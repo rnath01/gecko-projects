@@ -29,6 +29,7 @@
 #include "gfxGDIFontList.h"
 #include "gfxGDIFont.h"
 
+#include "mozilla/layers/CompositorParent.h"   // for CompositorParent::IsInCompositorThread
 #include "DeviceManagerD3D9.h"
 
 #ifdef CAIRO_HAS_DWRITE_FONT
@@ -351,8 +352,7 @@ BuildKeyNameFromFontName(nsAString &aName)
 }
 
 gfxWindowsPlatform::gfxWindowsPlatform()
-  : mD3D9DeviceInitialized(false)
-  , mD3D11DeviceInitialized(false)
+  : mD3D11DeviceInitialized(false)
   , mPrefFonts(50)
 {
     mUseClearTypeForDownloadableFonts = UNINITIALIZED_VALUE;
@@ -1456,6 +1456,14 @@ gfxWindowsPlatform::SetupClearTypeParams()
 #endif
 }
 
+void
+gfxWindowsPlatform::OnDeviceManagerDestroy(DeviceManagerD3D9* aDeviceManager)
+{
+  if (aDeviceManager == mDeviceManager) {
+    mDeviceManager = nullptr;
+  }
+}
+
 IDirect3DDevice9*
 gfxWindowsPlatform::GetD3D9Device()
 {
@@ -1466,12 +1474,14 @@ gfxWindowsPlatform::GetD3D9Device()
 DeviceManagerD3D9*
 gfxWindowsPlatform::GetD3D9DeviceManager()
 {
-  if (!mD3D9DeviceInitialized) {
-    mD3D9DeviceInitialized = true;
-
+  // We should only create the d3d9 device on the compositor thread
+  // or we don't have a compositor thread.
+  if (!mDeviceManager &&
+      (CompositorParent::IsInCompositorThread() ||
+       !CompositorParent::CompositorLoop())) {
     mDeviceManager = new DeviceManagerD3D9();
     if (!mDeviceManager->Init()) {
-      NS_WARNING("Could not initialise devive manager");
+      NS_WARNING("Could not initialise device manager");
       mDeviceManager = nullptr;
     }
   }

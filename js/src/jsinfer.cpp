@@ -603,9 +603,11 @@ class types::CompilerConstraintList
 
   public:
     CompilerConstraintList(jit::TempAllocator &alloc)
-      : constraints(alloc),
-        frozenScripts(alloc),
-        failed_(false)
+      : failed_(false)
+#ifdef JS_ION
+      , constraints(alloc)
+      , frozenScripts(alloc)
+#endif
     {}
 
     void add(CompilerConstraint *constraint) {
@@ -802,11 +804,8 @@ TypeObjectKey::singleton()
 TypeNewScript *
 TypeObjectKey::newScript()
 {
-    if (isTypeObject()) {
-        TypeObjectAddendum *addendum = asTypeObject()->addendum;
-        if (addendum && addendum->isNewScript())
-            return addendum->asNewScript();
-    }
+    if (isTypeObject() && asTypeObject()->hasNewScript())
+        return asTypeObject()->newScript();
     return nullptr;
 }
 
@@ -1630,14 +1629,11 @@ TemporaryTypeSet::getCommonPrototype()
     unsigned count = getObjectCount();
 
     for (unsigned i = 0; i < count; i++) {
-        TaggedProto nproto;
-        if (JSObject *object = getSingleObject(i))
-            nproto = object->getProto();
-        else if (TypeObject *object = getTypeObject(i))
-            nproto = object->proto.get();
-        else
+        TypeObjectKey *object = getObject(i);
+        if (!object)
             continue;
 
+        TaggedProto nproto = object->proto();
         if (proto) {
             if (nproto != proto)
                 return nullptr;
@@ -3809,16 +3805,18 @@ ExclusiveContext::getNewType(const Class *clasp, TaggedProto proto_, JSFunction 
 
     AutoEnterAnalysis enter(this);
 
-    /*
-     * Set the special equality flag for types whose prototype also has the
-     * flag set. This is a hack, :XXX: need a real correspondence between
-     * types and the possible js::Class of objects with that type.
-     */
     if (proto.isObject()) {
         RootedObject obj(this, proto.toObject());
 
         if (fun)
             CheckNewScriptProperties(asJSContext(), type, fun);
+
+        /*
+         * Some builtin objects have slotful native properties baked in at
+         * creation via the Shape::{insert,get}initialShape mechanism. Since
+         * these properties are never explicitly defined on new objects, update
+         * the type information for them here.
+         */
 
         if (obj->is<RegExpObject>()) {
             AddTypeProperty(this, type, "source", types::Type::StringType());

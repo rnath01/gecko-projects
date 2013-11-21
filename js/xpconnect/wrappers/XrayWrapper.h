@@ -5,8 +5,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef __XrayWrapper_h__
-#define __XrayWrapper_h__
+#ifndef XrayWrapper_h
+#define XrayWrapper_h
 
 #include "mozilla/Attributes.h"
 
@@ -193,4 +193,4 @@ private:
 
 }
 
-#endif /* __XrayWrapper_h__ */
+#endif

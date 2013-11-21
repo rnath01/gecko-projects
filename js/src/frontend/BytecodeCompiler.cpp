@@ -198,7 +198,7 @@ frontend::CompileScript(ExclusiveContext *cx, LifoAlloc *alloc, HandleObject sco
     if (options.filename() && !ss->setFilename(cx, options.filename()))
         return nullptr;
 
-    RootedScriptSource sourceObject(cx, ScriptSourceObject::create(cx, ss));
+    RootedScriptSource sourceObject(cx, ScriptSourceObject::create(cx, ss, options));
     if (!sourceObject)
         return nullptr;
 
@@ -355,9 +355,7 @@ frontend::CompileScript(ExclusiveContext *cx, LifoAlloc *alloc, HandleObject sco
         if (!FoldConstants(cx, &pn, &parser))
             return nullptr;
 
-        // Inferring names for functions in compiled scripts is currently only
-        // supported while on the main thread. See bug 895395.
-        if (cx->isJSContext() && !NameFunctions(cx->asJSContext(), pn))
+        if (!NameFunctions(cx, pn))
             return nullptr;
 
         if (!EmitTree(cx, &bce, pn))
@@ -496,7 +494,7 @@ CompileFunctionBody(JSContext *cx, MutableHandleFunction fun, const ReadOnlyComp
         return false;
     if (options.filename() && !ss->setFilename(cx, options.filename()))
         return false;
-    RootedScriptSource sourceObject(cx, ScriptSourceObject::create(cx, ss));
+    RootedScriptSource sourceObject(cx, ScriptSourceObject::create(cx, ss, options));
     if (!sourceObject)
         return false;
     SourceCompressionTask sct(cx);

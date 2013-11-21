@@ -7,16 +7,31 @@
 #ifndef mozilla_dom_bluetooth_bluetoothservicebluedroid_h__
 #define mozilla_dom_bluetooth_bluetoothservicebluedroid_h__
 
+#include <hardware/bluetooth.h>
+
 #include "BluetoothCommon.h"
 #include "BluetoothService.h"
 
-class DBusMessage;
+typedef char bdstr_t[18];
+
+const bt_interface_t*
+GetBluetoothInterface();
+
+void
+StringToBdAddressType(const nsAString& aBdAddress,
+                      bt_bdaddr_t *aRetBdAddressType);
+void
+BdAddressTypeToString(bt_bdaddr_t* aBdAddressType,
+                      nsAString& aRetBdAddress);
 
 BEGIN_BLUETOOTH_NAMESPACE
 
 class BluetoothServiceBluedroid : public BluetoothService
 {
 public:
+  BluetoothServiceBluedroid();
+  ~BluetoothServiceBluedroid();
+
   virtual nsresult StartInternal();
   virtual nsresult StopInternal();
   virtual bool IsEnabledInternal();

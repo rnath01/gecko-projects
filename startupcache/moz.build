@@ -18,6 +18,7 @@ EXPORTS.mozilla.scache += [
     'StartupCacheUtils.h',
 ]
 
+# These files cannot be built in unified mode because they rely on plarena.h.
 SOURCES += [
     'StartupCache.cpp',
     'StartupCacheModule.cpp',

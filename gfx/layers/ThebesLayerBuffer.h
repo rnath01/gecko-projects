@@ -62,6 +62,7 @@ public:
     , mBufferOnWhite(aBufferOnWhite)
     , mBufferRect(aBufferRect)
     , mBufferRotation(aBufferRotation)
+    , mDidSelfCopy(false)
   { }
   RotatedBuffer(gfx::DrawTarget* aDTBuffer, gfx::DrawTarget* aDTBufferOnWhite,
                 const nsIntRect& aBufferRect,
@@ -70,8 +71,11 @@ public:
     , mDTBufferOnWhite(aDTBufferOnWhite)
     , mBufferRect(aBufferRect)
     , mBufferRotation(aBufferRotation)
+    , mDidSelfCopy(false)
   { }
-  RotatedBuffer() { }
+  RotatedBuffer()
+    : mDidSelfCopy(false)
+  { }
 
   /*
    * Which buffer should be drawn to/read from.
@@ -390,8 +394,8 @@ protected:
   /**
    * If the buffer hasn't been mapped, map it.
    */
-  void EnsureBuffer();
-  void EnsureBufferOnWhite();
+  bool EnsureBuffer();
+  bool EnsureBufferOnWhite();
   /**
    * True if we have a buffer where we can get it (but not necessarily
    * mapped currently).
