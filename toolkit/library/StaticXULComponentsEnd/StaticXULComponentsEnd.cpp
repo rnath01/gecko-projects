@@ -2,7 +2,7 @@
 #include "mozilla/NullPtr.h"
 
 /* Ensure end_kPStaticModules is at the end of the .kPStaticModules section
- * on Windows. Somehow, placing the object last is not enough with PGO/LTCG.
+ * on Windows. Somehow, placing the object last is not enough with PGO/LTCG. */
 #ifdef _MSC_VER
 /* Sections on Windows are in two parts, separated with $. When linking,
  * sections with the same first part are all grouped, and ordered
