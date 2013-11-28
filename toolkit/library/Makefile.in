@@ -137,7 +137,7 @@ ifdef MOZ_NATIVE_PNG
 EXTRA_DSO_LDOPTS += $(MOZ_PNG_LIBS)
 endif
 
-ifneq (WINNT,$(OS_ARCH))
+ifndef ZLIB_IN_MOZGLUE
 EXTRA_DSO_LDOPTS += $(MOZ_ZLIB_LIBS)
 endif
 
@@ -391,10 +391,6 @@ LOCAL_INCLUDES += \
   $(NULL)
 
 OS_LIBS += $(LIBICONV)
-
-DEFINES += \
-  -DIMPL_LIBXUL \
-  $(NULL)
 
 ifeq ($(MOZ_WIDGET_TOOLKIT),windows)
 OS_LIBS += $(call EXPAND_LIBNAME,usp10 oleaut32)

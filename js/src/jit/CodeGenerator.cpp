@@ -853,7 +853,6 @@ CodeGenerator::visitLambdaPar(LLambdaPar *lir)
 bool
 CodeGenerator::visitLabel(LLabel *lir)
 {
-    masm.bind(lir->label());
     return true;
 }
 
@@ -2843,14 +2842,7 @@ CodeGenerator::generateBody()
 
     for (size_t i = 0; i < graph.numBlocks(); i++) {
         current = graph.getBlock(i);
-
-        LInstructionIterator iter = current->begin();
-
-        // Separately visit the label at the start of every block, so that
-        // count instrumentation is inserted after the block label is bound.
-        if (!iter->accept(this))
-            return false;
-        iter++;
+        masm.bind(current->label());
 
         mozilla::Maybe<ScriptCountBlockState> blockCounts;
         if (counts) {
@@ -2863,7 +2855,7 @@ CodeGenerator::generateBody()
         perfSpewer->startBasicBlock(current->mir(), masm);
 #endif
 
-        for (; iter != current->end(); iter++) {
+        for (LInstructionIterator iter = current->begin(); iter != current->end(); iter++) {
             IonSpewStart(IonSpew_Codegen, "instruction %s", iter->opName());
 #ifdef DEBUG
             if (const char *extra = iter->extraName())
@@ -3531,7 +3523,7 @@ CodeGenerator::visitInitPropGetterSetter(LInitPropGetterSetter *lir)
 }
 
 typedef bool (*CreateThisFn)(JSContext *cx, HandleObject callee, MutableHandleValue rval);
-static const VMFunction CreateThisInfo = FunctionInfo<CreateThisFn>(CreateThis);
+static const VMFunction CreateThisInfoCodeGen = FunctionInfo<CreateThisFn>(CreateThis);
 
 bool
 CodeGenerator::visitCreateThis(LCreateThis *lir)
@@ -3543,7 +3535,7 @@ CodeGenerator::visitCreateThis(LCreateThis *lir)
     else
         pushArg(ToRegister(callee));
 
-    return callVM(CreateThisInfo, lir);
+    return callVM(CreateThisInfoCodeGen, lir);
 }
 
 static JSObject *
@@ -3973,7 +3965,7 @@ CodeGenerator::visitMathFunctionF(LMathFunctionF *ins)
       case MMathFunction::Exp:   funptr = JS_FUNC_TO_DATA_PTR(void *, expf);   break;
       case MMathFunction::Tan:   funptr = JS_FUNC_TO_DATA_PTR(void *, tanf);   break;
       case MMathFunction::ATan:  funptr = JS_FUNC_TO_DATA_PTR(void *, atanf);  break;
-      case MMathFunction::ASin:  funptr = JS_FUNC_TO_DATA_PTR(void *, sinf);   break;
+      case MMathFunction::ASin:  funptr = JS_FUNC_TO_DATA_PTR(void *, asinf);  break;
       case MMathFunction::ACos:  funptr = JS_FUNC_TO_DATA_PTR(void *, acosf);  break;
       case MMathFunction::Floor: funptr = JS_FUNC_TO_DATA_PTR(void *, floorf); break;
       default:
@@ -6643,13 +6635,13 @@ CodeGenerator::visitSetPropertyParIC(OutOfLineUpdateCache *ool, DataPtr<SetPrope
 }
 
 typedef bool (*ThrowFn)(JSContext *, HandleValue);
-static const VMFunction ThrowInfo = FunctionInfo<ThrowFn>(js::Throw);
+static const VMFunction ThrowInfoCodeGen = FunctionInfo<ThrowFn>(js::Throw);
 
 bool
 CodeGenerator::visitThrow(LThrow *lir)
 {
     pushArg(ToValue(lir, LThrow::Value));
-    return callVM(ThrowInfo, lir);
+    return callVM(ThrowInfoCodeGen, lir);
 }
 
 typedef bool (*BitNotFn)(JSContext *, HandleValue, int *p);
@@ -7372,6 +7364,22 @@ CodeGenerator::visitGetDOMProperty(LGetDOMProperty *ins)
     masm.adjustStack(IonDOMExitFrameLayout::Size());
 
     JS_ASSERT(masm.framePushed() == initialStack);
+    return true;
+}
+
+bool
+CodeGenerator::visitGetDOMMember(LGetDOMMember *ins)
+{
+    // It's simple to duplicate visitLoadFixedSlotV here than it is to try to
+    // use an LLoadFixedSlotV or some subclass of it for this case: that would
+    // require us to have MGetDOMMember inherit from MLoadFixedSlot, and then
+    // we'd have to duplicate a bunch of stuff we now get for free from
+    // MGetDOMProperty.
+    Register object = ToRegister(ins->object());
+    size_t slot = ins->mir()->domMemberSlotIndex();
+    ValueOperand result = GetValueOutput(ins);
+
+    masm.loadValue(Address(object, JSObject::getFixedSlotOffset(slot)), result);
     return true;
 }
 

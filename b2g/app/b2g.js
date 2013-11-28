@@ -256,14 +256,13 @@ pref("ui.dragThresholdY", 25);
 
 // Layers Acceleration.  We can only have nice things on gonk, because
 // they're not maintained anywhere else.
+pref("layers.offmainthreadcomposition.enabled", true);
 #ifndef MOZ_WIDGET_GONK
 pref("dom.ipc.tabs.disabled", true);
-pref("layers.offmainthreadcomposition.enabled", false);
 pref("layers.offmainthreadcomposition.async-animations", false);
 pref("layers.async-video.enabled", false);
 #else
 pref("dom.ipc.tabs.disabled", false);
-pref("layers.offmainthreadcomposition.enabled", true);
 pref("layers.acceleration.disabled", false);
 pref("layers.offmainthreadcomposition.async-animations", true);
 pref("layers.async-video.enabled", true);
@@ -737,8 +736,7 @@ pref("font.size.inflation.disabledInMasterProcess", true);
 // consumption when applications are sent to the background.
 pref("memory.free_dirty_pages", true);
 
-pref("layout.imagevisibility.enabled", false);
-pref("layout.imagevisibility.enabled_for_browser_elements_only", true);
+pref("layout.imagevisibility.enabled", true);
 pref("layout.imagevisibility.numscrollportwidths", 1);
 pref("layout.imagevisibility.numscrollportheights", 1);
 

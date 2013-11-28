@@ -28,18 +28,12 @@ class LBinaryMath : public LInstructionHelper<1, 2 + ExtraUses, Temps>
     }
 };
 
-// Used for jumps from other blocks. Also simplifies register allocation since
-// the first instruction of a block is guaranteed to have no uses.
+// Simplifies register allocation since the first instruction of a block is
+// guaranteed to have no uses.
 class LLabel : public LInstructionHelper<0, 0, 0>
 {
-    Label label_;
-
   public:
     LIR_HEADER(Label)
-
-    Label *label() {
-        return &label_;
-    }
 };
 
 class LNop : public LInstructionHelper<0, 0, 0>
@@ -1208,6 +1202,23 @@ class LGetDOMProperty : public LDOMPropertyInstructionHelper<BOX_PIECES, 0>
 
     MGetDOMProperty *mir() const {
         return mir_->toGetDOMProperty();
+    }
+};
+
+class LGetDOMMember : public LInstructionHelper<BOX_PIECES, 1, 0>
+{
+  public:
+    LIR_HEADER(GetDOMMember);
+    LGetDOMMember(const LAllocation &object) {
+        setOperand(0, object);
+    }
+
+    const LAllocation *object() {
+        return getOperand(0);
+    }
+
+    MGetDOMMember *mir() const {
+        return mir_->toGetDOMMember();
     }
 };
 

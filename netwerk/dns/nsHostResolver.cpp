@@ -31,7 +31,6 @@
 #include "nsURLHelper.h"
 #include "nsThreadUtils.h"
 
-#include "mozilla/DebugOnly.h"
 #include "mozilla/HashFunctions.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Telemetry.h"
@@ -266,6 +265,42 @@ nsHostRecord::HasUsableResult(uint16_t queryFlags) const
     return addr_info || addr || negative;
 }
 
+static size_t
+SizeOfResolveHostCallbackListExcludingHead(const PRCList *head,
+                                           MallocSizeOf mallocSizeOf)
+{
+    size_t n = 0;
+    PRCList *curr = head->next;
+    while (curr != head) {
+        nsResolveHostCallback *callback =
+            static_cast<nsResolveHostCallback*>(curr);
+        n += callback->SizeOfIncludingThis(mallocSizeOf);
+        curr = curr->next;
+    }
+    return n;
+}
+
+size_t
+nsHostRecord::SizeOfIncludingThis(MallocSizeOf mallocSizeOf) const
+{
+    size_t n = mallocSizeOf(this);
+
+    // The |host| field (inherited from nsHostKey) actually points to extra
+    // memory that is allocated beyond the end of the nsHostRecord (see
+    // nsHostRecord::Create()).  So it will be included in the
+    // |mallocSizeOf(this)| call above.
+
+    n += SizeOfResolveHostCallbackListExcludingHead(&callbacks, mallocSizeOf);
+    n += addr_info ? addr_info->SizeOfIncludingThis(mallocSizeOf) : 0;
+    n += mallocSizeOf(addr);
+
+    n += mBlacklistedItems.SizeOfExcludingThis(mallocSizeOf);
+    for (size_t i = 0; i < mBlacklistedItems.Length(); i++) {
+        n += mBlacklistedItems[i].SizeOfIncludingThisMustBeUnshared(mallocSizeOf);
+    }
+    return n;
+}
+
 //----------------------------------------------------------------------------
 
 struct nsHostDBEnt : PLDHashEntryHdr
@@ -309,7 +344,7 @@ HostDB_ClearEntry(PLDHashTable *table,
     nsHostDBEnt *he = static_cast<nsHostDBEnt*>(entry);
     MOZ_ASSERT(he, "nsHostDBEnt is null!");
 
-    DebugOnly<nsHostRecord*> hr = he->rec;
+    nsHostRecord *hr = he->rec;
     MOZ_ASSERT(hr, "nsHostDBEnt has null host record!");
 
     LOG(("Clearing cache db entry for host [%s].\n", hr->host));
@@ -635,27 +670,35 @@ nsHostResolver::ResolveHost(const char            *host,
                         unspecHe->rec->HasUsableResult(flags) &&
                         TimeStamp::NowLoRes() <= (he->rec->expiration +
                             TimeDuration::FromSeconds(mGracePeriod * 60))) {
+
+                        MOZ_ASSERT(unspecHe->rec->addr_info || unspecHe->rec->negative,
+                                   "Entry should be resolved or negative.");
+
                         LOG(("  Trying AF_UNSPEC entry for [%s] af: %s.\n",
                             host, (af == PR_AF_INET) ? "AF_INET" : "AF_INET6"));
 
-                        // Search for any valid address in the AF_UNSPEC entry
-                        // in the cache (not blacklisted and from the right
-                        // family).
-                        NetAddrElement *addrIter =
-                            unspecHe->rec->addr_info->mAddresses.getFirst();
                         he->rec->addr_info = nullptr;
-                        while (addrIter) {
-                            if ((af == addrIter->mAddress.inet.family) &&
-                                 !unspecHe->rec->Blacklisted(&addrIter->mAddress)) {
-                                if (!he->rec->addr_info) {
-                                    he->rec->addr_info = new AddrInfo(
-                                        unspecHe->rec->addr_info->mHostName,
-                                        unspecHe->rec->addr_info->mCanonicalName);
+                        if (unspecHe->rec->negative) {
+                            he->rec->negative = unspecHe->rec->negative;
+                        } else if (unspecHe->rec->addr_info) {
+                            // Search for any valid address in the AF_UNSPEC entry
+                            // in the cache (not blacklisted and from the right
+                            // family).
+                            NetAddrElement *addrIter =
+                                unspecHe->rec->addr_info->mAddresses.getFirst();
+                            while (addrIter) {
+                                if ((af == addrIter->mAddress.inet.family) &&
+                                     !unspecHe->rec->Blacklisted(&addrIter->mAddress)) {
+                                    if (!he->rec->addr_info) {
+                                        he->rec->addr_info = new AddrInfo(
+                                            unspecHe->rec->addr_info->mHostName,
+                                            unspecHe->rec->addr_info->mCanonicalName);
+                                    }
+                                    he->rec->addr_info->AddAddress(
+                                        new NetAddrElement(*addrIter));
                                 }
-                                he->rec->addr_info->AddAddress(
-                                    new NetAddrElement(*addrIter));
+                                addrIter = addrIter->getNext();
                             }
-                            addrIter = addrIter->getNext();
                         }
                         if (he->rec->HasUsableResult(flags)) {
                             result = he->rec;
@@ -976,7 +1019,7 @@ nsHostResolver::OnLookupComplete(nsHostRecord *rec, nsresult status, AddrInfo *r
             rec->usingAnyThread = false;
         }
 
-        if (rec->addr_info && !mShutdown) {
+        if (!mShutdown) {
             // add to mEvictionQ
             PR_APPEND_LINK(rec, &mEvictionQ);
             NS_ADDREF(rec);
@@ -1061,6 +1104,31 @@ nsHostResolver::CancelAsyncRequest(const char            *host,
             }
         }
     }
+}
+
+static size_t
+SizeOfHostDBEntExcludingThis(PLDHashEntryHdr* hdr, MallocSizeOf mallocSizeOf,
+                             void*)
+{
+    nsHostDBEnt* ent = static_cast<nsHostDBEnt*>(hdr);
+    return ent->rec->SizeOfIncludingThis(mallocSizeOf);
+}
+
+size_t
+nsHostResolver::SizeOfIncludingThis(MallocSizeOf mallocSizeOf) const
+{
+    MutexAutoLock lock(mLock);
+
+    size_t n = mallocSizeOf(this);
+    n += PL_DHashTableSizeOfExcludingThis(&mDB, SizeOfHostDBEntExcludingThis,
+                                          mallocSizeOf);
+
+    // The following fields aren't measured.
+    // - mHighQ, mMediumQ, mLowQ, mEvictionQ, because they just point to
+    //   nsHostRecords that also pointed to by entries |mDB|, and measured when
+    //   |mDB| is measured.
+
+    return n;
 }
 
 void
@@ -1170,7 +1238,8 @@ CacheEntryEnumerator(PLDHashTable *table, PLDHashEntryHdr *entry,
     // We don't pay attention to address literals, only resolved domains.
     // Also require a host.
     nsHostRecord *rec = static_cast<nsHostDBEnt*>(entry)->rec;
-    if (!rec->addr_info || !rec->host) {
+    MOZ_ASSERT(rec, "rec should never be null here!");
+    if (!rec || !rec->addr_info || !rec->host) {
         return PL_DHASH_NEXT;
     }
 

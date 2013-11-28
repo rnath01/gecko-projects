@@ -1927,7 +1927,7 @@ AndroidBridge::IsContentDocumentDisplayed()
 }
 
 bool
-AndroidBridge::ProgressiveUpdateCallback(bool aHasPendingNewThebesContent, const LayerRect& aDisplayPort, float aDisplayResolution, bool aDrawingCritical, gfx::Rect& aViewport, float& aScaleX, float& aScaleY)
+AndroidBridge::ProgressiveUpdateCallback(bool aHasPendingNewThebesContent, const LayerRect& aDisplayPort, float aDisplayResolution, bool aDrawingCritical, ScreenRect& aCompositionBounds, CSSToScreenScale& aZoom)
 {
     GeckoLayerClient *client = mLayerClient;
     if (!client) {
@@ -1947,11 +1947,11 @@ AndroidBridge::ProgressiveUpdateCallback(bool aHasPendingNewThebesContent, const
 
     ProgressiveUpdateData* progressiveUpdateData = ProgressiveUpdateData::Wrap(progressiveUpdateDataJObj);
 
-    aViewport.x = progressiveUpdateData->getx();
-    aViewport.y = progressiveUpdateData->gety();
-    aViewport.width = progressiveUpdateData->getwidth();
-    aViewport.height = progressiveUpdateData->getheight();
-    aScaleX = aScaleY = progressiveUpdateData->getscale();
+    aCompositionBounds.x = progressiveUpdateData->getx();
+    aCompositionBounds.y = progressiveUpdateData->gety();
+    aCompositionBounds.width = progressiveUpdateData->getwidth();
+    aCompositionBounds.height = progressiveUpdateData->getheight();
+    aZoom.scale = progressiveUpdateData->getscale();
 
     bool ret = progressiveUpdateData->getabort();
     delete progressiveUpdateData;
@@ -1979,7 +1979,7 @@ AndroidBridge::RequestContentRepaint(const mozilla::layers::FrameMetrics& aFrame
 }
 
 void
-AndroidBridge::HandleDoubleTap(const CSSIntPoint& aPoint)
+AndroidBridge::HandleDoubleTap(const CSSIntPoint& aPoint, int32_t aModifiers)
 {
     nsCString data = nsPrintfCString("{ \"x\": %d, \"y\": %d }", aPoint.x, aPoint.y);
     nsAppShell::gAppShell->PostEvent(AndroidGeckoEvent::MakeBroadcastEvent(
@@ -1987,15 +1987,16 @@ AndroidBridge::HandleDoubleTap(const CSSIntPoint& aPoint)
 }
 
 void
-AndroidBridge::HandleSingleTap(const CSSIntPoint& aPoint)
+AndroidBridge::HandleSingleTap(const CSSIntPoint& aPoint, int32_t aModifiers)
 {
+    // TODO Send the modifier data to Gecko for use in mouse events.
     nsCString data = nsPrintfCString("{ \"x\": %d, \"y\": %d }", aPoint.x, aPoint.y);
     nsAppShell::gAppShell->PostEvent(AndroidGeckoEvent::MakeBroadcastEvent(
             NS_LITERAL_CSTRING("Gesture:SingleTap"), data));
 }
 
 void
-AndroidBridge::HandleLongTap(const CSSIntPoint& aPoint)
+AndroidBridge::HandleLongTap(const CSSIntPoint& aPoint, int32_t aModifiers)
 {
     nsCString data = nsPrintfCString("{ \"x\": %d, \"y\": %d }", aPoint.x, aPoint.y);
     nsAppShell::gAppShell->PostEvent(AndroidGeckoEvent::MakeBroadcastEvent(

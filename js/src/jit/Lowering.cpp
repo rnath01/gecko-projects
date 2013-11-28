@@ -397,7 +397,11 @@ LIRGenerator::visitComputeThis(MComputeThis *ins)
     JS_ASSERT(ins->input()->type() == MIRType_Value);
 
     LComputeThis *lir = new LComputeThis();
-    if (!useBoxAtStart(lir, LComputeThis::ValueIndex, ins->input()))
+
+    // Don't use useBoxAtStart because ComputeThis has a safepoint and needs to
+    // have its inputs in different registers than its return value so that
+    // they aren't clobbered.
+    if (!useBox(lir, LComputeThis::ValueIndex, ins->input()))
         return false;
 
     return define(lir, ins) && assignSafepoint(lir, ins);
@@ -3368,6 +3372,15 @@ LIRGenerator::visitGetDOMProperty(MGetDOMProperty *ins)
     return defineReturn(lir, ins) && assignSafepoint(lir, ins);
 }
 
+bool
+LIRGenerator::visitGetDOMMember(MGetDOMMember *ins)
+{
+    MOZ_ASSERT(ins->isDomPure(), "Members had better be pure");
+    LGetDOMMember *lir =
+        new LGetDOMMember(useRegister(ins->object()));
+    return defineBox(lir, ins);
+}
+
 static void
 SpewResumePoint(MBasicBlock *block, MInstruction *ins, MResumePoint *resumePoint)
 {
@@ -3488,8 +3501,10 @@ LIRGenerator::visitBlock(MBasicBlock *block)
     if (!definePhis())
         return false;
 
-    if (!add(new LLabel()))
-        return false;
+    if (js_IonOptions.registerAllocator == RegisterAllocator_LSRA) {
+        if (!add(new LLabel()))
+            return false;
+    }
 
     for (MInstructionIterator iter = block->begin(); *iter != block->lastIns(); iter++) {
         if (!visitInstruction(*iter))

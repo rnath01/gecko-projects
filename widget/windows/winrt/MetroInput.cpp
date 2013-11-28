@@ -496,6 +496,9 @@ MetroInput::OnPointerPressed(UI::Core::ICoreWindow* aSender,
     mRecognizerWantsEvents = true;
     mCancelable = true;
     mCanceledIds.Clear();
+  } else {
+    // Only the first touchstart can be canceled.
+    mCancelable = false;
   }
 
   InitTouchEventTouchList(touchEvent);
@@ -663,7 +666,10 @@ MetroInput::HitTestChrome(const LayoutDeviceIntPoint& pt)
   return (status == nsEventStatus_eConsumeNoDefault);
 }
 
-void
+/**
+ * Returns true if the position is in chrome, false otherwise.
+ */
+bool
 MetroInput::TransformRefPoint(const Foundation::Point& aPosition, LayoutDeviceIntPoint& aRefPointOut)
 {
   // If this event is destined for content we need to transform our ref point through
@@ -675,10 +681,14 @@ MetroInput::TransformRefPoint(const Foundation::Point& aPosition, LayoutDeviceIn
   // This is currently a general contained rect hit test, it may produce a false positive for
   // overlay chrome elements.
   bool apzIntersect = mWidget->ApzHitTest(spt);
-  if (apzIntersect && HitTestChrome(aRefPointOut)) {
-    return;
+  if (!apzIntersect) {
+    return true;
+  }
+  if (HitTestChrome(aRefPointOut)) {
+    return true;
   }
   mWidget->ApzTransformGeckoCoordinate(spt, &aRefPointOut);
+  return false;
 }
 
 void
@@ -940,9 +950,13 @@ MetroInput::HandleTap(const Foundation::Point& aPoint, unsigned int aTapCount)
 #ifdef DEBUG_INPUT
   LogFunction();
 #endif
-  
+
   LayoutDeviceIntPoint refPoint;
-  TransformRefPoint(aPoint, refPoint);
+  bool hitTestChrome = TransformRefPoint(aPoint, refPoint);
+  if (!hitTestChrome) {
+    // Let APZC handle tap/doubletap detection for content.
+    return;
+  }
 
   // send mousemove
   WidgetMouseEvent* mouseEvent =

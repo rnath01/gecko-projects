@@ -75,6 +75,7 @@ const char* const XPCJSRuntime::mStrings[] = {
     "__proto__",            // IDX_PROTO
     "__iterator__",         // IDX_ITERATOR
     "__exposedProps__",     // IDX_EXPOSEDPROPS
+    "eval",                 // IDX_EVAL
 };
 
 /***************************************************************************/
@@ -608,9 +609,8 @@ WindowGlobalOrNull(JSObject *aObj)
 static void
 CompartmentDestroyedCallback(JSFreeOp *fop, JSCompartment *compartment)
 {
-    XPCJSRuntime* self = nsXPConnect::GetRuntimeInstance();
-    if (!self)
-        return;
+    // NB - This callback may be called in JS_DestroyRuntime, which happens
+    // after the XPCJSRuntime has been torn down.
 
     // Get the current compartment private into an AutoPtr (which will do the
     // cleanup for us), and null out the private (which may already be null).
@@ -628,15 +628,11 @@ void XPCJSRuntime::TraceNativeBlackRoots(JSTracer* trc)
             roots->TraceJSAll(trc);
     }
 
-    {
-        XPCAutoLock lock(mMapLock);
-
-        // XPCJSObjectHolders don't participate in cycle collection, so always
-        // trace them here.
-        XPCRootSetElem *e;
-        for (e = mObjectHolderRoots; e; e = e->GetNextRoot())
-            static_cast<XPCJSObjectHolder*>(e)->TraceJS(trc);
-    }
+    // XPCJSObjectHolders don't participate in cycle collection, so always
+    // trace them here.
+    XPCRootSetElem *e;
+    for (e = mObjectHolderRoots; e; e = e->GetNextRoot())
+        static_cast<XPCJSObjectHolder*>(e)->TraceJS(trc);
 
     dom::TraceBlackJS(trc, JS_GetGCParameter(Runtime(), JSGC_NUMBER),
                       nsXPConnect::XPConnect()->IsShuttingDown());
@@ -644,8 +640,6 @@ void XPCJSRuntime::TraceNativeBlackRoots(JSTracer* trc)
 
 void XPCJSRuntime::TraceAdditionalNativeGrayRoots(JSTracer *trc)
 {
-    XPCAutoLock lock(mMapLock);
-
     XPCWrappedNativeScope::TraceWrappedNativesInAllScopes(trc, this);
 
     for (XPCRootSetElem *e = mVariantRoots; e ; e = e->GetNextRoot())
@@ -705,8 +699,6 @@ CanSkipWrappedJS(nsXPCWrappedJS *wrappedJS)
 void
 XPCJSRuntime::TraverseAdditionalNativeRoots(nsCycleCollectionNoteRootCallback &cb)
 {
-    XPCAutoLock lock(mMapLock);
-
     XPCWrappedNativeScope::SuspectAllWrappers(this, cb);
 
     for (XPCRootSetElem *e = mVariantRoots; e ; e = e->GetNextRoot()) {
@@ -734,7 +726,6 @@ XPCJSRuntime::TraverseAdditionalNativeRoots(nsCycleCollectionNoteRootCallback &c
 void
 XPCJSRuntime::UnmarkSkippableJSHolders()
 {
-    XPCAutoLock lock(mMapLock);
     CycleCollectedJSRuntime::UnmarkSkippableJSHolders();
 }
 
@@ -838,12 +829,8 @@ XPCJSRuntime::FinalizeCallback(JSFreeOp *fop, JSFinalizeStatus status, bool isCo
         {
             MOZ_ASSERT(!self->mDoingFinalization, "bad state");
 
-            // mThreadRunningGC indicates that GC is running
-            { // scoped lock
-                XPCAutoLock lock(self->GetMapLock());
-                MOZ_ASSERT(!self->mThreadRunningGC, "bad state");
-                self->mThreadRunningGC = PR_GetCurrentThread();
-            }
+            MOZ_ASSERT(!self->mGCIsRunning, "bad state");
+            self->mGCIsRunning = true;
 
             nsTArray<nsXPCWrappedJS*>* dyingWrappedJSArray =
                 &self->mWrappedJSToReleaseArray;
@@ -874,25 +861,15 @@ XPCJSRuntime::FinalizeCallback(JSFreeOp *fop, JSFinalizeStatus status, bool isCo
             // Sweep scopes needing cleanup
             XPCWrappedNativeScope::FinishedFinalizationPhaseOfGC();
 
-            // mThreadRunningGC indicates that GC is running.
-            // Clear it and notify waiters.
-            { // scoped lock
-                XPCAutoLock lock(self->GetMapLock());
-                MOZ_ASSERT(self->mThreadRunningGC == PR_GetCurrentThread(), "bad state");
-                self->mThreadRunningGC = nullptr;
-                xpc_NotifyAll(self->GetMapLock());
-            }
+            MOZ_ASSERT(self->mGCIsRunning, "bad state");
+            self->mGCIsRunning = false;
 
             break;
         }
         case JSFINALIZE_COLLECTION_END:
         {
-            // mThreadRunningGC indicates that GC is running
-            { // scoped lock
-                XPCAutoLock lock(self->GetMapLock());
-                MOZ_ASSERT(!self->mThreadRunningGC, "bad state");
-                self->mThreadRunningGC = PR_GetCurrentThread();
-            }
+            MOZ_ASSERT(!self->mGCIsRunning, "bad state");
+            self->mGCIsRunning = true;
 
             // We use this occasion to mark and sweep NativeInterfaces,
             // NativeSets, and the WrappedNativeJSClasses...
@@ -1029,14 +1006,8 @@ XPCJSRuntime::FinalizeCallback(JSFreeOp *fop, JSFinalizeStatus status, bool isCo
             self->mDyingWrappedNativeProtoMap->
                 Enumerate(DyingProtoKiller, nullptr);
 
-            // mThreadRunningGC indicates that GC is running.
-            // Clear it and notify waiters.
-            { // scoped lock
-                XPCAutoLock lock(self->GetMapLock());
-                MOZ_ASSERT(self->mThreadRunningGC == PR_GetCurrentThread(), "bad state");
-                self->mThreadRunningGC = nullptr;
-                xpc_NotifyAll(self->GetMapLock());
-            }
+            MOZ_ASSERT(self->mGCIsRunning, "bad state");
+            self->mGCIsRunning = false;
 
             break;
         }
@@ -1547,6 +1518,13 @@ void XPCJSRuntime::SystemIsBeingShutDown()
 
 XPCJSRuntime::~XPCJSRuntime()
 {
+    // This destructor runs before ~CycleCollectedJSRuntime, which does the
+    // actual JS_DestroyRuntime() call. But destroying the runtime triggers
+    // one final GC, which can call back into the runtime with various
+    // callback if we aren't careful. Null out the relevant callbacks.
+    js::SetActivityCallback(Runtime(), nullptr, nullptr);
+    JS_SetFinalizeCallback(Runtime(), nullptr);
+
     // Clear any pending exception.  It might be an XPCWrappedJS, and if we try
     // to destroy it later we will crash.
     SetPendingException(nullptr);
@@ -1565,44 +1543,52 @@ XPCJSRuntime::~XPCJSRuntime()
     delete rtPrivate;
     JS_SetRuntimePrivate(Runtime(), nullptr);
 
-    // Tell the superclas to destroy the JSRuntime. We need to do this here,
-    // because destroying the runtime runs one final rambo GC, which sometimes
-    // calls various finalizers that assume that XPCJSRuntime is still
-    // operational. We have bug 911303 on file for fixing this.
-    DestroyRuntime();
-
     // clean up and destroy maps...
     if (mWrappedJSMap) {
         mWrappedJSMap->ShutdownMarker();
         delete mWrappedJSMap;
+        mWrappedJSMap = nullptr;
     }
 
-    if (mWrappedJSClassMap)
+    if (mWrappedJSClassMap) {
         delete mWrappedJSClassMap;
+        mWrappedJSClassMap = nullptr;
+    }
 
-    if (mIID2NativeInterfaceMap)
+    if (mIID2NativeInterfaceMap) {
         delete mIID2NativeInterfaceMap;
+        mIID2NativeInterfaceMap = nullptr;
+    }
 
-    if (mClassInfo2NativeSetMap)
+    if (mClassInfo2NativeSetMap) {
         delete mClassInfo2NativeSetMap;
+        mClassInfo2NativeSetMap = nullptr;
+    }
 
-    if (mNativeSetMap)
+    if (mNativeSetMap) {
         delete mNativeSetMap;
+        mNativeSetMap = nullptr;
+    }
 
-    if (mMapLock)
-        XPCAutoLock::DestroyLock(mMapLock);
-
-    if (mThisTranslatorMap)
+    if (mThisTranslatorMap) {
         delete mThisTranslatorMap;
+        mThisTranslatorMap = nullptr;
+    }
 
-    if (mNativeScriptableSharedMap)
+    if (mNativeScriptableSharedMap) {
         delete mNativeScriptableSharedMap;
+        mNativeScriptableSharedMap = nullptr;
+    }
 
-    if (mDyingWrappedNativeProtoMap)
+    if (mDyingWrappedNativeProtoMap) {
         delete mDyingWrappedNativeProtoMap;
+        mDyingWrappedNativeProtoMap = nullptr;
+    }
 
-    if (mDetachedWrappedNativeProtoMap)
+    if (mDetachedWrappedNativeProtoMap) {
         delete mDetachedWrappedNativeProtoMap;
+        mDetachedWrappedNativeProtoMap = nullptr;
+    }
 
 #ifdef MOZ_ENABLE_PROFILER_SPS
     // Tell the profiler that the runtime is gone
@@ -2955,8 +2941,7 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
    mNativeScriptableSharedMap(XPCNativeScriptableSharedMap::newMap(XPC_NATIVE_JSCLASS_MAP_SIZE)),
    mDyingWrappedNativeProtoMap(XPCWrappedNativeProtoMap::newMap(XPC_DYING_NATIVE_PROTO_MAP_SIZE)),
    mDetachedWrappedNativeProtoMap(XPCWrappedNativeProtoMap::newMap(XPC_DETACHED_NATIVE_PROTO_MAP_SIZE)),
-   mMapLock(XPCAutoLock::NewLock("XPCJSRuntime::mMapLock")),
-   mThreadRunningGC(nullptr),
+   mGCIsRunning(false),
    mWrappedJSToReleaseArray(),
    mNativesToReleaseArray(),
    mDoingFinalization(false),
@@ -3144,7 +3129,6 @@ XPCJSRuntime::newXPCJSRuntime(nsXPConnect* aXPConnect)
         self->GetThisTranslatorMap()            &&
         self->GetNativeScriptableSharedMap()    &&
         self->GetDyingWrappedNativeProtoMap()   &&
-        self->GetMapLock()                      &&
         self->mWatchdogManager) {
         return self;
     }
@@ -3260,7 +3244,6 @@ XPCJSRuntime::DebugDump(int16_t depth)
     XPC_LOG_ALWAYS(("XPCJSRuntime @ %x", this));
         XPC_LOG_INDENT();
         XPC_LOG_ALWAYS(("mJSRuntime @ %x", Runtime()));
-        XPC_LOG_ALWAYS(("mMapLock @ %x", mMapLock));
 
         XPC_LOG_ALWAYS(("mWrappedJSToReleaseArray @ %x with %d wrappers(s)", \
                         &mWrappedJSToReleaseArray,
@@ -3329,11 +3312,9 @@ XPCJSRuntime::DebugDump(int16_t depth)
 /***************************************************************************/
 
 void
-XPCRootSetElem::AddToRootSet(XPCLock *lock, XPCRootSetElem **listHead)
+XPCRootSetElem::AddToRootSet(XPCRootSetElem **listHead)
 {
     MOZ_ASSERT(!mSelfp, "Must be not linked");
-
-    XPCAutoLock autoLock(lock);
 
     mSelfp = listHead;
     mNext = *listHead;
@@ -3345,14 +3326,12 @@ XPCRootSetElem::AddToRootSet(XPCLock *lock, XPCRootSetElem **listHead)
 }
 
 void
-XPCRootSetElem::RemoveFromRootSet(XPCLock *lock)
+XPCRootSetElem::RemoveFromRootSet()
 {
     nsXPConnect *xpc = nsXPConnect::XPConnect();
     JS::PokeGC(xpc->GetRuntime()->Runtime());
 
     MOZ_ASSERT(mSelfp, "Must be linked");
-
-    XPCAutoLock autoLock(lock);
 
     MOZ_ASSERT(*mSelfp == this, "Link invariant");
     *mSelfp = mNext;

@@ -314,9 +314,16 @@ public class Tab {
     }
 
     public synchronized void updateTitle(String title) {
-        // Keep the title unchanged while entering reader mode
-        if (mEnteringReaderMode)
+        // Keep the title unchanged while entering reader mode.
+        if (mEnteringReaderMode) {
             return;
+        }
+
+        // If there was a title, but it hasn't changed, do nothing.
+        if (mTitle != null &&
+            TextUtils.equals(mTitle, title)) {
+            return;
+        }
 
         mTitle = (title == null ? "" : title);
         Tabs.getInstance().notifyListeners(this, Tabs.TabEvents.TITLE);
@@ -618,7 +625,14 @@ public class Tab {
 
     void handleLocationChange(JSONObject message) throws JSONException {
         final String uri = message.getString("uri");
-        mEnteringReaderMode = ReaderModeUtils.isEnteringReaderMode(mUrl, uri);
+        final String oldUrl = getURL();
+        mEnteringReaderMode = ReaderModeUtils.isEnteringReaderMode(oldUrl, uri);
+
+        if (TextUtils.equals(oldUrl, uri)) {
+            Log.d(LOGTAG, "Ignoring location change event: URIs are the same.");
+            return;
+        }
+
         updateURL(uri);
         updateUserSearch(message.getString("userSearch"));
 
@@ -626,12 +640,18 @@ public class Tab {
         if (message.getBoolean("sameDocument")) {
             // We can get a location change event for the same document with an anchor tag
             // Notify listeners so that buttons like back or forward will update themselves
-            Tabs.getInstance().notifyListeners(this, Tabs.TabEvents.LOCATION_CHANGE, uri);
+            Tabs.getInstance().notifyListeners(this, Tabs.TabEvents.LOCATION_CHANGE, oldUrl);
             return;
         }
 
         setContentType(message.getString("contentType"));
+
+        // We can unconditionally clear the favicon here: we already
+        // short-circuited for both cases in which this was a (pseudo-)
+        // spurious location change, so we're definitely loading a new page.
+        // The same applies to all of the other fields we're wiping out.
         clearFavicon();
+
         setHasFeeds(false);
         updateTitle(null);
         updateIdentityData(null);
@@ -646,7 +666,7 @@ public class Tab {
             setAboutHomePage(HomePager.Page.valueOf(homePage));
         }
 
-        Tabs.getInstance().notifyListeners(this, Tabs.TabEvents.LOCATION_CHANGE, uri);
+        Tabs.getInstance().notifyListeners(this, Tabs.TabEvents.LOCATION_CHANGE, oldUrl);
     }
 
     private static boolean shouldShowProgress(final String url) {

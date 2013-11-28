@@ -238,13 +238,11 @@ class nsIScriptTimeoutHandler;
 static PRLogModuleInfo* gDOMLeakPRLog;
 #endif
 
-#ifdef XP_LINUX
-#include <unistd.h> // for getpid()
-#endif
-
 #ifdef XP_WIN
 #include <process.h>
 #define getpid _getpid
+#else
+#include <unistd.h> // for getpid()
 #endif
 
 static const char kStorageEnabled[] = "dom.storage.enabled";
@@ -550,7 +548,8 @@ nsPIDOMWindow::nsPIDOMWindow(nsPIDOMWindow *aOuterWindow)
   mIsActive(false), mIsBackground(false),
   mInnerWindow(nullptr), mOuterWindow(aOuterWindow),
   // Make sure no actual window ends up with mWindowID == 0
-  mWindowID(++gNextWindowID), mHasNotifiedGlobalCreated(false)
+  mWindowID(++gNextWindowID), mHasNotifiedGlobalCreated(false),
+  mMarkedCCGeneration(0)
  {}
 
 nsPIDOMWindow::~nsPIDOMWindow() {}
@@ -1619,7 +1618,7 @@ MarkXBLHandlers(nsXBLPrototypeHandler* aKey, JS::Heap<JSObject*>& aData, void* a
 }
 
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_BEGIN(nsGlobalWindow)
-  if (tmp->IsBlackForCC()) {
+  if (tmp->IsBlackForCC(false)) {
     if (tmp->mCachedXBLPrototypeHandlers) {
       tmp->mCachedXBLPrototypeHandlers->Enumerate(MarkXBLHandlers, nullptr);
     }
@@ -1632,11 +1631,11 @@ NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_BEGIN(nsGlobalWindow)
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_END
 
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_IN_CC_BEGIN(nsGlobalWindow)
-  return tmp->IsBlackForCC();
+  return tmp->IsBlackForCC(true);
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_IN_CC_END
 
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_BEGIN(nsGlobalWindow)
-  return tmp->IsBlackForCC();
+  return tmp->IsBlackForCC(false);
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_END
 
 inline void
@@ -1657,10 +1656,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGlobalWindow)
     cb.DescribeRefCountedNode(tmp->mRefCnt.get(), name);
   } else {
     NS_IMPL_CYCLE_COLLECTION_DESCRIBE(nsGlobalWindow, tmp->mRefCnt.get())
-  }
-
-  if (!cb.WantAllTraces() && tmp->IsBlackForCC()) {
-    return NS_SUCCESS_INTERRUPTED_TRAVERSE;
   }
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mContext)
@@ -1791,12 +1786,16 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(nsGlobalWindow)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 bool
-nsGlobalWindow::IsBlackForCC()
+nsGlobalWindow::IsBlackForCC(bool aTracingNeeded)
 {
-  return
-    (mDoc &&
-     nsCCUncollectableMarker::InGeneration(mDoc->GetMarkedCCGeneration())) ||
-    (nsCCUncollectableMarker::sGeneration && IsBlack());
+  if (!nsCCUncollectableMarker::sGeneration) {
+    return false;
+  }
+
+  return (nsCCUncollectableMarker::InGeneration(GetMarkedCCGeneration()) ||
+          IsBlack()) &&
+         (!aTracingNeeded ||
+          HasNothingToTrace(static_cast<nsIDOMEventTarget*>(this)));
 }
 
 void

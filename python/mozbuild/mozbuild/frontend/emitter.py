@@ -174,7 +174,7 @@ class TreeMetadataEmitter(LoggingMixin):
             yield XPIDLFile(sandbox, mozpath.join(sandbox['SRCDIR'], idl),
                 xpidl_module)
 
-        for symbol in ('SOURCES', 'GTEST_SOURCES', 'HOST_SOURCES', 'UNIFIED_SOURCES'):
+        for symbol in ('SOURCES', 'HOST_SOURCES', 'UNIFIED_SOURCES'):
             for src in (sandbox[symbol] or []):
                 if not os.path.exists(os.path.join(sandbox['SRCDIR'], src)):
                     raise SandboxValidationError('Reference to a file that '
@@ -202,6 +202,7 @@ class TreeMetadataEmitter(LoggingMixin):
             FILES_PER_UNIFIED_FILE='FILES_PER_UNIFIED_FILE',
             FORCE_SHARED_LIB='FORCE_SHARED_LIB',
             FORCE_STATIC_LIB='FORCE_STATIC_LIB',
+            GENERATED_FILES='GENERATED_FILES',
             HOST_LIBRARY_NAME='HOST_LIBRARY_NAME',
             IS_COMPONENT='IS_COMPONENT',
             JS_MODULES_PATH='JS_MODULES_PATH',
@@ -236,12 +237,6 @@ class TreeMetadataEmitter(LoggingMixin):
                 '.mm': 'HOST_CMMSRCS',
                 '.cc': 'HOST_CPPSRCS',
                 '.cpp': 'HOST_CPPSRCS',
-            },
-            GTEST_SOURCES={
-                '.c': 'GTEST_CSRCS',
-                '.mm': 'GTEST_CMMSRCS',
-                '.cc': 'GTEST_CPPSRCS',
-                '.cpp': 'GTEST_CPPSRCS',
             },
             UNIFIED_SOURCES={
                 '.c': 'UNIFIED_CSRCS',

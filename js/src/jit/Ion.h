@@ -83,6 +83,12 @@ struct IonOptions
     // Default: false
     bool checkRangeAnalysis;
 
+    // Whether to protect the GC heap during Ion compilation and ensure that
+    // only threadsafe operations are performed on it.
+    //
+    // Default: false
+    bool checkThreadSafety;
+
     // Whether to perform expensive graph-consistency DEBUG-only assertions.
     // It can be useful to disable this to reduce DEBUG-compile time of large
     // asm.js programs.
@@ -188,12 +194,6 @@ struct IonOptions
     // Default: 1000
     uint32_t inlineMaxTotalBytecodeLength;
 
-    // Minimal ratio between the use counts of the caller and the callee to
-    // enable inlining of functions.
-    //
-    // Default: 128
-    uint32_t inlineUseCountRatio;
-
     // Whether functions are compiled immediately.
     //
     // Default: false
@@ -216,7 +216,7 @@ struct IonOptions
         baselineUsesBeforeCompile = 0;
     }
 
-    IonOptions()
+    MOZ_CONSTEXPR IonOptions()
       : gvn(true),
         gvnIsOptimistic(true),
         licm(true),
@@ -227,6 +227,7 @@ struct IonOptions
         edgeCaseAnalysis(true),
         rangeAnalysis(true),
         checkRangeAnalysis(false),
+        checkThreadSafety(false),
         assertGraphConsistency(true),
         uce(true),
         eaa(true),
@@ -246,7 +247,6 @@ struct IonOptions
         smallFunctionMaxBytecodeLength(100),
         polyInlineMax(4),
         inlineMaxTotalBytecodeLength(1000),
-        inlineUseCountRatio(128),
         eagerCompilation(false),
         usesBeforeCompilePar(1),
         inliningMaxCallerBytecodeLength(10000)

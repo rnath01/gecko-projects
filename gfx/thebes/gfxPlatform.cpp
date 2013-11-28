@@ -58,6 +58,7 @@
 #include "nsTArray.h"
 #include "nsILocaleService.h"
 #include "nsIObserverService.h"
+#include "MainThreadUtils.h"
 
 #include "nsWeakReference.h"
 
@@ -120,6 +121,7 @@ static PRLogModuleInfo *sFontInitLog = nullptr;
 static PRLogModuleInfo *sTextrunLog = nullptr;
 static PRLogModuleInfo *sTextrunuiLog = nullptr;
 static PRLogModuleInfo *sCmapDataLog = nullptr;
+static PRLogModuleInfo *sTextPerfLog = nullptr;
 #endif
 
 /* Class to listen for pref changes so that chrome code can dynamically
@@ -364,11 +366,12 @@ gfxPlatform::Init()
     gEverInitialized = true;
 
 #ifdef PR_LOGGING
-    sFontlistLog = PR_NewLogModule("fontlist");;
-    sFontInitLog = PR_NewLogModule("fontinit");;
-    sTextrunLog = PR_NewLogModule("textrun");;
-    sTextrunuiLog = PR_NewLogModule("textrunui");;
-    sCmapDataLog = PR_NewLogModule("cmapdata");;
+    sFontlistLog = PR_NewLogModule("fontlist");
+    sFontInitLog = PR_NewLogModule("fontinit");
+    sTextrunLog = PR_NewLogModule("textrun");
+    sTextrunuiLog = PR_NewLogModule("textrunui");
+    sCmapDataLog = PR_NewLogModule("cmapdata");
+    sTextPerfLog = PR_NewLogModule("textperf");
 #endif
 
     gGfxPlatformPrefsLock = new Mutex("gfxPlatform::gGfxPlatformPrefsLock");
@@ -1945,6 +1948,9 @@ gfxPlatform::GetLog(eGfxLog aWhichLog)
     case eGfxLog_cmapdata:
         return sCmapDataLog;
         break;
+    case eGfxLog_textperf:
+        return sTextPerfLog;
+        break;
     default:
         break;
     }
@@ -2044,6 +2050,12 @@ InitLayersAccelerationPrefs()
 {
   if (!sLayersAccelerationPrefsInitialized)
   {
+    // If this is called for the first time on a non-main thread, we're screwed.
+    // At the moment there's no explicit guarantee that the main thread calls
+    // this before the compositor thread, but let's at least make the assumption
+    // explicit.
+    MOZ_ASSERT(NS_IsMainThread(), "can only initialize prefs on the main thread");
+
     sPrefLayersOffMainThreadCompositionEnabled = Preferences::GetBool("layers.offmainthreadcomposition.enabled", false);
     sPrefLayersOffMainThreadCompositionTestingEnabled = Preferences::GetBool("layers.offmainthreadcomposition.testing.enabled", false);
     sPrefLayersOffMainThreadCompositionForceEnabled = Preferences::GetBool("layers.offmainthreadcomposition.force-enabled", false);
@@ -2103,7 +2115,13 @@ gfxPlatform::GetPrefLayersAccelerationForceEnabled()
 bool gfxPlatform::OffMainThreadCompositionRequired()
 {
   InitLayersAccelerationPrefs();
+#if defined(MOZ_WIDGET_GTK) && defined(NIGHTLY_BUILD)
+  // Linux users who chose OpenGL are being grandfathered in to OMTC
+  return sPrefBrowserTabsRemote ||
+         sPrefLayersAccelerationForceEnabled;
+#else
   return sPrefBrowserTabsRemote;
+#endif
 }
 
 bool

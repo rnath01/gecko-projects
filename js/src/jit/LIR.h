@@ -203,6 +203,8 @@ class LAllocation : public TempObject
 #else
     const char *toString() const { return "???"; }
 #endif
+
+    void dump() const;
 };
 
 class LUse : public LAllocation
@@ -675,7 +677,8 @@ class LInstruction
         return false;
     }
 
-    virtual void print(FILE *fp);
+    virtual void dump(FILE *fp);
+    void dump();
     static void printName(FILE *fp, Opcode op);
     virtual void printName(FILE *fp);
     virtual void printOperands(FILE *fp);
@@ -735,6 +738,7 @@ class LBlock : public TempObject
     InlineList<LInstruction> instructions_;
     LMoveGroup *entryMoveGroup_;
     LMoveGroup *exitMoveGroup_;
+    Label label_;
 
     LBlock(TempAllocator &alloc, MBasicBlock *block)
       : block_(block),
@@ -798,7 +802,9 @@ class LBlock : public TempObject
     }
     uint32_t firstId();
     uint32_t lastId();
-    Label *label();
+    Label *label() {
+        return &label_;
+    }
     LMoveGroup *getEntryMoveGroup(TempAllocator &alloc);
     LMoveGroup *getExitMoveGroup(TempAllocator &alloc);
 };

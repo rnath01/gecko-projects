@@ -135,7 +135,6 @@
 #include "LayerManagerD3D10.h"
 #endif
 
-#include "LayerManagerOGL.h"
 #include "nsIGfxInfo.h"
 #include "nsUXThemeConstants.h"
 #include "KeyboardLayout.h"
@@ -3314,39 +3313,11 @@ nsWindow::GetLayerManager(PLayerTransactionChild* aShadowManager,
         }
       }
 #endif
-      if (!mLayerManager && prefs.mPreferOpenGL) {
-        nsCOMPtr<nsIGfxInfo> gfxInfo = do_GetService("@mozilla.org/gfx/info;1");
-        int32_t status = nsIGfxInfo::FEATURE_NO_INFO;
-
-        if (gfxInfo && !prefs.mForceAcceleration) {
-          gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_OPENGL_LAYERS, &status);
-        }
-
-        if (status == nsIGfxInfo::FEATURE_NO_INFO) {
-          nsRefPtr<LayerManagerOGL> layerManager =
-            new LayerManagerOGL(this);
-          if (layerManager->Initialize()) {
-            mLayerManager = layerManager;
-          }
-
-        } else {
-          NS_WARNING("OpenGL accelerated layers are not supported on this system.");
-        }
-      }
     }
 
     // Fall back to software if we couldn't use any hardware backends.
     if (!mLayerManager) {
-      // Try to use an async compositor first, if possible
-      if (ShouldUseOffMainThreadCompositing()) {
-        // e10s uses the parameter to pass in the shadow manager from the TabChild
-        // so we don't expect to see it there since this doesn't support e10s.
-        NS_ASSERTION(aShadowManager == nullptr, "Async Compositor not supported with e10s");
-        CreateCompositor();
-      }
-
-      if (!mLayerManager)
-        mLayerManager = CreateBasicLayerManager();
+      mLayerManager = CreateBasicLayerManager();
     }
   }
 

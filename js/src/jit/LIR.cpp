@@ -55,12 +55,6 @@ LIRGraph::removeBlock(size_t i)
     blocks_.erase(blocks_.begin() + i);
 }
 
-Label *
-LBlock::label()
-{
-    return begin()->toLabel()->label();
-}
-
 uint32_t
 LBlock::firstId()
 {
@@ -90,8 +84,10 @@ LBlock::getEntryMoveGroup(TempAllocator &alloc)
     if (entryMoveGroup_)
         return entryMoveGroup_;
     entryMoveGroup_ = new LMoveGroup(alloc);
-    JS_ASSERT(begin()->isLabel());
-    insertAfter(*begin(), entryMoveGroup_);
+    if (begin()->isLabel())
+        insertAfter(*begin(), entryMoveGroup_);
+    else
+        insertBefore(*begin(), entryMoveGroup_);
     return entryMoveGroup_;
 }
 
@@ -292,6 +288,12 @@ LAllocation::toString() const
 #endif // DEBUG
 
 void
+LAllocation::dump() const
+{
+    fprintf(stderr, "%s\n", toString());
+}
+
+void
 LInstruction::printOperands(FILE *fp)
 {
     for (size_t i = 0, e = numOperands(); i < e; i++) {
@@ -319,7 +321,7 @@ LInstruction::assignSnapshot(LSnapshot *snapshot)
 }
 
 void
-LInstruction::print(FILE *fp)
+LInstruction::dump(FILE *fp)
 {
     fprintf(fp, "{");
     for (size_t i = 0; i < numDefs(); i++) {
@@ -343,6 +345,12 @@ LInstruction::print(FILE *fp)
         }
         fprintf(fp, ")");
     }
+}
+
+void
+LInstruction::dump()
+{
+    return dump(stderr);
 }
 
 void

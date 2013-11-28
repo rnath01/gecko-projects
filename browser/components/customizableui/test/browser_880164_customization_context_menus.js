@@ -72,6 +72,32 @@ let gTests = [
     teardown: null
   },
   {
+    desc: "Right-click on the searchbar and moving it to the menu and back should move the search-container instead.",
+    run: function() {
+      let searchbar = document.getElementById("searchbar");
+      gCustomizeMode.addToPanel(searchbar);
+      let placement = CustomizableUI.getPlacementOfWidget("search-container");
+      is(placement.area, CustomizableUI.AREA_PANEL, "Should be in panel");
+
+      let shownPanelPromise = promisePanelShown(window);
+      PanelUI.toggle({type: "command"});
+      yield shownPanelPromise;
+      let hiddenPanelPromise = promisePanelHidden(window);
+      PanelUI.toggle({type: "command"});
+      yield hiddenPanelPromise;
+
+      gCustomizeMode.addToToolbar(searchbar);
+      placement = CustomizableUI.getPlacementOfWidget("search-container");
+      is(placement.area, CustomizableUI.AREA_NAVBAR, "Should be in navbar");
+      gCustomizeMode.removeFromArea(searchbar);
+      placement = CustomizableUI.getPlacementOfWidget("search-container");
+      is(placement, null, "Should be in palette");
+      CustomizableUI.reset();
+      placement = CustomizableUI.getPlacementOfWidget("search-container");
+      is(placement.area, CustomizableUI.AREA_NAVBAR, "Should be in navbar");
+    }
+  },
+  {
     desc: "Right-click on an item within the menu panel should show a context menu with options to move it.",
     setup: null,
     run: function() {
@@ -183,6 +209,38 @@ let gTests = [
     },
     teardown: endCustomizing
   },
+  {
+    desc: "Test the toolbarbutton panel context menu in customization mode without opening the panel before customization mode",
+    setup: null,
+    run: function() {
+      this.otherWin = yield openAndLoadWindow(null, true);
+
+      yield startCustomizing(this.otherWin);
+
+      let contextMenu = this.otherWin.document.getElementById("customizationPanelItemContextMenu");
+      let shownPromise = contextMenuShown(contextMenu);
+      let newWindowButton = this.otherWin.document.getElementById("wrapper-new-window-button");
+      EventUtils.synthesizeMouse(newWindowButton, 2, 2, {type: "contextmenu", button: 2}, this.otherWin);
+      yield shownPromise;
+
+      let expectedEntries = [
+        [".customize-context-addToToolbar", true],
+        [".customize-context-removeFromPanel", true],
+        ["---"],
+        [".viewCustomizeToolbar", false]
+      ];
+      checkContextMenu(contextMenu, expectedEntries, this.otherWin);
+
+      let hiddenContextPromise = contextMenuHidden(contextMenu);
+      contextMenu.hidePopup();
+      yield hiddenContextPromise;
+    },
+    teardown: function() {
+      yield endCustomizing(this.otherWin);
+      this.otherWin.close();
+      this.otherWin = null;
+    }
+  },
 ];
 
 function test() {
@@ -192,8 +250,13 @@ function test() {
 
 function contextMenuShown(aContextMenu) {
   let deferred = Promise.defer();
+  let win = aContextMenu.ownerDocument.defaultView;
+  let timeoutId = win.setTimeout(() => {
+    deferred.reject("Context menu (" + aContextMenu.id + ") did not show within 20 seconds.");
+  }, 20000);
   function onPopupShown(e) {
     aContextMenu.removeEventListener("popupshown", onPopupShown);
+    win.clearTimeout(timeoutId);
     deferred.resolve();
   };
   aContextMenu.addEventListener("popupshown", onPopupShown);
@@ -202,7 +265,12 @@ function contextMenuShown(aContextMenu) {
 
 function contextMenuHidden(aContextMenu) {
   let deferred = Promise.defer();
+  let win = aContextMenu.ownerDocument.defaultView;
+  let timeoutId = win.setTimeout(() => {
+    deferred.reject("Context menu (" + aContextMenu.id + ") did not hide within 20 seconds.");
+  }, 20000);
   function onPopupHidden(e) {
+    win.clearTimeout(timeoutId);
     aContextMenu.removeEventListener("popuphidden", onPopupHidden);
     deferred.resolve();
   };
@@ -212,7 +280,7 @@ function contextMenuHidden(aContextMenu) {
 
 // This is a simpler version of the context menu check that
 // exists in contextmenu_common.js.
-function checkContextMenu(aContextMenu, aExpectedEntries) {
+function checkContextMenu(aContextMenu, aExpectedEntries, aWindow=window) {
   let childNodes = aContextMenu.childNodes;
   for (let i = 0; i < childNodes.length; i++) {
     let menuitem = childNodes[i];
@@ -225,11 +293,11 @@ function checkContextMenu(aContextMenu, aExpectedEntries) {
       let selector = aExpectedEntries[i][0];
       ok(menuitem.mozMatchesSelector(selector), "menuitem should match " + selector + " selector");
       let commandValue = menuitem.getAttribute("command");
-      let relatedCommand = commandValue ? document.getElementById(commandValue) : null;
+      let relatedCommand = commandValue ? aWindow.document.getElementById(commandValue) : null;
       let menuItemDisabled = relatedCommand ?
                                relatedCommand.getAttribute("disabled") == "true" :
                                menuitem.getAttribute("disabled") == "true";
-      is(menuItemDisabled, !aExpectedEntries[i][1], "disabled state wrong for " + selector);
+      is(menuItemDisabled, !aExpectedEntries[i][1], "disabled state for " + selector);
     } catch (e) {
       ok(false, "Exception when checking context menu: " + e);
     }

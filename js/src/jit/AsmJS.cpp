@@ -617,10 +617,10 @@ class ABIArgIter
     uint32_t stackBytesConsumedSoFar() const { return gen_.stackBytesConsumedSoFar(); }
 };
 
-typedef Vector<MIRType, 8> MIRTypeVector;
+typedef js::Vector<MIRType, 8> MIRTypeVector;
 typedef ABIArgIter<MIRTypeVector> ABIArgMIRTypeIter;
 
-typedef Vector<VarType, 8> VarTypeVector;
+typedef js::Vector<VarType, 8> VarTypeVector;
 typedef ABIArgIter<VarTypeVector> ABIArgTypeIter;
 
 class Signature
@@ -963,8 +963,8 @@ js::IsValidAsmJSHeapLength(uint32_t length)
 
 namespace {
 
-typedef Vector<PropertyName*,1> LabelVector;
-typedef Vector<MBasicBlock*,8> BlockVector;
+typedef js::Vector<PropertyName*,1> LabelVector;
+typedef js::Vector<MBasicBlock*,8> BlockVector;
 
 // ModuleCompiler encapsulates the compilation of an entire asm.js module. Over
 // the course of an ModuleCompiler object's lifetime, many FunctionCompiler
@@ -1132,7 +1132,7 @@ class MOZ_STACK_CLASS ModuleCompiler
         }
     };
 
-    typedef Vector<const Func*> FuncPtrVector;
+    typedef js::Vector<const Func*> FuncPtrVector;
 
     class FuncPtrTable
     {
@@ -1161,7 +1161,7 @@ class MOZ_STACK_CLASS ModuleCompiler
         const Func &elem(unsigned i) const { return *elems_[i]; }
     };
 
-    typedef Vector<FuncPtrTable> FuncPtrTableVector;
+    typedef js::Vector<FuncPtrTable> FuncPtrTableVector;
 
     class ExitDescriptor
     {
@@ -1205,9 +1205,9 @@ class MOZ_STACK_CLASS ModuleCompiler
 
     typedef HashMap<PropertyName*, AsmJSMathBuiltin> MathNameMap;
     typedef HashMap<PropertyName*, Global*> GlobalMap;
-    typedef Vector<Func*> FuncVector;
-    typedef Vector<AsmJSGlobalAccess> GlobalAccessVector;
-    typedef Vector<SlowFunction> SlowFunctionVector;
+    typedef js::Vector<Func*> FuncVector;
+    typedef js::Vector<AsmJSGlobalAccess> GlobalAccessVector;
+    typedef js::Vector<SlowFunction> SlowFunctionVector;
 
     ExclusiveContext *             cx_;
     AsmJSParser &                  parser_;
@@ -1632,7 +1632,7 @@ class MOZ_STACK_CLASS ModuleCompiler
         module_->exportedFunction(exportIndex).initCodeOffset(masm_.size());
     }
 
-    void buildCompilationTimeReport(ScopedJSFreePtr<char> *out) {
+    void buildCompilationTimeReport(bool storedInCache, ScopedJSFreePtr<char> *out) {
         ScopedJSFreePtr<char> slowFuns;
 #ifndef JS_MORE_DETERMINISTIC
         int64_t usecAfter = PRMJ_Now();
@@ -1653,8 +1653,10 @@ class MOZ_STACK_CLASS ModuleCompiler
                     return;
             }
         }
-        out->reset(JS_smprintf("total compilation time %dms%s",
-                               msTotal, slowFuns ? slowFuns.get() : ""));
+        out->reset(JS_smprintf("total compilation time %dms%s%s",
+                               msTotal,
+                               storedInCache ? "; stored in cache" : "",
+                               slowFuns ? slowFuns.get() : ""));
 #endif
     }
 
@@ -1807,10 +1809,10 @@ class FunctionCompiler
 
   private:
     typedef HashMap<PropertyName*, Local> LocalMap;
-    typedef Vector<Value> VarInitializerVector;
+    typedef js::Vector<Value> VarInitializerVector;
     typedef HashMap<PropertyName*, BlockVector> LabeledBlockMap;
     typedef HashMap<ParseNode*, BlockVector> UnlabeledBlockMap;
-    typedef Vector<ParseNode*, 4> NodeStack;
+    typedef js::Vector<ParseNode*, 4> NodeStack;
 
     ModuleCompiler &       m_;
     LifoAlloc &            lifo_;
@@ -2056,6 +2058,24 @@ class FunctionCompiler
         return ins;
     }
 
+    MDefinition *div(MDefinition *lhs, MDefinition *rhs, MIRType type, bool unsignd)
+    {
+        if (!curBlock_)
+            return nullptr;
+        MDiv *ins = MDiv::NewAsmJS(alloc(), lhs, rhs, type, unsignd);
+        curBlock_->add(ins);
+        return ins;
+    }
+
+    MDefinition *mod(MDefinition *lhs, MDefinition *rhs, MIRType type, bool unsignd)
+    {
+        if (!curBlock_)
+            return nullptr;
+        MMod *ins = MMod::NewAsmJS(alloc(), lhs, rhs, type, unsignd);
+        curBlock_->add(ins);
+        return ins;
+    }
+
     template <class T>
     MDefinition *bitwise(MDefinition *lhs, MDefinition *rhs)
     {
@@ -2166,7 +2186,7 @@ class FunctionCompiler
         uint32_t spIncrement_;
         Signature sig_;
         MAsmJSCall::Args regArgs_;
-        Vector<MAsmJSPassStackArg*> stackArgs_;
+        js::Vector<MAsmJSPassStackArg*> stackArgs_;
         bool childClobbers_;
 
         friend class FunctionCompiler;
@@ -4195,26 +4215,26 @@ CheckDivOrMod(FunctionCompiler &f, ParseNode *expr, MDefinition **def, Type *typ
 
     if (lhsType.isDoublish() && rhsType.isDoublish()) {
         *def = expr->isKind(PNK_DIV)
-               ? f.binary<MDiv>(lhsDef, rhsDef, MIRType_Double)
-               : f.binary<MMod>(lhsDef, rhsDef, MIRType_Double);
+               ? f.div(lhsDef, rhsDef, MIRType_Double, /* unsignd = */ false)
+               : f.mod(lhsDef, rhsDef, MIRType_Double, /* unsignd = */ false);
         *type = Type::Double;
         return true;
     }
 
     if (lhsType.isSigned() && rhsType.isSigned()) {
         if (expr->isKind(PNK_DIV))
-            *def = f.binary<MDiv>(lhsDef, rhsDef, MIRType_Int32);
+            *def = f.div(lhsDef, rhsDef, MIRType_Int32, /* unsignd = */ false);
         else
-            *def = f.binary<MMod>(lhsDef, rhsDef, MIRType_Int32);
+            *def = f.mod(lhsDef, rhsDef, MIRType_Int32, /* unsignd = */ false);
         *type = Type::Intish;
         return true;
     }
 
     if (lhsType.isUnsigned() && rhsType.isUnsigned()) {
         if (expr->isKind(PNK_DIV))
-            *def = f.binary<MAsmJSUDiv>(lhsDef, rhsDef);
+            *def = f.div(lhsDef, rhsDef, MIRType_Int32, /* unsignd = */ true);
         else
-            *def = f.binary<MAsmJSUMod>(lhsDef, rhsDef);
+            *def = f.mod(lhsDef, rhsDef, MIRType_Int32, /* unsignd = */ true);
         *type = Type::Intish;
         return true;
     }
@@ -5109,11 +5129,11 @@ ParallelCompilationEnabled(ExclusiveContext *cx)
 struct ParallelGroupState
 {
     WorkerThreadState &state;
-    Vector<AsmJSParallelTask> &tasks;
+    js::Vector<AsmJSParallelTask> &tasks;
     int32_t outstandingJobs; // Good work, jobs!
     uint32_t compiledJobs;
 
-    ParallelGroupState(WorkerThreadState &state, Vector<AsmJSParallelTask> &tasks)
+    ParallelGroupState(WorkerThreadState &state, js::Vector<AsmJSParallelTask> &tasks)
       : state(state), tasks(tasks), outstandingJobs(0), compiledJobs(0)
     { }
 };
@@ -5282,7 +5302,7 @@ CheckFunctionsParallel(ModuleCompiler &m)
 
     // Allocate scoped AsmJSParallelTask objects. Each contains a unique
     // LifoAlloc that provides all necessary memory for compilation.
-    Vector<AsmJSParallelTask, 0> tasks(m.cx());
+    js::Vector<AsmJSParallelTask, 0> tasks(m.cx());
     if (!tasks.initCapacity(numParallelJobs))
         return false;
 
@@ -6444,10 +6464,10 @@ CheckModule(ExclusiveContext *cx, AsmJSParser &parser, ParseNode *stmtList,
     if (!FinishModule(m, &module, &linkData))
         return false;
 
-    StoreAsmJSModuleInCache(parser, *module, linkData, cx);
+    bool storedInCache = StoreAsmJSModuleInCache(parser, *module, linkData, cx);
     module->staticallyLink(linkData, cx);
 
-    m.buildCompilationTimeReport(compilationTimeReport);
+    m.buildCompilationTimeReport(storedInCache, compilationTimeReport);
     *moduleOut = module.forget();
     return true;
 }

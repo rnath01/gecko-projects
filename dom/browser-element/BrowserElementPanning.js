@@ -115,9 +115,7 @@ const ContentPanning = {
   },
 
   observe: function cp_observe(subject, topic, data) {
-    if (topic === 'BEC:ShownModalPrompt') {
-      this._resetHover();
-    }
+    this._resetHover();
   },
 
   position: new Point(0 , 0),
@@ -410,6 +408,7 @@ const ContentPanning = {
 
     function scroll(delta) {
       current = root;
+      firstScroll = true;
       while (current) {
         if (doScroll(current, delta)) {
           firstScroll = false;

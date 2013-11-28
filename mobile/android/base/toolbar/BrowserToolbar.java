@@ -115,8 +115,12 @@ public class BrowserToolbar extends GeckoRelativeLayout
     private ShapedButton mTabs;
     private ImageButton mBack;
     private ImageButton mForward;
-    private ImageButton mFavicon;
     private ImageButton mStop;
+
+    // To de-bounce sets.
+    private Bitmap mLastFavicon;
+    private ImageButton mFavicon;
+
     private ImageButton mSiteSecurity;
     private PageActionLayout mPageActionLayout;
     private Animation mProgressSpinner;
@@ -428,7 +432,7 @@ public class BrowserToolbar extends GeckoRelativeLayout
 
         mFavicon.setOnClickListener(faviconListener);
         mSiteSecurity.setOnClickListener(faviconListener);
-        
+
         mStop.setOnClickListener(new Button.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -532,73 +536,91 @@ public class BrowserToolbar extends GeckoRelativeLayout
 
     @Override
     public void onTabChanged(Tab tab, Tabs.TabEvents msg, Object data) {
-        switch(msg) {
-            case TITLE:
-                if (Tabs.getInstance().isSelectedTab(tab)) {
-                    updateTitle();
-                }
+        Log.d(LOGTAG, "onTabChanged: " + msg);
+        final Tabs tabs = Tabs.getInstance();
+
+        // These conditions are split into three phases:
+        // * Always do first
+        // * Handling specific to the selected tab
+        // * Always do afterwards.
+
+        switch (msg) {
+            case ADDED:
+                updateTabCount(tabs.getDisplayCount());
                 break;
-            case START:
-                if (Tabs.getInstance().isSelectedTab(tab)) {
+            case RESTORED:
+                // TabCount fixup after OOM
+            case SELECTED:
+                updateTabCount(tabs.getDisplayCount());
+                mSwitchingTabs = true;
+                // Fall through.
+        }
+
+        if (tabs.isSelectedTab(tab)) {
+            switch (msg) {
+                case TITLE:
+                    updateTitle();
+                    break;
+
+                case START:
                     updateBackButton(canDoBack(tab));
                     updateForwardButton(canDoForward(tab));
                     Boolean showProgress = (Boolean)data;
-                    if (showProgress && tab.getState() == Tab.STATE_LOADING)
+                    if (showProgress && tab.getState() == Tab.STATE_LOADING) {
                         setProgressVisibility(true);
+                    }
                     setSecurityMode(tab.getSecurityMode());
                     setPageActionVisibility(mStop.getVisibility() == View.VISIBLE);
-                }
-                break;
-            case STOP:
-                if (Tabs.getInstance().isSelectedTab(tab)) {
+                    break;
+
+                case STOP:
                     updateBackButton(canDoBack(tab));
                     updateForwardButton(canDoForward(tab));
                     setProgressVisibility(false);
                     // Reset the title in case we haven't navigated to a new page yet.
                     updateTitle();
-                }
-                break;
-            case LOADED:
-                if (Tabs.getInstance().isSelectedTab(tab)) {
+                    break;
+
+                case SELECTED:
+                case LOAD_ERROR:
                     updateTitle();
-                }
-                break;
-            case RESTORED:
-                // TabCount fixup after OOM
-            case SELECTED:
-                updateTabCount(Tabs.getInstance().getDisplayCount());
-                mSwitchingTabs = true;
-                // fall through
-            case LOCATION_CHANGE:
-            case LOAD_ERROR:
-                if (Tabs.getInstance().isSelectedTab(tab)) {
-                    refresh();
-                }
-                mSwitchingTabs = false;
-                break;
-            case CLOSED:
-            case ADDED:
-                updateTabCount(Tabs.getInstance().getDisplayCount());
-                if (Tabs.getInstance().isSelectedTab(tab)) {
+                    // Fall through.
+                case LOCATION_CHANGE:
+                    // A successful location change will cause Tab to notify
+                    // us of a title change, so we don't update the title here.
+                    // And there's no point in refreshing the UI
+                    // if the page is the same.
+                    final String oldURL = (String) data;
+                    if (!TextUtils.equals(oldURL, tab.getURL())) {
+                        refresh();
+                    }
+                    break;
+
+                case CLOSED:
+                case ADDED:
                     updateBackButton(canDoBack(tab));
                     updateForwardButton(canDoForward(tab));
-                }
-                break;
-            case FAVICON:
-                if (Tabs.getInstance().isSelectedTab(tab)) {
+                    break;
+
+                case FAVICON:
                     setFavicon(tab.getFavicon());
-                }
-                break;
-            case SECURITY_CHANGE:
-                if (Tabs.getInstance().isSelectedTab(tab)) {
+                    break;
+
+                case SECURITY_CHANGE:
                     setSecurityMode(tab.getSecurityMode());
-                }
-                break;
-            case READER_ENABLED:
-                if (Tabs.getInstance().isSelectedTab(tab)) {
+                    break;
+
+                case READER_ENABLED:
                     setPageActionVisibility(mStop.getVisibility() == View.VISIBLE);
-                }
-                break;
+                    break;
+            }
+        }
+
+        switch (msg) {
+            case SELECTED:
+            case LOAD_ERROR:
+            case LOCATION_CHANGE:
+                mSwitchingTabs = false;
         }
     }
 
@@ -729,12 +751,15 @@ public class BrowserToolbar extends GeckoRelativeLayout
     }
 
     public void setProgressVisibility(boolean visible) {
+        Log.d(LOGTAG, "setProgressVisibility: " + visible);
         // The "Throbber start" and "Throbber stop" log messages in this method
         // are needed by S1/S2 tests (http://mrcote.info/phonedash/#).
         // See discussion in Bug 804457. Bug 805124 tracks paring these down.
         if (visible) {
             mFavicon.setImageResource(R.drawable.progress_spinner);
-            //To stop the glitch caused by mutiple start() calls.
+            mLastFavicon = null;
+
+            // To stop the glitch caused by multiple start() calls.
             if (!mSpinnerVisible) {
                 setPageActionVisibility(true);
                 mFavicon.setAnimation(mProgressSpinner);
@@ -744,8 +769,9 @@ public class BrowserToolbar extends GeckoRelativeLayout
             Log.i(LOGTAG, "zerdatime " + SystemClock.uptimeMillis() + " - Throbber start");
         } else {
             Tab selectedTab = Tabs.getInstance().getSelectedTab();
-            if (selectedTab != null)
+            if (selectedTab != null) {
                 setFavicon(selectedTab.getFavicon());
+            }
 
             if (mSpinnerVisible) {
                 setPageActionVisibility(false);
@@ -856,15 +882,15 @@ public class BrowserToolbar extends GeckoRelativeLayout
         setContentDescription(title != null ? title : mTitle.getHint());
     }
 
-    // Sets the toolbar title according to the selected tab, obeying the mShowUrl prference.
+    // Sets the toolbar title according to the selected tab, obeying the mShowUrl preference.
     private void updateTitle() {
-        Tab tab = Tabs.getInstance().getSelectedTab();
+        final Tab tab = Tabs.getInstance().getSelectedTab();
         // Keep the title unchanged if there's no selected tab, or if the tab is entering reader mode.
         if (tab == null || tab.isEnteringReaderMode()) {
             return;
         }
 
-        String url = tab.getURL();
+        final String url = tab.getURL();
 
         if (!isEditing()) {
             mUrlEditLayout.setText(url);
@@ -911,8 +937,17 @@ public class BrowserToolbar extends GeckoRelativeLayout
     }
 
     private void setFavicon(Bitmap image) {
-        if (Tabs.getInstance().getSelectedTab().getState() == Tab.STATE_LOADING)
+        Log.d(LOGTAG, "setFavicon(" + image + ")");
+        if (Tabs.getInstance().getSelectedTab().getState() == Tab.STATE_LOADING) {
             return;
+        }
+
+        if (image == mLastFavicon) {
+            Log.d(LOGTAG, "Ignoring favicon set: new favicon is identical to previous favicon.");
+            return;
+        }
+
+        mLastFavicon = image;     // Cache the original so we can debounce without scaling.
 
         if (image != null) {
             image = Bitmap.createScaledBitmap(image, mFaviconSize, mFaviconSize, false);
@@ -921,7 +956,7 @@ public class BrowserToolbar extends GeckoRelativeLayout
             mFavicon.setImageDrawable(null);
         }
     }
-    
+
     private void setSecurityMode(String mode) {
         int imageLevel = SiteIdentityPopup.getSecurityImageLevel(mode);
         mSiteSecurity.setImageLevel(imageLevel);
@@ -1455,8 +1490,9 @@ public class BrowserToolbar extends GeckoRelativeLayout
     }
 
     @Override
-    public void addActionItem(View actionItem) {
+    public boolean addActionItem(View actionItem) {
         mActionItemBar.addView(actionItem);
+        return true;
     }
 
     @Override
@@ -1472,10 +1508,9 @@ public class BrowserToolbar extends GeckoRelativeLayout
         setVisibility(View.GONE);
     }
 
-    public void refresh() {
+    private void refresh() {
         Tab tab = Tabs.getInstance().getSelectedTab();
         if (tab != null) {
-            updateTitle();
             setFavicon(tab.getFavicon());
             setProgressVisibility(tab.getState() == Tab.STATE_LOADING);
             setSecurityMode(tab.getSecurityMode());
@@ -1559,6 +1594,7 @@ public class BrowserToolbar extends GeckoRelativeLayout
 
     @Override
     public void handleMessage(String event, JSONObject message) {
+        Log.d(LOGTAG, "handleMessage: " + event);
         if (event.equals("Reader:Click")) {
             Tab tab = Tabs.getInstance().getSelectedTab();
             if (tab != null) {
