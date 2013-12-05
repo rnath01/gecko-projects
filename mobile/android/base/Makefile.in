@@ -86,6 +86,7 @@ include $(topsrcdir)/config/config.mk
 # Sync dependencies are provided in a single jar. Sync classes themselves are delivered as source,
 # because Android resource classes must be compiled together in order to avoid overlapping resource
 # indices.
+
 classes.dex: proguard-jars
 	@echo 'DX classes.dex'
 	$(DX) --dex --output=classes.dex jars-proguarded $(ANDROID_COMPAT_LIB)

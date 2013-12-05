@@ -21,6 +21,8 @@
 %prefsDTD;
 <!ENTITY % aboutPanelDTD SYSTEM "chrome://browser/locale/aboutPanel.dtd">
 %aboutPanelDTD;
+<!ENTITY % searchPanelDTD SYSTEM "chrome://browser/locale/searchPanel.dtd">
+%searchPanelDTD;
 #ifdef MOZ_SERVICES_SYNC
 <!ENTITY % syncBrandDTD SYSTEM "chrome://browser/locale/syncBrand.dtd">
 %syncBrandDTD;
@@ -76,6 +78,7 @@
 
     <!-- tabs -->
     <command id="cmd_newTab" oncommand="CommandUpdater.doCommand(this.id);"/>
+    <command id="cmd_newTabKey" oncommand="CommandUpdater.doCommand(this.id);"/>
     <command id="cmd_closeTab" oncommand="CommandUpdater.doCommand(this.id);"/>
     <command id="cmd_undoCloseTab" oncommand="CommandUpdater.doCommand(this.id);"/>
 #ifdef MOZ_SERVICES_SYNC
@@ -152,8 +155,8 @@ Desktop browser's sync prefs.
 -->
 
     <!-- manage tabs -->
-    <key id="key_newTab" key="&newTab.key;" modifiers="accel" command="cmd_newTab"/>
-    <key id="key_newTab2" key="&newTab2.key;" modifiers="accel" command="cmd_newTab"/>
+    <key id="key_newTab" key="&newTab.key;" modifiers="accel" command="cmd_newTabKey"/>
+    <key id="key_newTab2" key="&newTab2.key;" modifiers="accel" command="cmd_newTabKey"/>
     <key id="key_closeTab" key="&closeTab.key;" modifiers="accel" command="cmd_closeTab"/>
     <key id="key_closeTab2" keycode="VK_F4" modifiers="accel" command="cmd_closeTab"/>
     <key id="key_undoCloseTab" key="&newTab.key;" modifiers="accel,shift" command="cmd_undoCloseTab"/>
@@ -683,6 +686,10 @@ Desktop browser's sync prefs.
           </radiogroup>
         </setting>
         <label class="text-link" href="https://www.mozilla.org/dnt">&doNotTrack.learnMoreLink;</label>
+      </settings>
+    </flyoutpanel>
+    <flyoutpanel id="search-flyoutpanel" class="flyout-narrow" headertext="&searchFlyoutHeader.title;">
+      <settings id="search-options" label="&searchSetting.title;">
       </settings>
     </flyoutpanel>
 
