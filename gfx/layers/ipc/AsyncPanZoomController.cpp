@@ -1418,7 +1418,9 @@ void AsyncPanZoomController::UpdateCompositionBounds(const ScreenIntRect& aCompo
   if (aCompositionBounds.width && aCompositionBounds.height &&
       oldCompositionBounds.width && oldCompositionBounds.height) {
     float adjustmentFactor = float(aCompositionBounds.width) / float(oldCompositionBounds.width);
-    mFrameMetrics.mZoom.scale *= adjustmentFactor;
+    mFrameMetrics.mZoom.scale =
+      clamped(mFrameMetrics.mZoom.scale * adjustmentFactor,
+              mMinZoom.scale, mMaxZoom.scale);
 
     // Repaint on a rotation so that our new resolution gets properly updated.
     RequestContentRepaint();
@@ -1590,6 +1592,17 @@ void AsyncPanZoomController::UpdateZoomConstraints(bool aAllowZoom,
   mMinZoom = (MIN_ZOOM > aMinZoom ? MIN_ZOOM : aMinZoom);
   mMaxZoom = (MAX_ZOOM > aMaxZoom ? aMaxZoom : MAX_ZOOM);
 }
+
+void
+AsyncPanZoomController::GetZoomConstraints(bool* aAllowZoom,
+                                           CSSToScreenScale* aMinZoom,
+                                           CSSToScreenScale* aMaxZoom)
+{
+  *aAllowZoom = mAllowZoom;
+  *aMinZoom = mMinZoom;
+  *aMaxZoom = mMaxZoom;
+}
+
 
 void AsyncPanZoomController::PostDelayedTask(Task* aTask, int aDelayMs) {
   nsRefPtr<GeckoContentController> controller = GetGeckoContentController();
