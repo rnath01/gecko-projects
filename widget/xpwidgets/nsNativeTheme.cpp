@@ -78,12 +78,20 @@ nsNativeTheme::GetContentState(nsIFrame* aFrame, uint8_t aWidgetType)
 
     // <input type=number> needs special handling since its nested native
     // anonymous <input type=text> takes focus for it.
-    if (aWidgetType == NS_THEME_TEXTFIELD &&
+    if (aWidgetType == NS_THEME_NUMBER_INPUT &&
         frameContent->IsHTML(nsGkAtoms::input)) {
       nsNumberControlFrame *numberControlFrame = do_QueryFrame(aFrame);
       if (numberControlFrame && numberControlFrame->IsFocused()) {
         flags |= NS_EVENT_STATE_FOCUS;
       }
+    }
+
+    nsNumberControlFrame* numberControlFrame =
+      nsNumberControlFrame::GetNumberControlFrameForSpinButton(aFrame);
+    if (numberControlFrame &&
+        numberControlFrame->GetContent()->AsElement()->State().
+          HasState(NS_EVENT_STATE_DISABLED)) {
+      flags |= NS_EVENT_STATE_DISABLED;
     }
   }
   
@@ -97,7 +105,8 @@ nsNativeTheme::GetContentState(nsIFrame* aFrame, uint8_t aWidgetType)
   // focus something in the window.
 #if defined(XP_MACOSX)
   // Mac always draws focus rings for textboxes and lists.
-  if (aWidgetType == NS_THEME_TEXTFIELD ||
+  if (aWidgetType == NS_THEME_NUMBER_INPUT ||
+      aWidgetType == NS_THEME_TEXTFIELD ||
       aWidgetType == NS_THEME_TEXTFIELD_MULTILINE ||
       aWidgetType == NS_THEME_SEARCHFIELD ||
       aWidgetType == NS_THEME_LISTBOX) {
@@ -333,7 +342,8 @@ nsNativeTheme::IsWidgetStyled(nsPresContext* aPresContext, nsIFrame* aFrame,
     }
   }
 
-  return (aWidgetType == NS_THEME_BUTTON ||
+  return (aWidgetType == NS_THEME_NUMBER_INPUT ||
+          aWidgetType == NS_THEME_BUTTON ||
           aWidgetType == NS_THEME_TEXTFIELD ||
           aWidgetType == NS_THEME_TEXTFIELD_MULTILINE ||
           aWidgetType == NS_THEME_LISTBOX ||

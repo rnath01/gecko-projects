@@ -548,14 +548,34 @@ HyperTextAccessible::DOMPointToHypertextOffset(nsINode* aNode,
   return nullptr;
 }
 
-nsresult
-HyperTextAccessible::HypertextOffsetsToDOMRange(int32_t aStartHTOffset,
-                                                int32_t aEndHTOffset,
-                                                nsRange* aRange)
+bool
+HyperTextAccessible::OffsetsToDOMRange(int32_t aStartOffset, int32_t aEndOffset,
+                                       nsRange* aRange)
 {
-  // If the given offsets are 0 and associated editor is empty then return
-  // collapsed range with editor root element as range container.
-  if (aStartHTOffset == 0 && aEndHTOffset == 0) {
+  DOMPoint startPoint = OffsetToDOMPoint(aStartOffset);
+  if (!startPoint.node)
+    return false;
+
+  aRange->SetStart(startPoint.node, startPoint.idx);
+  if (aStartOffset == aEndOffset) {
+    aRange->SetEnd(startPoint.node, startPoint.idx);
+    return true;
+  }
+
+  DOMPoint endPoint = OffsetToDOMPoint(aEndOffset);
+  if (!endPoint.node)
+    return false;
+
+  aRange->SetEnd(endPoint.node, endPoint.idx);
+  return true;
+}
+
+DOMPoint
+HyperTextAccessible::OffsetToDOMPoint(int32_t aOffset)
+{
+  // 0 offset is valid even if no children. In this case the associated editor
+  // is empty so return a DOM point for editor root element.
+  if (aOffset == 0) {
     nsCOMPtr<nsIEditor> editor = GetEditor();
     if (editor) {
       bool isEmpty = false;
@@ -565,110 +585,36 @@ HyperTextAccessible::HypertextOffsetsToDOMRange(int32_t aStartHTOffset,
         editor->GetRootElement(getter_AddRefs(editorRootElm));
 
         nsCOMPtr<nsINode> editorRoot(do_QueryInterface(editorRootElm));
-        if (editorRoot) {
-          aRange->SetStart(editorRoot, 0);
-          aRange->SetEnd(editorRoot, 0);
-
-          return NS_OK;
-        }
+        return DOMPoint(editorRoot, 0);
       }
     }
   }
 
-  nsRefPtr<Accessible> startAcc, endAcc;
-  int32_t startOffset = aStartHTOffset, endOffset = aEndHTOffset;
-  nsIFrame *startFrame = nullptr, *endFrame = nullptr;
+  int32_t childIdx = GetChildIndexAtOffset(aOffset);
+  if (childIdx == -1)
+    return DOMPoint();
 
-  startFrame = GetPosAndText(startOffset, endOffset, nullptr, &endFrame,
-                             getter_AddRefs(startAcc), getter_AddRefs(endAcc));
-  if (!startAcc || !endAcc)
-    return NS_ERROR_FAILURE;
+  Accessible* child = GetChildAt(childIdx);
+  int32_t innerOffset = aOffset - GetChildOffset(childIdx);
 
-  DOMPoint startPoint, endPoint;
-  nsresult rv = GetDOMPointByFrameOffset(startFrame, startOffset, startAcc,
-                                         &startPoint);
-  NS_ENSURE_SUCCESS(rv, rv);
+  // A text leaf case. The point is inside the text node.
+  if (child->IsTextLeaf()) {
+    nsIContent* content = child->GetContent();
+    int32_t idx = 0;
+    if (NS_FAILED(RenderedToContentOffset(content->GetPrimaryFrame(),
+                                          innerOffset, &idx)))
+      return DOMPoint();
 
-  rv = aRange->SetStart(startPoint.node, startPoint.idx);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (aStartHTOffset == aEndHTOffset)
-    return aRange->SetEnd(startPoint.node, startPoint.idx);
-
-  rv = GetDOMPointByFrameOffset(endFrame, endOffset, endAcc, &endPoint);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  return aRange->SetEnd(endPoint.node, endPoint.idx);
-}
-
-int32_t
-HyperTextAccessible::GetRelativeOffset(nsIPresShell* aPresShell,
-                                       nsIFrame* aFromFrame,
-                                       int32_t aFromOffset,
-                                       Accessible* aFromAccessible,
-                                       nsSelectionAmount aAmount,
-                                       nsDirection aDirection,
-                                       bool aNeedsStart,
-                                       EWordMovementType aWordMovementType)
-{
-  const bool kIsJumpLinesOk = true;          // okay to jump lines
-  const bool kIsScrollViewAStop = false;     // do not stop at scroll views
-  const bool kIsKeyboardSelect = true;       // is keyboard selection
-  const bool kIsVisualBidi = false;          // use visual order for bidi text
-
-  // Ask layout for the new node and offset, after moving the appropriate amount
-
-  nsresult rv;
-  int32_t contentOffset = aFromOffset;
-  nsIFrame *frame = aFromAccessible->GetFrame();
-  NS_ENSURE_TRUE(frame, -1);
-
-  if (frame->GetType() == nsGkAtoms::textFrame) {
-    rv = RenderedToContentOffset(frame, aFromOffset, &contentOffset);
-    NS_ENSURE_SUCCESS(rv, -1);
+    return DOMPoint(content, idx);
   }
 
-  nsPeekOffsetStruct pos(aAmount, aDirection, contentOffset,
-                         0, kIsJumpLinesOk, kIsScrollViewAStop, kIsKeyboardSelect, kIsVisualBidi,
-                         aWordMovementType);
-  rv = aFromFrame->PeekOffset(&pos);
-
-  // PeekOffset fails on last/first lines of the text in certain cases.
-  if (NS_FAILED(rv) && aAmount == eSelectLine) {
-    pos.mAmount = (aDirection == eDirNext) ? eSelectEndLine : eSelectBeginLine;
-    aFromFrame->PeekOffset(&pos);
-  }
-  if (!pos.mResultContent)
-    return -1;
-
-  // Turn the resulting node and offset into a hyperTextOffset
-  // If finalAccessible is nullptr, then DOMPointToHypertextOffset() searched
-  // through the hypertext children without finding the node/offset position.
-  int32_t hyperTextOffset;
-  Accessible* finalAccessible =
-    DOMPointToHypertextOffset(pos.mResultContent, pos.mContentOffset,
-                              &hyperTextOffset, aDirection == eDirNext);
-
-  if (!finalAccessible && aDirection == eDirPrevious) {
-    // If we reached the end during search, this means we didn't find the DOM point
-    // and we're actually at the start of the paragraph
-    hyperTextOffset = 0;
-  }  
-  else if (aAmount == eSelectBeginLine) {
-    Accessible* firstChild = mChildren.SafeElementAt(0, nullptr);
-    // For line selection with needsStart, set start of line exactly to line break
-    if (pos.mContentOffset == 0 && firstChild &&
-        firstChild->Role() == roles::STATICTEXT &&
-        static_cast<int32_t>(nsAccUtils::TextLength(firstChild)) == hyperTextOffset) {
-      // XXX Bullet hack -- we should remove this once list bullets use anonymous content
-      hyperTextOffset = 0;
-    }
-    if (!aNeedsStart && hyperTextOffset > 0) {
-      -- hyperTextOffset;
-    }
-  }
-
-  return hyperTextOffset;
+  // Case of embedded object. The point is either before or after the element.
+  NS_ASSERTION(innerOffset == 0 || innerOffset == 1, "A wrong inner offset!");
+  nsINode* node = child->GetNode();
+  nsINode* parentNode = node->GetParentNode();
+  return parentNode ?
+    DOMPoint(parentNode, parentNode->IndexOf(node) + innerOffset) :
+    DOMPoint();
 }
 
 int32_t
@@ -697,10 +643,48 @@ HyperTextAccessible::FindOffset(int32_t aOffset, nsDirection aDirection,
   }
 
   // Return hypertext offset of the boundary of the found word.
-  return GetRelativeOffset(mDoc->PresShell(), frameAtOffset, offsetInFrame,
-                           accAtOffset, aAmount, aDirection,
-                           (aWordMovementType == eStartWord || aAmount == eSelectBeginLine),
-                           aWordMovementType);
+  int32_t contentOffset = offsetInFrame;
+  nsIFrame* primaryFrame = accAtOffset->GetFrame();
+  NS_ENSURE_TRUE(primaryFrame, -1);
+
+  nsresult rv = NS_OK;
+  if (primaryFrame->GetType() == nsGkAtoms::textFrame) {
+    rv = RenderedToContentOffset(primaryFrame, offsetInFrame, &contentOffset);
+    NS_ENSURE_SUCCESS(rv, -1);
+  }
+
+  const bool kIsJumpLinesOk = true; // okay to jump lines
+  const bool kIsScrollViewAStop = false; // do not stop at scroll views
+  const bool kIsKeyboardSelect = true; // is keyboard selection
+  const bool kIsVisualBidi = false; // use visual order for bidi text
+  nsPeekOffsetStruct pos(aAmount, aDirection, contentOffset,
+                         0, kIsJumpLinesOk, kIsScrollViewAStop,
+                         kIsKeyboardSelect, kIsVisualBidi,
+                         aWordMovementType);
+  rv = frameAtOffset->PeekOffset(&pos);
+
+  // PeekOffset fails on last/first lines of the text in certain cases.
+  if (NS_FAILED(rv) && aAmount == eSelectLine) {
+    pos.mAmount = (aDirection == eDirNext) ? eSelectEndLine : eSelectBeginLine;
+    frameAtOffset->PeekOffset(&pos);
+  }
+  if (!pos.mResultContent)
+    return -1;
+
+  // Turn the resulting node and offset into a hyperTextOffset
+  // If finalAccessible is nullptr, then DOMPointToHypertextOffset() searched
+  // through the hypertext children without finding the node/offset position.
+  int32_t hyperTextOffset = 0;
+  Accessible* finalAccessible =
+    DOMPointToHypertextOffset(pos.mResultContent, pos.mContentOffset,
+                              &hyperTextOffset, aDirection == eDirNext);
+
+  // If we reached the end during search, this means we didn't find the DOM point
+  // and we're actually at the start of the paragraph
+  if (!finalAccessible && aDirection == eDirPrevious)
+    return 0;
+
+  return hyperTextOffset;
 }
 
 int32_t
@@ -1612,7 +1596,8 @@ HyperTextAccessible::SetSelectionBoundsAt(int32_t aSelectionNum,
   if (!range)
     return false;
 
-  HypertextOffsetsToDOMRange(startOffset, endOffset, range);
+  if (!OffsetsToDOMRange(startOffset, endOffset, range))
+    return false;
 
   // If new range was created then add it, otherwise notify selection listeners
   // that existing selection range was changed.
@@ -1642,8 +1627,7 @@ HyperTextAccessible::ScrollSubstringTo(int32_t aStartOffset, int32_t aEndOffset,
                                        uint32_t aScrollType)
 {
   nsRefPtr<nsRange> range = new nsRange(mContent);
-  nsresult rv = HypertextOffsetsToDOMRange(aStartOffset, aEndOffset, range);
-  if (NS_SUCCEEDED(rv))
+  if (OffsetsToDOMRange(aStartOffset, aEndOffset, range))
     nsCoreUtils::ScrollSubstringTo(GetFrame(), range, aScrollType);
 }
 
@@ -1661,8 +1645,7 @@ HyperTextAccessible::ScrollSubstringToPoint(int32_t aStartOffset,
                                                         this);
 
   nsRefPtr<nsRange> range = new nsRange(mContent);
-  nsresult rv = HypertextOffsetsToDOMRange(aStartOffset, aEndOffset, range);
-  if (NS_FAILED(rv))
+  if (!OffsetsToDOMRange(aStartOffset, aEndOffset, range))
     return;
 
   nsPresContext* presContext = frame->PresContext();
@@ -1690,7 +1673,7 @@ HyperTextAccessible::ScrollSubstringToPoint(int32_t aStartOffset,
         int16_t hPercent = offsetPointX * 100 / size.width;
         int16_t vPercent = offsetPointY * 100 / size.height;
 
-        rv = nsCoreUtils::ScrollSubstringTo(frame, range, vPercent, hPercent);
+        nsresult rv = nsCoreUtils::ScrollSubstringTo(frame, range, vPercent, hPercent);
         if (NS_FAILED(rv))
           return;
 

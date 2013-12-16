@@ -944,6 +944,13 @@ public:
                                             const mozilla::dom::Sequence<JS::Value>& aExtraArgument,
                                             mozilla::ErrorResult& aError);
   JSObject* GetContent(JSContext* aCx, mozilla::ErrorResult& aError);
+  JSObject* Get_content(JSContext* aCx, mozilla::ErrorResult& aError)
+  {
+    if (mDoc) {
+      mDoc->WarnOnceAbout(nsIDocument::eWindow_Content);
+    }
+    return GetContent(aCx, aError);
+  }
 
 protected:
   // Array of idle observers that are notified of idle events.
@@ -978,6 +985,7 @@ protected:
 
   // Object Management
   virtual ~nsGlobalWindow();
+  void ClearDelayedEventsAndDropDocument();
   void CleanUp();
   void ClearControllers();
   nsresult FinalClose();

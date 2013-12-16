@@ -26,7 +26,6 @@ XPCOMUtils.defineLazyGetter(this, "domWindowUtils", function () {
 const RESIZE_SCROLL_DELAY = 20;
 
 let HTMLDocument = Ci.nsIDOMHTMLDocument;
-let HTMLElement = Ci.nsIDOMHTMLElement;
 let HTMLHtmlElement = Ci.nsIDOMHTMLHtmlElement;
 let HTMLBodyElement = Ci.nsIDOMHTMLBodyElement;
 let HTMLIFrameElement = Ci.nsIDOMHTMLIFrameElement;
@@ -346,12 +345,6 @@ let FormAssistant = {
           break;
         }
 
-        // Only handle the event from our descendants
-        if (target instanceof HTMLElement &&
-            content.window != target.ownerDocument.defaultView.top) {
-          break;
-        }
-
         if (isContentEditable(target)) {
           this.showKeyboard(this.getTopLevelEditable(target));
           this.updateSelection();
@@ -403,7 +396,6 @@ let FormAssistant = {
         range = getSelectionRange(this.focusedElement);
         if (range[0] !== this.selectionStart ||
             range[1] !== this.selectionEnd) {
-          this.sendKeyboardState(this.focusedElement);
           this.updateSelection();
         }
         break;

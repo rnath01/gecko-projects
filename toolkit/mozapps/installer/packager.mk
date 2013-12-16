@@ -102,6 +102,39 @@ JSSHELL_BINS += \
   $(NULL)
 endif # MOZ_FOLD_LIBS
 endif # MOZ_NATIVE_NSPR
+ifdef MOZ_SHARED_ICU
+ifdef XP_WIN
+ifdef MOZ_DEBUG
+JSSHELL_BINS += \
+  $(DIST)/bin/icudtd$(MOZ_ICU_VERSION).dll \
+  $(DIST)/bin/icuind$(MOZ_ICU_VERSION).dll \
+  $(DIST)/bin/icuucd$(MOZ_ICU_VERSION).dll \
+  $(NULL)
+else
+JSSHELL_BINS += \
+  $(DIST)/bin/icudt$(MOZ_ICU_VERSION).dll \
+  $(DIST)/bin/icuin$(MOZ_ICU_VERSION).dll \
+  $(DIST)/bin/icuuc$(MOZ_ICU_VERSION).dll \
+  $(NULL)
+endif # MOZ_DEBUG
+else
+ifdef XP_MACOSX
+JSSHELL_BINS += \
+  $(DIST)/bin/libicudata.$(MOZ_ICU_VERSION).dylib \
+  $(DIST)/bin/libicui18n.$(MOZ_ICU_VERSION).dylib \
+  $(DIST)/bin/libicuuc.$(MOZ_ICU_VERSION).dylib \
+  $(NULL)
+else
+ifdef XP_UNIX
+JSSHELL_BINS += \
+  $(DIST)/bin/libicudata.so.$(MOZ_ICU_VERSION) \
+  $(DIST)/bin/libicui18n.so.$(MOZ_ICU_VERSION) \
+  $(DIST)/bin/libicuuc.so.$(MOZ_ICU_VERSION) \
+  $(NULL)
+endif # XP_UNIX
+endif # XP_MACOSX
+endif # XP_WIN
+endif # MOZ_STATIC_JS
 MAKE_JSSHELL  = $(ZIP) -9j $(PKG_JSSHELL) $(JSSHELL_BINS)
 endif # LIBXUL_SDK
 
@@ -365,11 +398,15 @@ INNER_BACKGROUND_TESTS_PACKAGE=echo 'Testing is disabled - No Android Background
 endif
 
 # Create geckoview_library/geckoview_{assets,library}.zip for third-party GeckoView consumers.
+ifdef NIGHTLY_BUILD
 ifndef MOZ_DISABLE_GECKOVIEW
 INNER_MAKE_GECKOVIEW_LIBRARY= \
   $(MAKE) -C ../mobile/android/geckoview_library package ABI_DIR=$(ABI_DIR)
 else
 INNER_MAKE_GECKOVIEW_LIBRARY=echo 'GeckoView library packaging is disabled'
+endif
+else
+INNER_MAKE_GECKOVIEW_LIBRARY=echo 'GeckoView library packaging is only enabled on Nightly'
 endif
 
 ifdef MOZ_OMX_PLUGIN
@@ -401,11 +438,22 @@ endif
 OMNIJAR_DIR := $(dir $(OMNIJAR_NAME))
 OMNIJAR_NAME := $(notdir $(OMNIJAR_NAME))
 
+# We force build an ap_ that does not check dependencies below.
+# Language repacks take advantage of this unchecked dependency ap_ to
+# insert additional resources (translated strings) into the ap_
+# without the build system's participation.  This can do the wrong
+# thing if there are resource changes in between build time and
+# package time.  We try to prevent mismatched resources by erroring
+# out if the compiled resource IDs are not the same as the resource
+# IDs being packaged.
+
 PKG_SUFFIX      = .apk
 INNER_MAKE_PACKAGE	= \
   $(if $(ALREADY_SZIPPED),,$(foreach lib,$(SZIP_LIBRARIES),host/bin/szip $(MOZ_SZIP_FLAGS) $(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH)/$(lib) && )) \
-  make -C $(GECKO_APP_AP_PATH) gecko.ap_ && \
-  cp $(GECKO_APP_AP_PATH)/gecko.ap_ $(_ABS_DIST) && \
+  make -C $(GECKO_APP_AP_PATH) gecko-nodeps.ap_ && \
+  cp $(GECKO_APP_AP_PATH)/gecko-nodeps.ap_ $(_ABS_DIST)/gecko.ap_ && \
+  ( diff $(GECKO_APP_AP_PATH)/R.txt $(GECKO_APP_AP_PATH)/gecko-nodeps/R.txt >/dev/null || \
+    (echo "*** Error: The R.txt that was built and the R.txt that is being packaged are not the same. Rebuild mobile/android/base and re-package." && exit 1)) && \
   ( cd $(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH) && \
     mkdir -p lib/$(ABI_DIR) && \
     mv libmozglue.so $(MOZ_CHILD_PROCESS_NAME) lib/$(ABI_DIR) && \

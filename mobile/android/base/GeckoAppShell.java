@@ -325,6 +325,7 @@ public class GeckoAppShell
         sLayerView = lv;
     }
 
+    @RobocopTarget
     public static LayerView getLayerView() {
         return sLayerView;
     }
@@ -392,6 +393,7 @@ public class GeckoAppShell
         } catch (NoSuchElementException e) {}
     }
 
+    @RobocopTarget
     public static void sendEventToGecko(GeckoEvent e) {
         if (GeckoThread.checkLaunchState(GeckoThread.LaunchState.GeckoRunning)) {
             notifyGeckoOfEvent(e);
@@ -1513,9 +1515,13 @@ public class GeckoAppShell
     public static boolean isNetworkLinkUp() {
         ConnectivityManager cm = (ConnectivityManager)
            getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
-        NetworkInfo info = cm.getActiveNetworkInfo();
-        if (info == null || !info.isConnected())
+        try {
+            NetworkInfo info = cm.getActiveNetworkInfo();
+            if (info == null || !info.isConnected())
+                return false;
+        } catch (SecurityException se) {
             return false;
+        }
         return true;
     }
 
@@ -1523,8 +1529,12 @@ public class GeckoAppShell
     public static boolean isNetworkLinkKnown() {
         ConnectivityManager cm = (ConnectivityManager)
             getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (cm.getActiveNetworkInfo() == null)
+        try {
+            if (cm.getActiveNetworkInfo() == null)
+                return false;
+        } catch (SecurityException se) {
             return false;
+        }
         return true;
     }
 
@@ -2079,6 +2089,7 @@ public class GeckoAppShell
         return pluginCL.loadClass(className);
     }
 
+    @WrapElementForJNI(allowMultithread = true)
     public static Class<?> loadPluginClass(String className, String libName) {
         if (getGeckoInterface() == null)
             return null;
@@ -2290,6 +2301,7 @@ public class GeckoAppShell
      * any added listeners will not be invoked on the event currently being processed, but
      * will be invoked on future events of that type.
      */
+    @RobocopTarget
     public static void registerEventListener(String event, GeckoEventListener listener) {
         sEventDispatcher.registerEventListener(event, listener);
     }
@@ -2305,6 +2317,7 @@ public class GeckoAppShell
      * any removed listeners will still be invoked on the event currently being processed, but
      * will not be invoked on future events of that type.
      */
+    @RobocopTarget
     public static void unregisterEventListener(String event, GeckoEventListener listener) {
         sEventDispatcher.unregisterEventListener(event, listener);
     }

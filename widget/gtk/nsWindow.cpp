@@ -5,10 +5,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/ArrayUtils.h"
 #include "mozilla/MiscEvents.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/TextEvents.h"
-#include "mozilla/Util.h"
 #include <algorithm>
 
 #include "prlink.h"
@@ -2816,9 +2816,6 @@ nsWindow::OnButtonReleaseEvent(GdkEventButton *aEvent)
 void
 nsWindow::OnContainerFocusInEvent(GdkEventFocus *aEvent)
 {
-    NS_ASSERTION(mWindowType != eWindowType_popup,
-                 "Unexpected focus on a popup window");
-
     LOGFOCUS(("OnContainerFocusInEvent [%p]\n", (void *)this));
 
     // Unset the urgency hint, if possible

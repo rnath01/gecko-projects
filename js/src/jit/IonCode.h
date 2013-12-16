@@ -199,6 +199,9 @@ struct IonScript
     // Flag set if IonScript was compiled with SPS profiling enabled.
     bool hasSPSInstrumentation_;
 
+    // Flag for if this script is getting recompiled.
+    bool recompiling_;
+
     // Any kind of data needed by the runtime, these can be either cache
     // information or profiling info.
     uint32_t runtimeData_;
@@ -253,7 +256,7 @@ struct IonScript
     uint32_t backedgeEntries_;
 
     // Number of references from invalidation records.
-    size_t refcount_;
+    uint32_t refcount_;
 
     // Identifier of the compilation which produced this code.
     types::RecompileInfo recompileInfo_;
@@ -344,6 +347,9 @@ struct IonScript
     }
     static inline size_t offsetOfSkipArgCheckEntryOffset() {
         return offsetof(IonScript, skipArgCheckEntryOffset_);
+    }
+    static inline size_t offsetOfRefcount() {
+        return offsetof(IonScript, refcount_);
     }
 
   public:
@@ -523,11 +529,26 @@ struct IonScript
     const types::RecompileInfo& recompileInfo() const {
         return recompileInfo_;
     }
+    types::RecompileInfo& recompileInfoRef() {
+        return recompileInfo_;
+    }
     uint32_t incrOsrPcMismatchCounter() {
         return ++osrPcMismatchCounter_;
     }
     void resetOsrPcMismatchCounter() {
         osrPcMismatchCounter_ = 0;
+    }
+
+    void setRecompiling() {
+        recompiling_ = true;
+    }
+
+    bool isRecompiling() const {
+        return recompiling_;
+    }
+
+    void clearRecompiling() {
+        recompiling_ = false;
     }
 
     static void writeBarrierPre(Zone *zone, IonScript *ionScript);

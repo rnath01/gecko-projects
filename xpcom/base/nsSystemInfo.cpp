@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/Util.h"
+#include "mozilla/ArrayUtils.h"
 
 #include "nsSystemInfo.h"
 #include "prsystem.h"
@@ -175,6 +175,21 @@ nsSystemInfo::Init()
         NS_WARNING("PR_GetSystemInfo failed");
       }
     }
+
+#if defined(XP_WIN) && defined(MOZ_METRO)
+    // Create "hasWindowsTouchInterface" property.
+    nsAutoString version;
+    rv = GetPropertyAsAString(NS_LITERAL_STRING("version"), version);
+    NS_ENSURE_SUCCESS(rv, rv);
+    double versionDouble = atof(NS_ConvertUTF16toUTF8(version).get());
+
+    rv = SetPropertyAsBool(NS_ConvertASCIItoUTF16("hasWindowsTouchInterface"),
+      versionDouble >= 6.2);
+    NS_ENSURE_SUCCESS(rv, rv);
+#else
+    rv = SetPropertyAsBool(NS_ConvertASCIItoUTF16("hasWindowsTouchInterface"), false);
+    NS_ENSURE_SUCCESS(rv, rv);
+#endif
 
     // Additional informations not available through PR_GetSystemInfo.
     SetInt32Property(NS_LITERAL_STRING("pagesize"), PR_GetPageSize());

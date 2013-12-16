@@ -7,7 +7,7 @@
 #ifndef jit_x86_Assembler_x86_h
 #define jit_x86_Assembler_x86_h
 
-#include "mozilla/Util.h"
+#include "mozilla/ArrayUtils.h"
 
 #include "assembler/assembler/X86Assembler.h"
 #include "jit/CompactBuffer.h"
@@ -272,6 +272,16 @@ class Assembler : public AssemblerX86Shared
         switch (dest.kind()) {
           case Operand::MEM_REG_DISP:
             masm.fld32_m(dest.disp(), dest.base());
+            break;
+          default:
+            MOZ_ASSUME_UNREACHABLE("unexpected operand kind");
+        }
+    }
+
+    void fstp32(const Operand &src) {
+        switch (src.kind()) {
+          case Operand::MEM_REG_DISP:
+            masm.fstp32_m(src.disp(), src.base());
             break;
           default:
             MOZ_ASSUME_UNREACHABLE("unexpected operand kind");

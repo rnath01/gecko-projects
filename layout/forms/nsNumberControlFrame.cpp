@@ -22,6 +22,10 @@
 #include "nsStyleSet.h"
 #include "nsIDOMMutationEvent.h"
 
+#ifdef ACCESSIBILITY
+#include "mozilla/a11y/AccTypes.h"
+#endif
+
 using namespace mozilla;
 using namespace mozilla::dom;
 
@@ -150,11 +154,24 @@ nsNumberControlFrame::
                            xoffset, yoffset, 0);
 }
 
+void
+nsNumberControlFrame::SyncDisabledState()
+{
+  nsEventStates eventStates = mContent->AsElement()->State();
+  if (eventStates.HasState(NS_EVENT_STATE_DISABLED)) {
+    mTextField->SetAttr(kNameSpaceID_None, nsGkAtoms::disabled, EmptyString(),
+                        true);
+  } else {
+    mTextField->UnsetAttr(kNameSpaceID_None, nsGkAtoms::disabled, true);
+  }
+}
+
 NS_IMETHODIMP
 nsNumberControlFrame::AttributeChanged(int32_t  aNameSpaceID,
                                        nsIAtom* aAttribute,
                                        int32_t  aModType)
 {
+  // nsGkAtoms::disabled is handled by SyncDisabledState
   if (aNameSpaceID == kNameSpaceID_None) {
     if (aAttribute == nsGkAtoms::placeholder ||
         aAttribute == nsGkAtoms::readonly ||
@@ -173,6 +190,14 @@ nsNumberControlFrame::AttributeChanged(int32_t  aNameSpaceID,
 
   return nsContainerFrame::AttributeChanged(aNameSpaceID, aAttribute,
                                             aModType);
+}
+
+void
+nsNumberControlFrame::ContentStatesChanged(nsEventStates aStates)
+{
+  if (aStates.HasState(NS_EVENT_STATE_DISABLED)) {
+    nsContentUtils::AddScriptRunner(new SyncDisabledStateEvent(this));
+  }
 }
 
 nsresult
@@ -201,6 +226,12 @@ nsNumberControlFrame::MakeAnonymousElement(Element** aResult,
 
   if (!aElements.AppendElement(ContentInfo(resultElement, newStyleContext))) {
     return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  if (aPseudoType == nsCSSPseudoElements::ePseudo_mozNumberSpinDown ||
+      aPseudoType == nsCSSPseudoElements::ePseudo_mozNumberSpinUp) {
+    resultElement->SetAttr(kNameSpaceID_None, nsGkAtoms::role,
+                           NS_LITERAL_STRING("button"), false);
   }
 
   resultElement.forget(aResult);
@@ -280,6 +311,12 @@ nsNumberControlFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
     fm->SetFocus(element, 0);
   }
 
+  if (StyleDisplay()->mAppearance == NS_THEME_TEXTFIELD) {
+    // The author has elected to hide the spinner by setting this
+    // -moz-appearance. We will reframe if it changes.
+    return rv;
+  }
+
   // Create the ::-moz-number-spin-box pseudo-element:
   rv = MakeAnonymousElement(getter_AddRefs(mSpinBox),
                             outerWrapperCI.mChildren,
@@ -304,6 +341,9 @@ nsNumberControlFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
                             nsGkAtoms::div,
                             nsCSSPseudoElements::ePseudo_mozNumberSpinDown,
                             spinBoxCI.mStyleContext);
+
+  SyncDisabledState();
+
   return rv;
 }
 
@@ -368,6 +408,10 @@ nsNumberControlFrame::GetSpinButtonForPointerEvent(WidgetGUIEvent* aEvent) const
   MOZ_ASSERT(aEvent->eventStructType == NS_MOUSE_EVENT,
              "Unexpected event type");
 
+  if (!mSpinBox) {
+    // we don't have a spinner
+    return eSpinButtonNone;
+  }
   if (aEvent->originalTarget == mSpinUp) {
     return eSpinButtonUp;
   }
@@ -398,6 +442,9 @@ nsNumberControlFrame::GetSpinButtonForPointerEvent(WidgetGUIEvent* aEvent) const
 void
 nsNumberControlFrame::SpinnerStateChanged() const
 {
+  MOZ_ASSERT(mSpinUp && mSpinDown,
+             "We should not be called when we have no spinner");
+
   nsIFrame* spinUpFrame = mSpinUp->GetPrimaryFrame();
   if (spinUpFrame && spinUpFrame->IsThemed()) {
     spinUpFrame->InvalidateFrame();
@@ -441,6 +488,12 @@ nsNumberControlFrame::HandleFocusEvent(WidgetEvent* aEvent)
   }
 }
 
+nsresult
+nsNumberControlFrame::HandleSelectCall()
+{
+  return HTMLInputElement::FromContent(mTextField)->Select();
+}
+
 #define STYLES_DISABLING_NATIVE_THEMING \
   NS_AUTHOR_SPECIFIED_BACKGROUND | \
   NS_AUTHOR_SPECIFIED_PADDING | \
@@ -449,6 +502,9 @@ nsNumberControlFrame::HandleFocusEvent(WidgetEvent* aEvent)
 bool
 nsNumberControlFrame::ShouldUseNativeStyleForSpinner() const
 {
+  MOZ_ASSERT(mSpinUp && mSpinDown,
+             "We should not be called when we have no spinner");
+
   nsIFrame* spinUpFrame = mSpinUp->GetPrimaryFrame();
   nsIFrame* spinDownFrame = mSpinDown->GetPrimaryFrame();
 
@@ -504,16 +560,27 @@ nsNumberControlFrame::GetPseudoElement(nsCSSPseudoElements::Type aType)
   }
 
   if (aType == nsCSSPseudoElements::ePseudo_mozNumberSpinBox) {
+    MOZ_ASSERT(mSpinBox);
     return mSpinBox;
   }
 
   if (aType == nsCSSPseudoElements::ePseudo_mozNumberSpinUp) {
+    MOZ_ASSERT(mSpinUp);
     return mSpinUp;
   }
 
   if (aType == nsCSSPseudoElements::ePseudo_mozNumberSpinDown) {
+    MOZ_ASSERT(mSpinDown);
     return mSpinDown;
   }
 
   return nsContainerFrame::GetPseudoElement(aType);
 }
+
+#ifdef ACCESSIBILITY
+a11y::AccType
+nsNumberControlFrame::AccessibleType()
+{
+  return a11y::eHTMLSpinnerType;
+}
+#endif

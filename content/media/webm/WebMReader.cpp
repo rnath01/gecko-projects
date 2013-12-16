@@ -11,6 +11,7 @@
 #include "WebMBufferedParser.h"
 #include "mozilla/dom/TimeRanges.h"
 #include "VorbisUtils.h"
+#include <algorithm>
 
 #define VPX_DONT_DEFINE_STDINT_TYPES
 #include "vpx/vp8dx.h"
@@ -147,6 +148,7 @@ WebMReader::WebMReader(AbstractMediaDecoder* aDecoder)
   mOpusParser(nullptr),
   mOpusDecoder(nullptr),
   mSkip(0),
+  mSeekPreroll(0),
 #endif
   mVideoTrack(0),
   mAudioTrack(0),
@@ -163,7 +165,7 @@ WebMReader::WebMReader(AbstractMediaDecoder* aDecoder)
 #endif
   // Zero these member vars to avoid crashes in VP8 destroy and Vorbis clear
   // functions when destructor is called before |Init|.
-  memset(&mVP8, 0, sizeof(vpx_codec_ctx_t));
+  memset(&mVPX, 0, sizeof(vpx_codec_ctx_t));
   memset(&mVorbisBlock, 0, sizeof(vorbis_block));
   memset(&mVorbisDsp, 0, sizeof(vorbis_dsp_state));
   memset(&mVorbisInfo, 0, sizeof(vorbis_info));
@@ -177,7 +179,7 @@ WebMReader::~WebMReader()
   mVideoPackets.Reset();
   mAudioPackets.Reset();
 
-  vpx_codec_destroy(&mVP8);
+  vpx_codec_destroy(&mVPX);
 
   vorbis_block_clear(&mVorbisBlock);
   vorbis_dsp_clear(&mVorbisDsp);
@@ -194,9 +196,6 @@ WebMReader::~WebMReader()
 
 nsresult WebMReader::Init(MediaDecoderReader* aCloneDonor)
 {
-  if (vpx_codec_dec_init(&mVP8, vpx_codec_vp8_dx(), nullptr, 0)) {
-    return NS_ERROR_FAILURE;
-  }
 
   vorbis_info_init(&mVorbisInfo);
   vorbis_comment_init(&mVorbisComment);
@@ -221,10 +220,20 @@ nsresult WebMReader::ResetDecode()
     res = NS_ERROR_FAILURE;
   }
 
-  // Ignore failed results from vorbis_synthesis_restart. They
-  // aren't fatal and it fails when ResetDecode is called at a
-  // time when no vorbis data has been read.
-  vorbis_synthesis_restart(&mVorbisDsp);
+  if (mAudioCodec == NESTEGG_CODEC_VORBIS) {
+    // Ignore failed results from vorbis_synthesis_restart. They
+    // aren't fatal and it fails when ResetDecode is called at a
+    // time when no vorbis data has been read.
+    vorbis_synthesis_restart(&mVorbisDsp);
+#ifdef MOZ_OPUS
+  } else if (mAudioCodec == NESTEGG_CODEC_OPUS) {
+    if (mOpusDecoder) {
+      // Reset the decoder.
+      opus_multistream_decoder_ctl(mOpusDecoder, OPUS_RESET_STATE);
+      mSkip = mOpusParser->mPreSkip;
+    }
+#endif
+  }
 
   mVideoPackets.Reset();
   mAudioPackets.Reset();
@@ -281,6 +290,18 @@ nsresult WebMReader::ReadMetadata(MediaInfo* aInfo,
       nestegg_video_params params;
       r = nestegg_track_video_params(mContext, track, &params);
       if (r == -1) {
+        Cleanup();
+        return NS_ERROR_FAILURE;
+      }
+
+      vpx_codec_iface_t* dx = nullptr;
+      mVideoCodec = nestegg_track_codec_id(mContext, track);
+      if (mVideoCodec == NESTEGG_CODEC_VP8) {
+        dx = vpx_codec_vp8_dx();
+      } else if (mVideoCodec == NESTEGG_CODEC_VP9) {
+        dx = vpx_codec_vp9_dx();
+      }
+      if (!dx || vpx_codec_dec_init(&mVPX, dx, nullptr, 0)) {
         Cleanup();
         return NS_ERROR_FAILURE;
       }
@@ -422,6 +443,8 @@ nsresult WebMReader::ReadMetadata(MediaInfo* aInfo,
 
         mInfo.mAudio.mChannels = mOpusParser->mChannels;
         mInfo.mAudio.mChannels = mInfo.mAudio.mChannels > 2 ? 2 : mInfo.mAudio.mChannels;
+        mChannels = mInfo.mAudio.mChannels;
+        mSeekPreroll = params.seek_preroll;
 #endif
       } else {
         Cleanup();
@@ -618,6 +641,7 @@ bool WebMReader::DecodeAudioPacket(nestegg_packet* aPacket, int64_t aOffset)
       if (ret < 0)
         return false;
       NS_ASSERTION(ret == frames, "Opus decoded too few audio samples");
+      CheckedInt64 startTime = tstamp_usecs;
 
       // Trim the initial frames while the decoder is settling.
       if (mSkip > 0) {
@@ -634,7 +658,7 @@ bool WebMReader::DecodeAudioPacket(nestegg_packet* aPacket, int64_t aOffset)
         nsAutoArrayPtr<AudioDataValue> trimBuffer(new AudioDataValue[samples]);
         for (int i = 0; i < samples; i++)
           trimBuffer[i] = buffer[skipFrames*channels + i];
-
+        startTime = startTime + FramesToUsecs(skipFrames, rate);
         frames = keepFrames;
         buffer = trimBuffer;
 
@@ -699,14 +723,12 @@ bool WebMReader::DecodeAudioPacket(nestegg_packet* aPacket, int64_t aOffset)
         NS_WARNING("Int overflow converting WebM audio duration");
         return false;
       }
-
-      CheckedInt64 time = tstamp_usecs;
+      CheckedInt64 time = startTime - (mCodecDelay / NS_PER_USEC);
       if (!time.isValid()) {
-        NS_WARNING("Int overflow adding total_duration and tstamp_usecs");
+        NS_WARNING("Int overflow shifting tstamp by codec delay");
         nestegg_free_packet(aPacket);
         return false;
       };
-
       AudioQueue().Push(new AudioData(mDecoder->GetResource()->Tell(),
                                      time.value(),
                                      duration.value(),
@@ -868,7 +890,11 @@ bool WebMReader::DecodeVideoFrame(bool &aKeyframeSkip,
     vpx_codec_stream_info_t si;
     memset(&si, 0, sizeof(si));
     si.sz = sizeof(si);
-    vpx_codec_peek_stream_info(vpx_codec_vp8_dx(), data, length, &si);
+    if (mVideoCodec == NESTEGG_CODEC_VP8) {
+      vpx_codec_peek_stream_info(vpx_codec_vp8_dx(), data, length, &si);
+    } else if (mVideoCodec == NESTEGG_CODEC_VP9) {
+      vpx_codec_peek_stream_info(vpx_codec_vp9_dx(), data, length, &si);
+    }
     if (aKeyframeSkip && (!si.is_kf || tstamp_usecs < aTimeThreshold)) {
       // Skipping to next keyframe...
       parsed++; // Assume 1 frame per chunk.
@@ -879,7 +905,7 @@ bool WebMReader::DecodeVideoFrame(bool &aKeyframeSkip,
       aKeyframeSkip = false;
     }
 
-    if (vpx_codec_decode(&mVP8, data, length, nullptr, 0)) {
+    if (vpx_codec_decode(&mVPX, data, length, nullptr, 0)) {
       return false;
     }
 
@@ -894,7 +920,7 @@ bool WebMReader::DecodeVideoFrame(bool &aKeyframeSkip,
     vpx_codec_iter_t  iter = nullptr;
     vpx_image_t      *img;
 
-    while ((img = vpx_codec_get_frame(&mVP8, &iter))) {
+    while ((img = vpx_codec_get_frame(&mVPX, &iter))) {
       NS_ASSERTION(img->fmt == IMG_FMT_I420, "WebM image format is not I420");
 
       // Chroma shifts are rounded down as per the decoding examples in the VP8 SDK
@@ -969,7 +995,11 @@ nsresult WebMReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndTime,
     return NS_ERROR_FAILURE;
   }
   uint32_t trackToSeek = mHasVideo ? mVideoTrack : mAudioTrack;
-  int r = nestegg_track_seek(mContext, trackToSeek, aTarget * NS_PER_USEC);
+  uint64_t target = aTarget * NS_PER_USEC;
+  if (mSeekPreroll) {
+    target = std::max(static_cast<uint64_t>(aStartTime * NS_PER_USEC), target - mSeekPreroll);
+  }
+  int r = nestegg_track_seek(mContext, trackToSeek, target);
   if (r != 0) {
     return NS_ERROR_FAILURE;
   }

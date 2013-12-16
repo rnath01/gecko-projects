@@ -1256,6 +1256,7 @@ Navigator::GetGamepads(nsTArray<nsRefPtr<Gamepad> >& aGamepads,
   }
   NS_ENSURE_TRUE_VOID(mWindow->GetDocShell());
   nsGlobalWindow* win = static_cast<nsGlobalWindow*>(mWindow.get());
+  win->SetHasGamepadEventListener(true);
   win->GetGamepads(aGamepads);
 }
 #endif
@@ -1702,14 +1703,16 @@ Navigator::HasMobileMessageSupport(JSContext* /* unused */, JSObject* aGlobal)
 
 /* static */
 bool
-Navigator::HasTelephonySupport(JSContext* /* unused */, JSObject* aGlobal)
+Navigator::HasTelephonySupport(JSContext* cx, JSObject* aGlobal)
 {
+  JS::Rooted<JSObject*> global(cx, aGlobal);
+
   // First of all, the general pref has to be turned on.
   bool enabled = false;
   Preferences::GetBool("dom.telephony.enabled", &enabled);
   NS_ENSURE_TRUE(enabled, false);
 
-  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
+  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(global);
   return win && CheckPermission(win, "telephony");
 }
 
@@ -1853,8 +1856,10 @@ bool Navigator::HasInputMethodSupport(JSContext* /* unused */,
 
 /* static */
 bool
-Navigator::HasDataStoreSupport(JSContext* /* unused */, JSObject* aGlobal)
+Navigator::HasDataStoreSupport(JSContext* cx, JSObject* aGlobal)
 {
+  JS::Rooted<JSObject*> global(cx, aGlobal);
+
   // First of all, the general pref has to be turned on.
   bool enabled = false;
   Preferences::GetBool("dom.datastore.enabled", &enabled);
@@ -1865,7 +1870,7 @@ Navigator::HasDataStoreSupport(JSContext* /* unused */, JSObject* aGlobal)
     return true;
   }
 
-  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
+  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(global);
   if (!win) {
     return false;
   }

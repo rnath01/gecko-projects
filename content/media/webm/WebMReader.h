@@ -181,7 +181,7 @@ private:
   nestegg* mContext;
 
   // VP8 decoder state
-  vpx_codec_ctx_t mVP8;
+  vpx_codec_ctx_t mVPX;
 
   // Vorbis decoder state
   vorbis_info mVorbisInfo;
@@ -197,6 +197,7 @@ private:
   nsAutoPtr<OpusParser> mOpusParser;
   OpusMSDecoder *mOpusDecoder;
   int mSkip;        // Number of samples left to trim before playback.
+  uint64_t mSeekPreroll; // Number of nanoseconds that must be discarded after seeking.
 #endif
 
   // Queue of video and audio packets that have been read but not decoded. These
@@ -234,6 +235,8 @@ private:
 
   // Codec ID of audio track
   int mAudioCodec;
+  // Codec ID of video track
+  int mVideoCodec;
 
 };
 

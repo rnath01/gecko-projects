@@ -386,8 +386,6 @@ class MDefinition : public MNode
     virtual bool truncate();
     virtual bool isOperandTruncated(size_t index) const;
 
-    bool earlyAbortCheck();
-
     // Compute an absolute or symbolic range for the value of this node.
     virtual void computeRange(TempAllocator &alloc) {
     }
@@ -953,11 +951,12 @@ class MConstant : public MNullaryInstruction
     Value value_;
 
   protected:
-    MConstant(const Value &v);
+    MConstant(const Value &v, types::CompilerConstraintList *constraints);
 
   public:
     INSTRUCTION_HEADER(Constant)
-    static MConstant *New(TempAllocator &alloc, const Value &v);
+    static MConstant *New(TempAllocator &alloc, const Value &v,
+                          types::CompilerConstraintList *constraints = nullptr);
     static MConstant *NewAsmJS(TempAllocator &alloc, const Value &v, MIRType type);
 
     const js::Value &value() const {
@@ -1279,6 +1278,9 @@ class MTest
     static MTest *New(TempAllocator &alloc, MDefinition *ins,
                       MBasicBlock *ifTrue, MBasicBlock *ifFalse);
 
+    MDefinition *input() const {
+        return getOperand(0);
+    }
     MBasicBlock *ifTrue() const {
         return getSuccessor(0);
     }
@@ -1362,35 +1364,9 @@ class MThrow
     }
 };
 
-class MNewParallelArray : public MNullaryInstruction
-{
-    CompilerRootObject templateObject_;
-
-    MNewParallelArray(JSObject *templateObject)
-      : templateObject_(templateObject)
-    {
-        setResultType(MIRType_Object);
-    }
-
-  public:
-    INSTRUCTION_HEADER(NewParallelArray);
-
-    static MNewParallelArray *New(TempAllocator &alloc, JSObject *templateObject) {
-        return new(alloc) MNewParallelArray(templateObject);
-    }
-
-    AliasSet getAliasSet() const {
-        return AliasSet::None();
-    }
-
-    JSObject *templateObject() const {
-        return templateObject_;
-    }
-};
-
 // Fabricate a type set containing only the type of the specified object.
 types::TemporaryTypeSet *
-MakeSingletonTypeSet(JSObject *obj);
+MakeSingletonTypeSet(types::CompilerConstraintList *constraints, JSObject *obj);
 
 void
 MergeTypes(MIRType *ptype, types::TemporaryTypeSet **ptypeSet,
@@ -1413,24 +1389,26 @@ class MNewArray : public MNullaryInstruction
     // Allocate space at initialization or not
     AllocatingBehaviour allocating_;
 
-    MNewArray(uint32_t count, JSObject *templateObject, gc::InitialHeap initialHeap,
-              AllocatingBehaviour allocating)
+    MNewArray(types::CompilerConstraintList *constraints, uint32_t count, JSObject *templateObject,
+              gc::InitialHeap initialHeap, AllocatingBehaviour allocating)
       : count_(count),
         templateObject_(templateObject),
         initialHeap_(initialHeap),
         allocating_(allocating)
     {
         setResultType(MIRType_Object);
-        setResultTypeSet(MakeSingletonTypeSet(templateObject));
+        if (!templateObject->hasSingletonType())
+            setResultTypeSet(MakeSingletonTypeSet(constraints, templateObject));
     }
 
   public:
     INSTRUCTION_HEADER(NewArray)
 
-    static MNewArray *New(TempAllocator &alloc, uint32_t count, JSObject *templateObject,
+    static MNewArray *New(TempAllocator &alloc, types::CompilerConstraintList *constraints,
+                          uint32_t count, JSObject *templateObject,
                           gc::InitialHeap initialHeap, AllocatingBehaviour allocating)
     {
-        return new(alloc) MNewArray(count, templateObject, initialHeap, allocating);
+        return new(alloc) MNewArray(constraints, count, templateObject, initialHeap, allocating);
     }
 
     uint32_t count() const {
@@ -1470,24 +1448,27 @@ class MNewObject : public MNullaryInstruction
     gc::InitialHeap initialHeap_;
     bool templateObjectIsClassPrototype_;
 
-    MNewObject(JSObject *templateObject, gc::InitialHeap initialHeap,
-               bool templateObjectIsClassPrototype)
+    MNewObject(types::CompilerConstraintList *constraints, JSObject *templateObject,
+               gc::InitialHeap initialHeap, bool templateObjectIsClassPrototype)
       : templateObject_(templateObject),
         initialHeap_(initialHeap),
         templateObjectIsClassPrototype_(templateObjectIsClassPrototype)
     {
         JS_ASSERT_IF(templateObjectIsClassPrototype, !shouldUseVM());
         setResultType(MIRType_Object);
-        setResultTypeSet(MakeSingletonTypeSet(templateObject));
+        if (!templateObject->hasSingletonType())
+            setResultTypeSet(MakeSingletonTypeSet(constraints, templateObject));
     }
 
   public:
     INSTRUCTION_HEADER(NewObject)
 
-    static MNewObject *New(TempAllocator &alloc, JSObject *templateObject, gc::InitialHeap initialHeap,
+    static MNewObject *New(TempAllocator &alloc, types::CompilerConstraintList *constraints,
+                           JSObject *templateObject, gc::InitialHeap initialHeap,
                            bool templateObjectIsClassPrototype)
     {
-        return new(alloc) MNewObject(templateObject, initialHeap, templateObjectIsClassPrototype);
+        return new(alloc) MNewObject(constraints, templateObject, initialHeap,
+                                     templateObjectIsClassPrototype);
     }
 
     // Returns true if the code generator should call through to the
@@ -2192,6 +2173,9 @@ class MCompare
         // Int32   compared to Int32
         // Boolean compared to Boolean
         Compare_Int32,
+        Compare_Int32MaybeCoerceBoth,
+        Compare_Int32MaybeCoerceLHS,
+        Compare_Int32MaybeCoerceRHS,
 
         // Int32 compared as unsigneds
         Compare_UInt32,
@@ -2258,6 +2242,12 @@ class MCompare
     CompareType compareType() const {
         return compareType_;
     }
+    bool isInt32Comparison() const {
+        return compareType() == Compare_Int32 ||
+               compareType() == Compare_Int32MaybeCoerceBoth ||
+               compareType() == Compare_Int32MaybeCoerceLHS ||
+               compareType() == Compare_Int32MaybeCoerceRHS;
+    }
     bool isDoubleComparison() const {
         return compareType() == Compare_Double ||
                compareType() == Compare_DoubleMaybeCoerceLHS ||
@@ -2301,6 +2291,8 @@ class MCompare
 
     void trySpecializeFloat32(TempAllocator &alloc);
     bool isFloat32Commutative() const { return true; }
+    bool truncate();
+    bool isOperandTruncated(size_t index) const;
 
 # ifdef DEBUG
     bool isConsistentFloat32Use() const {
@@ -2538,20 +2530,21 @@ class MCreateThisWithTemplate
     CompilerRootObject templateObject_;
     gc::InitialHeap initialHeap_;
 
-    MCreateThisWithTemplate(JSObject *templateObject, gc::InitialHeap initialHeap)
+    MCreateThisWithTemplate(types::CompilerConstraintList *constraints, JSObject *templateObject,
+                            gc::InitialHeap initialHeap)
       : templateObject_(templateObject),
         initialHeap_(initialHeap)
     {
         setResultType(MIRType_Object);
-        setResultTypeSet(MakeSingletonTypeSet(templateObject));
+        setResultTypeSet(MakeSingletonTypeSet(constraints, templateObject));
     }
 
   public:
     INSTRUCTION_HEADER(CreateThisWithTemplate);
-    static MCreateThisWithTemplate *New(TempAllocator &alloc, JSObject *templateObject,
-                                        gc::InitialHeap initialHeap)
+    static MCreateThisWithTemplate *New(TempAllocator &alloc, types::CompilerConstraintList *constraints,
+                                        JSObject *templateObject, gc::InitialHeap initialHeap)
     {
-        return new(alloc) MCreateThisWithTemplate(templateObject, initialHeap);
+        return new(alloc) MCreateThisWithTemplate(constraints, templateObject, initialHeap);
     }
 
     JSObject *templateObject() const {
@@ -2843,6 +2836,7 @@ class MPassArg
     // Set by the MCall.
     void setArgnum(uint32_t argnum) {
         argnum_ = argnum;
+        JS_ASSERT(argnum_ >= 0);
     }
     uint32_t getArgnum() const {
         JS_ASSERT(argnum_ >= 0);
@@ -3041,10 +3035,12 @@ class MToInt32
     public ToInt32Policy
 {
     bool canBeNegativeZero_;
+    MacroAssembler::IntConversionInputKind conversion_;
 
-    MToInt32(MDefinition *def)
+    MToInt32(MDefinition *def, MacroAssembler::IntConversionInputKind conversion)
       : MUnaryInstruction(def),
-        canBeNegativeZero_(true)
+        canBeNegativeZero_(true),
+        conversion_(conversion)
     {
         setResultType(MIRType_Int32);
         setMovable();
@@ -3052,9 +3048,11 @@ class MToInt32
 
   public:
     INSTRUCTION_HEADER(ToInt32)
-    static MToInt32 *New(TempAllocator &alloc, MDefinition *def)
+    static MToInt32 *New(TempAllocator &alloc, MDefinition *def,
+                         MacroAssembler::IntConversionInputKind conversion =
+                             MacroAssembler::IntConversion_Any)
     {
-        return new(alloc) MToInt32(def);
+        return new(alloc) MToInt32(def, conversion);
     }
 
     MDefinition *foldsTo(TempAllocator &alloc, bool useValueNumbers);
@@ -3071,6 +3069,10 @@ class MToInt32
 
     TypePolicy *typePolicy() {
         return this;
+    }
+
+    MacroAssembler::IntConversionInputKind conversion() const {
+        return conversion_;
     }
 
     bool congruentTo(MDefinition *ins) const {
@@ -4360,21 +4362,23 @@ class MStringSplit
 {
     types::TypeObject *typeObject_;
 
-    MStringSplit(MDefinition *string, MDefinition *sep, JSObject *templateObject)
+    MStringSplit(types::CompilerConstraintList *constraints, MDefinition *string, MDefinition *sep,
+                 JSObject *templateObject)
       : MBinaryInstruction(string, sep),
         typeObject_(templateObject->type())
     {
         setResultType(MIRType_Object);
-        setResultTypeSet(MakeSingletonTypeSet(templateObject));
+        setResultTypeSet(MakeSingletonTypeSet(constraints, templateObject));
     }
 
   public:
     INSTRUCTION_HEADER(StringSplit)
 
-    static MStringSplit *New(TempAllocator &alloc, MDefinition *string, MDefinition *sep,
+    static MStringSplit *New(TempAllocator &alloc, types::CompilerConstraintList *constraints,
+                             MDefinition *string, MDefinition *sep,
                              JSObject *templateObject)
     {
-        return new(alloc) MStringSplit(string, sep, templateObject);
+        return new(alloc) MStringSplit(constraints, string, sep, templateObject);
     }
     types::TypeObject *typeObject() const {
         return typeObject_;
@@ -4850,7 +4854,7 @@ class MRegExp : public MNullaryInstruction
     CompilerRootObject prototype_;
     bool mustClone_;
 
-    MRegExp(RegExpObject *source, JSObject *prototype, bool mustClone)
+    MRegExp(types::CompilerConstraintList *constraints, RegExpObject *source, JSObject *prototype, bool mustClone)
       : source_(source),
         prototype_(prototype),
         mustClone_(mustClone)
@@ -4858,16 +4862,17 @@ class MRegExp : public MNullaryInstruction
         setResultType(MIRType_Object);
 
         JS_ASSERT(source->getProto() == prototype);
-        setResultTypeSet(MakeSingletonTypeSet(source));
+        setResultTypeSet(MakeSingletonTypeSet(constraints, source));
     }
 
   public:
     INSTRUCTION_HEADER(RegExp)
 
-    static MRegExp *New(TempAllocator &alloc, RegExpObject *source, JSObject *prototype,
+    static MRegExp *New(TempAllocator &alloc, types::CompilerConstraintList *constraints,
+                        RegExpObject *source, JSObject *prototype,
                         bool mustClone)
     {
-        return new(alloc) MRegExp(source, prototype, mustClone);
+        return new(alloc) MRegExp(constraints, source, prototype, mustClone);
     }
 
     bool mustClone() const {
@@ -4934,7 +4939,7 @@ struct LambdaFunctionInfo
     bool useNewTypeForClone;
 
     LambdaFunctionInfo(JSFunction *fun)
-      : fun(fun), flags(fun->flags),
+      : fun(fun), flags(fun->flags()),
         scriptOrLazyScript(fun->hasScript()
                            ? (gc::Cell *) fun->nonLazyScript()
                            : (gc::Cell *) fun->lazyScript()),
@@ -4956,19 +4961,21 @@ class MLambda
 {
     LambdaFunctionInfo info_;
 
-    MLambda(MDefinition *scopeChain, JSFunction *fun)
+    MLambda(types::CompilerConstraintList *constraints, MDefinition *scopeChain, JSFunction *fun)
       : MUnaryInstruction(scopeChain), info_(fun)
     {
         setResultType(MIRType_Object);
         if (!fun->hasSingletonType() && !types::UseNewTypeForClone(fun))
-            setResultTypeSet(MakeSingletonTypeSet(fun));
+            setResultTypeSet(MakeSingletonTypeSet(constraints, fun));
     }
 
   public:
     INSTRUCTION_HEADER(Lambda)
 
-    static MLambda *New(TempAllocator &alloc, MDefinition *scopeChain, JSFunction *fun) {
-        return new(alloc) MLambda(scopeChain, fun);
+    static MLambda *New(TempAllocator &alloc, types::CompilerConstraintList *constraints,
+                        MDefinition *scopeChain, JSFunction *fun)
+    {
+        return new(alloc) MLambda(constraints, scopeChain, fun);
     }
     MDefinition *scopeChain() const {
         return getOperand(0);
@@ -5944,22 +5951,24 @@ class MArrayConcat
     CompilerRootObject templateObj_;
     gc::InitialHeap initialHeap_;
 
-    MArrayConcat(MDefinition *lhs, MDefinition *rhs, JSObject *templateObj, gc::InitialHeap initialHeap)
+    MArrayConcat(types::CompilerConstraintList *constraints, MDefinition *lhs, MDefinition *rhs,
+                 JSObject *templateObj, gc::InitialHeap initialHeap)
       : MBinaryInstruction(lhs, rhs),
         templateObj_(templateObj),
         initialHeap_(initialHeap)
     {
         setResultType(MIRType_Object);
-        setResultTypeSet(MakeSingletonTypeSet(templateObj));
+        setResultTypeSet(MakeSingletonTypeSet(constraints, templateObj));
     }
 
   public:
     INSTRUCTION_HEADER(ArrayConcat)
 
-    static MArrayConcat *New(TempAllocator &alloc, MDefinition *lhs, MDefinition *rhs,
+    static MArrayConcat *New(TempAllocator &alloc, types::CompilerConstraintList *constraints,
+                             MDefinition *lhs, MDefinition *rhs,
                              JSObject *templateObj, gc::InitialHeap initialHeap)
     {
-        return new(alloc) MArrayConcat(lhs, rhs, templateObj, initialHeap);
+        return new(alloc) MArrayConcat(constraints, lhs, rhs, templateObj, initialHeap);
     }
 
     JSObject *templateObj() const {
@@ -8491,21 +8500,23 @@ class MRest
     public MRestCommon,
     public IntPolicy<0>
 {
-    MRest(MDefinition *numActuals, unsigned numFormals, JSObject *templateObject)
+    MRest(types::CompilerConstraintList *constraints, MDefinition *numActuals, unsigned numFormals,
+          JSObject *templateObject)
       : MUnaryInstruction(numActuals),
         MRestCommon(numFormals, templateObject)
     {
         setResultType(MIRType_Object);
-        setResultTypeSet(MakeSingletonTypeSet(templateObject));
+        setResultTypeSet(MakeSingletonTypeSet(constraints, templateObject));
     }
 
   public:
     INSTRUCTION_HEADER(Rest);
 
-    static MRest *New(TempAllocator &alloc, MDefinition *numActuals, unsigned numFormals,
+    static MRest *New(TempAllocator &alloc, types::CompilerConstraintList *constraints,
+                      MDefinition *numActuals, unsigned numFormals,
                       JSObject *templateObject)
     {
-        return new(alloc) MRest(numActuals, numFormals, templateObject);
+        return new(alloc) MRest(constraints, numActuals, numFormals, templateObject);
     }
 
     MDefinition *numActuals() const {
@@ -9010,6 +9021,7 @@ class MResumePoint MOZ_FINAL : public MNode, public InlineForwardListNode<MResum
 
   private:
     friend class MBasicBlock;
+    friend void AssertBasicGraphCoherency(MIRGraph &graph);
 
     FixedList<MUse> operands_;
     uint32_t stackDepth_;
@@ -9221,7 +9233,9 @@ class MAsmJSLoadHeap : public MUnaryInstruction, public MAsmJSHeapAccess
       : MUnaryInstruction(ptr), MAsmJSHeapAccess(vt, false)
     {
         setMovable();
-        if (vt == ArrayBufferView::TYPE_FLOAT32 || vt == ArrayBufferView::TYPE_FLOAT64)
+        if (vt == ArrayBufferView::TYPE_FLOAT32)
+            setResultType(MIRType_Float32);
+        else if (vt == ArrayBufferView::TYPE_FLOAT64)
             setResultType(MIRType_Double);
         else
             setResultType(MIRType_Int32);
@@ -9271,7 +9285,7 @@ class MAsmJSLoadGlobalVar : public MNullaryInstruction
     MAsmJSLoadGlobalVar(MIRType type, unsigned globalDataOffset, bool isConstant)
       : globalDataOffset_(globalDataOffset), isConstant_(isConstant)
     {
-        JS_ASSERT(type == MIRType_Int32 || type == MIRType_Double);
+        JS_ASSERT(IsNumberType(type));
         setResultType(type);
         setMovable();
     }
@@ -9464,10 +9478,8 @@ class MAsmJSCall MOZ_FINAL : public MInstruction
     };
 
     Callee callee_;
-    size_t numOperands_;
-    MUse *operands_;
-    size_t numArgs_;
-    AnyRegister *argRegs_;
+    FixedList<MUse> operands_;
+    FixedList<AnyRegister> argRegs_;
     size_t spIncrement_;
 
   protected:
@@ -9493,17 +9505,17 @@ class MAsmJSCall MOZ_FINAL : public MInstruction
                            MIRType resultType, size_t spIncrement);
 
     size_t numOperands() const {
-        return numOperands_;
+        return operands_.length();
     }
     MDefinition *getOperand(size_t index) const {
-        JS_ASSERT(index < numOperands_);
+        JS_ASSERT(index < numOperands());
         return operands_[index].producer();
     }
     size_t numArgs() const {
-        return numArgs_;
+        return argRegs_.length();
     }
     AnyRegister registerForArg(size_t index) const {
-        JS_ASSERT(index < numArgs_);
+        JS_ASSERT(index < numArgs());
         return argRegs_[index];
     }
     Callee callee() const {
@@ -9511,8 +9523,8 @@ class MAsmJSCall MOZ_FINAL : public MInstruction
     }
     size_t dynamicCalleeOperandIndex() const {
         JS_ASSERT(callee_.which() == Callee::Dynamic);
-        JS_ASSERT(numArgs_ == numOperands_ - 1);
-        return numArgs_;
+        JS_ASSERT(numArgs() == numOperands() - 1);
+        return numArgs();
     }
     size_t spIncrement() const {
         return spIncrement_;

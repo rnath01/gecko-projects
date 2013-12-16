@@ -179,13 +179,12 @@ public:
   // Returns the maximum number of channels supported by the audio hardware.
   static int MaxNumberOfChannels();
 
+  // Queries the samplerate the hardware/mixer runs at, and stores it.
+  // Can be called on any thread. When this returns, it is safe to call
+  // PreferredSampleRate without locking.
   static void InitPreferredSampleRate();
-  // Returns the samplerate the systems prefer, because it is the
-  // samplerate the hardware/mixer supports.
-  static int PreferredSampleRate() {
-    MOZ_ASSERT(sPreferredSampleRate);
-    return sPreferredSampleRate;
-  }
+  // Get the aformentionned sample rate. Does not lock.
+  static int PreferredSampleRate();
 
   AudioStream();
   ~AudioStream();
@@ -263,7 +262,7 @@ public:
   nsresult SetPreservesPitch(bool aPreservesPitch);
 
 private:
-  static int PrefChanged(const char* aPref, void* aClosure);
+  static void PrefChanged(const char* aPref, void* aClosure);
   static double GetVolumeScale();
   static cubeb* GetCubebContext();
   static cubeb* GetCubebContextUnlocked();
@@ -377,13 +376,13 @@ private:
 
   StreamState mState;
 
+  // This mutex protects the static members below.
+  static StaticMutex sMutex;
+  static cubeb* sCubebContext;
+
   // Prefered samplerate, in Hz (characteristic of the
   // hardware/mixer/platform/API used).
   static uint32_t sPreferredSampleRate;
-
-  // This mutex protects the static members below
-  static StaticMutex sMutex;
-  static cubeb* sCubebContext;
 
   static double sVolumeScale;
   static uint32_t sCubebLatency;

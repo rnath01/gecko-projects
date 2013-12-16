@@ -261,19 +261,22 @@ BreakpointStore.prototype = {
  * @param nsIJSInspector inspector
  *        The underlying JS inspector we use to enter and exit nested event
  *        loops.
+ * @param ThreadActor thread
+ *        The thread actor instance that owns this EventLoopStack.
+ * @param DebuggerServerConnection connection
+ *        The remote protocol connection associated with this event loop stack.
  * @param Object hooks
  *        An object with the following properties:
  *          - url: The URL string of the debuggee we are spinning an event loop
  *                 for.
  *          - preNest: function called before entering a nested event loop
  *          - postNest: function called after exiting a nested event loop
- * @param ThreadActor thread
- *        The thread actor instance that owns this EventLoopStack.
  */
-function EventLoopStack({ inspector, thread, hooks }) {
+function EventLoopStack({ inspector, thread, connection, hooks }) {
   this._inspector = inspector;
   this._hooks = hooks;
   this._thread = thread;
+  this._connection = connection;
 }
 
 EventLoopStack.prototype = {
@@ -302,6 +305,14 @@ EventLoopStack.prototype = {
   },
 
   /**
+   * The DebuggerServerConnection of the debugger who pushed the event loop on
+   * top of the stack
+   */
+  get lastConnection() {
+    return this._inspector.lastNestRequestor._connection;
+  },
+
+  /**
    * Push a new nested event loop onto the stack.
    *
    * @returns EventLoop
@@ -310,6 +321,7 @@ EventLoopStack.prototype = {
     return new EventLoop({
       inspector: this._inspector,
       thread: this._thread,
+      connection: this._connection,
       hooks: this._hooks
     });
   }
@@ -323,14 +335,17 @@ EventLoopStack.prototype = {
  *        The JS Inspector that runs nested event loops.
  * @param ThreadActor thread
  *        The thread actor that is creating this nested event loop.
+ * @param DebuggerServerConnection connection
+ *        The remote protocol connection associated with this event loop.
  * @param Object hooks
  *        The same hooks object passed into EventLoopStack during its
  *        initialization.
  */
-function EventLoop({ inspector, thread, hooks }) {
+function EventLoop({ inspector, thread, connection, hooks }) {
   this._inspector = inspector;
   this._thread = thread;
   this._hooks = hooks;
+  this._connection = connection;
 
   this.enter = this.enter.bind(this);
   this.resolve = this.resolve.bind(this);
@@ -403,9 +418,7 @@ EventLoop.prototype = {
  *
  * @param aHooks object
  *        An object with preNest and postNest methods for calling when entering
- *        and exiting a nested event loop, addToParentPool and
- *        removeFromParentPool methods for handling the lifetime of actors that
- *        will outlive the thread, like breakpoints.
+ *        and exiting a nested event loop.
  * @param aGlobal object [optional]
  *        An optional (for content debugging only) reference to the content
  *        window.
@@ -416,11 +429,6 @@ function ThreadActor(aHooks, aGlobal)
   this._frameActors = [];
   this._hooks = aHooks;
   this.global = aGlobal;
-  this._nestedEventLoops = new EventLoopStack({
-    inspector: DebuggerServer.xpcInspector,
-    hooks: aHooks,
-    thread: this
-  });
   // A map of actorID -> actor for breakpoints created and managed by the server.
   this._hiddenBreakpoints = new Map();
 
@@ -527,12 +535,13 @@ ThreadActor.prototype = {
     eventLoop.resolve();
   },
 
+  /**
+   * Remove all debuggees and clear out the thread's sources.
+   */
   clearDebuggees: function () {
     if (this.dbg) {
       this.dbg.removeAllDebuggees();
     }
-    this.conn.removeActorPool(this._threadLifetimePool || undefined);
-    this._threadLifetimePool = null;
     this._sources = null;
   },
 
@@ -636,6 +645,8 @@ ThreadActor.prototype = {
     this._state = "exited";
 
     this.clearDebuggees();
+    this.conn.removeActorPool(this._threadLifetimePool);
+    this._threadLifetimePool = null;
 
     if (this._prettyPrintWorker) {
       this._prettyPrintWorker.removeEventListener(
@@ -673,6 +684,15 @@ ThreadActor.prototype = {
     this._state = "attached";
 
     update(this._options, aRequest.options || {});
+
+    // Initialize an event loop stack. This can't be done in the constructor,
+    // because this.conn is not yet initialized by the actor pool at that time.
+    this._nestedEventLoops = new EventLoopStack({
+      inspector: DebuggerServer.xpcInspector,
+      hooks: this._hooks,
+      connection: this.conn,
+      thread: this
+    });
 
     if (!this.dbg) {
       this._initDebugger();
@@ -991,7 +1011,8 @@ ThreadActor.prototype = {
     // different tabs or multiple debugger clients connected to the same tab)
     // only allow resumption in a LIFO order.
     if (this._nestedEventLoops.size && this._nestedEventLoops.lastPausedUrl
-        && this._nestedEventLoops.lastPausedUrl !== this._hooks.url) {
+        && (this._nestedEventLoops.lastPausedUrl !== this._hooks.url
+        || this._nestedEventLoops.lastConnection !== this.conn)) {
       return {
         error: "wrongOrder",
         message: "trying to resume in the wrong order.",
@@ -1365,7 +1386,7 @@ ThreadActor.prototype = {
         line: aLocation.line,
         column: aLocation.column
       });
-      this._hooks.addToParentPool(actor);
+      this.threadLifetimePool.addActor(actor);
     }
 
     // Find all scripts matching the given location
@@ -2804,8 +2825,6 @@ function ObjectActor(aObj, aThreadActor)
 ObjectActor.prototype = {
   actorPrefix: "obj",
 
-  _forcedMagicProps: false,
-
   /**
    * Returns a grip for this actor for returning in a protocol message.
    */
@@ -2853,27 +2872,6 @@ ObjectActor.prototype = {
       this.registeredPool.objectActors.delete(this.obj);
     }
     this.registeredPool.removeActor(this);
-  },
-
-  /**
-   * Force the magic Error properties to appear.
-   */
-  _forceMagicProperties: function () {
-    if (this._forcedMagicProps) {
-      return;
-    }
-
-    const MAGIC_ERROR_PROPERTIES = [
-      "message", "stack", "fileName", "lineNumber", "columnNumber"
-    ];
-
-    if (this.obj.class.endsWith("Error")) {
-      for (let property of MAGIC_ERROR_PROPERTIES) {
-        this._propertyDescriptor(property);
-      }
-    }
-
-    this._forcedMagicProps = true;
   },
 
   /**
@@ -2926,7 +2924,6 @@ ObjectActor.prototype = {
    *        The protocol request object.
    */
   onOwnPropertyNames: function (aRequest) {
-    this._forceMagicProperties();
     return { from: this.actorID,
              ownPropertyNames: this.obj.getOwnPropertyNames() };
   },
@@ -2939,7 +2936,6 @@ ObjectActor.prototype = {
    *        The protocol request object.
    */
   onPrototypeAndProperties: function (aRequest) {
-    this._forceMagicProperties();
     let ownProperties = Object.create(null);
     let names;
     try {
@@ -3565,7 +3561,7 @@ BreakpointActor.prototype = {
   onDelete: function (aRequest) {
     // Remove from the breakpoint store.
     this.threadActor.breakpointStore.removeBreakpoint(this.location);
-    this.threadActor._hooks.removeFromParentPool(this);
+    this.threadActor.threadLifetimePool.removeActor(this);
     // Remove the actual breakpoint from the associated scripts.
     this.removeScripts();
     return { from: this.actorID };
@@ -3815,9 +3811,7 @@ Object.defineProperty(Debugger.Frame.prototype, "line", {
  *
  * @param aHooks object
  *        An object with preNest and postNest methods for calling when entering
- *        and exiting a nested event loop and also addToParentPool and
- *        removeFromParentPool methods for handling the lifetime of actors that
- *        will outlive the thread, like breakpoints.
+ *        and exiting a nested event loop.
  */
 function ChromeDebuggerActor(aConnection, aHooks)
 {

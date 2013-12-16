@@ -682,7 +682,7 @@ static const mach_msg_id_t sExceptionId = 2405;
 // The choice of id here is arbitrary, the only constraint is that sQuitId != sExceptionId.
 static const mach_msg_id_t sQuitId = 42;
 
-void *
+void
 AsmJSMachExceptionHandlerThread(void *threadArg)
 {
     JSRuntime *rt = reinterpret_cast<JSRuntime*>(threadArg);
@@ -733,8 +733,6 @@ AsmJSMachExceptionHandlerThread(void *threadArg)
         mach_msg(&reply.Head, MACH_SEND_MSG, sizeof(reply), 0, MACH_PORT_NULL,
                  MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
     }
-
-    return nullptr;
 }
 
 AsmJSMachExceptionHandler::AsmJSMachExceptionHandler()
@@ -746,6 +744,7 @@ AsmJSMachExceptionHandler::AsmJSMachExceptionHandler()
 void
 AsmJSMachExceptionHandler::uninstall()
 {
+#ifdef JS_THREADSAFE
     if (installed_) {
         thread_port_t thread = mach_thread_self();
         kern_return_t kret = thread_set_exception_ports(thread,
@@ -775,7 +774,7 @@ AsmJSMachExceptionHandler::uninstall()
         }
 
         // Wait for the handler thread to complete before deallocating the port.
-        pthread_join(thread_, nullptr);
+        PR_JoinThread(thread_);
         thread_ = nullptr;
     }
     if (port_ != MACH_PORT_NULL) {
@@ -783,11 +782,15 @@ AsmJSMachExceptionHandler::uninstall()
         JS_ASSERT(kret == KERN_SUCCESS);
         port_ = MACH_PORT_NULL;
     }
+#else
+    JS_ASSERT(!installed_);
+#endif
 }
 
 bool
 AsmJSMachExceptionHandler::install(JSRuntime *rt)
 {
+#ifdef JS_THREADSAFE
     JS_ASSERT(!installed());
     kern_return_t kret;
     mach_port_t thread;
@@ -801,7 +804,9 @@ AsmJSMachExceptionHandler::install(JSRuntime *rt)
         goto error;
 
     // Create a thread to block on reading port_.
-    if (pthread_create(&thread_, nullptr, AsmJSMachExceptionHandlerThread, rt))
+    thread_ = PR_CreateThread(PR_USER_THREAD, AsmJSMachExceptionHandlerThread, rt,
+                              PR_PRIORITY_NORMAL, PR_GLOBAL_THREAD, PR_JOINABLE_THREAD, 0);
+    if (!thread_)
         goto error;
 
     // Direct exceptions on this thread to port_ (and thus our handler thread).
@@ -825,6 +830,9 @@ AsmJSMachExceptionHandler::install(JSRuntime *rt)
   error:
     uninstall();
     return false;
+#else
+    return false;
+#endif
 }
 
 #else  // If not Windows or Mac, assume Unix

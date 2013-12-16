@@ -662,25 +662,36 @@ template<class SourceType>
 static SourceSet *
   GetSources(MediaEngine *engine,
              const MediaTrackConstraintsInternal &aConstraints,
-             void (MediaEngine::* aEnumerate)(nsTArray<nsRefPtr<SourceType> >*))
+             void (MediaEngine::* aEnumerate)(nsTArray<nsRefPtr<SourceType> >*),
+             char* media_device_name = nullptr)
 {
   const SourceType * const type = nullptr;
-
+  nsString deviceName;
   // First collect sources
   SourceSet candidateSet;
   {
     nsTArray<nsRefPtr<SourceType> > sources;
     (engine->*aEnumerate)(&sources);
-
     /**
       * We're allowing multiple tabs to access the same camera for parity
       * with Chrome.  See bug 811757 for some of the issues surrounding
       * this decision.  To disallow, we'd filter by IsAvailable() as we used
       * to.
       */
-
     for (uint32_t len = sources.Length(), i = 0; i < len; i++) {
-      candidateSet.AppendElement(new MediaDevice(sources[i]));
+#ifdef DEBUG
+      sources[i]->GetName(deviceName);
+      if (media_device_name && strlen(media_device_name) > 0)  {
+        if (deviceName.EqualsASCII(media_device_name)) {
+          candidateSet.AppendElement(new MediaDevice(sources[i]));
+          break;
+        }
+      } else {
+#endif
+        candidateSet.AppendElement(new MediaDevice(sources[i]));
+#ifdef DEBUG
+      }
+#endif
     }
   }
 
@@ -1003,24 +1014,29 @@ public:
     const MediaStreamConstraintsInternal& aConstraints,
     already_AddRefed<nsIGetUserMediaDevicesSuccessCallback> aSuccess,
     already_AddRefed<nsIDOMGetUserMediaErrorCallback> aError,
-    uint64_t aWindowId)
+    uint64_t aWindowId, char* aAudioLoopbackDev, char* aVideoLoopbackDev)
     : mConstraints(aConstraints)
     , mSuccess(aSuccess)
     , mError(aError)
     , mManager(MediaManager::GetInstance())
-    , mWindowId(aWindowId) {}
+    , mWindowId(aWindowId)
+    , mLoopbackAudioDevice(aAudioLoopbackDev)
+    , mLoopbackVideoDevice(aVideoLoopbackDev) {}
 
   NS_IMETHOD
   Run()
   {
     NS_ASSERTION(!NS_IsMainThread(), "Don't call on main thread");
+
     MediaEngine *backend = mManager->GetBackend(mWindowId);
 
     ScopedDeletePtr<SourceSet> final (GetSources(backend, mConstraints.mVideom,
-                                          &MediaEngine::EnumerateVideoDevices));
+                                          &MediaEngine::EnumerateVideoDevices,
+                                          mLoopbackVideoDevice));
     {
       ScopedDeletePtr<SourceSet> s (GetSources(backend, mConstraints.mAudiom,
-                                        &MediaEngine::EnumerateAudioDevices));
+                                        &MediaEngine::EnumerateAudioDevices,
+                                        mLoopbackAudioDevice));
       final->MoveElementsFrom(*s);
     }
     NS_DispatchToMainThread(new DeviceSuccessCallbackRunnable(mSuccess, mError,
@@ -1034,6 +1050,11 @@ private:
   already_AddRefed<nsIDOMGetUserMediaErrorCallback> mError;
   nsRefPtr<MediaManager> mManager;
   uint64_t mWindowId;
+  // Audio & Video loopback devices to be used based on
+  // the preference settings. This is currently used for
+  // automated media tests only.
+  char* mLoopbackAudioDevice;
+  char* mLoopbackVideoDevice;
 };
 
 MediaManager::MediaManager()
@@ -1044,6 +1065,7 @@ MediaManager::MediaManager()
   mPrefs.mHeight = MediaEngine::DEFAULT_VIDEO_HEIGHT;
   mPrefs.mFPS    = MediaEngine::DEFAULT_VIDEO_FPS;
   mPrefs.mMinFPS = MediaEngine::DEFAULT_VIDEO_MIN_FPS;
+  mPrefs.mLoadAdapt = MediaEngine::DEFAULT_LOAD_ADAPT;
 
   nsresult rv;
   nsCOMPtr<nsIPrefService> prefs = do_GetService("@mozilla.org/preferences-service;1", &rv);
@@ -1088,6 +1110,7 @@ MediaManager::Get() {
       prefs->AddObserver("media.navigator.video.default_height", sSingleton, false);
       prefs->AddObserver("media.navigator.video.default_fps", sSingleton, false);
       prefs->AddObserver("media.navigator.video.default_minfps", sSingleton, false);
+      prefs->AddObserver("media.navigator.load_adapt", sSingleton, false);
     }
   }
   return sSingleton;
@@ -1313,6 +1336,9 @@ MediaManager::GetUserMedia(JSContext* aCx, bool aPrivileged,
   if (Preferences::GetBool("media.navigator.permission.disabled", false)) {
     aPrivileged = true;
   }
+  if (!Preferences::GetBool("media.navigator.video.enabled", true)) {
+    c.mVideo = false;
+  }
 
   /**
    * Pass runnables along to GetUserMediaRunnable so it can add the
@@ -1387,13 +1413,28 @@ MediaManager::GetUserMediaDevices(nsPIDOMWindow* aWindow,
 
   nsCOMPtr<nsIGetUserMediaDevicesSuccessCallback> onSuccess(aOnSuccess);
   nsCOMPtr<nsIDOMGetUserMediaErrorCallback> onError(aOnError);
+  char* loopbackAudioDevice = nullptr;
+  char* loopbackVideoDevice = nullptr;
+  nsresult rv;
+#ifdef DEBUG
+  // Check if the preference for using loopback devices is enabled.
+  nsCOMPtr<nsIPrefService> prefs = do_GetService("@mozilla.org/preferences-service;1", &rv);
+  if (NS_SUCCEEDED(rv)) {
+    nsCOMPtr<nsIPrefBranch> branch = do_QueryInterface(prefs);
+    if (branch) {
+      branch->GetCharPref("media.audio_loopback_dev", &loopbackAudioDevice);
+      branch->GetCharPref("media.video_loopback_dev", &loopbackVideoDevice);
+    }
+  }
+#endif
 
   nsCOMPtr<nsIRunnable> gUMDRunnable = new GetUserMediaDevicesRunnable(
-    aConstraints, onSuccess.forget(), onError.forget(), aWindow->WindowID()
+    aConstraints, onSuccess.forget(), onError.forget(), aWindow->WindowID(),
+    loopbackAudioDevice, loopbackVideoDevice
   );
 
   nsCOMPtr<nsIThread> deviceThread;
-  nsresult rv = NS_NewThread(getter_AddRefs(deviceThread));
+  rv = NS_NewThread(getter_AddRefs(deviceThread));
   NS_ENSURE_SUCCESS(rv, rv);
 
 
@@ -1411,7 +1452,7 @@ MediaManager::GetBackend(uint64_t aWindowId)
   if (!mBackend) {
 #if defined(MOZ_WEBRTC)
   #ifndef MOZ_B2G_CAMERA
-    mBackend = new MediaEngineWebRTC();
+    mBackend = new MediaEngineWebRTC(mPrefs);
   #else
     mBackend = new MediaEngineWebRTC(mCameraManager, aWindowId);
   #endif
@@ -1510,12 +1551,25 @@ MediaManager::GetPref(nsIPrefBranch *aBranch, const char *aPref,
 }
 
 void
+MediaManager::GetPrefBool(nsIPrefBranch *aBranch, const char *aPref,
+                          const char *aData, bool *aVal)
+{
+  bool temp;
+  if (aData == nullptr || strcmp(aPref,aData) == 0) {
+    if (NS_SUCCEEDED(aBranch->GetBoolPref(aPref, &temp))) {
+      *aVal = temp;
+    }
+  }
+}
+
+void
 MediaManager::GetPrefs(nsIPrefBranch *aBranch, const char *aData)
 {
   GetPref(aBranch, "media.navigator.video.default_width", aData, &mPrefs.mWidth);
   GetPref(aBranch, "media.navigator.video.default_height", aData, &mPrefs.mHeight);
   GetPref(aBranch, "media.navigator.video.default_fps", aData, &mPrefs.mFPS);
   GetPref(aBranch, "media.navigator.video.default_minfps", aData, &mPrefs.mMinFPS);
+  GetPrefBool(aBranch, "media.navigator.load_adapt", aData, &mPrefs.mLoadAdapt);
 }
 
 nsresult
@@ -1544,6 +1598,7 @@ MediaManager::Observe(nsISupports* aSubject, const char* aTopic,
       prefs->RemoveObserver("media.navigator.video.default_height", this);
       prefs->RemoveObserver("media.navigator.video.default_fps", this);
       prefs->RemoveObserver("media.navigator.video.default_minfps", this);
+      prefs->RemoveObserver("media.navigator.load_adapt", this);
     }
 
     // Close off any remaining active windows.

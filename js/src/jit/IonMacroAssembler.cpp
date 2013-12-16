@@ -1205,7 +1205,46 @@ MacroAssembler::handleFailure(ExecutionMode executionMode)
         sps_->reenter(*this, InvalidReg);
 }
 
-static void printf0_(const char *output) {
+#ifdef DEBUG
+static inline bool
+IsCompilingAsmJS()
+{
+    // asm.js compilation pushes an IonContext with a null JSCompartment.
+    IonContext *ictx = MaybeGetIonContext();
+    return ictx && ictx->compartment == nullptr;
+}
+
+static void
+AssumeUnreachable_(const char *output) {
+    MOZ_ReportAssertionFailure(output, __FILE__, __LINE__);
+}
+#endif
+
+void
+MacroAssembler::assumeUnreachable(const char *output)
+{
+#ifdef DEBUG
+    // AsmJS forbids use of ImmPtr.
+    if (!IsCompilingAsmJS()) {
+        RegisterSet regs = RegisterSet::Volatile();
+        PushRegsInMask(regs);
+
+        Register temp = regs.takeGeneral();
+
+        setupUnalignedABICall(1, temp);
+        movePtr(ImmPtr(output), temp);
+        passABIArg(temp);
+        callWithABINoProfiling(JS_FUNC_TO_DATA_PTR(void *, AssumeUnreachable_));
+
+        PopRegsInMask(RegisterSet::Volatile());
+    }
+#endif
+
+    breakpoint();
+}
+
+static void
+Printf0_(const char *output) {
     printf("%s", output);
 }
 
@@ -1220,12 +1259,13 @@ MacroAssembler::printf(const char *output)
     setupUnalignedABICall(1, temp);
     movePtr(ImmPtr(output), temp);
     passABIArg(temp);
-    callWithABI(JS_FUNC_TO_DATA_PTR(void *, printf0_));
+    callWithABI(JS_FUNC_TO_DATA_PTR(void *, Printf0_));
 
     PopRegsInMask(RegisterSet::Volatile());
 }
 
-static void printf1_(const char *output, uintptr_t value) {
+static void
+Printf1_(const char *output, uintptr_t value) {
     char *line = JS_sprintf_append(nullptr, output, value);
     printf("%s", line);
     js_free(line);
@@ -1245,7 +1285,7 @@ MacroAssembler::printf(const char *output, Register value)
     movePtr(ImmPtr(output), temp);
     passABIArg(temp);
     passABIArg(value);
-    callWithABI(JS_FUNC_TO_DATA_PTR(void *, printf1_));
+    callWithABI(JS_FUNC_TO_DATA_PTR(void *, Printf1_));
 
     PopRegsInMask(RegisterSet::Volatile());
 }
@@ -1526,7 +1566,8 @@ MacroAssembler::convertValueToInt(ValueOperand value, MDefinition *maybeInput,
                                   Label *handleStringEntry, Label *handleStringRejoin,
                                   Label *truncateDoubleSlow,
                                   Register stringReg, FloatRegister temp, Register output,
-                                  Label *fail, IntConversionBehavior behavior)
+                                  Label *fail, IntConversionBehavior behavior,
+                                  IntConversionInputKind conversion)
 {
     Register tag = splitTagForTest(value);
     bool handleStrings = (behavior == IntConversion_Truncate ||
@@ -1535,29 +1576,36 @@ MacroAssembler::convertValueToInt(ValueOperand value, MDefinition *maybeInput,
                          handleStringRejoin;
     bool zeroObjects = behavior == IntConversion_ClampToUint8;
 
+    JS_ASSERT_IF(handleStrings || zeroObjects, conversion == IntConversion_Any);
+
     Label done, isInt32, isBool, isDouble, isNull, isString;
 
     branchEqualTypeIfNeeded(MIRType_Int32, maybeInput, tag, &isInt32);
-    branchEqualTypeIfNeeded(MIRType_Boolean, maybeInput, tag, &isBool);
+    if (conversion == IntConversion_Any)
+        branchEqualTypeIfNeeded(MIRType_Boolean, maybeInput, tag, &isBool);
     branchEqualTypeIfNeeded(MIRType_Double, maybeInput, tag, &isDouble);
 
-    // If we are not truncating, we fail for anything that's not
-    // null. Otherwise we might be able to handle strings and objects.
-    switch (behavior) {
-      case IntConversion_Normal:
-      case IntConversion_NegativeZeroCheck:
-        branchTestNull(Assembler::NotEqual, tag, fail);
-        break;
+    if (conversion == IntConversion_Any) {
+        // If we are not truncating, we fail for anything that's not
+        // null. Otherwise we might be able to handle strings and objects.
+        switch (behavior) {
+          case IntConversion_Normal:
+          case IntConversion_NegativeZeroCheck:
+            branchTestNull(Assembler::NotEqual, tag, fail);
+            break;
 
-      case IntConversion_Truncate:
-      case IntConversion_ClampToUint8:
-        branchEqualTypeIfNeeded(MIRType_Null, maybeInput, tag, &isNull);
-        if (handleStrings)
-            branchEqualTypeIfNeeded(MIRType_String, maybeInput, tag, &isString);
-        if (zeroObjects)
-            branchEqualTypeIfNeeded(MIRType_Object, maybeInput, tag, &isNull);
-        branchTestUndefined(Assembler::NotEqual, tag, fail);
-        break;
+          case IntConversion_Truncate:
+          case IntConversion_ClampToUint8:
+            branchEqualTypeIfNeeded(MIRType_Null, maybeInput, tag, &isNull);
+            if (handleStrings)
+                branchEqualTypeIfNeeded(MIRType_String, maybeInput, tag, &isString);
+            if (zeroObjects)
+                branchEqualTypeIfNeeded(MIRType_Object, maybeInput, tag, &isNull);
+            branchTestUndefined(Assembler::NotEqual, tag, fail);
+            break;
+        }
+    } else {
+        jump(fail);
     }
 
     // The value is null or undefined in truncation contexts - just emit 0.
@@ -1732,8 +1780,8 @@ MacroAssembler::branchIfNotInterpretedConstructor(Register fun, Register scratch
 {
     // 16-bit loads are slow and unaligned 32-bit loads may be too so
     // perform an aligned 32-bit load and adjust the bitmask accordingly.
-    JS_STATIC_ASSERT(offsetof(JSFunction, nargs) % sizeof(uint32_t) == 0);
-    JS_STATIC_ASSERT(offsetof(JSFunction, flags) == offsetof(JSFunction, nargs) + 2);
+    JS_ASSERT(JSFunction::offsetOfNargs() % sizeof(uint32_t) == 0);
+    JS_ASSERT(JSFunction::offsetOfFlags() == JSFunction::offsetOfNargs() + 2);
     JS_STATIC_ASSERT(IS_LITTLE_ENDIAN);
 
     // Emit code for the following test:
@@ -1744,7 +1792,7 @@ MacroAssembler::branchIfNotInterpretedConstructor(Register fun, Register scratch
     // }
 
     // First, ensure it's a scripted function.
-    load32(Address(fun, offsetof(JSFunction, nargs)), scratch);
+    load32(Address(fun, JSFunction::offsetOfNargs()), scratch);
     branchTest32(Assembler::Zero, scratch, Imm32(JSFunction::INTERPRETED << 16), label);
 
     // Common case: if both IS_FUN_PROTO and SELF_HOSTED are not set,

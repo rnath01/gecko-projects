@@ -74,9 +74,10 @@ MacroAssemblerARM::convertUInt32ToFloat32(const Register &src, const FloatRegist
     as_vcvt(VFPRegister(dest).singleOverlay(), dest.uintOverlay());
 }
 
-void MacroAssemblerARM::convertDoubleToFloat(const FloatRegister &src, const FloatRegister &dest)
+void MacroAssemblerARM::convertDoubleToFloat(const FloatRegister &src, const FloatRegister &dest,
+                                             Condition c)
 {
-    as_vcvt(VFPRegister(dest).singleOverlay(), VFPRegister(src));
+    as_vcvt(VFPRegister(dest).singleOverlay(), VFPRegister(src), false, c);
 }
 
 // there are two options for implementing emitTruncateDouble.
@@ -958,7 +959,7 @@ MacroAssemblerARM::ma_mod_mask(Register src, Register dest, Register hold, int32
     // Do a trial subtraction, this is the same operation as cmp, but we store the dest
     ma_sub(dest, Imm32(mask), secondScratchReg_, SetCond);
     // If (sum - C) > 0, store sum - C back into sum, thus performing a modulus.
-    ma_mov(secondScratchReg_, dest, NoSetCond, Unsigned);
+    ma_mov(secondScratchReg_, dest, NoSetCond, NotSigned);
     // Get rid of the bits that we extracted before, and set the condition codes
     as_mov(ScratchRegister, lsr(ScratchRegister, shift), SetCond);
     // If the shift produced zero, finish, otherwise, continue in the loop.
@@ -1869,6 +1870,12 @@ MacroAssemblerARMCompat::addPtr(const Address &src, Register dest)
 {
     load32(src, ScratchRegister);
     ma_add(ScratchRegister, dest, SetCond);
+}
+
+void
+MacroAssemblerARMCompat::not32(Register reg)
+{
+    ma_mvn(reg, reg);
 }
 
 void
@@ -3511,26 +3518,26 @@ MacroAssemblerARMCompat::passABIArg(const MoveOperand &from)
         FloatRegister fr;
         if (GetFloatArgReg(usedIntSlots_, usedFloatSlots_, &fr)) {
             if (!from.isFloatReg() || from.floatReg() != fr) {
-                enoughMemory_ = moveResolver_.addMove(from, MoveOperand(fr), Move::DOUBLE);
+                enoughMemory_ = moveResolver_.addMove(from, MoveOperand(fr), MoveOp::DOUBLE);
             }
             // else nothing to do; the value is in the right register already
         } else {
             // If (and only if) the integer registers have started spilling, do we
             // need to take the double register's alignment into account
             uint32_t disp = GetFloatArgStackDisp(usedIntSlots_, usedFloatSlots_, &padding_);
-            enoughMemory_ = moveResolver_.addMove(from, MoveOperand(sp, disp), Move::DOUBLE);
+            enoughMemory_ = moveResolver_.addMove(from, MoveOperand(sp, disp), MoveOp::DOUBLE);
         }
         usedFloatSlots_++;
     } else {
         Register r;
         if (GetIntArgReg(usedIntSlots_, usedFloatSlots_, &r)) {
             if (!from.isGeneralReg() || from.reg() != r) {
-                enoughMemory_ = moveResolver_.addMove(from, MoveOperand(r), Move::GENERAL);
+                enoughMemory_ = moveResolver_.addMove(from, MoveOperand(r), MoveOp::GENERAL);
             }
             // else nothing to do; the value is in the right register already
         } else {
             uint32_t disp = GetIntArgStackDisp(usedIntSlots_, usedFloatSlots_, &padding_);
-            enoughMemory_ = moveResolver_.addMove(from, MoveOperand(sp, disp), Move::GENERAL);
+            enoughMemory_ = moveResolver_.addMove(from, MoveOperand(sp, disp), MoveOp::GENERAL);
         }
         usedIntSlots_++;
     }
@@ -3545,13 +3552,13 @@ MacroAssemblerARMCompat::passABIArg(const MoveOperand &from)
     uint32_t increment = 1;
     bool useResolver = true;
     ++passedArgs_;
-    Move::Kind kind = Move::GENERAL;
+    MoveOp::Kind kind = MoveOp::GENERAL;
     if (from.isDouble()) {
         // Double arguments need to be rounded up to the nearest doubleword
         // boundary, even if it is in a register!
         usedSlots_ = (usedSlots_ + 1) & ~1;
         increment = 2;
-        kind = Move::DOUBLE;
+        kind = MoveOp::DOUBLE;
     }
 
     Register destReg;
@@ -3662,13 +3669,24 @@ MacroAssemblerARMCompat::callWithABIPost(uint32_t stackAdjust, Result result)
     if (secondScratchReg_ != lr)
         ma_mov(secondScratchReg_, lr);
 
-    if (result == DOUBLE) {
-#ifdef JS_CPU_ARM_HARDFP
-        as_vmov(ReturnFloatReg, d0);
-#else
+    switch (result) {
+      case DOUBLE:
+#ifndef JS_CPU_ARM_HARDFP
         // Move double from r0/r1 to ReturnFloatReg.
         as_vxfer(r0, r1, ReturnFloatReg, CoreToFloat);
+        break;
 #endif
+      case FLOAT:
+#ifndef JS_CPU_ARM_HARDFP
+        // Move float32 from r0 to ReturnFloatReg.
+        as_vxfer(r0, InvalidReg, VFPRegister(d0).singleOverlay(), CoreToFloat);
+        break;
+#endif
+      case GENERAL:
+        break;
+
+      default:
+        MOZ_ASSUME_UNREACHABLE("unexpected callWithABI result");
     }
 
     freeStack(stackAdjust);
@@ -3873,7 +3891,7 @@ MacroAssemblerARMCompat::floor(FloatRegister input, Register output, Label *bail
     // the int range, and special handling is required.
     // zero is also caught by this case, but floor of a negative number
     // should never be zero.
-    ma_b(bail, Unsigned);
+    ma_b(bail, NotSigned);
 
     bind(&fin);
 }
@@ -3925,7 +3943,7 @@ MacroAssemblerARMCompat::floorf(FloatRegister input, Register output, Label *bai
     // the int range, and special handling is required.
     // zero is also caught by this case, but floor of a negative number
     // should never be zero.
-    ma_b(bail, Unsigned);
+    ma_b(bail, NotSigned);
 
     bind(&fin);
 }
@@ -4012,7 +4030,7 @@ MacroAssemblerARMCompat::round(FloatRegister input, Register output, Label *bail
     // If the result looks non-negative, then this value didn't actually fit into
     // the int range, and special handling is required, or it was zero, which means
     // the result is actually -0.0 which also requires special handling.
-    ma_b(bail, Unsigned);
+    ma_b(bail, NotSigned);
 
     bind(&fin);
 }

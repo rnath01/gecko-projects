@@ -9,6 +9,7 @@
 <?xml-stylesheet href="chrome://browser/content/browser.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/cssthrobber.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/tiles.css" type="text/css"?>
+<?xml-stylesheet href="chrome://branding/content/metro-about.css" type="text/css"?>
 
 <!DOCTYPE window [
 <!ENTITY % globalDTD SYSTEM "chrome://global/locale/global.dtd">
@@ -247,7 +248,7 @@ Desktop browser's sync prefs.
                      completeselectedindex="true"
                      placeholder="&urlbar.emptytext;"
                      tabscrolling="true"
-                     onclick="SelectionHelperUI.urlbarClick();"/>
+                     onclick="SelectionHelperUI.urlbarTextboxClick(this);"/>
 
             <toolbarbutton id="go-button" class="urlbar-button"
                            command="cmd_go"/>
@@ -265,10 +266,10 @@ Desktop browser's sync prefs.
             <hbox id="toolbar-context-page" pack="end">
               <circularprogressindicator id="download-progress" class="appbar-primary"
                                      oncommand="MetroDownloadsView.onDownloadButton()"/>
-              <toolbarbutton id="star-button" class="appbar-primary"
+              <toolbarbutton id="star-button" class="appbar-primary hide-on-start"
                              type="checkbox"
                              oncommand="Appbar.onStarButton()"/>
-              <toolbarbutton id="pin-button" class="appbar-primary"
+              <toolbarbutton id="pin-button" class="appbar-primary hide-on-start"
                              type="checkbox"
                              oncommand="Appbar.onPinButton()"/>
               <toolbarbutton id="menu-button" class="appbar-primary"
@@ -384,7 +385,9 @@ Desktop browser's sync prefs.
     </appbar>
     <autoscroller class="autoscroller" id="autoscrollerid"/>
     <flyoutpanel id="about-flyoutpanel" class="flyout-narrow" headertext="&aboutHeader.title;">
-      <label id="about-product-label" linewrap="true" value="&aboutHeader.product.label;"/>
+      <label align="start">
+        <html:img src="chrome://branding/content/metro-about-wordmark.png" alt="&aboutHeader.product.label;"/>
+      </label>
       <label value="&aboutHeader.company.label;" linewrap="true"/>
 #expand <label id="about-version-label">__MOZ_APP_VERSION__</label>
       <vbox id="updateBox">
@@ -672,7 +675,13 @@ Desktop browser's sync prefs.
       </settings>
       <setting pref="signon.rememberSignons" title="&optionsHeader.privacy.passwords.label;" type="bool"/>
       <settings id="prefs-reporting" label="&optionsHeader.reporting.title;">
-        <setting pref="app.crashreporter.autosubmit" type="bool" title="&optionsHeader.reporting.crashes.label;" oncommand="BrowserUI.crashReportingPrefChanged(this.value);"/>
+        <setting pref="app.crashreporter.autosubmit"
+                 type="bool"
+                 title="&optionsHeader.reporting.crashes.label;" />
+        <setting pref="app.crashreporter.submitURLs"
+                 id="prefs-reporting-submitURLs"
+                 type="bool"
+                 title="&optionsHeader.reporting.crashes.submitURLs;" />
       </settings>
       <settings id="prefs-telemetry" label="&optionsHeader.telemetry.title;">
         <setting pref="toolkit.telemetry.enabled" type="bool" title="&optionsHeader.telemetry.label;"/>

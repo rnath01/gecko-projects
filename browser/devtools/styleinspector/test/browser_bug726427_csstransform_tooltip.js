@@ -108,25 +108,18 @@ function testTransformTooltipOnTagSelector() {
 function testTransformTooltipNotShownOnInvalidTransform() {
   info("Testing that a transform tooltip does not appear for invalid values");
 
-  // This is the list of keys to type in the inplace-editor
-  let keyData = "transform".split("");
-  keyData.push("VK_TAB");
-  keyData = keyData.concat("muchTransform(suchAngle)".split(""));
-  keyData.push("VK_RETURN");
+  let ruleEditor;
+  for (let rule of ruleView._elementStyle.rules) {
+    if (rule.matchedSelectors[0] === "[attr]") {
+      ruleEditor = rule.editor;
+    }
+  }
+  ruleEditor.addProperty("transform", "muchTransform(suchAngle)", "");
 
-  // Focus the inplace editor
-  let rule = getRule("[attr]");
-  let brace = rule.querySelector(".ruleview-ruleclose");
-  waitForEditorFocus(brace.parentNode, editor => {
-    // Enter an invalid value
-    typeKeySequence(keyData, () => {
-      let {valueSpan} = getRuleViewProperty("[attr]", "transform");
-      assertTooltipNotShownOn(ruleView.previewTooltip, valueSpan, () => {
-        executeSoon(testTransformTooltipOnComputedView);
-      });
-    });
+  let {valueSpan} = getRuleViewProperty("[attr]", "transform");
+  assertTooltipNotShownOn(ruleView.previewTooltip, valueSpan, () => {
+    executeSoon(testTransformTooltipOnComputedView);
   });
-  brace.click();
 }
 
 function testTransformTooltipOnComputedView() {
@@ -165,17 +158,6 @@ function assertTooltipNotShownOn(tooltip, element, cb) {
     ok(!tooltip.isShown(), "The tooltip did not appear on hover of the element");
     cb();
   }, tooltip.defaultShowDelay + 100);
-}
-
-function typeKeySequence(sequence, cb, index=0) {
-  if (index === sequence.length) {
-    return cb();
-  }
-
-  EventUtils.synthesizeKey(sequence[index], {}, ruleView.doc.defaultView);
-  executeSoon(() => {
-    typeKeySequence(sequence, cb, index + 1);
-  });
 }
 
 function getRule(selectorText) {

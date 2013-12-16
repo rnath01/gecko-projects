@@ -9,7 +9,6 @@
 
 #include "mozilla/Atomics.h"
 #include "mozilla/MemoryReporting.h"
-#include "mozilla/Util.h"
 
 #include "jscntxt.h"
 #include "jsgc.h"
@@ -310,8 +309,6 @@ struct Zone : public JS::shadow::Zone,
     void reportAllocationOverflow() {
         js_ReportAllocationOverflow(nullptr);
     }
-
-    void markTypes(JSTracer *trc);
 
     js::types::TypeZone types;
 

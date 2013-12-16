@@ -58,7 +58,6 @@
 #include "mozilla/MiscEvents.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/TouchEvents.h"
-#include "mozilla/Util.h"
 
 #include "mozilla/ipc/MessageChannel.h"
 #include <algorithm>
@@ -980,7 +979,7 @@ float nsWindow::GetDPI()
 
 double nsWindow::GetDefaultScaleInternal()
 {
-  return gfxWindowsPlatform::GetPlatform()->GetDPIScale();
+  return WinUtils::LogToPhysFactor();
 }
 
 nsWindow*
@@ -3514,19 +3513,36 @@ mozilla::TemporaryRef<mozilla::gfx::DrawTarget>
 nsWindow::StartRemoteDrawing()
 {
   MOZ_ASSERT(!mCompositeDC);
+  NS_ASSERTION(IsRenderMode(gfxWindowsPlatform::RENDER_DIRECT2D) ||
+               IsRenderMode(gfxWindowsPlatform::RENDER_GDI),
+               "Unexpected render mode for remote drawing");
 
   HDC dc = (HDC)GetNativeData(NS_NATIVE_GRAPHIC);
-  if (!dc) {
-    return nullptr;
-  }
+  nsRefPtr<gfxASurface> surf;
 
-  uint32_t flags = (mTransparencyMode == eTransparencyOpaque) ? 0 :
-      gfxWindowsSurface::FLAG_IS_TRANSPARENT;
-  nsRefPtr<gfxASurface> surf = new gfxWindowsSurface(dc, flags);
+  if (mTransparencyMode == eTransparencyTransparent) {
+    if (!mTransparentSurface) {
+      SetupTranslucentWindowMemoryBitmap(mTransparencyMode);
+    }
+    if (mTransparentSurface) {
+      surf = mTransparentSurface;
+    }
+  } 
+  
+  if (!surf) {
+    if (!dc) {
+      return nullptr;
+    }
+    uint32_t flags = (mTransparencyMode == eTransparencyOpaque) ? 0 :
+        gfxWindowsSurface::FLAG_IS_TRANSPARENT;
+    surf = new gfxWindowsSurface(dc, flags);
+  }
 
   mozilla::gfx::IntSize size(surf->GetSize().width, surf->GetSize().height);
   if (size.width <= 0 || size.height <= 0) {
-    FreeNativeData(dc, NS_NATIVE_GRAPHIC);
+    if (dc) {
+      FreeNativeData(dc, NS_NATIVE_GRAPHIC);
+    }
     return nullptr;
   }
 
@@ -3539,9 +3555,14 @@ nsWindow::StartRemoteDrawing()
 void
 nsWindow::EndRemoteDrawing()
 {
-  MOZ_ASSERT(mCompositeDC);
-  UpdateTranslucentWindow();
-  FreeNativeData(mCompositeDC, NS_NATIVE_GRAPHIC);
+  if (mTransparencyMode == eTransparencyTransparent) {
+    MOZ_ASSERT(IsRenderMode(gfxWindowsPlatform::RENDER_DIRECT2D)
+               || mTransparentSurface);
+    UpdateTranslucentWindow();
+  }
+  if (mCompositeDC) {
+    FreeNativeData(mCompositeDC, NS_NATIVE_GRAPHIC);
+  }
   mCompositeDC = nullptr;
 }
 
@@ -5474,8 +5495,10 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
       if (IsWin8OrLater() && lParam &&
           !wcsicmp(L"ConvertibleSlateMode", (wchar_t*)lParam)) {
         // If we're switching into slate mode, switch to Metro for hardware
-        // that supports this feature.
-        if (GetSystemMetrics(SM_CONVERTIBLESLATEMODE) == 0) {
+        // that supports this feature if the pref is set.
+        if (GetSystemMetrics(SM_CONVERTIBLESLATEMODE) == 0 &&
+            Preferences::GetBool("browser.shell.desktop-auto-switch-enabled",
+                                 false)) {
           nsCOMPtr<nsIAppStartup> appStartup(do_GetService(NS_APPSTARTUP_CONTRACTID));
           if (appStartup) {
             appStartup->Quit(nsIAppStartup::eForceQuit |

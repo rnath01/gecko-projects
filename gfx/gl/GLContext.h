@@ -2415,16 +2415,6 @@ public:
 
     virtual void ReleaseSurface() {}
 
-    void *GetUserData(void *aKey) {
-        void *result = nullptr;
-        mUserData.Get(aKey, &result);
-        return result;
-    }
-
-    void SetUserData(void *aKey, void *aValue) {
-        mUserData.Put(aKey, aValue);
-    }
-
     // Mark this context as destroyed.  This will nullptr out all
     // the GL function pointers!
     void MarkDestroyed();
@@ -2491,25 +2481,6 @@ public:
      * Releases a color buffer that is being used as a texture
      */
     virtual bool ReleaseTexImage() { return false; }
-
-    /**
-     * Applies aFilter to the texture currently bound to GL_TEXTURE_2D.
-     */
-    void ApplyFilterToBoundTexture(GraphicsFilter aFilter);
-
-    /**
-     * Applies aFilter to the texture currently bound to aTarget.
-     */
-    void ApplyFilterToBoundTexture(GLuint aTarget,
-                                   GraphicsFilter aFilter);
-
-    virtual bool BindExternalBuffer(GLuint texture, void* buffer) { return false; }
-    virtual bool UnbindExternalBuffer(GLuint texture) { return false; }
-
-#ifdef MOZ_WIDGET_GONK
-    virtual EGLImage CreateEGLImageForNativeBuffer(void* buffer) = 0;
-    virtual void DestroyEGLImage(EGLImage image) = 0;
-#endif
 
     // Before reads from offscreen texture
     void GuaranteeResolve();
@@ -2822,24 +2793,7 @@ public:
         return *mPixelFormat;
     }
 
-
-    GLuint CreateTextureForOffscreen(const GLFormats& formats,
-                                     const gfxIntSize& size);
-    GLuint CreateTexture(GLenum internalFormat,
-                         GLenum format, GLenum type,
-                         const gfxIntSize& size);
-    GLuint CreateRenderbuffer(GLenum format,
-                              GLsizei samples,
-                              const gfxIntSize& size);
     bool IsFramebufferComplete(GLuint fb, GLenum* status = nullptr);
-
-    // Pass null to an RB arg to disable its creation.
-    void CreateRenderbuffersForOffscreen(const GLFormats& formats,
-                                         const gfxIntSize& size,
-                                         bool multisample,
-                                         GLuint* colorMSRB,
-                                         GLuint* depthRB,
-                                         GLuint* stencilRB);
 
     // Does not check completeness.
     void AttachBuffersToFB(GLuint colorTex, GLuint colorRB,
@@ -2910,8 +2864,6 @@ public:
     bool IsOffscreenSizeAllowed(const gfxIntSize& aSize) const;
 
 protected:
-    nsDataHashtable<nsPtrHashKey<void>, void*> mUserData;
-
     GLuint mReadTextureImagePrograms[4];
 
     bool InitWithPrefix(const char *prefix, bool trygl);

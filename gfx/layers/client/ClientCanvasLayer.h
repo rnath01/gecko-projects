@@ -19,8 +19,6 @@
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 
-using namespace mozilla::gfx;
-
 namespace mozilla {
 namespace layers {
 
@@ -53,11 +51,11 @@ public:
                  "Can only set properties in construction phase");
     CanvasLayer::SetVisibleRegion(aRegion);
   }
-  
+
   virtual void Initialize(const Data& aData);
 
   virtual void RenderLayer();
-  
+
   virtual void FillSpecificAttributes(SpecificLayerAttributes& aAttrs)
   {
     aAttrs = CanvasLayerAttributes(mFilter, mBounds);
@@ -65,7 +63,7 @@ public:
 
   virtual Layer* AsLayer() { return this; }
   virtual ShadowableLayer* AsShadowableLayer() { return this; }
-  
+
   virtual void Disconnect()
   {
     mCanvasClient = nullptr;
@@ -81,7 +79,7 @@ protected:
   {
     return static_cast<ClientLayerManager*>(mManager);
   }
-  
+
   CanvasClientType GetCanvasClientType()
   {
     if (mGLContext) {
@@ -95,6 +93,7 @@ protected:
   friend class DeprecatedCanvasClient2D;
   friend class CanvasClient2D;
   friend class DeprecatedCanvasClientSurfaceStream;
+  friend class CanvasClientSurfaceStream;
 };
 }
 }
