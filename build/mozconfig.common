@@ -16,4 +16,3 @@ ac_add_options --enable-crashreporter
 
 ac_add_options --enable-release
 
-ac_add_options --disable-unified-compilation
