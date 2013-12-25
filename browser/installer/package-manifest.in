@@ -183,6 +183,9 @@
 @BINPATH@/components/content_canvas.xpt
 @BINPATH@/components/content_htmldoc.xpt
 @BINPATH@/components/content_html.xpt
+#ifdef MOZ_WEBRTC
+@BINPATH@/components/content_webrtc.xpt
+#endif
 @BINPATH@/components/content_xslt.xpt
 @BINPATH@/components/cookie.xpt
 @BINPATH@/components/directory.xpt
@@ -831,6 +834,10 @@ bin/libfreebl_32int64_3.so
 @BINPATH@/metro/chrome/chrome.manifest
 @BINPATH@/metro/chrome/@AB_CD@@JAREXT@
 @BINPATH@/metro/chrome/@AB_CD@.manifest
+#ifdef NIGHTLY_BUILD
+@BINPATH@/metro/chrome/shumway.manifest
+@BINPATH@/metro/chrome/shumway/*
+#endif
 @BINPATH@/metro/chrome/pdfjs.manifest
 @BINPATH@/metro/chrome/pdfjs/*
 @BINPATH@/metro/components

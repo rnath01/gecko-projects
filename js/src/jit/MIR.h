@@ -3875,6 +3875,7 @@ class MMathFunction
         Trunc,
         Cbrt,
         Floor,
+        Ceil,
         Round
     };
 
@@ -3931,7 +3932,8 @@ class MMathFunction
     bool isFloat32Commutative() const {
         return function_ == Log || function_ == Sin || function_ == Cos
                || function_ == Exp || function_ == Tan || function_ == ATan
-               || function_ == ASin || function_ == ACos || function_ == Floor;
+               || function_ == ASin || function_ == ACos || function_ == Floor
+               || function_ == Ceil;
     }
     void trySpecializeFloat32(TempAllocator &alloc);
     void computeRange(TempAllocator &alloc);
@@ -4093,6 +4095,10 @@ class MMul : public MBinaryArithInstruction
 
     bool fallible() const {
         return canBeNegativeZero_ || canOverflow();
+    }
+
+    void setSpecialization(MIRType type) {
+        specialization_ = type;
     }
 
     bool isFloat32Commutative() const { return true; }
