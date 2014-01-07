@@ -1521,6 +1521,10 @@ var BrowserApp = {
         break;
 
       case "Locale:Changed":
+        // The value provided to Locale:Changed should be a BCP47 language tag
+        // understood by Gecko -- for example, "es-ES" or "de".
+        console.log("Locale:Changed: " + aData);
+
         // TODO: do we need to be more nuanced here -- e.g., checking for the
         // OS locale -- or should it always be false on Fennec?
         Services.prefs.setBoolPref("intl.locale.matchOS", false);
@@ -3777,18 +3781,8 @@ Tab.prototype = {
 
       // Clear page-specific opensearch engines and feeds for a new request.
       if (aStateFlags & Ci.nsIWebProgressListener.STATE_START && aRequest && aWebProgress.isTopLevel) {
-          this.browser.engines = null;
-
-          // Send message to clear search engine option in context menu.
-          let newEngineMessage = {
-            type: "Link:OpenSearch",
-            tabID: this.id,
-            visible: false
-          };
-
-          sendMessageToJava(newEngineMessage);
-
-          this.browser.feeds = null;
+        this.browser.engines = null;
+        this.browser.feeds = null;
       }
 
       // true if the page loaded successfully (i.e., no 404s or other errors)

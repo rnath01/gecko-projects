@@ -3801,7 +3801,7 @@ TextRenderedRunFlagsForBBoxContribution(const TextRenderedRun& aRun,
 }
 
 SVGBBox
-SVGTextFrame::GetBBoxContribution(const gfxMatrix &aToBBoxUserspace,
+SVGTextFrame::GetBBoxContribution(const gfx::Matrix &aToBBoxUserspace,
                                   uint32_t aFlags)
 {
   NS_ASSERTION(GetFirstPrincipalChild(), "must have a child frame");
@@ -3814,8 +3814,9 @@ SVGTextFrame::GetBBoxContribution(const gfxMatrix &aToBBoxUserspace,
   TextRenderedRunIterator it(this);
   for (TextRenderedRun run = it.Current(); run.mFrame; run = it.Next()) {
     uint32_t flags = TextRenderedRunFlagsForBBoxContribution(run, aFlags);
+    gfxMatrix m = ThebesMatrix(aToBBoxUserspace);
     SVGBBox bboxForRun =
-      run.GetUserSpaceRect(presContext, flags, &aToBBoxUserspace);
+      run.GetUserSpaceRect(presContext, flags, &m);
     bbox.UnionEdges(bboxForRun);
   }
 
@@ -4325,6 +4326,7 @@ SVGTextFrame::ResolvePositions(nsIContent* aContent,
     // only if they actually have some text content.
     if (HasTextContent(aContent)) {
       mPositions[aIndex].mPosition = gfxPoint();
+      mPositions[aIndex].mStartOfChunk = true;
     }
   } else if (aContent->Tag() != nsGkAtoms::a) {
     // We have a text content element that can have x/y/dx/dy/rotate attributes.
@@ -5166,18 +5168,18 @@ SVGTextFrame::DoReflow()
   nsHTMLReflowState reflowState(presContext, kid,
                                 renderingContext,
                                 nsSize(width, NS_UNCONSTRAINEDSIZE));
-  nsHTMLReflowMetrics desiredSize;
+  nsHTMLReflowMetrics desiredSize(reflowState.GetWritingMode());
   nsReflowStatus status;
 
-  NS_ASSERTION(reflowState.mComputedBorderPadding == nsMargin(0, 0, 0, 0) &&
-               reflowState.mComputedMargin == nsMargin(0, 0, 0, 0),
+  NS_ASSERTION(reflowState.ComputedPhysicalBorderPadding() == nsMargin(0, 0, 0, 0) &&
+               reflowState.ComputedPhysicalMargin() == nsMargin(0, 0, 0, 0),
                "style system should ensure that :-moz-svg-text "
                "does not get styled");
 
   kid->WillReflow(presContext);
   kid->Reflow(presContext, desiredSize, reflowState, status);
   kid->DidReflow(presContext, &reflowState, nsDidReflowStatus::FINISHED);
-  kid->SetSize(nsSize(desiredSize.width, desiredSize.height));
+  kid->SetSize(nsSize(desiredSize.Width(), desiredSize.Height()));
 
   mState &= ~NS_STATE_SVG_TEXT_IN_REFLOW;
 
@@ -5586,7 +5588,9 @@ SVGTextFrame::SetupInheritablePaint(gfxContext* aContext,
 
   if (ps && ps->SetupPaintServer(aContext, aFrame, aFillOrStroke, aOpacity)) {
     aTargetPaint.SetPaintServer(aFrame, aContext->CurrentMatrix(), ps);
-  } else if (SetupContextPaint(aContext, aFrame, aFillOrStroke, aOpacity, aOuterContextPaint)) {
+  } else if (nsSVGUtils::SetupContextPaint(aContext, aOuterContextPaint,
+                                           style->*aFillOrStroke,
+                                           aOpacity)) {
     aTargetPaint.SetContextPaint(aOuterContextPaint, (style->*aFillOrStroke).mType);
   } else {
     nscolor color = nsSVGUtils::GetFallbackOrPaintColor(aContext,
@@ -5601,36 +5605,4 @@ SVGTextFrame::SetupInheritablePaint(gfxContext* aContext,
                              NS_GET_A(color) / 255.0 * aOpacity));
     aContext->SetPattern(pattern);
   }
-}
-
-bool
-SVGTextFrame::SetupContextPaint(gfxContext* aContext,
-                                nsIFrame* aFrame,
-                                nsStyleSVGPaint nsStyleSVG::*aFillOrStroke,
-                                float& aOpacity,
-                                gfxTextContextPaint* aOuterContextPaint)
-{
-  if (!aOuterContextPaint) {
-    return false;
-  }
-
-  const nsStyleSVG *style = aFrame->StyleSVG();
-  const nsStyleSVGPaint &paint = style->*aFillOrStroke;
-
-  if (paint.mType != eStyleSVGPaintType_ContextFill &&
-      paint.mType != eStyleSVGPaintType_ContextStroke) {
-    return false;
-  }
-
-  gfxMatrix current = aContext->CurrentMatrix();
-  nsRefPtr<gfxPattern> pattern =
-    paint.mType == eStyleSVGPaintType_ContextFill ?
-      aOuterContextPaint->GetFillPattern(aOpacity, current) :
-      aOuterContextPaint->GetStrokePattern(aOpacity, current);
-  if (!pattern) {
-    return false;
-  }
-
-  aContext->SetPattern(pattern);
-  return true;
 }

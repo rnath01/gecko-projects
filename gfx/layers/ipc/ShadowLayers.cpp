@@ -486,6 +486,7 @@ ShadowLayerForwarder::EndTransaction(InfallibleTArray<EditReply>* aReplies, bool
     LayerAttributes attrs;
     CommonLayerAttributes& common = attrs.common();
     common.visibleRegion() = mutant->GetVisibleRegion();
+    common.eventRegions() = mutant->GetEventRegions();
     common.postXScale() = mutant->GetPostXScale();
     common.postYScale() = mutant->GetPostYScale();
     common.transform() = mutant->GetBaseTransform();
@@ -668,8 +669,8 @@ ShadowLayerForwarder::GetDescriptorSurfaceSize(
   }
 
   nsRefPtr<gfxASurface> surface = OpenDescriptor(aMode, aDescriptor);
-  size = surface->GetSize();
-  *aSurface = surface.forget().get();
+  size = surface->GetSize().ToIntSize();
+  surface.forget(aSurface);
   return size;
 }
 
@@ -828,7 +829,7 @@ gfx::IntSize
 AutoOpenSurface::Size()
 {
   if (mSurface) {
-    return mSurface->GetSize();
+    return mSurface->GetSize().ToIntSize();
   }
   return ShadowLayerForwarder::GetDescriptorSurfaceSize(
     mDescriptor, mMode, getter_AddRefs(mSurface));

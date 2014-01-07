@@ -73,7 +73,13 @@ GK_ATOM(alink, "alink")
 GK_ATOM(all, "all")
 GK_ATOM(allowevents, "allowevents")
 GK_ATOM(allownegativeassertions, "allownegativeassertions")
+GK_ATOM(allowforms,"allow-forms")
 GK_ATOM(allowfullscreen, "allowfullscreen")
+GK_ATOM(allowpointerlock,"allow-pointer-lock")
+GK_ATOM(allowpopups,"allow-popups")
+GK_ATOM(allowsameorigin,"allow-same-origin")
+GK_ATOM(allowscripts,"allow-scripts")
+GK_ATOM(allowtopnavigation,"allow-top-navigation")
 GK_ATOM(allowuntrusted, "allowuntrusted")
 GK_ATOM(alt, "alt")
 GK_ATOM(alternate, "alternate")
@@ -1989,9 +1995,6 @@ GK_ATOM(x_tibt, "x-tibt")
 GK_ATOM(ko_xxx, "ko-xxx")
 GK_ATOM(x_central_euro, "x-central-euro")
 GK_ATOM(x_symbol, "x-symbol")
-
-// referenced in all.js
-GK_ATOM(x_user_def, "x-user-def")
 
 // additional languages that have special case transformations
 GK_ATOM(az, "az")
