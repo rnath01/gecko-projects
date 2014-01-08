@@ -4,21 +4,19 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+LIBRARY_NAME = 'media_gtest'
+
 UNIFIED_SOURCES += [
-    'txDouble.cpp',
-    'txExpandedNameMap.cpp',
-    'txList.cpp',
-    'txNamespaceMap.cpp',
-    'txURIUtils.cpp',
+    'TestTrackEncoder.cpp',
 ]
 
-FAIL_ON_WARNINGS = True
+LIBXUL_LIBRARY = True
+
+EXPORT_LIBRARY = True
+
+include('/ipc/chromium/chromium-config.mozbuild')
 
 LOCAL_INCLUDES += [
-    '../../public',
-    '../xml',
-    '../xpath',
-    '../xslt',
+    '/content/media/encoder',
 ]
 
-FINAL_LIBRARY = 'gklayout'
