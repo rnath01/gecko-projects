@@ -26,12 +26,18 @@ namespace net {
     enum {
         SPDY_VERSION_2_REMOVED = 2,
         SPDY_VERSION_3 = 3,
-        SPDY_VERSION_31 = 4
+        SPDY_VERSION_31 = 4,
+
+        // leave room for official versions. telem goes to 48
+        // 24 was a internal spdy/3.1
+        // 25 was spdy/4a2
+        HTTP2_VERSION_DRAFT08 = 26
     };
-} // namespace mozilla::net
-} // namespace mozilla
 
 typedef uint8_t nsHttpVersion;
+
+#define NS_HTTP2_DRAFT_VERSION HTTP2_VERSION_DRAFT08
+#define NS_HTTP2_DRAFT_TOKEN "HTTP-draft-08/2.0"
 
 //-----------------------------------------------------------------------------
 // http connection capabilities
@@ -105,7 +111,7 @@ struct nsHttp
     // The mutex is valid any time the Atom Table is valid
     // This mutex is used in the unusual case that the network thread and
     // main thread might access the same data
-    static mozilla::Mutex *GetLock();
+    static Mutex *GetLock();
 
     // will dynamically add atoms to the table if they don't already exist
     static nsHttpAtom ResolveAtom(const char *);
@@ -188,5 +194,8 @@ PRTimeToSeconds(PRTime t_usec)
 
 #define HTTP_LWS " \t"
 #define HTTP_HEADER_VALUE_SEPS HTTP_LWS ","
+
+} // namespace mozilla::net
+} // namespace mozilla
 
 #endif // nsHttp_h__

@@ -73,6 +73,7 @@ const CM_MAPPING = [
   "setSelection",
   "getSelection",
   "replaceSelection",
+  "extendSelection",
   "undo",
   "redo",
   "clearHistory",
@@ -367,18 +368,6 @@ Editor.prototype = {
   },
 
   /**
-   * Extends the current selection to the position specified
-   * by the provided {line, ch} object.
-   */
-  extendSelection: function (pos) {
-    let cm = editors.get(this);
-    let cursor = cm.indexFromPos(cm.getCursor());
-    let anchor = cm.posFromIndex(cursor + pos.start);
-    let head   = cm.posFromIndex(cursor + pos.start + pos.length);
-    cm.setSelection(anchor, head);
-  },
-
-  /**
    * Gets the first visible line number in the editor.
    */
   getFirstVisibleLine: function () {
@@ -561,8 +550,16 @@ Editor.prototype = {
    */
   markText: function(from, to, className = "marked-text") {
     let cm = editors.get(this);
-    let mark = cm.markText(from, to, { className: className });
-    return { clear: () => mark.clear() };
+    let text = cm.getRange(from, to);
+    let span = cm.getWrapperElement().ownerDocument.createElement("span");
+    span.className = className;
+    span.textContent = text;
+
+    let mark = cm.markText(from, to, { replacedWith: span });
+    return {
+      anchor: span,
+      clear: () => mark.clear()
+    };
   },
 
   /**

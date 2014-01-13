@@ -5,3 +5,7 @@
 # See http://lldb.llvm.org/troubleshooting.html for more info.
 settings set target.inline-breakpoint-strategy always
 
+# Show the dynamic type of an object when using "expr".  This, for example,
+# will show a variable declared as "nsIFrame *" that points to an nsBlockFrame
+# object as being of type "nsBlockFrame *" rather than "nsIFrame *".
+settings set target.prefer-dynamic-value run-target

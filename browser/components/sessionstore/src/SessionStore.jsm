@@ -35,7 +35,8 @@ const OBSERVING = [
   "quit-application-requested", "quit-application-granted",
   "browser-lastwindow-close-granted",
   "quit-application", "browser:purge-session-history",
-  "browser:purge-domain-data"
+  "browser:purge-domain-data",
+  "gather-telemetry",
 ];
 
 // XUL Window properties to (re)store
@@ -587,6 +588,9 @@ let SessionStoreInternal = {
       case "nsPref:changed": // catch pref changes
         this.onPrefChange(aData);
         break;
+      case "gather-telemetry":
+        this.onGatherTelemetry();
+        break;
     }
   },
 
@@ -1035,6 +1039,11 @@ let SessionStoreInternal = {
       winData._shouldRestore = true;
 #endif
 
+      // Store the window's close date to figure out when each individual tab
+      // was closed. This timestamp should allow re-arranging data based on how
+      // recently something was closed.
+      winData.closedAt = Date.now();
+
       // Save the window if it has multiple tabs or a single saveable tab and
       // it's not private.
       if (!winData.isPrivate && (winData.tabs.length > 1 ||
@@ -1348,7 +1357,8 @@ let SessionStoreInternal = {
         state: tabState,
         title: tabTitle,
         image: tabbrowser.getIcon(aTab),
-        pos: aTab._tPos
+        pos: aTab._tPos,
+        closedAt: Date.now()
       });
       var length = this._windows[aWindow.__SSi]._closedTabs.length;
       if (length > this._max_tabs_undo)
@@ -1449,6 +1459,16 @@ let SessionStoreInternal = {
     // Default delay of 2 seconds gives enough time to catch multiple TabHide
     // events due to changing groups in Panorama.
     this.saveStateDelayed(aWindow);
+  },
+
+  onGatherTelemetry: function() {
+    // On the first gather-telemetry notification of the session,
+    // gather telemetry data.
+    Services.obs.removeObserver(this, "gather-telemetry");
+    this.fillTabCachesAsynchronously().then(function() {
+      let stateString = SessionStore.getBrowserState();
+      return SessionFile.gatherTelemetry(stateString);
+    });
   },
 
   /* ........ nsISessionStore API .............. */

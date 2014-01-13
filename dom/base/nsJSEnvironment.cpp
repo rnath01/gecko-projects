@@ -1926,7 +1926,10 @@ nsJSContext::GarbageCollectNow(JS::gcreason::Reason aReason,
 
   JS::PrepareForFullGC(sRuntime);
   if (aIncremental == IncrementalGC) {
+    MOZ_ASSERT(aShrinking == NonShrinkingGC);
     JS::IncrementalGC(sRuntime, aReason, aSliceMillis);
+  } else if (aShrinking == ShrinkingGC) {
+    JS::ShrinkingGC(sRuntime, aReason);
   } else {
     JS::GCForReason(sRuntime, aReason);
   }
@@ -2003,6 +2006,7 @@ struct CycleCollectorStats
     mSuspected = 0;
     mMaxSkippableDuration = 0;
     mMaxSliceTime = 0;
+    mTotalSliceTime = 0;
     mAnyLockedOut = false;
     mExtraForgetSkippableCalls = 0;
   }
@@ -2013,6 +2017,7 @@ struct CycleCollectorStats
   {
     uint32_t sliceTime = TimeUntilNow(mBeginSliceTime);
     mMaxSliceTime = std::max(mMaxSliceTime, sliceTime);
+    mTotalSliceTime += sliceTime;
     MOZ_ASSERT(mExtraForgetSkippableCalls == 0, "Forget to reset extra forget skippable calls?");
   }
 
@@ -2039,6 +2044,9 @@ struct CycleCollectorStats
 
   // The longest pause of any slice in the current CC.
   uint32_t mMaxSliceTime;
+
+  // The total amount of time spent actually running the current CC.
+  uint32_t mTotalSliceTime;
 
   // True if we were locked out by the GC in any slice of the current CC.
   bool mAnyLockedOut;
@@ -2257,7 +2265,8 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
       MOZ_UTF16("ForgetSkippable %lu times before CC, min: %lu ms, max: %lu ms, avg: %lu ms, total: %lu ms, max sync: %lu ms, removed: %lu"));
     nsString msg;
     msg.Adopt(nsTextFormatter::smprintf(kFmt.get(), double(delta) / PR_USEC_PER_SEC,
-                                        gCCStats.mMaxSliceTime, ccNowDuration, gCCStats.mSuspected,
+                                        gCCStats.mMaxSliceTime, gCCStats.mTotalSliceTime,
+                                        gCCStats.mSuspected,
                                         aResults.mVisitedRefCounted, aResults.mVisitedGCed, mergeMsg.get(),
                                         aResults.mFreedRefCounted, aResults.mFreedGCed,
                                         sCCollectedWaitingForGC, sLikelyShortLivingObjectsNeedingGC,
@@ -2281,6 +2290,7 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
        MOZ_UTF16("{ \"timestamp\": %llu, ")
          MOZ_UTF16("\"duration\": %llu, ")
          MOZ_UTF16("\"max_slice_pause\": %llu, ")
+         MOZ_UTF16("\"total_slice_pause\": %llu, ")
          MOZ_UTF16("\"max_finish_gc_duration\": %llu, ")
          MOZ_UTF16("\"max_sync_skippable_duration\": %llu, ")
          MOZ_UTF16("\"suspected\": %lu, ")
@@ -2303,7 +2313,9 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
        MOZ_UTF16("}"));
     nsString json;
     json.Adopt(nsTextFormatter::smprintf(kJSONFmt.get(), endCCTime, ccNowDuration,
-                                         gCCStats.mMaxSliceTime, gCCStats.mMaxGCDuration,
+                                         gCCStats.mMaxSliceTime,
+                                         gCCStats.mTotalSliceTime,
+                                         gCCStats.mMaxGCDuration,
                                          gCCStats.mMaxSkippableDuration,
                                          gCCStats.mSuspected,
                                          aResults.mVisitedRefCounted, aResults.mVisitedGCed,
