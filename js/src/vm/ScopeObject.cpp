@@ -48,13 +48,13 @@ Shape *
 js::ScopeCoordinateToStaticScopeShape(JSScript *script, jsbytecode *pc)
 {
     StaticScopeIter<NoGC> ssi(InnermostStaticScope(script, pc));
-    ScopeCoordinate sc(pc);
+    uint32_t hops = ScopeCoordinate(pc).hops();
     while (true) {
         JS_ASSERT(!ssi.done());
         if (ssi.hasDynamicScopeObject()) {
-            if (!sc.hops)
+            if (!hops)
                 break;
-            sc.hops--;
+            hops--;
         }
         ssi++;
     }
@@ -93,11 +93,11 @@ js::ScopeCoordinateName(ScopeCoordinateNameCache &cache, JSScript *script, jsbyt
     jsid id;
     ScopeCoordinate sc(pc);
     if (shape == cache.shape) {
-        ScopeCoordinateNameCache::Map::Ptr p = cache.map.lookup(sc.slot);
+        ScopeCoordinateNameCache::Map::Ptr p = cache.map.lookup(sc.slot());
         id = p->value();
     } else {
         Shape::Range<NoGC> r(shape);
-        while (r.front().slot() != sc.slot)
+        while (r.front().slot() != sc.slot())
             r.popFront();
         id = r.front().propidRaw();
     }
@@ -112,12 +112,12 @@ JSScript *
 js::ScopeCoordinateFunctionScript(JSScript *script, jsbytecode *pc)
 {
     StaticScopeIter<NoGC> ssi(InnermostStaticScope(script, pc));
-    ScopeCoordinate sc(pc);
+    uint32_t hops = ScopeCoordinate(pc).hops();
     while (true) {
         if (ssi.hasDynamicScopeObject()) {
-            if (!sc.hops)
+            if (!hops)
                 break;
-            sc.hops--;
+            hops--;
         }
         ssi++;
     }
@@ -539,7 +539,6 @@ const Class WithObject::class_ = {
     JS_ResolveStub,
     JS_ConvertStub,
     nullptr,                 /* finalize */
-    nullptr,                 /* checkAccess */
     nullptr,                 /* call        */
     nullptr,                 /* hasInstance */
     nullptr,                 /* construct   */
@@ -655,9 +654,10 @@ StaticBlockObject::create(ExclusiveContext *cx)
 
 /* static */ Shape *
 StaticBlockObject::addVar(ExclusiveContext *cx, Handle<StaticBlockObject*> block, HandleId id,
-                          int index, bool *redeclared)
+                          unsigned index, bool *redeclared)
 {
-    JS_ASSERT(JSID_IS_ATOM(id) || (JSID_IS_INT(id) && JSID_TO_INT(id) == index));
+    JS_ASSERT(JSID_IS_ATOM(id) || (JSID_IS_INT(id) && JSID_TO_INT(id) == (int)index));
+    JS_ASSERT(index < VAR_INDEX_LIMIT);
 
     *redeclared = false;
 
@@ -1148,7 +1148,7 @@ class DebugScopeProxy : public BaseProxyHandler
                 return false;
 
             if (bi->kind() == VARIABLE || bi->kind() == CONSTANT) {
-                unsigned i = bi.frameIndex();
+                uint32_t i = bi.frameIndex();
                 if (script->varIsAliased(i))
                     return false;
 
@@ -1219,7 +1219,7 @@ class DebugScopeProxy : public BaseProxyHandler
             if (maybeLiveScope) {
                 AbstractFramePtr frame = maybeLiveScope->frame();
                 JSScript *script = frame.script();
-                unsigned local = block->slotToLocalIndex(script->bindings, shape->slot());
+                uint32_t local = block->slotToLocalIndex(script->bindings, shape->slot());
                 if (action == GET)
                     vp.set(frame.unaliasedLocal(local));
                 else
@@ -1545,7 +1545,7 @@ js_IsDebugScopeSlow(ProxyObject *proxy)
 
 /*****************************************************************************/
 
-/* static */ JS_ALWAYS_INLINE void
+/* static */ MOZ_ALWAYS_INLINE void
 DebugScopes::proxiedScopesPostWriteBarrier(JSRuntime *rt, ObjectWeakMap *map,
                                            const EncapsulatedPtr<JSObject> &key)
 {
@@ -1591,7 +1591,7 @@ class DebugScopes::MissingScopesRef : public gc::BufferableRef
 };
 #endif
 
-/* static */ JS_ALWAYS_INLINE void
+/* static */ MOZ_ALWAYS_INLINE void
 DebugScopes::missingScopesPostWriteBarrier(JSRuntime *rt, MissingScopeMap *map,
                                            const ScopeIterKey &key)
 {
@@ -1601,7 +1601,7 @@ DebugScopes::missingScopesPostWriteBarrier(JSRuntime *rt, MissingScopeMap *map,
 #endif
 }
 
-/* static */ JS_ALWAYS_INLINE void
+/* static */ MOZ_ALWAYS_INLINE void
 DebugScopes::liveScopesPostWriteBarrier(JSRuntime *rt, LiveScopeMap *map, ScopeObject *key)
 {
 #ifdef JSGC_GENERATIONAL
@@ -1693,7 +1693,7 @@ DebugScopes::sweep(JSRuntime *rt)
     }
 }
 
-#if defined(DEBUG) && defined(JSGC_GENERATIONAL)
+#if defined(JSGC_GENERATIONAL) && defined(JS_GC_ZEAL)
 void
 DebugScopes::checkHashTablesAfterMovingGC(JSRuntime *runtime)
 {

@@ -12,6 +12,7 @@
 #include "nsIWidget.h"
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
+#include "nsPresContext.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
 
@@ -30,12 +31,13 @@ namespace mozilla {
 class TextComposition MOZ_FINAL
 {
   friend class ::nsIMEStateManager;
+
+  NS_INLINE_DECL_REFCOUNTING(TextComposition)
+
 public:
   TextComposition(nsPresContext* aPresContext,
                   nsINode* aNode,
                   WidgetGUIEvent* aEvent);
-
-  TextComposition(const TextComposition& aOther);
 
   ~TextComposition()
   {
@@ -66,6 +68,11 @@ public:
    */
   nsresult NotifyIME(widget::NotificationToIME aNotification);
 
+  /**
+   * the offset of first selected clause or start of of compositon
+   */
+  uint32_t OffsetOfTargetClause() const { return mCompositionTargetOffset; }
+
 private:
   // This class holds nsPresContext weak.  This instance shouldn't block
   // destroying it.  When the presContext is being destroyed, it's notified to
@@ -82,11 +89,19 @@ private:
   // the compositionstart event).
   nsString mLastData;
 
+  // Offset of the composition string from start of the editor
+  uint32_t mCompositionStartOffset;
+  // Offset of the selected clause of the composition string from start of the
+  // editor
+  uint32_t mCompositionTargetOffset;
+
   // See the comment for IsSynthesizedForTests().
   bool mIsSynthesizedForTests;
 
-  // Hide the default constructor
+  // Hide the default constructor and copy constructor.
   TextComposition() {}
+  TextComposition(const TextComposition& aOther);
+
 
   /**
    * DispatchEvent() dispatches the aEvent to the mContent synchronously.
@@ -95,6 +110,11 @@ private:
   void DispatchEvent(WidgetGUIEvent* aEvent,
                      nsEventStatus* aStatus,
                      nsDispatchingCallback* aCallBack);
+
+  /**
+   * Calculate composition offset then notify composition update to widget
+   */
+  void NotityUpdateComposition(WidgetGUIEvent* aEvent);
 
   /**
    * CompositionEventDispatcher dispatches the specified composition (or text)
@@ -146,7 +166,8 @@ private:
  * in the array can be destroyed by calling some methods of itself.
  */
 
-class TextCompositionArray MOZ_FINAL : public nsAutoTArray<TextComposition, 2>
+class TextCompositionArray MOZ_FINAL :
+  public nsAutoTArray<nsRefPtr<TextComposition>, 2>
 {
 public:
   index_type IndexOf(nsIWidget* aWidget);

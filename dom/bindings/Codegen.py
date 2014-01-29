@@ -201,7 +201,6 @@ static const DOMJSClass Class = {
     %s, /* resolve */
     JS_ConvertStub,
     %s, /* finalize */
-    nullptr,               /* checkAccess */
     %s, /* call */
     nullptr,               /* hasInstance */
     nullptr,               /* construct */
@@ -292,7 +291,6 @@ class CGPrototypeJSClass(CGThing):
     JS_ResolveStub,
     JS_ConvertStub,
     nullptr,               /* finalize */
-    nullptr,               /* checkAccess */
     nullptr,               /* call */
     nullptr,               /* hasInstance */
     nullptr,               /* construct */
@@ -350,7 +348,6 @@ static DOMIfaceAndProtoJSClass InterfaceObjectClass = {
     JS_ResolveStub,
     JS_ConvertStub,
     nullptr,               /* finalize */
-    nullptr,               /* checkAccess */
     %s, /* call */
     %s, /* hasInstance */
     %s, /* construct */
@@ -840,7 +837,9 @@ def UnionTypes(descriptors, dictionaries, callbacks, config):
                     if typeNeedsRooting(f):
                         headers.add("mozilla/dom/RootedDictionary.h")
                 elif f.isEnum():
-                    headers.add(CGHeaders.getDeclarationFilename(f))
+                    # Need to see the actual definition of the enum,
+                    # unfortunately.
+                    headers.add(CGHeaders.getDeclarationFilename(f.inner))
 
     map(addInfoForType, getAllTypes(descriptors, dictionaries, callbacks))
 
@@ -1585,7 +1584,9 @@ class MethodDefiner(PropertyDefiner):
                 selfHostedName = "nullptr";
                 accessor = m.get("nativeName", m["name"])
                 if m.get("methodInfo", True):
-                    jitinfo = ("&%s_methodinfo" % accessor)
+                    # Cast this in case the methodInfo is a
+                    # JSTypedMethodJitInfo.
+                    jitinfo = ("reinterpret_cast<const JSJitInfo*>(&%s_methodinfo)" % accessor)
                     if m.get("allowCrossOriginThis", False):
                         accessor = "genericCrossOriginMethod"
                     else:
@@ -1872,7 +1873,7 @@ class CGCreateInterfaceObjectsMethod(CGAbstractMethod):
 
         if UseHolderForUnforgeable(self.descriptor):
             createUnforgeableHolder = CGGeneric("""JS::Rooted<JSObject*> unforgeableHolder(aCx,
-  JS_NewObjectWithGivenProto(aCx, nullptr, nullptr, nullptr));
+  JS_NewObjectWithGivenProto(aCx, nullptr, JS::NullPtr(), JS::NullPtr()));
 if (!unforgeableHolder) {
   return;
 }""")
@@ -3026,7 +3027,7 @@ def getJSToNativeConversionInfo(type, descriptorProvider, failureCode=None,
         if isMember or isOptional or nullable or isCallbackReturnValue:
             sequenceClass = "Sequence"
         else:
-            sequenceClass = "AutoSequence"
+            sequenceClass = "binding_detail::AutoSequence"
 
         # XXXbz we can't include the index in the the sourceDescription, because
         # we don't really have a way to pass one in dynamically at runtime...
@@ -3632,7 +3633,7 @@ for (uint32_t i = 0; i < length; ++i) {
                 assignString = "${declName} = str"
             return JSToNativeConversionInfo(
                 "{\n"
-                "  FakeDependentString str;\n"
+                "  binding_detail::FakeDependentString str;\n"
                 "%s\n"
                 "  %s;\n"
                 "}\n" % (
@@ -3642,16 +3643,20 @@ for (uint32_t i = 0; i < length; ++i) {
 
         if isOptional:
             declType = "Optional<nsAString>"
+            holderType = CGGeneric("binding_detail::FakeDependentString")
+            conversionCode = ("%s\n"
+                              "${declName} = &${holderName};" %
+                              getConversionCode("${holderName}"))
         else:
-            declType = "NonNull<nsAString>"
+            declType = "binding_detail::FakeDependentString"
+            holderType = None
+            conversionCode = getConversionCode("${declName}")
 
         # No need to deal with optional here; we handled it already
         return JSToNativeConversionInfo(
-            ("%s\n"
-             "${declName} = &${holderName};" %
-             getConversionCode("${holderName}")),
+            conversionCode,
             declType=CGGeneric(declType),
-            holderType=CGGeneric("FakeDependentString"))
+            holderType=holderType)
 
     if type.isByteString():
         assert not isEnforceRange and not isClamp
@@ -3828,7 +3833,7 @@ for (uint32_t i = 0; i < length; ++i) {
             # Since we're not a member and not nullable or optional, no one will
             # see our real type, so we can do the fast version of the dictionary
             # that doesn't pre-initialize members.
-            typeName = "dictionary_detail::Fast" + typeName
+            typeName = "binding_detail::Fast" + typeName
 
         declType = CGGeneric(typeName)
 
@@ -4166,7 +4171,7 @@ class CGArgumentConverter(CGThing):
             raise TypeError("Shouldn't need holders for variadics")
 
         replacer = dict(self.argcAndIndex, **self.replacementVariables)
-        replacer["seqType"] = CGTemplatedType("AutoSequence",
+        replacer["seqType"] = CGTemplatedType("binding_detail::AutoSequence",
                                               typeConversion.declType).define()
         if typeNeedsRooting(self.argument.type):
             rooterDecl = ("SequenceRooter<%s> ${holderName}(cx, &${declName});\n" %
@@ -5221,7 +5226,8 @@ if (!${obj}) {
             if self.idlNode.getExtendedAttribute("Frozen"):
                 assert self.idlNode.type.isSequence()
                 freezeValue = CGGeneric(
-                    "if (!JS_FreezeObject(cx, &args.rval().toObject())) {\n"
+                    "JS::Rooted<JSObject*> rvalObj(cx, &args.rval().toObject());\n"
+                    "if (!JS_FreezeObject(cx, rvalObj)) {\n"
                     "  return false;\n"
                     "}")
                 if self.idlNode.type.nullable():
@@ -5901,7 +5907,7 @@ class CGGenericMethod(CGAbstractBindingMethod):
     def generate_code(self):
         return CGIndenter(CGGeneric(
             "const JSJitInfo *info = FUNCTION_VALUE_TO_JITINFO(JS_CALLEE(cx, vp));\n"
-            "MOZ_ASSERT(info->type == JSJitInfo::Method);\n"
+            "MOZ_ASSERT(info->type() == JSJitInfo::Method);\n"
             "JSJitMethodOp method = info->method;\n"
             "return method(cx, obj, self, JSJitMethodCallArgs(args));"))
 
@@ -5935,7 +5941,7 @@ class CGJsonifierMethod(CGSpecializedMethod):
         CGSpecializedMethod.__init__(self, descriptor, method)
 
     def definition_body(self):
-        ret = ('JS::Rooted<JSObject*> result(cx, JS_NewObject(cx, nullptr, nullptr, nullptr));\n'
+        ret = ('JS::Rooted<JSObject*> result(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));\n'
                'if (!result) {\n'
                '  return false;\n'
                '}\n')
@@ -5996,14 +6002,20 @@ class CGNewResolveHook(CGAbstractBindingMethod):
 
     def generate_code(self):
         return CGIndenter(CGGeneric(
-                "JS::Rooted<JS::Value> value(cx);\n"
-                "if (!self->DoNewResolve(cx, obj, id, &value)) {\n"
+                "JS::Rooted<JSPropertyDescriptor> desc(cx);\n"
+                "if (!self->DoNewResolve(cx, obj, id, &desc)) {\n"
                 "  return false;\n"
                 "}\n"
-                "if (value.isUndefined()) {\n"
+                "if (!desc.object()) {\n"
                 "  return true;\n"
                 "}\n"
-                "if (!JS_DefinePropertyById(cx, obj, id, value, nullptr, nullptr, JSPROP_ENUMERATE)) {\n"
+                "// If desc.value() is undefined, then the DoNewResolve call\n"
+                "// has already defined it on the object.  Don't try to also\n"
+                "// define it.\n"
+                "if (!desc.value().isUndefined() &&\n"
+                "    !JS_DefinePropertyById(cx, obj, id, desc.value(),\n"
+                "                           desc.getter(), desc.setter(),\n"
+                "                           desc.attributes())) {\n"
                 "  return false;\n"
                 "}\n"
                 "objp.set(obj);\n"
@@ -6045,7 +6057,7 @@ class CppKeywords():
     A class for checking if method names declared in webidl
     are not in conflict with C++ keywords.
     """
-    keywords = frozenset(['alignas', 'alignof', 'and', 'and_eq', 'asm', 'auto', 'bitand', 'bitor', 'bool',
+    keywords = frozenset(['alignas', 'alignof', 'and', 'and_eq', 'asm', 'assert', 'auto', 'bitand', 'bitor', 'bool',
     'break', 'case', 'catch', 'char', 'char16_t', 'char32_t', 'class', 'compl', 'const', 'constexpr',
     'const_cast', 'continue', 'decltype', 'default', 'delete', 'do', 'double', 'dynamic_cast', 'else', 'enum',
     'explicit', 'export', 'extern', 'false', 'final', 'float', 'for', 'friend', 'goto', 'if', 'inline',
@@ -6106,7 +6118,7 @@ class CGGenericGetter(CGAbstractBindingMethod):
     def generate_code(self):
         return CGIndenter(CGGeneric(
             "const JSJitInfo *info = FUNCTION_VALUE_TO_JITINFO(JS_CALLEE(cx, vp));\n"
-            "MOZ_ASSERT(info->type == JSJitInfo::Getter);\n"
+            "MOZ_ASSERT(info->type() == JSJitInfo::Getter);\n"
             "JSJitGetterOp getter = info->getter;\n"
             "return getter(cx, obj, self, JSJitGetterCallArgs(args));"))
 
@@ -6222,7 +6234,7 @@ class CGGenericSetter(CGAbstractBindingMethod):
                 '  return ThrowErrorMessage(cx, MSG_MISSING_ARGUMENTS, "%s attribute setter");\n'
                 "}\n"
                 "const JSJitInfo *info = FUNCTION_VALUE_TO_JITINFO(JS_CALLEE(cx, vp));\n"
-                "MOZ_ASSERT(info->type == JSJitInfo::Setter);\n"
+                "MOZ_ASSERT(info->type() == JSJitInfo::Setter);\n"
                 "JSJitSetterOp setter = info->setter;\n"
                 "if (!setter(cx, obj, self, JSJitSetterCallArgs(args))) {\n"
                 "  return false;\n"
@@ -6297,7 +6309,8 @@ if (!v.isObject()) {
   return ThrowErrorMessage(cx, MSG_NOT_OBJECT, "%s.%s");
 }
 
-return JS_SetProperty(cx, &v.toObject(), "%s", args[0]);""" % (attrName, self.descriptor.interface.identifier.name, attrName, forwardToAttrName))).define()
+JS::Rooted<JSObject*> targetObj(cx, &v.toObject());
+return JS_SetProperty(cx, targetObj, "%s", args[0]);""" % (attrName, self.descriptor.interface.identifier.name, attrName, forwardToAttrName))).define()
 
 class CGSpecializedReplaceableSetter(CGSpecializedSetter):
     """
@@ -6346,6 +6359,23 @@ class CGMemberJITInfo(CGThing):
         slotStr = toStringBool(hasSlot)
         returnType = reduce(CGMemberJITInfo.getSingleReturnType, returnTypes,
                             "")
+        def jitInfoInitializer(isTypedMethod):
+            typedMethodStr = toStringBool(isTypedMethod)
+            return ("{\n"
+                    " { %s },\n"
+                    "  %s,\n"
+                    "  %s,\n"
+                    "  JSJitInfo::%s,\n"
+                    "  JSJitInfo::%s, /* aliasSet.  Not relevant for setters. */\n"
+                    "  %s,  /* returnType.  Not relevant for setters. */\n"
+                    "  %s,  /* isInfallible. False in setters. */\n"
+                    "  %s,  /* isMovable.  Not relevant for setters. */\n"
+                    "  %s,  /* isInSlot.  Only relevant for getters. */\n"
+                    "  %s,  /* isTypedMethod.  Only relevant for methods. */\n"
+                    "  %s   /* Reserved slot index, if we're stored in a slot, else 0. */\n"
+                    "}" % (opName, protoID, depth, opType, aliasSet,
+                           returnType, failstr, movablestr, slotStr,
+                           typedMethodStr, slotIndex))
         if args is not None:
             argTypes = "%s_argTypes" % infoName
             args = [CGMemberJITInfo.getJSArgType(arg.type) for arg in args]
@@ -6353,27 +6383,17 @@ class CGMemberJITInfo(CGThing):
             argTypesDecl = (
                 "static const JSJitInfo::ArgType %s[] = { %s };\n" %
                 (argTypes, ", ".join(args)))
-        else:
-            argTypes = "nullptr"
-            argTypesDecl = ""
+            return ("\n"
+                    "%s"
+                    "static const JSTypedMethodJitInfo %s = {\n"
+                    "  %s,\n"
+                    "  %s\n"
+                    "};\n" % (argTypesDecl, infoName,
+                              jitInfoInitializer(True), argTypes))
+
         return ("\n"
-                "%s"
-                "static const JSJitInfo %s = {\n"
-                "  { %s },\n"
-                "  %s,\n"
-                "  %s,\n"
-                "  JSJitInfo::%s,\n"
-                "  %s,  /* isInfallible. False in setters. */\n"
-                "  %s,  /* isMovable.  Not relevant for setters. */\n"
-                "  JSJitInfo::%s,  /* aliasSet.  Not relevant for setters. */\n"
-                "  %s,  /* hasSlot.  Only relevant for getters. */\n"
-                "  %s,  /* Reserved slot index, if we're stored in a slot, else 0. */\n"
-                "  %s,  /* returnType.  Not relevant for setters. */\n"
-                "  %s,  /* argTypes.  Only relevant for methods */\n"
-                "  nullptr /* parallelNative */\n"
-                "};\n" % (argTypesDecl, infoName, opName, protoID, depth,
-                          opType, failstr, movablestr, aliasSet, slotStr,
-                          slotIndex, returnType, argTypes))
+                "static const JSJitInfo %s = %s;\n"
+                % (infoName, jitInfoInitializer(False)))
 
     def define(self):
         if self.member.isAttr():
@@ -6924,7 +6944,7 @@ class CGUnionStruct(CGThing):
                                 [Argument("const nsString::char_type*", "aData"),
                                  Argument("nsString::size_type", "aLength")],
                                 inline=True, bodyInHeader=True,
-                                body="mValue.mString.Value().Assign(aData, aLength);"))
+                                body="SetAsString().Assign(aData, aLength);"))
 
             body = string.Template('MOZ_ASSERT(Is${name}(), "Wrong type!");\n'
                                    'mValue.m${name}.Destroy();\n'
@@ -7123,7 +7143,7 @@ class CGUnionConversionStruct(CGThing):
                                      [Argument("const nsDependentString::char_type*", "aData"),
                                       Argument("nsDependentString::size_type", "aLength")],
                                      inline=True, bodyInHeader=True,
-                                     body="mStringHolder.SetData(aData, aLength);"))
+                                     body="SetAsString().SetData(aData, aLength);"))
 
             if vars["holderType"] is not None:
                 members.append(ClassMember("m%sHolder" % vars["name"],
@@ -7710,14 +7730,7 @@ class CGResolveOwnPropertyViaNewresolve(CGAbstractBindingMethod):
                                          callArgs="")
     def generate_code(self):
         return CGIndenter(CGGeneric(
-                "JS::Rooted<JS::Value> value(cx);\n"
-                "if (!self->DoNewResolve(cx, obj, id, &value)) {\n"
-                "  return false;\n"
-                "}\n"
-                "if (!value.isUndefined()) {\n"
-                "  FillPropertyDescriptor(desc, wrapper, value, /* readonly = */ false);\n"
-                "}\n"
-                "return true;"))
+                "return self->DoNewResolve(cx, wrapper, id, desc);"))
 
 class CGEnumerateOwnProperties(CGAbstractStaticMethod):
     def __init__(self, descriptor):
@@ -7954,7 +7967,7 @@ class CGProxyNamedOperation(CGProxySpecialOperation):
         # seems like probable overkill.
         return ("JS::Rooted<JS::Value> nameVal(cx);\n" +
                 idDecl +
-                ("FakeDependentString %s;\n" % argName) +
+                ("binding_detail::FakeDependentString %s;\n" % argName) +
                 unwrapString +
                 ("\n"
                  "\n"
@@ -9087,7 +9100,7 @@ if (!*reinterpret_cast<jsid**>(atomsCache) && !InitIds(cx, atomsCache)) {
                 "\n") % self.makeClassName(self.dictionary.parent)
         else:
             body += (
-                "JS::Rooted<JSObject*> obj(cx, JS_NewObject(cx, nullptr, nullptr, nullptr));\n"
+                "JS::Rooted<JSObject*> obj(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));\n"
                 "if (!obj) {\n"
                 "  return false;\n"
                 "}\n"
@@ -9247,7 +9260,7 @@ if (""",
             isStruct=True)
 
         return CGList([struct,
-                       CGNamespace.build(['dictionary_detail'],
+                       CGNamespace.build(['binding_detail'],
                                          fastStruct)],
                       "\n")
 
@@ -11394,7 +11407,7 @@ class CallbackSetter(CallbackAccessor):
             }
         return string.Template(
             'MOZ_ASSERT(argv.length() == 1);\n'
-            'if (!JS_SetProperty(cx, mCallback, "${attrName}", ${argv})) {\n'
+            'if (!JS_SetProperty(cx, CallbackPreserveColor(), "${attrName}", ${argv})) {\n'
             '  aRv.Throw(NS_ERROR_UNEXPECTED);\n'
             '  return${errorReturn};\n'
             '}\n').substitute(replacements)
@@ -11495,6 +11508,14 @@ class GlobalGenRoots():
 
         idEnum.append(ifaceChainMacro(1))
 
+        def fieldSizeAssert(amount, jitInfoField, message):
+            maxFieldValue = "(uint64_t(1) << (sizeof(((JSJitInfo*)nullptr)->%s) * 8))" % jitInfoField
+            return CGGeneric(declare="static_assert(%s < %s, \"%s\");\n\n"
+                             % (amount, maxFieldValue, message))
+
+        idEnum.append(fieldSizeAssert("id::_ID_Count", "protoID",
+                                      "Too many prototypes!"));
+
         # Wrap all of that in our namespaces.
         idEnum = CGNamespace.build(['mozilla', 'dom', 'prototypes'],
                                    CGWrapper(idEnum, pre='\n'))
@@ -11503,8 +11524,11 @@ class GlobalGenRoots():
         curr = CGList([idEnum])
 
         # Let things know the maximum length of the prototype chain.
-        maxMacro = CGGeneric(declare="#define MAX_PROTOTYPE_CHAIN_LENGTH " + str(config.maxProtoChainLength))
+        maxMacroName = "MAX_PROTOTYPE_CHAIN_LENGTH"
+        maxMacro = CGGeneric(declare="#define " + maxMacroName + " " + str(config.maxProtoChainLength))
         curr.append(CGWrapper(maxMacro, post='\n\n'))
+        curr.append(fieldSizeAssert(maxMacroName, "depth",
+                                    "Some inheritance chain is too long!"));
 
         # Constructor ID enum.
         constructors = [d.name for d in config.getDescriptors(hasInterfaceObject=True)]
@@ -11579,6 +11603,8 @@ struct PrototypeTraits;
         includes.add("mozilla/dom/OwningNonNull.h")
         includes.add("mozilla/dom/UnionMember.h")
         includes.add("mozilla/dom/BindingDeclarations.h")
+        # Need BindingUtils.h for FakeDependentString
+        includes.add("mozilla/dom/BindingUtils.h")
         implincludes.add("mozilla/dom/PrimitiveConversions.h")
 
         # Wrap all of that in our namespaces.

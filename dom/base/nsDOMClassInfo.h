@@ -303,10 +303,6 @@ protected:
   }
 
 public:
-  NS_IMETHOD CheckAccess(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                         JSObject *obj, jsid id, uint32_t mode,
-                         JS::Value *vp, bool *_retval) MOZ_OVERRIDE;
-
   NS_IMETHOD PreCreate(nsISupports *nativeObj, JSContext *cx,
                        JSObject *globalObj, JSObject **parentObj) MOZ_OVERRIDE;
   NS_IMETHODIMP AddProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
@@ -574,7 +570,7 @@ public:
                        JSObject *obj, const JS::CallArgs &args, bool *_retval) MOZ_OVERRIDE;
 
   NS_IMETHOD HasInstance(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                         JSObject *obj, const JS::Value &val, bool *bp,
+                         JSObject *obj, JS::Handle<JS::Value> val, bool *bp,
                          bool *_retval);
 
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)

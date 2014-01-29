@@ -125,7 +125,6 @@
 #include "nsAutoJSValHolder.h"
 
 #include "MainThreadUtils.h"
-#include "nsIJSEngineTelemetryStats.h"
 
 #include "nsIConsoleService.h"
 #include "nsIScriptError.h"
@@ -149,7 +148,6 @@
 #include "nsIPrincipal.h"
 #include "nsJSPrincipals.h"
 #include "nsIScriptObjectPrincipal.h"
-#include "nsISecurityCheckedComponent.h"
 #include "xpcObjectHelper.h"
 #include "nsIThreadInternal.h"
 
@@ -270,16 +268,14 @@ AddToCCKind(JSGCTraceKind kind)
 class nsXPConnect : public nsIXPConnect,
                     public nsIThreadObserver,
                     public nsSupportsWeakReference,
-                    public nsIJSRuntimeService,
-                    public nsIJSEngineTelemetryStats
+                    public nsIJSRuntimeService
 {
 public:
     // all the interface method declarations...
-    NS_DECL_THREADSAFE_ISUPPORTS
+    NS_DECL_ISUPPORTS
     NS_DECL_NSIXPCONNECT
     NS_DECL_NSITHREADOBSERVER
     NS_DECL_NSIJSRUNTIMESERVICE
-    NS_DECL_NSIJSENGINETELEMETRYSTATS
 
     // non-interface implementation
 public:
@@ -344,9 +340,6 @@ public:
 
 protected:
     nsXPConnect();
-
-private:
-    static PRThread* FindMainThread();
 
 private:
     // Singleton instance
@@ -534,18 +527,21 @@ public:
         IDX_ITERATOR                ,
         IDX_EXPOSEDPROPS            ,
         IDX_EVAL                    ,
+        IDX_CONTROLLERS             ,
         IDX_TOTAL_COUNT // just a count of the above
     };
 
-    jsid GetStringID(unsigned index) const
+    JS::HandleId GetStringID(unsigned index) const
     {
         MOZ_ASSERT(index < IDX_TOTAL_COUNT, "index out of range");
-        return mStrIDs[index];
+        // fromMarkedLocation() is safe because the string is interned.
+        return JS::HandleId::fromMarkedLocation(&mStrIDs[index]);
     }
-    jsval GetStringJSVal(unsigned index) const
+    JS::HandleValue GetStringJSVal(unsigned index) const
     {
         MOZ_ASSERT(index < IDX_TOTAL_COUNT, "index out of range");
-        return mStrJSVals[index];
+        // fromMarkedLocation() is safe because the string is interned.
+        return JS::HandleValue::fromMarkedLocation(&mStrJSVals[index]);
     }
     const char* GetStringName(unsigned index) const
     {
@@ -1030,26 +1026,6 @@ static inline bool IS_PROTO_CLASS(const js::Class *clazz)
            clazz == &XPC_WN_NoMods_NoCall_Proto_JSClass ||
            clazz == &XPC_WN_ModsAllowed_WithCall_Proto_JSClass ||
            clazz == &XPC_WN_ModsAllowed_NoCall_Proto_JSClass;
-}
-
-/***************************************************************************/
-
-namespace XPCWrapper {
-
-enum WrapperType {
-    UNKNOWN         = 0,
-    NONE            = 0,
-    XPCNW_IMPLICIT  = 1 << 0,
-    XPCNW_EXPLICIT  = 1 << 1,
-    XPCNW           = (XPCNW_IMPLICIT | XPCNW_EXPLICIT),
-    SJOW            = 1 << 2,
-    // SJOW must be the last wrapper type that can be returned to chrome.
-
-    XOW             = 1 << 3,
-    COW             = 1 << 4,
-    SOW             = 1 << 5
-};
-
 }
 
 /***************************************************************************/
@@ -1624,7 +1600,6 @@ public:
     bool WantNewResolve()               GET_IT(WANT_NEWRESOLVE)
     bool WantConvert()                  GET_IT(WANT_CONVERT)
     bool WantFinalize()                 GET_IT(WANT_FINALIZE)
-    bool WantCheckAccess()              GET_IT(WANT_CHECKACCESS)
     bool WantCall()                     GET_IT(WANT_CALL)
     bool WantConstruct()                GET_IT(WANT_CONSTRUCT)
     bool WantHasInstance()              GET_IT(WANT_HASINSTANCE)
@@ -1850,7 +1825,6 @@ public:
 #define GET_IT(f_) const {return !!(mClassInfoFlags & nsIClassInfo:: f_ );}
 
     bool ClassIsSingleton()           GET_IT(SINGLETON)
-    bool ClassIsMainThreadOnly()      GET_IT(MAIN_THREAD_ONLY)
     bool ClassIsDOMObject()           GET_IT(DOM_OBJECT)
     bool ClassIsPluginObject()        GET_IT(PLUGIN_OBJECT)
 
@@ -2193,7 +2167,6 @@ public:
             GetProto()->TraceSelf(trc);
         else
             GetScope()->TraceSelf(trc);
-        TraceWrapper(trc);
         if (mFlatJSObject && JS_IsGlobalObject(mFlatJSObject))
         {
             TraceXPCGlobal(trc, mFlatJSObject);
@@ -2236,41 +2209,6 @@ public:
 
     bool HasExternalReference() const {return mRefCnt > 1;}
 
-    bool NeedsSOW() { return mWrapper.hasFlag(WRAPPER_NEEDS_SOW); }
-    void SetNeedsSOW() { mWrapper.setFlags(WRAPPER_NEEDS_SOW); }
-    bool NeedsCOW() { return mWrapper.hasFlag(WRAPPER_NEEDS_COW); }
-    void SetNeedsCOW() { mWrapper.setFlags(WRAPPER_NEEDS_COW); }
-
-    JSObject* GetWrapperPreserveColor() const { return mWrapper.getPtr(); }
-
-    JSObject* GetWrapper()
-    {
-        JSObject* wrapper = GetWrapperPreserveColor();
-        if (wrapper) {
-            JS::ExposeObjectToActiveJS(wrapper);
-            // Call this to unmark mFlatJSObject.
-            GetFlatJSObject();
-        }
-        return wrapper;
-    }
-    void SetWrapper(JSObject *obj)
-    {
-        JS::IncrementalObjectBarrier(GetWrapperPreserveColor());
-        mWrapper.setPtr(obj);
-    }
-
-    void TraceWrapper(JSTracer *trc)
-    {
-        JS_CallTenuredObjectTracer(trc, &mWrapper, "XPCWrappedNative::mWrapper");
-    }
-
-    // Returns the relevant same-compartment security if applicable, or
-    // mFlatJSObject otherwise.
-    //
-    // This takes care of checking mWrapper to see if we already have such
-    // a wrapper.
-    JSObject *GetSameCompartmentSecurityWrapper(JSContext *cx);
-
     void NoteTearoffs(nsCycleCollectionTraversalCallback& cb);
 
     // Make ctor and dtor protected (rather than private) to placate nsCOMPtr.
@@ -2293,10 +2231,6 @@ protected:
 
 private:
     enum {
-        // Flags bits for mWrapper:
-        WRAPPER_NEEDS_SOW = JS_BIT(0),
-        WRAPPER_NEEDS_COW = JS_BIT(1),
-
         // Flags bits for mFlatJSObject:
         FLAT_JS_OBJECT_VALID = JS_BIT(0)
     };
@@ -2330,7 +2264,6 @@ private:
     JS::TenuredHeap<JSObject*>   mFlatJSObject;
     XPCNativeScriptableInfo*     mScriptableInfo;
     XPCWrappedNativeTearOffChunk mFirstChunk;
-    JS::TenuredHeap<JSObject*>   mWrapper;
 };
 
 /***************************************************************************
@@ -2364,7 +2297,7 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsIXPCWrappedJSClass,
 class nsXPCWrappedJSClass : public nsIXPCWrappedJSClass
 {
     // all the interface method declarations...
-    NS_DECL_THREADSAFE_ISUPPORTS
+    NS_DECL_ISUPPORTS
     NS_IMETHOD DebugDump(int16_t depth);
 public:
 
@@ -2562,7 +2495,7 @@ class XPCJSObjectHolder : public nsIXPConnectJSObjectHolder,
 {
 public:
     // all the interface method declarations...
-    NS_DECL_THREADSAFE_ISUPPORTS
+    NS_DECL_ISUPPORTS
     NS_DECL_NSIXPCONNECTJSOBJECTHOLDER
 
     // non-interface implementation
@@ -2790,8 +2723,8 @@ public:
     const nsID& ID() const {return mID;}
     bool IsValid() const {return !mID.Equals(GetInvalidIID());}
 
-    static nsJSID* NewID(const char* str);
-    static nsJSID* NewID(const nsID& id);
+    static already_AddRefed<nsJSID> NewID(const char* str);
+    static already_AddRefed<nsJSID> NewID(const nsID& id);
 
     nsJSID();
     virtual ~nsJSID();
@@ -2822,7 +2755,7 @@ public:
     NS_DECL_NSIJSIID
     NS_DECL_NSIXPCSCRIPTABLE
 
-    static nsJSIID* NewID(nsIInterfaceInfo* aInfo);
+    static already_AddRefed<nsJSIID> NewID(nsIInterfaceInfo* aInfo);
 
     nsJSIID(nsIInterfaceInfo* aInfo);
     nsJSIID(); // not implemented
@@ -2846,7 +2779,7 @@ public:
     NS_DECL_NSIJSCID
     NS_DECL_NSIXPCSCRIPTABLE
 
-    static nsJSCID* NewID(const char* str);
+    static already_AddRefed<nsJSCID> NewID(const char* str);
 
     nsJSCID();
     virtual ~nsJSCID();
@@ -2937,7 +2870,7 @@ public:
 
 public:
     void SystemIsBeingShutDown() { ClearMembers(); }
-    virtual ~nsXPCComponentsBase() { ClearMembers(); }
+    virtual ~nsXPCComponentsBase();
 
     XPCWrappedNativeScope *GetScope() { return mScope; }
 
@@ -2945,12 +2878,12 @@ protected:
     nsXPCComponentsBase(XPCWrappedNativeScope* aScope);
     virtual void ClearMembers();
 
-    XPCWrappedNativeScope*          mScope;
+    XPCWrappedNativeScope*                   mScope;
 
     // Unprivileged members from nsIXPCComponentsBase.
-    nsXPCComponents_Interfaces*     mInterfaces;
-    nsXPCComponents_InterfacesByID* mInterfacesByID;
-    nsXPCComponents_Results*        mResults;
+    nsRefPtr<nsXPCComponents_Interfaces>     mInterfaces;
+    nsRefPtr<nsXPCComponents_InterfacesByID> mInterfacesByID;
+    nsRefPtr<nsXPCComponents_Results>        mResults;
 
     friend class XPCWrappedNativeScope;
 };
@@ -2965,22 +2898,16 @@ public:
 
 protected:
     nsXPCComponents(XPCWrappedNativeScope* aScope);
-
-    // One might think we could rely on the superclass destructor invoking
-    // the virtual cleanup function. But by the time we hit the superclass
-    // destructor, the derived class will be gone and the vtable pointer
-    // will be updated to point to that of the superclass, giving us only
-    // the superclass' cleanup.
-    virtual ~nsXPCComponents() { ClearMembers(); }
+    virtual ~nsXPCComponents();
     virtual void ClearMembers() MOZ_OVERRIDE;
 
     // Privileged members added by nsIXPCComponents.
-    nsXPCComponents_Classes*        mClasses;
-    nsXPCComponents_ClassesByID*    mClassesByID;
-    nsXPCComponents_ID*             mID;
-    nsXPCComponents_Exception*      mException;
-    nsXPCComponents_Constructor*    mConstructor;
-    nsXPCComponents_Utils*          mUtils;
+    nsRefPtr<nsXPCComponents_Classes>     mClasses;
+    nsRefPtr<nsXPCComponents_ClassesByID> mClassesByID;
+    nsRefPtr<nsXPCComponents_ID>          mID;
+    nsRefPtr<nsXPCComponents_Exception>   mException;
+    nsRefPtr<nsXPCComponents_Constructor> mConstructor;
+    nsRefPtr<nsXPCComponents_Utils>       mUtils;
 
     friend class XPCWrappedNativeScope;
 };
@@ -3537,7 +3464,7 @@ CreateSandboxObject(JSContext *cx, JS::MutableHandleValue vp, nsISupports *prinO
 // result, and cx->exception will be empty.
 nsresult
 EvalInSandbox(JSContext *cx, JS::HandleObject sandbox, const nsAString& source,
-              const char *filename, int32_t lineNo,
+              const nsACString& filename, int32_t lineNo,
               JSVersion jsVersion, bool returnStringOnly,
               JS::MutableHandleValue rval);
 
@@ -3570,7 +3497,7 @@ ExportFunction(JSContext *cx, JS::HandleValue vscope, JS::HandleValue vfunction,
 // Inlined utilities.
 
 inline bool
-xpc_ForcePropertyResolve(JSContext* cx, JSObject* obj, jsid id);
+xpc_ForcePropertyResolve(JSContext* cx, JS::HandleObject obj, jsid id);
 
 inline jsid
 GetRTIdByIndex(JSContext *cx, unsigned index);

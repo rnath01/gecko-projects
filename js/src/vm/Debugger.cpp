@@ -879,7 +879,8 @@ Debugger::newCompletionValue(JSContext *cx, JSTrapStatus status, Value value_,
 }
 
 bool
-Debugger::receiveCompletionValue(Maybe<AutoCompartment> &ac, bool ok, Value val,
+Debugger::receiveCompletionValue(Maybe<AutoCompartment> &ac, bool ok,
+                                 HandleValue val,
                                  MutableHandleValue vp)
 {
     JSContext *cx = ac.ref().context()->asJSContext();
@@ -1699,7 +1700,6 @@ const Class Debugger::jsclass = {
     JSCLASS_HAS_RESERVED_SLOTS(JSSLOT_DEBUG_COUNT),
     JS_PropertyStub, JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
     JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, Debugger::finalize,
-    nullptr,              /* checkAccess */
     nullptr,              /* call        */
     nullptr,              /* hasInstance */
     nullptr,              /* construct   */
@@ -2604,7 +2604,10 @@ class Debugger::ScriptQuery {
      * condition occurred.
      */
     void consider(JSScript *script) {
-        if (oom || script->selfHosted())
+        // We check for presence of script->code() because it is possible that
+        // the script was created and thus exposed to GC, but *not* fully
+        // initialized from fullyInit{FromEmitter,Trivial} due to errors.
+        if (oom || script->selfHosted() || !script->code())
             return;
         JSCompartment *compartment = script->compartment();
         if (!compartments.has(compartment))
@@ -2736,7 +2739,7 @@ Debugger::findAllGlobals(JSContext *cx, unsigned argc, Value *vp)
             RootedValue globalValue(cx, ObjectValue(*global));
             if (!dbg->wrapDebuggeeValue(cx, &globalValue))
                 return false;
-            if (!js_NewbornArrayPush(cx, result, globalValue))
+            if (!NewbornArrayPush(cx, result, globalValue))
                 return false;
         }
     }
@@ -2814,7 +2817,6 @@ const Class DebuggerScript_class = {
     JSCLASS_HAS_RESERVED_SLOTS(JSSLOT_DEBUGSCRIPT_COUNT),
     JS_PropertyStub, JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
     JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, nullptr,
-    nullptr,              /* checkAccess */
     nullptr,              /* call        */
     nullptr,              /* hasInstance */
     nullptr,              /* construct   */
@@ -3000,6 +3002,19 @@ DebuggerScript_getSourceMapUrl(JSContext *cx, unsigned argc, Value *vp)
 }
 
 static bool
+DebuggerScript_getGlobal(JSContext *cx, unsigned argc, Value *vp)
+{
+    THIS_DEBUGSCRIPT_SCRIPT(cx, argc, vp, "(get global)", args, obj, script);
+    Debugger *dbg = Debugger::fromChildJSObject(obj);
+
+    RootedValue v(cx, ObjectValue(script->global()));
+    if (!dbg->wrapDebuggeeValue(cx, &v))
+        return false;
+    args.rval().set(v);
+    return true;
+}
+
+static bool
 DebuggerScript_getChildScripts(JSContext *cx, unsigned argc, Value *vp)
 {
     THIS_DEBUGSCRIPT_SCRIPT(cx, argc, vp, "getChildScripts", args, obj, script);
@@ -3027,7 +3042,7 @@ DebuggerScript_getChildScripts(JSContext *cx, unsigned argc, Value *vp)
                 if (!funScript)
                     return false;
                 s = dbg->wrapScript(cx, funScript);
-                if (!s || !js_NewbornArrayPush(cx, result, ObjectValue(*s)))
+                if (!s || !NewbornArrayPush(cx, result, ObjectValue(*s)))
                     return false;
             }
         }
@@ -3359,7 +3374,7 @@ DebuggerScript_getAllOffsets(JSContext *cx, unsigned argc, Value *vp)
             }
 
             /* Append the current offset to the offsets array. */
-            if (!js_NewbornArrayPush(cx, offsets, NumberValue(offset)))
+            if (!NewbornArrayPush(cx, offsets, NumberValue(offset)))
                 return false;
         }
     }
@@ -3412,7 +3427,7 @@ DebuggerScript_getAllColumnOffsets(JSContext *cx, unsigned argc, Value *vp)
             if (!JSObject::defineGeneric(cx, entry, id, value))
                 return false;
 
-            if (!js_NewbornArrayPush(cx, result, ObjectValue(*entry)))
+            if (!NewbornArrayPush(cx, result, ObjectValue(*entry)))
                 return false;
         }
     }
@@ -3461,7 +3476,7 @@ DebuggerScript_getLineOffsets(JSContext *cx, unsigned argc, Value *vp)
             !flowData[offset].hasNoEdges() &&
             flowData[offset].lineno() != lineno)
         {
-            if (!js_NewbornArrayPush(cx, result, NumberValue(offset)))
+            if (!NewbornArrayPush(cx, result, NumberValue(offset)))
                 return false;
         }
     }
@@ -3574,7 +3589,7 @@ DebuggerScript_getBreakpoints(JSContext *cx, unsigned argc, Value *vp)
         if (site && (!pc || site->pc == pc)) {
             for (Breakpoint *bp = site->firstBreakpoint(); bp; bp = bp->nextInSite()) {
                 if (bp->debugger == dbg &&
-                    !js_NewbornArrayPush(cx, arr, ObjectValue(*bp->getHandler())))
+                    !NewbornArrayPush(cx, arr, ObjectValue(*bp->getHandler())))
                 {
                     return false;
                 }
@@ -3662,6 +3677,7 @@ static const JSPropertySpec DebuggerScript_properties[] = {
     JS_PSG("sourceLength", DebuggerScript_getSourceLength, 0),
     JS_PSG("staticLevel", DebuggerScript_getStaticLevel, 0),
     JS_PSG("sourceMapURL", DebuggerScript_getSourceMapUrl, 0),
+    JS_PSG("global", DebuggerScript_getGlobal, 0),
     JS_PS_END
 };
 
@@ -3708,7 +3724,6 @@ const Class DebuggerSource_class = {
     JSCLASS_HAS_RESERVED_SLOTS(JSSLOT_DEBUGSOURCE_COUNT),
     JS_PropertyStub, JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
     JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, nullptr,
-    nullptr,              /* checkAccess */
     nullptr,              /* call        */
     nullptr,              /* hasInstance */
     nullptr,              /* construct   */
@@ -3874,8 +3889,8 @@ DebuggerSource_getElement(JSContext *cx, unsigned argc, Value *vp)
 static bool
 DebuggerSource_getElementProperty(JSContext *cx, unsigned argc, Value *vp)
 {
-    THIS_DEBUGSOURCE_REFERENT(cx, argc, vp, "(get elementProperty)", args, obj, sourceObject);
-    args.rval().set(sourceObject->elementProperty());
+    THIS_DEBUGSOURCE_REFERENT(cx, argc, vp, "(get elementAttributeName)", args, obj, sourceObject);
+    args.rval().set(sourceObject->elementAttributeName());
     return Debugger::fromChildJSObject(obj)->wrapDebuggeeValue(cx, args.rval());
 }
 
@@ -3884,7 +3899,7 @@ static const JSPropertySpec DebuggerSource_properties[] = {
     JS_PSG("url", DebuggerSource_getUrl, 0),
     JS_PSG("element", DebuggerSource_getElement, 0),
     JS_PSG("displayURL", DebuggerSource_getDisplayURL, 0),
-    JS_PSG("elementProperty", DebuggerSource_getElementProperty, 0),
+    JS_PSG("elementAttributeName", DebuggerSource_getElementProperty, 0),
     JS_PS_END
 };
 
@@ -4602,7 +4617,6 @@ const Class DebuggerObject_class = {
     JSCLASS_HAS_RESERVED_SLOTS(JSSLOT_DEBUGOBJECT_COUNT),
     JS_PropertyStub, JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
     JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, nullptr,
-    nullptr,              /* checkAccess */
     nullptr,              /* call        */
     nullptr,              /* hasInstance */
     nullptr,              /* construct   */
@@ -5443,7 +5457,6 @@ const Class DebuggerEnv_class = {
     JSCLASS_HAS_RESERVED_SLOTS(JSSLOT_DEBUGENV_COUNT),
     JS_PropertyStub, JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
     JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, nullptr,
-    nullptr,              /* checkAccess */
     nullptr,              /* call        */
     nullptr,              /* hasInstance */
     nullptr,              /* construct   */
@@ -5648,7 +5661,7 @@ DebuggerEnv_names(JSContext *cx, unsigned argc, Value *vp)
         if (JSID_IS_ATOM(id) && IsIdentifier(JSID_TO_ATOM(id))) {
             if (!cx->compartment()->wrapId(cx, id.address()))
                 return false;
-            if (!js_NewbornArrayPush(cx, arr, StringValue(JSID_TO_STRING(id))))
+            if (!NewbornArrayPush(cx, arr, StringValue(JSID_TO_STRING(id))))
                 return false;
         }
     }

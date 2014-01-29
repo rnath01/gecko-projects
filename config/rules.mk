@@ -592,7 +592,6 @@ endif
 # of the tiers and because of libxul. Suppress the default rules in favor
 # of something else. Makefiles which use this var *must* provide a sensible
 # default rule before including rules.mk
-ifndef SUPPRESS_DEFAULT_RULES
 default all::
 	$(MAKE) export
 ifdef MOZ_PSEUDO_DERECURSE
@@ -602,7 +601,6 @@ endif
 endif
 	$(MAKE) libs
 	$(MAKE) tools
-endif # SUPPRESS_DEFAULT_RULES
 
 ifeq ($(findstring s,$(filter-out --%, $(MAKEFLAGS))),)
 ECHO := echo
@@ -763,7 +761,7 @@ ifdef MOZ_PROFILE_GENERATE
 endif
 else # !WINNT || GNU_CC
 	$(EXPAND_CCC) -o $@ $(CXXFLAGS) $(PROGOBJS) $(RESFILE) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(WRAP_LDFLAGS) $(LIBS_DIR) $(LIBS) $(MOZ_GLUE_PROGRAM_LDFLAGS) $(OS_LIBS) $(EXTRA_LIBS) $(BIN_FLAGS) $(EXE_DEF_FILE) $(STLPORT_LIBS)
-	@$(call CHECK_STDCXX,$@)
+	$(call CHECK_BINARY,$@)
 endif # WINNT && !GNU_CC
 
 ifdef ENABLE_STRIP
@@ -819,7 +817,7 @@ ifdef MSMANIFEST_TOOL
 endif	# MSVC with manifest tool
 else
 	$(EXPAND_CCC) $(CXXFLAGS) -o $@ $< $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(WRAP_LDFLAGS) $(LIBS_DIR) $(LIBS) $(MOZ_GLUE_PROGRAM_LDFLAGS) $(OS_LIBS) $(EXTRA_LIBS) $(BIN_FLAGS) $(STLPORT_LIBS)
-	@$(call CHECK_STDCXX,$@)
+	$(call CHECK_BINARY,$@)
 endif # WINNT && !GNU_CC
 
 ifdef ENABLE_STRIP
@@ -921,7 +919,7 @@ endif
 else # ! DTRACE_LIB_DEPENDENT
 	$(EXPAND_MKSHLIB) $(SHLIB_LDSTARTFILE) $(OBJS) $(SUB_SHLOBJS) $(RESFILE) $(LDFLAGS) $(WRAP_LDFLAGS) $(SHARED_LIBRARY_LIBS) $(EXTRA_DSO_LDOPTS) $(MOZ_GLUE_LDFLAGS) $(OS_LIBS) $(EXTRA_LIBS) $(DEF_FILE) $(SHLIB_LDENDFILE) $(if $(LIB_IS_C_ONLY),,$(STLPORT_LIBS))
 endif # DTRACE_LIB_DEPENDENT
-	@$(call CHECK_STDCXX,$@)
+	$(call CHECK_BINARY,$@)
 
 ifeq (_WINNT,$(GNU_CC)_$(OS_ARCH))
 ifdef MSMANIFEST_TOOL

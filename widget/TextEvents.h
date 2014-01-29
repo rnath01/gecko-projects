@@ -32,6 +32,8 @@ enum
 
 #undef NS_DEFINE_VK
 
+#define kLatestSeqno UINT32_MAX
+
 namespace mozilla {
 
 namespace dom {
@@ -85,6 +87,18 @@ public:
     mNativeKeyEvent(nullptr),
     mUniqueId(0)
   {
+  }
+
+  virtual WidgetEvent* Duplicate() const MOZ_OVERRIDE
+  {
+    MOZ_ASSERT(eventStructType == NS_KEY_EVENT,
+               "Duplicate() must be overridden by sub class");
+    // Not copying widget, it is a weak reference.
+    WidgetKeyboardEvent* result =
+      new WidgetKeyboardEvent(false, message, nullptr);
+    result->AssignKeyEventData(*this, true);
+    result->mFlags = mFlags;
+    return result;
   }
 
   // A DOM keyCode value or 0.  If a keypress event whose charCode is 0, this
@@ -166,19 +180,37 @@ private:
   friend class plugins::PPluginInstanceChild;
 
   WidgetTextEvent()
+    : mSeqno(kLatestSeqno)
+    , rangeCount(0)
+    , rangeArray(nullptr)
+    , isChar(false)
   {
   }
 
 public:
-  uint32_t seqno;
+  uint32_t mSeqno;
 
 public:
   virtual WidgetTextEvent* AsTextEvent() MOZ_OVERRIDE { return this; }
 
-  WidgetTextEvent(bool aIsTrusted, uint32_t aMessage, nsIWidget* aWidget) :
-    WidgetGUIEvent(aIsTrusted, aMessage, aWidget, NS_TEXT_EVENT),
-    rangeCount(0), rangeArray(nullptr), isChar(false)
+  WidgetTextEvent(bool aIsTrusted, uint32_t aMessage, nsIWidget* aWidget)
+    : WidgetGUIEvent(aIsTrusted, aMessage, aWidget, NS_TEXT_EVENT)
+    , mSeqno(kLatestSeqno)
+    , rangeCount(0)
+    , rangeArray(nullptr)
+    , isChar(false)
   {
+  }
+
+  virtual WidgetEvent* Duplicate() const MOZ_OVERRIDE
+  {
+    MOZ_ASSERT(eventStructType == NS_TEXT_EVENT,
+               "Duplicate() must be overridden by sub class");
+    // Not copying widget, it is a weak reference.
+    WidgetTextEvent* result = new WidgetTextEvent(false, message, nullptr);
+    result->AssignTextEventData(*this, true);
+    result->mFlags = mFlags;
+    return result;
   }
 
   // The composition string or the commit string.
@@ -217,11 +249,12 @@ private:
   friend class mozilla::dom::PBrowserChild;
 
   WidgetCompositionEvent()
+    : mSeqno(kLatestSeqno)
   {
   }
 
 public:
-  uint32_t seqno;
+  uint32_t mSeqno;
 
 public:
   virtual WidgetCompositionEvent* AsCompositionEvent() MOZ_OVERRIDE
@@ -230,13 +263,26 @@ public:
   }
 
   WidgetCompositionEvent(bool aIsTrusted, uint32_t aMessage,
-                         nsIWidget* aWidget) :
-    WidgetGUIEvent(aIsTrusted, aMessage, aWidget, NS_COMPOSITION_EVENT)
+                         nsIWidget* aWidget)
+    : WidgetGUIEvent(aIsTrusted, aMessage, aWidget, NS_COMPOSITION_EVENT)
+    , mSeqno(kLatestSeqno)
   {
     // XXX compositionstart is cancelable in draft of DOM3 Events.
     //     However, it doesn't make sense for us, we cannot cancel composition
     //     when we send compositionstart event.
     mFlags.mCancelable = false;
+  }
+
+  virtual WidgetEvent* Duplicate() const MOZ_OVERRIDE
+  {
+    MOZ_ASSERT(eventStructType == NS_COMPOSITION_EVENT,
+               "Duplicate() must be overridden by sub class");
+    // Not copying widget, it is a weak reference.
+    WidgetCompositionEvent* result =
+      new WidgetCompositionEvent(false, message, nullptr);
+    result->AssignCompositionEventData(*this, true);
+    result->mFlags = mFlags;
+    return result;
   }
 
   // The composition string or the commit string.  If the instance is a
@@ -279,6 +325,13 @@ public:
     WidgetGUIEvent(aIsTrusted, aMessage, aWidget, NS_QUERY_CONTENT_EVENT),
     mSucceeded(false), mWasAsync(false)
   {
+  }
+
+  virtual WidgetEvent* Duplicate() const MOZ_OVERRIDE
+  {
+    // This event isn't an internal event of any DOM event.
+    MOZ_CRASH("WidgetQueryContentEvent doesn't support Duplicate()");
+    return nullptr;
   }
 
   void InitForQueryTextContent(uint32_t aOffset, uint32_t aLength)
@@ -376,12 +429,17 @@ private:
   friend class mozilla::dom::PBrowserChild;
 
   WidgetSelectionEvent()
+    : mSeqno(kLatestSeqno)
+    , mOffset(0)
+    , mLength(0)
+    , mReversed(false)
+    , mExpandToClusterBoundary(true)
+    , mSucceeded(false)
   {
-    MOZ_CRASH("WidgetSelectionEvent is created without proper arguments");
   }
 
 public:
-  uint32_t seqno;
+  uint32_t mSeqno;
 
 public:
   virtual WidgetSelectionEvent* AsSelectionEvent() MOZ_OVERRIDE
@@ -389,10 +447,22 @@ public:
     return this;
   }
 
-  WidgetSelectionEvent(bool aIsTrusted, uint32_t aMessage, nsIWidget* aWidget) :
-    WidgetGUIEvent(aIsTrusted, aMessage, aWidget, NS_SELECTION_EVENT),
-    mExpandToClusterBoundary(true), mSucceeded(false)
+  WidgetSelectionEvent(bool aIsTrusted, uint32_t aMessage, nsIWidget* aWidget)
+    : WidgetGUIEvent(aIsTrusted, aMessage, aWidget, NS_SELECTION_EVENT)
+    , mSeqno(kLatestSeqno)
+    , mOffset(0)
+    , mLength(0)
+    , mReversed(false)
+    , mExpandToClusterBoundary(true)
+    , mSucceeded(false)
   {
+  }
+
+  virtual WidgetEvent* Duplicate() const MOZ_OVERRIDE
+  {
+    // This event isn't an internal event of any DOM event.
+    MOZ_CRASH("WidgetSelectionEvent doesn't support Duplicate()");
+    return nullptr;
   }
 
   // Start offset of selection

@@ -83,6 +83,8 @@
 		 android:debuggable="true">
 #endif
 
+        <!-- If the windowSoftInputMode adjust* flag changes below, the
+             setSoftInputMode call in BrowserSearch#onStop must also be updated. -->
         <activity android:name=".App"
                   android:label="@MOZ_APP_DISPLAYNAME@"
                   android:configChanges="keyboard|keyboardHidden|mcc|mnc|orientation|screenSize"
@@ -157,7 +159,7 @@
         </activity>
 
 #ifdef MOZ_ANDROID_SYNTHAPKS
-        <activity android:name="org.mozilla.gecko.webapp.WebAppDispatcher"
+        <activity android:name="org.mozilla.gecko.webapp.Dispatcher"
             android:noHistory="true" >
             <intent-filter>
                 <!-- catch links from synthetic apks -->
@@ -236,7 +238,7 @@
         </activity>
 
 #include ../services/manifests/AnnouncementsAndroidManifest_activities.xml.in
-#include ../services/manifests/FxAccountAndroidManifest_services.xml.in
+#include ../services/manifests/FxAccountAndroidManifest_activities.xml.in
 #include ../services/manifests/SyncAndroidManifest_activities.xml.in
 #include ../services/manifests/HealthReportAndroidManifest_activities.xml.in
 
@@ -298,7 +300,7 @@
                   android:authorities="@ANDROID_PACKAGE_NAME@.db.tabs"
                   android:permission="@ANDROID_PACKAGE_NAME@.permissions.BROWSER_PROVIDER"/>
 
-        <provider android:name="org.mozilla.gecko.db.HomeListsProvider"
+        <provider android:name="org.mozilla.gecko.db.HomeProvider"
                   android:authorities="@ANDROID_PACKAGE_NAME@.db.homelists"
                   android:permission="@ANDROID_PACKAGE_NAME@.permissions.BROWSER_PROVIDER"/>
 
@@ -315,6 +317,7 @@
 
 
 #include ../services/manifests/AnnouncementsAndroidManifest_services.xml.in
+#include ../services/manifests/FxAccountAndroidManifest_services.xml.in
 #include ../services/manifests/HealthReportAndroidManifest_services.xml.in
 #include ../services/manifests/SyncAndroidManifest_services.xml.in
 

@@ -8,8 +8,6 @@
 
 #include "mozilla/DebugOnly.h"
 
-#include "jsautooplen.h"
-
 #include "builtin/Eval.h"
 #include "builtin/TypedObject.h"
 #include "builtin/TypeRepresentation.h"
@@ -22,12 +20,13 @@
 #include "jit/IonSpewer.h"
 #include "jit/Lowering.h"
 #include "jit/MIRGraph.h"
-
 #include "vm/ArgumentsObject.h"
+#include "vm/Opcodes.h"
 #include "vm/RegExpStatics.h"
 
 #include "jsinferinlines.h"
 #include "jsobjinlines.h"
+#include "jsopcodeinlines.h"
 #include "jsscriptinlines.h"
 
 #include "jit/CompileInfo-inl.h"
@@ -102,13 +101,14 @@ jit::NewBaselineFrameInspector(TempAllocator *temp, BaselineFrame *frame)
     return inspector;
 }
 
-IonBuilder::IonBuilder(JSContext *analysisContext, CompileCompartment *comp, TempAllocator *temp,
+IonBuilder::IonBuilder(JSContext *analysisContext, CompileCompartment *comp,
+                       const JitCompileOptions &options, TempAllocator *temp,
                        MIRGraph *graph, types::CompilerConstraintList *constraints,
                        BaselineInspector *inspector, CompileInfo *info,
                        const OptimizationInfo *optimizationInfo,
                        BaselineFrameInspector *baselineFrame, size_t inliningDepth,
                        uint32_t loopDepth)
-  : MIRGenerator(comp, temp, graph, info, optimizationInfo),
+  : MIRGenerator(comp, options, temp, graph, info, optimizationInfo),
     backgroundCodegen_(nullptr),
     analysisContext(analysisContext),
     baselineFrame_(baselineFrame),
@@ -464,9 +464,9 @@ IonBuilder::analyzeNewLoopTypes(MBasicBlock *entry, jsbytecode *start, jsbytecod
     for (jsbytecode *pc = start; pc != end; earlier = last, last = pc, pc += GetBytecodeLength(pc)) {
         uint32_t slot;
         if (*pc == JSOP_SETLOCAL)
-            slot = info().localSlot(GET_SLOTNO(pc));
+            slot = info().localSlot(GET_LOCALNO(pc));
         else if (*pc == JSOP_SETARG)
-            slot = info().argSlotUnchecked(GET_SLOTNO(pc));
+            slot = info().argSlotUnchecked(GET_ARGNO(pc));
         else
             continue;
         if (slot >= info().firstStackSlot())
@@ -487,8 +487,8 @@ IonBuilder::analyzeNewLoopTypes(MBasicBlock *entry, jsbytecode *start, jsbytecod
             }
         } else if (*last == JSOP_GETLOCAL || *last == JSOP_GETARG) {
             uint32_t slot = (*last == JSOP_GETLOCAL)
-                            ? info().localSlot(GET_SLOTNO(last))
-                            : info().argSlotUnchecked(GET_SLOTNO(last));
+                            ? info().localSlot(GET_LOCALNO(last))
+                            : info().argSlotUnchecked(GET_ARGNO(last));
             if (slot < info().firstStackSlot()) {
                 MPhi *otherPhi = entry->getSlot(slot)->toPhi();
                 if (otherPhi->hasBackedgeType())
@@ -1517,24 +1517,24 @@ IonBuilder::inspectOpcode(JSOp op)
         if (info().argsObjAliasesFormals()) {
             MGetArgumentsObjectArg *getArg = MGetArgumentsObjectArg::New(alloc(),
                                                                          current->argumentsObject(),
-                                                                         GET_SLOTNO(pc));
+                                                                         GET_ARGNO(pc));
             current->add(getArg);
             current->push(getArg);
         } else {
-            current->pushArg(GET_SLOTNO(pc));
+            current->pushArg(GET_ARGNO(pc));
         }
         return true;
 
       case JSOP_SETARG:
-        return jsop_setarg(GET_SLOTNO(pc));
+        return jsop_setarg(GET_ARGNO(pc));
 
       case JSOP_GETLOCAL:
       case JSOP_CALLLOCAL:
-        current->pushLocal(GET_SLOTNO(pc));
+        current->pushLocal(GET_LOCALNO(pc));
         return true;
 
       case JSOP_SETLOCAL:
-        current->setLocal(GET_SLOTNO(pc));
+        current->setLocal(GET_LOCALNO(pc));
         return true;
 
       case JSOP_POP:
@@ -1583,6 +1583,11 @@ IonBuilder::inspectOpcode(JSOp op)
       {
         PropertyName *name = info().getAtom(pc)->asPropertyName();
         return jsop_initprop(name);
+      }
+
+      case JSOP_MUTATEPROTO:
+      {
+        return jsop_mutateproto();
       }
 
       case JSOP_INITPROP_GETTER:
@@ -3898,7 +3903,7 @@ IonBuilder::inlineScriptedCall(CallInfo &callInfo, JSFunction *target)
     unlock();
 
     // Build the graph.
-    IonBuilder inlineBuilder(analysisContext, compartment, &alloc(), &graph(), constraints(),
+    IonBuilder inlineBuilder(analysisContext, compartment, options, &alloc(), &graph(), constraints(),
                              &inspector, info, &optimizationInfo(), nullptr, inliningDepth_ + 1,
                              loopDepth_);
     if (!inlineBuilder.buildInline(this, outerResumePoint, callInfo)) {
@@ -4099,6 +4104,8 @@ IonBuilder::selectInliningTargets(ObjectVector &targets, CallInfo &callInfo, Boo
           case InliningDecision_Inline:
             inlineable = true;
             break;
+          default:
+            MOZ_ASSUME_UNREACHABLE("Unhandled InliningDecision value!");
         }
 
         // Enforce a maximum inlined bytecode limit at the callsite.
@@ -5092,7 +5099,7 @@ IonBuilder::testShouldDOMCall(types::TypeSet *inTypes,
         compartment->runtime()->DOMcallbacks()->instanceClassMatchesProto;
 
     const JSJitInfo *jinfo = func->jitInfo();
-    if (jinfo->type != opType)
+    if (jinfo->type() != opType)
         return false;
 
     for (unsigned i = 0; i < inTypes->getObjectCount(); i++) {
@@ -5243,16 +5250,16 @@ DOMCallNeedsBarrier(const JSJitInfo* jitinfo, types::TemporaryTypeSet *types)
 {
     // If the return type of our DOM native is in "types" already, we don't
     // actually need a barrier.
-    if (jitinfo->returnType == JSVAL_TYPE_UNKNOWN)
+    if (jitinfo->returnType() == JSVAL_TYPE_UNKNOWN)
         return true;
 
     // JSVAL_TYPE_OBJECT doesn't tell us much; we still have to barrier on the
     // actual type of the object.
-    if (jitinfo->returnType == JSVAL_TYPE_OBJECT)
+    if (jitinfo->returnType() == JSVAL_TYPE_OBJECT)
         return true;
 
     // No need for a barrier if we're already expecting the type we'll produce.
-    return jitinfo->returnType != types->getKnownTypeTag();
+    return jitinfo->returnType() != types->getKnownTypeTag();
 }
 
 bool
@@ -5517,6 +5524,17 @@ IonBuilder::jsop_initelem_array()
         return false;
 
    return true;
+}
+
+bool
+IonBuilder::jsop_mutateproto()
+{
+    MDefinition *value = current->pop();
+    MDefinition *obj = current->peek(-1);
+
+    MMutateProto *mutate = MMutateProto::New(alloc(), obj, value);
+    current->add(mutate);
+    return resumeAfter(mutate);
 }
 
 bool
@@ -6225,12 +6243,12 @@ IonBuilder::pushDOMTypeBarrier(MInstruction *ins, types::TemporaryTypeSet *obser
     // JSValueType than codegen can, short of jitinfo->returnType just being
     // JSVAL_TYPE_UNKNOWN.
     MDefinition* replace = ins;
-    if (jitinfo->returnType != JSVAL_TYPE_DOUBLE ||
+    if (jitinfo->returnType() != JSVAL_TYPE_DOUBLE ||
         observed->getKnownTypeTag() != JSVAL_TYPE_INT32) {
-        JS_ASSERT(jitinfo->returnType == JSVAL_TYPE_UNKNOWN ||
+        JS_ASSERT(jitinfo->returnType() == JSVAL_TYPE_UNKNOWN ||
                   observed->getKnownTypeTag() == JSVAL_TYPE_UNKNOWN ||
-                  jitinfo->returnType == observed->getKnownTypeTag());
-        replace = ensureDefiniteType(ins, jitinfo->returnType);
+                  jitinfo->returnType() == observed->getKnownTypeTag());
+        replace = ensureDefiniteType(ins, jitinfo->returnType());
         if (replace != ins) {
             current->pop();
             current->push(replace);
@@ -8835,7 +8853,7 @@ IonBuilder::setPropTryCommonDOMSetter(bool *emitted, MDefinition *obj,
         return true;
 
     // Emit SetDOMProperty.
-    JS_ASSERT(setter->jitInfo()->type == JSJitInfo::Setter);
+    JS_ASSERT(setter->jitInfo()->type() == JSJitInfo::Setter);
     MSetDOMProperty *set = MSetDOMProperty::New(alloc(), setter->jitInfo()->setter, obj, value);
 
     current->add(set);
@@ -9102,6 +9120,14 @@ IonBuilder::jsop_regexp(RegExpObject *reobj)
 bool
 IonBuilder::jsop_object(JSObject *obj)
 {
+    if (options.cloneSingletons()) {
+        MCloneLiteral *clone = MCloneLiteral::New(alloc(), constant(ObjectValue(*obj)));
+        current->add(clone);
+        current->push(clone);
+        return resumeAfter(clone);
+    }
+
+    compartment->setSingletonsAsValues();
     pushConstant(ObjectValue(*obj));
     return true;
 }
@@ -9139,7 +9165,7 @@ IonBuilder::jsop_setarg(uint32_t arg)
         if (NeedsPostBarrier(info(), val))
             current->add(MPostWriteBarrier::New(alloc(), current->argumentsObject(), val));
         current->add(MSetArgumentsObjectArg::New(alloc(), current->argumentsObject(),
-                                                 GET_SLOTNO(pc), val));
+                                                 GET_ARGNO(pc), val));
         return true;
     }
 
@@ -9467,18 +9493,18 @@ IonBuilder::jsop_getaliasedvar(ScopeCoordinate sc)
             return true;
     }
 
-    MDefinition *obj = walkScopeChain(sc.hops);
+    MDefinition *obj = walkScopeChain(sc.hops());
 
     Shape *shape = ScopeCoordinateToStaticScopeShape(script(), pc);
 
     MInstruction *load;
-    if (shape->numFixedSlots() <= sc.slot) {
+    if (shape->numFixedSlots() <= sc.slot()) {
         MInstruction *slots = MSlots::New(alloc(), obj);
         current->add(slots);
 
-        load = MLoadSlot::New(alloc(), slots, sc.slot - shape->numFixedSlots());
+        load = MLoadSlot::New(alloc(), slots, sc.slot() - shape->numFixedSlots());
     } else {
-        load = MLoadFixedSlot::New(alloc(), obj, sc.slot);
+        load = MLoadFixedSlot::New(alloc(), obj, sc.slot());
     }
 
     current->add(load);
@@ -9511,14 +9537,14 @@ IonBuilder::jsop_setaliasedvar(ScopeCoordinate sc)
 
         // The call object has type information we need to respect but we
         // couldn't find it. Just do a normal property assign.
-        MDefinition *obj = walkScopeChain(sc.hops);
+        MDefinition *obj = walkScopeChain(sc.hops());
         current->push(obj);
         current->push(value);
         return jsop_setprop(name);
     }
 
     MDefinition *rval = current->peek(-1);
-    MDefinition *obj = walkScopeChain(sc.hops);
+    MDefinition *obj = walkScopeChain(sc.hops());
 
     Shape *shape = ScopeCoordinateToStaticScopeShape(script(), pc);
 
@@ -9526,13 +9552,13 @@ IonBuilder::jsop_setaliasedvar(ScopeCoordinate sc)
         current->add(MPostWriteBarrier::New(alloc(), obj, rval));
 
     MInstruction *store;
-    if (shape->numFixedSlots() <= sc.slot) {
+    if (shape->numFixedSlots() <= sc.slot()) {
         MInstruction *slots = MSlots::New(alloc(), obj);
         current->add(slots);
 
-        store = MStoreSlot::NewBarriered(alloc(), slots, sc.slot - shape->numFixedSlots(), rval);
+        store = MStoreSlot::NewBarriered(alloc(), slots, sc.slot() - shape->numFixedSlots(), rval);
     } else {
-        store = MStoreFixedSlot::NewBarriered(alloc(), obj, sc.slot, rval);
+        store = MStoreFixedSlot::NewBarriered(alloc(), obj, sc.slot(), rval);
     }
 
     current->add(store);

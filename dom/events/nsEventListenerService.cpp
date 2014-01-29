@@ -65,7 +65,8 @@ nsEventListenerInfo::GetInSystemEventGroup(bool* aInSystemEventGroup)
 }
 
 NS_IMETHODIMP
-nsEventListenerInfo::GetListenerObject(JSContext* aCx, JS::Value* aObject)
+nsEventListenerInfo::GetListenerObject(JSContext* aCx,
+                                       JS::MutableHandle<JS::Value> aObject)
 {
   mozilla::Maybe<JSAutoCompartment> ac;
   GetJSVal(aCx, ac, aObject);
@@ -74,13 +75,12 @@ nsEventListenerInfo::GetListenerObject(JSContext* aCx, JS::Value* aObject)
 
 NS_IMPL_ISUPPORTS1(nsEventListenerService, nsIEventListenerService)
 
-// Caller must root *aJSVal!
 bool
 nsEventListenerInfo::GetJSVal(JSContext* aCx,
                               mozilla::Maybe<JSAutoCompartment>& aAc,
-                              JS::Value* aJSVal)
+                              JS::MutableHandle<JS::Value> aJSVal)
 {
-  *aJSVal = JSVAL_NULL;
+  aJSVal.setNull();
   nsCOMPtr<nsIXPConnectWrappedJS> wrappedJS = do_QueryInterface(mListener);
   if (wrappedJS) {
     JS::Rooted<JSObject*> object(aCx, wrappedJS->GetJSObject());
@@ -88,16 +88,16 @@ nsEventListenerInfo::GetJSVal(JSContext* aCx,
       return false;
     }
     aAc.construct(aCx, object);
-    *aJSVal = OBJECT_TO_JSVAL(object);
+    aJSVal.setObject(*object);
     return true;
   }
 
   nsCOMPtr<nsIJSEventListener> jsl = do_QueryInterface(mListener);
-  if (jsl) {
+  if (jsl && jsl->GetHandler().HasEventHandler()) {
     JS::Handle<JSObject*> handler(jsl->GetHandler().Ptr()->Callable());
     if (handler) {
       aAc.construct(aCx, handler);
-      *aJSVal = OBJECT_TO_JSVAL(handler);
+      aJSVal.setObject(*handler);
       return true;
     }
   }
@@ -111,8 +111,8 @@ nsEventListenerInfo::ToSource(nsAString& aResult)
 
   AutoSafeJSContext cx;
   mozilla::Maybe<JSAutoCompartment> ac;
-  JS::Rooted<JS::Value> v(cx, JSVAL_NULL);
-  if (GetJSVal(cx, ac, v.address())) {
+  JS::Rooted<JS::Value> v(cx);
+  if (GetJSVal(cx, ac, &v)) {
     JSString* str = JS_ValueToSource(cx, v);
     if (str) {
       nsDependentJSString depStr;
@@ -141,8 +141,8 @@ nsEventListenerInfo::GetDebugObject(nsISupports** aRetVal)
 
   AutoSafeJSContext cx;
   mozilla::Maybe<JSAutoCompartment> ac;
-  JS::Rooted<JS::Value> v(cx, JSVAL_NULL);
-  if (GetJSVal(cx, ac, v.address())) {
+  JS::Rooted<JS::Value> v(cx);
+  if (GetJSVal(cx, ac, &v)) {
     nsCOMPtr<jsdIValue> jsdValue;
     rv = jsd->WrapValue(v, getter_AddRefs(jsdValue));
     NS_ENSURE_SUCCESS(rv, rv);

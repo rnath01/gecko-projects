@@ -7,6 +7,7 @@
 #include "jit/Ion.h"
 
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/ThreadLocal.h"
 
 #include "jscompartment.h"
 #include "jsworkers.h"
@@ -51,48 +52,31 @@ using namespace js;
 using namespace js::jit;
 
 using mozilla::Maybe;
+using mozilla::ThreadLocal;
 
 // Assert that JitCode is gc::Cell aligned.
 JS_STATIC_ASSERT(sizeof(JitCode) % gc::CellSize == 0);
 
-#ifdef JS_THREADSAFE
-static bool IonTLSInitialized = false;
-static unsigned IonTLSIndex;
+static ThreadLocal<IonContext*> TlsIonContext;
 
-static inline IonContext *
+static IonContext *
 CurrentIonContext()
 {
-    return (IonContext *)PR_GetThreadPrivate(IonTLSIndex);
+    if (!TlsIonContext.initialized())
+        return nullptr;
+    return TlsIonContext.get();
 }
 
-bool
+void
 jit::SetIonContext(IonContext *ctx)
 {
-    return PR_SetThreadPrivate(IonTLSIndex, ctx) == PR_SUCCESS;
+    TlsIonContext.set(ctx);
 }
-
-#else
-
-static IonContext *GlobalIonContext;
-
-static inline IonContext *
-CurrentIonContext()
-{
-    return GlobalIonContext;
-}
-
-bool
-jit::SetIonContext(IonContext *ctx)
-{
-    GlobalIonContext = ctx;
-    return true;
-}
-#endif
 
 IonContext *
 jit::GetIonContext()
 {
-    JS_ASSERT(CurrentIonContext());
+    MOZ_ASSERT(CurrentIonContext());
     return CurrentIonContext();
 }
 
@@ -154,15 +138,8 @@ IonContext::~IonContext()
 bool
 jit::InitializeIon()
 {
-#ifdef JS_THREADSAFE
-    if (!IonTLSInitialized) {
-        PRStatus status = PR_NewThreadPrivateIndex(&IonTLSIndex, nullptr);
-        if (status != PR_SUCCESS)
-            return false;
-
-        IonTLSInitialized = true;
-    }
-#endif
+    if (!TlsIonContext.initialized() && !TlsIonContext.init())
+        return false;
     CheckLogging();
     CheckPerf();
     return true;
@@ -330,9 +307,7 @@ JitRuntime::createIonAlloc(JSContext *cx)
 {
     JS_ASSERT(cx->runtime()->currentThreadOwnsOperationCallbackLock());
 
-    JSC::AllocationBehavior randomize =
-        cx->runtime()->jitHardening ? JSC::AllocationCanRandomize : JSC::AllocationDeterministic;
-    ionAlloc_ = js_new<JSC::ExecutableAllocator>(randomize);
+    ionAlloc_ = js_new<JSC::ExecutableAllocator>();
     if (!ionAlloc_)
         js_ReportOutOfMemory(cx);
     return ionAlloc_;
@@ -1596,14 +1571,9 @@ OffThreadCompilationAvailable(JSContext *cx)
     // Skip off thread compilation if PC count profiling is enabled, as
     // CodeGenerator::maybeCreateScriptCounts will not attach script profiles
     // when running off thread.
-    //
-    // Also skip off thread compilation if the SPS profiler is enabled, as it
-    // stores strings in the spsProfiler data structure, which is not protected
-    // by a lock.
     return cx->runtime()->canUseParallelIonCompilation()
         && cx->runtime()->gcIncrementalState == gc::NO_INCREMENTAL
-        && !cx->runtime()->profilingScripts
-        && !cx->runtime()->spsProfiler.enabled();
+        && !cx->runtime()->profilingScripts;
 }
 
 static void
@@ -1708,10 +1678,11 @@ IonCompile(JSContext *cx, JSScript *script,
         return AbortReason_Alloc;
 
     const OptimizationInfo *optimizationInfo = js_IonOptimizations.get(optimizationLevel);
+    const JitCompileOptions options(cx);
 
     IonBuilder *builder = alloc->new_<IonBuilder>((JSContext *) nullptr,
                                                   CompileCompartment::get(cx->compartment()),
-                                                  temp, graph, constraints,
+                                                  options, temp, graph, constraints,
                                                   inspector, info, optimizationInfo,
                                                   baselineFrameInspector);
     if (!builder)
@@ -1759,8 +1730,7 @@ IonCompile(JSContext *cx, JSScript *script,
     Maybe<AutoProtectHeapForIonCompilation> protect;
     if (js_JitOptions.checkThreadSafety &&
         cx->runtime()->gcIncrementalState == gc::NO_INCREMENTAL &&
-        !cx->runtime()->profilingScripts &&
-        !cx->runtime()->spsProfiler.enabled())
+        !cx->runtime()->profilingScripts)
     {
         protect.construct(cx->runtime());
     }

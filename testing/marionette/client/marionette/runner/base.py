@@ -12,6 +12,7 @@ import sys
 import time
 import traceback
 import random
+import mozinfo
 import moznetwork
 import xml.dom.minidom as dom
 
@@ -537,8 +538,13 @@ class BaseMarionetteTestRunner(object):
                 raise IOError('--testvars file does not exist')
 
             import json
-            with open(testvars) as f:
-                self.testvars = json.loads(f.read())
+            try:
+                with open(testvars) as f:
+                    self.testvars = json.loads(f.read())
+            except ValueError as e:
+                json_path = os.path.abspath(testvars)
+                raise Exception("JSON file (%s) is not properly "
+                                "formatted: %s" % (json_path, e.message))
 
         # set up test handlers
         self.test_handlers = []
@@ -746,7 +752,9 @@ class BaseMarionetteTestRunner(object):
         if self.marionette.instance:
             self.marionette.instance.close()
             self.marionette.instance = None
-        del self.marionette
+
+        self.marionette.cleanup()
+
         for run_tests in self.mixin_run_tests:
             run_tests(tests)
 
@@ -802,7 +810,8 @@ class BaseMarionetteTestRunner(object):
             manifest_tests = manifest.active_tests(exists=False,
                                                    disabled=False,
                                                    device=self.device,
-                                                   app=self.appName)
+                                                   app=self.appName,
+                                                   **mozinfo.info)
             skip_tests = list(set([x['path'] for x in all_tests]) -
                               set([x['path'] for x in manifest_tests]))
             for skipped in skip_tests:

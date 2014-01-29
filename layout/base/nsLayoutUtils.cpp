@@ -1814,7 +1814,7 @@ nsLayoutUtils::GetLayerTransformForFrame(nsIFrame* aFrame,
     new (&builder) nsDisplayTransform(&builder, aFrame, &list);
 
   *aTransform =
-    item->GetTransform(aFrame->PresContext()->AppUnitsPerDevPixel());
+    item->GetTransform();
   item->~nsDisplayTransform();
 
   return true;
@@ -4346,7 +4346,7 @@ nsLayoutUtils::DrawPixelSnapped(nsRenderingContext* aRenderingContext,
   gfxUtils::DrawPixelSnapped(ctx, aDrawable,
                              drawingParams.mUserSpaceToImageSpace, subimage,
                              sourceRect, imageRect, drawingParams.mFillRect,
-                             gfxImageFormatARGB32, aFilter);
+                             gfxImageFormat::ARGB32, aFilter);
 }
 
 /* static */ nsresult
@@ -4943,7 +4943,7 @@ nsLayoutUtils::SurfaceFromElement(HTMLCanvasElement* aElement,
       nsRefPtr<gfxImageSurface> image = new gfxImageSurface(data->GetData(),
                                                             gfxIntSize(size.width, size.height),
                                                             data->Stride(),
-                                                            gfxImageFormatARGB32);
+                                                            gfxImageFormat::ARGB32);
       ctx = new gfxContext(image);
     }
     // XXX shouldn't use the external interface, but maybe we can layerify this
@@ -4995,7 +4995,7 @@ nsLayoutUtils::SurfaceFromElement(HTMLVideoElement* aElement,
     return result;
 
   mozilla::gfx::IntSize size;
-  nsRefPtr<gfxASurface> surf = container->GetCurrentAsSurface(&size);
+  nsRefPtr<gfxASurface> surf = container->DeprecatedGetCurrentAsSurface(&size);
   if (!surf)
     return result;
 

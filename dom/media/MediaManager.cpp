@@ -105,7 +105,7 @@ static nsresult CompareDictionaries(JSContext* aCx, JSObject *aA,
     if (bprop.isUndefined()) {
       // Unknown property found in A. Bail with name
       JS::Rooted<JS::Value> nameval(aCx);
-      bool success = JS_IdToValue(aCx, props[i], nameval.address());
+      bool success = JS_IdToValue(aCx, props[i], &nameval);
       NS_ENSURE_TRUE(success, NS_ERROR_UNEXPECTED);
 
       JS::Rooted<JSString*> namestr(aCx, JS::ToString(aCx, nameval));
@@ -878,6 +878,7 @@ public:
     if (NS_IsMainThread()) {
       // This is safe since we're on main-thread, and the window can only
       // be invalidated from the main-thread (see OnNavigation)
+      nsCOMPtr<nsIDOMGetUserMediaSuccessCallback> success(mSuccess);
       nsCOMPtr<nsIDOMGetUserMediaErrorCallback> error(mError);
       error->OnError(aErrorMsg);
 

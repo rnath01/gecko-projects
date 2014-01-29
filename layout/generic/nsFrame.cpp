@@ -84,6 +84,7 @@
 #include "mozilla/MouseEvents.h"
 #include "mozilla/css/ImageLoader.h"
 #include "mozilla/gfx/Tools.h"
+#include "nsPrintfCString.h"
 
 using namespace mozilla;
 using namespace mozilla::css;
@@ -2621,6 +2622,7 @@ nsFrame::HandlePress(nsPresContext* aPresContext,
   // the mouse on the nearest scrollable frame. If there isn't a scrollable
   // frame, or something else is already capturing the mouse, there's no
   // reason to capture.
+  bool hasCapturedContent = false;
   if (!nsIPresShell::GetCapturingContent()) {
     nsIScrollableFrame* scrollFrame =
       nsLayoutUtils::GetNearestScrollableFrame(this,
@@ -2630,6 +2632,7 @@ nsFrame::HandlePress(nsPresContext* aPresContext,
       nsIFrame* capturingFrame = do_QueryFrame(scrollFrame);
       nsIPresShell::SetCapturingContent(capturingFrame->GetContent(),
                                         CAPTURE_IGNOREALLOWED);
+      hasCapturedContent = true;
     }
   }
 
@@ -2673,6 +2676,13 @@ nsFrame::HandlePress(nsPresContext* aPresContext,
   // let the user move the caret by tapping and dragging.
   if (!offsets.content->IsEditable() &&
       Preferences::GetBool("browser.ignoreNativeFrameTextSelection", false)) {
+    // On touchables devices, mouse events are generated if the gesture is a tap.
+    // Such events are never going to generate a drag action, so let's release
+    // captured content if any.
+    if (hasCapturedContent) {
+      nsIPresShell::SetCapturingContent(nullptr, 0);
+    }
+
     return fc->HandleClick(offsets.content, offsets.StartOffset(),
                            offsets.EndOffset(), false, false,
                            offsets.associateWithNext);
@@ -4824,7 +4834,8 @@ nsIFrame::TryUpdateTransformOnly()
     // the transform and will need to schedule an invalidating paint.
     return false;
   }
-  gfxMatrix transform, previousTransform;
+  gfxMatrix transform;
+  gfx::Matrix previousTransform;
   // FIXME/bug 796690 and 796705: in general, changes to 3D
   // transforms, or transform changes to properties other than
   // translation, may lead us to choose a different rendering
@@ -4835,13 +4846,15 @@ nsIFrame::TryUpdateTransformOnly()
  static const gfx::Float kError = 0.0001f;
   if (!transform3d.Is2D(&transform) ||
       !layer->GetBaseTransform().Is2D(&previousTransform) ||
-      !gfx::FuzzyEqual(transform.xx, previousTransform.xx, kError) ||
-      !gfx::FuzzyEqual(transform.yy, previousTransform.yy, kError) ||
-      !gfx::FuzzyEqual(transform.xy, previousTransform.xy, kError) ||
-      !gfx::FuzzyEqual(transform.yx, previousTransform.yx, kError)) {
+      !gfx::FuzzyEqual(transform.xx, previousTransform._11, kError) ||
+      !gfx::FuzzyEqual(transform.yy, previousTransform._22, kError) ||
+      !gfx::FuzzyEqual(transform.xy, previousTransform._21, kError) ||
+      !gfx::FuzzyEqual(transform.yx, previousTransform._12, kError)) {
     return false;
   }
-  layer->SetBaseTransformForNextTransaction(transform3d);
+  gfx::Matrix4x4 matrix;
+  gfx::ToMatrix4x4(transform3d, matrix);
+  layer->SetBaseTransformForNextTransaction(matrix);
   return true;
 }
 
@@ -4896,7 +4909,7 @@ nsIFrame::InvalidateLayer(uint32_t aDisplayItemKey,
   // If the layer is being updated asynchronously, and it's being forwarded
   // to a compositor, then we don't need to invalidate.
   if ((aFlags & UPDATE_IS_ASYNC) && layer &&
-      layer->Manager()->GetBackendType() == LAYERS_CLIENT) {
+      layer->Manager()->GetBackendType() == LayersBackend::LAYERS_CLIENT) {
     return layer;
   }
 
@@ -5256,90 +5269,105 @@ int32_t nsFrame::ContentIndexInContainer(const nsIFrame* aFrame)
 void
 DebugListFrameTree(nsIFrame* aFrame)
 {
-  ((nsFrame*)aFrame)->List(stdout, 0);
+  ((nsFrame*)aFrame)->List(stdout);
 }
 
+void
+nsIFrame::ListTag(nsACString& aTo) const
+{
+  ListTag(aTo, this);
+}
+
+/* static */
+void
+nsIFrame::ListTag(nsACString& aTo, const nsIFrame* aFrame) {
+  nsAutoString tmp;
+  aFrame->GetFrameName(tmp);
+  aTo += NS_ConvertUTF16toUTF8(tmp).get();
+  aTo += nsPrintfCString("@%p", static_cast<const void*>(aFrame));
+}
 
 // Debugging
 void
-nsIFrame::ListGeneric(FILE* out, int32_t aIndent, uint32_t aFlags) const
+nsIFrame::ListGeneric(nsACString& aTo, const char* aPrefix, uint32_t aFlags) const
 {
-  IndentBy(out, aIndent);
-  ListTag(out);
+  aTo =+ aPrefix;
+  ListTag(aTo);
   if (HasView()) {
-    fprintf(out, " [view=%p]", static_cast<void*>(GetView()));
+    aTo += nsPrintfCString(" [view=%p]", static_cast<void*>(GetView()));
   }
   if (GetNextSibling()) {
-    fprintf(out, " next=%p", static_cast<void*>(GetNextSibling()));
+    aTo += nsPrintfCString(" next=%p", static_cast<void*>(GetNextSibling()));
   }
   if (GetPrevContinuation()) {
     bool fluid = GetPrevInFlow() == GetPrevContinuation();
-    fprintf(out, " prev-%s=%p", fluid?"in-flow":"continuation",
+    aTo += nsPrintfCString(" prev-%s=%p", fluid?"in-flow":"continuation",
             static_cast<void*>(GetPrevContinuation()));
   }
   if (GetNextContinuation()) {
     bool fluid = GetNextInFlow() == GetNextContinuation();
-    fprintf(out, " next-%s=%p", fluid?"in-flow":"continuation",
+    aTo += nsPrintfCString(" next-%s=%p", fluid?"in-flow":"continuation",
             static_cast<void*>(GetNextContinuation()));
   }
   void* IBsibling = Properties().Get(IBSplitSpecialSibling());
   if (IBsibling) {
-    fprintf(out, " IBSplitSpecialSibling=%p", IBsibling);
+    aTo += nsPrintfCString(" IBSplitSpecialSibling=%p", IBsibling);
   }
   void* IBprevsibling = Properties().Get(IBSplitSpecialPrevSibling());
   if (IBprevsibling) {
-    fprintf(out, " IBSplitSpecialPrevSibling=%p", IBprevsibling);
+    aTo += nsPrintfCString(" IBSplitSpecialPrevSibling=%p", IBprevsibling);
   }
-  fprintf(out, " {%d,%d,%d,%d}", mRect.x, mRect.y, mRect.width, mRect.height);
+  aTo += nsPrintfCString(" {%d,%d,%d,%d}", mRect.x, mRect.y, mRect.width, mRect.height);
   nsIFrame* f = const_cast<nsIFrame*>(this);
   if (f->HasOverflowAreas()) {
     nsRect vo = f->GetVisualOverflowRect();
     if (!vo.IsEqualEdges(mRect)) {
-      fprintf(out, " vis-overflow=%d,%d,%d,%d", vo.x, vo.y, vo.width, vo.height);
+      aTo += nsPrintfCString(" vis-overflow=%d,%d,%d,%d", vo.x, vo.y, vo.width, vo.height);
     }
     nsRect so = f->GetScrollableOverflowRect();
     if (!so.IsEqualEdges(mRect)) {
-      fprintf(out, " scr-overflow=%d,%d,%d,%d", so.x, so.y, so.width, so.height);
+      aTo += nsPrintfCString(" scr-overflow=%d,%d,%d,%d", so.x, so.y, so.width, so.height);
     }
   }
   if (0 != mState) {
-    fprintf(out, " [state=%016llx]", (unsigned long long)mState);
+    aTo += nsPrintfCString(" [state=%016llx]", (unsigned long long)mState);
   }
   if (IsTransformed()) {
-    fprintf(out, " transformed");
+    aTo += nsPrintfCString(" transformed");
   }
   if (ChildrenHavePerspective()) {
-    fprintf(out, " perspective");
+    aTo += nsPrintfCString(" perspective");
   }
   if (Preserves3DChildren()) {
-    fprintf(out, " preserves-3d-children");
+    aTo += nsPrintfCString(" preserves-3d-children");
   }
   if (Preserves3D()) {
-    fprintf(out, " preserves-3d");
+    aTo += nsPrintfCString(" preserves-3d");
   }
   if (mContent) {
-    fprintf(out, " [content=%p]", static_cast<void*>(mContent));
+    aTo += nsPrintfCString(" [content=%p]", static_cast<void*>(mContent));
   }
-  fprintf(out, " [sc=%p", static_cast<void*>(mStyleContext));
+  aTo += nsPrintfCString(" [sc=%p", static_cast<void*>(mStyleContext));
   if (mStyleContext) {
     nsIAtom* pseudoTag = mStyleContext->GetPseudo();
     if (pseudoTag) {
       nsAutoString atomString;
       pseudoTag->ToString(atomString);
-      fprintf(out, "%s", NS_LossyConvertUTF16toASCII(atomString).get());
+      aTo += nsPrintfCString("%s", NS_LossyConvertUTF16toASCII(atomString).get());
     }
     if (mParent && mStyleContext->GetParent() != mParent->StyleContext()) {
-      fprintf(out, ",parent=%p", mStyleContext->GetParent());
+      aTo += nsPrintfCString(",parent=%p", mStyleContext->GetParent());
     }
   }
-  fputs("]", out);
+  aTo += "]";
 }
 
 void
-nsIFrame::List(FILE* out, int32_t aIndent, uint32_t aFlags) const
+nsIFrame::List(FILE* out, const char* aPrefix, uint32_t aFlags) const
 {
-  ListGeneric(out, aIndent, aFlags);
-  fputs("\n", out);
+  nsCString str;
+  ListGeneric(str, aPrefix, aFlags);
+  fprintf_stderr(out, "%s\n", str.get());
 }
 
 NS_IMETHODIMP
@@ -5371,17 +5399,17 @@ nsFrame::MakeFrameName(const nsAString& aType, nsAString& aResult) const
 void
 nsIFrame::DumpFrameTree()
 {
-  RootFrameList(PresContext(), stdout, 0);
+  RootFrameList(PresContext(), stdout);
 }
 
 void
 nsIFrame::DumpFrameTreeLimited()
 {
-  List(stdout, 0);
+  List(stdout);
 }
 
 void
-nsIFrame::RootFrameList(nsPresContext* aPresContext, FILE* out, int32_t aIndent)
+nsIFrame::RootFrameList(nsPresContext* aPresContext, FILE* out, const char* aPrefix)
 {
   if (!aPresContext || !out)
     return;
@@ -5390,7 +5418,7 @@ nsIFrame::RootFrameList(nsPresContext* aPresContext, FILE* out, int32_t aIndent)
   if (shell) {
     nsIFrame* frame = shell->FrameManager()->GetRootFrame();
     if(frame) {
-      frame->List(out, aIndent);
+      frame->List(out, aPrefix);
     }
   }
 }
@@ -7966,8 +7994,8 @@ nsFrame::BoxReflow(nsBoxLayoutState&        aState,
     NS_ASSERTION(NS_FRAME_IS_COMPLETE(status), "bad status");
 
     uint32_t layoutFlags = aState.LayoutFlags();
-    nsContainerFrame::FinishReflowChild(this, aPresContext, &reflowState,
-                                        aDesiredSize, aX, aY, layoutFlags | NS_FRAME_NO_MOVE_FRAME);
+    nsContainerFrame::FinishReflowChild(this, aPresContext, aDesiredSize,
+                                        &reflowState, aX, aY, layoutFlags | NS_FRAME_NO_MOVE_FRAME);
 
     // Save the ascent.  (bug 103925)
     if (IsCollapsed()) {
