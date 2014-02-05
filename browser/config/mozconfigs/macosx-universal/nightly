@@ -15,4 +15,4 @@ ac_add_options --with-macbundlename-prefix=Firefox
 
 mk_add_options NO_FAIL=1
 
-mk_add_options REBUILD_CHECK=1
+mk_add_options "export REBUILD_CHECK=1"
