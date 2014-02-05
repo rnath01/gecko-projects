@@ -14,3 +14,5 @@ ac_add_options --with-macbundlename-prefix=Firefox
 . "$topsrcdir/build/mozconfig.common.override"
 
 mk_add_options NO_FAIL=1
+
+mk_add_options REBUILD_CHECK=1
