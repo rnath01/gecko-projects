@@ -112,6 +112,9 @@ endef
 # followed by a space (since sed doesn't remove newlines), except on the
 # last line, so replace both '|| ' and '||'.
 MOZCONFIG_CONTENT := $(subst ||,$(CR),$(subst || ,$(CR),$(shell $(TOPSRCDIR)/$(MOZCONFIG_LOADER) $(TOPSRCDIR) | sed 's/$$/||/')))
+ifndef NO_FAIL
+$(error Purposeful fail)
+endif
 $(eval $(MOZCONFIG_CONTENT))
 
 export FOUND_MOZCONFIG
