@@ -10,6 +10,7 @@ const { Cu, Cc, Ci, components } = require("chrome");
 const TAB_SIZE    = "devtools.editor.tabsize";
 const EXPAND_TAB  = "devtools.editor.expandtab";
 const KEYMAP      = "devtools.editor.keymap";
+const AUTO_CLOSE  = "devtools.editor.autoclosebrackets";
 const L10N_BUNDLE = "chrome://browser/locale/devtools/sourceeditor.properties";
 const XUL_NS      = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
@@ -89,6 +90,7 @@ const CM_MAPPING = [
   "clearHistory",
   "openDialog",
   "refresh",
+  "getScrollInfo",
   "getOption",
   "setOption"
 ];
@@ -131,6 +133,7 @@ function Editor(config) {
   const tabSize = Services.prefs.getIntPref(TAB_SIZE);
   const useTabs = !Services.prefs.getBoolPref(EXPAND_TAB);
   const keyMap = Services.prefs.getCharPref(KEYMAP);
+  const useAutoClose = Services.prefs.getBoolPref(AUTO_CLOSE);
 
   this.version = null;
   this.config = {
@@ -143,7 +146,8 @@ function Editor(config) {
     extraKeys:         {},
     indentWithTabs:    useTabs,
     styleActiveLine:   true,
-    autoCloseBrackets: true,
+    autoCloseBrackets: "()[]{}''\"\"",
+    autoCloseEnabled:  useAutoClose,
     theme:             "mozilla"
   };
 
@@ -185,6 +189,10 @@ function Editor(config) {
       this.config.gutters.push("CodeMirror-foldgutter");
     }
   }
+
+  // Configure automatic bracket closing.
+  if (!this.config.autoCloseEnabled)
+    this.config.autoCloseBrackets = false;
 
   // Overwrite default tab behavior. If something is selected,
   // indent those lines. If nothing is selected and we're
@@ -748,6 +756,25 @@ Editor.prototype = {
       { line: end.line + 1, ch: cm.getLine(end.line + 1).length});
     cm.setSelection({ line: start.line + 1, ch: start.ch },
       { line: end.line + 1, ch: end.ch });
+  },
+
+  /**
+   * Returns current font size for the editor area, in pixels.
+   */
+  getFontSize: function () {
+    let cm  = editors.get(this);
+    let el  = cm.getWrapperElement();
+    let win = el.ownerDocument.defaultView;
+
+    return parseInt(win.getComputedStyle(el).getPropertyValue("font-size"), 10);
+  },
+
+  /**
+   * Sets font size for the editor area.
+   */
+  setFontSize: function (size) {
+    let cm = editors.get(this);
+    cm.getWrapperElement().style.fontSize = parseInt(size, 10) + "px";
   },
 
   /**

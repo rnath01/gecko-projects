@@ -766,8 +766,7 @@ xpc::SandboxCallableProxyHandler::call(JSContext *cx, JS::Handle<JSObject*> prox
         thisVal = ObjectValue(*js::GetProxyTargetObject(sandboxProxy));
     }
 
-    return JS::Call(cx, thisVal, js::GetProxyPrivate(proxy), args.length(), args.array(),
-                    args.rval());
+    return JS::Call(cx, thisVal, js::GetProxyPrivate(proxy), args, args.rval());
 }
 
 xpc::SandboxCallableProxyHandler xpc::sandboxCallableProxyHandler;
@@ -789,7 +788,7 @@ WrapCallable(JSContext *cx, JSObject *callable, JSObject *sandboxProtoProxy)
 
     RootedValue priv(cx, ObjectValue(*callable));
     js::ProxyOptions options;
-    options.setCallable(true);
+    options.selectDefaultClass(true);
     return js::NewProxyObject(cx, &xpc::sandboxCallableProxyHandler,
                               priv, nullptr,
                               sandboxProtoProxy, options);
@@ -1748,7 +1747,7 @@ NonCloningFunctionForwarder(JSContext *cx, unsigned argc, Value *vp)
     if (!obj) {
         return false;
     }
-    return JS_CallFunctionValue(cx, obj, v, args.length(), args.array(), vp);
+    return JS_CallFunctionValue(cx, obj, v, args, vp);
 }
 
 /*
@@ -1778,8 +1777,7 @@ CloningFunctionForwarder(JSContext *cx, unsigned argc, Value *vp)
         RootedValue functionVal(cx);
         functionVal.setObject(*origFunObj);
 
-        if (!JS_CallFunctionValue(cx, nullptr, functionVal, args.length(), args.array(),
-                                  args.rval().address()))
+        if (!JS_CallFunctionValue(cx, nullptr, functionVal, args, args.rval().address()))
             return false;
     }
 
@@ -1802,6 +1800,17 @@ xpc::NewFunctionForwarder(JSContext *cx, HandleId id, HandleObject callable, boo
     js::SetFunctionNativeReserved(funobj, 0, ObjectValue(*callable));
     vp.setObject(*funobj);
     return true;
+}
+
+bool
+xpc::NewFunctionForwarder(JSContext *cx, HandleObject callable, bool doclone,
+                          MutableHandleValue vp)
+{
+    RootedId emptyId(cx);
+    if (!JS_ValueToId(cx, JS_GetEmptyStringValue(cx), &emptyId))
+        return false;
+
+    return NewFunctionForwarder(cx, emptyId, callable, doclone, vp);
 }
 
 

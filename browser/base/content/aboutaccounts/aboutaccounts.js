@@ -9,6 +9,9 @@ const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/FxAccounts.jsm");
 
+const PREF_LAST_FXA_USER = "identity.fxaccounts.lastSignedInUserHash";
+const PREF_SYNC_SHOW_CUSTOMIZATION = "services.sync.ui.showCustomizationDialog";
+
 function log(msg) {
   //dump("FXA: " + msg + "\n");
 };
@@ -17,16 +20,79 @@ function error(msg) {
   console.log("Firefox Account Error: " + msg + "\n");
 };
 
+function getPreviousAccountNameHash() {
+  try {
+    return Services.prefs.getComplexValue(PREF_LAST_FXA_USER, Ci.nsISupportsString).data;
+  } catch (_) {
+    return "";
+  }
+}
+
+function setPreviousAccountNameHash(acctName) {
+  let string = Cc["@mozilla.org/supports-string;1"]
+               .createInstance(Ci.nsISupportsString);
+  string.data = sha256(acctName);
+  Services.prefs.setComplexValue(PREF_LAST_FXA_USER, Ci.nsISupportsString, string);
+}
+
+function needRelinkWarning(acctName) {
+  let prevAcctHash = getPreviousAccountNameHash();
+  return prevAcctHash && prevAcctHash != sha256(acctName);
+}
+
+// Given a string, returns the SHA265 hash in base64
+function sha256(str) {
+  let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
+                    .createInstance(Ci.nsIScriptableUnicodeConverter);
+  converter.charset = "UTF-8";
+  // Data is an array of bytes.
+  let data = converter.convertToByteArray(str, {});
+  let hasher = Cc["@mozilla.org/security/hash;1"]
+                 .createInstance(Ci.nsICryptoHash);
+  hasher.init(hasher.SHA256);
+  hasher.update(data, data.length);
+
+  return hasher.finish(true);
+}
+
+function promptForRelink(acctName) {
+  let sb = Services.strings.createBundle("chrome://browser/locale/syncSetup.properties");
+  let continueLabel = sb.GetStringFromName("continue.label");
+  let title = sb.GetStringFromName("relinkVerify.title");
+  let description = sb.formatStringFromName("relinkVerify.description",
+                                            [acctName], 1);
+  let body = sb.GetStringFromName("relinkVerify.heading") +
+             "\n\n" + description;
+  let ps = Services.prompt;
+  let buttonFlags = (ps.BUTTON_POS_0 * ps.BUTTON_TITLE_IS_STRING) +
+                    (ps.BUTTON_POS_1 * ps.BUTTON_TITLE_CANCEL) +
+                    ps.BUTTON_POS_1_DEFAULT;
+  let pressed = Services.prompt.confirmEx(window, title, body, buttonFlags,
+                                     continueLabel, null, null, null,
+                                     {});
+  return pressed == 0; // 0 is the "continue" button
+}
+
 let wrapper = {
   iframe: null,
 
-  init: function () {
+  init: function (url=null) {
+    let weave = Cc["@mozilla.org/weave/service;1"]
+                  .getService(Ci.nsISupports)
+                  .wrappedJSObject;
+
+    // Don't show about:accounts with FxA disabled.
+    if (!weave.fxAccountsEnabled) {
+      document.body.remove();
+      return;
+    }
+
     let iframe = document.getElementById("remote");
     this.iframe = iframe;
     iframe.addEventListener("load", this);
 
     try {
-      iframe.src = fxAccounts.getAccountsURI();
+      iframe.src = url || fxAccounts.getAccountsURI();
     } catch (e) {
       error("Couldn't init Firefox Account wrapper: " + e.message);
     }
@@ -53,18 +119,46 @@ let wrapper = {
   onLogin: function (accountData) {
     log("Received: 'login'. Data:" + JSON.stringify(accountData));
 
-    fxAccounts.setSignedInUser(accountData).then(
-      () => {
-        this.injectData("message", { status: "login" });
-        // until we sort out a better UX, just leave the jelly page in place.
-        // If the account email is not yet verified, it will tell the user to
-        // go check their email, but then it will *not* change state after
-        // the verification completes (the browser will begin syncing, but
-        // won't notify the user). If the email has already been verified,
-        // the jelly will say "Welcome! You are successfully signed in as
-        // EMAIL", but it won't then say "syncing started".
-      },
-      (err) => this.injectData("message", { status: "error", error: err })
+    if (accountData.customizeSync) {
+      Services.prefs.setBoolPref(PREF_SYNC_SHOW_CUSTOMIZATION, true);
+      delete accountData.customizeSync;
+    }
+
+    // If the last fxa account used for sync isn't this account, we display
+    // a modal dialog checking they really really want to do this...
+    // (This is sync-specific, so ideally would be in sync's identity module,
+    // but it's a little more seamless to do here, and sync is currently the
+    // only fxa consumer, so...
+    let newAccountEmail = accountData.email;
+    if (needRelinkWarning(newAccountEmail) && !promptForRelink(newAccountEmail)) {
+      // we need to tell the page we successfully received the message, but
+      // then bail without telling fxAccounts
+      this.injectData("message", { status: "login" });
+      // and reload the page or else it remains in a "signed in" state.
+      window.location.reload();
+      return;
+    }
+
+    // Remember who it was so we can log out next time.
+    setPreviousAccountNameHash(newAccountEmail);
+
+    // A sync-specific hack - we want to ensure sync has been initialized
+    // before we set the signed-in user.
+    let xps = Cc["@mozilla.org/weave/service;1"]
+              .getService(Ci.nsISupports)
+              .wrappedJSObject;
+    xps.whenLoaded().then(() => {
+      return fxAccounts.setSignedInUser(accountData);
+    }).then(() => {
+      this.injectData("message", { status: "login" });
+      // until we sort out a better UX, just leave the jelly page in place.
+      // If the account email is not yet verified, it will tell the user to
+      // go check their email, but then it will *not* change state after
+      // the verification completes (the browser will begin syncing, but
+      // won't notify the user). If the email has already been verified,
+      // the jelly will say "Welcome! You are successfully signed in as
+      // EMAIL", but it won't then say "syncing started".
+    }, (err) => this.injectData("message", { status: "error", error: err })
     );
   },
 
@@ -133,7 +227,7 @@ let wrapper = {
 // Button onclick handlers
 function handleOldSync() {
   // we just want to navigate the current tab to the new location...
-  window.location = "https://services.mozilla.com/legacysync";
+  window.location = Services.urlFormatter.formatURLPref("app.support.baseURL") + "old-sync";
 }
 
 function getStarted() {
@@ -147,17 +241,22 @@ function openPrefs() {
 }
 
 function init() {
-  let signinQuery = window.location.href.match(/signin=true$/);
-
-  if (signinQuery) {
+  if (window.location.href.contains("action=signin")) {
     show("remote");
     wrapper.init();
+  } else if (window.location.href.contains("action=reauth")) {
+    fxAccounts.promiseAccountsForceSigninURI().then(url => {
+      show("remote");
+      wrapper.init(url);
+    });
   } else {
     // Check if we have a local account
     fxAccounts.getSignedInUser().then(user => {
       if (user) {
         show("stage");
         show("manage");
+        let sb = Services.strings.createBundle("chrome://browser/locale/syncSetup.properties");
+        document.title = sb.GetStringFromName("manage.pageTitle");
       } else {
         show("stage");
         show("intro");

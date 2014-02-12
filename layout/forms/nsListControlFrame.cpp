@@ -2201,9 +2201,11 @@ nsListControlFrame::KeyDown(nsIDOMEvent* aKeyEvent)
                                 0, -1);
       break;
 
-#if defined(XP_WIN) || defined(XP_OS2)
+#if defined(XP_WIN)
     case NS_VK_F4:
-      DropDownToggleKey(aKeyEvent);
+      if (!isControlOrMeta) {
+        DropDownToggleKey(aKeyEvent);
+      }
       return NS_OK;
 #endif
 

@@ -33,6 +33,9 @@ fuzzy-if(Android,255,42) == pre-line-1.html pre-line-1-ref.html
 == soft-hyphens-1a.html soft-hyphens-1-ref.html
 == soft-hyphens-1b.html soft-hyphens-1-ref.html
 == soft-hyphens-1c.html soft-hyphens-1-ref.html
+== soft-hyphens-break-word-1a.html soft-hyphens-break-word-1-ref.html
+== soft-hyphens-break-word-1b.html soft-hyphens-break-word-1-ref.html
+== soft-hyphens-break-word-1c.html soft-hyphens-break-word-1-ref.html
 # Tests for soft hyphens in table cells, bug 418975
 != soft-hyphen-in-table-1.html soft-hyphen-in-table-1-notref.html
 == soft-hyphen-in-table-1.html soft-hyphen-in-table-1-ref.html
@@ -289,3 +292,6 @@ pref(layout.css.text-align-true-value.enabled,true) == text-align-true.html text
 != control-chars-01b.html control-chars-01-notref.html
 != control-chars-01c.html control-chars-01-notref.html
 != control-chars-01d.html control-chars-01-notref.html
+!= control-chars-02.html control-chars-02-notref.html
+== control-chars-03a.html control-chars-03-ref.html
+== control-chars-03b.html control-chars-03-ref.html

@@ -92,16 +92,13 @@ ScrollFrameTo(nsIScrollableFrame* aFrame, const CSSPoint& aPoint)
     return CSSPoint();
   }
 
-  // If the scrollable frame got a scroll request from something other than us
+  // If the scrollable frame is currently in the middle of an async or smooth
+  // scroll then we don't want to interrupt it (see bug 961280).
+  // Also if the scrollable frame got a scroll request from something other than us
   // since the last layers update, then we don't want to push our scroll request
   // because we'll clobber that one, which is bad.
-  // Note that content may have just finished sending a layers update with a scroll
-  // offset update to the APZ, in which case the origin will be reset to null and we
-  // might actually be clobbering the content-side scroll offset with a stale APZ
-  // scroll offset. This is unavoidable because of the async communication between
-  // APZ and content; however the code in NotifyLayersUpdated should reissue a new
-  // repaint request to bring everything back into sync.
-  if (!aFrame->OriginOfLastScroll() || aFrame->OriginOfLastScroll() == nsGkAtoms::apz) {
+  if (!aFrame->IsProcessingAsyncScroll() &&
+     (!aFrame->OriginOfLastScroll() || aFrame->OriginOfLastScroll() == nsGkAtoms::apz)) {
     aFrame->ScrollToCSSPixelsApproximate(aPoint, nsGkAtoms::apz);
   }
   // Return the final scroll position after setting it so that anything that relies
@@ -237,6 +234,45 @@ APZCCallbackHelper::GetScrollIdentifiers(const nsIContent* aContent,
     }
     nsCOMPtr<nsIDOMWindowUtils> utils = GetDOMWindowUtils(aContent);
     return utils && (utils->GetPresShellId(aPresShellIdOut) == NS_OK);
+}
+
+class AcknowledgeScrollUpdateEvent : public nsRunnable
+{
+    typedef mozilla::layers::FrameMetrics::ViewID ViewID;
+
+public:
+    AcknowledgeScrollUpdateEvent(const ViewID& aScrollId, const uint32_t& aScrollGeneration)
+        : mScrollId(aScrollId)
+        , mScrollGeneration(aScrollGeneration)
+    {
+    }
+
+    NS_IMETHOD Run() {
+        MOZ_ASSERT(NS_IsMainThread());
+
+        nsIScrollableFrame* sf = nsLayoutUtils::FindScrollableFrameFor(mScrollId);
+        if (sf) {
+            sf->ResetOriginIfScrollAtGeneration(mScrollGeneration);
+        }
+
+        return NS_OK;
+    }
+
+protected:
+    ViewID mScrollId;
+    uint32_t mScrollGeneration;
+};
+
+void
+APZCCallbackHelper::AcknowledgeScrollUpdate(const FrameMetrics::ViewID& aScrollId,
+                                            const uint32_t& aScrollGeneration)
+{
+    nsCOMPtr<nsIRunnable> r1 = new AcknowledgeScrollUpdateEvent(aScrollId, aScrollGeneration);
+    if (!NS_IsMainThread()) {
+        NS_DispatchToMainThread(r1);
+    } else {
+        r1->Run();
+    }
 }
 
 }

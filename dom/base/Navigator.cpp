@@ -52,6 +52,7 @@
 #include "nsIDOMNavigatorSystemMessages.h"
 #include "nsIAppsService.h"
 #include "mozIApplication.h"
+#include "WidgetUtils.h"
 
 #ifdef MOZ_MEDIA_NAVIGATOR
 #include "MediaManager.h"
@@ -762,6 +763,19 @@ Navigator::Vibrate(const nsTArray<uint32_t>& aPattern)
 
   hal::Vibrate(aPattern, mWindow);
   return true;
+}
+
+//*****************************************************************************
+//  Pointer Events interface
+//*****************************************************************************
+
+uint32_t
+Navigator::MaxTouchPoints()
+{
+  nsCOMPtr<nsIWidget> widget = widget::WidgetUtils::DOMWindowToWidget(mWindow);
+
+  NS_ENSURE_TRUE(widget, 0);
+  return widget->GetMaxTouchPoints();
 }
 
 //*****************************************************************************
@@ -1787,6 +1801,26 @@ Navigator::HasIccManagerSupport(JSContext* /* unused */,
 }
 #endif // MOZ_B2G_RIL
 
+/* static */
+bool
+Navigator::HasWifiManagerSupport(JSContext* /* unused */,
+                                 JSObject* aGlobal)
+{
+  // On XBL scope, the global object is NOT |window|. So we have
+  // to use nsContentUtils::GetObjectPrincipal to get the principal
+  // and test directly with permission manager.
+
+  nsIPrincipal* principal = nsContentUtils::GetObjectPrincipal(aGlobal);
+
+  nsCOMPtr<nsIPermissionManager> permMgr =
+    do_GetService(NS_PERMISSIONMANAGER_CONTRACTID);
+  NS_ENSURE_TRUE(permMgr, false);
+
+  uint32_t permission = nsIPermissionManager::DENY_ACTION;
+  permMgr->TestPermissionFromPrincipal(principal, "wifi-manage", &permission);
+  return nsIPermissionManager::ALLOW_ACTION == permission;
+}
+
 #ifdef MOZ_B2G_BT
 /* static */
 bool
@@ -1926,17 +1960,7 @@ Navigator::HasDataStoreSupport(JSContext* cx, JSObject* aGlobal)
 bool
 Navigator::HasDownloadsSupport(JSContext* aCx, JSObject* aGlobal)
 {
-  // We'll need a rooted object so that GC doesn't make it go away while
-  // we're calling CheckIsChrome.
-  JS::Rooted<JSObject*> global(aCx, aGlobal);
-
-  // Because of the way this API must be implemented, it will interact with
-  // objects attached to a chrome window. We always want to allow this.
-  if (ThreadsafeCheckIsChrome(aCx, global)) {
-    return true;
-  }
-
-  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(global);
+  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
 
   return win &&
          CheckPermission(win, "downloads")  &&
@@ -2003,8 +2027,6 @@ NS_GetNavigatorPlatform(nsAString& aPlatform)
   aPlatform.AssignLiteral("MacIntel");
 #elif defined(XP_MACOSX) && defined(__x86_64__)
   aPlatform.AssignLiteral("MacIntel");
-#elif defined(XP_OS2)
-  aPlatform.AssignLiteral("OS/2");
 #else
   // XXX Communicator uses compiled-in build-time string defines
   // to indicate the platform it was compiled *for*, not what it is

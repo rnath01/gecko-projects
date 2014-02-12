@@ -20,6 +20,7 @@ EXPORTS += [
     'gfxFont.h',
     'gfxFontConstants.h',
     'gfxFontFeatures.h',
+    'gfxFontInfoLoader.h',
     'gfxFontTest.h',
     'gfxFontUtils.h',
     'gfxGradientCache.h',
@@ -131,21 +132,6 @@ elif CONFIG['MOZ_WIDGET_GTK']:
             'gfxXlibSurface.cpp',
         ]
 
-elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'os2':
-    EXPORTS += [
-        'gfxOS2Fonts.h',
-        'gfxOS2Platform.h',
-        'gfxOS2Surface.h',
-        'gfxPDFSurface.h',
-    ]
-    SOURCES += [
-        'gfxFontconfigUtils.cpp',
-        'gfxOS2Fonts.cpp',
-        'gfxOS2Platform.cpp',
-        'gfxOS2Surface.cpp',
-        'gfxPDFSurface.cpp',
-        'nsUnicodeRange.cpp'
-    ]
 elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'qt':
     EXPORTS += [
         'gfxFT2FontBase.h',
@@ -244,6 +230,7 @@ UNIFIED_SOURCES += [
     'gfxCachedTempSurface.cpp',
     'gfxContext.cpp',
     'gfxFontFeatures.cpp',
+    'gfxFontInfoLoader.cpp',
     'gfxFontMissingGlyphs.cpp',
     'gfxFontTest.cpp',
     'gfxGradientCache.cpp',
@@ -301,7 +288,6 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
     # top of the android java runtime.
     DEFINES['MOZ_USING_ANDROID_JAVA_WIDGETS'] = True
 
-DEFINES['MOZ_OTS_REPORT_ERRORS'] = True
 DEFINES['GRAPHITE2_STATIC'] = True
 
 if CONFIG['OS_TARGET'] == 'WINNT':

@@ -37,8 +37,6 @@
 #include "gfxPlatformGtk.h"
 #elif defined(MOZ_WIDGET_QT)
 #include "gfxQtPlatform.h"
-#elif defined(XP_OS2)
-#include "gfxOS2Platform.h"
 #elif defined(ANDROID)
 #include "gfxAndroidPlatform.h"
 #endif
@@ -298,12 +296,16 @@ gfxPlatform::gfxPlatform()
     mOpenTypeSVGEnabled = UNINITIALIZED_VALUE;
     mBidiNumeralOption = UNINITIALIZED_VALUE;
 
-    mLayersPreferMemoryOverShmem =
-        XRE_GetProcessType() == GeckoProcessType_Default &&
-        Preferences::GetBool("layers.prefer-memory-over-shmem", true);
+    mLayersPreferMemoryOverShmem = XRE_GetProcessType() == GeckoProcessType_Default;
 
+#ifdef XP_WIN
+    // XXX - When 957560 is fixed, the pref can go away entirely
     mLayersUseDeprecated =
-        Preferences::GetBool("layers.use-deprecated-textures", true);
+        Preferences::GetBool("layers.use-deprecated-textures", true)
+        && !Preferences::GetBool("layers.prefer-opengl", false);
+#else
+    mLayersUseDeprecated = false;
+#endif
 
     Preferences::AddBoolVarCache(&mDrawLayerBorders,
                                  "layers.draw-borders",
@@ -400,8 +402,6 @@ gfxPlatform::Init()
     gPlatform = new gfxPlatformGtk;
 #elif defined(MOZ_WIDGET_QT)
     gPlatform = new gfxQtPlatform;
-#elif defined(XP_OS2)
-    gPlatform = new gfxOS2Platform;
 #elif defined(ANDROID)
     gPlatform = new gfxAndroidPlatform;
 #else
@@ -436,7 +436,7 @@ gfxPlatform::Init()
 #endif
 
     gPlatform->mScreenReferenceSurface =
-        gPlatform->CreateOffscreenSurface(gfxIntSize(1,1),
+        gPlatform->CreateOffscreenSurface(IntSize(1, 1),
                                           gfxContentType::COLOR_ALPHA);
     if (!gPlatform->mScreenReferenceSurface) {
         NS_RUNTIMEABORT("Could not initialize mScreenReferenceSurface");
@@ -629,7 +629,7 @@ already_AddRefed<gfxASurface>
 gfxPlatform::OptimizeImage(gfxImageSurface *aSurface,
                            gfxImageFormat format)
 {
-    const gfxIntSize& surfaceSize = aSurface->GetSize();
+    IntSize surfaceSize = aSurface->GetSize().ToIntSize();
 
 #ifdef XP_WIN
     if (gfxWindowsPlatform::GetPlatform()->GetRenderMode() ==
@@ -988,7 +988,7 @@ gfxPlatform::CreateDrawTargetForBackend(BackendType aBackend, const IntSize& aSi
   // CreateOffscreenSurface() and CreateDrawTargetForSurface() for all
   // backends).
   if (aBackend == BackendType::CAIRO) {
-    nsRefPtr<gfxASurface> surf = CreateOffscreenSurface(ThebesIntSize(aSize),
+    nsRefPtr<gfxASurface> surf = CreateOffscreenSurface(aSize,
                                                         ContentForFormat(aFormat));
     if (!surf || surf->CairoStatus()) {
       return nullptr;
@@ -1607,19 +1607,17 @@ gfxPlatform::UseLowPrecisionBuffer()
 float
 gfxPlatform::GetLowPrecisionResolution()
 {
-    static float sLowPrecisionResolution;
+    static int32_t sLowPrecisionResolutionX1000 = 250;
     static bool sLowPrecisionResolutionPrefCached = false;
 
     if (!sLowPrecisionResolutionPrefCached) {
-        int32_t lowPrecisionResolution = 250;
         sLowPrecisionResolutionPrefCached = true;
-        mozilla::Preferences::AddIntVarCache(&lowPrecisionResolution,
+        mozilla::Preferences::AddIntVarCache(&sLowPrecisionResolutionX1000,
                                              "layers.low-precision-resolution",
-                                             250);
-        sLowPrecisionResolution = lowPrecisionResolution / 1000.f;
+                                             sLowPrecisionResolutionX1000);
     }
 
-    return sLowPrecisionResolution;
+    return sLowPrecisionResolutionX1000/1000.f;
 }
 
 bool
@@ -2065,11 +2063,13 @@ static bool sPrefLayersAccelerationForceEnabled = false;
 static bool sPrefLayersAccelerationDisabled = false;
 static bool sPrefLayersPreferOpenGL = false;
 static bool sPrefLayersPreferD3D9 = false;
+static bool sPrefLayersDrawFPS = false;
 static bool sPrefLayersDump = false;
 static bool sPrefLayersScrollGraph = false;
 static bool sPrefLayersEnableTiles = false;
 static bool sLayersSupportsD3D9 = false;
 static int  sPrefLayoutFrameRate = -1;
+static int  sPrefLayersCompositionFrameRate = -1;
 static bool sBufferRotationEnabled = false;
 static bool sComponentAlphaEnabled = true;
 static bool sPrefBrowserTabsRemote = false;
@@ -2094,10 +2094,12 @@ InitLayersAccelerationPrefs()
     sPrefLayersAccelerationDisabled = Preferences::GetBool("layers.acceleration.disabled", false);
     sPrefLayersPreferOpenGL = Preferences::GetBool("layers.prefer-opengl", false);
     sPrefLayersPreferD3D9 = Preferences::GetBool("layers.prefer-d3d9", false);
+    sPrefLayersDrawFPS = Preferences::GetBool("layers.acceleration.draw-fps", false);
     sPrefLayersDump = Preferences::GetBool("layers.dump", false);
     sPrefLayersScrollGraph = Preferences::GetBool("layers.scroll-graph", false);
     sPrefLayersEnableTiles = Preferences::GetBool("layers.enable-tiles", false);
     sPrefLayoutFrameRate = Preferences::GetInt("layout.frame_rate", -1);
+    sPrefLayersCompositionFrameRate = Preferences::GetInt("layers.offmainthreadcomposition.frame-rate", -1);
     sBufferRotationEnabled = Preferences::GetBool("layers.bufferrotation.enabled", true);
     sComponentAlphaEnabled = Preferences::GetBool("layers.componentalpha.enabled", true);
     sPrefBrowserTabsRemote = BrowserTabsRemote();
@@ -2179,6 +2181,13 @@ gfxPlatform::GetPrefLayersPreferD3D9()
 }
 
 bool
+gfxPlatform::GetPrefLayersDrawFPS()
+{
+  InitLayersAccelerationPrefs();
+  return sPrefLayersDrawFPS;
+}
+
+bool
 gfxPlatform::CanUseDirect3D9()
 {
   // this function is called from the compositor thread, so it is not
@@ -2217,6 +2226,13 @@ gfxPlatform::GetPrefLayersEnableTiles()
   return sPrefLayersEnableTiles;
 }
 
+int
+gfxPlatform::GetPrefLayersCompositionFrameRate()
+{
+  InitLayersAccelerationPrefs();
+  return sPrefLayersCompositionFrameRate;
+}
+
 bool
 gfxPlatform::BufferRotationEnabled()
 {
@@ -2253,4 +2269,17 @@ gfxPlatform::AsyncVideoEnabled()
 #else
   return Preferences::GetBool("layers.async-video.enabled", false);
 #endif
+}
+
+TemporaryRef<ScaledFont>
+gfxPlatform::GetScaledFontForFontWithCairoSkia(DrawTarget* aTarget, gfxFont* aFont)
+{
+    NativeFont nativeFont;
+    if (aTarget->GetType() == BackendType::CAIRO || aTarget->GetType() == BackendType::SKIA) {
+        nativeFont.mType = NativeFontType::CAIRO_FONT_FACE;
+        nativeFont.mFont = aFont->GetCairoScaledFont();
+        return Factory::CreateScaledFontForNativeFont(nativeFont, aFont->GetAdjustedSize());
+    }
+
+    return nullptr;
 }

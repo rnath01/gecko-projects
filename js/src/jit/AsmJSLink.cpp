@@ -18,6 +18,7 @@
 #include "frontend/BytecodeCompiler.h"
 #include "jit/AsmJSModule.h"
 #include "jit/Ion.h"
+#include "jit/JitCommon.h"
 #ifdef JS_ION_PERF
 # include "jit/PerfSpewer.h"
 #endif
@@ -142,7 +143,7 @@ ValidateArrayView(JSContext *cx, AsmJSModule::Global &global, HandleValue global
 }
 
 static bool
-ValidateMathBuiltin(JSContext *cx, AsmJSModule::Global &global, HandleValue globalVal)
+ValidateMathBuiltinFunction(JSContext *cx, AsmJSModule::Global &global, HandleValue globalVal)
 {
     RootedValue v(cx);
     if (!GetDataProperty(cx, globalVal, cx->names().Math, &v))
@@ -152,7 +153,7 @@ ValidateMathBuiltin(JSContext *cx, AsmJSModule::Global &global, HandleValue glob
         return false;
 
     Native native = nullptr;
-    switch (global.mathBuiltin()) {
+    switch (global.mathBuiltinFunction()) {
       case AsmJSMathBuiltin_sin: native = math_sin; break;
       case AsmJSMathBuiltin_cos: native = math_cos; break;
       case AsmJSMathBuiltin_tan: native = math_tan; break;
@@ -165,6 +166,8 @@ ValidateMathBuiltin(JSContext *cx, AsmJSModule::Global &global, HandleValue glob
       case AsmJSMathBuiltin_log: native = math_log; break;
       case AsmJSMathBuiltin_pow: native = js_math_pow; break;
       case AsmJSMathBuiltin_sqrt: native = js_math_sqrt; break;
+      case AsmJSMathBuiltin_min: native = js_math_min; break;
+      case AsmJSMathBuiltin_max: native = js_math_max; break;
       case AsmJSMathBuiltin_abs: native = js_math_abs; break;
       case AsmJSMathBuiltin_atan2: native = math_atan2; break;
       case AsmJSMathBuiltin_imul: native = math_imul; break;
@@ -172,21 +175,26 @@ ValidateMathBuiltin(JSContext *cx, AsmJSModule::Global &global, HandleValue glob
     }
 
     if (!IsNativeFunction(v, native))
-        return LinkFail(cx, "bad Math.* builtin");
+        return LinkFail(cx, "bad Math.* builtin function");
 
     return true;
 }
 
 static bool
-ValidateGlobalConstant(JSContext *cx, AsmJSModule::Global &global, HandleValue globalVal)
+ValidateConstant(JSContext *cx, AsmJSModule::Global &global, HandleValue globalVal)
 {
     RootedPropertyName field(cx, global.constantName());
-    RootedValue v(cx);
-    if (!GetDataProperty(cx, globalVal, field, &v))
-        return false;
+    RootedValue v(cx, globalVal);
 
+    if (global.constantKind() == AsmJSModule::Global::MathConstant) {
+        if (!GetDataProperty(cx, v, cx->names().Math, &v))
+            return false;
+    }
+
+    if (!GetDataProperty(cx, v, field, &v))
+        return false;
     if (!v.isNumber())
-        return LinkFail(cx, "global constant value needs to be a number");
+        return LinkFail(cx, "math / global constant value needs to be a number");
 
     // NaN != NaN
     if (IsNaN(global.constantValue())) {
@@ -210,15 +218,15 @@ DynamicallyLinkModule(JSContext *cx, CallArgs args, AsmJSModule &module)
                             "Function constructor).");
     module.setIsLinked();
 
-    RootedValue globalVal(cx, UndefinedValue());
+    RootedValue globalVal(cx);
     if (args.length() > 0)
         globalVal = args[0];
 
-    RootedValue importVal(cx, UndefinedValue());
+    RootedValue importVal(cx);
     if (args.length() > 1)
         importVal = args[1];
 
-    RootedValue bufferVal(cx, UndefinedValue());
+    RootedValue bufferVal(cx);
     if (args.length() > 2)
         bufferVal = args[2];
 
@@ -230,17 +238,25 @@ DynamicallyLinkModule(JSContext *cx, CallArgs args, AsmJSModule &module)
         heap = &bufferVal.toObject().as<ArrayBufferObject>();
 
         if (!IsValidAsmJSHeapLength(heap->byteLength())) {
-            return LinkFail(cx, JS_smprintf("ArrayBuffer byteLength 0x%x is not a valid heap length. The next valid length is 0x%x",
-                                            heap->byteLength(),
-                                            RoundUpToNextValidAsmJSHeapLength(heap->byteLength())));
+            ScopedJSFreePtr<char> msg(
+                JS_smprintf("ArrayBuffer byteLength 0x%x is not a valid heap length. The next "
+                            "valid length is 0x%x",
+                            heap->byteLength(),
+                            RoundUpToNextValidAsmJSHeapLength(heap->byteLength())));
+            return LinkFail(cx, msg.get());
         }
 
         // This check is sufficient without considering the size of the loaded datum because heap
         // loads and stores start on an aligned boundary and the heap byteLength has larger alignment.
         JS_ASSERT((module.minHeapLength() - 1) <= INT32_MAX);
         if (heap->byteLength() < module.minHeapLength()) {
-            return LinkFail(cx, JS_smprintf("ArrayBuffer byteLength of 0x%x is less than 0x%x (which is the largest constant heap access offset rounded up to the next valid heap size).",
-                                            heap->byteLength(), module.minHeapLength()));
+            ScopedJSFreePtr<char> msg(
+                JS_smprintf("ArrayBuffer byteLength of 0x%x is less than 0x%x (which is the"
+                            "largest constant heap access offset rounded up to the next valid "
+                            "heap size).",
+                            heap->byteLength(),
+                            module.minHeapLength()));
+            return LinkFail(cx, msg.get());
         }
 
         if (!ArrayBufferObject::prepareForAsmJS(cx, heap))
@@ -268,12 +284,12 @@ DynamicallyLinkModule(JSContext *cx, CallArgs args, AsmJSModule &module)
             if (!ValidateArrayView(cx, global, globalVal, bufferVal))
                 return false;
             break;
-          case AsmJSModule::Global::MathBuiltin:
-            if (!ValidateMathBuiltin(cx, global, globalVal))
+          case AsmJSModule::Global::MathBuiltinFunction:
+            if (!ValidateMathBuiltinFunction(cx, global, globalVal))
                 return false;
             break;
           case AsmJSModule::Global::Constant:
-            if (!ValidateGlobalConstant(cx, global, globalVal))
+            if (!ValidateConstant(cx, global, globalVal))
                 return false;
             break;
         }
@@ -397,7 +413,8 @@ CallAsmJS(JSContext *cx, unsigned argc, Value *vp)
         JitActivation jitActivation(cx, /* firstFrameIsConstructing = */ false, /* active */ false);
 
         // Call the per-exported-function trampoline created by GenerateEntry.
-        if (!module.entryTrampoline(func)(coercedArgs.begin(), module.globalData()))
+        AsmJSModule::CodePtr enter = module.entryTrampoline(func);
+        if (!CALL_GENERATED_ASMJS(enter, coercedArgs.begin(), module.globalData()))
             return false;
     }
 
@@ -440,7 +457,7 @@ HandleDynamicLinkFailure(JSContext *cx, CallArgs args, AsmJSModule &module, Hand
 
     uint32_t begin = module.charsBegin();
     uint32_t end = module.charsEnd();
-    Rooted<JSStableString*> src(cx, module.scriptSource()->substring(cx, begin, end));
+    Rooted<JSFlatString*> src(cx, module.scriptSource()->substring(cx, begin, end));
     if (!src)
         return false;
 
@@ -465,7 +482,7 @@ HandleDynamicLinkFailure(JSContext *cx, CallArgs args, AsmJSModule &module, Hand
            .setCompileAndGo(false)
            .setNoScriptRval(false);
 
-    if (!frontend::CompileFunctionBody(cx, &fun, options, formals, src->chars().get(), end - begin))
+    if (!frontend::CompileFunctionBody(cx, &fun, options, formals, src->chars(), end - begin))
         return false;
 
     // Call the function we just recompiled.

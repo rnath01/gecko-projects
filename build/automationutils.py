@@ -72,10 +72,17 @@ DEBUGGER_INFO = {
   },
 
   # valgrind doesn't explain much about leaks unless you set the
-  # '--leak-check=full' flag.
+  # '--leak-check=full' flag. But there are a lot of objects that are
+  # semi-deliberately leaked, so we set '--show-possibly-lost=no' to avoid
+  # uninteresting output from those objects. We set '--smc-check==all-non-file'
+  # and '--vex-iropt-register-updates=allregs-at-mem-access' so that valgrind
+  # deals properly with JIT'd JavaScript code.  
   "valgrind": {
     "interactive": False,
-    "args": "--leak-check=full"
+    "args": " ".join(["--leak-check=full",
+                      "--show-possibly-lost=no",
+                      "--smc-check=all-non-file,"
+                      "--vex-iropt-register-updates=allregs-at-mem-access"])
   }
 }
 
@@ -505,11 +512,9 @@ def dumpScreen(utilityPath):
 
   # Run the capture
   try:
-    with mozfile.NamedTemporaryFile(suffix='.png',
-                                    prefix='mozilla-test-fail-screenshot_',
-                                    dir=parent_dir,
-                                    delete=False) as f:
-      returncode = subprocess.call(utility + [f.name])
+    tmpfd, imgfilename = tempfile.mkstemp(prefix='mozilla-test-fail-screenshot_', suffix='.png', dir=parent_dir)
+    os.close(tmpfd)
+    returncode = subprocess.call(utility + [imgfilename])
   except OSError, err:
     log.info("Failed to start %s for screenshot: %s",
              utility[0], err.strerror)

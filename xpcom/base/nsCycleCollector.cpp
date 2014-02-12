@@ -1407,6 +1407,18 @@ public:
         return NS_OK;
     }
 
+    NS_IMETHOD GetGcLogPath(nsAString &aPath)
+    {
+      aPath = mGCLogPath;
+      return NS_OK;
+    }
+
+    NS_IMETHOD GetCcLogPath(nsAString &aPath)
+    {
+      aPath = mCCLogPath;
+      return NS_OK;
+    }
+
     NS_IMETHOD Begin()
     {
         mCurrentAddress.AssignLiteral("0x");
@@ -1459,6 +1471,8 @@ public:
             nsString msg = NS_LITERAL_STRING("Garbage Collector log dumped to ") +
                            gcLogPath;
             cs->LogStringMessage(msg.get());
+
+            mGCLogPath = gcLogPath;
         }
 
         // Open a file for dumping the CC graph.  We again prefix with
@@ -1616,6 +1630,8 @@ public:
                 nsString msg = NS_LITERAL_STRING("Cycle Collector log dumped to ") +
                                ccLogPath;
                 cs->LogStringMessage(msg.get());
+
+                mCCLogPath = ccLogPath;
             }
         }
         return NS_OK;
@@ -1713,6 +1729,8 @@ private:
     bool mDisableLog;
     bool mWantAfterProcessing;
     nsString mFilenameIdentifier;
+    nsString mGCLogPath;
+    nsString mCCLogPath;
     nsCString mCurrentAddress;
     mozilla::LinkedList<CCGraphDescriber> mDescribers;
 };
@@ -3091,13 +3109,6 @@ nsCycleCollector::CleanupAfterCollection()
 {
     MOZ_ASSERT(mIncrementalPhase == CleanupPhase);
     mGraph.Clear();
-
-#ifdef XP_OS2
-    // Now that the cycle collector has freed some memory, we can try to
-    // force the C library to give back as much memory to the system as
-    // possible.
-    _heapmin();
-#endif
 
     uint32_t interval = (uint32_t) ((TimeStamp::Now() - mCollectionStart).ToMilliseconds());
 #ifdef COLLECT_TIME_DEBUG

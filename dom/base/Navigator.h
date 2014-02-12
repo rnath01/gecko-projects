@@ -157,6 +157,7 @@ public:
                                           ErrorResult& aRv);
   bool Vibrate(uint32_t aDuration);
   bool Vibrate(const nsTArray<uint32_t>& aDuration);
+  uint32_t MaxTouchPoints();
   void GetAppCodeName(nsString& aAppCodeName, ErrorResult& aRv)
   {
     aRv = GetAppCodeName(aAppCodeName);
@@ -264,6 +265,8 @@ public:
   static bool HasIccManagerSupport(JSContext* /* unused */,
                                    JSObject* aGlobal);
 #endif // MOZ_B2G_RIL
+  static bool HasWifiManagerSupport(JSContext* /* unused */,
+                                  JSObject* aGlobal);
 #ifdef MOZ_B2G_BT
   static bool HasBluetoothSupport(JSContext* /* unused */, JSObject* aGlobal);
 #endif // MOZ_B2G_BT

@@ -278,10 +278,14 @@ MarkRangeConservativelyAndSkipIon(JSTracer *trc, JSRuntime *rt, const uintptr_t 
 {
     const uintptr_t *i = begin;
 
-#if JS_STACK_GROWTH_DIRECTION < 0 && defined(JS_ION)
+#if JS_STACK_GROWTH_DIRECTION < 0 && defined(JS_ION) && !defined(JS_ARM_SIMULATOR)
     // Walk only regions in between JIT activations. Note that non-volatile
     // registers are spilled to the stack before the entry frame, ensuring
     // that the conservative scanner will still see them.
+    //
+    // If the ARM simulator is enabled, JIT activations are not on the native
+    // stack but on the simulator stack, so we don't have to skip JIT regions
+    // in this case.
     for (jit::JitActivationIterator iter(rt); !iter.done(); ++iter) {
         uintptr_t *jitMin, *jitEnd;
         iter.jitStackRange(jitMin, jitEnd);
@@ -424,12 +428,6 @@ AutoGCRooter::trace(JSTracer *trc)
         return;
       }
 
-      case STRING:
-        if (static_cast<AutoStringRooter *>(this)->str_)
-            MarkStringRoot(trc, &static_cast<AutoStringRooter *>(this)->str_,
-                           "JS::AutoStringRooter.str_");
-        return;
-
       case IDVECTOR: {
         AutoIdVector::VectorImpl &vector = static_cast<AutoIdVector *>(this)->vector;
         MarkIdRootRange(trc, vector.length(), vector.begin(), "js::AutoIdVector.vector");
@@ -468,8 +466,12 @@ AutoGCRooter::trace(JSTracer *trc)
       }
 
       case VALARRAY: {
-        AutoValueArray *array = static_cast<AutoValueArray *>(this);
-        MarkValueRootRange(trc, array->length(), array->start(), "js::AutoValueArray");
+        /*
+         * We don't know the template size parameter, but we can safely treat it
+         * as an AutoValueArray<1> because the length is stored separately.
+         */
+        AutoValueArray<1> *array = static_cast<AutoValueArray<1> *>(this);
+        MarkValueRootRange(trc, array->length(), array->begin(), "js::AutoValueArray");
         return;
       }
 

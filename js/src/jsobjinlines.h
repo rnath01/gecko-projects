@@ -497,36 +497,24 @@ JSObject::create(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::Initi
     JS_ASSERT(js::gc::GetGCKindSlots(kind, type->clasp()) == shape->numFixedSlots());
     JS_ASSERT_IF(type->clasp()->flags & JSCLASS_BACKGROUND_FINALIZE, IsBackgroundFinalized(kind));
     JS_ASSERT_IF(type->clasp()->finalize, heap == js::gc::TenuredHeap);
-    JS_ASSERT_IF(extantSlots, dynamicSlotsCount(shape->numFixedSlots(), shape->slotSpan()));
+    JS_ASSERT_IF(extantSlots, dynamicSlotsCount(shape->numFixedSlots(), shape->slotSpan(),
+                                                type->clasp()));
 
-    js::HeapSlot *slots = extantSlots;
-    if (!slots) {
-        size_t nDynamicSlots = dynamicSlotsCount(shape->numFixedSlots(), shape->slotSpan());
-        if (nDynamicSlots) {
-            slots = cx->pod_malloc<js::HeapSlot>(nDynamicSlots);
-            if (!slots)
-                return nullptr;
-            js::Debug_SetSlotRangeToCrashOnTouch(slots, nDynamicSlots);
-        }
-    }
+    const js::Class *clasp = type->clasp();
+    size_t nDynamicSlots = 0;
+    if (!extantSlots)
+        nDynamicSlots = dynamicSlotsCount(shape->numFixedSlots(), shape->slotSpan(), clasp);
 
-    JSObject *obj = js_NewGCObject<js::CanGC>(cx, kind, heap);
-    if (!obj) {
-        js_free(slots);
+    JSObject *obj = js::NewGCObject<js::CanGC>(cx, kind, nDynamicSlots, heap);
+    if (!obj)
         return nullptr;
-    }
-
-#ifdef JSGC_GENERATIONAL
-    if (slots && heap != js::gc::TenuredHeap)
-        cx->asJSContext()->runtime()->gcNursery.notifyInitialSlots(obj, slots);
-#endif
 
     obj->shape_.init(shape);
     obj->type_.init(type);
-    obj->slots = slots;
+    if (extantSlots)
+        obj->slots = extantSlots;
     obj->elements = js::emptyObjectElements;
 
-    const js::Class *clasp = type->clasp();
     if (clasp->hasPrivate())
         obj->privateRef(shape->numFixedSlots()) = nullptr;
 
@@ -553,37 +541,15 @@ JSObject::createArray(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::
      * named properties stored in those fixed slots.
      */
     JS_ASSERT(shape->numFixedSlots() == 0);
-
-    /*
-     * The array initially stores its elements inline, there must be enough
-     * space for an elements header.
-     */
-    JS_ASSERT(js::gc::GetGCKindSlots(kind) >= js::ObjectElements::VALUES_PER_HEADER);
-
-    js::HeapSlot *slots = nullptr;
-    if (size_t nDynamicSlots = dynamicSlotsCount(shape->numFixedSlots(), shape->slotSpan())) {
-        slots = cx->pod_malloc<js::HeapSlot>(nDynamicSlots);
-        if (!slots)
-            return nullptr;
-        js::Debug_SetSlotRangeToCrashOnTouch(slots, nDynamicSlots);
-    }
-
-    JSObject *obj = js_NewGCObject<js::CanGC>(cx, kind, heap);
-    if (!obj) {
-        js_free(slots);
+    size_t nDynamicSlots = dynamicSlotsCount(0, shape->slotSpan(), type->clasp());
+    JSObject *obj = js::NewGCObject<js::CanGC>(cx, kind, nDynamicSlots, heap);
+    if (!obj)
         return nullptr;
-    }
-
-#ifdef JSGC_GENERATIONAL
-    if (slots && heap != js::gc::TenuredHeap)
-        cx->asJSContext()->runtime()->gcNursery.notifyInitialSlots(obj, slots);
-#endif
 
     uint32_t capacity = js::gc::GetGCKindSlots(kind) - js::ObjectElements::VALUES_PER_HEADER;
 
     obj->shape_.init(shape);
     obj->type_.init(type);
-    obj->slots = slots;
     obj->setFixedElements();
     new (obj->getElementsHeader()) js::ObjectElements(capacity, length);
 
@@ -876,8 +842,7 @@ GetClassProtoKey(const js::Class *clasp)
 inline bool
 FindProto(ExclusiveContext *cx, const js::Class *clasp, MutableHandleObject proto)
 {
-    JSProtoKey protoKey = GetClassProtoKey(clasp);
-    if (!js_GetClassPrototype(cx, protoKey, proto, clasp))
+    if (!js_FindClassPrototype(cx, proto, clasp))
         return false;
     if (!proto && !js_GetClassPrototype(cx, JSProto_Object, proto))
         return false;
@@ -918,6 +883,18 @@ NewObjectWithClassProto(ExclusiveContext *cx, const js::Class *clasp, JSObject *
 {
     gc::AllocKind allocKind = gc::GetGCObjectKind(clasp);
     return NewObjectWithClassProto(cx, clasp, proto, parent, allocKind, newKind);
+}
+
+template<typename T>
+inline T *
+NewObjectWithProto(ExclusiveContext *cx, JSObject *proto, JSObject *parent,
+                   NewObjectKind newKind = GenericObject)
+{
+    JSObject *obj = NewObjectWithClassProto(cx, &T::class_, proto, parent, newKind);
+    if (!obj)
+        return nullptr;
+
+    return &obj->as<T>();
 }
 
 /*

@@ -179,8 +179,7 @@ nsPluginInstanceOwner::GetImageContainer()
   
   container = LayerManager::CreateImageContainer();
 
-  ImageFormat format = ImageFormat::SHARED_TEXTURE;
-  nsRefPtr<Image> img = container->CreateImage(&format, 1);
+  nsRefPtr<Image> img = container->CreateImage(ImageFormat::SHARED_TEXTURE);
 
   SharedTextureImage::Data data;
   data.mSize = gfx::IntSize(r.width, r.height);
@@ -655,7 +654,7 @@ NS_IMETHODIMP nsPluginInstanceOwner::GetNetscapeWindow(void *value)
     return NS_ERROR_FAILURE;
   }
   
-#if defined(XP_WIN) || defined(XP_OS2)
+#if defined(XP_WIN)
   void** pvalue = (void**)value;
   nsViewManager* vm = mObjectFrame->PresContext()->GetPresShell()->GetViewManager();
   if (!vm)
@@ -1499,8 +1498,7 @@ already_AddRefed<ImageContainer> nsPluginInstanceOwner::GetImageContainerForVide
 {
   nsRefPtr<ImageContainer> container = LayerManager::CreateImageContainer();
 
-  ImageFormat format = ImageFormat::SHARED_TEXTURE;
-  nsRefPtr<Image> img = container->CreateImage(&format, 1);
+  nsRefPtr<Image> img = container->CreateImage(ImageFormat::SHARED_TEXTURE);
 
   SharedTextureImage::Data data;
 
@@ -2448,32 +2446,6 @@ void nsPluginInstanceOwner::Paint(const RECT& aDirty, HDC aDC)
   pluginEvent.event = WM_PAINT;
   pluginEvent.wParam = WPARAM(aDC);
   pluginEvent.lParam = LPARAM(&aDirty);
-  mInstance->HandleEvent(&pluginEvent, nullptr);
-}
-#endif
-
-#ifdef XP_OS2
-void nsPluginInstanceOwner::Paint(const nsRect& aDirtyRect, HPS aHPS)
-{
-  if (!mInstance || !mObjectFrame)
-    return;
-
-  NPWindow *window;
-  GetWindow(window);
-  nsIntRect relDirtyRect = aDirtyRect.ToOutsidePixels(mObjectFrame->PresContext()->AppUnitsPerDevPixel());
-
-  // we got dirty rectangle in relative window coordinates, but we
-  // need it in absolute units and in the (left, top, right, bottom) form
-  RECTL rectl;
-  rectl.xLeft   = relDirtyRect.x + window->x;
-  rectl.yBottom = relDirtyRect.y + window->y;
-  rectl.xRight  = rectl.xLeft + relDirtyRect.width;
-  rectl.yTop    = rectl.yBottom + relDirtyRect.height;
-
-  NPEvent pluginEvent;
-  pluginEvent.event = WM_PAINT;
-  pluginEvent.wParam = (uint32_t)aHPS;
-  pluginEvent.lParam = (uint32_t)&rectl;
   mInstance->HandleEvent(&pluginEvent, nullptr);
 }
 #endif

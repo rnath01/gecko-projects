@@ -45,8 +45,6 @@ public:
   Promise(nsPIDOMWindow* aWindow);
   ~Promise();
 
-  static bool EnabledForScope(JSContext* aCx, JSObject* /* unused */);
-
   void MaybeResolve(JSContext* aCx,
                     JS::Handle<JS::Value> aValue);
   void MaybeReject(JSContext* aCx,
@@ -83,21 +81,15 @@ public:
          JS::Handle<JS::Value> aValue, ErrorResult& aRv);
 
   already_AddRefed<Promise>
-  Then(const Optional<nsRefPtr<AnyCallback>>& aResolveCallback,
-       const Optional<nsRefPtr<AnyCallback>>& aRejectCallback);
-
+  Then(AnyCallback* aResolveCallback, AnyCallback* aRejectCallback);
 
   already_AddRefed<Promise>
-  Catch(const Optional<nsRefPtr<AnyCallback>>& aRejectCallback);
+  Catch(AnyCallback* aRejectCallback);
 
   // FIXME(nsm): Bug 956197
   static already_AddRefed<Promise>
   All(const GlobalObject& aGlobal, JSContext* aCx,
       const Sequence<JS::Value>& aIterable, ErrorResult& aRv);
-
-  static already_AddRefed<Promise>
-  Cast(const GlobalObject& aGlobal, JSContext* aCx,
-       const Optional<JS::Handle<JS::Value>>& aValue, ErrorResult& aRv);
 
   // FIXME(nsm): Bug 956197
   static already_AddRefed<Promise>

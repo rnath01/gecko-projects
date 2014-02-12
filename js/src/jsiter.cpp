@@ -39,6 +39,7 @@
 
 using namespace js;
 using namespace js::gc;
+using JS::ForOfIterator;
 
 using mozilla::ArrayLength;
 #ifdef JS_MORE_DETERMINISTIC
@@ -79,10 +80,11 @@ typedef HashSet<jsid, IdHashPolicy> IdSet;
 static inline bool
 NewKeyValuePair(JSContext *cx, jsid id, const Value &val, MutableHandleValue rval)
 {
-    Value vec[2] = { IdToValue(id), val };
-    AutoArrayRooter tvr(cx, ArrayLength(vec), vec);
+    JS::AutoValueArray<2> vec(cx);
+    vec[0].set(IdToValue(id));
+    vec[1].set(val);
 
-    JSObject *aobj = NewDenseCopiedArray(cx, 2, vec);
+    JSObject *aobj = NewDenseCopiedArray(cx, 2, vec.begin());
     if (!aobj)
         return false;
     rval.setObject(*aobj);
@@ -729,9 +731,9 @@ bool
 js_ThrowStopIteration(JSContext *cx)
 {
     JS_ASSERT(!JS_IsExceptionPending(cx));
-    RootedValue v(cx);
-    if (js_FindClassObject(cx, JSProto_StopIteration, &v))
-        cx->setPendingException(v);
+    RootedObject ctor(cx);
+    if (js_GetClassObject(cx, JSProto_StopIteration, &ctor) && ctor)
+        cx->setPendingException(ObjectValue(*ctor));
     return false;
 }
 
@@ -838,6 +840,7 @@ const Class PropertyIteratorObject::class_ = {
     nullptr,                 /* hasInstance */
     nullptr,                 /* construct   */
     trace,
+    JS_NULL_CLASS_SPEC,
     {
         nullptr,             /* outerObject    */
         nullptr,             /* innerObject    */
@@ -1253,8 +1256,7 @@ stopiter_hasInstance(JSContext *cx, HandleObject obj, MutableHandleValue v, bool
 
 const Class StopIterationObject::class_ = {
     "StopIteration",
-    JSCLASS_HAS_CACHED_PROTO(JSProto_StopIteration) |
-    JSCLASS_FREEZE_PROTO,
+    JSCLASS_HAS_CACHED_PROTO(JSProto_StopIteration),
     JS_PropertyStub,         /* addProperty */
     JS_DeletePropertyStub,   /* delProperty */
     JS_PropertyStub,         /* getProperty */
@@ -1269,8 +1271,9 @@ const Class StopIterationObject::class_ = {
 };
 
 bool
-ForOfIterator::init(HandleValue iterable)
+ForOfIterator::init(HandleValue iterable, NonIterableBehavior nonIterableBehavior)
 {
+    JSContext *cx = cx_;
     RootedObject iterableObj(cx, ToObject(cx, iterable));
     if (!iterableObj)
         return false;
@@ -1285,10 +1288,13 @@ ForOfIterator::init(HandleValue iterable)
     if (!JSObject::getProperty(cx, iterableObj, iterableObj, cx->names().std_iterator, &callee))
         return false;
 
-    // Throw if obj[@@iterator] isn't callable. js::Invoke is about to check
-    // for this kind of error anyway, but it would throw an inscrutable
-    // error message about |method| rather than this nice one about |obj|.
+    // Throw if obj[@@iterator] isn't callable if we were asked to do so.
+    // js::Invoke is about to check for this kind of error anyway, but it would
+    // throw an inscrutable error message about |method| rather than this nice
+    // one about |obj|.
     if (!callee.isObject() || !callee.toObject().isCallable()) {
+        if (nonIterableBehavior == AllowNonIterable)
+            return true;
         char *bytes = DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, iterable, NullPtr());
         if (!bytes)
             return false;
@@ -1313,6 +1319,7 @@ ForOfIterator::next(MutableHandleValue vp, bool *done)
 {
     JS_ASSERT(iterator);
 
+    JSContext *cx = cx_;
     RootedValue method(cx);
     if (!JSObject::getProperty(cx, iterator, iterator, cx->names().next, &method))
         return false;
@@ -1490,6 +1497,7 @@ const Class LegacyGeneratorObject::class_ = {
     nullptr,                 /* hasInstance */
     nullptr,                 /* construct   */
     TraceGenerator<LegacyGeneratorObject>,
+    JS_NULL_CLASS_SPEC,
     {
         nullptr,             /* outerObject    */
         nullptr,             /* innerObject    */
@@ -1512,6 +1520,7 @@ const Class StarGeneratorObject::class_ = {
     nullptr,                 /* hasInstance */
     nullptr,                 /* construct   */
     TraceGenerator<StarGeneratorObject>,
+    JS_NULL_CLASS_SPEC,
     {
         nullptr,             /* outerObject    */
         nullptr,             /* innerObject    */
@@ -1546,14 +1555,14 @@ js_NewGenerator(JSContext *cx, const FrameRegs &stackRegs)
             return nullptr;
         JSObject *proto = pval.isObject() ? &pval.toObject() : nullptr;
         if (!proto) {
-            proto = global->getOrCreateStarGeneratorObjectPrototype(cx);
+            proto = GlobalObject::getOrCreateStarGeneratorObjectPrototype(cx, global);
             if (!proto)
                 return nullptr;
         }
         obj = NewObjectWithGivenProto(cx, &StarGeneratorObject::class_, proto, global);
     } else {
         JS_ASSERT(stackfp->script()->isLegacyGenerator());
-        JSObject *proto = global->getOrCreateLegacyGeneratorObjectPrototype(cx);
+        JSObject *proto = GlobalObject::getOrCreateLegacyGeneratorObjectPrototype(cx, global);
         if (!proto)
             return nullptr;
         obj = NewObjectWithGivenProto(cx, &LegacyGeneratorObject::class_, proto, global);
@@ -1705,8 +1714,11 @@ star_generator_next(JSContext *cx, CallArgs args)
     JSGenerator *gen = thisObj->as<StarGeneratorObject>().getGenerator();
 
     if (gen->state == JSGEN_CLOSED) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_GENERATOR_FINISHED);
-        return false;
+        RootedObject obj(cx, CreateItrResultObject(cx, JS::UndefinedHandleValue, true));
+        if (!obj)
+            return false;
+        args.rval().setObject(*obj);
+        return true;
     }
 
     if (gen->state == JSGEN_NEWBORN && args.hasDefined(0)) {
@@ -1727,7 +1739,7 @@ star_generator_throw(JSContext *cx, CallArgs args)
 
     JSGenerator *gen = thisObj->as<StarGeneratorObject>().getGenerator();
     if (gen->state == JSGEN_CLOSED) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_GENERATOR_FINISHED);
+        cx->setPendingException(args.get(0));
         return false;
     }
 

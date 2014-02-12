@@ -22,10 +22,6 @@
 
 #include "mozilla/layers/CompositorTypes.h"
 
-#ifdef XP_OS2
-#undef OS2EMX_PLAIN_CHAR
-#endif
-
 class gfxASurface;
 class gfxImageSurface;
 class gfxFont;
@@ -158,6 +154,8 @@ GetBackendName(mozilla::gfx::BackendType aBackend)
 
 class gfxPlatform {
 public:
+    typedef mozilla::gfx::IntSize IntSize;
+
     /**
      * Return a pointer to the current active platform.
      * This is a singleton; it contains mostly convenience
@@ -176,8 +174,9 @@ public:
      * Create an offscreen surface of the given dimensions
      * and image format.
      */
-    virtual already_AddRefed<gfxASurface> CreateOffscreenSurface(const gfxIntSize& size,
-                                                                 gfxContentType contentType) = 0;
+    virtual already_AddRefed<gfxASurface>
+      CreateOffscreenSurface(const IntSize& size,
+                             gfxContentType contentType) = 0;
 
     /**
      * Create an offscreen surface of the given dimensions and image format which
@@ -510,9 +509,11 @@ public:
     static bool GetPrefLayersPreferD3D9();
     static bool CanUseDirect3D9();
     static int  GetPrefLayoutFrameRate();
+    static int  GetPrefLayersCompositionFrameRate();
     static bool GetPrefLayersDump();
     static bool GetPrefLayersScrollGraph();
     static bool GetPrefLayersEnableTiles();
+    static bool GetPrefLayersDrawFPS();
 
     static bool OffMainThreadCompositionRequired();
 
@@ -684,6 +685,9 @@ protected:
     mozilla::gfx::BackendType GetContentBackend() {
       return mContentBackend;
     }
+
+    static mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
+      GetScaledFontForFontWithCairoSkia(mozilla::gfx::DrawTarget* aTarget, gfxFont* aFont);
 
     int8_t  mAllowDownloadableFonts;
     int8_t  mGraphiteShapingEnabled;

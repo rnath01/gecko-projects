@@ -37,9 +37,9 @@ class Blob
 
 public:
   static JSObject*
-  InitClass(JSContext* aCx, JSObject* aObj)
+  InitClass(JSContext* aCx, JS::Handle<JSObject*> aObj)
   {
-    return JS_InitClass(aCx, aObj, nullptr, &sClass, Construct, 0,
+    return JS_InitClass(aCx, aObj, JS::NullPtr(), &sClass, Construct, 0,
                         sProperties, sFunctions, nullptr, nullptr);
   }
 
@@ -167,7 +167,9 @@ private:
   static bool
   Slice(JSContext* aCx, unsigned aArgc, jsval* aVp)
   {
-    JS::Rooted<JSObject*> obj(aCx, JS_THIS_OBJECT(aCx, aVp));
+    JS::CallArgs args = JS::CallArgsFromVp(aArgc, aVp);
+
+    JS::Rooted<JSObject*> obj(aCx, args.thisv().toObjectOrNull());
     if (!obj) {
       return false;
     }
@@ -179,7 +181,7 @@ private:
 
     double start = 0, end = 0;
     JS::Rooted<JSString*> jsContentType(aCx, JS_GetEmptyString(JS_GetRuntime(aCx)));
-    if (!JS_ConvertArguments(aCx, aArgc, JS_ARGV(aCx, aVp), "/IIS", &start,
+    if (!JS_ConvertArguments(aCx, args, "/IIS", &start,
                              &end, jsContentType.address())) {
       return false;
     }
@@ -203,7 +205,7 @@ private:
       return false;
     }
 
-    JS_SET_RVAL(aCx, aVp, OBJECT_TO_JSVAL(rtnObj));
+    args.rval().setObject(*rtnObj);
     return true;
   }
 };
@@ -237,7 +239,7 @@ class File : public Blob
 
 public:
   static JSObject*
-  InitClass(JSContext* aCx, JSObject* aObj, JSObject* aParentProto)
+  InitClass(JSContext* aCx, JS::Handle<JSObject*> aObj, JS::Handle<JSObject*> aParentProto)
   {
     return JS_InitClass(aCx, aObj, aParentProto, &sClass, Construct, 0,
                         sProperties, nullptr, nullptr, nullptr);
@@ -470,7 +472,7 @@ CreateBlob(JSContext* aCx, nsIDOMBlob* aBlob)
 bool
 InitClasses(JSContext* aCx, JS::Handle<JSObject*> aGlobal)
 {
-  JSObject* blobProto = Blob::InitClass(aCx, aGlobal);
+  JS::Rooted<JSObject*> blobProto(aCx, Blob::InitClass(aCx, aGlobal));
   return blobProto && File::InitClass(aCx, aGlobal, blobProto);
 }
 

@@ -89,6 +89,7 @@ public:
     }
 
     mStartTime = aStartTime;
+    mReset = true;
     CueChanged();
   }
 
@@ -104,6 +105,7 @@ public:
     }
 
     mEndTime = aEndTime;
+    mReset = true;
     CueChanged();
   }
 
@@ -320,6 +322,7 @@ public:
   void SetDisplayState(HTMLDivElement* aDisplayState)
   {
     mDisplayState = aDisplayState;
+    mReset = false;
   }
 
   bool HasBeenReset()

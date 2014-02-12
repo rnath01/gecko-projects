@@ -72,9 +72,11 @@ CreateTextureHostD3D9(const SurfaceDescriptor& aDesc,
     }
     case SurfaceDescriptor::TSurfaceDescriptorD3D9: {
       result = new TextureHostD3D9(aFlags, aDesc);
+      break;
     }
     case SurfaceDescriptor::TSurfaceDescriptorDIB: {
       result = new DIBTextureHostD3D9(aFlags, aDesc);
+      break;
     }
     default: {
       NS_WARNING("Unsupported SurfaceDescriptor type");
@@ -1024,6 +1026,7 @@ DataTextureSourceD3D9::DataTextureSourceD3D9(gfx::SurfaceFormat aFormat,
 }
 
 DataTextureSourceD3D9::DataTextureSourceD3D9(gfx::SurfaceFormat aFormat,
+                                             gfx::IntSize aSize,
                                              CompositorD3D9* aCompositor,
                                              IDirect3DTexture9* aTexture,
                                              TextureFlags aFlags)
@@ -1034,8 +1037,9 @@ DataTextureSourceD3D9::DataTextureSourceD3D9(gfx::SurfaceFormat aFormat,
   , mIsTiled(false)
   , mIterating(false)
 {
+  mSize = aSize;
   mTexture = aTexture;
-  mStereoMode = STEREO_MODE_MONO;
+  mStereoMode = StereoMode::MONO;
   MOZ_COUNT_CTOR(DataTextureSourceD3D9);
 }
 
@@ -1210,11 +1214,10 @@ void
 DataTextureSourceD3D9::SetCompositor(Compositor* aCompositor)
 {
   CompositorD3D9* d3dCompositor = static_cast<CompositorD3D9*>(aCompositor);
-
-  if (d3dCompositor != mCompositor) {
+  if (mCompositor && mCompositor != d3dCompositor) {
     Reset();
-    mCompositor = d3dCompositor;
   }
+  mCompositor = d3dCompositor;
 }
 
 void
@@ -1253,6 +1256,8 @@ CairoTextureClientD3D9::CairoTextureClientD3D9(gfx::SurfaceFormat aFormat, Textu
   : TextureClient(aFlags)
   , mFormat(aFormat)
   , mIsLocked(false)
+  , mNeedsClear(false)
+  , mLockRect(false)
 {
   MOZ_COUNT_CTOR(CairoTextureClientD3D9);
 }
@@ -1269,6 +1274,11 @@ CairoTextureClientD3D9::Lock(OpenMode)
   if (!IsValid() || !IsAllocated()) {
     return false;
   }
+  if (mNeedsClear) {
+    mDrawTarget = GetAsDrawTarget();
+    mDrawTarget->ClearRect(Rect(0, 0, GetSize().width, GetSize().height));
+    mNeedsClear = false;
+  }
   mIsLocked = true;
   return true;
 }
@@ -1280,6 +1290,11 @@ CairoTextureClientD3D9::Unlock()
   if (mDrawTarget) {
     mDrawTarget->Flush();
     mDrawTarget = nullptr;
+  }
+
+  if (mLockRect) {
+    mD3D9Surface->UnlockRect();
+    mLockRect = false;
   }
 
   if (mSurface) {
@@ -1324,11 +1339,22 @@ CairoTextureClientD3D9::GetAsDrawTarget()
     }
   }
 
-  mSurface = new gfxWindowsSurface(mD3D9Surface);
-  if (!mSurface || mSurface->CairoStatus()) {
-    NS_WARNING("Could not create surface for d3d9 surface");
-    mSurface = nullptr;
-    return nullptr;
+  if (ContentForFormat(mFormat) == gfxContentType::COLOR) {
+    mSurface = new gfxWindowsSurface(mD3D9Surface);
+    if (!mSurface || mSurface->CairoStatus()) {
+      NS_WARNING("Could not create surface for d3d9 surface");
+      mSurface = nullptr;
+      return nullptr;
+    }
+  } else {
+    // gfxWindowsSurface don't support transparency so we can't use the d3d9
+    // windows surface optimization.
+    // Instead we have to use a gfxImageSurface and fallback for font drawing.
+    D3DLOCKED_RECT rect;
+    mD3D9Surface->LockRect(&rect, nullptr, 0);
+    mSurface = new gfxImageSurface((uint8_t*)rect.pBits, ThebesIntSize(mSize),
+                                   rect.Pitch, SurfaceFormatToImageFormat(mFormat));
+    mLockRect = true;
   }
 
   mDrawTarget =
@@ -1351,13 +1377,7 @@ CairoTextureClientD3D9::AllocateForSurface(gfx::IntSize aSize, TextureAllocation
     return false;
   }
 
-  if (aFlags & ALLOC_CLEAR_BUFFER) {
-    DebugOnly<bool> locked = Lock(OPEN_WRITE_ONLY);
-    MOZ_ASSERT(locked);
-    RefPtr<DrawTarget> dt = GetAsDrawTarget();
-    dt->ClearRect(Rect(0, 0, GetSize().width, GetSize().height));
-    Unlock();
-  }
+  mNeedsClear = aFlags & ALLOC_CLEAR_BUFFER;
 
   MOZ_ASSERT(mTexture);
   return true;
@@ -1532,11 +1552,91 @@ TextureHostD3D9::TextureHostD3D9(TextureFlags aFlags,
   }
 }
 
-TextureHostD3D9::TextureHostD3D9(TextureFlags aFlags)
-  : TextureHost(aFlags)
-  , mFormat(SurfaceFormat::UNKNOWN)
-  , mIsLocked(false)
-{}
+bool
+DataTextureSourceD3D9::UpdateFromTexture(IDirect3DTexture9* aTexture,
+                                         const nsIntRegion* aRegion)
+{
+  MOZ_ASSERT(aTexture);
+
+  D3DSURFACE_DESC desc;
+  HRESULT hr = aTexture->GetLevelDesc(0, &desc);
+  if (FAILED(hr)) {
+    return false;
+  } else {
+    // If we changed the compositor, the size might have been reset to zero
+    // Otherwise the texture size must not change.
+    MOZ_ASSERT(mFormat == D3D9FormatToSurfaceFormat(desc.Format));
+    MOZ_ASSERT(!mSize.width || mSize.width == desc.Width);
+    MOZ_ASSERT(!mSize.height || mSize.height == desc.Height);
+    mSize = IntSize(desc.Width, desc.Height);
+  }
+
+  DeviceManagerD3D9* dm = gfxWindowsPlatform::GetPlatform()->GetD3D9DeviceManager();
+  if (!mTexture) {
+    mTexture = dm->CreateTexture(mSize, SurfaceFormatToD3D9Format(mFormat),
+                                 D3DPOOL_DEFAULT, this);
+    if (!mTexture) {
+      NS_WARNING("Failed to create a texture");
+      return false;
+    }
+  }
+
+  RefPtr<IDirect3DSurface9> srcSurface;
+  RefPtr<IDirect3DSurface9> dstSurface;
+
+  hr = aTexture->GetSurfaceLevel(0, byRef(srcSurface));
+  if (FAILED(hr)) {
+    return false;
+  }
+  hr = mTexture->GetSurfaceLevel(0, byRef(dstSurface));
+  if (FAILED(hr)) {
+    return false;
+  }
+
+  if (aRegion) {
+    nsIntRegionRectIterator iter(*aRegion);
+    const nsIntRect *iterRect;
+    while ((iterRect = iter.Next())) {
+      RECT rect;
+      rect.left = iterRect->x;
+      rect.top = iterRect->y;
+      rect.right = iterRect->XMost();
+      rect.bottom = iterRect->YMost();
+
+      POINT point;
+      point.x = iterRect->x;
+      point.y = iterRect->y;
+      hr = dm->device()->UpdateSurface(srcSurface, &rect, dstSurface, &point);
+      if (FAILED(hr)) {
+        NS_WARNING("Failed Update the surface");
+        return false;
+      }
+    }
+  } else {
+    hr = dm->device()->UpdateSurface(srcSurface, nullptr, dstSurface, nullptr);
+    if (FAILED(hr)) {
+      NS_WARNING("Failed Update the surface");
+      return false;
+    }
+  }
+  mIsTiled = false;
+  return true;
+}
+
+void
+TextureHostD3D9::Updated(const nsIntRegion* aRegion)
+{
+  if (!mTexture) {
+    return;
+  }
+
+  if (!mTextureSource) {
+    mTextureSource = new DataTextureSourceD3D9(mFormat, mSize, mCompositor,
+                                               nullptr, mFlags);
+  }
+
+  mTextureSource->UpdateFromTexture(mTexture, aRegion);
+}
 
 IDirect3DDevice9*
 TextureHostD3D9::GetDevice()
@@ -1556,9 +1656,7 @@ TextureHostD3D9::SetCompositor(Compositor* aCompositor)
 NewTextureSource*
 TextureHostD3D9::GetTextureSources()
 {
-  if (!mTextureSource) {
-    mTextureSource = new DataTextureSourceD3D9(mFormat, mCompositor, mTexture, mFlags);
-  }
+  MOZ_ASSERT(mIsLocked);
   return mTextureSource;
 }
 

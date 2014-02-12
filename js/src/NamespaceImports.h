@@ -21,7 +21,7 @@
 namespace JS {
 
 class Latin1CharsZ;
-class StableCharPtr;
+class ConstTwoByteChars;
 class TwoByteChars;
 
 class AutoFunctionVector;
@@ -33,7 +33,6 @@ class AutoValueVector;
 class AutoIdArray;
 
 class AutoGCRooter;
-class AutoArrayRooter;
 template <typename T> class AutoVectorRooter;
 template<typename K, typename V> class AutoHashMapRooter;
 template<typename T> class AutoHashSetRooter;
@@ -62,7 +61,7 @@ using JS::UndefinedValue;
 using JS::IsPoisonedPtr;
 
 using JS::Latin1CharsZ;
-using JS::StableCharPtr;
+using JS::ConstTwoByteChars;
 using JS::TwoByteChars;
 
 using JS::AutoFunctionVector;
@@ -74,7 +73,6 @@ using JS::AutoValueVector;
 using JS::AutoIdArray;
 
 using JS::AutoGCRooter;
-using JS::AutoArrayRooter;
 using JS::AutoHashMapRooter;
 using JS::AutoHashSetRooter;
 using JS::AutoVectorRooter;
@@ -119,6 +117,9 @@ using JS::MutableHandleObject;
 using JS::MutableHandleScript;
 using JS::MutableHandleString;
 using JS::MutableHandleValue;
+
+using JS::NullHandleValue;
+using JS::UndefinedHandleValue;
 
 using JS::Zone;
 

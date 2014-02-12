@@ -364,8 +364,8 @@ js_ReportOutOfMemory(ThreadSafeContext *cxArg)
     fprintf(stderr, "js_ReportOutOfMemory called\n");
 #endif
 
-    if (cxArg->isForkJoinSlice()) {
-        cxArg->asForkJoinSlice()->setPendingAbortFatal(ParallelBailoutOutOfMemory);
+    if (cxArg->isForkJoinContext()) {
+        cxArg->asForkJoinContext()->setPendingAbortFatal(ParallelBailoutOutOfMemory);
         return;
     }
 
@@ -444,8 +444,8 @@ js_ReportAllocationOverflow(ThreadSafeContext *cxArg)
     if (!cxArg)
         return;
 
-    if (cxArg->isForkJoinSlice()) {
-        cxArg->asForkJoinSlice()->setPendingAbortFatal(ParallelBailoutOutOfMemory);
+    if (cxArg->isForkJoinContext()) {
+        cxArg->asForkJoinContext()->setPendingAbortFatal(ParallelBailoutOutOfMemory);
         return;
     }
 
@@ -1001,27 +1001,28 @@ js_InvokeOperationCallback(JSContext *cx)
     JS_ASSERT_REQUEST_DEPTH(cx);
 
     JSRuntime *rt = cx->runtime();
-    JS_ASSERT(rt->interrupt != 0);
+    JS_ASSERT(rt->interrupt);
 
     /*
      * Reset the callback counter first, then run GC and yield. If another
      * thread is racing us here we will accumulate another callback request
      * which will be serviced at the next opportunity.
      */
-    rt->interrupt = 0;
+    rt->interrupt = false;
 
-    /* IonMonkey sets its stack limit to UINTPTR_MAX to trigger operaton callbacks. */
+    /*
+     * IonMonkey sets its stack limit to UINTPTR_MAX to trigger operation
+     * callbacks.
+     */
     rt->resetIonStackLimit();
 
-    if (rt->gcIsNeeded)
-        GCSlice(rt, GC_NORMAL, rt->gcTriggerReason);
-
-#ifdef JSGC_GENERATIONAL
-    if (rt->gcStoreBuffer.isAboutToOverflow())
-        MinorGC(cx, JS::gcreason::FULL_STORE_BUFFER);
-#endif
+    js::gc::GCIfNeeded(cx);
 
 #ifdef JS_ION
+#ifdef JS_THREADSAFE
+    rt->interruptPar = false;
+#endif
+
     /*
      * A worker thread may have set the callback after finishing an Ion
      * compilation.
@@ -1052,22 +1053,19 @@ js::ThreadSafeContext::ThreadSafeContext(JSRuntime *rt, PerThreadData *pt, Conte
     perThreadData(pt),
     allocator_(nullptr)
 {
-#ifdef JS_THREADSAFE
-    JS_ASSERT_IF(kind == Context_Exclusive, rt->workerThreadState != nullptr);
-#endif
 }
 
 bool
-ThreadSafeContext::isForkJoinSlice() const
+ThreadSafeContext::isForkJoinContext() const
 {
     return contextKind_ == Context_ForkJoin;
 }
 
-ForkJoinSlice *
-ThreadSafeContext::asForkJoinSlice()
+ForkJoinContext *
+ThreadSafeContext::asForkJoinContext()
 {
-    JS_ASSERT(isForkJoinSlice());
-    return reinterpret_cast<ForkJoinSlice *>(this);
+    JS_ASSERT(isForkJoinContext());
+    return reinterpret_cast<ForkJoinContext *>(this);
 }
 
 JSContext::JSContext(JSRuntime *rt)
@@ -1289,6 +1287,15 @@ JSContext::mark(JSTracer *trc)
     TraceCycleDetectionSet(trc, cycleDetectorSet);
 
     MarkValueRoot(trc, &iterValue, "iterValue");
+}
+
+void *
+ThreadSafeContext::stackLimitAddressForJitCode(StackKind kind)
+{
+#ifdef JS_ARM_SIMULATOR
+    return runtime_->mainThread.addressOfSimulatorStackLimit();
+#endif
+    return stackLimitAddress(kind);
 }
 
 JSVersion

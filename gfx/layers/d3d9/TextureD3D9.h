@@ -107,9 +107,10 @@ public:
   DataTextureSourceD3D9(gfx::SurfaceFormat aFormat,
                         CompositorD3D9* aCompositor,
                         TextureFlags aFlags = TEXTURE_FLAGS_DEFAULT,
-                        StereoMode aStereoMode = STEREO_MODE_MONO);
+                        StereoMode aStereoMode = StereoMode::MONO);
 
   DataTextureSourceD3D9(gfx::SurfaceFormat aFormat,
+                        gfx::IntSize aSize,
                         CompositorD3D9* aCompositor,
                         IDirect3DTexture9* aTexture,
                         TextureFlags aFlags = TEXTURE_FLAGS_DEFAULT);
@@ -156,6 +157,11 @@ public:
     mCurrentTile = 0;
   }
 
+  /**
+   * Copy the content of aTexture using the GPU.
+   */
+  bool UpdateFromTexture(IDirect3DTexture9* aTexture, const nsIntRegion* aRegion);
+
   // To use with DIBTextureHostD3D9
 
   bool Update(gfxWindowsSurface* aSurface);
@@ -175,7 +181,7 @@ protected:
 };
 
 /**
- * Can only be drawn into through Cairo, and only support opaque surfaces.
+ * Can only be drawn into through Cairo and need a D3D9 context on the client side.
  * The corresponding TextureHost is TextureHostD3D9.
  */
 class CairoTextureClientD3D9 : public TextureClient
@@ -221,11 +227,13 @@ private:
   gfx::IntSize mSize;
   gfx::SurfaceFormat mFormat;
   bool mIsLocked;
+  bool mNeedsClear;
+  bool mLockRect;
 };
 
 /**
  * Can only be drawn into through Cairo.
- * Supports opaque surfaces. Prefer CairoTextureClientD3D9 when possible.
+ * Prefer CairoTextureClientD3D9 when possible.
  * The coresponding TextureHost is DIBTextureHostD3D9.
  */
 class DIBTextureClientD3D9 : public TextureClient
@@ -335,6 +343,8 @@ public:
   virtual bool Lock() MOZ_OVERRIDE;
 
   virtual void Unlock() MOZ_OVERRIDE;
+
+  virtual void Updated(const nsIntRegion* aRegion) MOZ_OVERRIDE;
 
   virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
 

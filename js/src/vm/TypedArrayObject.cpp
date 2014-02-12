@@ -1919,8 +1919,7 @@ class TypedArrayObjectTemplate : public TypedArrayObject
         if (!getter)
             return false;
 
-        RootedValue value(cx, UndefinedValue());
-        return DefineNativeProperty(cx, proto, id, value,
+        return DefineNativeProperty(cx, proto, id, UndefinedHandleValue,
                                     JS_DATA_TO_FUNC_PTR(PropertyOp, getter), nullptr,
                                     flags, 0, 0);
     }
@@ -3466,6 +3465,7 @@ const Class ArrayBufferObject::class_ = {
     nullptr,        /* hasInstance */
     nullptr,        /* construct   */
     ArrayBufferObject::obj_trace,
+    JS_NULL_CLASS_SPEC,
     JS_NULL_CLASS_EXT,
     {
         ArrayBufferObject::obj_lookupGeneric,
@@ -3529,29 +3529,26 @@ const JSFunctionSpec _typedArray##Object::jsfuncs[] = {                         
 }
 #endif
 
-#define IMPL_TYPED_ARRAY_JSAPI_CONSTRUCTORS(Name,NativeType)                                 \
-  JS_FRIEND_API(JSObject *) JS_New ## Name ## Array(JSContext *cx, uint32_t nelements)       \
-  {                                                                                          \
-      return TypedArrayObjectTemplate<NativeType>::fromLength(cx, nelements);                \
-  }                                                                                          \
-  JS_FRIEND_API(JSObject *) JS_New ## Name ## ArrayFromArray(JSContext *cx, JSObject *other_)\
-  {                                                                                          \
-      Rooted<JSObject*> other(cx, other_);                                                   \
-      return TypedArrayObjectTemplate<NativeType>::fromArray(cx, other);                     \
-  }                                                                                          \
-  JS_FRIEND_API(JSObject *) JS_New ## Name ## ArrayWithBuffer(JSContext *cx,                 \
-                               JSObject *arrayBuffer_, uint32_t byteOffset, int32_t length)  \
-  {                                                                                          \
-      Rooted<JSObject*> arrayBuffer(cx, arrayBuffer_);                                       \
-      Rooted<JSObject*> proto(cx, nullptr);                                                  \
-      return TypedArrayObjectTemplate<NativeType>::fromBuffer(cx, arrayBuffer, byteOffset,   \
-                                                              length, proto);                \
-  }                                                                                          \
-  JS_FRIEND_API(bool) JS_Is ## Name ## Array(JSObject *obj)                                  \
-  {                                                                                          \
-      if (!(obj = CheckedUnwrap(obj)))                                                       \
-          return false;                                                                      \
-      const Class *clasp = obj->getClass();                                                  \
+#define IMPL_TYPED_ARRAY_JSAPI_CONSTRUCTORS(Name,NativeType)                                    \
+  JS_FRIEND_API(JSObject *) JS_New ## Name ## Array(JSContext *cx, uint32_t nelements)          \
+  {                                                                                             \
+      return TypedArrayObjectTemplate<NativeType>::fromLength(cx, nelements);                   \
+  }                                                                                             \
+  JS_FRIEND_API(JSObject *) JS_New ## Name ## ArrayFromArray(JSContext *cx, HandleObject other) \
+  {                                                                                             \
+      return TypedArrayObjectTemplate<NativeType>::fromArray(cx, other);                        \
+  }                                                                                             \
+  JS_FRIEND_API(JSObject *) JS_New ## Name ## ArrayWithBuffer(JSContext *cx,                    \
+                               HandleObject arrayBuffer, uint32_t byteOffset, int32_t length)   \
+  {                                                                                             \
+      return TypedArrayObjectTemplate<NativeType>::fromBuffer(cx, arrayBuffer, byteOffset,      \
+                                                              length, js::NullPtr());           \
+  }                                                                                             \
+  JS_FRIEND_API(bool) JS_Is ## Name ## Array(JSObject *obj)                                     \
+  {                                                                                             \
+      if (!(obj = CheckedUnwrap(obj)))                                                          \
+          return false;                                                                         \
+      const Class *clasp = obj->getClass();                                                     \
       return (clasp == &TypedArrayObject::classes[TypedArrayObjectTemplate<NativeType>::ArrayTypeID()]); \
   }
 
@@ -3628,12 +3625,8 @@ IMPL_TYPED_ARRAY_COMBINED_UNWRAPPERS(Float64, double, double)
     nullptr,                 /* hasInstance */                                 \
     nullptr,                 /* construct   */                                 \
     ArrayBufferViewObject::trace, /* trace  */                                 \
-    {                                                                          \
-        nullptr,    /* outerObject */                                          \
-        nullptr,    /* innerObject */                                          \
-        nullptr,    /* iteratorObject  */                                      \
-        false,      /* isWrappedNative */                                      \
-    },                                                                         \
+    JS_NULL_CLASS_SPEC,                                                        \
+    JS_NULL_CLASS_EXT,                                                         \
     {                                                                          \
         _typedArray##Object::obj_lookupGeneric,                                \
         _typedArray##Object::obj_lookupProperty,                               \
@@ -3791,8 +3784,7 @@ InitArrayBufferClass(JSContext *cx)
     if (!getter)
         return nullptr;
 
-    RootedValue value(cx, UndefinedValue());
-    if (!DefineNativeProperty(cx, arrayBufferProto, byteLengthId, value,
+    if (!DefineNativeProperty(cx, arrayBufferProto, byteLengthId, UndefinedHandleValue,
                               JS_DATA_TO_FUNC_PTR(PropertyOp, getter), nullptr, flags, 0, 0))
         return nullptr;
 
@@ -3841,8 +3833,6 @@ const Class DataViewObject::class_ = {
     nullptr,                 /* hasInstance */
     nullptr,                 /* construct   */
     ArrayBufferViewObject::trace, /* trace  */
-    JS_NULL_CLASS_EXT,
-    JS_NULL_OBJECT_OPS
 };
 
 const JSFunctionSpec DataViewObject::jsfuncs[] = {
@@ -3894,8 +3884,7 @@ DataViewObject::defineGetter(JSContext *cx, PropertyName *name, HandleObject pro
     if (!getter)
         return false;
 
-    RootedValue value(cx, UndefinedValue());
-    return DefineNativeProperty(cx, proto, id, value,
+    return DefineNativeProperty(cx, proto, id, UndefinedHandleValue,
                                 JS_DATA_TO_FUNC_PTR(PropertyOp, getter), nullptr,
                                 flags, 0, 0);
 }
@@ -3958,11 +3947,12 @@ JSObject *
 js_InitTypedArrayClasses(JSContext *cx, HandleObject obj)
 {
     JS_ASSERT(obj->isNative());
+    assertSameCompartment(cx, obj);
     Rooted<GlobalObject*> global(cx, &obj->as<GlobalObject>());
 
     /* Idempotency required: we initialize several things, possibly lazily. */
     RootedObject stop(cx);
-    if (!js_GetClassObject(cx, global, JSProto_ArrayBuffer, &stop))
+    if (!js_GetClassObject(cx, JSProto_ArrayBuffer, &stop))
         return nullptr;
     if (stop)
         return stop;

@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "jit/arm/Simulator-arm.h"
 #include "jit/BaselineIC.h"
 #include "jit/BaselineJIT.h"
 #include "jit/CompileInfo.h"
@@ -474,7 +475,7 @@ InitFromBailout(JSContext *cx, HandleScript caller, jsbytecode *callerPC,
     if (excInfo)
         exprStackSlots = excInfo->numExprSlots;
     else
-        exprStackSlots = iter.slots() - (script->nfixed() + CountArgSlots(script, fun));
+        exprStackSlots = iter.allocations() - (script->nfixed() + CountArgSlots(script, fun));
 
     builder.resetFramePushed();
 
@@ -622,9 +623,9 @@ InitFromBailout(JSContext *cx, HandleScript caller, jsbytecode *callerPC,
         size_t thisvOffset = builder.framePushed() + IonJSFrameLayout::offsetOfThis();
         *builder.valuePointerAtStackOffset(thisvOffset) = thisv;
 
-        JS_ASSERT(iter.slots() >= CountArgSlots(script, fun));
+        JS_ASSERT(iter.allocations() >= CountArgSlots(script, fun));
         IonSpew(IonSpew_BaselineBailouts, "      frame slots %u, nargs %u, nfixed %u",
-                iter.slots(), fun->nargs(), script->nfixed());
+                iter.allocations(), fun->nargs(), script->nfixed());
 
         if (!callerPC) {
             // This is the first frame. Store the formals in a Vector until we
@@ -1336,7 +1337,12 @@ jit::BailoutIonToBaseline(JSContext *cx, JitActivation *activation, IonBailoutIt
     // Do stack check.
     bool overRecursed = false;
     uint8_t *newsp = info->incomingStack - (info->copyStackTop - info->copyStackBottom);
+#ifdef JS_ARM_SIMULATOR
+    if (Simulator::Current()->overRecursed(uintptr_t(newsp)))
+        overRecursed = true;
+#else
     JS_CHECK_RECURSION_WITH_SP_DONT_REPORT(cx, newsp, overRecursed = true);
+#endif
     if (overRecursed) {
         IonSpew(IonSpew_BaselineBailouts, "  Overrecursion check failed!");
         return BAILOUT_RETURN_OVERRECURSED;
