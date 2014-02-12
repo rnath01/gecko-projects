@@ -113,9 +113,6 @@ endef
 # last line, so replace both '|| ' and '||'.
 MOZCONFIG_CONTENT := $(subst ||,$(CR),$(subst || ,$(CR),$(shell $(TOPSRCDIR)/$(MOZCONFIG_LOADER) $(TOPSRCDIR) | sed 's/$$/||/')))
 $(eval $(MOZCONFIG_CONTENT))
-ifndef NO_FAIL
-$(error Purposeful fail)
-endif
 
 export FOUND_MOZCONFIG
 
