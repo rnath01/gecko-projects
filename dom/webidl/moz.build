@@ -41,6 +41,7 @@ WEBIDL_FILES = [
     'BrowserElementDictionaries.webidl',
     'CallEvent.webidl',
     'CallsList.webidl',
+    'CameraCapabilities.webidl',
     'CameraControl.webidl',
     'CameraManager.webidl',
     'CanvasRenderingContext2D.webidl',
@@ -65,6 +66,7 @@ WEBIDL_FILES = [
     'CSSValueList.webidl',
     'DataContainerEvent.webidl',
     'DataStore.webidl',
+    'DataTransfer.webidl',
     'DedicatedWorkerGlobalScope.webidl',
     'DelayNode.webidl',
     'DesktopNotification.webidl',
@@ -83,6 +85,7 @@ WEBIDL_FILES = [
     'DOMRectList.webidl',
     'DOMRequest.webidl',
     'DOMSettableTokenList.webidl',
+    'DOMStringList.webidl',
     'DOMStringMap.webidl',
     'DOMTokenList.webidl',
     'DOMTransaction.webidl',
@@ -273,6 +276,7 @@ WEBIDL_FILES = [
     'RGBColor.webidl',
     'RTCConfiguration.webidl',
     'RTCIceCandidate.webidl',
+    'RTCIdentityAssertion.webidl',
     'RTCPeerConnection.webidl',
     'RTCSessionDescription.webidl',
     'RTCStatsReport.webidl',
@@ -510,6 +514,11 @@ WEBIDL_FILES += [
     'StyleSheetChangeEvent.webidl',
 ]
 
+# We only expose our prefable test interfaces in debug builds, just to be on
+# the safe side.
+if CONFIG['MOZ_DEBUG']:
+    WEBIDL_FILES += ['TestInterfaceJS.webidl']
+
 if CONFIG['MOZ_B2G_BT']:
     WEBIDL_FILES += [
         'BluetoothAdapter.webidl',
@@ -580,6 +589,7 @@ GENERATED_EVENTS_WEBIDL_FILES = [
     'MozStkCommandEvent.webidl',
     'RTCDataChannelEvent.webidl',
     'RTCPeerConnectionIceEvent.webidl',
+    'RTCPeerConnectionIdentityEvent.webidl',
     'TrackEvent.webidl',
     'UserProximityEvent.webidl',
     'USSDReceivedEvent.webidl',

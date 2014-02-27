@@ -175,12 +175,6 @@
   box-shadow: 0 0 0 1px rgba(0,0,0,0.5);
 }
 
-.variables-view-scope:focus > .title,
-.variable-or-property:focus > .title {
-  background:  #3689b2; /* fg-color2 */
-  color: white;
-}
-
 /* CodeMirror specific styles.
  * Best effort to match the existing theme, some of the colors
  * are duplicated here to prevent weirdness in the main theme. */
@@ -319,6 +313,10 @@ div.CodeMirror span.eval-text {
 
 .devtools-side-splitter {
   -moz-border-end: 1px solid black;
+}
+
+.devtools-responsive-container > .devtools-side-splitter {
+  border-top: 1px solid black;
 }
 
 .devtools-textinput,

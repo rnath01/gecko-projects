@@ -91,10 +91,8 @@ class CodeGeneratorX86Shared : public CodeGeneratorShared
     virtual bool visitMulI(LMulI *ins);
     virtual bool visitDivI(LDivI *ins);
     virtual bool visitDivPowTwoI(LDivPowTwoI *ins);
-    virtual bool visitDivSelfI(LDivSelfI *ins);
     virtual bool visitModI(LModI *ins);
     virtual bool visitModPowTwoI(LModPowTwoI *ins);
-    virtual bool visitModSelfI(LModSelfI *ins);
     virtual bool visitBitNotI(LBitNotI *ins);
     virtual bool visitBitOpI(LBitOpI *ins);
     virtual bool visitShiftI(LShiftI *ins);
@@ -123,6 +121,8 @@ class CodeGeneratorX86Shared : public CodeGeneratorShared
     virtual bool visitEffectiveAddress(LEffectiveAddress *ins);
     virtual bool visitUDivOrMod(LUDivOrMod *ins);
     virtual bool visitAsmJSPassStackArg(LAsmJSPassStackArg *ins);
+
+    bool visitForkJoinGetSlice(LForkJoinGetSlice *ins);
 
     bool visitNegI(LNegI *lir);
     bool visitNegD(LNegD *lir);

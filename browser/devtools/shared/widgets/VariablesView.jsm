@@ -21,7 +21,7 @@ const ITEM_FLASH_DURATION = 300 // ms
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
-Cu.import("resource:///modules/devtools/shared/event-emitter.js");
+Cu.import("resource://gre/modules/devtools/event-emitter.js");
 Cu.import("resource://gre/modules/devtools/DevToolsUtils.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 let promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js").Promise;
@@ -512,7 +512,6 @@ VariablesView.prototype = {
   _onSearchboxKeyPress: function(e) {
     switch(e.keyCode) {
       case e.DOM_VK_RETURN:
-      case e.DOM_VK_ENTER:
         this._onSearchboxInput();
         return;
       case e.DOM_VK_ESCAPE:
@@ -861,7 +860,6 @@ VariablesView.prototype = {
         return;
 
       case e.DOM_VK_RETURN:
-      case e.DOM_VK_ENTER:
         // Start editing the value or name of the Variable or Property.
         if (item instanceof Variable) {
           if (e.metaKey || e.altKey || e.shiftKey) {
@@ -3941,7 +3939,6 @@ Editable.prototype = {
         this._next();
         break;
       case e.DOM_VK_RETURN:
-      case e.DOM_VK_ENTER:
         this._save();
         break;
       case e.DOM_VK_ESCAPE:

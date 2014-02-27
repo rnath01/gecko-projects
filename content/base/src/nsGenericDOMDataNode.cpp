@@ -18,7 +18,7 @@
 #include "nsEventListenerManager.h"
 #include "nsIDOMDocument.h"
 #include "nsReadableUtils.h"
-#include "mozilla/MutationEvent.h"
+#include "mozilla/InternalMutationEvent.h"
 #include "nsINameSpaceManager.h"
 #include "nsIURI.h"
 #include "nsIDOMEvent.h"
@@ -711,6 +711,17 @@ nsGenericDOMDataNode::SetXBLInsertionParent(nsIContent* aContent)
     SetFlags(NODE_MAY_BE_IN_BINDING_MNGR);
   }
   slots->mXBLInsertionParent = aContent;
+}
+
+CustomElementData *
+nsGenericDOMDataNode::GetCustomElementData() const
+{
+  return nullptr;
+}
+
+void
+nsGenericDOMDataNode::SetCustomElementData(CustomElementData* aData)
+{
 }
 
 bool

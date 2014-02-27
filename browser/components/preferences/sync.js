@@ -85,7 +85,7 @@ let gSyncPane = {
   _init: function () {
     let topics = ["weave:service:login:error",
                   "weave:service:login:finish",
-                  "weave:service:start-over",
+                  "weave:service:start-over:finish",
                   "weave:service:setup-complete",
                   "weave:service:logout:finish",
                   FxAccountsCommon.ONVERIFIED_NOTIFICATION];
@@ -254,6 +254,10 @@ let gSyncPane = {
     win.switchToTabHavingURI(url, true);
     // seeing as we are doing this in a tab we close the prefs dialog.
     window.close();
+  },
+
+  signUp: function() {
+    this.openContentInBrowser("about:accounts?action=signup");
   },
 
   signIn: function() {

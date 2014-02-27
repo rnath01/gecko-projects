@@ -11,9 +11,9 @@
 #include "mozilla/dom/EventTarget.h"
 #include "nsCOMPtr.h"
 #include "nsIAtom.h"
+#include "nsISupportsImpl.h"
 #include "nsIWidget.h"
 #include "nsString.h"
-#include "nsTraceRefcnt.h"
 #include "Units.h"
 
 /******************************************************************************
@@ -49,7 +49,6 @@ enum nsEventStructType
   NS_TOUCH_EVENT,                    // WidgetTouchEvent
 
   // ContentEvents.h
-  NS_SCRIPT_ERROR_EVENT,             // InternalScriptErrorEvent
   NS_SCROLLPORT_EVENT,               // InternalScrollPortEvent
   NS_SCROLLAREA_EVENT,               // InternalScrollAreaEvent
   NS_FORM_EVENT,                     // InternalFormEvent
@@ -63,7 +62,7 @@ enum nsEventStructType
   NS_CONTENT_COMMAND_EVENT,          // WidgetContentCommandEvent
   NS_PLUGIN_EVENT,                   // WidgetPluginEvent
 
-  // MutationEvent.h (dom/events)
+  // InternalMutationEvent.h (dom/events)
   NS_MUTATION_EVENT,                 // InternalMutationEvent
 
   // Follwoing struct type values are ugly.  They indicate other struct type
@@ -1055,18 +1054,18 @@ class InternalUIEvent : public WidgetGUIEvent
 {
 protected:
   InternalUIEvent(bool aIsTrusted, uint32_t aMessage,
-                  nsEventStructType aStructType, int32_t aDetail) :
-    WidgetGUIEvent(aIsTrusted, aMessage, nullptr, aStructType),
-    detail(aDetail)
+                  nsEventStructType aStructType)
+    : WidgetGUIEvent(aIsTrusted, aMessage, nullptr, aStructType)
+    , detail(0)
   {
   }
 
 public:
   virtual InternalUIEvent* AsUIEvent() MOZ_OVERRIDE { return this; }
 
-  InternalUIEvent(bool aIsTrusted, uint32_t aMessage, int32_t aDetail) :
-    WidgetGUIEvent(aIsTrusted, aMessage, nullptr, NS_UI_EVENT),
-    detail(aDetail)
+  InternalUIEvent(bool aIsTrusted, uint32_t aMessage)
+    : WidgetGUIEvent(aIsTrusted, aMessage, nullptr, NS_UI_EVENT)
+    , detail(0)
   {
   }
 
@@ -1075,7 +1074,7 @@ public:
     MOZ_ASSERT(eventStructType == NS_UI_EVENT ||
                  eventStructType == NS_SMIL_TIME_EVENT,
                "Duplicate() must be overridden by sub class");
-    InternalUIEvent* result = new InternalUIEvent(false, message, detail);
+    InternalUIEvent* result = new InternalUIEvent(false, message);
     result->AssignUIEventData(*this, true);
     result->mFlags = mFlags;
     return result;
@@ -1087,7 +1086,7 @@ public:
   {
     AssignGUIEventData(aEvent, aCopyTargets);
 
-    // detail must have been initialized with the constructor.
+    detail = aEvent.detail;
   }
 };
 

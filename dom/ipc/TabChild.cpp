@@ -38,6 +38,7 @@
 #ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
 #endif
+#include "nsFilePickerProxy.h"
 #include "mozilla/dom/Element.h"
 #include "nsIBaseWindow.h"
 #include "nsICachedFileDescriptorListener.h"
@@ -74,6 +75,8 @@
 #include "ipc/nsGUIEventIPC.h"
 #include "mozilla/gfx/Matrix.h"
 
+#include "nsColorPickerProxy.h"
+
 #ifdef DEBUG
 #include "PCOMContentPermissionRequestChild.h"
 #endif /* DEBUG */
@@ -100,6 +103,8 @@ static const char BROWSER_ZOOM_TO_RECT[] = "browser-zoom-to-rect";
 static const char BEFORE_FIRST_PAINT[] = "before-first-paint";
 
 static bool sCpowsEnabled = false;
+static int32_t sActiveDurationMs = 10;
+static bool sActiveDurationMsSet = false;
 
 NS_IMETHODIMP
 ContentListener::HandleEvent(nsIDOMEvent* aEvent)
@@ -291,6 +296,12 @@ TabChild::TabChild(ContentChild* aManager, const TabContext& aContext, uint32_t 
   , mContextMenuHandled(false)
   , mWaitingTouchListeners(false)
 {
+  if (!sActiveDurationMsSet) {
+    Preferences::AddIntVarCache(&sActiveDurationMs,
+                                "ui.touch_activation.duration_ms",
+                                sActiveDurationMs);
+    sActiveDurationMsSet = true;
+  }
 }
 
 NS_IMETHODIMP
@@ -305,6 +316,32 @@ TabChild::HandleEvent(nsIDOMEvent* aEvent)
   }
 
   return NS_OK;
+}
+
+void
+TabChild::InitializeRootMetrics()
+{
+  // Calculate a really simple resolution that we probably won't
+  // be keeping, as well as putting the scroll offset back to
+  // the top-left of the page.
+  mLastRootMetrics.mViewport = CSSRect(CSSPoint(), kDefaultViewportSize);
+  mLastRootMetrics.mCompositionBounds = ScreenIntRect(ScreenIntPoint(), mInnerSize);
+  mLastRootMetrics.mZoom = mLastRootMetrics.CalculateIntrinsicScale();
+  mLastRootMetrics.mDevPixelsPerCSSPixel = mWidget->GetDefaultScale();
+  // We use ScreenToLayerScale(1) below in order to turn the
+  // async zoom amount into the gecko zoom amount.
+  mLastRootMetrics.mCumulativeResolution =
+    mLastRootMetrics.mZoom / mLastRootMetrics.mDevPixelsPerCSSPixel * ScreenToLayerScale(1);
+  // This is the root layer, so the cumulative resolution is the same
+  // as the resolution.
+  mLastRootMetrics.mResolution = mLastRootMetrics.mCumulativeResolution / LayoutDeviceToParentLayerScale(1);
+  mLastRootMetrics.mScrollOffset = CSSPoint(0, 0);
+}
+
+bool
+TabChild::HasValidInnerSize()
+{
+  return (mInnerSize.width != 0) && (mInnerSize.height != 0);
 }
 
 NS_IMETHODIMP
@@ -343,26 +380,16 @@ TabChild::Observe(nsISupports *aSubject,
         // page.
         SetCSSViewport(kDefaultViewportSize);
 
-        // Calculate a really simple resolution that we probably won't
-        // be keeping, as well as putting the scroll offset back to
-        // the top-left of the page.
-        mLastRootMetrics.mViewport = CSSRect(CSSPoint(), kDefaultViewportSize);
-        mLastRootMetrics.mCompositionBounds = ScreenIntRect(ScreenIntPoint(), mInnerSize);
-        mLastRootMetrics.mZoom = mLastRootMetrics.CalculateIntrinsicScale();
-        mLastRootMetrics.mDevPixelsPerCSSPixel = mWidget->GetDefaultScale();
-        // We use ScreenToLayerScale(1) below in order to turn the
-        // async zoom amount into the gecko zoom amount.
-        mLastRootMetrics.mCumulativeResolution =
-          mLastRootMetrics.mZoom / mLastRootMetrics.mDevPixelsPerCSSPixel * ScreenToLayerScale(1);
-        // This is the root layer, so the cumulative resolution is the same
-        // as the resolution.
-        mLastRootMetrics.mResolution = mLastRootMetrics.mCumulativeResolution / LayoutDeviceToParentLayerScale(1);
-        mLastRootMetrics.mScrollOffset = CSSPoint(0, 0);
-
-        utils->SetResolution(mLastRootMetrics.mResolution.scale,
-                             mLastRootMetrics.mResolution.scale);
-
-        HandlePossibleViewportChange();
+        // In some cases before-first-paint gets called before
+        // RecvUpdateDimensions is called and therefore before we have an
+        // mInnerSize value set. In such cases defer initializing the viewport
+        // until we we get an inner size.
+        if (HasValidInnerSize()) {
+          InitializeRootMetrics();
+          utils->SetResolution(mLastRootMetrics.mResolution.scale,
+                               mLastRootMetrics.mResolution.scale);
+          HandlePossibleViewportChange();
+        }
       }
     }
   }
@@ -519,10 +546,12 @@ TabChild::HandlePossibleViewportChange()
   nsViewportInfo viewportInfo = nsContentUtils::GetViewportInfo(document, mInnerSize);
   uint32_t presShellId;
   ViewID viewId;
-  if (APZCCallbackHelper::GetScrollIdentifiers(document->GetDocumentElement(),
-                                               &presShellId, &viewId)) {
+  bool scrollIdentifiersValid = APZCCallbackHelper::GetScrollIdentifiers(
+        document->GetDocumentElement(), &presShellId, &viewId);
+  if (scrollIdentifiersValid) {
     ZoomConstraints constraints(
       viewportInfo.IsZoomAllowed(),
+      viewportInfo.IsDoubleTapZoomAllowed(),
       viewportInfo.GetMinZoom(),
       viewportInfo.GetMaxZoom());
     SendUpdateZoomConstraints(presShellId,
@@ -530,7 +559,6 @@ TabChild::HandlePossibleViewportChange()
                               /* isRoot = */ true,
                               constraints);
   }
-
 
   float screenW = mInnerSize.width;
   float screenH = mInnerSize.height;
@@ -634,6 +662,25 @@ TabChild::HandlePossibleViewportChange()
   // Force a repaint with these metrics. This, among other things, sets the
   // displayport, so we start with async painting.
   ProcessUpdateFrame(metrics);
+
+  if (viewportInfo.IsZoomAllowed() && scrollIdentifiersValid) {
+    // If the CSS viewport is narrower than the screen (i.e. width <= device-width)
+    // then we disable double-tap-to-zoom behaviour.
+    bool allowDoubleTapZoom = (viewport.width > screenW / metrics.mDevPixelsPerCSSPixel.scale);
+    if (allowDoubleTapZoom != viewportInfo.IsDoubleTapZoomAllowed()) {
+      viewportInfo.SetAllowDoubleTapZoom(allowDoubleTapZoom);
+
+      ZoomConstraints constraints(
+        viewportInfo.IsZoomAllowed(),
+        viewportInfo.IsDoubleTapZoomAllowed(),
+        viewportInfo.GetMinZoom(),
+        viewportInfo.GetMaxZoom());
+      SendUpdateZoomConstraints(presShellId,
+                                viewId,
+                                /* isRoot = */ true,
+                                constraints);
+    }
+  }
 }
 
 nsresult
@@ -696,6 +743,8 @@ TabChild::Init()
   MOZ_ASSERT(loadContext);
   loadContext->SetPrivateBrowsing(
       mChromeFlags & nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW);
+  loadContext->SetRemoteTabs(
+      mChromeFlags & nsIWebBrowserChrome::CHROME_REMOTE_WINDOW);
 
   nsCOMPtr<nsIWebProgress> webProgress = do_GetInterface(docShell);
   NS_ENSURE_TRUE(webProgress, NS_ERROR_FAILURE);
@@ -1447,6 +1496,9 @@ TabChild::RecvUpdateDimensions(const nsRect& rect, const nsIntSize& size, const 
     mOuterRect.width = rect.width;
     mOuterRect.height = rect.height;
 
+    bool initialSizing = !HasValidInnerSize()
+                      && (size.width != 0 && size.height != 0);
+
     mOrientation = orientation;
     mInnerSize = ScreenIntSize::FromUnknownSize(
       gfx::IntSize(size.width, size.height));
@@ -1456,6 +1508,14 @@ TabChild::RecvUpdateDimensions(const nsRect& rect, const nsIntSize& size, const 
     nsCOMPtr<nsIBaseWindow> baseWin = do_QueryInterface(mWebNav);
     baseWin->SetPositionAndSize(0, 0, size.width, size.height,
                                 true);
+
+    if (initialSizing && mContentDocumentIsDisplayed) {
+      // If this is the first time we're getting a valid mInnerSize, and the
+      // before-first-paint event has already been handled, then we need to set
+      // up our default viewport here. See the corresponding call to
+      // InitializeRootMetrics in the before-first-paint handler.
+      InitializeRootMetrics();
+    }
 
     HandlePossibleViewportChange();
 
@@ -1616,12 +1676,20 @@ TabChild::RecvHandleSingleTap(const CSSIntPoint& aPoint, const ScrollableLayerGu
 
   LayoutDevicePoint currentPoint = CSSPoint(aPoint) * mWidget->GetDefaultScale();;
 
-  int time = 0;
-  DispatchSynthesizedMouseEvent(NS_MOUSE_MOVE, time, currentPoint);
-  DispatchSynthesizedMouseEvent(NS_MOUSE_BUTTON_DOWN, time, currentPoint);
-  DispatchSynthesizedMouseEvent(NS_MOUSE_BUTTON_UP, time, currentPoint);
-
+  MessageLoop::current()->PostDelayedTask(
+    FROM_HERE,
+    NewRunnableMethod(this, &TabChild::FireSingleTapEvent, currentPoint),
+    sActiveDurationMs);
   return true;
+}
+
+void
+TabChild::FireSingleTapEvent(LayoutDevicePoint aPoint)
+{
+  int time = 0;
+  DispatchSynthesizedMouseEvent(NS_MOUSE_MOVE, time, aPoint);
+  DispatchSynthesizedMouseEvent(NS_MOUSE_BUTTON_DOWN, time, aPoint);
+  DispatchSynthesizedMouseEvent(NS_MOUSE_BUTTON_UP, time, aPoint);
 }
 
 bool
@@ -2047,6 +2115,21 @@ TabChild::RecvPDocumentRendererConstructor(PDocumentRendererChild* actor,
     return PDocumentRendererChild::Send__delete__(actor, renderSize, data);
 }
 
+PColorPickerChild*
+TabChild::AllocPColorPickerChild(const nsString&, const nsString&)
+{
+  NS_RUNTIMEABORT("unused");
+  return nullptr;
+}
+
+bool
+TabChild::DeallocPColorPickerChild(PColorPickerChild* aColorPicker)
+{
+  nsColorPickerProxy* picker = static_cast<nsColorPickerProxy*>(aColorPicker);
+  NS_RELEASE(picker);
+  return true;
+}
+
 PContentDialogChild*
 TabChild::AllocPContentDialogChild(const uint32_t&,
                                    const nsCString&,
@@ -2082,6 +2165,21 @@ TabChild::DeallocPContentPermissionRequestChild(PContentPermissionRequestChild* 
 #endif /* DEBUG */
     child->IPDLRelease();
     return true;
+}
+
+PFilePickerChild*
+TabChild::AllocPFilePickerChild(const nsString&, const int16_t&)
+{
+  NS_RUNTIMEABORT("unused");
+  return nullptr;
+}
+
+bool
+TabChild::DeallocPFilePickerChild(PFilePickerChild* actor)
+{
+  nsFilePickerProxy* filePicker = static_cast<nsFilePickerProxy*>(actor);
+  NS_RELEASE(filePicker);
+  return true;
 }
 
 bool
@@ -2372,11 +2470,7 @@ TabChild::GetDefaultScale(double* aScale)
 void
 TabChild::NotifyPainted()
 {
-    // Normally we only need to notify the content process once, but with BasicCompositor
-    // we need to notify content every change so that it can compute an invalidation
-    // region and send that to the widget.
-    if (UseDirectCompositor() &&
-        (!mNotified || mTextureFactoryIdentifier.mParentBackend == LayersBackend::LAYERS_BASIC)) {
+    if (UseDirectCompositor() && !mNotified) {
         mRemoteFrame->SendNotifyCompositorTransaction();
         mNotified = true;
     }
@@ -2482,12 +2576,12 @@ TabChild::DoSendBlockingMessage(JSContext* aCx,
     }
   }
   if (aIsSync) {
-    return SendSyncMessage(nsString(aMessage), data, cpows, aPrincipal,
-                           aJSONRetVal);
+    return SendSyncMessage(PromiseFlatString(aMessage), data, cpows,
+                           aPrincipal, aJSONRetVal);
   }
 
-  return CallRpcMessage(nsString(aMessage), data, cpows, aPrincipal,
-                        aJSONRetVal);
+  return CallRpcMessage(PromiseFlatString(aMessage), data, cpows,
+                        aPrincipal, aJSONRetVal);
 }
 
 bool
@@ -2508,7 +2602,7 @@ TabChild::DoSendAsyncMessage(JSContext* aCx,
       return false;
     }
   }
-  return SendAsyncMessage(nsString(aMessage), data, cpows,
+  return SendAsyncMessage(PromiseFlatString(aMessage), data, cpows,
                           aPrincipal);
 }
 

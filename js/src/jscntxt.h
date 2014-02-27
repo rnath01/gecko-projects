@@ -276,8 +276,9 @@ struct ThreadSafeContext : ContextFriendFields,
     }
 
     // Accessors for immutable runtime data.
-    JSAtomState &names() { return runtime_->atomState; }
-    StaticStrings &staticStrings() { return runtime_->staticStrings; }
+    JSAtomState &names() { return *runtime_->commonNames; }
+    StaticStrings &staticStrings() { return *runtime_->staticStrings; }
+    AtomSet &permanentAtoms() { return *runtime_->permanentAtoms; }
     const JS::AsmJSCacheOps &asmJSCacheOps() { return runtime_->asmJSCacheOps; }
     PropertyName *emptyString() { return runtime_->emptyString; }
     FreeOp *defaultFreeOp() { return runtime_->defaultFreeOp(); }
@@ -411,6 +412,7 @@ struct JSContext : public js::ExclusiveContext,
     js::PerThreadData &mainThread() const { return runtime()->mainThread; }
 
     friend class js::ExclusiveContext;
+    friend class JS::AutoSaveExceptionState;
 
   private:
     /* Exception state -- the exception member is a GC root by definition. */
@@ -554,16 +556,6 @@ struct JSContext : public js::ExclusiveContext,
     JSGenerator *innermostGenerator() const { return innermostGenerator_; }
     void enterGenerator(JSGenerator *gen);
     void leaveGenerator(JSGenerator *gen);
-
-    void *onOutOfMemory(void *p, size_t nbytes) {
-        return runtime()->onOutOfMemory(p, nbytes, this);
-    }
-    void updateMallocCounter(size_t nbytes) {
-        runtime()->updateMallocCounter(zone(), nbytes);
-    }
-    void reportAllocationOverflow() {
-        js_ReportAllocationOverflow(this);
-    }
 
     bool isExceptionPending() {
         return throwing;
@@ -1042,6 +1034,9 @@ bool intrinsic_NewParallelArray(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_ForkJoinGetSlice(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_InParallelSection(JSContext *cx, unsigned argc, Value *vp);
 
+bool intrinsic_ObjectIsTransparentTypedObject(JSContext *cx, unsigned argc, Value *vp);
+bool intrinsic_ObjectIsOpaqueTypedObject(JSContext *cx, unsigned argc, Value *vp);
+
 class AutoLockForExclusiveAccess
 {
 #ifdef JS_THREADSAFE
@@ -1089,69 +1084,6 @@ class AutoLockForExclusiveAccess
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     }
     ~AutoLockForExclusiveAccess() {
-        // An empty destructor is needed to avoid warnings from clang about
-        // unused local variables of this type.
-    }
-#endif // JS_THREADSAFE
-
-    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
-};
-
-class AutoLockForCompilation
-{
-#ifdef JS_THREADSAFE
-    JSRuntime *runtime;
-
-    void init(JSRuntime *rt) {
-        runtime = rt;
-        if (runtime->numCompilationThreads) {
-            runtime->assertCanLock(CompilationLock);
-            PR_Lock(runtime->compilationLock);
-#ifdef DEBUG
-            runtime->compilationLockOwner = PR_GetCurrentThread();
-#endif
-        } else {
-#ifdef DEBUG
-            JS_ASSERT(!runtime->mainThreadHasCompilationLock);
-            runtime->mainThreadHasCompilationLock = true;
-#endif
-        }
-    }
-
-  public:
-    AutoLockForCompilation(ExclusiveContext *cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM) {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        if (cx->isJSContext())
-            init(cx->asJSContext()->runtime());
-        else
-            runtime = nullptr;
-    }
-    AutoLockForCompilation(jit::CompileCompartment *compartment MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
-    ~AutoLockForCompilation() {
-        if (runtime) {
-            if (runtime->numCompilationThreads) {
-                JS_ASSERT(runtime->compilationLockOwner == PR_GetCurrentThread());
-#ifdef DEBUG
-                runtime->compilationLockOwner = nullptr;
-#endif
-                PR_Unlock(runtime->compilationLock);
-            } else {
-#ifdef DEBUG
-                JS_ASSERT(runtime->mainThreadHasCompilationLock);
-                runtime->mainThreadHasCompilationLock = false;
-#endif
-            }
-        }
-    }
-#else // JS_THREADSAFE
-  public:
-    AutoLockForCompilation(ExclusiveContext *cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM) {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-    }
-    AutoLockForCompilation(jit::CompileCompartment *compartment MOZ_GUARD_OBJECT_NOTIFIER_PARAM) {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-    }
-    ~AutoLockForCompilation() {
         // An empty destructor is needed to avoid warnings from clang about
         // unused local variables of this type.
     }

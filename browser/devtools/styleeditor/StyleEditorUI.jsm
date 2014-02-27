@@ -16,7 +16,7 @@ Cu.import("resource://gre/modules/PluralForm.jsm");
 Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
 let promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js").Promise;
-Cu.import("resource:///modules/devtools/shared/event-emitter.js");
+Cu.import("resource://gre/modules/devtools/event-emitter.js");
 Cu.import("resource:///modules/devtools/gDevTools.jsm");
 Cu.import("resource:///modules/devtools/StyleEditorUtil.jsm");
 Cu.import("resource:///modules/devtools/SplitView.jsm");
@@ -205,7 +205,8 @@ StyleEditorUI.prototype = {
     // remember saved file locations
     for (let editor of this.editors) {
       if (editor.savedFile) {
-        this.savedLocations[editor.styleSheet.href] = editor.savedFile;
+        let identifier = this.getStyleSheetIdentifier(editor.styleSheet);
+        this.savedLocations[identifier] = editor.savedFile;
       }
     }
 
@@ -257,7 +258,8 @@ StyleEditorUI.prototype = {
    */
   _addStyleSheetEditor: function(styleSheet, file, isNew) {
     // recall location of saved file for this sheet after page reload
-    let savedFile = this.savedLocations[styleSheet.href];
+    let identifier = this.getStyleSheetIdentifier(styleSheet);
+    let savedFile = this.savedLocations[identifier];
     if (savedFile && !file) {
       file = savedFile;
     }
@@ -524,6 +526,18 @@ StyleEditorUI.prototype = {
     });
 
     return deferred.promise;
+  },
+
+  /**
+   * Returns an identifier for the given style sheet.
+   *
+   * @param {StyleSheet} aStyleSheet
+   *        The style sheet to be identified.
+   */
+  getStyleSheetIdentifier: function (aStyleSheet) {
+    // Identify inline style sheets by their host page URI and index at the page.
+    return aStyleSheet.href ? aStyleSheet.href :
+            "inline-" + aStyleSheet.styleSheetIndex + "-at-" + aStyleSheet.nodeHref;
   },
 
   /**

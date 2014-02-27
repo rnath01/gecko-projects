@@ -107,7 +107,8 @@ gTests.push({
     let autocompletePopup = document.getElementById("urlbar-autocomplete-scroll");
     yield waitForEvent(autocompletePopup, "transitionend");
 
-    SelectionHelperUI.attachEditSession(ChromeSelectionHandler, editCoords.x, editCoords.y);
+    SelectionHelperUI.attachEditSession(ChromeSelectionHandler, editCoords.x,
+        editCoords.y, edit);
     ok(SelectionHelperUI.isSelectionUIVisible, "selection enabled");
 
     let selection = edit.QueryInterface(Components.interfaces.nsIDOMXULTextBoxElement)
@@ -136,7 +137,8 @@ gTests.push({
     edit.value = "wikipedia.org";
     edit.select();
     let editCoords = logicalCoordsForElement(edit);
-    SelectionHelperUI.attachEditSession(ChromeSelectionHandler, editCoords.x, editCoords.y);
+    SelectionHelperUI.attachEditSession(ChromeSelectionHandler, editCoords.x,
+        editCoords.y, edit);
     edit.blur();
     ok(!SelectionHelperUI.isSelectionUIVisible, "selection no longer enabled");
     clearSelection(edit);
@@ -225,6 +227,59 @@ gTests.push({
     yield waitForCondition(function () {
       return !SelectionHelperUI.isSelectionUIVisible;
     });
+  }
+});
+
+gTests.push({
+  desc: "Bug 957646 - Selection monocles sometimes don't display when tapping" +
+        " text ion the nav bar.",
+  run: function() {
+    yield showNavBar();
+
+    let edit = document.getElementById("urlbar-edit");
+    edit.value = "about:mozilla";
+
+    let editRectangle = edit.getBoundingClientRect();
+
+    // Tap outside the input but close enough for fluffing to take effect.
+    sendTap(window, editRectangle.left + 50, editRectangle.top - 2);
+
+    yield waitForCondition(function () {
+      return SelectionHelperUI.isSelectionUIVisible;
+    });
+  }
+});
+
+gTests.push({
+  desc: "Bug 972428 - grippers not appearing under the URL field when adding " +
+        "text.",
+  run: function() {
+    let inputField = document.getElementById("urlbar-edit").inputField;
+    let inputFieldRectangle = inputField.getBoundingClientRect();
+
+    let chromeHandlerSpy = spyOnMethod(ChromeSelectionHandler, "msgHandler");
+
+    // Reset URL to empty string
+    inputField.value = "";
+    inputField.blur();
+
+    // Activate URL input
+    sendTap(window, inputFieldRectangle.left + 50, inputFieldRectangle.top + 5);
+
+    // Wait until ChromeSelectionHandler tries to attach selection
+    yield waitForCondition(() => chromeHandlerSpy.argsForCall.some(
+        (args) => args[0] == "Browser:SelectionAttach"));
+
+    ok(!SelectHelperUI.isSelectionUIVisible && !SelectHelperUI.isCaretUIVisible,
+        "Neither CaretUI nor SelectionUI is visible on empty input.");
+
+    inputField.value = "Test text";
+
+    sendTap(window, inputFieldRectangle.left + 10, inputFieldRectangle.top + 5);
+
+    yield waitForCondition(() => SelectionHelperUI.isCaretUIVisible);
+
+    chromeHandlerSpy.restore();
   }
 });
 

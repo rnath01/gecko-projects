@@ -322,23 +322,6 @@ TelephonyProvider.prototype = {
     }
   },
 
-  _validateNumber: function(aNumber) {
-    // note: isPlainPhoneNumber also accepts USSD and SS numbers
-    if (gPhoneNumberUtils.isPlainPhoneNumber(aNumber)) {
-      return true;
-    }
-
-    let errorMsg = RIL.RIL_CALL_FAILCAUSE_TO_GECKO_CALL_ERROR[RIL.CALL_FAIL_UNOBTAINABLE_NUMBER];
-    let currentThread = Services.tm.currentThread;
-    currentThread.dispatch(this.notifyCallError.bind(this, -1, errorMsg),
-                           Ci.nsIThread.DISPATCH_NORMAL);
-    if (DEBUG) {
-      debug("Number '" + aNumber + "' doesn't seem to be a viable number. Drop.");
-    }
-
-    return false;
-  },
-
   _updateDebugFlag: function() {
     try {
       DEBUG = RIL.DEBUG_RIL ||
@@ -417,19 +400,44 @@ TelephonyProvider.prototype = {
     });
   },
 
-  dial: function(aClientId, aNumber, aIsEmergency) {
+  isDialing: false,
+  dial: function(aClientId, aNumber, aIsEmergency, aTelephonyCallback) {
     if (DEBUG) debug("Dialing " + (aIsEmergency ? "emergency " : "") + aNumber);
+
+    if (this.isDialing) {
+      if (DEBUG) debug("Already has a dialing call. Drop.");
+      aTelephonyCallback.notifyDialError("InvalidStateError");
+      return;
+    }
+
     // we don't try to be too clever here, as the phone is probably in the
     // locked state. Let's just check if it's a number without normalizing
     if (!aIsEmergency) {
       aNumber = gPhoneNumberUtils.normalize(aNumber);
     }
-    if (this._validateNumber(aNumber)) {
-      this._getClient(aClientId).sendWorkerMessage("dial", {
-        number: aNumber,
-        isDialEmergency: aIsEmergency
-      });
+
+    // Validate the number.
+    if (!gPhoneNumberUtils.isPlainPhoneNumber(aNumber)) {
+      // Note: isPlainPhoneNumber also accepts USSD and SS numbers
+      if (DEBUG) debug("Number '" + aNumber + "' is not viable. Drop.");
+      let errorMsg = RIL.RIL_CALL_FAILCAUSE_TO_GECKO_CALL_ERROR[RIL.CALL_FAIL_UNOBTAINABLE_NUMBER];
+      aTelephonyCallback.notifyDialError(errorMsg);
+      return;
     }
+
+    this.isDialing = true;
+    this._getClient(aClientId).sendWorkerMessage("dial", {
+      number: aNumber,
+      isDialEmergency: aIsEmergency
+    }, (function(response) {
+      this.isDialing = false;
+      if (response.success) {
+        aTelephonyCallback.notifyDialSuccess();
+      } else {
+        aTelephonyCallback.notifyDialError(response.errorMsg);
+      }
+      return false;
+    }).bind(this));
   },
 
   hangUp: function(aClientId, aCallIndex) {

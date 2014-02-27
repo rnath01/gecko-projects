@@ -126,9 +126,6 @@
 using namespace mozilla;
 using namespace mozilla::ipc;
 
-// Buffer file writes in 32kb chunks
-#define BUFFERED_OUTPUT_SIZE (1024 * 32)
-
 // Download Folder location constants
 #define NS_PREF_DOWNLOAD_DIR        "browser.download.dir"
 #define NS_PREF_DOWNLOAD_FOLDERLIST "browser.download.folderList"
@@ -432,14 +429,12 @@ static nsDefaultMimeTypeEntry defaultMimeEntries [] =
   { "application/xhtml+xml", "xhtml" },
   { "application/xhtml+xml", "xht" },
   { TEXT_PLAIN, "txt" },
-#ifdef MOZ_OGG
   { VIDEO_OGG, "ogv" },
   { VIDEO_OGG, "ogg" },
   { APPLICATION_OGG, "ogg" },
   { AUDIO_OGG, "oga" },
 #ifdef MOZ_OPUS
   { AUDIO_OGG, "opus" },
-#endif
 #endif
 #ifdef MOZ_WEBM
   { VIDEO_WEBM, "webm" },
@@ -670,6 +665,8 @@ NS_IMETHODIMP nsExternalHelperAppService::DoContent(const nsACString& aMimeConte
   nsAutoString fileName;
   nsAutoCString fileExtension;
   uint32_t reason = nsIHelperAppLauncherDialog::REASON_CANTHANDLE;
+  uint32_t contentDisposition = -1;
+
   nsresult rv;
 
   // Get the file extension and name that we will need later
@@ -679,7 +676,10 @@ NS_IMETHODIMP nsExternalHelperAppService::DoContent(const nsACString& aMimeConte
   if (channel) {
     channel->GetURI(getter_AddRefs(uri));
     channel->GetContentLength(&contentLength);
+    channel->GetContentDisposition(&contentDisposition);
+    channel->GetContentDispositionFilename(fileName);
   }
+  
   if (XRE_GetProcessType() == GeckoProcessType_Content) {
     nsCOMPtr<nsIDOMWindow> window = do_GetInterface(aWindowContext);
     NS_ENSURE_STATE(window);
@@ -696,8 +696,9 @@ NS_IMETHODIMP nsExternalHelperAppService::DoContent(const nsACString& aMimeConte
       return NS_ERROR_FAILURE;
 
     nsCString disp;
-    if (channel)
+    if (channel) {
       channel->GetContentDispositionHeader(disp);
+    }
 
     nsCOMPtr<nsIURI> referrer;
     rv = NS_GetReferrerFromChannel(channel, getter_AddRefs(referrer));
@@ -713,8 +714,9 @@ NS_IMETHODIMP nsExternalHelperAppService::DoContent(const nsACString& aMimeConte
     mozilla::dom::PExternalHelperAppChild *pc =
       child->SendPExternalHelperAppConstructor(uriParams,
                                                nsCString(aMimeContentType),
-                                               disp, aForceSave, contentLength,
-                                               referrerParams,
+                                               disp, contentDisposition,
+                                               fileName, aForceSave, 
+                                               contentLength, referrerParams,
                                                mozilla::dom::TabChild::GetFrom(window));
     ExternalHelperAppChild *childListener = static_cast<ExternalHelperAppChild *>(pc);
 

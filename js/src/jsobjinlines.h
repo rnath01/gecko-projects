@@ -400,9 +400,6 @@ JSObject::clearType(JSContext *cx, js::HandleObject obj)
 inline void
 JSObject::setType(js::types::TypeObject *newType)
 {
-    // Note: This is usually called for newly created objects that haven't
-    // escaped to script yet, so don't require that the compilation lock be
-    // held here.
     JS_ASSERT(newType);
     JS_ASSERT(!hasSingletonType());
     type_ = newType;
@@ -511,8 +508,13 @@ JSObject::create(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::Initi
 
     obj->shape_.init(shape);
     obj->type_.init(type);
-    if (extantSlots)
+    if (extantSlots) {
+#ifdef JSGC_GENERATIONAL
+        if (cx->isJSContext())
+            cx->asJSContext()->runtime()->gcNursery.notifyInitialSlots(obj, extantSlots);
+#endif
         obj->slots = extantSlots;
+    }
     obj->elements = js::emptyObjectElements;
 
     if (clasp->hasPrivate())
@@ -915,6 +917,17 @@ NewBuiltinClassInstance(ExclusiveContext *cx, const Class *clasp, NewObjectKind 
     return NewBuiltinClassInstance(cx, clasp, allocKind, newKind);
 }
 
+template<typename T>
+inline T *
+NewBuiltinClassInstance(ExclusiveContext *cx, NewObjectKind newKind = GenericObject)
+{
+    JSObject *obj = NewBuiltinClassInstance(cx, &T::class_, newKind);
+    if (!obj)
+        return nullptr;
+
+    return &obj->as<T>();
+}
+
 // Used to optimize calls to (new Object())
 bool
 NewObjectScriptedCall(JSContext *cx, MutableHandleObject obj);
@@ -994,11 +1007,8 @@ DefineConstructorAndPrototype(JSContext *cx, Handle<GlobalObject*> global,
     JS_ASSERT(!global->nativeLookup(cx, id));
 
     /* Set these first in case AddTypePropertyId looks for this class. */
-    {
-        AutoLockForCompilation lock(cx);
-        global->setConstructor(key, ObjectValue(*ctor));
-        global->setPrototype(key, ObjectValue(*proto));
-    }
+    global->setConstructor(key, ObjectValue(*ctor));
+    global->setPrototype(key, ObjectValue(*proto));
     global->setConstructorPropertySlot(key, ObjectValue(*ctor));
 
     if (!global->addDataProperty(cx, id, GlobalObject::constructorPropertySlot(key), 0)) {
@@ -1024,7 +1034,8 @@ ObjectClassIs(HandleObject obj, ESClassValue classValue, JSContext *cx)
       case ESClass_String: return obj->is<StringObject>();
       case ESClass_Boolean: return obj->is<BooleanObject>();
       case ESClass_RegExp: return obj->is<RegExpObject>();
-      case ESClass_ArrayBuffer: return obj->is<ArrayBufferObject>();
+      case ESClass_ArrayBuffer:
+        return obj->is<ArrayBufferObject>() || obj->is<SharedArrayBufferObject>();
       case ESClass_Date: return obj->is<DateObject>();
     }
     MOZ_ASSUME_UNREACHABLE("bad classValue");
@@ -1085,11 +1096,10 @@ NewObjectMetadata(ExclusiveContext *cxArg, JSObject **pmetadata)
 inline bool
 DefineNativeProperty(ExclusiveContext *cx, HandleObject obj, PropertyName *name, HandleValue value,
                      PropertyOp getter, StrictPropertyOp setter, unsigned attrs,
-                     unsigned flags, int shortid, unsigned defineHow = 0)
+                     unsigned flags, unsigned defineHow = 0)
 {
     Rooted<jsid> id(cx, NameToId(name));
-    return DefineNativeProperty(cx, obj, id, value, getter, setter, attrs, flags,
-                                shortid, defineHow);
+    return DefineNativeProperty(cx, obj, id, value, getter, setter, attrs, flags, defineHow);
 }
 
 inline bool

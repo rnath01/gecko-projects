@@ -6,7 +6,6 @@
 package org.mozilla.gecko.home;
 
 import org.mozilla.gecko.EditBookmarkDialog;
-import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.GeckoProfile;
@@ -15,14 +14,13 @@ import org.mozilla.gecko.ReaderModeUtils;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.db.BrowserContract.Combined;
 import org.mozilla.gecko.db.BrowserDB;
-import org.mozilla.gecko.home.HomeContextMenuInfo;
+import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.util.UiAsyncTask;
 
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.support.v4.app.Fragment;
 import android.util.Log;
@@ -117,7 +115,7 @@ abstract class HomeFragment extends Fragment {
         }
 
         final HomeContextMenuInfo info = (HomeContextMenuInfo) menuInfo;
-        final Context context = getActivity().getApplicationContext();
+        final Context context = getActivity();
 
         final int itemId = item.getItemId();
         if (itemId == R.id.home_share) {
@@ -160,7 +158,7 @@ abstract class HomeFragment extends Fragment {
 
         if (itemId == R.id.home_edit_bookmark) {
             // UI Dialog associates to the activity context, not the applications'.
-            new EditBookmarkDialog(getActivity()).show(info.url);
+            new EditBookmarkDialog(context).show(info.url);
             return true;
         }
 
@@ -244,18 +242,17 @@ abstract class HomeFragment extends Fragment {
             if (mInReadingList) {
                 GeckoEvent e = GeckoEvent.createBroadcastEvent("Reader:Remove", mUrl);
                 GeckoAppShell.sendEventToGecko(e);
-
-                int count = BrowserDB.getReadingListCount(cr);
-                e = GeckoEvent.createBroadcastEvent("Reader:ListCountUpdated", Integer.toString(count));
-                GeckoAppShell.sendEventToGecko(e);
             }
             return null;
         }
 
         @Override
         public void onPostExecute(Void result) {
-            int messageId = mInReadingList ? R.string.reading_list_removed : R.string.bookmark_removed;
-            Toast.makeText(mContext, messageId, Toast.LENGTH_SHORT).show();
+            // The remove from reading list toast is handled in Reader:Removed,
+            // so handle only the bookmark removed toast here.
+            if (!mInReadingList) {
+                Toast.makeText(mContext, R.string.bookmark_removed, Toast.LENGTH_SHORT).show();
+            }
         }
     }
 

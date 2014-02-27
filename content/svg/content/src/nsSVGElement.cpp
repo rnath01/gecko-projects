@@ -14,7 +14,7 @@
 #include "nsICSSDeclaration.h"
 #include "nsIDocument.h"
 #include "nsIDOMMutationEvent.h"
-#include "mozilla/MutationEvent.h"
+#include "mozilla/InternalMutationEvent.h"
 #include "nsError.h"
 #include "nsIPresShell.h"
 #include "nsGkAtoms.h"
@@ -1520,10 +1520,6 @@ nsIAtom* nsSVGElement::GetEventNameForAttr(nsIAtom* aAttr)
     return nsGkAtoms::onSVGLoad;
   if (aAttr == nsGkAtoms::onunload)
     return nsGkAtoms::onSVGUnload;
-  if (aAttr == nsGkAtoms::onabort)
-    return nsGkAtoms::onSVGAbort;
-  if (aAttr == nsGkAtoms::onerror)
-    return nsGkAtoms::onSVGError;
   if (aAttr == nsGkAtoms::onresize)
     return nsGkAtoms::onSVGResize;
   if (aAttr == nsGkAtoms::onscroll)

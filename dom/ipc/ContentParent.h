@@ -327,6 +327,10 @@ private:
     AllocPImageBridgeParent(mozilla::ipc::Transport* aTransport,
                             base::ProcessId aOtherProcess) MOZ_OVERRIDE;
 
+    PBackgroundParent*
+    AllocPBackgroundParent(Transport* aTransport, ProcessId aOtherProcess)
+                           MOZ_OVERRIDE;
+
     virtual bool RecvGetProcessAttributes(uint64_t* aId,
                                           bool* aIsForApp,
                                           bool* aIsForBrowser) MOZ_OVERRIDE;
@@ -367,6 +371,8 @@ private:
             const OptionalURIParams& aUri,
             const nsCString& aMimeContentType,
             const nsCString& aContentDisposition,
+            const uint32_t& aContentDispositionHint,
+            const nsString& aContentDispositionFilename, 
             const bool& aForceSave,
             const int64_t& aContentLength,
             const OptionalURIParams& aReferrer,
@@ -426,18 +432,6 @@ private:
 
     virtual bool RecvSetURITitle(const URIParams& uri,
                                  const nsString& title) MOZ_OVERRIDE;
-
-    virtual bool RecvShowFilePicker(const int16_t& mode,
-                                    const int16_t& selectedType,
-                                    const bool& addToRecentDocs,
-                                    const nsString& title,
-                                    const nsString& defaultFile,
-                                    const nsString& defaultExtension,
-                                    const InfallibleTArray<nsString>& filters,
-                                    const InfallibleTArray<nsString>& filterNames,
-                                    InfallibleTArray<nsString>* files,
-                                    int16_t* retValue,
-                                    nsresult* result) MOZ_OVERRIDE;
 
     virtual bool RecvShowAlertNotification(const nsString& aImageUrl, const nsString& aTitle,
                                            const nsString& aText, const bool& aTextClickable,

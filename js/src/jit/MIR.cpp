@@ -26,7 +26,7 @@
 using namespace js;
 using namespace js::jit;
 
-using mozilla::DoublesAreIdentical;
+using mozilla::NumbersAreIdentical;
 using mozilla::IsFloat32Representable;
 using mozilla::Maybe;
 
@@ -43,7 +43,7 @@ CheckUsesAreFloat32Consumers(MInstruction *ins)
 {
     bool allConsumerUses = true;
     for (MUseDefIterator use(ins); allConsumerUses && use; use++)
-        allConsumerUses &= use.def()->canConsumeFloat32();
+        allConsumerUses &= use.def()->canConsumeFloat32(use.use());
     return allConsumerUses;
 }
 
@@ -571,7 +571,7 @@ void
 MLoadTypedArrayElement::printOpcode(FILE *fp) const
 {
     MDefinition::printOpcode(fp);
-    fprintf(fp, " %s", ScalarTypeRepresentation::typeName(arrayType()));
+    fprintf(fp, " %s", ScalarTypeDescr::typeName(arrayType()));
 }
 
 void
@@ -788,8 +788,6 @@ MStringLength::foldsTo(TempAllocator &alloc, bool useValueNumbers)
     if ((type() == MIRType_Int32) && (string()->isConstant())) {
         Value value = string()->toConstant()->value();
         JSAtom *atom = &value.toString()->asAtom();
-
-        AutoThreadSafeAccess ts(atom);
         return MConstant::New(alloc, Int32Value(atom->length()));
     }
 
@@ -1157,7 +1155,7 @@ IsConstant(MDefinition *def, double v)
     if (!def->isConstant())
         return false;
 
-    return DoublesAreIdentical(def->toConstant()->value().toNumber(), v);
+    return NumbersAreIdentical(def->toConstant()->value().toNumber(), v);
 }
 
 MDefinition *
@@ -2607,7 +2605,6 @@ MBeta::printOpcode(FILE *fp) const
 bool
 MNewObject::shouldUseVM() const
 {
-    AutoThreadSafeAccess ts(templateObject());
     return templateObject()->hasSingletonType() ||
            templateObject()->hasDynamicSlots();
 }
@@ -2926,7 +2923,7 @@ jit::ElementAccessIsDenseNative(MDefinition *obj, MDefinition *id)
 
 bool
 jit::ElementAccessIsTypedArray(MDefinition *obj, MDefinition *id,
-                               ScalarTypeRepresentation::Type *arrayType)
+                               ScalarTypeDescr::Type *arrayType)
 {
     if (obj->mightBeType(MIRType_String))
         return false;
@@ -2938,8 +2935,8 @@ jit::ElementAccessIsTypedArray(MDefinition *obj, MDefinition *id,
     if (!types)
         return false;
 
-    *arrayType = (ScalarTypeRepresentation::Type) types->getTypedArrayType();
-    return *arrayType != ScalarTypeRepresentation::TYPE_MAX;
+    *arrayType = (ScalarTypeDescr::Type) types->getTypedArrayType();
+    return *arrayType != ScalarTypeDescr::TYPE_MAX;
 }
 
 bool

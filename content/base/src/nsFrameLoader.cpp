@@ -53,6 +53,7 @@
 #include "nsIEditor.h"
 #include "nsIMozBrowserFrame.h"
 #include "nsIPermissionManager.h"
+#include "nsISHistory.h"
 
 #include "nsLayoutUtils.h"
 #include "nsView.h"
@@ -461,9 +462,9 @@ nsFrameLoader::ReallyStartLoadingInternal()
     if (!mRemoteBrowser) {
       if (!mPendingFrameSent) {
         nsCOMPtr<nsIObserverService> os = services::GetObserverService();
-        if (OwnerIsBrowserOrAppFrame() && os && !mRemoteBrowserInitialized) {
+        if (os && !mRemoteBrowserInitialized) {
           os->NotifyObservers(NS_ISUPPORTS_CAST(nsIFrameLoader*, this),
-                              "remote-browser-frame-pending", nullptr);
+                              "remote-browser-pending", nullptr);
           mPendingFrameSent = true;
         }
       }
@@ -994,14 +995,14 @@ nsFrameLoader::ShowRemoteFrame(const nsIntSize& size,
     EnsureMessageManager();
 
     nsCOMPtr<nsIObserverService> os = services::GetObserverService();
-    if (OwnerIsBrowserOrAppFrame() && os && !mRemoteBrowserInitialized) {
+    if (os && !mRemoteBrowserInitialized) {
       if (!mPendingFrameSent) {
         os->NotifyObservers(NS_ISUPPORTS_CAST(nsIFrameLoader*, this),
-                            "remote-browser-frame-pending", nullptr);
+                            "remote-browser-pending", nullptr);
         mPendingFrameSent = true;
       }
       os->NotifyObservers(NS_ISUPPORTS_CAST(nsIFrameLoader*, this),
-                          "remote-browser-frame-shown", nullptr);
+                          "remote-browser-shown", nullptr);
       mRemoteBrowserInitialized = true;
     }
   } else {
@@ -1448,6 +1449,14 @@ nsFrameLoader::OwnerIsBrowserOrAppFrame()
   return browserFrame ? browserFrame->GetReallyIsBrowserOrApp() : false;
 }
 
+// The xpcom getter version
+NS_IMETHODIMP
+nsFrameLoader::GetOwnerIsBrowserOrAppFrame(bool* aResult)
+{
+  *aResult = OwnerIsBrowserOrAppFrame();
+  return NS_OK;
+}
+
 bool
 nsFrameLoader::OwnerIsAppFrame()
 {
@@ -1673,6 +1682,18 @@ nsFrameLoader::MaybeCreateDocShell()
     return NS_ERROR_FAILURE;
   }
 
+  if (mIsTopLevelContent &&
+      mOwnerContent->IsXUL(nsGkAtoms::browser) &&
+      !mOwnerContent->HasAttr(kNameSpaceID_None, nsGkAtoms::disablehistory)) {
+    nsresult rv;
+    nsCOMPtr<nsISHistory> sessionHistory =
+      do_CreateInstance(NS_SHISTORY_CONTRACTID, &rv);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    nsCOMPtr<nsIWebNavigation> webNav(do_QueryInterface(mDocShell));
+    webNav->SetSessionHistory(sessionHistory);
+  }
+
   EnsureMessageManager();
 
   if (OwnerIsAppFrame()) {
@@ -1702,19 +1723,17 @@ nsFrameLoader::MaybeCreateDocShell()
     mDocShell->SetIsBrowserInsideApp(containingAppId);
   }
 
-  if (OwnerIsBrowserOrAppFrame()) {
-    nsCOMPtr<nsIObserverService> os = services::GetObserverService();
-    if (os) {
-      os->NotifyObservers(NS_ISUPPORTS_CAST(nsIFrameLoader*, this),
-                          "in-process-browser-or-app-frame-shown", nullptr);
-    }
+  nsCOMPtr<nsIObserverService> os = services::GetObserverService();
+  if (os) {
+    os->NotifyObservers(NS_ISUPPORTS_CAST(nsIFrameLoader*, this),
+                        "inprocess-browser-shown", nullptr);
+  }
 
-    if (mMessageManager) {
-      mMessageManager->LoadFrameScript(
-        NS_LITERAL_STRING("chrome://global/content/BrowserElementChild.js"),
-        /* allowDelayedLoad = */ true,
-        /* aRunInGlobalScope */ true);
-    }
+  if (OwnerIsBrowserOrAppFrame() && mMessageManager) {
+    mMessageManager->LoadFrameScript(
+      NS_LITERAL_STRING("chrome://global/content/BrowserElementChild.js"),
+      /* allowDelayedLoad = */ true,
+      /* aRunInGlobalScope */ true);
   }
 
   return NS_OK;

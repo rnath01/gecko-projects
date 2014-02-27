@@ -1004,6 +1004,31 @@ TreatAsOpaque(nsDisplayItem* aItem, nsDisplayListBuilder* aBuilder)
   return opaqueClipped;
 }
 
+/* Checks if aPotentialScrollItem is a scroll layer item and aPotentialScrollbarItem
+ * is an overlay scrollbar item for the same scroll frame.
+ */
+static bool
+IsScrollLayerItemAndOverlayScrollbarForScrollFrame(
+  nsDisplayItem* aPotentialScrollItem, nsDisplayItem* aPotentialScrollbarItem)
+{
+  if (aPotentialScrollItem->GetType() == nsDisplayItem::TYPE_SCROLL_LAYER &&
+      aPotentialScrollbarItem &&
+      aPotentialScrollbarItem->GetType() == nsDisplayItem::TYPE_OWN_LAYER &&
+      LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars)) {
+    nsDisplayScrollLayer* scrollItem =
+      static_cast<nsDisplayScrollLayer*>(aPotentialScrollItem);
+    nsDisplayOwnLayer* layerItem =
+      static_cast<nsDisplayOwnLayer*>(aPotentialScrollbarItem);
+    if ((layerItem->GetFlags() &
+         (nsDisplayOwnLayer::VERTICAL_SCROLLBAR |
+          nsDisplayOwnLayer::HORIZONTAL_SCROLLBAR)) &&
+        layerItem->Frame()->GetParent() == scrollItem->GetScrollFrame()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool
 nsDisplayList::ComputeVisibilityForSublist(nsDisplayListBuilder* aBuilder,
                                            nsRegion* aVisibleRegion,
@@ -1033,6 +1058,17 @@ nsDisplayList::ComputeVisibilityForSublist(nsDisplayListBuilder* aBuilder,
       if (belowItem && item->TryMerge(aBuilder, belowItem)) {
         belowItem->~nsDisplayItem();
         elements.ReplaceElementsAt(i - 1, 1, item);
+        continue;
+      }
+
+      // If an overlay scrollbar item is between a scroll layer item and the
+      // other scroll layer items that we need to merge with just move the
+      // scrollbar item up, that way it will be on top of the scrolled content
+      // and we can try to merge all the scroll layer items.
+      if (IsScrollLayerItemAndOverlayScrollbarForScrollFrame(item, belowItem)) {
+        elements[i] = belowItem;
+        elements[i-1] = item;
+        i++;
         continue;
       }
 
@@ -1151,7 +1187,7 @@ void nsDisplayList::PaintForFrame(nsDisplayListBuilder* aBuilder,
   NotifySubDocInvalidationFunc computeInvalidFunc =
     presContext->MayHavePaintEventListenerInSubDocument() ? nsPresContext::NotifySubDocInvalidation : 0;
   bool computeInvalidRect = (computeInvalidFunc ||
-                             !layerManager->IsCompositingCheap()) &&
+                             (!layerManager->IsCompositingCheap() && layerManager->NeedsWidgetInvalidation())) &&
                             widgetTransaction;
 
   nsAutoPtr<LayerProperties> props(computeInvalidRect ? 
@@ -1217,8 +1253,7 @@ void nsDisplayList::PaintForFrame(nsDisplayListBuilder* aBuilder,
   if (usingDisplayport &&
       !(root->GetContentFlags() & Layer::CONTENT_OPAQUE)) {
     // See bug 693938, attachment 567017
-    NS_WARNING("We don't support transparent content with displayports, force it to be opqaue");
-    root->SetContentFlags(Layer::CONTENT_OPAQUE);
+    NS_WARNING("Transparent content with displayports can be expensive.");
   }
 
   layerManager->SetRoot(root);
@@ -3268,7 +3303,7 @@ nsDisplayMixBlendMode::BuildLayer(nsDisplayListBuilder* aBuilder,
     return nullptr;
   }
 
-  container->SetMixBlendMode(nsCSSRendering::GetGFXBlendMode(mFrame->StyleDisplay()->mMixBlendMode));
+  container->DeprecatedSetMixBlendMode(nsCSSRendering::GetGFXBlendMode(mFrame->StyleDisplay()->mMixBlendMode));
 
   return container.forget();
 }
@@ -4009,6 +4044,21 @@ nsDisplayTransform::nsDisplayTransform(nsDisplayListBuilder* aBuilder, nsIFrame 
   mStoredList.SetClip(aBuilder, DisplayItemClip::NoClip());
 }
 
+nsDisplayTransform::nsDisplayTransform(nsDisplayListBuilder* aBuilder, nsIFrame *aFrame,
+                                       nsDisplayItem *aItem, uint32_t aIndex)
+  : nsDisplayItem(aBuilder, aFrame)
+  , mStoredList(aBuilder, aFrame, aItem)
+  , mTransformGetter(nullptr)
+  , mIndex(aIndex)
+{
+  MOZ_COUNT_CTOR(nsDisplayTransform);
+  NS_ABORT_IF_FALSE(aFrame, "Must have a frame!");
+  mReferenceFrame =
+    aBuilder->FindReferenceFrameFor(GetTransformRootFrame(aFrame));
+  mToReferenceFrame = aFrame->GetOffsetToCrossDoc(mReferenceFrame);
+  mStoredList.SetClip(aBuilder, DisplayItemClip::NoClip());
+}
+
 /* Returns the delta specified by the -moz-transform-origin property.
  * This is a positive delta, meaning that it indicates the direction to move
  * to get from (0, 0) of the frame to the transform origin.  This function is
@@ -4020,8 +4070,12 @@ nsDisplayTransform::GetDeltaToTransformOrigin(const nsIFrame* aFrame,
                                               const nsRect* aBoundsOverride)
 {
   NS_PRECONDITION(aFrame, "Can't get delta for a null frame!");
-  NS_PRECONDITION(aFrame->IsTransformed(),
+  NS_PRECONDITION(aFrame->IsTransformed() || aFrame->StyleDisplay()->BackfaceIsHidden(),
                   "Shouldn't get a delta for an untransformed frame!");
+
+  if (!aFrame->IsTransformed()) {
+    return gfxPoint3D();
+  }
 
   /* For both of the coordinates, if the value of -moz-transform is a
    * percentage, it's relative to the size of the frame.  Otherwise, if it's
@@ -4085,8 +4139,12 @@ nsDisplayTransform::GetDeltaToPerspectiveOrigin(const nsIFrame* aFrame,
                                                 float aAppUnitsPerPixel)
 {
   NS_PRECONDITION(aFrame, "Can't get delta for a null frame!");
-  NS_PRECONDITION(aFrame->IsTransformed(),
+  NS_PRECONDITION(aFrame->IsTransformed() || aFrame->StyleDisplay()->BackfaceIsHidden(),
                   "Shouldn't get a delta for an untransformed frame!");
+
+  if (!aFrame->IsTransformed()) {
+    return gfxPoint3D();
+  }
 
   /* For both of the coordinates, if the value of -moz-perspective-origin is a
    * percentage, it's relative to the size of the frame.  Otherwise, if it's
@@ -4894,17 +4952,16 @@ nsDisplaySVGEffects::BuildLayer(nsDisplayListBuilder* aBuilder,
   nsSVGEffects::EffectProperties effectProperties =
     nsSVGEffects::GetEffectProperties(firstFrame);
 
-  bool isOK = true;
+  bool isOK = effectProperties.HasNoFilterOrHasValidFilter();
   effectProperties.GetClipPathFrame(&isOK);
   effectProperties.GetMaskFrame(&isOK);
-  bool hasFilter = effectProperties.GetFilterFrame(&isOK) != nullptr;
 
   if (!isOK) {
     return nullptr;
   }
 
   ContainerLayerParameters newContainerParameters = aContainerParameters;
-  if (hasFilter) {
+  if (effectProperties.HasValidFilter()) {
     newContainerParameters.mDisableSubpixelAntialiasingInDescendants = true;
   }
 
@@ -4973,7 +5030,7 @@ nsDisplaySVGEffects::PrintEffects(nsACString& aTo)
     aTo += nsPrintfCString("clip(%s)", clipPathFrame->IsTrivial() ? "trivial" : "non-trivial");
     first = false;
   }
-  if (effectProperties.GetFilterFrame(&isOK)) {
+  if (effectProperties.HasValidFilter()) {
     if (!first) {
       aTo += ", ";
     }

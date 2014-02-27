@@ -5,6 +5,11 @@
 
 package org.mozilla.gecko.db;
 
+import java.io.ByteArrayOutputStream;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+
 import org.mozilla.gecko.AboutPages;
 import org.mozilla.gecko.db.BrowserContract.Bookmarks;
 import org.mozilla.gecko.db.BrowserContract.Combined;
@@ -17,7 +22,6 @@ import org.mozilla.gecko.db.BrowserContract.Thumbnails;
 import org.mozilla.gecko.db.BrowserContract.URLColumns;
 import org.mozilla.gecko.favicons.decoders.FaviconDecoder;
 import org.mozilla.gecko.favicons.decoders.LoadFaviconResult;
-import org.mozilla.gecko.gfx.BitmapUtils;
 
 import android.content.ContentProviderOperation;
 import android.content.ContentResolver;
@@ -25,18 +29,12 @@ import android.content.ContentValues;
 import android.database.ContentObserver;
 import android.database.Cursor;
 import android.database.CursorWrapper;
-import android.database.DatabaseUtils;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.net.Uri;
 import android.provider.Browser;
 import android.text.TextUtils;
 import android.util.Log;
-
-import java.io.ByteArrayOutputStream;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
 
 public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
     // Calculate these once, at initialization. isLoggable is too expensive to
@@ -59,6 +57,7 @@ public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
 
     private final Uri mBookmarksUriWithProfile;
     private final Uri mParentsUriWithProfile;
+    private final Uri mFlagsUriWithProfile;
     private final Uri mHistoryUriWithProfile;
     private final Uri mHistoryExpireUriWithProfile;
     private final Uri mCombinedUriWithProfile;
@@ -82,6 +81,7 @@ public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
 
         mBookmarksUriWithProfile = appendProfile(Bookmarks.CONTENT_URI);
         mParentsUriWithProfile = appendProfile(Bookmarks.PARENTS_CONTENT_URI);
+        mFlagsUriWithProfile = appendProfile(Bookmarks.FLAGS_URI);
         mHistoryUriWithProfile = appendProfile(History.CONTENT_URI);
         mHistoryExpireUriWithProfile = appendProfile(History.CONTENT_OLD_URI);
         mCombinedUriWithProfile = appendProfile(Combined.CONTENT_URI);
@@ -471,7 +471,7 @@ public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
 
     @Override
     public boolean isBookmark(ContentResolver cr, String uri) {
-        // This method is about normal bookmarks, not the Reading List
+        // This method is about normal bookmarks, not the Reading List.
         Cursor c = null;
         try {
             c = cr.query(bookmarksUriWithLimit(1),
@@ -515,6 +515,34 @@ public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
         }
 
         return false;
+    }
+
+    /**
+     * For a given URI, we want to return a number of things:
+     *
+     * * Is this URI the URI of a bookmark?
+     * * ... a reading list item?
+     *
+     * This will expand as necessary to eliminate multiple consecutive queries.
+     */
+    @Override
+    public int getItemFlags(ContentResolver cr, String uri) {
+        final Cursor c = cr.query(mFlagsUriWithProfile,
+                                  null,
+                                  null,
+                                  new String[] { uri },
+                                  null);
+        if (c == null) {
+            return 0;
+        }
+
+        try {
+            // This should never fail: it returns a single `flags` row.
+            c.moveToFirst();
+            return Bookmarks.FLAG_SUCCESS | c.getInt(0);
+        } finally {
+            c.close();
+        }
     }
 
     @Override

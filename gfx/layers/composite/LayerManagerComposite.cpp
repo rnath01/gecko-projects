@@ -21,7 +21,7 @@
 #include "Units.h"                      // for ScreenIntRect
 #include "gfx2DGlue.h"                  // for ToMatrix4x4
 #include "gfx3DMatrix.h"                // for gfx3DMatrix
-#include "gfxPlatform.h"                // for gfxPlatform
+#include "gfxPrefs.h"                   // for gfxPrefs
 #ifdef XP_MACOSX
 #include "gfxPlatformMac.h"
 #endif
@@ -389,7 +389,7 @@ static uint16_t sFrameCount = 0;
 void
 LayerManagerComposite::RenderDebugOverlay(const Rect& aBounds)
 {
-  if (gfxPlatform::GetPrefLayersDrawFPS()) {
+  if (gfxPrefs::LayersDrawFPS()) {
     if (!mFPS) {
       mFPS = new FPSState();
     }
@@ -400,7 +400,7 @@ LayerManagerComposite::RenderDebugOverlay(const Rect& aBounds)
     mFPS = nullptr;
   }
 
-  if (gfxPlatform::DrawFrameCounter()) {
+  if (gfxPrefs::DrawFrameCounter()) {
     profiler_set_frame_number(sFrameCount);
 
     uint16_t frameNumber = sFrameCount;
@@ -437,17 +437,19 @@ LayerManagerComposite::Render()
     return;
   }
 
-  if (gfxPlatform::GetPrefLayersDump()) {
+  if (gfxPrefs::LayersDump()) {
     this->Dump();
   }
 
   /** Our more efficient but less powerful alter ego, if one is available. */
   nsRefPtr<Composer2D> composer2D = mCompositor->GetWidget()->GetComposer2D();
 
-  if (mFPS && composer2D && composer2D->TryRender(mRoot, mWorldMatrix)) {
-    double fps = mFPS->mCompositionFps.AddFrameAndGetFps(TimeStamp::Now());
-    if (gfxPlatform::GetPrefLayersDrawFPS()) {
-      printf_stderr("HWComposer: FPS is %g\n", fps);
+  if (composer2D && composer2D->TryRender(mRoot, mWorldMatrix)) {
+    if (mFPS) {
+      double fps = mFPS->mCompositionFps.AddFrameAndGetFps(TimeStamp::Now());
+      if (gfxPrefs::LayersDrawFPS()) {
+        printf_stderr("HWComposer: FPS is %g\n", fps);
+      }
     }
     mCompositor->EndFrameForExternalComposition(mWorldMatrix);
     return;
@@ -653,7 +655,7 @@ LayerManagerComposite::ComputeRenderIntegrity()
 {
   // We only ever have incomplete rendering when progressive tiles are enabled.
   Layer* root = GetRoot();
-  if (!gfxPlatform::UseProgressiveTilePainting() || !root) {
+  if (!gfxPrefs::UseProgressiveTilePainting() || !root) {
     return 1.f;
   }
 

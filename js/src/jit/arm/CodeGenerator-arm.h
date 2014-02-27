@@ -170,14 +170,14 @@ class CodeGeneratorARM : public CodeGeneratorShared
     bool visitAsmJSStoreGlobalVar(LAsmJSStoreGlobalVar *ins);
     bool visitAsmJSLoadFuncPtr(LAsmJSLoadFuncPtr *ins);
     bool visitAsmJSLoadFFIFunc(LAsmJSLoadFFIFunc *ins);
-
     bool visitAsmJSPassStackArg(LAsmJSPassStackArg *ins);
+
+    bool visitForkJoinGetSlice(LForkJoinGetSlice *ins);
 
     bool generateInvalidateEpilogue();
   protected:
     void postAsmJSCall(LAsmJSCall *lir) {
-#ifndef JS_CODEGEN_ARM_HARDFP
-        if (lir->mir()->callee().which() == MAsmJSCall::Callee::Builtin) {
+        if (!useHardFpABI() && lir->mir()->callee().which() == MAsmJSCall::Callee::Builtin) {
             switch (lir->mir()->type()) {
               case MIRType_Double:
                 masm.ma_vxfer(r0, r1, d0);
@@ -190,7 +190,6 @@ class CodeGeneratorARM : public CodeGeneratorShared
                 break;
             }
         }
-#endif
     }
 
     bool visitEffectiveAddress(LEffectiveAddress *ins);

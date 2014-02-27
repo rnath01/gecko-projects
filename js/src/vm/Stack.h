@@ -939,7 +939,7 @@ class StackFrame
 
   public:
     void mark(JSTracer *trc);
-    void markValues(JSTracer *trc, Value *sp);
+    void markValues(JSTracer *trc, Value *sp, jsbytecode *pc);
 
     // Entered Baseline/Ion from the interpreter.
     bool runningInJit() const {
@@ -1139,7 +1139,7 @@ class Activation
 
     // Counter incremented by JS::HideScriptedCaller and decremented by
     // JS::UnhideScriptedCaller. If > 0 for the top activation,
-    // JS_DescribeScriptedCaller will return null instead of querying that
+    // DescribeScriptedCaller will return null instead of querying that
     // activation, which should prompt the caller to consult embedding-specific
     // data structures instead.
     size_t hideScriptedCallerCount_;
@@ -1305,7 +1305,7 @@ namespace jit {
 class JitActivation : public Activation
 {
     uint8_t *prevIonTop_;
-    JSContext *prevIonJSContext_;
+    JSContext *prevJitJSContext_;
     bool firstFrameIsConstructing_;
     bool active_;
 
@@ -1592,21 +1592,24 @@ class ScriptFrameIter
     inline void ionForEachCanonicalActualArg(JSContext *cx, Op op);
 };
 
+#ifdef DEBUG
+bool SelfHostedFramesVisible();
+#else
+static inline bool
+SelfHostedFramesVisible()
+{
+    return false;
+}
+#endif
+
 /* A filtering of the ScriptFrameIter to only stop at non-self-hosted scripts. */
 class NonBuiltinScriptFrameIter : public ScriptFrameIter
 {
-#ifdef DEBUG
-    static bool includeSelfhostedFrames();
-#else
-    static bool includeSelfhostedFrames() {
-        return false;
-    }
-#endif
-
     void settle() {
-        if (!includeSelfhostedFrames())
+        if (!SelfHostedFramesVisible()) {
             while (!done() && script()->selfHosted())
                 ScriptFrameIter::operator++();
+        }
     }
 
   public:

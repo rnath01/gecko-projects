@@ -27,6 +27,15 @@ Logger.debug('content-script.js');
 
 let eventManager = null;
 
+function clearCursor(aMessage) {
+  try {
+    Utils.getVirtualCursor(content.document).position = null;
+    forwardToChild(aMessage);
+  } catch (x) {
+    Logger.logException(x);
+  }
+}
+
 function moveCursor(aMessage) {
   if (Logger.logLevel >= Logger.DEBUG) {
     Logger.debug(aMessage.name, JSON.stringify(aMessage.json, null, ' '));
@@ -107,9 +116,9 @@ function moveToPoint(aMessage) {
 }
 
 function showCurrent(aMessage) {
-  if (Logger.logLevel >= Logger.DEBUG) {
-    Logger.debug(aMessage.name, JSON.stringify(aMessage.json, null, ' '));
-  }
+  Logger.debug(() => {
+    return [aMessage.name, JSON.stringify(aMessage.json, null, ' ')];
+  });
 
   let vc = Utils.getVirtualCursor(content.document);
 
@@ -138,13 +147,17 @@ function forwardToChild(aMessage, aListener, aVCPosition) {
     return false;
   }
 
-  if (Logger.logLevel >= Logger.DEBUG) {
-    Logger.debug('forwardToChild', Logger.accessibleToString(acc),
-                 aMessage.name, JSON.stringify(aMessage.json, null, '  '));
-  }
+  Logger.debug(() => {
+    return ['forwardToChild', Logger.accessibleToString(acc),
+            aMessage.name, JSON.stringify(aMessage.json, null, '  ')];
+  });
 
   let mm = Utils.getMessageManager(acc.DOMNode);
-  mm.addMessageListener(aMessage.name, aListener);
+
+  if (aListener) {
+    mm.addMessageListener(aMessage.name, aListener);
+  }
+
   // XXX: This is a silly way to make a deep copy
   let newJSON = JSON.parse(JSON.stringify(aMessage.json));
   newJSON.origin = 'parent';
@@ -381,11 +394,14 @@ addMessageListener(
     addMessageListener('AccessFu:AdjustRange', adjustRange);
     addMessageListener('AccessFu:MoveCaret', moveCaret);
     addMessageListener('AccessFu:MoveByGranularity', moveByGranularity);
+    addMessageListener('AccessFu:ClearCursor', clearCursor);
 
     if (!eventManager) {
       eventManager = new EventManager(this);
     }
     eventManager.start();
+
+    sendAsyncMessage('AccessFu:ContentStarted');
   });
 
 addMessageListener(
@@ -401,6 +417,7 @@ addMessageListener(
     removeMessageListener('AccessFu:Scroll', scroll);
     removeMessageListener('AccessFu:MoveCaret', moveCaret);
     removeMessageListener('AccessFu:MoveByGranularity', moveByGranularity);
+    removeMessageListener('AccessFu:ClearCursor', clearCursor);
 
     eventManager.stop();
   });

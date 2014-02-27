@@ -52,6 +52,8 @@
 #include "nsGlobalWindow.h"
 #include "nsScriptNameSpaceManager.h"
 #include "StructuredCloneTags.h"
+#include "mozilla/AutoRestore.h"
+#include "mozilla/dom/ErrorEvent.h"
 #include "mozilla/dom/ImageData.h"
 #include "mozilla/dom/ImageDataBinding.h"
 #include "nsAXPCNativeCallContext.h"
@@ -312,7 +314,7 @@ private:
 // XXXmarkh - This function is mis-placed!
 bool
 NS_HandleScriptError(nsIScriptGlobalObject *aScriptGlobal,
-                     InternalScriptErrorEvent *aErrorEvent,
+                     const ErrorEventInit &aErrorEventInit,
                      nsEventStatus *aStatus)
 {
   bool called = false;
@@ -325,11 +327,17 @@ NS_HandleScriptError(nsIScriptGlobalObject *aScriptGlobal,
     static int32_t errorDepth; // Recursion prevention
     ++errorDepth;
 
-    if (presContext && errorDepth < 2) {
+    if (errorDepth < 2) {
       // Dispatch() must be synchronous for the recursion block
       // (errorDepth) to work.
-      nsEventDispatcher::Dispatch(win, presContext, aErrorEvent, nullptr,
-                                  aStatus);
+      nsRefPtr<ErrorEvent> event =
+        ErrorEvent::Constructor(static_cast<nsGlobalWindow*>(win.get()),
+                                NS_LITERAL_STRING("error"),
+                                aErrorEventInit);
+      event->SetTrusted(true);
+
+      nsEventDispatcher::DispatchDOMEvent(win, nullptr, event, presContext,
+                                          aStatus);
       called = true;
     }
     --errorDepth;
@@ -444,44 +452,47 @@ public:
       if (docShell &&
           !JSREPORT_IS_WARNING(mFlags) &&
           !sHandlingScriptError) {
-        sHandlingScriptError = true; // Recursion prevention
+        AutoRestore<bool> recursionGuard(sHandlingScriptError);
+        sHandlingScriptError = true;
 
         nsRefPtr<nsPresContext> presContext;
         docShell->GetPresContext(getter_AddRefs(presContext));
 
-        if (presContext) {
-          InternalScriptErrorEvent errorevent(true, NS_LOAD_ERROR);
+        ErrorEventInit init;
+        init.mCancelable = true;
+        init.mFilename = mFileName;
+        init.mBubbles = true;
 
-          errorevent.fileName = mFileName.get();
+        nsCOMPtr<nsIScriptObjectPrincipal> sop(do_QueryInterface(win));
+        NS_ENSURE_STATE(sop);
+        nsIPrincipal* p = sop->GetPrincipal();
+        NS_ENSURE_STATE(p);
 
-          nsCOMPtr<nsIScriptObjectPrincipal> sop(do_QueryInterface(win));
-          NS_ENSURE_STATE(sop);
-          nsIPrincipal* p = sop->GetPrincipal();
-          NS_ENSURE_STATE(p);
+        bool sameOrigin = !mOriginPrincipal;
 
-          bool sameOrigin = !mOriginPrincipal;
-
-          if (p && !sameOrigin) {
-            if (NS_FAILED(p->Subsumes(mOriginPrincipal, &sameOrigin))) {
-              sameOrigin = false;
-            }
+        if (p && !sameOrigin) {
+          if (NS_FAILED(p->Subsumes(mOriginPrincipal, &sameOrigin))) {
+            sameOrigin = false;
           }
-
-          NS_NAMED_LITERAL_STRING(xoriginMsg, "Script error.");
-          if (sameOrigin) {
-            errorevent.errorMsg = mErrorMsg.get();
-            errorevent.lineNr = mLineNumber;
-          } else {
-            NS_WARNING("Not same origin error!");
-            errorevent.errorMsg = xoriginMsg.get();
-            errorevent.lineNr = 0;
-          }
-
-          nsEventDispatcher::Dispatch(win, presContext, &errorevent, nullptr,
-                                      &status);
         }
 
-        sHandlingScriptError = false;
+        NS_NAMED_LITERAL_STRING(xoriginMsg, "Script error.");
+        if (sameOrigin) {
+          init.mMessage = mErrorMsg;
+          init.mLineno = mLineNumber;
+        } else {
+          NS_WARNING("Not same origin error!");
+          init.mMessage = xoriginMsg;
+          init.mLineno = 0;
+        }
+
+        nsRefPtr<ErrorEvent> event =
+          ErrorEvent::Constructor(static_cast<nsGlobalWindow*>(win.get()),
+                                  NS_LITERAL_STRING("error"), init);
+        event->SetTrusted(true);
+
+        nsEventDispatcher::DispatchDOMEvent(win, nullptr, event, presContext,
+                                            &status);
       }
     }
 
@@ -515,8 +526,7 @@ NS_ScriptErrorReporter(JSContext *cx,
   // absence of werror are swallowed whole, so report those now.
   if (!JSREPORT_IS_WARNING(report->flags)) {
     nsIXPConnect* xpc = nsContentUtils::XPConnect();
-    JS::Rooted<JSScript*> script(cx);
-    if (JS_DescribeScriptedCaller(cx, &script, nullptr)) {
+    if (JS::DescribeScriptedCaller(cx)) {
       xpc->MarkErrorUnreported(cx);
       return;
     }
@@ -1169,7 +1179,7 @@ nsJSContext::SetProperty(JS::Handle<JSObject*> aTarget, const char* aPropName, n
     }
   }
 
-  JSObject* array = ::JS_NewArrayObject(mContext, args.length(), args.begin());
+  JSObject* array = ::JS_NewArrayObject(mContext, args);
   if (!array) {
     return NS_ERROR_FAILURE;
   }
@@ -2196,10 +2206,15 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
     PokeGC(JS::gcreason::CC_WAITING);
   }
 
-  TimeStamp endCCTime = TimeStamp::Now();
+  TimeStamp endCCTimeStamp = TimeStamp::Now();
+
+  PRTime endCCTime;
+  if (sPostGCEventsToObserver) {
+    endCCTime = PR_Now();
+  }
 
   // Log information about the CC via telemetry, JSON and the console.
-  uint32_t ccNowDuration = TimeBetween(gCCStats.mBeginTime, endCCTime);
+  uint32_t ccNowDuration = TimeBetween(gCCStats.mBeginTime, endCCTimeStamp);
   Telemetry::Accumulate(Telemetry::CYCLE_COLLECTOR_FINISH_IGC, gCCStats.mAnyLockedOut);
   Telemetry::Accumulate(Telemetry::CYCLE_COLLECTOR_SYNC_SKIPPABLE, gCCStats.mRanSyncForgetSkippable);
   Telemetry::Accumulate(Telemetry::CYCLE_COLLECTOR_FULL, ccNowDuration);
@@ -2209,7 +2224,7 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
     uint32_t timeBetween = TimeBetween(sLastCCEndTime, gCCStats.mBeginTime);
     Telemetry::Accumulate(Telemetry::CYCLE_COLLECTOR_TIME_BETWEEN, timeBetween);
   }
-  sLastCCEndTime = endCCTime;
+  sLastCCEndTime = endCCTimeStamp;
 
   Telemetry::Accumulate(Telemetry::FORGET_SKIPPABLE_MAX,
                         sMaxForgetSkippableTime / PR_USEC_PER_MSEC);
@@ -2259,11 +2274,11 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
   if (sPostGCEventsToObserver) {
     NS_NAMED_MULTILINE_LITERAL_STRING(kJSONFmt,
        MOZ_UTF16("{ \"timestamp\": %llu, ")
-         MOZ_UTF16("\"duration\": %llu, ")
-         MOZ_UTF16("\"max_slice_pause\": %llu, ")
-         MOZ_UTF16("\"total_slice_pause\": %llu, ")
-         MOZ_UTF16("\"max_finish_gc_duration\": %llu, ")
-         MOZ_UTF16("\"max_sync_skippable_duration\": %llu, ")
+         MOZ_UTF16("\"duration\": %lu, ")
+         MOZ_UTF16("\"max_slice_pause\": %lu, ")
+         MOZ_UTF16("\"total_slice_pause\": %lu, ")
+         MOZ_UTF16("\"max_finish_gc_duration\": %lu, ")
+         MOZ_UTF16("\"max_sync_skippable_duration\": %lu, ")
          MOZ_UTF16("\"suspected\": %lu, ")
          MOZ_UTF16("\"visited\": { ")
              MOZ_UTF16("\"RCed\": %lu, ")
@@ -2971,6 +2986,16 @@ AsmJSCacheOpenEntryForWrite(JS::Handle<JSObject*> aGlobal,
                                        aHandle);
 }
 
+static void
+OnLargeAllocationFailure()
+{
+  nsCOMPtr<nsIObserverService> os =
+    mozilla::services::GetObserverService();
+  if (os) {
+    os->NotifyObservers(nullptr, "memory-pressure", MOZ_UTF16("heap-minimize"));
+  }
+}
+
 static NS_DEFINE_CID(kDOMScriptObjectFactoryCID, NS_DOM_SCRIPT_OBJECT_FACTORY_CID);
 
 void
@@ -3026,6 +3051,8 @@ nsJSContext::EnsureStatics()
     asmjscache::GetBuildId
   };
   JS::SetAsmJSCacheOps(sRuntime, &asmJSCacheOps);
+
+  JS::SetLargeAllocationFailureCallback(sRuntime, OnLargeAllocationFailure);
 
   // Set these global xpconnect options...
   Preferences::RegisterCallbackAndCall(ReportAllJSExceptionsPrefChangedCallback,

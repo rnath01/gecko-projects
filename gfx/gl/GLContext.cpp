@@ -15,7 +15,6 @@
 #include "GLReadTexImageHelper.h"
 
 #include "gfxCrashReporterUtils.h"
-#include "gfxPlatform.h"
 #include "gfxUtils.h"
 #include "GLContextProvider.h"
 #include "GLTextureImage.h"
@@ -28,11 +27,11 @@
 #include "GfxTexturesReporter.h"
 #include "TextureGarbageBin.h"
 #include "gfx2DGlue.h"
+#include "gfxPrefs.h"
 
 #include "OGLShaderProgram.h" // for ShaderProgramType
 
 #include "mozilla/DebugOnly.h"
-#include "mozilla/Preferences.h"
 
 #ifdef XP_MACOSX
 #include <CoreServices/CoreServices.h>
@@ -76,6 +75,7 @@ static const char *sExtensionNames[] = {
     "GL_IMG_read_format",
     "GL_EXT_read_format_bgra",
     "GL_APPLE_client_storage",
+    "GL_APPLE_texture_range",
     "GL_ARB_texture_non_power_of_two",
     "GL_ARB_pixel_buffer_object",
     "GL_ARB_ES2_compatibility",
@@ -84,6 +84,7 @@ static const char *sExtensionNames[] = {
     "GL_OES_texture_float_linear",
     "GL_ARB_texture_float",
     "GL_OES_texture_half_float",
+    "GL_OES_texture_half_float_linear",
     "GL_NV_half_float",
     "GL_EXT_unpack_subimage",
     "GL_OES_standard_derivatives",
@@ -131,6 +132,7 @@ static const char *sExtensionNames[] = {
     "GL_EXT_framebuffer_sRGB",
     "GL_KHR_debug",
     "GL_ARB_half_float_pixel",
+    "GL_EXT_frag_depth",
     nullptr
 };
 
@@ -305,7 +307,7 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
         return true;
     }
 
-    mWorkAroundDriverBugs = gfxPlatform::GetPlatform()->WorkAroundDriverBugs();
+    mWorkAroundDriverBugs = gfxPrefs::WorkAroundDriverBugs();
 
     SymLoadStruct symbols[] = {
         { (PRFuncPtr*) &mSymbols.fActiveTexture, { "ActiveTexture", "ActiveTextureARB", nullptr } },
@@ -496,6 +498,19 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
                 { (PRFuncPtr*) &mSymbols.fUnmapBuffer, { "UnmapBuffer", nullptr } },
                 { (PRFuncPtr*) &mSymbols.fPointParameterf, { "PointParameterf", nullptr } },
                 { (PRFuncPtr*) &mSymbols.fDrawBuffer, { "DrawBuffer", nullptr } },
+                    // These functions are only used by Skia/GL in desktop mode.
+                    // Other parts of Gecko should avoid using these
+                    { (PRFuncPtr*) &mSymbols.fDrawBuffers, { "DrawBuffers", nullptr } },
+                    { (PRFuncPtr*) &mSymbols.fClientActiveTexture, { "ClientActiveTexture", nullptr } },
+                    { (PRFuncPtr*) &mSymbols.fDisableClientState, { "DisableClientState", nullptr } },
+                    { (PRFuncPtr*) &mSymbols.fEnableClientState, { "EnableClientState", nullptr } },
+                    { (PRFuncPtr*) &mSymbols.fLoadIdentity, { "LoadIdentity", nullptr } },
+                    { (PRFuncPtr*) &mSymbols.fLoadMatrixf, { "LoadMatrixf", nullptr } },
+                    { (PRFuncPtr*) &mSymbols.fMatrixMode, { "MatrixMode", nullptr } },
+                    { (PRFuncPtr*) &mSymbols.fTexGeni, { "TexGeni", nullptr } },
+                    { (PRFuncPtr*) &mSymbols.fTexGenf, { "TexGenf", nullptr } },
+                    { (PRFuncPtr*) &mSymbols.fTexGenfv, { "TexGenfv", nullptr } },
+                    { (PRFuncPtr*) &mSymbols.fVertexPointer, { "VertexPointer", nullptr } },
                 { nullptr, { nullptr } },
             };
 
@@ -753,6 +768,17 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
                 MarkExtensionUnsupported(OES_EGL_image);
                 mSymbols.fEGLImageTargetTexture2D = nullptr;
                 mSymbols.fEGLImageTargetRenderbufferStorage = nullptr;
+            }
+        }
+
+        if (IsExtensionSupported(APPLE_texture_range)) {
+            SymLoadStruct vaoSymbols[] = {
+                { (PRFuncPtr*) &mSymbols.fTextureRangeAPPLE, { "TextureRangeAPPLE", nullptr } },
+                { nullptr, { nullptr } },
+            };
+
+            if (!LoadSymbols(&vaoSymbols[0], trygl, prefix)) {
+                mSymbols.fTextureRangeAPPLE = nullptr;
             }
         }
 
@@ -1306,7 +1332,7 @@ GLContext::ChooseGLFormats(const SurfaceCaps& caps) const
         }
     }
 
-    uint32_t msaaLevel = Preferences::GetUint("gl.msaa-level", 2);
+    uint32_t msaaLevel = gfxPrefs::MSAALevel();
     GLsizei samples = msaaLevel * msaaLevel;
     samples = std::min(samples, mMaxSamples);
 

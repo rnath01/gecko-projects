@@ -16,6 +16,7 @@
 #include "dom_quickstubs.h"
 #include "mozJSComponentLoader.h"
 
+#include "nsIMemoryInfoDumper.h"
 #include "nsIMemoryReporter.h"
 #include "nsIObserverService.h"
 #include "nsIDebug2.h"
@@ -491,7 +492,7 @@ Scriptability::Unblock()
 void
 Scriptability::SetDocShellAllowsScript(bool aAllowed)
 {
-    mDocShellAllowsScript = aAllowed;
+    mDocShellAllowsScript = aAllowed || mImmuneToScriptPolicy;
 }
 
 /* static */
@@ -1396,6 +1397,25 @@ XPCJSRuntime::OperationCallback(JSContext *cx)
     return true;
 }
 
+/* static */ void
+XPCJSRuntime::OutOfMemoryCallback(JSContext *cx)
+{
+    if (!Preferences::GetBool("memory.dump_reports_on_oom")) {
+        return;
+    }
+
+    nsCOMPtr<nsIMemoryInfoDumper> dumper =
+        do_GetService("@mozilla.org/memory-info-dumper;1");
+    if (!dumper) {
+        return;
+    }
+
+    // If this fails, it fails silently.
+    dumper->DumpMemoryInfoToTempDir(NS_LITERAL_STRING("due-to-JS-OOM"),
+                                    /* minimizeMemoryUsage = */ false,
+                                    /* dumpChildProcesses = */ false);
+}
+
 size_t
 XPCJSRuntime::SizeOfIncludingThis(MallocSizeOf mallocSizeOf)
 {
@@ -1415,38 +1435,32 @@ XPCJSRuntime::SizeOfIncludingThis(MallocSizeOf mallocSizeOf)
     return n;
 }
 
-XPCReadableJSStringWrapper *
-XPCJSRuntime::NewStringWrapper(const char16_t *str, uint32_t len)
+nsString*
+XPCJSRuntime::NewShortLivedString()
 {
     for (uint32_t i = 0; i < XPCCCX_STRING_CACHE_SIZE; ++i) {
-        StringWrapperEntry& ent = mScratchStrings[i];
-
-        if (!ent.mInUse) {
-            ent.mInUse = true;
-
-            // Construct the string using placement new.
-
-            return new (ent.mString.addr()) XPCReadableJSStringWrapper(str, len);
+        if (mScratchStrings[i].empty()) {
+            mScratchStrings[i].construct();
+            return mScratchStrings[i].addr();
         }
     }
 
     // All our internal string wrappers are used, allocate a new string.
-
-    return new XPCReadableJSStringWrapper(str, len);
+    return new nsString();
 }
 
 void
-XPCJSRuntime::DeleteString(nsAString *string)
+XPCJSRuntime::DeleteShortLivedString(nsString *string)
 {
+    if (string == &EmptyString() || string == &NullString())
+        return;
+
     for (uint32_t i = 0; i < XPCCCX_STRING_CACHE_SIZE; ++i) {
-        StringWrapperEntry& ent = mScratchStrings[i];
-        if (string == ent.mString.addr()) {
+        if (!mScratchStrings[i].empty() &&
+            mScratchStrings[i].addr() == string) {
             // One of our internal strings is no longer in use, mark
-            // it as such and destroy the string.
-
-            ent.mInUse = false;
-            ent.mString.addr()->~XPCReadableJSStringWrapper();
-
+            // it as such and free its data.
+            mScratchStrings[i].destroy();
             return;
         }
     }
@@ -1566,7 +1580,7 @@ XPCJSRuntime::~XPCJSRuntime()
 
 #ifdef DEBUG
     for (uint32_t i = 0; i < XPCCCX_STRING_CACHE_SIZE; ++i) {
-        MOZ_ASSERT(!mScratchStrings[i].mInUse, "Uh, string wrapper still in use!");
+        MOZ_ASSERT(mScratchStrings[i].empty(), "Short lived string still in use");
     }
 #endif
 }
@@ -2966,7 +2980,7 @@ static const JSWrapObjectCallbacks WrapObjectCallbacks = {
 };
 
 XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
-   : CycleCollectedJSRuntime(32L * 1024L * 1024L, JS_USE_HELPER_THREADS),
+   : CycleCollectedJSRuntime(nullptr, 32L * 1024L * 1024L, JS_USE_HELPER_THREADS),
    mJSContextStack(new XPCJSContextStack()),
    mCallContext(nullptr),
    mAutoRoots(nullptr),
@@ -3056,17 +3070,17 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     // ASan requires more stack space due to red-zones, so give it double the
     // default (2MB on 32-bit, 4MB on 64-bit). ASAN stack frame measurements
     // were not taken at the time of this writing, so we hazard a guess that
-    // ASAN builds have roughly twice the stack overhead as normal builds.
+    // ASAN builds have roughly thrice the stack overhead as normal builds.
     // On normal builds, the largest stack frame size we might encounter is
-    // 8.2k, so let's use a buffer of 8.2 * 2 * 10 = 164k.
+    // 8.2k, so let's use a buffer of 8.2 * 3 * 10 = 246k.
     const size_t kStackQuota =  2 * kDefaultStackQuota;
-    const size_t kTrustedScriptBuffer = 164 * 1024;
+    const size_t kTrustedScriptBuffer = 246 * 1024;
 #elif defined(XP_WIN)
     // 1MB is the default stack size on Windows, so the default 1MB stack quota
     // we'd get on win32 is slightly too large. Use 900k instead. And since
-    // windows stack frames are 3.4k each, let's use a buffer of 40k.
+    // windows stack frames are 3.4k each, let's use a buffer of 50k.
     const size_t kStackQuota = 900 * 1024;
-    const size_t kTrustedScriptBuffer = 40 * 1024;
+    const size_t kTrustedScriptBuffer = 50 * 1024;
     // The following two configurations are linux-only. Given the numbers above,
     // we use 50k and 100k trusted buffers on 32-bit and 64-bit respectively.
 #elif defined(DEBUG)
@@ -3107,6 +3121,7 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     js::SetActivityCallback(runtime, ActivityCallback, this);
     js::SetCTypesActivityCallback(runtime, CTypesActivityCallback);
     JS_SetOperationCallback(runtime, OperationCallback);
+    JS::SetOutOfMemoryCallback(runtime, OutOfMemoryCallback);
 
     // The JS engine needs to keep the source code around in order to implement
     // Function.prototype.toSource(). It'd be nice to not have to do this for

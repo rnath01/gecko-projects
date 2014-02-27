@@ -19,6 +19,7 @@
 #include "vm/ArrayObject.h"
 #include "vm/BooleanObject.h"
 #include "vm/NumberObject.h"
+#include "vm/SharedArrayObject.h"
 #include "vm/StringObject.h"
 #include "vm/TypedArrayObject.h"
 
@@ -87,7 +88,6 @@ Type::ObjectType(JSObject *obj)
 /* static */ inline Type
 Type::ObjectType(TypeObject *obj)
 {
-    AutoThreadSafeAccess ts(obj);
     if (obj->singleton())
         return Type(uintptr_t(obj->singleton()) | 1);
     return Type(uintptr_t(obj));
@@ -178,7 +178,6 @@ IdToTypeId(jsid id)
      */
     if (JSID_IS_STRING(id)) {
         JSAtom *atom = JSID_TO_ATOM(id);
-        js::AutoThreadSafeAccess ts(atom);
         JS::TwoByteChars cp = atom->range();
         if (cp.length() > 0 && (JS7_ISDEC(cp[0]) || cp[0] == '-')) {
             for (size_t i = 1; i < cp.length(); ++i) {
@@ -306,6 +305,9 @@ GetClassForProtoKey(JSProtoKey key)
 
       case JSProto_ArrayBuffer:
         return &ArrayBufferObject::class_;
+
+      case JSProto_SharedArrayBuffer:
+        return &SharedArrayBufferObject::class_;
 
       case JSProto_DataView:
         return &DataViewObject::class_;
@@ -565,7 +567,6 @@ TypeScript::NumTypeSets(JSScript *script)
 /* static */ inline StackTypeSet *
 TypeScript::ThisTypes(JSScript *script)
 {
-    JS_ASSERT(CurrentThreadCanReadCompilationData());
     return script->types->typeArray() + script->nTypeSets() + analyze::ThisSlot();
 }
 
@@ -579,7 +580,6 @@ TypeScript::ThisTypes(JSScript *script)
 TypeScript::ArgTypes(JSScript *script, unsigned i)
 {
     JS_ASSERT(i < script->functionNonDelazifying()->nargs());
-    JS_ASSERT(CurrentThreadCanReadCompilationData());
     return script->types->typeArray() + script->nTypeSets() + analyze::ArgSlot(i);
 }
 
@@ -1128,12 +1128,9 @@ ConstraintTypeSet::addType(ExclusiveContext *cxArg, Type type)
     if (hasType(type))
         return;
 
-    {
-        AutoLockForCompilation lock(cxArg);
-        if (!TypeSet::addType(type, &cxArg->typeLifoAlloc())) {
-            cxArg->compartment()->types.setPendingNukeTypes(cxArg);
-            return;
-        }
+    if (!TypeSet::addType(type, &cxArg->typeLifoAlloc())) {
+        cxArg->compartment()->types.setPendingNukeTypes(cxArg);
+        return;
     }
 
     InferSpew(ISpewOps, "addType: %sT%p%s %s",
@@ -1277,7 +1274,6 @@ inline TypeObject::TypeObject(const Class *clasp, TaggedProto proto, TypeObjectF
 inline uint32_t
 TypeObject::basePropertyCount() const
 {
-    JS_ASSERT(CurrentThreadCanReadCompilationData());
     return (flags() & OBJECT_FLAG_PROPERTY_COUNT_MASK) >> OBJECT_FLAG_PROPERTY_COUNT_SHIFT;
 }
 
@@ -1302,27 +1298,21 @@ TypeObject::getProperty(ExclusiveContext *cx, jsid id)
     if (HeapTypeSet *types = maybeGetProperty(id))
         return types;
 
-    uint32_t propertyCount;
-    Property **pprop;
-    {
-        AutoLockForCompilation lock(cx);
+    uint32_t propertyCount = basePropertyCount();
+    Property **pprop = HashSetInsert<jsid,Property,Property>
+        (cx->typeLifoAlloc(), propertySet, propertyCount, id);
+    if (!pprop) {
+        cx->compartment()->types.setPendingNukeTypes(cx);
+        return nullptr;
+    }
 
-        propertyCount = basePropertyCount();
-        pprop = HashSetInsert<jsid,Property,Property>
-            (cx->typeLifoAlloc(), propertySet, propertyCount, id);
-        if (!pprop) {
-            cx->compartment()->types.setPendingNukeTypes(cx);
-            return nullptr;
-        }
+    JS_ASSERT(!*pprop);
 
-        JS_ASSERT(!*pprop);
-
-        setBasePropertyCount(propertyCount);
-        if (!addProperty(cx, id, pprop)) {
-            setBasePropertyCount(0);
-            propertySet = nullptr;
-            return nullptr;
-        }
+    setBasePropertyCount(propertyCount);
+    if (!addProperty(cx, id, pprop)) {
+        setBasePropertyCount(0);
+        propertySet = nullptr;
+        return nullptr;
     }
 
     if (propertyCount == OBJECT_FLAG_PROPERTY_COUNT_LIMIT) {
@@ -1350,9 +1340,6 @@ TypeObject::maybeGetProperty(jsid id)
     JS_ASSERT(JSID_IS_VOID(id) || JSID_IS_EMPTY(id) || JSID_IS_STRING(id));
     JS_ASSERT_IF(!JSID_IS_EMPTY(id), id == IdToTypeId(id));
     JS_ASSERT(!unknownProperties());
-    JS_ASSERT(CurrentThreadCanReadCompilationData());
-
-    AutoThreadSafeAccess ts(this);
 
     Property *prop = HashSetLookup<jsid,Property,Property>
         (propertySet, basePropertyCount(), id);

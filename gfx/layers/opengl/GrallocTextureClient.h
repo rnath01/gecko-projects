@@ -9,6 +9,7 @@
 
 #include "mozilla/layers/TextureClient.h"
 #include "ISurfaceAllocator.h" // For IsSurfaceDescriptorValid
+#include "mozilla/layers/FenceUtils.h" // for FenceHandle
 #include "mozilla/layers/ShadowLayerUtilsGralloc.h"
 #include <ui/GraphicBuffer.h>
 
@@ -55,7 +56,16 @@ public:
 
   virtual bool ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor) MOZ_OVERRIDE;
 
+  virtual bool UpdateSurface(gfxASurface* aSurface) MOZ_OVERRIDE;
+
   virtual TextureClientData* DropTextureData() MOZ_OVERRIDE;
+
+  virtual void SetReleaseFenceHandle(FenceHandle aReleaseFenceHandle) MOZ_OVERRIDE;
+
+  const FenceHandle& GetReleaseFenceHandle() const
+  {
+    return mReleaseFenceHandle;
+  }
 
   void InitWith(GrallocBufferActor* aActor, gfx::IntSize aSize);
 
@@ -73,17 +83,11 @@ public:
     return mGraphicBuffer->getPixelFormat();
   }
 
-  /**
-   * These flags are important for performances because they'll let the driver
-   * optimize for the right usage.
-   * Be sure to specify them before calling Lock.
-   */
-  void SetGrallocOpenFlags(uint32_t aFlags)
-  {
-    mGrallocFlags = aFlags;
-  }
-
   virtual uint8_t* GetBuffer() const MOZ_OVERRIDE;
+
+  virtual TemporaryRef<gfx::DrawTarget> GetAsDrawTarget() MOZ_OVERRIDE;
+
+  virtual already_AddRefed<gfxASurface> GetAsSurface() MOZ_OVERRIDE;
 
   virtual bool AllocateForSurface(gfx::IntSize aSize,
                                   TextureAllocationFlags aFlags = ALLOC_DEFAULT) MOZ_OVERRIDE;
@@ -117,14 +121,13 @@ protected:
   RefPtr<ISurfaceAllocator> mAllocator;
 
   /**
-   * Flags that are used when locking the gralloc buffer
-   */
-  uint32_t mGrallocFlags;
-  /**
    * Points to a mapped gralloc buffer between calls to lock and unlock.
    * Should be null outside of the lock-unlock pair.
    */
   uint8_t* mMappedBuffer;
+
+  RefPtr<gfx::DrawTarget> mDrawTarget;
+
   /**
    * android::GraphicBuffer has a size information. But there are cases
    * that GraphicBuffer's size and actual video's size are different.

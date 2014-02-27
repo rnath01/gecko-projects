@@ -4,13 +4,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #if defined(MOZ_WIDGET_QT)
-#include <QApplication>
+#include <QGuiApplication>
 #include <QStringList>
 #include "nsQAppInstance.h"
-#if (QT_VERSION < QT_VERSION_CHECK(5, 0, 0))
-#include <QInputContextFactory>
-#include <QInputContext>
-#endif
 #endif // MOZ_WIDGET_QT
 
 #include "mozilla/dom/ContentParent.h"
@@ -870,6 +866,42 @@ nsXULAppInfo::GetLastRunCrashID(nsAString &aLastRunCrashID)
 #endif
 }
 
+NS_IMETHODIMP
+nsXULAppInfo::GetIsReleaseBuild(bool* aResult)
+{
+#ifdef RELEASE_BUILD
+  *aResult = true;
+#else
+  *aResult = false;
+#endif
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetIsOfficialBranding(bool* aResult)
+{
+#ifdef MOZ_OFFICIAL_BRANDING
+  *aResult = true;
+#else
+  *aResult = false;
+#endif
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetDefaultUpdateChannel(nsACString& aResult)
+{
+  aResult.AssignLiteral(NS_STRINGIFY(MOZ_UPDATE_CHANNEL));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetDistributionID(nsACString& aResult)
+{
+  aResult.AssignLiteral(MOZ_DISTRIBUTION_ID);
+  return NS_OK;
+}
+
 #ifdef XP_WIN
 // Matches the enum in WinNT.h for the Vista SDK but renamed so that we can
 // safely build with the Vista SDK and without it.
@@ -1076,6 +1108,13 @@ NS_IMETHODIMP
 nsXULAppInfo::SetSubmitReports(bool aEnabled)
 {
   return CrashReporter::SetSubmitReports(aEnabled);
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::UpdateCrashEventsDir()
+{
+  CrashReporter::UpdateCrashEventsDir();
+  return NS_OK;
 }
 
 #endif
@@ -2625,12 +2664,6 @@ NS_VISIBILITY_DEFAULT PRBool nspr_use_zone_allocator = PR_FALSE;
 
 #include <dwrite.h>
 
-typedef HRESULT (WINAPI*DWriteCreateFactoryFunc)(
-  DWRITE_FACTORY_TYPE factoryType,
-  REFIID iid,
-  IUnknown **factory
-);
-
 #ifdef DEBUG_DWRITE_STARTUP
 
 #define LOGREGISTRY(msg) LogRegistryEvent(msg)
@@ -2660,7 +2693,7 @@ static DWORD InitDwriteBG(LPVOID lpdwThreadParam)
   LOGREGISTRY(L"loading dwrite.dll");
   HMODULE dwdll = LoadLibraryW(L"dwrite.dll");
   if (dwdll) {
-    DWriteCreateFactoryFunc createDWriteFactory = (DWriteCreateFactoryFunc)
+    decltype(DWriteCreateFactory)* createDWriteFactory = (decltype(DWriteCreateFactory)*)
       GetProcAddress(dwdll, "DWriteCreateFactory");
     if (createDWriteFactory) {
       LOGREGISTRY(L"creating dwrite factory");
@@ -2965,6 +2998,7 @@ XREMain::XRE_mainInit(bool* aExitFlag)
   if ((mAppData->flags & NS_XRE_ENABLE_CRASH_REPORTER) &&
       NS_SUCCEEDED(
          CrashReporter::SetExceptionHandler(mAppData->xreDirectory))) {
+    CrashReporter::UpdateCrashEventsDir();
     if (mAppData->crashReporterURL)
       CrashReporter::SetServerURL(nsDependentCString(mAppData->crashReporterURL));
 
@@ -3618,6 +3652,8 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
 #ifdef MOZ_CRASHREPORTER
   if (mAppData->flags & NS_XRE_ENABLE_CRASH_REPORTER)
       MakeOrSetMinidumpPath(mProfD);
+
+  CrashReporter::UpdateCrashEventsDir();
 #endif
 
   nsAutoCString version;
@@ -3846,11 +3882,6 @@ XREMain::XRE_mainRun()
   mDirProvider.DoStartup();
 
 #ifdef MOZ_CRASHREPORTER
-  if (BrowserTabsRemote()) {
-    CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("DOMIPCEnabled"),
-                                       NS_LITERAL_CSTRING("1"));
-  }
-
   nsCString userAgentLocale;
   if (NS_SUCCEEDED(Preferences::GetCString("general.useragent.locale", &userAgentLocale))) {
     CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("useragent_locale"), userAgentLocale);

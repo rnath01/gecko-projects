@@ -219,20 +219,24 @@ Components.utils.import('resource://gre/modules/ctypes.jsm');
 
 // =================== DevTools ====================
 
-let devtoolsWidgetPanel;
+let developerHUD;
 SettingsListener.observe('devtools.overlay', false, (value) => {
   if (value) {
-    if (!devtoolsWidgetPanel) {
+    if (!developerHUD) {
       let scope = {};
       Services.scriptloader.loadSubScript('chrome://b2g/content/devtools.js', scope);
-      devtoolsWidgetPanel = scope.devtoolsWidgetPanel;
+      developerHUD = scope.developerHUD;
     }
-    devtoolsWidgetPanel.init();
+    developerHUD.init();
   } else {
-    if (devtoolsWidgetPanel) {
-      devtoolsWidgetPanel.uninit();
+    if (developerHUD) {
+      developerHUD.uninit();
     }
   }
+});
+
+SettingsListener.observe('devtools.eventlooplag.threshold', 100, function(value) {
+  Services.prefs.setIntPref('devtools.eventlooplag.threshold', value);
 });
 
 // =================== Debugger / ADB ====================
@@ -678,11 +682,11 @@ SettingsListener.observe('apz.force-enable', false, function(value) {
 
 SettingsListener.observe('apz.displayport.heuristics', 'default', function(value) {
   // first reset everything to default
-  Services.prefs.setCharPref('apz.velocity_bias', '1.0');
-  Services.prefs.setBoolPref('apz.use_paint_duration', true);
-  Services.prefs.setCharPref('apz.x_skate_size_multiplier', '1.5');
-  Services.prefs.setCharPref('apz.y_skate_size_multiplier', '2.5');
-  Services.prefs.setBoolPref('apz.allow-checkerboarding', true);
+  Services.prefs.clearUserPref('apz.velocity_bias');
+  Services.prefs.clearUserPref('apz.use_paint_duration');
+  Services.prefs.clearUserPref('apz.x_skate_size_multiplier');
+  Services.prefs.clearUserPref('apz.y_skate_size_multiplier');
+  Services.prefs.clearUserPref('apz.allow-checkerboarding');
   // and then set the things that we want to change
   switch (value) {
   case 'default':
@@ -717,5 +721,9 @@ SettingsListener.observe('layers.progressive-paint', false, function(value) {
 
 SettingsListener.observe('layers.draw-tile-borders', false, function(value) {
   Services.prefs.setBoolPref('layers.draw-tile-borders', value);
+});
+
+SettingsListener.observe('layers.dump', false, function(value) {
+  Services.prefs.setBoolPref('layers.dump', value);
 });
 

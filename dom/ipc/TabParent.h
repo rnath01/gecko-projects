@@ -10,6 +10,7 @@
 #include "mozilla/EventForwards.h"
 #include "mozilla/dom/PBrowserParent.h"
 #include "mozilla/dom/PContentDialogParent.h"
+#include "mozilla/dom/PFilePickerParent.h"
 #include "mozilla/dom/TabContext.h"
 #include "nsCOMPtr.h"
 #include "nsIAuthPromptProvider.h"
@@ -148,13 +149,15 @@ public:
                                     uint32_t* aSeqno) MOZ_OVERRIDE;
     virtual bool RecvNotifyIMETextChange(const uint32_t& aStart,
                                          const uint32_t& aEnd,
-                                         const uint32_t& aNewEnd) MOZ_OVERRIDE;
+                                         const uint32_t& aNewEnd,
+                                         const bool& aCausedByComposition) MOZ_OVERRIDE;
     virtual bool RecvNotifyIMESelectedCompositionRect(const uint32_t& aOffset,
                                                       const nsIntRect& aRect,
                                                       const nsIntRect& aCaretRect) MOZ_OVERRIDE;
     virtual bool RecvNotifyIMESelection(const uint32_t& aSeqno,
                                         const uint32_t& aAnchor,
-                                        const uint32_t& aFocus) MOZ_OVERRIDE;
+                                        const uint32_t& aFocus,
+                                        const bool& aCausedByComposition) MOZ_OVERRIDE;
     virtual bool RecvNotifyIMETextHint(const nsString& aText) MOZ_OVERRIDE;
     virtual bool RecvEndIMEComposition(const bool& aCancel,
                                        nsString* aComposition) MOZ_OVERRIDE;
@@ -186,6 +189,11 @@ public:
                                            const ZoomConstraints& aConstraints) MOZ_OVERRIDE;
     virtual bool RecvContentReceivedTouch(const ScrollableLayerGuid& aGuid,
                                           const bool& aPreventDefault) MOZ_OVERRIDE;
+
+    virtual PColorPickerParent*
+    AllocPColorPickerParent(const nsString& aTitle, const nsString& aInitialColor) MOZ_OVERRIDE;
+    virtual bool DeallocPColorPickerParent(PColorPickerParent* aColorPicker) MOZ_OVERRIDE;
+
     virtual PContentDialogParent*
     AllocPContentDialogParent(const uint32_t& aType,
                               const nsCString& aName,
@@ -257,6 +265,11 @@ public:
                                          const IPC::Principal& aPrincipal) MOZ_OVERRIDE;
     virtual bool
     DeallocPContentPermissionRequestParent(PContentPermissionRequestParent* actor) MOZ_OVERRIDE;
+
+    virtual PFilePickerParent*
+    AllocPFilePickerParent(const nsString& aTitle,
+                           const int16_t& aMode) MOZ_OVERRIDE;
+    virtual bool DeallocPFilePickerParent(PFilePickerParent* actor) MOZ_OVERRIDE;
 
     virtual POfflineCacheUpdateParent*
     AllocPOfflineCacheUpdateParent(const URIParams& aManifestURI,

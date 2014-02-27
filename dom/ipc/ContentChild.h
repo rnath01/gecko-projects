@@ -88,6 +88,10 @@ public:
 
     virtual bool RecvSetProcessPrivileges(const ChildPrivileges& aPrivs) MOZ_OVERRIDE;
 
+    PBackgroundChild*
+    AllocPBackgroundChild(Transport* aTransport, ProcessId aOtherProcess)
+                          MOZ_OVERRIDE;
+
     virtual PBrowserChild* AllocPBrowserChild(const IPCTabContext &aContext,
                                               const uint32_t &chromeFlags);
     virtual bool DeallocPBrowserChild(PBrowserChild*);
@@ -144,6 +148,8 @@ public:
             const OptionalURIParams& uri,
             const nsCString& aMimeContentType,
             const nsCString& aContentDisposition,
+            const uint32_t& aContentDispositionHint,
+            const nsString& aContentDispositionFilename,
             const bool& aForceSave,
             const int64_t& aContentLength,
             const OptionalURIParams& aReferrer,
@@ -236,7 +242,6 @@ public:
     virtual bool
     RecvNotifyProcessPriorityChanged(const hal::ProcessPriority& aPriority) MOZ_OVERRIDE;
     virtual bool RecvMinimizeMemoryUsage() MOZ_OVERRIDE;
-    virtual bool RecvCancelMinimizeMemoryUsage() MOZ_OVERRIDE;
 
     virtual bool RecvLoadAndRegisterSheet(const URIParams& aURI,
                                           const uint32_t& aType) MOZ_OVERRIDE;
@@ -301,7 +306,6 @@ private:
     bool mIsForApp;
     bool mIsForBrowser;
     nsString mProcessName;
-    nsWeakPtr mMemoryMinimizerRunnable;
 
     static ContentChild* sSingleton;
 

@@ -52,7 +52,6 @@
 using namespace js;
 using namespace js::jit;
 
-using mozilla::Maybe;
 using mozilla::ThreadLocal;
 
 // Assert that JitCode is gc::Cell aligned.
@@ -158,6 +157,7 @@ JitRuntime::JitRuntime()
     parallelArgumentsRectifier_(nullptr),
     invalidator_(nullptr),
     debugTrapHandler_(nullptr),
+    forkJoinGetSliceStub_(nullptr),
     functionWrappers_(nullptr),
     osrTempData_(nullptr),
     flusher_(nullptr),
@@ -287,6 +287,18 @@ JitRuntime::debugTrapHandler(JSContext *cx)
         debugTrapHandler_ = generateDebugTrapHandler(cx);
     }
     return debugTrapHandler_;
+}
+
+bool
+JitRuntime::ensureForkJoinGetSliceStubExists(JSContext *cx)
+{
+    if (!forkJoinGetSliceStub_) {
+        IonSpew(IonSpew_Codegen, "# Emitting ForkJoinGetSlice stub");
+        AutoLockForExclusiveAccess lock(cx);
+        AutoCompartment ac(cx, cx->runtime()->atomsCompartment());
+        forkJoinGetSliceStub_ = generateForkJoinGetSliceStub(cx);
+    }
+    return !!forkJoinGetSliceStub_;
 }
 
 uint8_t *
@@ -492,8 +504,6 @@ JitCompartment::ensureIonStubsExist(JSContext *cx)
 void
 jit::FinishOffThreadBuilder(IonBuilder *builder)
 {
-    builder->script()->runtimeFromMainThread()->removeCompilationThread();
-
     ExecutionMode executionMode = builder->info().executionMode();
 
     // Clear the recompiling flag if it would have failed.
@@ -1565,9 +1575,6 @@ AttachFinishedCompilations(JSContext *cx)
                 // operation callback and can't propagate failures.
                 cx->clearPendingException();
             }
-        } else {
-            if (builder->abortReason() == AbortReason_Disable)
-                SetIonScript(builder->script(), builder->info().executionMode(), ION_DISABLED_SCRIPT);
         }
 
         FinishOffThreadBuilder(builder);
@@ -1673,6 +1680,13 @@ IonCompile(JSContext *cx, JSScript *script,
     if (!cx->compartment()->jitCompartment()->ensureIonStubsExist(cx))
         return AbortReason_Alloc;
 
+    if (executionMode == ParallelExecution &&
+        LIRGenerator::allowInlineForkJoinGetSlice() &&
+        !cx->runtime()->jitRuntime()->ensureForkJoinGetSliceStubExists(cx))
+    {
+        return AbortReason_Alloc;
+    }
+
     MIRGraph *graph = alloc->new_<MIRGraph>(temp);
     if (!graph)
         return AbortReason_Alloc;
@@ -1689,7 +1703,7 @@ IonCompile(JSContext *cx, JSScript *script,
 
     BaselineFrameInspector *baselineFrameInspector = nullptr;
     if (baselineFrame) {
-        baselineFrameInspector = NewBaselineFrameInspector(temp, baselineFrame);
+        baselineFrameInspector = NewBaselineFrameInspector(temp, baselineFrame, info);
         if (!baselineFrameInspector)
             return AbortReason_Alloc;
     }
@@ -1722,6 +1736,14 @@ IonCompile(JSContext *cx, JSScript *script,
         builderScript->ionScript()->setRecompiling();
     }
 
+    IonSpewNewFunction(graph, builderScript);
+
+    bool succeeded = builder->build();
+    builder->clearForBackEnd();
+
+    if (!succeeded)
+        return builder->abortReason();
+
     // If possible, compile the script off thread.
     if (OffThreadCompilationAvailable(cx)) {
         if (!recompile)
@@ -1742,41 +1764,11 @@ IonCompile(JSContext *cx, JSScript *script,
         return AbortReason_NoAbort;
     }
 
-    Maybe<AutoEnterIonCompilation> ionCompiling;
-    if (!cx->runtime()->profilingScripts && !IonSpewEnabled(IonSpew_Logs)) {
-        // Compilation with script profiling is only done on the main thread,
-        // and may modify scripts directly. Same for logging. It is only
-        // enabled when offthread compilation is disabled. So don't watch for
-        // proper use of the compilation lock.
-        ionCompiling.construct();
-    }
-
-    Maybe<AutoProtectHeapForIonCompilation> protect;
-    if (js_JitOptions.checkThreadSafety &&
-        cx->runtime()->gcIncrementalState == gc::NO_INCREMENTAL &&
-        !cx->runtime()->profilingScripts)
-    {
-        protect.construct(cx->runtime());
-    }
-
-    IonSpewNewFunction(graph, builderScript);
-
-    bool succeeded = builder->build();
-    builder->clearForBackEnd();
-
-    if (!succeeded)
-        return builder->abortReason();
-
     ScopedJSDeletePtr<CodeGenerator> codegen(CompileBackEnd(builder));
     if (!codegen) {
         IonSpew(IonSpew_Abort, "Failed during back-end compilation.");
         return AbortReason_Disable;
     }
-
-    if (!protect.empty())
-        protect.destroy();
-    if (!ionCompiling.empty())
-        ionCompiling.destroy();
 
     bool success = codegen->link(cx, builder->constraints());
 
@@ -2255,7 +2247,6 @@ EnterIon(JSContext *cx, EnterJitData &data)
     data.result.setInt32(data.numActualArgs);
     {
         AssertCompartmentUnchanged pcc(cx);
-        IonContext ictx(cx, nullptr);
         JitActivation activation(cx, data.constructing);
         JSAutoResolveFlags rf(cx, RESOLVE_INFER);
         AutoFlushInhibitor afi(cx->runtime()->jitRuntime());
@@ -2907,7 +2898,9 @@ AutoDebugModeInvalidation::~AutoDebugModeInvalidation()
     if (comp_) {
         FinishDiscardJitCode(fop, comp_);
     } else {
-        for (CompartmentsInZoneIter comp(zone_); !comp.done(); comp.next())
-            FinishDiscardJitCode(fop, comp);
+        for (CompartmentsInZoneIter comp(zone_); !comp.done(); comp.next()) {
+            if (comp->principals)
+                FinishDiscardJitCode(fop, comp);
+        }
     }
 }

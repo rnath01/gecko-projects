@@ -2264,11 +2264,6 @@ bool
 LIRGenerator::visitPostWriteBarrier(MPostWriteBarrier *ins)
 {
 #ifdef JSGC_GENERATIONAL
-    if (!ins->hasValue()) {
-        LPostWriteBarrierAllSlots *lir =
-            new(alloc()) LPostWriteBarrierAllSlots(useRegisterOrConstant(ins->object()));
-        return add(lir, ins) && assignSafepoint(lir, ins);
-    }
     switch (ins->value()->type()) {
       case MIRType_Object: {
         LPostWriteBarrierO *lir = new(alloc()) LPostWriteBarrierO(useRegisterOrConstant(ins->object()),
@@ -2404,6 +2399,16 @@ LIRGenerator::visitNot(MNot *ins)
       default:
         MOZ_ASSUME_UNREACHABLE("Unexpected MIRType.");
     }
+}
+
+bool
+LIRGenerator::visitNeuterCheck(MNeuterCheck *ins)
+{
+    LNeuterCheck *chk = new(alloc()) LNeuterCheck(useRegister(ins->object()),
+                                                  temp());
+    if (!assignSnapshot(chk, Bailout_BoundsCheck))
+        return false;
+    return redefine(ins, ins->input()) && add(chk, ins);
 }
 
 bool
@@ -2652,7 +2657,7 @@ LIRGenerator::visitLoadTypedArrayElement(MLoadTypedArrayElement *ins)
 
     // We need a temp register for Uint32Array with known double result.
     LDefinition tempDef = LDefinition::BogusTemp();
-    if (ins->arrayType() == ScalarTypeRepresentation::TYPE_UINT32 && IsFloatingPointType(ins->type()))
+    if (ins->arrayType() == ScalarTypeDescr::TYPE_UINT32 && IsFloatingPointType(ins->type()))
         tempDef = temp();
 
     LLoadTypedArrayElement *lir = new(alloc()) LLoadTypedArrayElement(elements, index, tempDef);
@@ -2725,9 +2730,9 @@ LIRGenerator::visitStoreTypedArrayElement(MStoreTypedArrayElement *ins)
 
     if (ins->isFloatArray()) {
         DebugOnly<bool> optimizeFloat32 = allowFloat32Optimizations();
-        JS_ASSERT_IF(optimizeFloat32 && ins->arrayType() == ScalarTypeRepresentation::TYPE_FLOAT32,
+        JS_ASSERT_IF(optimizeFloat32 && ins->arrayType() == ScalarTypeDescr::TYPE_FLOAT32,
                      ins->value()->type() == MIRType_Float32);
-        JS_ASSERT_IF(!optimizeFloat32 || ins->arrayType() == ScalarTypeRepresentation::TYPE_FLOAT64,
+        JS_ASSERT_IF(!optimizeFloat32 || ins->arrayType() == ScalarTypeDescr::TYPE_FLOAT64,
                      ins->value()->type() == MIRType_Double);
     } else {
         JS_ASSERT(ins->value()->type() == MIRType_Int32);
@@ -2754,9 +2759,9 @@ LIRGenerator::visitStoreTypedArrayElementHole(MStoreTypedArrayElementHole *ins)
 
     if (ins->isFloatArray()) {
         DebugOnly<bool> optimizeFloat32 = allowFloat32Optimizations();
-        JS_ASSERT_IF(optimizeFloat32 && ins->arrayType() == ScalarTypeRepresentation::TYPE_FLOAT32,
+        JS_ASSERT_IF(optimizeFloat32 && ins->arrayType() == ScalarTypeDescr::TYPE_FLOAT32,
                      ins->value()->type() == MIRType_Float32);
-        JS_ASSERT_IF(!optimizeFloat32 || ins->arrayType() == ScalarTypeRepresentation::TYPE_FLOAT64,
+        JS_ASSERT_IF(!optimizeFloat32 || ins->arrayType() == ScalarTypeDescr::TYPE_FLOAT64,
                      ins->value()->type() == MIRType_Double);
     } else {
         JS_ASSERT(ins->value()->type() == MIRType_Int32);
@@ -3318,6 +3323,14 @@ LIRGenerator::visitHaveSameClass(MHaveSameClass *ins)
     JS_ASSERT(rhs->type() == MIRType_Object);
 
     return define(new(alloc()) LHaveSameClass(useRegister(lhs), useRegister(rhs), temp()), ins);
+}
+
+bool
+LIRGenerator::visitHasClass(MHasClass *ins)
+{
+    JS_ASSERT(ins->object()->type() == MIRType_Object);
+    JS_ASSERT(ins->type() == MIRType_Boolean);
+    return define(new(alloc()) LHasClass(useRegister(ins->object())), ins);
 }
 
 bool

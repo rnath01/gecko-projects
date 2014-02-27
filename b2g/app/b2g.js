@@ -756,6 +756,9 @@ pref("memory.free_dirty_pages", true);
 // Enable the Linux-specific, system-wide memory reporter.
 pref("memory.system_memory_reporter", true);
 
+// Don't dump memory reports on OOM, by default.
+pref("memory.dump_reports_on_oom", false);
+
 pref("layout.imagevisibility.enabled", true);
 pref("layout.imagevisibility.numscrollportwidths", 1);
 pref("layout.imagevisibility.numscrollportheights", 1);
@@ -869,6 +872,10 @@ pref("identity.fxaccounts.auth.uri", "https://api-accounts.dev.lcip.org/v1");
 pref("apz.asyncscroll.throttle", 40);
 pref("apz.pan_repaint_interval", 40);
 
+// Maximum fling velocity in px/ms.  Slower devices may need to reduce this
+// to avoid checkerboarding.  Note, float value must be set as a string.
+pref("apz.max_velocity_pixels_per_ms", "6.0");
+
 // This preference allows FirefoxOS apps (and content, I think) to force
 // the use of software (instead of hardware accelerated) 2D canvases by
 // creating a context like this:
@@ -882,3 +889,6 @@ pref("gfx.canvas.willReadFrequently.enable", true);
 // Disable autofocus until we can have it not bring up the keyboard.
 // https://bugzilla.mozilla.org/show_bug.cgi?id=965763
 pref("browser.autofocus", false);
+
+// Enable wakelock
+pref("dom.wakelock.enabled", true);

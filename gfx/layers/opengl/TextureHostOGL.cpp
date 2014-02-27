@@ -176,6 +176,7 @@ void CompositableDataGonkOGL::SetCompositor(Compositor* aCompositor)
 
 void CompositableDataGonkOGL::ClearData()
 {
+  CompositableBackendSpecificData::ClearData();
   DeleteTextureIfPresent();
 }
 
@@ -199,6 +200,41 @@ CompositableDataGonkOGL::DeleteTextureIfPresent()
     mTexture = 0;
   }
 }
+
+#if MOZ_WIDGET_GONK && ANDROID_VERSION >= 18
+bool
+TextureHostOGL::SetReleaseFence(const android::sp<android::Fence>& aReleaseFence)
+{
+  if (!aReleaseFence.get() || !aReleaseFence->isValid()) {
+    return false;
+  }
+
+  if (!mReleaseFence.get()) {
+    mReleaseFence = aReleaseFence;
+  } else {
+    android::sp<android::Fence> mergedFence = android::Fence::merge(
+                  android::String8::format("TextureHostOGL"),
+                  mReleaseFence, aReleaseFence);
+    if (!mergedFence.get()) {
+      // synchronization is broken, the best we can do is hope fences
+      // signal in order so the new fence will act like a union.
+      // This error handling is same as android::ConsumerBase does.
+      mReleaseFence = aReleaseFence;
+      return false;
+    }
+    mReleaseFence = mergedFence;
+  }
+  return true;
+}
+
+android::sp<android::Fence>
+TextureHostOGL::GetAndResetReleaseFence()
+{
+  android::sp<android::Fence> fence = mReleaseFence;
+  mReleaseFence = android::Fence::NO_FENCE;
+  return fence;
+}
+#endif
 
 bool
 TextureImageTextureSourceOGL::Update(gfx::DataSourceSurface* aSurface,
@@ -740,11 +776,18 @@ TextureImageDeprecatedTextureHostOGL::UpdateImpl(const SurfaceDescriptor& aImage
   } else {
     updateRegion = *aRegion;
   }
-  nsIntPoint offset;
+  gfx::IntPoint offset;
   if (aOffset) {
-    offset = *aOffset;
+    offset.x = aOffset->x;
+    offset.y = aOffset->y;
   }
-  mTexture->DirectUpdate(surf.Get(), updateRegion, offset);
+  nsRefPtr<gfxImageSurface> thebesSurf = surf.GetAsImage();
+  RefPtr<DataSourceSurface> sourceSurf =
+    gfx::Factory::CreateWrappingDataSourceSurface(thebesSurf->Data(),
+                                                  thebesSurf->Stride(),
+                                                  ToIntSize(thebesSurf->GetSize()),
+                                                  ImageFormatToSurfaceFormat(thebesSurf->Format()));
+  mTexture->DirectUpdate(sourceSurf, updateRegion, offset);
   mFormat = mTexture->GetTextureFormat();
 
   if (mTexture->InUpdate()) {
@@ -1148,7 +1191,8 @@ GrallocDeprecatedTextureHostOGL::GetRenderState()
 
     return LayerRenderState(mGraphicBuffer.get(),
                             bufferSize,
-                            flags);
+                            flags,
+                            nullptr);
   }
 
   return LayerRenderState();

@@ -208,9 +208,7 @@ pref("media.fragmented-mp4.use-blank-decoder", false);
 #ifdef MOZ_RAW
 pref("media.raw.enabled", true);
 #endif
-#ifdef MOZ_OGG
 pref("media.ogg.enabled", true);
-#endif
 #ifdef MOZ_OPUS
 pref("media.opus.enabled", true);
 #endif
@@ -249,6 +247,12 @@ pref("media.navigator.permission.disabled", false);
 pref("media.peerconnection.default_iceservers", "[{\"url\": \"stun:stun.services.mozilla.com\"}]");
 pref("media.peerconnection.trickle_ice", true);
 pref("media.peerconnection.use_document_iceservers", true);
+// Do not enable identity before ensuring that the UX cannot be spoofed
+// see Bug 884573 for details
+// Do not enable identity before fixing domain comparison: see Bug 958741
+// Do not enable identity before fixing origin spoofing: see Bug 968335
+pref("media.peerconnection.identity.enabled", false);
+pref("media.peerconnection.identity.timeout", 5000);
 // These values (aec, agc, and noice) are from media/webrtc/trunk/webrtc/common_types.h
 // kXxxUnchanged = 0, kXxxDefault = 1, and higher values are specific to each 
 // setting (for Xxx = Ec, Agc, or Ns).  Defaults are all set to kXxxDefault here.
@@ -432,6 +436,7 @@ pref("accessibility.tabfocus_applies_to_xul", true);
 // provide ability to turn on support for canvas focus rings
 pref("canvas.focusring.enabled", false);
 pref("canvas.customfocusring.enabled", false);
+pref("canvas.hitregions.enabled", false);
 
 // We want the ability to forcibly disable platform a11y, because
 // some non-a11y-related components attempt to bring it up.  See bug
@@ -738,12 +743,12 @@ pref("javascript.options.strict.debug",     true);
 pref("javascript.options.baselinejit.content", true);
 pref("javascript.options.baselinejit.chrome",  true);
 pref("javascript.options.ion.content",      true);
-pref("javascript.options.ion.chrome",       false);
+pref("javascript.options.ion.chrome",       true);
 pref("javascript.options.asmjs",            true);
 pref("javascript.options.parallel_parsing", true);
 pref("javascript.options.ion.parallel_compilation", true);
 pref("javascript.options.typeinference.content", true);
-pref("javascript.options.typeinference.chrome", false);
+pref("javascript.options.typeinference.chrome", true);
 // This preference limits the memory usage of javascript.
 // If you want to change these values for your device,
 // please find Bug 417052 comment 17 and Bug 456721
@@ -992,7 +997,7 @@ pref("network.http.spdy.enabled.v3", true);
 pref("network.http.spdy.enabled.v3-1", true);
 pref("network.http.spdy.enabled.http2draft", false);
 pref("network.http.spdy.enforce-tls-profile", true);
-pref("network.http.spdy.chunk-size", 4096);
+pref("network.http.spdy.chunk-size", 16000);
 pref("network.http.spdy.timeout", 180);
 pref("network.http.spdy.coalesce-hostnames", true);
 pref("network.http.spdy.persistent-settings", false);
@@ -1804,11 +1809,7 @@ pref("layout.css.scope-pseudo.enabled", true);
 #endif
 
 // Is support for background-blend-mode enabled?
-#ifdef RELEASE_BUILD
-pref("layout.css.background-blend-mode.enabled", false);
-#else
 pref("layout.css.background-blend-mode.enabled", true);
-#endif
 
 // Is support for CSS vertical text enabled?
 pref("layout.css.vertical-text.enabled", false);
@@ -1833,6 +1834,9 @@ pref("layout.css.variables.enabled", false);
 #else
 pref("layout.css.variables.enabled", true);
 #endif
+
+// Is support for CSS overflow-clip-box enabled for non-UA sheets?
+pref("layout.css.overflow-clip-box.enabled", false);
 
 // pref for which side vertical scrollbars should be on
 // 0 = end-side in UI direction
@@ -1905,6 +1909,11 @@ pref("plugins.enumerable_names", "Java,Nexus Personal,QuickTime,Shockwave");
 
 // The default value for nsIPluginTag.enabledState (STATE_ENABLED = 2)
 pref("plugin.default.state", 2);
+
+// The MIME type that should bind to legacy java-specific invocations like
+// <applet> and <object data="java:foo">. Setting this to a non-java MIME type
+// is undefined behavior.
+pref("plugin.java.mime", "application/x-java-vm");
 
 // How long in minutes we will allow a plugin to work after the user has chosen
 // to allow it "now"
@@ -3655,8 +3664,6 @@ pref("ui.panel.default_level_parent", true);
 
 pref("mousewheel.system_scroll_override_on_root_content.enabled", false);
 
-pref("ui.key.menuAccessKeyFocuses", true);
-
 #if MOZ_WIDGET_GTK == 2
 pref("intl.ime.use_simple_context_on_password_field", true);
 #else
@@ -3858,6 +3865,7 @@ pref("webgl.lose-context-on-heap-minimize", false);
 pref("webgl.can-lose-context-in-foreground", true);
 pref("webgl.max-warnings-per-context", 32);
 pref("webgl.enable-draft-extensions", false);
+pref("webgl.enable-privileged-extensions", false);
 #ifdef MOZ_WIDGET_GONK
 pref("gfx.gralloc.fence-with-readpixels", false);
 #endif
@@ -4134,6 +4142,9 @@ pref("memory.free_dirty_pages", false);
 pref("memory.system_memory_reporter", false);
 #endif
 
+// Don't dump memory reports on OOM, by default.
+pref("memory.dump_reports_on_oom", false);
+
 // Number of stack frames to capture in createObjectURL for about:memory.
 pref("memory.blob_report.stack_frames", 0);
 
@@ -4309,3 +4320,6 @@ pref("urlclassifier.download_allow_table", "");
 
 // Turn off Spatial navigation by default.
 pref("snav.enabled", false);
+
+// Wakelock is disabled by default.
+pref("dom.wakelock.enabled", false);

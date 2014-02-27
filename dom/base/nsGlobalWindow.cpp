@@ -232,6 +232,10 @@ class nsIScriptTimeoutHandler;
 #endif // check
 #include "AccessCheck.h"
 
+#ifdef ANDROID
+#include <android/log.h>
+#endif
+
 #ifdef PR_LOGGING
 static PRLogModuleInfo* gDOMLeakPRLog;
 #endif
@@ -1079,6 +1083,7 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
 #endif
     mShowFocusRingForContent(false),
     mFocusByKeyOccurred(false),
+    mInnerObjectsFreed(false),
     mHasGamepad(false),
 #ifdef MOZ_GAMEPAD
     mHasSeenGamepadInput(false),
@@ -1173,10 +1178,10 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
   if (!PR_GetEnv("MOZ_QUIET")) {
     printf_stderr("++DOMWINDOW == %d (%p) [pid = %d] [serial = %d] [outer = %p]\n",
                   gRefCnt,
-                  static_cast<void*>(static_cast<nsIScriptGlobalObject*>(this)),
+                  static_cast<void*>(ToCanonicalSupports(this)),
                   getpid(),
                   gSerialCounter,
-                  static_cast<void*>(static_cast<nsIScriptGlobalObject*>(aOuterWindow)));
+                  static_cast<void*>(ToCanonicalSupports(aOuterWindow)));
   }
 #endif
 
@@ -1251,10 +1256,10 @@ nsGlobalWindow::~nsGlobalWindow()
     nsGlobalWindow* outer = static_cast<nsGlobalWindow*>(mOuterWindow.get());
     printf_stderr("--DOMWINDOW == %d (%p) [pid = %d] [serial = %d] [outer = %p] [url = %s]\n",
                   gRefCnt,
-                  static_cast<void*>(static_cast<nsIScriptGlobalObject*>(this)),
+                  static_cast<void*>(ToCanonicalSupports(this)),
                   getpid(),
                   mSerial,
-                  static_cast<void*>(static_cast<nsIScriptGlobalObject*>(outer)),
+                  static_cast<void*>(ToCanonicalSupports(outer)),
                   url.get());
   }
 #endif
@@ -1516,6 +1521,8 @@ nsGlobalWindow::FreeInnerObjects()
   // re-create.
   NotifyDOMWindowDestroyed(this);
 
+  mInnerObjectsFreed = true;
+
   // Kill all of the workers for this window.
   mozilla::dom::workers::CancelWorkersForWindow(this);
 
@@ -1561,8 +1568,11 @@ nsGlobalWindow::FreeInnerObjects()
     mDocBaseURI = mDoc->GetDocBaseURI();
 
     while (mDoc->EventHandlingSuppressed()) {
-      mDoc->UnsuppressEventHandlingAndFireEvents(false);
+      mDoc->UnsuppressEventHandlingAndFireEvents(nsIDocument::eEvents, false);
     }
+
+    // Note: we don't have to worry about eAnimationsOnly suppressions because
+    // they won't leak.
   }
 
   // Remove our reference to the document and the document principal.
@@ -1801,6 +1811,14 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindow)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mScrollbars)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCrypto)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+#ifdef DEBUG
+void
+nsGlobalWindow::RiskyUnlink()
+{
+  NS_CYCLE_COLLECTION_INNERNAME.Unlink(this);
+}
+#endif
 
 struct TraceData
 {
@@ -5809,7 +5827,31 @@ nsGlobalWindow::Dump(const nsAString& aStr)
     return NS_OK;
   }
 
-  PrintToDebugger(aStr, gDumpFile ? gDumpFile : stdout);
+  char *cstr = ToNewUTF8String(aStr);
+
+#if defined(XP_MACOSX)
+  // have to convert \r to \n so that printing to the console works
+  char *c = cstr, *cEnd = cstr + strlen(cstr);
+  while (c < cEnd) {
+    if (*c == '\r')
+      *c = '\n';
+    c++;
+  }
+#endif
+
+  if (cstr) {
+#ifdef XP_WIN
+    PrintToDebugger(cstr);
+#endif
+#ifdef ANDROID
+    __android_log_write(ANDROID_LOG_INFO, "GeckoDump", cstr);
+#endif
+    FILE *fp = gDumpFile ? gDumpFile : stdout;
+    fputs(cstr, fp);
+    fflush(fp);
+    nsMemory::Free(cstr);
+  }
+
   return NS_OK;
 }
 
@@ -7403,18 +7445,25 @@ JSObject* nsGlobalWindow::CallerGlobal()
   // If somebody does sameOriginIframeWindow.postMessage(...), they probably
   // expect the .source attribute of the resulting message event to be |window|
   // rather than |sameOriginIframeWindow|, even though the transparent wrapper
-  // semantics of same-origin access will cause us to be in the iframe's cx at
-  // the time of the call. So we do some nasty poking in the JS engine and
-  // retrieve the global corresponding to the innermost scripted frame. Then,
-  // we verify that its principal is subsumed by the subject principal. If it
-  // isn't, something is screwy, and we want to clamp to the cx global.
-  JS::Rooted<JSObject*> scriptedGlobal(cx, JS_GetScriptedGlobal(cx));
-  JS::Rooted<JSObject*> cxGlobal(cx, JS::CurrentGlobalOrNull(cx));
-  if (!xpc::AccessCheck::subsumes(cxGlobal, scriptedGlobal)) {
-    NS_WARNING("Something nasty is happening! Applying countermeasures...");
-    return cxGlobal;
-  }
-  return scriptedGlobal;
+  // semantics of same-origin access will cause us to be in the iframe's
+  // compartment at the time of the call. This means that we want the incumbent
+  // global here, rather than the global of the current compartment.
+  //
+  // There are various edge cases in which the incumbent global and the current
+  // global would not be same-origin. They include:
+  // * A privileged caller (System Principal or Expanded Principal) manipulating
+  //   less-privileged content via Xray Waivers.
+  // * An unprivileged caller invoking a cross-origin function that was exposed
+  //   to it by privileged code (i.e. Sandbox.importFunction).
+  //
+  // In these cases, we probably don't want the privileged global appearing in the
+  // .source attribute. So we fall back to the compartment global there.
+  JS::Rooted<JSObject*> incumbentGlobal(cx, &IncumbentJSGlobal());
+  JS::Rooted<JSObject*> compartmentGlobal(cx, JS::CurrentGlobalOrNull(cx));
+  nsIPrincipal* incumbentPrin = nsContentUtils::GetObjectPrincipal(incumbentGlobal);
+  nsIPrincipal* compartmentPrin = nsContentUtils::GetObjectPrincipal(compartmentGlobal);
+  return incumbentPrin->EqualsConsideringDomain(compartmentPrin) ? incumbentGlobal
+                                                                 : compartmentGlobal;
 }
 
 
@@ -7690,7 +7739,7 @@ PostMessageEvent::Run()
     //       don't do that in other places it seems better to hold the line for
     //       now.  Long-term, we want HTML5 to address this so that we can
     //       be compliant while being safer.
-    if (!targetPrin->EqualsIgnoringDomain(mProvidedPrincipal)) {
+    if (!targetPrin->Equals(mProvidedPrincipal)) {
       return NS_OK;
     }
   }
@@ -7912,9 +7961,13 @@ nsGlobalWindow::PostMessageMoz(JSContext* aCx, JS::Handle<JS::Value> aMessage,
   JS::Rooted<JS::Value> transferArray(aCx, JS::UndefinedValue());
   if (aTransfer.WasPassed()) {
     const Sequence<JS::Value >& values = aTransfer.Value();
-    transferArray = JS::ObjectOrNullValue(JS_NewArrayObject(aCx,
-                                                            values.Length(),
-                                                            const_cast<JS::Value*>(values.Elements())));
+
+    // The input sequence only comes from the generated bindings code, which
+    // ensures it is rooted.
+    JS::HandleValueArray elements =
+      JS::HandleValueArray::fromMarkedLocation(values.Length(), values.Elements());
+
+    transferArray = JS::ObjectOrNullValue(JS_NewArrayObject(aCx, elements));
     if (transferArray.isNull()) {
       aError.Throw(NS_ERROR_OUT_OF_MEMORY);
       return;
@@ -8232,7 +8285,7 @@ nsGlobalWindow::EnterModalState()
 
     mSuspendedDoc = topDoc;
     if (mSuspendedDoc) {
-      mSuspendedDoc->SuppressEventHandling();
+      mSuspendedDoc->SuppressEventHandling(nsIDocument::eAnimationsOnly);
     }
   }
   topWin->mModalStateDepth++;
@@ -8329,7 +8382,8 @@ nsGlobalWindow::LeaveModalState()
 
     if (mSuspendedDoc) {
       nsCOMPtr<nsIDocument> currentDoc = topWin->GetExtantDoc();
-      mSuspendedDoc->UnsuppressEventHandlingAndFireEvents(currentDoc == mSuspendedDoc);
+      mSuspendedDoc->UnsuppressEventHandlingAndFireEvents(nsIDocument::eAnimationsOnly,
+                                                          currentDoc == mSuspendedDoc);
       mSuspendedDoc = nullptr;
     }
   }
@@ -8523,7 +8577,16 @@ nsGlobalWindow::GetFrameElement(ErrorResult& aError)
     return nullptr;
   }
 
-  return GetRealFrameElement(aError);
+  // Per HTML5, the frameElement getter returns null in cross-origin situations.
+  Element* element = GetRealFrameElement(aError);
+  if (aError.Failed() || !element) {
+    return nullptr;
+  }
+  if (!nsContentUtils::GetSubjectPrincipal()->
+         SubsumesConsideringDomain(element->NodePrincipal())) {
+    return nullptr;
+  }
+  return element;
 }
 
 Element*
@@ -8759,18 +8822,14 @@ nsGlobalWindow::ShowModalDialog(const nsAString& aUrl, nsIVariant* aArgument,
 
 JS::Value
 nsGlobalWindow::ShowModalDialog(JSContext* aCx, const nsAString& aUrl,
-                                const Optional<JS::Handle<JS::Value> >& aArgument,
+                                JS::Handle<JS::Value> aArgument,
                                 const nsAString& aOptions,
                                 ErrorResult& aError)
 {
   nsCOMPtr<nsIVariant> args;
-  if (aArgument.WasPassed()) {
-    aError = nsContentUtils::XPConnect()->JSToVariant(aCx,
-                                                      aArgument.Value(),
-                                                      getter_AddRefs(args));
-  } else {
-    args = CreateVoidVariant();
-  }
+  aError = nsContentUtils::XPConnect()->JSToVariant(aCx,
+                                                    aArgument,
+                                                    getter_AddRefs(args));
 
   nsCOMPtr<nsIVariant> retVal = ShowModalDialog(aUrl, args, aOptions, aError);
   if (aError.Failed()) {
@@ -10481,9 +10540,9 @@ nsGlobalWindow::ShowSlowScriptDialog()
   NS_ENSURE_TRUE(prompt, KillSlowScript);
 
   // Check if we should offer the option to debug
-  JS::Rooted<JSScript*> script(cx);
+  JS::AutoFilename filename;
   unsigned lineno;
-  bool hasFrame = JS_DescribeScriptedCaller(cx, &script, &lineno);
+  bool hasFrame = JS::DescribeScriptedCaller(cx, &filename, &lineno);
 
   bool debugPossible = hasFrame && js::CanCallContextDebugHandler(cx);
 #ifdef MOZ_JSDEBUGGER
@@ -10568,23 +10627,20 @@ nsGlobalWindow::ShowSlowScriptDialog()
   }
 
   // Append file and line number information, if available
-  if (script) {
-    const char *filename = JS_GetScriptFilename(cx, script);
-    if (filename) {
-      nsXPIDLString scriptLocation;
-      NS_ConvertUTF8toUTF16 filenameUTF16(filename);
-      const char16_t *formatParams[] = { filenameUTF16.get() };
-      rv = nsContentUtils::FormatLocalizedString(nsContentUtils::eDOM_PROPERTIES,
-                                                 "KillScriptLocation",
-                                                 formatParams,
-                                                 scriptLocation);
+  if (filename.get()) {
+    nsXPIDLString scriptLocation;
+    NS_ConvertUTF8toUTF16 filenameUTF16(filename.get());
+    const char16_t *formatParams[] = { filenameUTF16.get() };
+    rv = nsContentUtils::FormatLocalizedString(nsContentUtils::eDOM_PROPERTIES,
+                                               "KillScriptLocation",
+                                               formatParams,
+                                               scriptLocation);
 
-      if (NS_SUCCEEDED(rv) && scriptLocation) {
-        msg.AppendLiteral("\n\n");
-        msg.Append(scriptLocation);
-        msg.Append(':');
-        msg.AppendInt(lineno);
-      }
+    if (NS_SUCCEEDED(rv) && scriptLocation) {
+      msg.AppendLiteral("\n\n");
+      msg.Append(scriptLocation);
+      msg.Append(':');
+      msg.AppendInt(lineno);
     }
   }
 
@@ -11382,7 +11438,9 @@ nsGlobalWindow::SetTimeout(JSContext* aCx, Function& aFunction,
 
 int32_t
 nsGlobalWindow::SetTimeout(JSContext* aCx, const nsAString& aHandler,
-                           int32_t aTimeout, ErrorResult& aError)
+                           int32_t aTimeout,
+                           const Sequence<JS::Value>& /* unused */,
+                           ErrorResult& aError)
 {
   return SetTimeoutOrInterval(aCx, aHandler, aTimeout, false, aError);
 }
@@ -11416,6 +11474,7 @@ nsGlobalWindow::SetInterval(JSContext* aCx, Function& aFunction,
 int32_t
 nsGlobalWindow::SetInterval(JSContext* aCx, const nsAString& aHandler,
                             const Optional<int32_t>& aTimeout,
+                            const Sequence<JS::Value>& /* unused */,
                             ErrorResult& aError)
 {
   int32_t timeout;
@@ -12514,7 +12573,7 @@ nsGlobalWindow::ResumeTimeouts(bool aThawChildren)
 
   NS_ASSERTION(mTimeoutsSuspendDepth, "Mismatched calls to ResumeTimeouts!");
   --mTimeoutsSuspendDepth;
-  bool shouldResume = (mTimeoutsSuspendDepth == 0);
+  bool shouldResume = (mTimeoutsSuspendDepth == 0) && !mInnerObjectsFreed;
   nsresult rv;
 
   if (shouldResume) {

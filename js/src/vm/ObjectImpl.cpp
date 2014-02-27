@@ -335,25 +335,6 @@ js::ObjectImpl::nativeLookupPure(jsid id)
 }
 
 uint32_t
-js::ObjectImpl::numFixedSlotsForCompilation() const
-{
-    // This is an alternative method for getting the number of fixed slots
-    // in an object. It requires more logic and memory accesses than
-    // numFixedSlots() but is safe to be called from the compilation thread,
-    // even if the main thread is actively mutating the VM.
-    if (static_cast<const JSObject *>(this)->is<ArrayObject>())
-        return 0;
-#ifdef JSGC_GENERATIONAL
-    // The compiler does not have access to nursery things, so if this object
-    // is in the nursery we can fall back to numFixedSlots().
-    if (IsInsideNursery(GetGCThingRuntime(this), this))
-        return numFixedSlots();
-#endif
-    gc::AllocKind kind = tenuredGetAllocKind();
-    return gc::GetGCKindSlots(kind, getClass());
-}
-
-uint32_t
 js::ObjectImpl::dynamicSlotsCount(uint32_t nfixed, uint32_t span, const Class *clasp)
 {
     if (span <= nfixed)
@@ -552,7 +533,9 @@ DenseElementsHeader::defineElement(JSContext *cx, Handle<ObjectImpl*> obj, uint3
 JSObject *
 js::ArrayBufferDelegate(JSContext *cx, Handle<ObjectImpl*> obj)
 {
-    MOZ_ASSERT(obj->hasClass(&ArrayBufferObject::class_));
+    MOZ_ASSERT(obj->hasClass(&ArrayBufferObject::class_) ||
+               obj->hasClass(&SharedArrayBufferObject::class_));
+
     if (obj->getPrivate())
         return static_cast<JSObject *>(obj->getPrivate());
     JSObject *delegate = NewObjectWithGivenProto(cx, &JSObject::class_,

@@ -92,6 +92,8 @@
 
 static NS_DEFINE_CID(kAppShellCID, NS_APPSHELL_CID);
 
+static const char *kPrefJavaMIME = "plugin.java.mime";
+
 using namespace mozilla;
 using namespace mozilla::dom;
 
@@ -902,6 +904,8 @@ nsObjectLoadingContent::InstantiatePluginInstance(bool aIsLoading)
 void
 nsObjectLoadingContent::NotifyOwnerDocumentActivityChanged()
 {
+  // XXX(johns): We cannot touch plugins or run arbitrary script from this call,
+  //             as nsDocument is in a non-reentrant state.
 
   // If we have a plugin we want to queue an event to stop it unless we are
   // moved into an active document before returning to the event loop.
@@ -1410,8 +1414,12 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
   ///
   /// Initial MIME Type
   ///
+
   if (aJavaURI || thisContent->NodeInfo()->Equals(nsGkAtoms::applet)) {
-    newMime.AssignLiteral("application/x-java-vm");
+    nsAdoptingCString javaMIME = Preferences::GetCString(kPrefJavaMIME);
+    newMime = javaMIME;
+    NS_ASSERTION(nsPluginHost::IsJavaMIMEType(newMime.get()),
+                 "plugin.mime.java should be recognized by IsJavaMIMEType");
     isJava = true;
   } else {
     nsAutoString rawTypeAttr;
@@ -1432,9 +1440,12 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
     thisContent->GetAttr(kNameSpaceID_None, nsGkAtoms::classid, classIDAttr);
     if (!classIDAttr.IsEmpty()) {
       // Our classid support is limited to 'java:' ids
+      nsAdoptingCString javaMIME = Preferences::GetCString(kPrefJavaMIME);
+      NS_ASSERTION(nsPluginHost::IsJavaMIMEType(javaMIME.get()),
+                   "plugin.mime.java should be recognized by IsJavaMIMEType");
       if (StringBeginsWith(classIDAttr, NS_LITERAL_STRING("java:")) &&
-          PluginExistsForType("application/x-java-vm")) {
-        newMime.Assign("application/x-java-vm");
+          PluginExistsForType(javaMIME)) {
+        newMime = javaMIME;
         isJava = true;
       } else {
         // XXX(johns): Our de-facto behavior since forever was to refuse to load
@@ -2622,7 +2633,7 @@ nsObjectLoadingContent::ScriptRequestPluginInstance(JSContext* aCx,
       NS_NOTREACHED("failed to dispatch PluginScripted event");
     }
     mScriptRequested = true;
-  } else if (mType == eType_Plugin && !mInstanceOwner &&
+  } else if (callerIsContentJS && mType == eType_Plugin && !mInstanceOwner &&
              nsContentUtils::IsSafeToRunScript() &&
              InActiveDocument(thisContent)) {
     // If we're configured as a plugin in an active document and it's safe to
@@ -3143,7 +3154,7 @@ nsObjectLoadingContent::GetContentDocument()
   }
 
   // Return null for cross-origin contentDocument.
-  if (!nsContentUtils::GetSubjectPrincipal()->Subsumes(sub_doc->NodePrincipal())) {
+  if (!nsContentUtils::GetSubjectPrincipal()->SubsumesConsideringDomain(sub_doc->NodePrincipal())) {
     return nullptr;
   }
 
@@ -3434,7 +3445,8 @@ nsObjectLoadingContent::DoNewResolve(JSContext* aCx, JS::Handle<JSObject*> aObje
                                      JS::Handle<jsid> aId,
                                      JS::MutableHandle<JSPropertyDescriptor> aDesc)
 {
-  // We don't resolve anything; we just try to make sure we're instantiated
+  // We don't resolve anything; we just try to make sure we're instantiated.
+  // This purposefully does not fire for chrome/xray resolves, see bug 967694
 
   nsRefPtr<nsNPAPIPluginInstance> pi;
   nsresult rv = ScriptRequestPluginInstance(aCx, getter_AddRefs(pi));
@@ -3450,8 +3462,8 @@ nsObjectLoadingContent::GetOwnPropertyNames(JSContext* aCx,
                                             ErrorResult& aRv)
 {
   // Just like DoNewResolve, just make sure we're instantiated.  That will do
-  // the work our Enumerate hook needs to do, and we don't want to return these
-  // property names from Xrays anyway.
+  // the work our Enumerate hook needs to do.  This purposefully does not fire
+  // for xray resolves, see bug 967694
   nsRefPtr<nsNPAPIPluginInstance> pi;
   aRv = ScriptRequestPluginInstance(aCx, getter_AddRefs(pi));
 }

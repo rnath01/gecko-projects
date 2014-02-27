@@ -29,6 +29,9 @@ const EVENTS = {
   SOURCE_SHOWN: "Debugger:EditorSourceShown",
   SOURCE_ERROR_SHOWN: "Debugger:EditorSourceErrorShown",
 
+  // When the editor has shown a source and set the line / column position
+  EDITOR_LOCATION_SET: "Debugger:EditorLocationSet",
+
   // When scopes, variables, properties and watch expressions are fetched and
   // displayed in the variables view.
   FETCHED_SCOPES: "Debugger:FetchedScopes",
@@ -87,7 +90,7 @@ const FRAME_TYPE = {
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/devtools/dbg-client.jsm");
-Cu.import("resource:///modules/devtools/shared/event-emitter.js");
+Cu.import("resource://gre/modules/devtools/event-emitter.js");
 Cu.import("resource:///modules/devtools/SimpleListWidget.jsm");
 Cu.import("resource:///modules/devtools/BreadcrumbsWidget.jsm");
 Cu.import("resource:///modules/devtools/SideMenuWidget.jsm");
@@ -237,7 +240,11 @@ let DebuggerController = {
       } else {
         this._startDebuggingTab(startedDebugging.resolve);
         const startedTracing = promise.defer();
-        this._startTracingTab(traceActor, startedTracing.resolve);
+        if (Prefs.tracerEnabled && traceActor) {
+          this._startTracingTab(traceActor, startedTracing.resolve);
+        } else {
+          startedTracing.resolve();
+        }
 
         return promise.all([startedDebugging.promise, startedTracing.promise]);
       }
@@ -1300,7 +1307,7 @@ SourceScripts.prototype = {
     deferred.promise.pretty = wantPretty;
     this._cache.set(aSource.url, deferred.promise);
 
-    const afterToggle = ({ error, message, source: text }) => {
+    const afterToggle = ({ error, message, source: text, contentType }) => {
       if (error) {
         // Revert the rejected promise from the cache, so that the original
         // source's text may be shown when the source is selected.
@@ -1308,7 +1315,7 @@ SourceScripts.prototype = {
         deferred.reject([aSource, message || error]);
         return;
       }
-      deferred.resolve([aSource, text]);
+      deferred.resolve([aSource, text, contentType]);
     };
 
     if (wantPretty) {
@@ -1360,14 +1367,15 @@ SourceScripts.prototype = {
     }
 
     // Get the source text from the active thread.
-    this.activeThread.source(aSource).source(({ error, message, source: text }) => {
+    this.activeThread.source(aSource)
+        .source(({ error, message, source: text, contentType }) => {
       if (aOnTimeout) {
         window.clearTimeout(fetchTimeout);
       }
       if (error) {
         deferred.reject([aSource, message || error]);
       } else {
-        deferred.resolve([aSource, text]);
+        deferred.resolve([aSource, text, contentType]);
       }
     });
 
@@ -1406,13 +1414,13 @@ SourceScripts.prototype = {
     }
 
     /* Called if fetching a source finishes successfully. */
-    function onFetch([aSource, aText]) {
+    function onFetch([aSource, aText, aContentType]) {
       // If fetching the source has previously timed out, discard it this time.
       if (!pending.has(aSource.url)) {
         return;
       }
       pending.delete(aSource.url);
-      fetched.push([aSource.url, aText]);
+      fetched.push([aSource.url, aText, aContentType]);
       maybeFinish();
     }
 
@@ -2121,16 +2129,6 @@ Breakpoints.prototype = {
   },
 
   /**
-   * Gets all Promises for the BreakpointActor client objects that are
-   * either enabled (added to the server) or disabled (removed from the server,
-   * but for which some details are preserved).
-   */
-  get _addedOrDisabled() {
-    for (let [, value] of this._added) yield value;
-    for (let [, value] of this._disabled) yield value;
-  },
-
-  /**
    * Get a Promise for the BreakpointActor client object which is already added
    * or currently being added at the given location.
    *
@@ -2171,6 +2169,22 @@ Breakpoints.prototype = {
     return aLocation.url + ":" + aLocation.line;
   }
 };
+
+/**
+ * Gets all Promises for the BreakpointActor client objects that are
+ * either enabled (added to the server) or disabled (removed from the server,
+ * but for which some details are preserved).
+ */
+Object.defineProperty(Breakpoints.prototype, "_addedOrDisabled", {
+  get: function* () {
+    for (let [, value] of this._added) {
+      yield value;
+    }
+    for (let [, value] of this._disabled) {
+      yield value;
+    }
+  }
+});
 
 /**
  * Localization convenience methods.

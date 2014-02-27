@@ -335,6 +335,8 @@ fi
 
 MOZ_TOOL_VARIABLES
 
+MOZ_CHECK_COMPILER_WRAPPER
+
 if test -n "$GNU_CC" -a -z "$CLANG_CC" ; then
     if test "$GCC_MAJOR_VERSION" -eq 4 -a "$GCC_MINOR_VERSION" -lt 4 ||
        test "$GCC_MAJOR_VERSION" -lt 4; then
@@ -825,6 +827,24 @@ darwin*)
     ;;
 linux*)
     HOST_OS_ARCH=Linux
+    ;;
+kfreebsd*-gnu)
+    HOST_OS_ARCH=GNU_kFreeBSD
+    ;;
+gnu*)
+    HOST_OS_ARCH=GNU
+    ;;
+dragonfly*)
+    HOST_OS_ARCH=DragonFly
+    ;;
+freebsd*)
+    HOST_OS_ARCH=FreeBSD
+    ;;
+netbsd*)
+    HOST_OS_ARCH=NetBSD
+    ;;
+openbsd*)
+    HOST_OS_ARCH=OpenBSD
     ;;
 solaris*)
     HOST_OS_ARCH=SunOS
@@ -3448,7 +3468,6 @@ if test -n "$JS_OOM_DO_BACKTRACES"; then
 fi
 
 MOZ_CHECK_CCACHE
-MOZ_CHECK_COMPILER_WRAPPER
 
 dnl ========================================================
 dnl = Enable static checking using gcc-dehydra

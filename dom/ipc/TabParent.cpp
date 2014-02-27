@@ -55,7 +55,9 @@
 #include "private/pprio.h"
 #include "PermissionMessageUtils.h"
 #include "StructuredCloneUtils.h"
+#include "ColorPickerParent.h"
 #include "JavaScriptParent.h"
+#include "FilePickerParent.h"
 #include "TabChild.h"
 #include "LoadContext.h"
 #include "nsNetCID.h"
@@ -637,6 +639,19 @@ TabParent::DeallocPContentPermissionRequestParent(PContentPermissionRequestParen
   return true;
 }
 
+PFilePickerParent*
+TabParent::AllocPFilePickerParent(const nsString& aTitle, const int16_t& aMode)
+{
+  return new FilePickerParent(aTitle, aMode);
+}
+
+bool
+TabParent::DeallocPFilePickerParent(PFilePickerParent* actor)
+{
+  delete actor;
+  return true;
+}
+
 void
 TabParent::SendMouseEvent(const nsAString& aType, float aX, float aY,
                           int32_t aButton, int32_t aClickCount,
@@ -1036,7 +1051,7 @@ TabParent::RecvNotifyIMEFocus(const bool& aFocus,
 {
   nsCOMPtr<nsIWidget> widget = GetWidget();
   if (!widget) {
-    aPreference->mWantUpdates = nsIMEUpdatePreference::NOTIFY_NOTHING;
+    *aPreference = nsIMEUpdatePreference();
     return true;
   }
 
@@ -1044,7 +1059,8 @@ TabParent::RecvNotifyIMEFocus(const bool& aFocus,
   mIMETabParent = aFocus ? this : nullptr;
   mIMESelectionAnchor = 0;
   mIMESelectionFocus = 0;
-  widget->NotifyIME(aFocus ? NOTIFY_IME_OF_FOCUS : NOTIFY_IME_OF_BLUR);
+  widget->NotifyIME(IMENotification(aFocus ? NOTIFY_IME_OF_FOCUS :
+                                             NOTIFY_IME_OF_BLUR));
 
   if (aFocus) {
     *aPreference = widget->GetIMEUpdatePreference();
@@ -1057,16 +1073,28 @@ TabParent::RecvNotifyIMEFocus(const bool& aFocus,
 bool
 TabParent::RecvNotifyIMETextChange(const uint32_t& aStart,
                                    const uint32_t& aEnd,
-                                   const uint32_t& aNewEnd)
+                                   const uint32_t& aNewEnd,
+                                   const bool& aCausedByComposition)
 {
   nsCOMPtr<nsIWidget> widget = GetWidget();
   if (!widget)
     return true;
 
-  NS_ASSERTION(widget->GetIMEUpdatePreference().WantTextChange(),
+#ifdef DEBUG
+  nsIMEUpdatePreference updatePreference = widget->GetIMEUpdatePreference();
+  NS_ASSERTION(updatePreference.WantTextChange(),
                "Don't call Send/RecvNotifyIMETextChange without NOTIFY_TEXT_CHANGE");
+  MOZ_ASSERT(!aCausedByComposition ||
+               updatePreference.WantChangesCausedByComposition(),
+    "The widget doesn't want text change notification caused by composition");
+#endif
 
-  widget->NotifyIMEOfTextChange(aStart, aEnd, aNewEnd);
+  IMENotification notification(NOTIFY_IME_OF_TEXT_CHANGE);
+  notification.mTextChangeData.mStartOffset = aStart;
+  notification.mTextChangeData.mOldEndOffset = aEnd;
+  notification.mTextChangeData.mNewEndOffset = aNewEnd;
+  notification.mTextChangeData.mCausedByComposition = aCausedByComposition;
+  widget->NotifyIME(notification);
   return true;
 }
 
@@ -1084,14 +1112,15 @@ TabParent::RecvNotifyIMESelectedCompositionRect(const uint32_t& aOffset,
   if (!widget) {
     return true;
   }
-  widget->NotifyIME(NOTIFY_IME_OF_COMPOSITION_UPDATE);
+  widget->NotifyIME(IMENotification(NOTIFY_IME_OF_COMPOSITION_UPDATE));
   return true;
 }
 
 bool
 TabParent::RecvNotifyIMESelection(const uint32_t& aSeqno,
                                   const uint32_t& aAnchor,
-                                  const uint32_t& aFocus)
+                                  const uint32_t& aFocus,
+                                  const bool& aCausedByComposition)
 {
   nsCOMPtr<nsIWidget> widget = GetWidget();
   if (!widget)
@@ -1100,8 +1129,15 @@ TabParent::RecvNotifyIMESelection(const uint32_t& aSeqno,
   if (aSeqno == mIMESeqno) {
     mIMESelectionAnchor = aAnchor;
     mIMESelectionFocus = aFocus;
-    if (widget->GetIMEUpdatePreference().WantSelectionChange()) {
-      widget->NotifyIME(NOTIFY_IME_OF_SELECTION_CHANGE);
+    const nsIMEUpdatePreference updatePreference =
+      widget->GetIMEUpdatePreference();
+    if (updatePreference.WantSelectionChange() &&
+        (updatePreference.WantChangesCausedByComposition() ||
+         !aCausedByComposition)) {
+      IMENotification notification(NOTIFY_IME_OF_SELECTION_CHANGE);
+      notification.mSelectionChangeData.mCausedByComposition =
+        aCausedByComposition;
+      widget->NotifyIME(notification);
     }
   }
   return true;
@@ -1358,8 +1394,8 @@ TabParent::RecvEndIMEComposition(const bool& aCancel,
 
   mIMECompositionEnding = true;
 
-  widget->NotifyIME(aCancel ? REQUEST_TO_CANCEL_COMPOSITION :
-                              REQUEST_TO_COMMIT_COMPOSITION);
+  widget->NotifyIME(IMENotification(aCancel ? REQUEST_TO_CANCEL_COMPOSITION :
+                                              REQUEST_TO_COMMIT_COMPOSITION));
 
   mIMECompositionEnding = false;
   *aComposition = mIMECompositionText;
@@ -1604,6 +1640,20 @@ TabParent::GetAuthPrompt(uint32_t aPromptReason, const nsIID& iid,
   // of the dialogs works as it should when using tabs.
   return wwatch->GetPrompt(window, iid,
                            reinterpret_cast<void**>(aResult));
+}
+
+PColorPickerParent*
+TabParent::AllocPColorPickerParent(const nsString& aTitle,
+                                   const nsString& aInitialColor)
+{
+  return new ColorPickerParent(aTitle, aInitialColor);
+}
+
+bool
+TabParent::DeallocPColorPickerParent(PColorPickerParent* actor)
+{
+  delete actor;
+  return true;
 }
 
 PContentDialogParent*
@@ -1919,12 +1969,18 @@ TabParent::GetLoadContext()
                                   OwnOrContainingAppId(),
                                   true /* aIsContent */,
                                   mChromeFlags & nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW,
+                                  mChromeFlags & nsIWebBrowserChrome::CHROME_REMOTE_WINDOW,
                                   IsBrowserElement());
     mLoadContext = loadContext;
   }
   return loadContext.forget();
 }
 
+/* Be careful if you call this method while proceding a real touch event. For
+ * example sending a touchstart during a real touchend may results into
+ * a busted mEventCaptureDepth and following touch events may not do what you
+ * expect.
+ */
 NS_IMETHODIMP
 TabParent::InjectTouchEvent(const nsAString& aType,
                             uint32_t* aIdentifiers,
@@ -1966,6 +2022,11 @@ TabParent::InjectTouchEvent(const nsAString& aType,
     // https://developer.mozilla.org/docs/Web/API/TouchEvent.changedTouches
     t->mChanged = true;
     event.touches.AppendElement(t);
+  }
+
+  if ((msg == NS_TOUCH_END || msg == NS_TOUCH_CANCEL) && sEventCapturer) {
+    WidgetGUIEvent* guiEvent = event.AsGUIEvent();
+    TryCapture(*guiEvent);
   }
 
   SendRealTouchEvent(event);

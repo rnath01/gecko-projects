@@ -759,10 +759,11 @@ class ObjectElements
         CONVERT_DOUBLE_ELEMENTS     = 0x1,
         ASMJS_ARRAY_BUFFER          = 0x2,
         NEUTERED_BUFFER             = 0x4,
+        SHARED_ARRAY_BUFFER         = 0x8,
 
         // Present only if these elements correspond to an array with
         // non-writable length; never present for non-arrays.
-        NONWRITABLE_ARRAY_LENGTH    = 0x8
+        NONWRITABLE_ARRAY_LENGTH    = 0x10
     };
 
   private:
@@ -770,6 +771,8 @@ class ObjectElements
     friend class ObjectImpl;
     friend class ArrayObject;
     friend class ArrayBufferObject;
+    friend class ArrayBufferViewObject;
+    friend class SharedArrayBufferObject;
     friend class TypedArrayObject;
     friend class Nursery;
 
@@ -828,6 +831,12 @@ class ObjectElements
     }
     void setIsNeuteredBuffer() {
         flags |= NEUTERED_BUFFER;
+    }
+    bool isSharedArrayBuffer() const {
+        return flags & SHARED_ARRAY_BUFFER;
+    }
+    void setIsSharedArrayBuffer() {
+        flags |= SHARED_ARRAY_BUFFER;
     }
     bool hasNonwritableArrayLength() const {
         return flags & NONWRITABLE_ARRAY_LENGTH;
@@ -984,14 +993,12 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
 
   public:
     TaggedProto getTaggedProto() const {
-        AutoThreadSafeAccess ts(this);
         return type_->proto();
     }
 
     bool hasTenuredProto() const;
 
     const Class *getClass() const {
-        AutoThreadSafeAccess ts(this);
         return type_->clasp();
     }
 
@@ -1206,8 +1213,6 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
     }
 
     types::TypeObject *typeRaw() const {
-        AutoThreadSafeAccess ts0(this);
-        AutoThreadSafeAccess ts1(type_);
         return type_;
     }
 
@@ -1215,14 +1220,11 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
         return reinterpret_cast<const shadow::Object *>(this)->numFixedSlots();
     }
 
-    uint32_t numFixedSlotsForCompilation() const;
-
     /*
      * Whether this is the only object which has its specified type. This
      * object will have its type constructed lazily as needed by analysis.
      */
     bool hasSingletonType() const {
-        AutoThreadSafeAccess ts(this);
         return !!type_->singleton();
     }
 
@@ -1231,7 +1233,6 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
      * might have a lazy type, use getType() below, otherwise type().
      */
     bool hasLazyType() const {
-        AutoThreadSafeAccess ts(this);
         return type_->lazy();
     }
 
@@ -1391,7 +1392,7 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
     }
 
     const Value &getFixedSlot(uint32_t slot) const {
-        MOZ_ASSERT(slot < numFixedSlotsForCompilation());
+        MOZ_ASSERT(slot < numFixedSlots());
         return fixedSlots()[slot];
     }
 
@@ -1478,7 +1479,7 @@ class ObjectImpl : public gc::BarrieredCell<ObjectImpl>
          * Private pointers are stored immediately after the last fixed slot of
          * the object.
          */
-        MOZ_ASSERT(nfixed == numFixedSlotsForCompilation());
+        MOZ_ASSERT(nfixed == numFixedSlots());
         MOZ_ASSERT(hasPrivate());
         HeapSlot *end = &fixedSlots()[nfixed];
         return *reinterpret_cast<void**>(end);
@@ -1555,10 +1556,6 @@ MOZ_ALWAYS_INLINE Zone *
 BarrieredCell<ObjectImpl>::zoneFromAnyThread() const
 {
     const ObjectImpl* obj = static_cast<const ObjectImpl*>(this);
-
-    // Note: This read of obj->shape_ may race, though the zone fetched will be the same.
-    AutoThreadSafeAccess ts(obj->shape_);
-
     return obj->shape_->zoneFromAnyThread();
 }
 

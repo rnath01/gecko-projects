@@ -179,9 +179,9 @@
     _(MonitorTypes)                 \
     _(PostWriteBarrierO)            \
     _(PostWriteBarrierV)            \
-    _(PostWriteBarrierAllSlots)     \
     _(InitializedLength)            \
     _(SetInitializedLength)         \
+    _(NeuterCheck)                  \
     _(BoundsCheck)                  \
     _(BoundsCheckRange)             \
     _(BoundsCheckLower)             \
@@ -213,6 +213,7 @@
     _(StoreFixedSlotT)              \
     _(FunctionEnvironment)          \
     _(ForkJoinContext)              \
+    _(ForkJoinGetSlice)             \
     _(GetPropertyCacheV)            \
     _(GetPropertyCacheT)            \
     _(GetPropertyPolymorphicV)      \
@@ -274,6 +275,7 @@
     _(CallDOMNative)                \
     _(IsCallable)                   \
     _(HaveSameClass)                \
+    _(HasClass)                      \
     _(AsmJSLoadHeap)                \
     _(AsmJSStoreHeap)               \
     _(AsmJSLoadGlobalVar)           \
