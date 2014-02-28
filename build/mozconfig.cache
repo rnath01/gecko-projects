@@ -7,11 +7,17 @@
 bucket=
 if test -z "$SCCACHE_DISABLE" -a -f "$topsrcdir/sccache/sccache.py"; then
     case `hostname` in
-    *spot*.use1.mozilla.com|*ec2*.use1.mozilla.com)
+    try*spot*.use1.mozilla.com|try*ec2*.use1.mozilla.com)
         bucket=mozilla-releng-s3-cache-us-east-1-try
         ;;
-    *spot*.usw2.mozilla.com|*ec2*.usw2.mozilla.com)
+    try*spot*.usw2.mozilla.com|try*ec2*.usw2.mozilla.com)
         bucket=mozilla-releng-s3-cache-us-west-2-try
+        ;;
+    bld*spot*.use1.mozilla.com|bld*ec2*.use1.mozilla.com)
+        bucket=mozilla-releng-s3-cache-us-east-1-prod
+        ;;
+    bld*spot*.usw2.mozilla.com|bld*ec2*.usw2.mozilla.com)
+        bucket=mozilla-releng-s3-cache-us-west-2-prod
         ;;
     esac
 fi
