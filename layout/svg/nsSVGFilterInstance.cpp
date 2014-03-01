@@ -52,9 +52,9 @@ nsSVGFilterInstance::nsSVGFilterInstance(const nsStyleFilter& aFilter,
 
   // XXX if filterUnits is set (or has defaulted) to objectBoundingBox, we
   // should send a warning to the error console if the author has used lengths
-  // with units. This is a common mistake and can result in filterRes being
-  // *massive* below (because we ignore the units and interpret the number as
-  // a factor of the bbox width/height). We should also send a warning if the
+  // with units. This is a common mistake and can result in the filter region
+  // being *massive* below (because we ignore the units and interpret the number
+  // as a factor of the bbox width/height). We should also send a warning if the
   // user uses a number without units (a future SVG spec should really
   // deprecate that, since it's too confusing for a bare number to be sometimes
   // interpreted as a fraction of the bounding box and sometimes as user-space
@@ -81,56 +81,31 @@ nsSVGFilterInstance::nsSVGFilterInstance(const nsStyleFilter& aFilter,
     return;
   }
 
-  // Calculate filterRes (the width and height of the pixel buffer of the
+  // Calculate the width and height of the pixel buffer of the
   // temporary offscreen surface that we would/will create to paint into when
-  // painting the entire filtered element) and, if necessary, adjust
+  // painting the entire filtered element and, if necessary, adjust
   // mFilterRegion out slightly so that it aligns with pixel boundaries of this
   // buffer:
 
-  gfxIntSize filterRes;
-  const nsSVGIntegerPair* filterResAttrs =
-    mFilterFrame->GetIntegerPairValue(SVGFilterElement::FILTERRES);
-  if (filterResAttrs->IsExplicitlySet()) {
-    int32_t filterResX = filterResAttrs->GetAnimValue(nsSVGIntegerPair::eFirst);
-    int32_t filterResY = filterResAttrs->GetAnimValue(nsSVGIntegerPair::eSecond);
-    if (filterResX <= 0 || filterResY <= 0) {
-      // 0 disables rendering, < 0 is error. dispatch error console warning?
-      return;
-    }
-
-    mFilterRegion.Scale(filterResX, filterResY);
-    mFilterRegion.RoundOut();
-    mFilterRegion.Scale(1.0 / filterResX, 1.0 / filterResY);
-    // We don't care if this overflows, because we can handle upscaling/
-    // downscaling to filterRes
-    bool overflow;
-    filterRes =
-      nsSVGUtils::ConvertToSurfaceSize(gfxSize(filterResX, filterResY),
-                                       &overflow);
-    // XXX we could send a warning to the error console if the author specified
-    // filterRes doesn't align well with our outer 'svg' device space.
-  } else {
-    // Match filterRes as closely as possible to the pixel density of the nearest
-    // outer 'svg' device space:
-    gfxMatrix canvasTM =
-      nsSVGUtils::GetCanvasTM(mTargetFrame, nsISVGChildFrame::FOR_OUTERSVG_TM);
-    if (canvasTM.IsSingular()) {
-      // nothing to draw
-      return;
-    }
-
-    gfxSize scale = canvasTM.ScaleFactors(true);
-    mFilterRegion.Scale(scale.width, scale.height);
-    mFilterRegion.RoundOut();
-    // We don't care if this overflows, because we can handle upscaling/
-    // downscaling to filterRes
-    bool overflow;
-    filterRes = nsSVGUtils::ConvertToSurfaceSize(mFilterRegion.Size(),
-                                                 &overflow);
-    mFilterRegion.Scale(1.0 / scale.width, 1.0 / scale.height);
+  // Match filter space as closely as possible to the pixel density of the
+  // nearest outer 'svg' device space:
+  gfxMatrix canvasTM =
+    nsSVGUtils::GetCanvasTM(mTargetFrame, nsISVGChildFrame::FOR_OUTERSVG_TM);
+  if (canvasTM.IsSingular()) {
+    // nothing to draw
+    return;
   }
 
-  mFilterSpaceBounds.SetRect(nsIntPoint(0, 0), filterRes);
+  gfxSize scale = canvasTM.ScaleFactors(true);
+  mFilterRegion.Scale(scale.width, scale.height);
+  mFilterRegion.RoundOut();
+
+  // We don't care if this overflows, because we can handle upscaling/
+  // downscaling to filter space.
+  bool overflow;
+  mFilterSpaceBounds.SetRect(nsIntPoint(0, 0),
+    nsSVGUtils::ConvertToSurfaceSize(mFilterRegion.Size(), &overflow));
+  mFilterRegion.Scale(1.0 / scale.width, 1.0 / scale.height);
 
   mInitialized = true;
 }
@@ -301,14 +276,23 @@ nsSVGFilterInstance::GetInputsAreTainted(const nsTArray<FilterPrimitiveDescripti
   }
 }
 
-static nsresult
-GetSourceIndices(nsSVGFE* aFilterElement,
-                 int32_t aCurrentIndex,
-                 const nsDataHashtable<nsStringHashKey, int32_t>& aImageTable,
-                 nsTArray<int32_t>& aSourceIndices)
+static int32_t
+GetLastResultIndex(const nsTArray<FilterPrimitiveDescription>& aPrimitiveDescrs)
+{
+  uint32_t numPrimitiveDescrs = aPrimitiveDescrs.Length();
+  return !numPrimitiveDescrs ?
+    FilterPrimitiveDescription::kPrimitiveIndexSourceGraphic :
+    numPrimitiveDescrs - 1;
+}
+
+nsresult
+nsSVGFilterInstance::GetSourceIndices(nsSVGFE* aPrimitiveElement,
+                                      const nsTArray<FilterPrimitiveDescription>& aPrimitiveDescrs,
+                                      const nsDataHashtable<nsStringHashKey, int32_t>& aImageTable,
+                                      nsTArray<int32_t>& aSourceIndices)
 {
   nsAutoTArray<nsSVGStringInfo,2> sources;
-  aFilterElement->GetSourceImageNames(sources);
+  aPrimitiveElement->GetSourceImageNames(sources);
 
   for (uint32_t j = 0; j < sources.Length(); j++) {
     nsAutoString str;
@@ -316,7 +300,7 @@ GetSourceIndices(nsSVGFE* aFilterElement,
 
     int32_t sourceIndex = 0;
     if (str.EqualsLiteral("SourceGraphic")) {
-      sourceIndex = FilterPrimitiveDescription::kPrimitiveIndexSourceGraphic;
+      sourceIndex = mSourceGraphicIndex;
     } else if (str.EqualsLiteral("SourceAlpha")) {
       sourceIndex = FilterPrimitiveDescription::kPrimitiveIndexSourceAlpha;
     } else if (str.EqualsLiteral("FillPaint")) {
@@ -327,16 +311,13 @@ GetSourceIndices(nsSVGFE* aFilterElement,
                str.EqualsLiteral("BackgroundAlpha")) {
       return NS_ERROR_NOT_IMPLEMENTED;
     } else if (str.EqualsLiteral("")) {
-      sourceIndex = aCurrentIndex == 0 ?
-        FilterPrimitiveDescription::kPrimitiveIndexSourceGraphic :
-        aCurrentIndex - 1;
+      sourceIndex = GetLastResultIndex(aPrimitiveDescrs);
     } else {
       bool inputExists = aImageTable.Get(str, &sourceIndex);
       if (!inputExists)
         return NS_ERROR_FAILURE;
     }
 
-    MOZ_ASSERT(sourceIndex < aCurrentIndex);
     aSourceIndices.AppendElement(sourceIndex);
   }
   return NS_OK;
@@ -346,6 +327,9 @@ nsresult
 nsSVGFilterInstance::BuildPrimitives(nsTArray<FilterPrimitiveDescription>& aPrimitiveDescrs,
                                      nsTArray<mozilla::RefPtr<SourceSurface>>& aInputImages)
 {
+  mSourceGraphicIndex = GetLastResultIndex(aPrimitiveDescrs);
+
+  // Get the filter primitive elements.
   nsTArray<nsRefPtr<nsSVGFE> > primitives;
   for (nsIContent* child = mFilterElement->nsINode::GetFirstChild();
        child;
@@ -363,11 +347,13 @@ nsSVGFilterInstance::BuildPrimitives(nsTArray<FilterPrimitiveDescription>& aPrim
   // The principal that we check principals of any loaded images against.
   nsCOMPtr<nsIPrincipal> principal = mTargetFrame->GetContent()->NodePrincipal();
 
-  for (uint32_t i = 0; i < primitives.Length(); ++i) {
-    nsSVGFE* filter = primitives[i];
+  for (uint32_t primitiveElementIndex = 0;
+       primitiveElementIndex < primitives.Length();
+       ++primitiveElementIndex) {
+    nsSVGFE* filter = primitives[primitiveElementIndex];
 
     nsAutoTArray<int32_t,2> sourceIndices;
-    nsresult rv = GetSourceIndices(filter, i, imageTable, sourceIndices);
+    nsresult rv = GetSourceIndices(filter, aPrimitiveDescrs, imageTable, sourceIndices);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -384,14 +370,14 @@ nsSVGFilterInstance::BuildPrimitives(nsTArray<FilterPrimitiveDescription>& aPrim
     descr.SetIsTainted(filter->OutputIsTainted(sourcesAreTainted, principal));
     descr.SetPrimitiveSubregion(primitiveSubregion);
 
-    for (uint32_t j = 0; j < sourceIndices.Length(); j++) {
-      int32_t inputIndex = sourceIndices[j];
-      descr.SetInputPrimitive(j, inputIndex);
+    for (uint32_t i = 0; i < sourceIndices.Length(); i++) {
+      int32_t inputIndex = sourceIndices[i];
+      descr.SetInputPrimitive(i, inputIndex);
       ColorSpace inputColorSpace =
         inputIndex < 0 ? SRGB : aPrimitiveDescrs[inputIndex].OutputColorSpace();
-      ColorSpace desiredInputColorSpace = filter->GetInputColorSpace(j, inputColorSpace);
-      descr.SetInputColorSpace(j, desiredInputColorSpace);
-      if (j == 0) {
+      ColorSpace desiredInputColorSpace = filter->GetInputColorSpace(i, inputColorSpace);
+      descr.SetInputColorSpace(i, desiredInputColorSpace);
+      if (i == 0) {
         // the output color space is whatever in1 is if there is an in1
         descr.SetOutputColorSpace(desiredInputColorSpace);
       }
@@ -402,10 +388,11 @@ nsSVGFilterInstance::BuildPrimitives(nsTArray<FilterPrimitiveDescription>& aPrim
     }
 
     aPrimitiveDescrs.AppendElement(descr);
+    uint32_t primitiveDescrIndex = aPrimitiveDescrs.Length() - 1;
 
     nsAutoString str;
     filter->GetResultImageName().GetAnimValue(str, filter);
-    imageTable.Put(str, i);
+    imageTable.Put(str, primitiveDescrIndex);
   }
 
   return NS_OK;
