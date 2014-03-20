@@ -25,4 +25,18 @@ configuration files containing the default values live in:
 
 config = {
     # Add custom mozharness config options here
+
+    "reftest_options": [
+        "--appname=%(binary_path)s", "--utility-path=tests/bin",
+        "--extra-profile-file=tests/bin/plugins", "--symbols-path=%(symbols_path)s",
+        "--e10s"
+    ],
+
+    "mochitest_options": [
+        "--appname=%(binary_path)s", "--utility-path=tests/bin",
+        "--extra-profile-file=tests/bin/plugins", "--symbols-path=%(symbols_path)s",
+        "--certificate-path=tests/certs", "--autorun", "--close-when-done",
+        "--console-level=INFO", "--setpref=webgl.force-enabled=true",
+        "--e10s"
+    ],
 }
