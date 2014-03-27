@@ -1249,10 +1249,13 @@ public:
     , mCallee(nullptr)
   {}
 
+private:
+  // Private destructor, to discourage deletion outside of Release():
   ~AsyncScroll() {
     RemoveObserver();
   }
 
+public:
   nsPoint PositionAt(TimeStamp aTime);
   nsSize VelocityAt(TimeStamp aTime); // In nscoords per second
 
@@ -2092,19 +2095,39 @@ ScrollFrameHelper::ScrollToImpl(nsPoint aPt, const nsRect& aRange, nsIAtom* aOri
   }
 }
 
+static int32_t
+MaxZIndexInList(nsDisplayList* aList, nsDisplayListBuilder* aBuilder)
+{
+  int32_t maxZIndex = 0;
+  for (nsDisplayItem* item = aList->GetBottom(); item; item = item->GetAbove()) {
+    maxZIndex = std::max(maxZIndex, item->ZIndex());
+  }
+  return maxZIndex;
+}
+
 static void
-AppendToTop(nsDisplayListBuilder* aBuilder, nsDisplayList* aDest,
+AppendToTop(nsDisplayListBuilder* aBuilder, const nsDisplayListSet& aLists,
             nsDisplayList* aSource, nsIFrame* aSourceFrame, bool aOwnLayer,
-            uint32_t aFlags, mozilla::layers::FrameMetrics::ViewID aScrollTargetId)
+            uint32_t aFlags, mozilla::layers::FrameMetrics::ViewID aScrollTargetId,
+            bool aPositioned)
 {
   if (aSource->IsEmpty())
     return;
-  if (aOwnLayer) {
-    aDest->AppendNewToTop(
-        new (aBuilder) nsDisplayOwnLayer(aBuilder, aSourceFrame, aSource,
-                                         aFlags, aScrollTargetId));
+
+  nsDisplayWrapList* newItem = aOwnLayer?
+    new (aBuilder) nsDisplayOwnLayer(aBuilder, aSourceFrame, aSource,
+                                     aFlags, aScrollTargetId) :
+    new (aBuilder) nsDisplayWrapList(aBuilder, aSourceFrame, aSource);
+
+  nsDisplayList* positionedDescendants = aLists.PositionedDescendants();
+  if (aPositioned && !positionedDescendants->IsEmpty()) {
+    // We want overlay scrollbars to always be on top of the scrolled content,
+    // but we don't want them to unnecessarily cover overlapping elements from
+    // outside our scroll frame.
+    newItem->SetOverrideZIndex(MaxZIndexInList(positionedDescendants, aBuilder));
+    positionedDescendants->AppendNewToTop(newItem);
   } else {
-    aDest->AppendToTop(aSource);
+    aLists.BorderBackground()->AppendNewToTop(newItem);
   }
 }
 
@@ -2163,14 +2186,6 @@ ScrollFrameHelper::AppendScrollPartsTo(nsDisplayListBuilder*   aBuilder,
       aBuilder, scrollParts[i], aDirtyRect, partList,
       nsIFrame::DISPLAY_CHILD_FORCE_STACKING_CONTEXT);
 
-    // Don't append textarea resizers to the positioned descendants because
-    // we don't want them to float on top of overlapping elements.
-    bool appendToPositioned = aPositioned &&
-                              !(scrollParts[i] == mResizerBox && !mIsRoot);
-
-    nsDisplayList* dest = appendToPositioned ?
-      aLists.PositionedDescendants() : aLists.BorderBackground();
-
     uint32_t flags = 0;
     if (scrollParts[i] == mVScrollbarBox) {
       flags |= nsDisplayOwnLayer::VERTICAL_SCROLLBAR;
@@ -2181,9 +2196,9 @@ ScrollFrameHelper::AppendScrollPartsTo(nsDisplayListBuilder*   aBuilder,
 
     // DISPLAY_CHILD_FORCE_STACKING_CONTEXT put everything into
     // partList.PositionedDescendants().
-    ::AppendToTop(aBuilder, dest,
+    ::AppendToTop(aBuilder, aLists,
                   partList.PositionedDescendants(), scrollParts[i],
-                  aCreateLayer, flags, scrollTargetId);
+                  aCreateLayer, flags, scrollTargetId, aPositioned);
   }
 }
 
@@ -2443,10 +2458,21 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   nsRect dirtyRect = aDirtyRect.Intersect(mScrollPort);
 
   // Override the dirty rectangle if the displayport has been set.
-  nsRect displayPort;
   bool usingDisplayport =
-    nsLayoutUtils::GetDisplayPort(mOuter->GetContent(), &displayPort) &&
+    nsLayoutUtils::GetDisplayPort(mOuter->GetContent()) &&
     !aBuilder->IsForEventDelivery();
+
+  // don't set the display port base rect for root scroll frames,
+  // nsLayoutUtils::PaintFrame or nsSubDocumentFrame::BuildDisplayList
+  // does that for root scroll frames before it expands the dirty rect
+  // to the display port.
+  if (usingDisplayport && !mIsRoot) {
+    nsLayoutUtils::SetDisplayPortBase(mOuter->GetContent(), dirtyRect);
+  }
+
+  // now that we have an updated base rect we can get the display port
+  nsRect displayPort;
+  nsLayoutUtils::GetDisplayPort(mOuter->GetContent(), &displayPort);
   if (usingDisplayport && DisplayportExceedsMaxTextureSize(mOuter->PresContext(), displayPort)) {
     usingDisplayport = false;
   }
@@ -2601,8 +2627,6 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       aBuilder, mScrolledFrame, mOuter);
     scrolledContent.BorderBackground()->AppendNewToBottom(layerItem);
   }
-  scrolledContent.MoveTo(aLists);
-
   // Now display overlay scrollbars and the resizer, if we have one.
 #ifdef MOZ_WIDGET_GONK
   // TODO: only layerize the overlay scrollbars if this scrollframe can be
@@ -2610,8 +2634,9 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   // that's where we want the layerized scrollbars
   createLayersForScrollbars = true;
 #endif
-  AppendScrollPartsTo(aBuilder, aDirtyRect, aLists, createLayersForScrollbars,
-                      true);
+  AppendScrollPartsTo(aBuilder, aDirtyRect, scrolledContent,
+                      createLayersForScrollbars, true);
+  scrolledContent.MoveTo(aLists);
 }
 
 bool

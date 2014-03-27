@@ -587,6 +587,12 @@ GetJunkScopeGlobal()
     return GetNativeForGlobal(junkScope);
 }
 
+JSObject *
+GetSafeJSContextGlobal()
+{
+    return XPCJSRuntime::Get()->GetJSContextStack()->GetSafeJSContextGlobal();
+}
+
 nsGlobalWindow*
 WindowOrNull(JSObject *aObj)
 {
@@ -2391,8 +2397,8 @@ ReportJSRuntimeExplicitTreeStats(const JS::RuntimeStats &rtStats,
         "GC arenas in non-empty chunks that is decommitted, i.e. it takes up "
         "address space but no physical memory or swap space.");
 
-    REPORT_GC_BYTES(rtPath2 + NS_LITERAL_CSTRING("runtime/gc/nursery-decommitted"),
-        rtStats.runtime.gc.nurseryDecommitted,
+    REPORT_BYTES(rtPath2 + NS_LITERAL_CSTRING("runtime/gc/nursery-decommitted"),
+        KIND_NONHEAP, rtStats.runtime.gc.nurseryDecommitted,
         "Memory allocated to the GC's nursery this is decommitted, i.e. it takes up "
         "address space but no physical memory or swap space.");
 
@@ -2987,7 +2993,6 @@ class XPCJSSourceHook: public js::SourceHook {
 
 static const JSWrapObjectCallbacks WrapObjectCallbacks = {
     xpc::WrapperFactory::Rewrap,
-    xpc::WrapperFactory::WrapForSameCompartment,
     xpc::WrapperFactory::PrepareForWrapping
 };
 

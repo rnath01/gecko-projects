@@ -288,6 +288,16 @@ public:
                                           TextureFlags aFlags);
 
   /**
+   * Tell to TextureChild that TextureHost is recycled.
+   * This function should be called from TextureHost's RecycleCallback.
+   * If SetRecycleCallback is set to TextureHost.
+   * TextureHost can be recycled by calling RecycleCallback
+   * when reference count becomes one.
+   * One reference count is always added by TextureChild.
+   */
+  void CompositorRecycle();
+
+  /**
    * Lock the texture host for compositing.
    */
   virtual bool Lock() { return true; }
@@ -761,8 +771,6 @@ public:
    * retain a SurfaceDescriptor.
    * Ownership of the SurfaceDescriptor passes to this.
    */
-  // only made virtual to allow overriding in GrallocDeprecatedTextureHostOGL, for hacky fix in gecko 23 for bug 862324.
-  // see bug 865908 about fixing this.
   virtual void SetBuffer(SurfaceDescriptor* aBuffer, ISurfaceAllocator* aAllocator);
 
   // used only for hacky fix in gecko 23 for bug 862324

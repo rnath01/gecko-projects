@@ -67,6 +67,8 @@ const PREF_EM_AUTO_DISABLED_SCOPES    = "extensions.autoDisableScopes";
 const PREF_EM_SHOW_MISMATCH_UI        = "extensions.showMismatchUI";
 const PREF_XPI_ENABLED                = "xpinstall.enabled";
 const PREF_XPI_WHITELIST_REQUIRED     = "xpinstall.whitelist.required";
+const PREF_XPI_DIRECT_WHITELISTED     = "xpinstall.whitelist.directRequest";
+const PREF_XPI_FILE_WHITELISTED       = "xpinstall.whitelist.fileRequest";
 const PREF_XPI_PERMISSIONS_BRANCH     = "xpinstall.";
 const PREF_XPI_UNPACK                 = "extensions.alwaysUnpack";
 const PREF_INSTALL_REQUIREBUILTINCERTS = "extensions.install.requireBuiltInCerts";
@@ -1319,7 +1321,7 @@ function recursiveLastModifiedTime(aFile) {
  *         Directory to look at
  * @param  aSortEntries
  *         True to sort entries by filename
- * @return An array of nsIFile, or null if aDir is not a readable directory
+ * @return An array of nsIFile, or an empty array if aDir is not a readable directory
  */
 function getDirectoryEntries(aDir, aSortEntries) {
   let dirEnum;
@@ -1338,10 +1340,13 @@ function getDirectoryEntries(aDir, aSortEntries) {
     return entries
   }
   catch (e) {
-    return null;
+    logger.warn("Can't iterate directory " + aDir.path, e);
+    return [];
   }
   finally {
-    dirEnum.close();
+    if (dirEnum) {
+      dirEnum.close();
+    }
   }
 }
 
@@ -3446,6 +3451,28 @@ var XPIProvider = {
   },
 
   /**
+   * Called to test whether installing XPI add-ons by direct URL requests is
+   * whitelisted.
+   *
+   * @return true if installing by direct requests is whitelisted
+   */
+  isDirectRequestWhitelisted: function XPI_isDirectRequestWhitelisted() {
+    // Default to whitelisted if the preference does not exist.
+    return Prefs.getBoolPref(PREF_XPI_DIRECT_WHITELISTED, true);
+  },
+
+  /**
+   * Called to test whether installing XPI add-ons from file referrers is
+   * whitelisted.
+   *
+   * @return true if installing from file referrers is whitelisted
+   */
+  isFileRequestWhitelisted: function XPI_isFileRequestWhitelisted() {
+    // Default to whitelisted if the preference does not exist.
+    return Prefs.getBoolPref(PREF_XPI_FILE_WHITELISTED, true);
+  },
+
+  /**
    * Called to test whether installing XPI add-ons from a URI is allowed.
    *
    * @param  aUri
@@ -3456,11 +3483,13 @@ var XPIProvider = {
     if (!this.isInstallEnabled())
       return false;
 
+    // Direct requests without a referrer are either whitelisted or blocked.
     if (!aUri)
-      return true;
+      return this.isDirectRequestWhitelisted();
 
-    // file: and chrome: don't need whitelisted hosts
-    if (aUri.schemeIs("chrome") || aUri.schemeIs("file"))
+    // Local referrers can be whitelisted.
+    if (this.isFileRequestWhitelisted() &&
+        (aUri.schemeIs("chrome") || aUri.schemeIs("file")))
       return true;
 
     this.importPermissions();
@@ -4001,16 +4030,21 @@ var XPIProvider = {
 
     if (!aFile.exists()) {
       this.bootstrapScopes[aId] =
-        new Cu.Sandbox(principal, {sandboxName: aFile.path,
-                                   wantGlobalProperties: ["indexedDB"]});
+        new Cu.Sandbox(principal, { sandboxName: aFile.path,
+                                    wantGlobalProperties: ["indexedDB"],
+                                    metadata: { addonID: aId } });
       logger.error("Attempted to load bootstrap scope from missing directory " + aFile.path);
       return;
     }
 
     let uri = getURIForResourceInFile(aFile, "bootstrap.js").spec;
+    if (aType == "dictionary")
+      uri = "resource://gre/modules/addons/SpellCheckDictionaryBootstrap.js"
+
     this.bootstrapScopes[aId] =
-      new Cu.Sandbox(principal, {sandboxName: uri,
-                                 wantGlobalProperties: ["indexedDB"]});
+      new Cu.Sandbox(principal, { sandboxName: uri,
+                                  wantGlobalProperties: ["indexedDB"],
+                                  metadata: { addonID: aId, URI: uri } });
 
     let loader = Cc["@mozilla.org/moz/jssubscript-loader;1"].
                  createInstance(Ci.mozIJSSubScriptLoader);
@@ -4032,12 +4066,7 @@ var XPIProvider = {
       // As we don't want our caller to control the JS version used for the
       // bootstrap file, we run loadSubScript within the context of the
       // sandbox with the latest JS version set explicitly.
-      if (aType == "dictionary") {
-        this.bootstrapScopes[aId].__SCRIPT_URI_SPEC__ =
-            "resource://gre/modules/addons/SpellCheckDictionaryBootstrap.js"
-      } else {
-        this.bootstrapScopes[aId].__SCRIPT_URI_SPEC__ = uri;
-      }
+      this.bootstrapScopes[aId].__SCRIPT_URI_SPEC__ = uri;
       Components.utils.evalInSandbox(
         "Components.classes['@mozilla.org/moz/jssubscript-loader;1'] \
                    .createInstance(Components.interfaces.mozIJSSubScriptLoader) \
@@ -6448,6 +6477,10 @@ function AddonWrapper(aAddon) {
       ops |= AddonManager.OP_NEEDS_RESTART_DISABLE;
 
     return ops;
+  });
+
+  this.__defineGetter__("isDebuggable", function AddonWrapper_isDebuggable() {
+    return this.isActive && aAddon.bootstrap;
   });
 
   this.__defineGetter__("permissions", function AddonWrapper_permisionsGetter() {

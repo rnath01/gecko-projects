@@ -66,16 +66,19 @@
 // #define APZC_LOG(...) printf_stderr("APZC: " __VA_ARGS__)
 #define APZC_LOG_FM(fm, prefix, ...) \
   APZC_LOG(prefix ":" \
-           " i=(%ld %lld) cb=(%d %d %d %d) dp=(%.3f %.3f %.3f %.3f) v=(%.3f %.3f %.3f %.3f) " \
-           "s=(%.3f %.3f) sr=(%.3f %.3f %.3f %.3f) z=(%.3f %.3f %.3f %.3f) u=(%d %llu)\n", \
+           " i=(%ld %lld) cb=(%d %d %d %d) rcs=(%.3f %.3f) dp=(%.3f %.3f %.3f %.3f) dpm=(%.3f %.3f %.3f %.3f) um=%d " \
+           "v=(%.3f %.3f %.3f %.3f) s=(%.3f %.3f) sr=(%.3f %.3f %.3f %.3f) z=(%.3f %.3f %.3f %.3f) u=(%d %llu)\n", \
            __VA_ARGS__, \
-           fm.mPresShellId, fm.mScrollId, \
+           fm.mPresShellId, fm.GetScrollId(), \
            fm.mCompositionBounds.x, fm.mCompositionBounds.y, fm.mCompositionBounds.width, fm.mCompositionBounds.height, \
+           fm.GetRootCompositionSize().width, fm.GetRootCompositionSize().height, \
            fm.mDisplayPort.x, fm.mDisplayPort.y, fm.mDisplayPort.width, fm.mDisplayPort.height, \
+           fm.mDisplayPortMargins.top, fm.mDisplayPortMargins.right, fm.mDisplayPortMargins.bottom, fm.mDisplayPortMargins.left, \
+           fm.mUseDisplayPortMargins ? 1 : 0, \
            fm.mViewport.x, fm.mViewport.y, fm.mViewport.width, fm.mViewport.height, \
-           fm.mScrollOffset.x, fm.mScrollOffset.y, \
+           fm.GetScrollOffset().x, fm.GetScrollOffset().y, \
            fm.mScrollableRect.x, fm.mScrollableRect.y, fm.mScrollableRect.width, fm.mScrollableRect.height, \
-           fm.mDevPixelsPerCSSPixel.scale, fm.mResolution.scale, fm.mCumulativeResolution.scale, fm.mZoom.scale, \
+           fm.mDevPixelsPerCSSPixel.scale, fm.mResolution.scale, fm.mCumulativeResolution.scale, fm.GetZoom().scale, \
            fm.GetScrollOffsetUpdated(), fm.GetScrollGeneration()); \
 
 // Static helper functions
@@ -325,7 +328,7 @@ static inline void LogRendertraceRect(const ScrollableLayerGuid& aGuid, const ch
   static const TimeStamp sRenderStart = TimeStamp::Now();
   TimeDuration delta = TimeStamp::Now() - sRenderStart;
   printf_stderr("(%llu,%lu,%llu)%s RENDERTRACE %f rect %s %f %f %f %f\n",
-    aGuid.mLayersId, aGuid.mPresShellId, aGuid.mScrollId,
+    aGuid.mLayersId, aGuid.mPresShellId, aGuid.GetScrollId(),
     aDesc, delta.ToMilliseconds(), aColor,
     aRect.x, aRect.y, aRect.width, aRect.height);
 #endif
@@ -480,7 +483,7 @@ AsyncPanZoomController::~AsyncPanZoomController() {
 
   // Only send the release message if the SharedFrameMetrics has been created.
   if (compositor && mSharedFrameMetricsBuffer) {
-    unused << compositor->SendReleaseSharedCompositorFrameMetrics(mFrameMetrics.mScrollId, mAPZCId);
+    unused << compositor->SendReleaseSharedCompositorFrameMetrics(mFrameMetrics.GetScrollId(), mAPZCId);
   }
 
   delete mSharedFrameMetricsBuffer;
@@ -1368,7 +1371,7 @@ void AsyncPanZoomController::ScaleWithFocus(float aScale,
  * Enlarges the displayport along both axes based on the velocity.
  */
 static CSSSize
-CalculateDisplayPortSize(const CSSRect& aCompositionBounds,
+CalculateDisplayPortSize(const CSSSize& aCompositionSize,
                          const CSSPoint& aVelocity)
 {
   float xMultiplier = fabsf(aVelocity.x) < gMinSkateSpeed
@@ -1377,8 +1380,8 @@ CalculateDisplayPortSize(const CSSRect& aCompositionBounds,
   float yMultiplier = fabsf(aVelocity.y) < gMinSkateSpeed
                         ? gYStationarySizeMultiplier
                         : gYSkateSizeMultiplier;
-  return CSSSize(aCompositionBounds.width * xMultiplier,
-                 aCompositionBounds.height * yMultiplier);
+  return CSSSize(aCompositionSize.width * xMultiplier,
+                 aCompositionSize.height * yMultiplier);
 }
 
 /**
@@ -1388,7 +1391,6 @@ CalculateDisplayPortSize(const CSSRect& aCompositionBounds,
  */
 static void
 RedistributeDisplayPortExcess(CSSSize& aDisplayPortSize,
-                              const CSSRect& aCompositionBounds,
                               const CSSRect& aScrollableRect)
 {
   float xSlack = std::max(0.0f, aDisplayPortSize.width - aScrollableRect.width);
@@ -1408,21 +1410,25 @@ RedistributeDisplayPortExcess(CSSSize& aDisplayPortSize,
 }
 
 /* static */
-const CSSRect AsyncPanZoomController::CalculatePendingDisplayPort(
+const LayerMargin AsyncPanZoomController::CalculatePendingDisplayPort(
   const FrameMetrics& aFrameMetrics,
   const ScreenPoint& aVelocity,
   double aEstimatedPaintDuration)
 {
   CSSRect compositionBounds(aFrameMetrics.CalculateCompositedRectInCssPixels());
+  CSSSize compositionSize = aFrameMetrics.GetRootCompositionSize();
+  compositionSize =
+    CSSSize(std::min(compositionBounds.width, compositionSize.width),
+            std::min(compositionBounds.height, compositionSize.height));
   CSSPoint velocity = aVelocity / aFrameMetrics.GetZoom();
   CSSPoint scrollOffset = aFrameMetrics.GetScrollOffset();
   CSSRect scrollableRect = aFrameMetrics.GetExpandedScrollableRect();
 
   // Calculate the displayport size based on how fast we're moving along each axis.
-  CSSSize displayPortSize = CalculateDisplayPortSize(compositionBounds, velocity);
+  CSSSize displayPortSize = CalculateDisplayPortSize(compositionSize, velocity);
 
   if (gEnlargeDisplayPortWhenClipped) {
-    RedistributeDisplayPortExcess(displayPortSize, compositionBounds, scrollableRect);
+    RedistributeDisplayPortExcess(displayPortSize, scrollableRect);
   }
 
   // Offset the displayport, depending on how fast we're moving and the
@@ -1432,9 +1438,9 @@ const CSSRect AsyncPanZoomController::CalculatePendingDisplayPort(
   CSSRect displayPort = CSSRect(scrollOffset + (velocity * paintFactor * gVelocityBias),
                                 displayPortSize);
 
-  // Re-center the displayport based on its expansion over the composition bounds.
-  displayPort.MoveBy((compositionBounds.width - displayPort.width)/2.0f,
-                     (compositionBounds.height - displayPort.height)/2.0f);
+  // Re-center the displayport based on its expansion over the composition size.
+  displayPort.MoveBy((compositionSize.width - displayPort.width)/2.0f,
+                     (compositionSize.height - displayPort.height)/2.0f);
 
   // Make sure the displayport remains within the scrollable rect.
   displayPort = displayPort.ForceInside(scrollableRect) - scrollOffset;
@@ -1444,7 +1450,15 @@ const CSSRect AsyncPanZoomController::CalculatePendingDisplayPort(
     displayPort.x, displayPort.y, displayPort.width, displayPort.height,
     aVelocity.x, aVelocity.y, (float)estimatedPaintDurationMillis);
 
-  return displayPort;
+  CSSMargin cssMargins;
+  cssMargins.left = -displayPort.x;
+  cssMargins.top = -displayPort.y;
+  cssMargins.right = displayPort.width - compositionSize.width - cssMargins.left;
+  cssMargins.bottom = displayPort.height - compositionSize.height - cssMargins.top;
+
+  LayerMargin layerMargins = cssMargins * aFrameMetrics.LayersPixelsPerCSSPixel();
+
+  return layerMargins;
 }
 
 void AsyncPanZoomController::ScheduleComposite() {
@@ -1464,10 +1478,11 @@ void AsyncPanZoomController::RequestContentRepaint() {
 }
 
 void AsyncPanZoomController::RequestContentRepaint(FrameMetrics& aFrameMetrics) {
-  aFrameMetrics.mDisplayPort =
+  aFrameMetrics.SetDisplayPortMargins(
     CalculatePendingDisplayPort(aFrameMetrics,
                                 GetVelocityVector(),
-                                mPaintThrottler.AverageDuration().ToSeconds());
+                                mPaintThrottler.AverageDuration().ToSeconds()));
+  aFrameMetrics.SetUseDisplayPortMargins();
 
   // If we're trying to paint what we already think is painted, discard this
   // request since it's a pointless paint.
@@ -1749,6 +1764,7 @@ void AsyncPanZoomController::NotifyLayersUpdated(const FrameMetrics& aLayerMetri
     }
     mFrameMetrics.mScrollableRect = aLayerMetrics.mScrollableRect;
     mFrameMetrics.mCompositionBounds = aLayerMetrics.mCompositionBounds;
+    mFrameMetrics.SetRootCompositionSize(aLayerMetrics.GetRootCompositionSize());
     mFrameMetrics.mResolution = aLayerMetrics.mResolution;
     mFrameMetrics.mCumulativeResolution = aLayerMetrics.mCumulativeResolution;
     mFrameMetrics.mHasScrollgrab = aLayerMetrics.mHasScrollgrab;
@@ -1757,8 +1773,8 @@ void AsyncPanZoomController::NotifyLayersUpdated(const FrameMetrics& aLayerMetri
     // we want to take the new scroll offset.
     if (aLayerMetrics.GetScrollOffsetUpdated()) {
       APZC_LOG("%p updating scroll offset from (%f, %f) to (%f, %f)\n", this,
-        mFrameMetrics.mScrollOffset.x, mFrameMetrics.mScrollOffset.y,
-        aLayerMetrics.mScrollOffset.x, aLayerMetrics.mScrollOffset.y);
+        mFrameMetrics.GetScrollOffset().x, mFrameMetrics.GetScrollOffset().y,
+        aLayerMetrics.GetScrollOffset().x, aLayerMetrics.GetScrollOffset().y);
 
       mFrameMetrics.SetScrollOffset(aLayerMetrics.GetScrollOffset());
 
@@ -1778,7 +1794,7 @@ void AsyncPanZoomController::NotifyLayersUpdated(const FrameMetrics& aLayerMetri
     // more "legitimate" sources like content scripts.
     nsRefPtr<GeckoContentController> controller = GetGeckoContentController();
     if (controller) {
-      controller->AcknowledgeScrollUpdate(aLayerMetrics.mScrollId,
+      controller->AcknowledgeScrollUpdate(aLayerMetrics.GetScrollId(),
                                           aLayerMetrics.GetScrollGeneration());
     }
   }
@@ -1868,10 +1884,11 @@ void AsyncPanZoomController::ZoomToRect(CSSRect aRect) {
     }
 
     endZoomToMetrics.SetScrollOffset(aRect.TopLeft());
-    endZoomToMetrics.mDisplayPort =
+    endZoomToMetrics.SetDisplayPortMargins(
       CalculatePendingDisplayPort(endZoomToMetrics,
                                   ScreenPoint(0,0),
-                                  0);
+                                  0));
+    endZoomToMetrics.SetUseDisplayPortMargins();
 
     StartAnimation(new ZoomAnimation(
         mFrameMetrics.GetScrollOffset(),
@@ -1989,10 +2006,10 @@ void AsyncPanZoomController::SetState(PanZoomState aNewState) {
   if (mGeckoContentController) {
     if (!IsTransformingState(oldState) && IsTransformingState(aNewState)) {
       mGeckoContentController->NotifyTransformBegin(
-        ScrollableLayerGuid(mLayersId, mFrameMetrics.mPresShellId, mFrameMetrics.mScrollId));
+        ScrollableLayerGuid(mLayersId, mFrameMetrics.mPresShellId, mFrameMetrics.GetScrollId()));
     } else if (IsTransformingState(oldState) && !IsTransformingState(aNewState)) {
       mGeckoContentController->NotifyTransformEnd(
-        ScrollableLayerGuid(mLayersId, mFrameMetrics.mPresShellId, mFrameMetrics.mScrollId));
+        ScrollableLayerGuid(mLayersId, mFrameMetrics.mPresShellId, mFrameMetrics.GetScrollId()));
     }
   }
 }

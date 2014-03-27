@@ -203,7 +203,7 @@ class RefTest(object):
     return profile
 
   def buildBrowserEnv(self, options, profileDir):
-    browserEnv = self.automation.environment(xrePath = options.xrePath)
+    browserEnv = self.automation.environment(xrePath = options.xrePath, debugger=options.debugger)
     browserEnv["XPCOM_DEBUG_BREAK"] = "stack"
 
     for v in options.environment:

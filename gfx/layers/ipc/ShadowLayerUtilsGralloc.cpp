@@ -317,31 +317,11 @@ GrallocBufferActor::Create(const gfx::IntSize& aSize,
 
 void GrallocBufferActor::ActorDestroy(ActorDestroyReason)
 {
-  // used only for hacky fix for bug 862324
-  for (size_t i = 0; i < mDeprecatedTextureHosts.Length(); i++) {
-    mDeprecatedTextureHosts[i]->ForgetBuffer();
-  }
-
   // Used only for hacky fix for bug 966446.
   if (mTextureHost) {
     mTextureHost->ForgetBufferActor();
     mTextureHost = nullptr;
   }
-}
-
-// used only for hacky fix for bug 862324
-void GrallocBufferActor::AddDeprecatedTextureHost(DeprecatedTextureHost* aDeprecatedTextureHost)
-{
-  mDeprecatedTextureHosts.AppendElement(aDeprecatedTextureHost);
-}
-
-// used only for hacky fix for bug 862324
-void GrallocBufferActor::RemoveDeprecatedTextureHost(DeprecatedTextureHost* aDeprecatedTextureHost)
-{
-  mDeprecatedTextureHosts.RemoveElement(aDeprecatedTextureHost);
-  // that should be the only occurence, otherwise we'd leak this TextureHost...
-  // assert that that's not happening.
-  MOZ_ASSERT(!mDeprecatedTextureHosts.Contains(aDeprecatedTextureHost));
 }
 
 void GrallocBufferActor::AddTextureHost(TextureHost* aTextureHost)
@@ -382,7 +362,7 @@ ISurfaceAllocator::PlatformDestroySharedSurface(SurfaceDescriptor* aSurface)
   } else {
     PGrallocBufferChild* gbc =
       aSurface->get_SurfaceDescriptorGralloc().bufferChild();
-    unused << PGrallocBufferChild::Send__delete__(gbc);
+    DeallocGrallocBuffer(gbc);
   }
 
   *aSurface = SurfaceDescriptor();
@@ -414,6 +394,13 @@ ShadowLayerForwarder::AllocGrallocBuffer(const gfx::IntSize& aSize,
                                          MaybeMagicGrallocBufferHandle* aHandle)
 {
   return mShadowManager->SendPGrallocBufferConstructor(aSize, aFormat, aUsage, aHandle);
+}
+
+void
+ShadowLayerForwarder::DeallocGrallocBuffer(PGrallocBufferChild* aChild)
+{
+  MOZ_ASSERT(aChild);
+  PGrallocBufferChild::Send__delete__(aChild);
 }
 
 bool

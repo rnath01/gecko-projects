@@ -161,6 +161,17 @@ LIRGenerator::visitDefFun(MDefFun *ins)
 }
 
 bool
+LIRGenerator::visitNewSlots(MNewSlots *ins)
+{
+    // No safepoint needed, since we don't pass a cx.
+    LNewSlots *lir = new(alloc()) LNewSlots(tempFixed(CallTempReg0), tempFixed(CallTempReg1),
+                                            tempFixed(CallTempReg2));
+    if (!assignSnapshot(lir))
+        return false;
+    return defineReturn(lir, ins);
+}
+
+bool
 LIRGenerator::visitNewArray(MNewArray *ins)
 {
     LNewArray *lir = new(alloc()) LNewArray(temp());
@@ -184,7 +195,41 @@ LIRGenerator::visitNewDeclEnvObject(MNewDeclEnvObject *ins)
 bool
 LIRGenerator::visitNewCallObject(MNewCallObject *ins)
 {
-    LNewCallObject *lir = new(alloc()) LNewCallObject(temp());
+    LAllocation slots;
+    if (ins->slots()->type() == MIRType_Slots)
+        slots = useRegister(ins->slots());
+    else
+        slots = LConstantIndex::Bogus();
+
+    LInstruction *lir;
+    if (ins->templateObject()->hasSingletonType()) {
+        LNewSingletonCallObject *singletonLir = new(alloc()) LNewSingletonCallObject(slots);
+        if (!define(singletonLir, ins))
+            return false;
+        lir = singletonLir;
+    } else {
+        LNewCallObject *normalLir = new(alloc()) LNewCallObject(slots, temp());
+        if (!define(normalLir, ins))
+            return false;
+        lir = normalLir;
+    }
+
+    if (!assignSafepoint(lir, ins))
+        return false;
+
+    return true;
+}
+
+bool
+LIRGenerator::visitNewRunOnceCallObject(MNewRunOnceCallObject *ins)
+{
+    LAllocation slots;
+    if (ins->slots()->type() == MIRType_Slots)
+        slots = useRegister(ins->slots());
+    else
+        slots = LConstantIndex::Bogus();
+
+    LNewSingletonCallObject *lir = new(alloc()) LNewSingletonCallObject(slots);
     if (!define(lir, ins))
         return false;
 
@@ -208,7 +253,17 @@ bool
 LIRGenerator::visitNewCallObjectPar(MNewCallObjectPar *ins)
 {
     const LAllocation &parThreadContext = useRegister(ins->forkJoinContext());
-    LNewCallObjectPar *lir = LNewCallObjectPar::New(alloc(), parThreadContext, temp(), temp());
+    const LDefinition &temp1 = temp();
+    const LDefinition &temp2 = temp();
+
+    LNewCallObjectPar *lir;
+    if (ins->slots()->type() == MIRType_Slots) {
+        const LAllocation &slots = useRegister(ins->slots());
+        lir = LNewCallObjectPar::NewWithSlots(alloc(), parThreadContext, slots, temp1, temp2);
+    } else {
+        lir = LNewCallObjectPar::NewSansSlots(alloc(), parThreadContext, temp1, temp2);
+    }
+
     return define(lir, ins);
 }
 

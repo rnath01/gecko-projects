@@ -71,7 +71,7 @@ FileRequest::NotifyHelperCompleted(FileHelper* aFileHelper)
   nsIScriptContext* sc = GetContextForEventHandlers(&rv);
   NS_ENSURE_STATE(sc);
 
-  AutoPushJSContext cx(sc->GetNativeContext());
+  AutoJSContext cx;
   NS_ASSERTION(cx, "Failed to get a context!");
 
   JS::Rooted<JS::Value> result(cx);
@@ -115,7 +115,7 @@ FileRequest::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
   return FileRequestBinding::Wrap(aCx, aScope, this);
 }
 
-nsIDOMLockedFile*
+LockedFile*
 FileRequest::GetLockedFile() const
 {
   MOZ_ASSERT(NS_IsMainThread(), "Wrong thread!");

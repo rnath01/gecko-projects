@@ -228,15 +228,6 @@ AccessCheck::isCrossOriginAccessPermitted(JSContext *cx, JSObject *wrapperArg, j
     return false;
 }
 
-bool
-AccessCheck::needsSystemOnlyWrapper(JSObject *obj)
-{
-    JSObject* wrapper = obj;
-    if (dom::GetSameCompartmentWrapperForDOMBinding(wrapper))
-        return wrapper != obj;
-    return false;
-}
-
 enum Access { READ = (1<<0), WRITE = (1<<1), NO_ACCESS = 0 };
 
 static void
@@ -364,7 +355,7 @@ bool
 ExposedPropertiesOnly::allowNativeCall(JSContext *cx, JS::IsAcceptableThis test,
                                        JS::NativeImpl impl)
 {
-    return js::IsReadOnlyDateMethod(test, impl) || js::IsTypedArrayThisCheck(test);
+    return js::IsTypedArrayThisCheck(test);
 }
 
 }

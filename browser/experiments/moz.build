@@ -9,8 +9,10 @@ EXTRA_COMPONENTS += [
 
 JS_MODULES_PATH = 'modules/experiments'
 
-EXTRA_JS_MODULES += [
+EXTRA_PP_JS_MODULES += [
   'Experiments.jsm',
 ]
 
 XPCSHELL_TESTS_MANIFESTS += ['test/xpcshell/xpcshell.ini']
+
+SPHINX_TREES['experiments'] = 'docs'

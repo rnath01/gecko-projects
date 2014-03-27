@@ -182,20 +182,6 @@ JSCompartment::ensureJitCompartmentExists(JSContext *cx)
 }
 #endif
 
-static bool
-WrapForSameCompartment(JSContext *cx, MutableHandleObject obj, const JSWrapObjectCallbacks *cb)
-{
-    JS_ASSERT(cx->compartment() == obj->compartment());
-    if (!cb->sameCompartmentWrap)
-        return true;
-
-    RootedObject wrapped(cx, cb->sameCompartmentWrap(cx, obj));
-    if (!wrapped)
-        return false;
-    obj.set(wrapped);
-    return true;
-}
-
 #ifdef JSGC_GENERATIONAL
 
 /*
@@ -361,20 +347,28 @@ JSCompartment::wrap(JSContext *cx, MutableHandleObject obj, HandleObject existin
     JS_ASSERT(global);
     JS_ASSERT(objGlobal);
 
-    JS_ASSERT(!cx->runtime()->isSelfHostingGlobal(global) &&
-              !cx->runtime()->isSelfHostingGlobal(objGlobal));
-
     const JSWrapObjectCallbacks *cb = cx->runtime()->wrapObjectCallbacks;
 
-    if (obj->compartment() == this)
-        return WrapForSameCompartment(cx, obj, cb);
+    if (obj->compartment() == this) {
+        obj.set(GetOuterObject(cx, obj));
+        return true;
+    }
+
+    // If we have a cross-compartment wrapper, make sure that the cx isn't
+    // associated with the self-hosting global. We don't want to create
+    // wrappers for objects in other runtimes, which may be the case for the
+    // self-hosting global.
+    JS_ASSERT(!cx->runtime()->isSelfHostingGlobal(global) &&
+              !cx->runtime()->isSelfHostingGlobal(objGlobal));
 
     // Unwrap the object, but don't unwrap outer windows.
     unsigned flags = 0;
     obj.set(UncheckedUnwrap(obj, /* stopAtOuter = */ true, &flags));
 
-    if (obj->compartment() == this)
-        return WrapForSameCompartment(cx, obj, cb);
+    if (obj->compartment() == this) {
+        MOZ_ASSERT(obj == GetOuterObject(cx, obj));
+        return true;
+    }
 
     // Translate StopIteration singleton.
     if (obj->is<StopIterationObject>()) {
@@ -395,16 +389,11 @@ JSCompartment::wrap(JSContext *cx, MutableHandleObject obj, HandleObject existin
         if (!obj)
             return false;
     }
+    MOZ_ASSERT(obj == GetOuterObject(cx, obj));
 
     if (obj->compartment() == this)
-        return WrapForSameCompartment(cx, obj, cb);
+        return true;
 
-#ifdef DEBUG
-    {
-        JSObject *outer = GetOuterObject(cx, obj);
-        JS_ASSERT(outer && outer == obj);
-    }
-#endif
 
     // If we already have a wrapper for this value, use it.
     RootedValue key(cx, ObjectValue(*obj));
@@ -534,7 +523,7 @@ JSCompartment::markCrossCompartmentWrappers(JSTracer *trc)
 }
 
 void
-JSCompartment::mark(JSTracer *trc)
+JSCompartment::markRoots(JSTracer *trc)
 {
     JS_ASSERT(!trc->runtime->isHeapMinorCollecting());
 

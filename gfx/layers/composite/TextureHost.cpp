@@ -14,6 +14,7 @@
 #include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator
 #include "mozilla/layers/ImageDataSerializer.h"
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor, etc
+#include "mozilla/layers/TextureHostOGL.h"  // for TextureHostOGL
 #ifdef MOZ_X11
 #include "mozilla/layers/X11TextureHost.h"
 #endif
@@ -260,6 +261,15 @@ CreateBackendIndependentTextureHost(const SurfaceDescriptor& aDesc,
 }
 
 void
+TextureHost::CompositorRecycle()
+{
+  if (!mActor) {
+    return;
+  }
+  static_cast<TextureParent*>(mActor)->CompositorRecycle();
+}
+
+void
 TextureHost::SetCompositableBackendSpecificData(CompositableBackendSpecificData* aBackendData)
 {
     mCompositableBackendData = aBackendData;
@@ -357,14 +367,6 @@ DeprecatedTextureHost::SwapTextures(const SurfaceDescriptor& aImage,
     *aResult = *mBuffer;
   }
   *mBuffer = aImage;
-  // The following SetBuffer call was added in bug 912725 as a fix for the
-  // hacky fix introduced in gecko 23 for bug 862324.
-  // Note that it is a no-op in the generic case, but not for
-  // GrallocDeprecatedTextureHostOGL which overrides SetBuffer to make it
-  // register the TextureHost with the GrallocBufferActor.
-  // The reason why this SetBuffer calls is needed here is that just above we
-  // overwrote *mBuffer in place, so we need to tell the new mBuffer about this
-  // TextureHost.
   SetBuffer(mBuffer, mDeAllocator);
 }
 
@@ -753,7 +755,20 @@ void
 TextureParent::CompositorRecycle()
 {
   mTextureHost->ClearRecycleCallback();
-  mozilla::unused << SendCompositorRecycle();
+
+  MaybeFenceHandle handle = null_t();
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
+  if (mTextureHost) {
+    TextureHostOGL* hostOGL = mTextureHost->AsHostOGL();
+    android::sp<android::Fence> fence = hostOGL->GetAndResetReleaseFence();
+    if (fence.get() && fence->isValid()) {
+      handle = FenceHandle(fence);
+      // HWC might not provide Fence.
+      // In this case, HWC implicitly handles buffer's fence.
+    }
+  }
+#endif
+  mozilla::unused << SendCompositorRecycle(handle);
 
   // Don't forget to prepare for the next reycle
   mWaitForClientRecycle = mTextureHost;

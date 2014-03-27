@@ -71,7 +71,7 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gonk'):
 if (CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android') or \
    (CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa') or \
    (CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk') or \
-   CONFIG['MOZ_WIDGET_QT'] or \
+   (CONFIG['MOZ_WIDGET_TOOLKIT'] == 'qt') or \
    CONFIG['MOZ_WIDGET_GTK']:
     DEFINES['SK_FONTHOST_DOES_NOT_USE_FONTMGR'] = 1
 
@@ -80,14 +80,14 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     DEFINES['GR_DLL'] = 1
 
 if CONFIG['INTEL_ARCHITECTURE'] and CONFIG['GNU_CC']:
-    SOURCES['trunk/src/opts/SkBitmapFilter_opts_SSE2.cpp'].flags += ['-msse2']
-    SOURCES['trunk/src/opts/SkBitmapProcState_opts_SSE2.cpp'].flags += ['-msse2']
+    SOURCES['trunk/src/opts/SkBitmapFilter_opts_SSE2.cpp'].flags += CONFIG['SSE2_FLAGS']
+    SOURCES['trunk/src/opts/SkBitmapProcState_opts_SSE2.cpp'].flags += CONFIG['SSE2_FLAGS']
     SOURCES['trunk/src/opts/SkBitmapProcState_opts_SSSE3.cpp'].flags += ['-mssse3']
-    SOURCES['trunk/src/opts/SkBlitRect_opts_SSE2.cpp'].flags += ['-msse2']
-    SOURCES['trunk/src/opts/SkBlitRow_opts_SSE2.cpp'].flags += ['-msse2']
-    SOURCES['trunk/src/opts/SkBlurImage_opts_SSE2.cpp'].flags += ['-msse2']
-    SOURCES['trunk/src/opts/SkMorphology_opts_SSE2.cpp'].flags += ['-msse2']
-    SOURCES['trunk/src/opts/SkUtils_opts_SSE2.cpp'].flags += ['-msse2']
+    SOURCES['trunk/src/opts/SkBlitRect_opts_SSE2.cpp'].flags += CONFIG['SSE2_FLAGS']
+    SOURCES['trunk/src/opts/SkBlitRow_opts_SSE2.cpp'].flags += CONFIG['SSE2_FLAGS']
+    SOURCES['trunk/src/opts/SkBlurImage_opts_SSE2.cpp'].flags += CONFIG['SSE2_FLAGS']
+    SOURCES['trunk/src/opts/SkMorphology_opts_SSE2.cpp'].flags += CONFIG['SSE2_FLAGS']
+    SOURCES['trunk/src/opts/SkUtils_opts_SSE2.cpp'].flags += CONFIG['SSE2_FLAGS']
 elif CONFIG['CPU_ARCH'] == 'arm' and CONFIG['GNU_CC'] and CONFIG['BUILD_ARM_NEON']:
     DEFINES['__ARM_HAVE_OPTIONAL_NEON_SUPPORT'] = 1
     DEFINES['USE_ANDROID_NDK_CPU_FEATURES'] = 0
@@ -166,7 +166,7 @@ def generate_separated_sources(platform_sources):
     'SkBitmapHasher',
     'SkWGL',
     'SkImages',
-    'SkDiscardableMemory_ashmem'
+    'SkDiscardableMemory_ashmem',
     'SkMemory_malloc'
   ]
 
@@ -321,7 +321,7 @@ def write_mozbuild(includes, sources):
   f.write("if CONFIG['MOZ_WIDGET_GTK']:\n")
   write_list(f, 'SOURCES', sources['linux'], 4)
 
-  f.write("if CONFIG['MOZ_WIDGET_QT']:\n")
+  f.write("if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'qt':\n")
   write_list(f, 'SOURCES', sources['linux'], 4)
 
   f.write("if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':\n")

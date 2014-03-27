@@ -119,6 +119,7 @@ ImageBridgeChild::UseComponentAlphaTextures(CompositableClient* aCompositable,
                                             TextureClient* aTextureOnBlack,
                                             TextureClient* aTextureOnWhite)
 {
+  MOZ_ASSERT(aTextureOnBlack->GetSize() == aTextureOnWhite->GetSize());
   mTxn->AddNoSwapEdit(OpUseComponentAlphaTextures(nullptr, aCompositable->GetIPDLActor(),
                                                   nullptr, aTextureOnBlack->GetIPDLActor(),
                                                   nullptr, aTextureOnWhite->GetIPDLActor()));
@@ -933,6 +934,53 @@ ImageBridgeChild::AllocGrallocBuffer(const IntSize& aSize,
   NS_RUNTIMEABORT("not implemented");
   return nullptr;
 #endif
+}
+
+static void ProxyDeallocGrallocBufferNow(ISurfaceAllocator* aAllocator,
+                                         PGrallocBufferChild* aChild,
+                                         ReentrantMonitor* aBarrier,
+                                         bool* aDone)
+{
+  MOZ_ASSERT(aChild);
+  MOZ_ASSERT(aDone);
+  MOZ_ASSERT(aBarrier);
+
+#ifdef MOZ_WIDGET_GONK
+  PGrallocBufferChild::Send__delete__(aChild);
+#else
+  NS_RUNTIMEABORT("not implemented");
+#endif
+
+  ReentrantMonitorAutoEnter autoMon(*aBarrier);
+  *aDone = true;
+  aBarrier->NotifyAll();
+}
+
+void
+ImageBridgeChild::DeallocGrallocBuffer(PGrallocBufferChild* aChild)
+{
+  MOZ_ASSERT(aChild);
+  if (InImageBridgeChildThread()) {
+#ifdef MOZ_WIDGET_GONK
+    PGrallocBufferChild::Send__delete__(aChild);
+#else
+    NS_RUNTIMEABORT("not implemented");
+#endif
+  } else {
+    ReentrantMonitor barrier("AllocatorProxy Dealloc");
+    ReentrantMonitorAutoEnter autoMon(barrier);
+
+    bool done = false;
+    GetMessageLoop()->PostTask(FROM_HERE,
+                               NewRunnableFunction(&ProxyDeallocGrallocBufferNow,
+                                                   this,
+                                                   aChild,
+                                                   &barrier,
+                                                   &done));
+    while (!done) {
+      barrier.Wait();
+    }
+  }
 }
 
 PTextureChild*

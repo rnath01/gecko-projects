@@ -19,25 +19,15 @@
 #include "mozilla/dom/ValidityState.h"
 #include "mozilla/dom/ElementInlines.h"
 
-class nsIDOMAttr;
-class nsIDOMEventListener;
-class nsIDOMNodeList;
-class nsIFrame;
-class nsIStyleRule;
-class nsChildContentList;
-class nsDOMCSSDeclaration;
-class nsIDOMCSSStyleDeclaration;
-class nsIURI;
-class nsIFormControlFrame;
-class nsIForm;
-class nsPresState;
-class nsILayoutHistoryState;
-class nsIEditor;
-struct nsRect;
-struct nsSize;
-class nsIDOMHTMLMenuElement;
-class nsIDOMHTMLCollection;
 class nsDOMSettableTokenList;
+class nsIDOMHTMLMenuElement;
+class nsIEditor;
+class nsIFormControlFrame;
+class nsIFrame;
+class nsILayoutHistoryState;
+class nsIURI;
+class nsPresState;
+struct nsSize;
 
 namespace mozilla {
 class EventChainPostVisitor;
@@ -323,8 +313,10 @@ public:
 
   /**
    * Get width and height, using given image request if attributes are unset.
+   * Pass a reference to the image request, since the method may change the
+   * value and we want to use the updated value.
    */
-  nsSize GetWidthHeightForImage(imgIRequest *aImageRequest);
+  nsSize GetWidthHeightForImage(nsRefPtr<imgRequestProxy>& aImageRequest);
 
   // XPIDL methods
   NS_FORWARD_NSIDOMNODE_TO_NSINODE
@@ -1290,7 +1282,7 @@ public:
 
   NS_DECL_ISUPPORTS_INHERITED
 
-  nsINode* GetParentObject() const;
+  mozilla::dom::ParentObject GetParentObject() const;
 
   virtual bool IsNodeOfType(uint32_t aFlags) const MOZ_OVERRIDE;
   virtual void SaveSubtreeState() MOZ_OVERRIDE;

@@ -9,6 +9,7 @@
 #include "mozilla/gfx/Matrix.h"         // for Matrix4x4
 #include "mozilla/layers/Compositor.h"  // for Compositor
 #include "mozilla/layers/Effects.h"     // for TexturedEffect, Effect, etc
+#include "mozilla/layers/TextureHostOGL.h"  // for TextureHostOGL
 #include "nsAString.h"
 #include "nsDebug.h"                    // for NS_WARNING
 #include "nsPoint.h"                    // for nsIntPoint
@@ -31,6 +32,12 @@ TiledLayerBufferComposite::TiledLayerBufferComposite()
   , mUninitialized(true)
 {}
 
+/* static */ void
+TiledLayerBufferComposite::RecycleCallback(TextureHost* textureHost, void* aClosure)
+{
+  textureHost->CompositorRecycle();
+}
+
 TiledLayerBufferComposite::TiledLayerBufferComposite(ISurfaceAllocator* aAllocator,
                                                      const SurfaceDescriptorTiles& aDescriptor,
                                                      const nsIntRegion& aOldPaintedRegion)
@@ -42,7 +49,7 @@ TiledLayerBufferComposite::TiledLayerBufferComposite(ISurfaceAllocator* aAllocat
   mRetainedWidth = aDescriptor.retainedWidth();
   mRetainedHeight = aDescriptor.retainedHeight();
   mResolution = aDescriptor.resolution();
-  mFrameResolution = CSSToScreenScale(aDescriptor.frameResolution());
+  mFrameResolution = CSSToParentLayerScale(aDescriptor.frameResolution());
 
   // Combine any valid content that wasn't already uploaded
   nsIntRegion oldPaintedRegion(aOldPaintedRegion);
@@ -56,6 +63,11 @@ TiledLayerBufferComposite::TiledLayerBufferComposite(ISurfaceAllocator* aAllocat
     switch (tileDesc.type()) {
       case TileDescriptor::TTexturedTileDescriptor : {
         texture = TextureHost::AsTextureHost(tileDesc.get_TexturedTileDescriptor().textureParent());
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
+        if (!gfxPrefs::LayersUseSimpleTiles()) {
+          texture->SetRecycleCallback(RecycleCallback, nullptr);
+        }
+#endif
         const TileLock& ipcLock = tileDesc.get_TexturedTileDescriptor().sharedLock();
         nsRefPtr<gfxSharedReadLock> sharedLock;
         if (ipcLock.type() == TileLock::TShmemSection) {
@@ -159,6 +171,23 @@ TiledLayerBufferComposite::SetCompositor(Compositor* aCompositor)
     mRetainedTiles[i].mTextureHost->SetCompositor(aCompositor);
   }
 }
+
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
+void
+TiledLayerBufferComposite::SetReleaseFence(const android::sp<android::Fence>& aReleaseFence)
+{
+  for (size_t i = 0; i < mRetainedTiles.Length(); i++) {
+    if (!mRetainedTiles[i].mTextureHost) {
+      continue;
+    }
+    TextureHostOGL* texture = mRetainedTiles[i].mTextureHost->AsHostOGL();
+    if (!texture) {
+      continue;
+    }
+    texture->SetReleaseFence(new android::Fence(aReleaseFence->dup()));
+  }
+}
+#endif
 
 TiledContentHost::TiledContentHost(const TextureInfo& aTextureInfo)
   : ContentHost(aTextureInfo)
@@ -356,7 +385,7 @@ TiledContentHost::RenderTile(const TileHost& aTile,
     mCompositor->DrawQuad(graphicsRect, aClipRect, aEffectChain, aOpacity, aTransform);
   }
   mCompositor->DrawDiagnostics(DIAGNOSTIC_CONTENT|DIAGNOSTIC_TILE,
-                               aScreenRegion, aClipRect, aTransform);
+                               aScreenRegion, aClipRect, aTransform, mFlashCounter);
 }
 
 void
@@ -379,8 +408,8 @@ TiledContentHost::RenderLayerBuffer(TiledLayerBufferComposite& aLayerBuffer,
   // We assume that the current frame resolution is the one used in our primary
   // layer buffer. Compensate for a changing frame resolution.
   if (aLayerBuffer.GetFrameResolution() != mTiledBuffer.GetFrameResolution()) {
-    const CSSToScreenScale& layerResolution = aLayerBuffer.GetFrameResolution();
-    const CSSToScreenScale& localResolution = mTiledBuffer.GetFrameResolution();
+    const CSSToParentLayerScale& layerResolution = aLayerBuffer.GetFrameResolution();
+    const CSSToParentLayerScale& localResolution = mTiledBuffer.GetFrameResolution();
     layerScale.width = layerScale.height = layerResolution.scale / localResolution.scale;
     aVisibleRect.ScaleRoundOut(layerScale.width, layerScale.height);
   }
@@ -436,7 +465,7 @@ TiledContentHost::RenderLayerBuffer(TiledLayerBufferComposite& aLayerBuffer,
   gfx::Rect rect(aVisibleRect.x, aVisibleRect.y,
                  aVisibleRect.width, aVisibleRect.height);
   GetCompositor()->DrawDiagnostics(DIAGNOSTIC_CONTENT,
-                                   rect, aClipRect, aTransform);
+                                   rect, aClipRect, aTransform, mFlashCounter);
 }
 
 void

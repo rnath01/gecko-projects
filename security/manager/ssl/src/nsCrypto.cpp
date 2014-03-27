@@ -70,7 +70,7 @@
 #include "certdb.h"
 #include "secmod.h"
 #include "ScopedNSSTypes.h"
-#include "insanity/pkixtypes.h"
+#include "pkix/pkixtypes.h"
 
 #include "ssl.h" // For SSL_ClearSessionCache
 
@@ -1042,7 +1042,7 @@ nsSetEscrowAuthority(CRMFCertRequest *certReq, nsKeyPairInfo *keyInfo,
       CRMF_CertRequestIsControlPresent(certReq, crmfPKIArchiveOptionsControl)){
     return NS_ERROR_FAILURE;
   }
-  insanity::pkix::ScopedCERTCertificate cert(wrappingCert->GetCert());
+  mozilla::pkix::ScopedCERTCertificate cert(wrappingCert->GetCert());
   if (!cert)
     return NS_ERROR_FAILURE;
 
@@ -1838,7 +1838,7 @@ nsCreateReqFromKeyPairs(nsKeyPairInfo *keyids, int32_t numRequests,
   return retString;
 loser:
   nsFreeCertReqMessages(certReqMsgs,numRequests);
-  return nullptr;;
+  return nullptr;
 }
 
 static nsISupports *
@@ -1942,7 +1942,7 @@ nsCrypto::GenerateCRMFRequest(JSContext* aContext,
       aRv.Throw(NS_ERROR_FAILURE);
       return nullptr;
     }
-    insanity::pkix::ScopedCERTCertificate cert(
+    mozilla::pkix::ScopedCERTCertificate cert(
       CERT_NewTempCertificate(CERT_GetDefaultCertDB(),
                               &certDer, nullptr, false, true));
     if (!cert) {
@@ -2024,6 +2024,7 @@ nsCrypto::GenerateCRMFRequest(JSContext* aContext,
   }
   CRMFObject* newObject = new CRMFObject();
   newObject->SetCRMFRequest(encodedRequest);
+  PORT_Free(encodedRequest);
   nsFreeKeyPairInfo(keyids, numRequests);
 
   // Post an event on the UI queue so that the JS gets called after
@@ -2211,7 +2212,7 @@ nsCertAlreadyExists(SECItem *derCert)
   CERTCertDBHandle *handle = CERT_GetDefaultCertDB();
   bool retVal = false;
 
-  insanity::pkix::ScopedCERTCertificate cert(
+  mozilla::pkix::ScopedCERTCertificate cert(
     CERT_FindCertByDERCert(handle, derCert));
   if (cert) {
     if (cert->isperm && !cert->nickname && !cert->emailAddr) {
@@ -2373,7 +2374,7 @@ nsCrypto::ImportUserCertificates(const nsAString& aNickname,
 
   //Import the root chain into the cert db.
  {
-  insanity::pkix::ScopedCERTCertList
+  mozilla::pkix::ScopedCERTCertList
     caPubs(CMMF_CertRepContentGetCAPubs(certRepContent));
   if (caPubs) {
     int32_t numCAs = nsCertListCount(caPubs.get());

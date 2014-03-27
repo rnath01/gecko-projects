@@ -24,8 +24,7 @@ public:
 
   GrallocTextureSourceOGL(CompositorOGL* aCompositor,
                           android::GraphicBuffer* aGraphicBuffer,
-                          gfx::SurfaceFormat aFormat,
-                          TextureFlags aFlags);
+                          gfx::SurfaceFormat aFormat);
 
   virtual ~GrallocTextureSourceOGL();
 
@@ -39,7 +38,7 @@ public:
 
   virtual GLenum GetTextureTarget() const MOZ_OVERRIDE;
 
-  virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE;
+  virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE { return mFormat; }
 
   virtual GLenum GetWrapMode() const MOZ_OVERRIDE
   {
@@ -72,11 +71,10 @@ protected:
   GLuint mTexture;
   gfx::SurfaceFormat mFormat;
   bool mNeedsReset;
-  TextureFlags mFlags;
 };
 
 class GrallocTextureHostOGL : public TextureHost
-#if MOZ_WIDGET_GONK && ANDROID_VERSION >= 17
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
                             , public TextureHostOGL
 #endif
 {
@@ -112,7 +110,7 @@ public:
     return mTextureSource;
   }
 
-#if MOZ_WIDGET_GONK && ANDROID_VERSION >= 17
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
   virtual TextureHostOGL* AsHostOGL() MOZ_OVERRIDE
   {
     return this;

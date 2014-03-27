@@ -61,6 +61,9 @@ public:
   static already_AddRefed<CanvasPath> Constructor(const GlobalObject& aGlobal,
                                                   CanvasPath& aCanvasPath,
                                                   ErrorResult& rv);
+  static already_AddRefed<CanvasPath> Constructor(const GlobalObject& aGlobal,
+                                                  const nsAString& aPathString,
+                                                  ErrorResult& rv);
 
   void ClosePath();
   void MoveTo(double x, double y);
@@ -231,7 +234,9 @@ public:
   void Clip(const CanvasWindingRule& winding);
   void Clip(const CanvasPath& path, const CanvasWindingRule& winding);
   bool IsPointInPath(double x, double y, const CanvasWindingRule& winding);
+  bool IsPointInPath(const CanvasPath& path, double x, double y, const CanvasWindingRule& winding);
   bool IsPointInStroke(double x, double y);
+  bool IsPointInStroke(const CanvasPath& path, double x, double y);
   void FillText(const nsAString& text, double x, double y,
                 const Optional<double>& maxWidth,
                 mozilla::ErrorResult& error);

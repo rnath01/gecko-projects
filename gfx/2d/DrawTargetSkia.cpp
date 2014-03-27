@@ -218,7 +218,7 @@ SetPaintPattern(SkPaint& aPaint, const Pattern& aPattern, TempBitmap& aTmpBitmap
       shader->setLocalMatrix(mat);
       SkSafeUnref(aPaint.setShader(shader));
       if (pat.mFilter == Filter::POINT) {
-        aPaint.setFilterBitmap(false);
+        aPaint.setFilterLevel(SkPaint::kNone_FilterLevel);
       }
       break;
     }
@@ -273,7 +273,7 @@ struct AutoPaintSetup {
       mPaint.setAlpha(U8CPU(aOptions.mAlpha*255.0));
       mAlpha = aOptions.mAlpha;
     }
-    mPaint.setFilterBitmap(true);
+    mPaint.setFilterLevel(SkPaint::kLow_FilterLevel);
   }
 
   // TODO: Maybe add an operator overload to access this easier?
@@ -314,7 +314,7 @@ DrawTargetSkia::DrawSurface(SourceSurface *aSurface,
  
   AutoPaintSetup paint(mCanvas.get(), aOptions);
   if (aSurfOptions.mFilter == Filter::POINT) {
-    paint.mPaint.setFilterBitmap(false);
+    paint.mPaint.setFilterLevel(SkPaint::kNone_FilterLevel);
   }
 
   mCanvas->drawBitmapRectToRect(bitmap.mBitmap, &sourceRect, destRect, &paint.mPaint);
@@ -351,8 +351,8 @@ DrawTargetSkia::DrawSurfaceWithShadow(SourceSurface *aSurface,
 
   SkPaint paint;
 
-  SkImageFilter* filter = new SkDropShadowImageFilter(aOffset.x, aOffset.y,
-                                                      aSigma, ColorToSkColor(aColor, 1.0));
+  SkImageFilter* filter = SkDropShadowImageFilter::Create(aOffset.x, aOffset.y,
+                                                          aSigma, ColorToSkColor(aColor, 1.0));
 
   paint.setImageFilter(filter);
   paint.setXfermodeMode(GfxOpToSkiaOp(aOperator));
@@ -659,11 +659,13 @@ DrawTargetSkia::Init(const IntSize &aSize, SurfaceFormat aFormat)
 }
 
 #ifdef USE_SKIA_GPU
-void
+bool
 DrawTargetSkia::InitWithGrContext(GrContext* aGrContext,
                                   const IntSize &aSize,
                                   SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aGrContext, "null GrContext");
+
   mGrContext = aGrContext;
 
   mSize = aSize;
@@ -679,12 +681,17 @@ DrawTargetSkia::InitWithGrContext(GrContext* aGrContext,
   targetDescriptor.fSampleCnt = 0;
 
   SkAutoTUnref<GrTexture> skiaTexture(mGrContext->createUncachedTexture(targetDescriptor, NULL, 0));
+  if (!skiaTexture) {
+    return false;
+  }
 
   mTexture = (uint32_t)skiaTexture->getTextureHandle();
 
   SkAutoTUnref<SkBaseDevice> device(new SkGpuDevice(mGrContext.get(), skiaTexture->asRenderTarget()));
   SkAutoTUnref<SkCanvas> canvas(new SkCanvas(device.get()));
   mCanvas = canvas.get();
+
+  return true;
 }
 
 #endif
