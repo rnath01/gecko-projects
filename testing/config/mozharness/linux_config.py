@@ -13,7 +13,7 @@ config = {
         "--extra-profile-file=tests/bin/plugins", "--symbols-path=%(symbols_path)s",
         "--certificate-path=tests/certs", "--autorun", "--close-when-done",
         "--console-level=INFO", "--setpref=webgl.force-enabled=true",
-        "--e10s"
+        "--quiet", "--e10s"
     ],
     "xpcshell_options": [
         "--symbols-path=%(symbols_path)s",
