@@ -759,8 +759,12 @@
           }
 
           // Listen for first load for lazy attachment to form fill controller
-          this.addEventListener("pageshow", this.onPageShow, true);
-          this.addEventListener("pagehide", this.onPageHide, true);
+          // (But we don't want to do this in e10s - the test infra might
+          // arrange for us to see these events when we normally wouldn't.)
+          if (this.docShell) {
+            this.addEventListener("pageshow", this.onPageShow, true);
+            this.addEventListener("pagehide", this.onPageHide, true);
+          }
 
           if (this.messageManager) {
             this.messageManager.addMessageListener("PopupBlocking:UpdateBlockedPopups", this);
@@ -806,8 +810,10 @@
 
           this.lastURI = null;
 
-          this.removeEventListener("pageshow", this.onPageShow, true);
-          this.removeEventListener("pagehide", this.onPageHide, true);
+          if (this.docShell) {
+            this.removeEventListener("pageshow", this.onPageShow, true);
+            this.removeEventListener("pagehide", this.onPageHide, true);
+          }
 
           if (this._autoScrollNeedsCleanup) {
             // we polluted the global scope, so clean it up
