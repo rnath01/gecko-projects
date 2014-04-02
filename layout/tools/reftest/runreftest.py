@@ -163,7 +163,8 @@ class RefTest(object):
       prefs['reftest.filter'] = options.filter
     prefs['reftest.focusFilterMode'] = options.focusFilterMode
 
-    prefs['browser.tabs.remote.autostart'] = options.e10s
+    if options.e10s:
+      prefs['browser.tabs.remote.autostart'] = True
 
     for v in options.extraPrefs:
       thispref = v.split('=')
