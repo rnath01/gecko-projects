@@ -66,9 +66,6 @@ using namespace js;
 using namespace js::gc;
 using namespace js::types;
 
-using js::frontend::IsIdentifier;
-using mozilla::ArrayLength;
-using mozilla::DebugOnly;
 using mozilla::Maybe;
 using mozilla::RoundUpPow2;
 
@@ -1256,8 +1253,20 @@ NewObject(ExclusiveContext *cx, types::TypeObject *type_, JSObject *parent, gc::
     if (!NewObjectMetadata(cx, &metadata))
         return nullptr;
 
+    // Normally, the number of fixed slots given an object is the maximum
+    // permitted for its size class. For array buffers we only use enough to
+    // cover the class reservd slots, so that the remaining space in the
+    // object's allocation is available for the buffer's data.
+    size_t nfixed;
+    if (clasp == &ArrayBufferObject::class_) {
+        JS_STATIC_ASSERT(ArrayBufferObject::RESERVED_SLOTS == 4);
+        nfixed = ArrayBufferObject::RESERVED_SLOTS;
+    } else {
+        nfixed = GetGCKindSlots(kind, clasp);
+    }
+
     RootedShape shape(cx, EmptyShape::getInitialShape(cx, clasp, type->proto(),
-                                                      parent, metadata, kind));
+                                                      parent, metadata, nfixed));
     if (!shape)
         return nullptr;
 
@@ -1563,7 +1572,7 @@ js::CreateThisForFunctionWithProto(JSContext *cx, HandleObject callee, JSObject 
         res = NewObjectWithClassProto(cx, &JSObject::class_, proto, callee->getParent(), allocKind, newKind);
     }
 
-    if (res && cx->typeInferenceEnabled()) {
+    if (res) {
         JSScript *script = callee->as<JSFunction>().getOrCreateScript(cx);
         if (!script)
             return nullptr;
@@ -1706,9 +1715,6 @@ JSObject::deleteByValue(JSContext *cx, HandleObject obj, const Value &property, 
         return deleteElement(cx, obj, index, succeeded);
 
     RootedValue propval(cx, property);
-    Rooted<SpecialId> sid(cx);
-    if (ValueIsSpecial(obj, &propval, &sid, cx))
-        return deleteSpecial(cx, obj, sid, succeeded);
 
     JSAtom *name = ToAtom<CanGC>(cx, propval);
     if (!name)
@@ -1751,10 +1757,8 @@ JS_CopyPropertyFrom(JSContext *cx, HandleId id, HandleObject target,
 }
 
 JS_FRIEND_API(bool)
-JS_CopyPropertiesFrom(JSContext *cx, JSObject *targetArg, JSObject *objArg)
+JS_CopyPropertiesFrom(JSContext *cx, HandleObject target, HandleObject obj)
 {
-    RootedObject target(cx, targetArg);
-    RootedObject obj(cx, objArg);
     JSAutoCompartment ac(cx, obj);
 
     AutoIdVector props(cx);
@@ -2481,13 +2485,13 @@ ClearClassObject(JSObject *obj, JSProtoKey key)
     obj->as<GlobalObject>().setPrototype(key, UndefinedValue());
 }
 
-JSObject *
-js::DefineConstructorAndPrototype(JSContext *cx, HandleObject obj, JSProtoKey key, HandleAtom atom,
-                                  JSObject *protoProto, const Class *clasp,
-                                  Native constructor, unsigned nargs,
-                                  const JSPropertySpec *ps, const JSFunctionSpec *fs,
-                                  const JSPropertySpec *static_ps, const JSFunctionSpec *static_fs,
-                                  JSObject **ctorp, AllocKind ctorKind)
+static JSObject *
+DefineConstructorAndPrototype(JSContext *cx, HandleObject obj, JSProtoKey key, HandleAtom atom,
+                              JSObject *protoProto, const Class *clasp,
+                              Native constructor, unsigned nargs,
+                              const JSPropertySpec *ps, const JSFunctionSpec *fs,
+                              const JSPropertySpec *static_ps, const JSFunctionSpec *static_fs,
+                              JSObject **ctorp, AllocKind ctorKind)
 {
     /*
      * Create a prototype object for this class.
@@ -2552,14 +2556,14 @@ js::DefineConstructorAndPrototype(JSContext *cx, HandleObject obj, JSProtoKey ke
          * (FIXME: remove this dependency on the exact identity of the parent,
          * perhaps as part of bug 638316.)
          */
-        RootedFunction fun(cx, NewFunction(cx, NullPtr(), constructor, nargs,
+        RootedFunction fun(cx, NewFunction(cx, js::NullPtr(), constructor, nargs,
                                            JSFunction::NATIVE_CTOR, obj, atom, ctorKind));
         if (!fun)
             goto bad;
 
         /*
          * Set the class object early for standard class constructors. Type
-         * inference may need to access these, and js_GetClassPrototype will
+         * inference may need to access these, and js::GetBuiltinPrototype will
          * fail if it tries to do a reentrant reconstruction of the class.
          */
         if (key != JSProto_Null) {
@@ -2638,16 +2642,14 @@ js_InitClass(JSContext *cx, HandleObject obj, JSObject *protoProto_,
      * in turn will inherit from protoProto.
      *
      * When initializing a standard class (other than Object), if protoProto is
-     * null, default to the Object prototype object. The engine's internal uses
-     * of js_InitClass depend on this nicety. Note that in
-     * js_InitFunctionAndObjectClasses, we specially hack the resolving table
-     * and then depend on js_GetClassPrototype here leaving protoProto nullptr
-     * and returning true.
+     * null, default to Object.prototype. The engine's internal uses of
+     * js_InitClass depend on this nicety.
      */
     JSProtoKey key = JSCLASS_CACHED_PROTO_KEY(clasp);
     if (key != JSProto_Null &&
         !protoProto &&
-        !js_GetClassPrototype(cx, JSProto_Object, &protoProto)) {
+        !GetBuiltinPrototype(cx, JSProto_Object, &protoProto))
+    {
         return nullptr;
     }
 
@@ -3241,38 +3243,30 @@ MaybeResolveConstructor(ExclusiveContext *cxArg, Handle<GlobalObject*> global, J
         return false;
 
     JSContext *cx = cxArg->asJSContext();
-    RootedId name(cx, NameToId(ClassName(key, cx)));
-    AutoResolving resolving(cx, global, name);
-    if (resolving.alreadyStarted())
-       return true;
-    return GlobalObject::ensureConstructor(cx, global, key);
+    return GlobalObject::resolveConstructor(cx, global, key);
 }
 
 bool
-js_GetClassObject(ExclusiveContext *cx, JSProtoKey key, MutableHandleObject objp)
+js::GetBuiltinConstructor(ExclusiveContext *cx, JSProtoKey key, MutableHandleObject objp)
 {
     MOZ_ASSERT(key != JSProto_Null);
     Rooted<GlobalObject*> global(cx, cx->global());
     if (!MaybeResolveConstructor(cx, global, key))
         return false;
 
-    Value v = global->getConstructor(key);
-    if (v.isObject())
-        objp.set(&v.toObject());
+    objp.set(&global->getConstructor(key).toObject());
     return true;
 }
 
 bool
-js_GetClassPrototype(ExclusiveContext *cx, JSProtoKey key, MutableHandleObject protop)
+js::GetBuiltinPrototype(ExclusiveContext *cx, JSProtoKey key, MutableHandleObject protop)
 {
     MOZ_ASSERT(key != JSProto_Null);
     Rooted<GlobalObject*> global(cx, cx->global());
     if (!MaybeResolveConstructor(cx, global, key))
         return false;
 
-    Value v = global->getPrototype(key);
-    if (v.isObject())
-        protop.set(&v.toObject());
+    protop.set(&global->getPrototype(key).toObject());
     return true;
 }
 
@@ -3313,26 +3307,19 @@ JS::IdentifyStandardInstanceOrPrototype(JSObject *obj)
 }
 
 bool
-js_FindClassObject(ExclusiveContext *cx, MutableHandleObject protop, const Class *clasp)
+js::FindClassObject(ExclusiveContext *cx, MutableHandleObject protop, const Class *clasp)
 {
-    MOZ_ASSERT(clasp);
     JSProtoKey protoKey = GetClassProtoKey(clasp);
-    RootedId id(cx);
     if (protoKey != JSProto_Null) {
         JS_ASSERT(JSProto_Null < protoKey);
         JS_ASSERT(protoKey < JSProto_LIMIT);
-        RootedObject cobj(cx);
-        if (!js_GetClassObject(cx, protoKey, protop))
-            return false;
-        if (cobj)
-            return true;
-        id = NameToId(ClassName(protoKey, cx));
-    } else {
-        JSAtom *atom = Atomize(cx, clasp->name, strlen(clasp->name));
-        if (!atom)
-            return false;
-        id = AtomToId(atom);
+        return GetBuiltinConstructor(cx, protoKey, protop);
     }
+
+    JSAtom *atom = Atomize(cx, clasp->name, strlen(clasp->name));
+    if (!atom)
+        return false;
+    RootedId id(cx, AtomToId(atom));
 
     RootedObject pobj(cx);
     RootedShape shape(cx);
@@ -3516,15 +3503,6 @@ JSObject::defineProperty(ExclusiveContext *cx, HandleObject obj,
                          JSPropertyOp getter, JSStrictPropertyOp setter, unsigned attrs)
 {
     RootedId id(cx, NameToId(name));
-    return defineGeneric(cx, obj, id, value, getter, setter, attrs);
-}
-
-/* static */ bool
-JSObject::defineSpecial(ExclusiveContext *cx, HandleObject obj,
-                        SpecialId sid, HandleValue value,
-                        JSPropertyOp getter, JSStrictPropertyOp setter, unsigned attrs)
-{
-    RootedId id(cx, SPECIALID_TO_JSID(sid));
     return defineGeneric(cx, obj, id, value, getter, setter, attrs);
 }
 
@@ -3760,7 +3738,7 @@ DefinePropertyOrElement(typename ExecutionModeTraits<mode>::ExclusiveContextType
 
     // Don't define new indexed properties on typed arrays.
     if (obj->is<TypedArrayObject>()) {
-        double index;
+        uint64_t index;
         if (IsTypedArrayIndex(id, &index))
             return true;
     }
@@ -4002,11 +3980,14 @@ LookupOwnPropertyWithFlagsInline(ExclusiveContext *cx,
     // so that integer properties on the prototype are ignored even for out
     // of bounds accesses.
     if (obj->template is<TypedArrayObject>()) {
-        double index;
+        uint64_t index;
         if (IsTypedArrayIndex(id, &index)) {
-            if (index >= 0 && index < obj->template as<TypedArrayObject>().length()) {
+            if (index < obj->template as<TypedArrayObject>().length()) {
                 objp.set(obj);
                 MarkDenseOrTypedArrayElementFound<allowGC>(propp);
+            } else {
+                objp.set(nullptr);
+                propp.set(nullptr);
             }
             *donep = true;
             return true;
@@ -4315,7 +4296,6 @@ js::HasOwnProperty(JSContext *cx, HandleObject obj, HandleId id, bool *resultp)
     return true;
 }
 
-
 template <AllowGC allowGC>
 static MOZ_ALWAYS_INLINE bool
 NativeGetInline(JSContext *cx,
@@ -4595,9 +4575,9 @@ LookupPropertyPureInline(JSObject *obj, jsid id, JSObject **objp, Shape **propp)
         }
 
         if (current->is<TypedArrayObject>()) {
-            double index;
+            uint64_t index;
             if (IsTypedArrayIndex(id, &index)) {
-                if (index >= 0 && index < obj->as<TypedArrayObject>().length()) {
+                if (index < obj->as<TypedArrayObject>().length()) {
                     *objp = current;
                     MarkDenseOrTypedArrayElementFound<NoGC>(propp);
                 } else {
@@ -5239,13 +5219,6 @@ baseops::DeleteElement(JSContext *cx, HandleObject obj, uint32_t index, bool *su
 }
 
 bool
-baseops::DeleteSpecial(JSContext *cx, HandleObject obj, HandleSpecialId sid, bool *succeeded)
-{
-    Rooted<jsid> id(cx, SPECIALID_TO_JSID(sid));
-    return baseops::DeleteGeneric(cx, obj, id, succeeded);
-}
-
-bool
 js::WatchGuts(JSContext *cx, JS::HandleObject origObj, JS::HandleId id, JS::HandleObject callable)
 {
     RootedObject obj(cx, GetInnerObject(cx, origObj));
@@ -5466,7 +5439,7 @@ js::IsDelegateOfObject(JSContext *cx, HandleObject protoObj, JSObject* obj, bool
 }
 
 JSObject *
-js::GetClassPrototypePure(GlobalObject *global, JSProtoKey protoKey)
+js::GetBuiltinPrototypePure(GlobalObject *global, JSProtoKey protoKey)
 {
     JS_ASSERT(JSProto_Null <= protoKey);
     JS_ASSERT(protoKey < JSProto_LIMIT);
@@ -5485,19 +5458,15 @@ js::GetClassPrototypePure(GlobalObject *global, JSProtoKey protoKey)
  * NewBuiltinClassInstance in jsobjinlines.h.
  */
 bool
-js_FindClassPrototype(ExclusiveContext *cx, MutableHandleObject protop, const Class *clasp)
+js::FindClassPrototype(ExclusiveContext *cx, MutableHandleObject protop, const Class *clasp)
 {
     protop.set(nullptr);
     JSProtoKey protoKey = GetClassProtoKey(clasp);
-    if (protoKey != JSProto_Null) {
-        if (!js_GetClassPrototype(cx, protoKey, protop))
-            return false;
-        if (protop)
-            return true;
-    }
+    if (protoKey != JSProto_Null)
+        return GetBuiltinPrototype(cx, protoKey, protop);
 
     RootedObject ctor(cx);
-    if (!js_FindClassObject(cx, &ctor, clasp))
+    if (!FindClassObject(cx, &ctor, clasp))
         return false;
 
     if (ctor && ctor->is<JSFunction>()) {
@@ -5844,7 +5813,7 @@ MaybeDumpValue(const char *name, const Value &v)
 }
 
 JS_FRIEND_API(void)
-js_DumpStackFrame(JSContext *cx, StackFrame *start)
+js_DumpInterpreterFrame(JSContext *cx, InterpreterFrame *start)
 {
     /* This should only called during live debugging. */
     ScriptFrameIter i(cx, ScriptFrameIter::GO_THROUGH_SAVED);
@@ -5868,7 +5837,7 @@ js_DumpStackFrame(JSContext *cx, StackFrame *start)
         if (i.isJit())
             fprintf(stderr, "JIT frame\n");
         else
-            fprintf(stderr, "StackFrame at %p\n", (void *) i.interpFrame());
+            fprintf(stderr, "InterpreterFrame at %p\n", (void *) i.interpFrame());
 
         if (i.isFunctionFrame()) {
             fprintf(stderr, "callee fun: ");
@@ -5931,24 +5900,14 @@ js_DumpBacktrace(JSContext *cx)
     fprintf(stdout, "%s", sprinter.string());
 }
 void
-JSObject::addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::ClassInfo *info)
+JSObject::addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::ObjectsExtraSizes *sizes)
 {
     if (hasDynamicSlots())
-        info->objectsMallocHeapSlots += mallocSizeOf(slots);
+        sizes->mallocHeapSlots += mallocSizeOf(slots);
 
     if (hasDynamicElements()) {
         js::ObjectElements *elements = getElementsHeader();
-        if (MOZ_UNLIKELY(elements->isAsmJSArrayBuffer())) {
-#if defined (JS_CPU_X64)
-            // On x64, ArrayBufferObject::prepareForAsmJS switches the
-            // ArrayBufferObject to use mmap'd storage.
-            info->objectsNonHeapElementsAsmJS += as<ArrayBufferObject>().byteLength();
-#else
-            info->objectsMallocHeapElementsAsmJS += mallocSizeOf(elements);
-#endif
-        } else {
-            info->objectsMallocHeapElementsNonAsmJS += mallocSizeOf(elements);
-        }
+        sizes->mallocHeapElementsNonAsmJS += mallocSizeOf(elements);
     }
 
     // Other things may be measured in the future if DMD indicates it is worthwhile.
@@ -5970,20 +5929,22 @@ JSObject::addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::ClassIn
         // - ( 1.0%, 96.4%): Proxy
 
     } else if (is<ArgumentsObject>()) {
-        info->objectsMallocHeapMisc += as<ArgumentsObject>().sizeOfMisc(mallocSizeOf);
+        sizes->mallocHeapArgumentsData += as<ArgumentsObject>().sizeOfMisc(mallocSizeOf);
     } else if (is<RegExpStaticsObject>()) {
-        info->objectsMallocHeapMisc += as<RegExpStaticsObject>().sizeOfData(mallocSizeOf);
+        sizes->mallocHeapRegExpStatics += as<RegExpStaticsObject>().sizeOfData(mallocSizeOf);
     } else if (is<PropertyIteratorObject>()) {
-        info->objectsMallocHeapMisc += as<PropertyIteratorObject>().sizeOfMisc(mallocSizeOf);
+        sizes->mallocHeapPropertyIteratorData += as<PropertyIteratorObject>().sizeOfMisc(mallocSizeOf);
+    } else if (is<ArrayBufferObject>() || is<SharedArrayBufferObject>()) {
+        ArrayBufferObject::addSizeOfExcludingThis(this, mallocSizeOf, sizes);
 #ifdef JS_ION
     } else if (is<AsmJSModuleObject>()) {
-        as<AsmJSModuleObject>().addSizeOfMisc(mallocSizeOf, &info->objectsNonHeapCodeAsmJS,
-                                              &info->objectsMallocHeapMisc);
+        as<AsmJSModuleObject>().addSizeOfMisc(mallocSizeOf, &sizes->nonHeapCodeAsmJS,
+                                              &sizes->mallocHeapAsmJSModuleData);
 #endif
 #ifdef JS_HAS_CTYPES
     } else {
         // This must be the last case.
-        info->objectsMallocHeapMisc +=
+        sizes->mallocHeapCtypesData +=
             js::SizeOfDataIfCDataObject(mallocSizeOf, const_cast<JSObject *>(this));
 #endif
     }

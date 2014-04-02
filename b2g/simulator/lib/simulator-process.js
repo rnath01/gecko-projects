@@ -17,7 +17,7 @@ const Runtime = require("sdk/system/runtime");
 const Self = require("sdk/self");
 const URL = require("sdk/url");
 const Subprocess = require("subprocess");
-const Promise = require("sdk/core/promise");
+const { Promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
 
 const { rootURI: ROOT_URI } = require('@loader/options');
 const PROFILE_URL = ROOT_URI + "profile/";
@@ -141,7 +141,7 @@ exports.SimulatorProcess = Class({
     let bin = URL.toFilename(BIN_URL);
     let executables = {
       WINNT: "b2g-bin.exe",
-      Darwin: "Contents/MacOS/b2g-bin",
+      Darwin: "B2G.app/Contents/MacOS/b2g-bin",
       Linux: "b2g-bin",
     };
 
@@ -171,7 +171,7 @@ exports.SimulatorProcess = Class({
     Cu.reportError(profile);
 
     // NOTE: push dbgport option on the b2g-desktop commandline
-    args.push("-dbgport", "" + this.remoteDebuggerPort);
+    args.push("-start-debugger-server", "" + this.remoteDebuggerPort);
 
     // Ignore eventual zombie instances of b2g that are left over
     args.push("-no-remote");

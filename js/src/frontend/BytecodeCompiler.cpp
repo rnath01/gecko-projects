@@ -188,7 +188,6 @@ frontend::CompileScript(ExclusiveContext *cx, LifoAlloc *alloc, HandleObject sco
                         SourceCompressionTask *extraSct /* = nullptr */)
 {
     RootedString source(cx, source_);
-    SkipRoot skip(cx, &chars);
 
 #if JS_TRACE_LOGGING
         js::AutoTraceLog logger(js::TraceLogging::defaultLogger(),
@@ -431,8 +430,7 @@ frontend::CompileLazyFunction(JSContext *cx, Handle<LazyScript*> lazy, const jsc
     JS_ASSERT(cx->compartment() == lazy->functionNonDelazifying()->compartment());
 
     CompileOptions options(cx, lazy->version());
-    options.setPrincipals(cx->compartment()->principals)
-           .setOriginPrincipals(lazy->originPrincipals())
+    options.setOriginPrincipals(lazy->originPrincipals())
            .setFileAndLine(lazy->source()->filename(), lazy->lineno())
            .setColumn(lazy->column())
            .setCompileAndGo(true)
@@ -508,7 +506,6 @@ CompileFunctionBody(JSContext *cx, MutableHandleFunction fun, const ReadOnlyComp
 
     // FIXME: make Function pass in two strings and parse them as arguments and
     // ProgramElements respectively.
-    SkipRoot skip(cx, &chars);
 
     MaybeCallSourceHandler(cx, options, chars, length);
 
@@ -601,7 +598,7 @@ CompileFunctionBody(JSContext *cx, MutableHandleFunction fun, const ReadOnlyComp
         /*
          * The reason for checking fun->environment() below is that certain
          * consumers of JS::CompileFunction, namely
-         * nsEventListenerManager::CompileEventHandlerInternal, passes in a
+         * EventListenerManager::CompileEventHandlerInternal, passes in a
          * nullptr environment. This compiled function is never used, but
          * instead is cloned immediately onto the right scope chain.
          */

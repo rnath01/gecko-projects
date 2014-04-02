@@ -78,7 +78,7 @@ public:
   void SetInt32Parameter(uint32_t aIndex, int32_t aValue);
   void SetTimelineParameter(uint32_t aIndex, const dom::AudioParamTimeline& aValue);
   void SetThreeDPointParameter(uint32_t aIndex, const dom::ThreeDPoint& aValue);
-  void SetBuffer(already_AddRefed<ThreadSharedFloatArrayBufferList> aBuffer);
+  void SetBuffer(already_AddRefed<ThreadSharedFloatArrayBufferList>&& aBuffer);
   // This consumes the contents of aData.  aData will be emptied after this returns.
   void SetRawArrayData(nsTArray<float>& aData);
   void SetChannelMixingParameters(uint32_t aNumberOfChannels,
@@ -165,7 +165,7 @@ protected:
                          nsTArray<const void*>& aOutputChannels,
                          nsTArray<float>& aDownmixBuffer);
 
-  uint32_t ComputeFinalOuputChannelCount(uint32_t aInputChannelCount);
+  uint32_t ComputedNumberOfChannels(uint32_t aInputChannelCount);
   void ObtainInputBlock(AudioChunk& aTmpChunk, uint32_t aPortIndex);
 
   // The engine that will generate output for this node.

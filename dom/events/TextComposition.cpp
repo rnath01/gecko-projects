@@ -4,15 +4,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "ContentEventHandler.h"
 #include "TextComposition.h"
-#include "nsContentEventHandler.h"
 #include "nsContentUtils.h"
-#include "nsEventDispatcher.h"
 #include "nsIContent.h"
 #include "nsIEditor.h"
-#include "nsIMEStateManager.h"
 #include "nsIPresShell.h"
 #include "nsPresContext.h"
+#include "mozilla/EventDispatcher.h"
+#include "mozilla/IMEStateManager.h"
 #include "mozilla/MiscEvents.h"
 #include "mozilla/TextEvents.h"
 
@@ -56,14 +56,14 @@ TextComposition::MatchesNativeContext(nsIWidget* aWidget) const
 void
 TextComposition::DispatchEvent(WidgetGUIEvent* aEvent,
                                nsEventStatus* aStatus,
-                               nsDispatchingCallback* aCallBack)
+                               EventDispatchingCallback* aCallBack)
 {
   if (aEvent->message == NS_COMPOSITION_UPDATE) {
     mLastData = aEvent->AsCompositionEvent()->data;
   }
 
-  nsEventDispatcher::Dispatch(mNode, mPresContext,
-                              aEvent, nullptr, aStatus, aCallBack);
+  EventDispatcher::Dispatch(mNode, mPresContext,
+                            aEvent, nullptr, aStatus, aCallBack);
 
   if (!mPresContext) {
     return;
@@ -145,7 +145,7 @@ nsresult
 TextComposition::NotifyIME(IMEMessage aMessage)
 {
   NS_ENSURE_TRUE(mPresContext, NS_ERROR_NOT_AVAILABLE);
-  return nsIMEStateManager::NotifyIME(aMessage, mPresContext);
+  return IMEStateManager::NotifyIME(aMessage, mPresContext);
 }
 
 void
@@ -227,27 +227,27 @@ TextComposition::CompositionEventDispatcher::Run()
       WidgetCompositionEvent compStart(true, NS_COMPOSITION_START, mWidget);
       WidgetQueryContentEvent selectedText(true, NS_QUERY_SELECTED_TEXT,
                                            mWidget);
-      nsContentEventHandler handler(mPresContext);
+      ContentEventHandler handler(mPresContext);
       handler.OnQuerySelectedText(&selectedText);
       NS_ASSERTION(selectedText.mSucceeded, "Failed to get selected text");
       compStart.data = selectedText.mReply.mString;
-      nsIMEStateManager::DispatchCompositionEvent(mEventTarget, mPresContext,
-                                                  &compStart, &status, nullptr);
+      IMEStateManager::DispatchCompositionEvent(mEventTarget, mPresContext,
+                                                &compStart, &status, nullptr);
       break;
     }
     case NS_COMPOSITION_UPDATE:
     case NS_COMPOSITION_END: {
       WidgetCompositionEvent compEvent(true, mEventMessage, mWidget);
       compEvent.data = mData;
-      nsIMEStateManager::DispatchCompositionEvent(mEventTarget, mPresContext,
-                                                  &compEvent, &status, nullptr);
+      IMEStateManager::DispatchCompositionEvent(mEventTarget, mPresContext,
+                                                &compEvent, &status, nullptr);
       break;
     }
     case NS_TEXT_TEXT: {
       WidgetTextEvent textEvent(true, NS_TEXT_TEXT, mWidget);
       textEvent.theText = mData;
-      nsIMEStateManager::DispatchCompositionEvent(mEventTarget, mPresContext,
-                                                  &textEvent, &status, nullptr);
+      IMEStateManager::DispatchCompositionEvent(mEventTarget, mPresContext,
+                                                &textEvent, &status, nullptr);
       break;
     }
     default:

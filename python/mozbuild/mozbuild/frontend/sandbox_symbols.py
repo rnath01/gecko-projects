@@ -314,13 +314,6 @@ VARIABLES = {
         A list of libraries and flags to include when linking.
         """, None),
 
-    'LIBXUL_LIBRARY': (bool, bool,
-        """Whether the library in this directory is linked into libxul.
-
-        Implies ``FORCE_STATIC_LIB`` and the ``MOZILLA_INTERNAL_API``
-        preprocessor macro.
-        """, None),
-
     'LOCAL_INCLUDES': (StrictOrderingOnAppendList, list,
         """Additional directories to be searched for include files by the compiler.
         """, None),
@@ -736,6 +729,14 @@ VARIABLES = {
            executables declared in this directory.
 
            Note that the ordering of flags matters here; these flags will be
+           added to the linker's command line in the same order as they
+           appear in the moz.build file.
+        """, 'libs'),
+
+    'EXTRA_DSO_LDOPTS': (list, list,
+        """Flags passed to the linker when linking a shared library.
+
+           Note that the ordering of flags matter here, these flags will be
            added to the linker's command line in the same order as they
            appear in the moz.build file.
         """, 'libs'),

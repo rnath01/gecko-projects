@@ -14,6 +14,7 @@
 
 #include "ContentChild.h"
 #include "CrashReporterChild.h"
+#include "FileDescriptorSetChild.h"
 #include "TabChild.h"
 
 #include "mozilla/Attributes.h"
@@ -32,12 +33,13 @@
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/Preferences.h"
 
-#if defined(MOZ_CONTENT_SANDBOX) && defined(XP_WIN)
+#if defined(MOZ_CONTENT_SANDBOX)
+#if defined(XP_WIN)
 #define TARGET_SANDBOX_EXPORTS
 #include "mozilla/sandboxTarget.h"
-#endif
-#if defined(XP_LINUX)
+#elif defined(XP_LINUX)
 #include "mozilla/Sandbox.h"
+#endif
 #endif
 
 #include "mozilla/unused.h"
@@ -116,6 +118,8 @@
 #include "mozilla/dom/indexedDB/PIndexedDBChild.h"
 #include "mozilla/dom/mobilemessage/SmsChild.h"
 #include "mozilla/dom/devicestorage/DeviceStorageRequestChild.h"
+#include "mozilla/dom/PFileSystemRequestChild.h"
+#include "mozilla/dom/FileSystemTaskBase.h"
 #include "mozilla/dom/bluetooth/PBluetoothChild.h"
 #include "mozilla/dom/PFMRadioChild.h"
 #include "mozilla/ipc/InputStreamUtils.h"
@@ -375,6 +379,7 @@ ContentChild::ContentChild()
 #ifdef ANDROID
    ,mScreenSize(0, 0)
 #endif
+   , mCanOverrideProcessName(true)
 {
     // This process is a content process, so it's clearly running in
     // multiprocess mode!
@@ -434,28 +439,39 @@ ContentChild::Init(MessageLoop* aIOLoop,
                                   XRE_GetProcessType());
 #endif
 
-    SendGetProcessAttributes(&mID, &mIsForApp, &mIsForBrowser);
-
     GetCPOWManager();
 
-#ifdef MOZ_NUWA_PROCESS
-    if (IsNuwaProcess()) {
-        SetProcessName(NS_LITERAL_STRING("(Nuwa)"));
-        return true;
-    }
-#endif
-    if (mIsForApp && !mIsForBrowser) {
-        SetProcessName(NS_LITERAL_STRING("(Preallocated app)"));
-    } else {
-        SetProcessName(NS_LITERAL_STRING("Browser"));
-    }
+    InitProcessAttributes();
 
     return true;
 }
 
 void
-ContentChild::SetProcessName(const nsAString& aName)
+ContentChild::InitProcessAttributes()
 {
+    SendGetProcessAttributes(&mID, &mIsForApp, &mIsForBrowser);
+
+#ifdef MOZ_NUWA_PROCESS
+    if (IsNuwaProcess()) {
+        SetProcessName(NS_LITERAL_STRING("(Nuwa)"), false);
+        return;
+    }
+#endif
+    if (mIsForApp && !mIsForBrowser) {
+        SetProcessName(NS_LITERAL_STRING("(Preallocated app)"), false);
+    } else {
+        SetProcessName(NS_LITERAL_STRING("Browser"), false);
+    }
+
+}
+
+void
+ContentChild::SetProcessName(const nsAString& aName, bool aDontOverride)
+{
+    if (!mCanOverrideProcessName) {
+        return;
+    }
+
     char* name;
     if ((name = PR_GetEnv("MOZ_DEBUG_APP_PROCESS")) &&
         aName.EqualsASCII(name)) {
@@ -473,6 +489,10 @@ ContentChild::SetProcessName(const nsAString& aName)
 
     mProcessName = aName;
     mozilla::ipc::SetThisProcessName(NS_LossyConvertUTF16toASCII(aName).get());
+
+    if (aDontOverride) {
+        mCanOverrideProcessName = false;
+    }
 }
 
 void
@@ -684,23 +704,16 @@ ContentChild::AllocPBackgroundChild(Transport* aTransport,
 }
 
 bool
-ContentChild::RecvSetProcessPrivileges(const ChildPrivileges& aPrivs)
+ContentChild::RecvSetProcessSandbox()
 {
-  ChildPrivileges privs = (aPrivs == PRIVILEGES_DEFAULT) ?
-                          GeckoChildProcessHost::DefaultChildPrivileges() :
-                          aPrivs;
-#if defined(XP_LINUX)
-  // SetCurrentProcessSandbox includes SetCurrentProcessPrivileges.
-  // But we may want to move the sandbox initialization somewhere else
+  // We may want to move the sandbox initialization somewhere else
   // at some point; see bug 880808.
-  SetCurrentProcessSandbox(privs);
-#else
-  // If this fails, we die.
-  SetCurrentProcessPrivileges(privs);
-#endif
-
-#if defined(MOZ_CONTENT_SANDBOX) && defined(XP_WIN)
+#if defined(MOZ_CONTENT_SANDBOX)
+#if defined(XP_LINUX)
+  SetCurrentProcessSandbox();
+#elif defined(XP_WIN)
   mozilla::SandboxTarget::Instance()->StartSandbox();
+#endif
 #endif
   return true;
 }
@@ -772,7 +785,7 @@ ContentChild::AllocPBrowserChild(const IPCTabContext& aContext,
     nsRefPtr<TabChild> child = TabChild::Create(this, tc.GetTabContext(), aChromeFlags);
 
     // The ref here is released in DeallocPBrowserChild.
-    return child.forget().get();
+    return child.forget().take();
 }
 
 bool
@@ -797,11 +810,27 @@ ContentChild::RecvPBrowserConstructor(PBrowserChild* actor,
         MOZ_ASSERT(!sFirstIdleTask);
         sFirstIdleTask = NewRunnableFunction(FirstIdle);
         MessageLoop::current()->PostIdleTask(FROM_HERE, sFirstIdleTask);
+
+        // Redo InitProcessAttributes() when the app or browser is really
+        // launching so the attributes will be correct.
+        InitProcessAttributes();
     }
 
     return true;
 }
 
+PFileDescriptorSetChild*
+ContentChild::AllocPFileDescriptorSetChild(const FileDescriptor& aFD)
+{
+    return new FileDescriptorSetChild(aFD);
+}
+
+bool
+ContentChild::DeallocPFileDescriptorSetChild(PFileDescriptorSetChild* aActor)
+{
+    delete static_cast<FileDescriptorSetChild*>(aActor);
+    return true;
+}
 
 bool
 ContentChild::DeallocPBrowserChild(PBrowserChild* iframe)
@@ -908,7 +937,9 @@ ContentChild::GetOrCreateActorForBlob(nsIDOMBlob* aBlob)
     NS_ENSURE_SUCCESS(rv, nullptr);
 
     InputStreamParams inputStreamParams;
-    SerializeInputStream(stream, inputStreamParams);
+    nsTArray<mozilla::ipc::FileDescriptor> fds;
+    SerializeInputStream(stream, inputStreamParams, fds);
+    MOZ_ASSERT(fds.IsEmpty());
 
     params.optionalInputStreamParams() = inputStreamParams;
 
@@ -1041,6 +1072,24 @@ bool
 ContentChild::DeallocPDeviceStorageRequestChild(PDeviceStorageRequestChild* aDeviceStorage)
 {
     delete aDeviceStorage;
+    return true;
+}
+
+PFileSystemRequestChild*
+ContentChild::AllocPFileSystemRequestChild(const FileSystemParams& aParams)
+{
+    NS_NOTREACHED("Should never get here!");
+    return nullptr;
+}
+
+bool
+ContentChild::DeallocPFileSystemRequestChild(PFileSystemRequestChild* aFileSystem)
+{
+    mozilla::dom::FileSystemTaskBase* child =
+      static_cast<mozilla::dom::FileSystemTaskBase*>(aFileSystem);
+    // The reference is increased in FileSystemTaskBase::Start of
+    // FileSystemTaskBase.cpp. We should decrease it after IPC.
+    NS_RELEASE(child);
     return true;
 }
 
@@ -1676,7 +1725,7 @@ public:
 
         // In the new process.
         ContentChild* child = ContentChild::GetSingleton();
-        child->SetProcessName(NS_LITERAL_STRING("(Preallocated app)"));
+        child->SetProcessName(NS_LITERAL_STRING("(Preallocated app)"), false);
         mozilla::ipc::Transport* transport = child->GetTransport();
         int fd = transport->GetFileDescriptor();
         transport->ResetFileDescriptor(fd);
@@ -1855,6 +1904,13 @@ OnNuwaProcessReady()
         mozilla::dom::ContentChild::GetSingleton();
     content->SendNuwaReady();
 }
+
+NS_EXPORT void
+AfterNuwaFork()
+{
+    SetCurrentProcessPrivileges(base::PRIVILEGES_DEFAULT);
+}
+
 #endif // MOZ_NUWA_PROCESS
 
 }

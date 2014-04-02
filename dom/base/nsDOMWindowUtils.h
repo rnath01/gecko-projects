@@ -17,6 +17,13 @@ class nsIPresShell;
 class nsIWidget;
 class nsPresContext;
 class nsPoint;
+class nsIDocument;
+
+namespace mozilla {
+  namespace layers {
+    class LayerTransactionChild;
+  }
+}
 
 class nsDOMWindowUtils MOZ_FINAL : public nsIDOMWindowUtils,
                                    public nsSupportsWeakReference
@@ -39,6 +46,8 @@ protected:
 
   nsIPresShell* GetPresShell();
   nsPresContext* GetPresContext();
+  nsIDocument* GetDocument();
+  mozilla::layers::LayerTransactionChild* GetLayerTransaction();
 
   NS_IMETHOD SendMouseEventCommon(const nsAString& aType,
                                   float aX,

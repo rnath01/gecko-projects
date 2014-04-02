@@ -13,7 +13,6 @@
 #include "jslibmath.h"
 #include "jsstr.h"
 
-#include "builtin/SIMD.h"
 #include "jit/BaselineInspector.h"
 #include "jit/IonBuilder.h"
 #include "jit/IonSpewer.h"
@@ -163,9 +162,6 @@ MDefinition::valueHash() const
 bool
 MDefinition::congruentIfOperandsEqual(MDefinition *ins) const
 {
-    if (numOperands() != ins->numOperands())
-        return false;
-
     if (op() != ins->op())
         return false;
 
@@ -173,6 +169,9 @@ MDefinition::congruentIfOperandsEqual(MDefinition *ins) const
         return false;
 
     if (isEffectful() || ins->isEffectful())
+        return false;
+
+    if (numOperands() != ins->numOperands())
         return false;
 
     for (size_t i = 0, e = numOperands(); i < e; i++) {
@@ -226,6 +225,12 @@ MaybeCallable(MDefinition *op)
     return types->maybeCallable();
 }
 
+MTest *
+MTest::New(TempAllocator &alloc, MDefinition *ins, MBasicBlock *ifTrue, MBasicBlock *ifFalse)
+{
+    return new(alloc) MTest(ins, ifTrue, ifFalse);
+}
+
 void
 MTest::infer()
 {
@@ -244,6 +249,32 @@ MTest::foldsTo(TempAllocator &alloc, bool useValueNumbers)
         return MTest::New(alloc, op->toNot()->operand(), ifFalse(), ifTrue());
 
     return this;
+}
+
+void
+MTest::filtersUndefinedOrNull(bool trueBranch, MDefinition **subject, bool *filtersUndefined,
+                              bool *filtersNull)
+{
+    MDefinition *ins = getOperand(0);
+    if (ins->isCompare()) {
+        ins->toCompare()->filtersUndefinedOrNull(trueBranch, subject, filtersUndefined, filtersNull);
+        return;
+    }
+
+    if (!trueBranch && ins->isNot()) {
+        *subject = ins->getOperand(0);
+        *filtersUndefined = *filtersNull = true;
+        return;
+    }
+
+    if (trueBranch) {
+        *subject = ins;
+        *filtersUndefined = *filtersNull = true;
+        return;
+    }
+
+    *filtersUndefined = *filtersNull = false;
+    *subject = nullptr;
 }
 
 void
@@ -625,116 +656,6 @@ MMathFunction::printOpcode(FILE *fp) const
     fprintf(fp, " %s", FunctionName(function()));
 }
 
-const char *MSIMDNullaryFunction::Names[] = {
-#define MSIMD_NULLARY_FUNCTION_NAME_TYPE(Id, Name, ReturnType) "SIMD." Name,
-        MSIMD_NULLARY_FUNCTION_LIST(MSIMD_NULLARY_FUNCTION_NAME_TYPE)
-#undef MSIMD_NULLARY_FUNCTION_NAME_TYPE
-        ""
-};
-
-MIRType MSIMDNullaryFunction::ReturnTypes[] = {
-#define MSIMD_NULLARY_FUNCTION_RETURN_TYPE(Id, Name, ReturnType) ReturnType,
-        MSIMD_NULLARY_FUNCTION_LIST(MSIMD_NULLARY_FUNCTION_RETURN_TYPE)
-#undef MSIMD_NULLARY_FUNCTION_RETURN_TYPE
-        MIRType_None
-};
-
-const char *MSIMDUnaryFunction::Names[] = {
-#define MSIMD_UNARY_FUNCTION_NAME_TYPE(Id, Name, ReturnType, ArgumentType)    \
-        "SIMD." Name,
-        MSIMD_UNARY_FUNCTION_LIST(MSIMD_UNARY_FUNCTION_NAME_TYPE)
-#undef MSIMD_UNARY_FUNCTION_NAME_TYPE
-        ""
-};
-
-MIRType MSIMDUnaryFunction::ReturnTypes[] = {
-#define MSIMD_UNARY_FUNCTION_RETURN_TYPE(Id, Name, ReturnType, ArgumentType)    \
-        ReturnType,
-        MSIMD_UNARY_FUNCTION_LIST(MSIMD_UNARY_FUNCTION_RETURN_TYPE)
-#undef MSIMD_UNARY_FUNCTION_RETURN_TYPE
-        MIRType_None
-};
-
-MIRType MSIMDUnaryFunction::ArgumentTypes[] = {
-#define MSIMD_UNARY_FUNCTION_ARGUMENT_TYPE(Id, Name, ReturnType, ArgumentType)  \
-        ArgumentType,
-        MSIMD_UNARY_FUNCTION_LIST(MSIMD_UNARY_FUNCTION_ARGUMENT_TYPE)
-#undef MSIMD_UNARY_FUNCTION_ARGUMENT_TYPE
-        MIRType_None
-};
-
-const char *MSIMDBinaryFunction::Names[] = {
-#define MSIMD_BINARY_FUNCTION_NAME_TYPE(Id, Name, ReturnType, Argument1Type, Argument2Type)       \
-        "SIMD." Name,
-        MSIMD_BINARY_FUNCTION_LIST(MSIMD_BINARY_FUNCTION_NAME_TYPE)
-#undef MSIMD_BINARY_FUNCTION_NAME_TYPE
-        ""
-};
-
-MIRType MSIMDBinaryFunction::ReturnTypes[] = {
-#define MSIMD_BINARY_FUNCTION_RETURN_TYPE(Id, Name, ReturnType, Argument1Type, Argument2Type)       \
-        ReturnType,
-        MSIMD_BINARY_FUNCTION_LIST(MSIMD_BINARY_FUNCTION_RETURN_TYPE)
-#undef MSIMD_BINARY_FUNCTION_RETURN_TYPE
-        MIRType_None
-};
-
-MIRType MSIMDBinaryFunction::ArgumentTypes[][2] = {
-#define MSIMD_BINARY_FUNCTION_ARGUMENTS_TYPE(Id, Name, ReturnType, Argument1Type, Argument2Type)    \
-        {Argument1Type, Argument2Type},
-        MSIMD_BINARY_FUNCTION_LIST(MSIMD_BINARY_FUNCTION_ARGUMENTS_TYPE)
-#undef MSIMD_BINARY_FUNCTION_ARGUMENTS_TYPE
-        {MIRType_None, MIRType_None}
-};
-
-const char *MSIMDTernaryFunction::Names[] = {
-#define MSIMD_TERNARY_FUNCTION_NAME_TYPE(Id, Name, ReturnType, Argument1Type, Argument2Type, Argument3Type)       \
-        "SIMD." Name,
-        MSIMD_TERNARY_FUNCTION_LIST(MSIMD_TERNARY_FUNCTION_NAME_TYPE)
-#undef MSIMD_TERNARY_FUNCTION_NAME_TYPE
-        ""
-};
-
-MIRType MSIMDTernaryFunction::ReturnTypes[] = {
-#define MSIMD_TERNARY_FUNCTION_RETURN_TYPE(Id, Name, ReturnType, Argument1Type, Argument2Type, Argument3Type)       \
-        ReturnType,
-        MSIMD_TERNARY_FUNCTION_LIST(MSIMD_TERNARY_FUNCTION_RETURN_TYPE)
-#undef MSIMD_TERNARY_FUNCTION_RETURN_TYPE
-        MIRType_None
-};
-
-MIRType MSIMDTernaryFunction::ArgumentTypes[][3] = {
-#define MSIMD_TERNARY_FUNCTION_ARGUMENTS_TYPE(Id, Name, ReturnType, Argument1Type, Argument2Type, Argument3Type)    \
-        {Argument1Type, Argument2Type, Argument3Type},
-        MSIMD_TERNARY_FUNCTION_LIST(MSIMD_TERNARY_FUNCTION_ARGUMENTS_TYPE)
-#undef MSIMD_TERNARY_FUNCTION_ARGUMENTS_TYPE
-        {MIRType_None, MIRType_None, MIRType_None}
-};
-
-const char *MSIMDQuarternaryFunction::Names[] = {
-#define MSIMD_QUARTERNARY_FUNCTION_NAME_TYPE(Id, Name, ReturnType, Argument1Type, Argument2Type, Argument3Type, Argument4Type)       \
-        "SIMD." Name,
-        MSIMD_QUARTERNARY_FUNCTION_LIST(MSIMD_QUARTERNARY_FUNCTION_NAME_TYPE)
-#undef MSIMD_QUARTERNARY_FUNCTION_NAME_TYPE
-        ""
-};
-
-MIRType MSIMDQuarternaryFunction::ReturnTypes[] = {
-#define MSIMD_QUARTERNARY_FUNCTION_RETURN_TYPE(Id, Name, ReturnType, Argument1Type, Argument2Type, Argument3Type, Argument4Type)       \
-        ReturnType,
-        MSIMD_QUARTERNARY_FUNCTION_LIST(MSIMD_QUARTERNARY_FUNCTION_RETURN_TYPE)
-#undef MSIMD_QUARTERNARY_FUNCTION_RETURN_TYPE
-        MIRType_None
-};
-
-MIRType MSIMDQuarternaryFunction::ArgumentTypes[][4] = {
-#define MSIMD_QUARTERNARY_FUNCTION_ARGUMENTS_TYPE(Id, Name, ReturnType, Argument1Type, Argument2Type, Argument3Type, Argument4Type)    \
-        {Argument1Type, Argument2Type, Argument3Type, Argument4Type},
-        MSIMD_QUARTERNARY_FUNCTION_LIST(MSIMD_QUARTERNARY_FUNCTION_ARGUMENTS_TYPE)
-#undef MSIMD_QUARTERNARY_FUNCTION_ARGUMENTS_TYPE
-        {MIRType_None, MIRType_None, MIRType_None, MIRType_None}
-};
-
 MParameter *
 MParameter::New(TempAllocator &alloc, int32_t index, types::TemporaryTypeSet *types)
 {
@@ -937,12 +858,6 @@ MRound::trySpecializeFloat32(TempAllocator &alloc)
     setPolicyType(MIRType_Float32);
 }
 
-MTest *
-MTest::New(TempAllocator &alloc, MDefinition *ins, MBasicBlock *ifTrue, MBasicBlock *ifFalse)
-{
-    return new(alloc) MTest(ins, ifTrue, ifFalse);
-}
-
 MCompare *
 MCompare::New(TempAllocator &alloc, MDefinition *left, MDefinition *right, JSOp op)
 {
@@ -1007,7 +922,7 @@ MTypeBarrier::printOpcode(FILE *fp) const
     fprintf(fp, " ");
     getOperand(0)->printName(fp);
 }
-
+ 
 void
 MPhi::removeOperand(size_t index)
 {
@@ -1038,20 +953,33 @@ MPhi::removeOperand(size_t index)
 }
 
 MDefinition *
-MPhi::foldsTo(TempAllocator &alloc, bool useValueNumbers)
+MPhi::operandIfRedundant()
 {
-    JS_ASSERT(!inputs_.empty());
+    JS_ASSERT(inputs_.length() != 0);
 
+    // If this phi is redundant (e.g., phi(a,a) or b=phi(a,this)),
+    // returns the operand that it will always be equal to (a, in
+    // those two cases).
     MDefinition *first = getOperand(0);
-
-    for (size_t i = 1; i < inputs_.length(); i++) {
+    for (size_t i = 1, e = numOperands(); i < e; i++) {
         // Phis need dominator information to fold based on value numbers. For
         // simplicity, we only compare SSA names right now (bug 714727).
-        if (!EqualValues(false, getOperand(i), first))
-            return this;
+        if (!EqualValues(false, getOperand(i), first) &&
+            !EqualValues(false, getOperand(i), this))
+        {
+            return nullptr;
+        }
     }
-
     return first;
+}
+
+MDefinition *
+MPhi::foldsTo(TempAllocator &alloc, bool useValueNumbers)
+{
+    if (MDefinition *def = operandIfRedundant())
+        return def;
+
+    return this;
 }
 
 bool
@@ -1330,20 +1258,20 @@ MBinaryBitwiseInstruction::foldUnnecessaryBitop()
 void
 MBinaryBitwiseInstruction::infer(BaselineInspector *, jsbytecode *)
 {
-    if (getOperand(0)->mightBeType(MIRType_Object) || getOperand(1)->mightBeType(MIRType_Object)) {
+    if (getOperand(0)->mightBeType(MIRType_Object) || getOperand(1)->mightBeType(MIRType_Object))
         specialization_ = MIRType_None;
-    } else {
-        specialization_ = MIRType_Int32;
-        setCommutative();
-    }
+    else
+        specializeAsInt32();
 }
 
 void
-MBinaryBitwiseInstruction::specializeForAsmJS()
+MBinaryBitwiseInstruction::specializeAsInt32()
 {
     specialization_ = MIRType_Int32;
     JS_ASSERT(type() == MIRType_Int32);
-    setCommutative();
+
+    if (isBitOr() || isBitAnd() || isBitXor())
+        setCommutative();
 }
 
 void
@@ -1877,9 +1805,10 @@ SafelyCoercesToDouble(MDefinition *op)
 static bool
 ObjectOrSimplePrimitive(MDefinition *op)
 {
-    // Return true if op is either undefined/null/bolean/int32 or an object.
+    // Return true if op is either undefined/null/boolean/int32 or an object.
     return !op->mightBeType(MIRType_String)
         && !op->mightBeType(MIRType_Double)
+        && !op->mightBeType(MIRType_Float32)
         && !op->mightBeType(MIRType_Magic);
 }
 
@@ -2226,7 +2155,7 @@ MBitAnd *
 MBitAnd::NewAsmJS(TempAllocator &alloc, MDefinition *left, MDefinition *right)
 {
     MBitAnd *ins = new(alloc) MBitAnd(left, right);
-    ins->specializeForAsmJS();
+    ins->specializeAsInt32();
     return ins;
 }
 
@@ -2240,7 +2169,7 @@ MBitOr *
 MBitOr::NewAsmJS(TempAllocator &alloc, MDefinition *left, MDefinition *right)
 {
     MBitOr *ins = new(alloc) MBitOr(left, right);
-    ins->specializeForAsmJS();
+    ins->specializeAsInt32();
     return ins;
 }
 
@@ -2254,7 +2183,7 @@ MBitXor *
 MBitXor::NewAsmJS(TempAllocator &alloc, MDefinition *left, MDefinition *right)
 {
     MBitXor *ins = new(alloc) MBitXor(left, right);
-    ins->specializeForAsmJS();
+    ins->specializeAsInt32();
     return ins;
 }
 
@@ -2268,7 +2197,7 @@ MLsh *
 MLsh::NewAsmJS(TempAllocator &alloc, MDefinition *left, MDefinition *right)
 {
     MLsh *ins = new(alloc) MLsh(left, right);
-    ins->specializeForAsmJS();
+    ins->specializeAsInt32();
     return ins;
 }
 
@@ -2282,7 +2211,7 @@ MRsh *
 MRsh::NewAsmJS(TempAllocator &alloc, MDefinition *left, MDefinition *right)
 {
     MRsh *ins = new(alloc) MRsh(left, right);
-    ins->specializeForAsmJS();
+    ins->specializeAsInt32();
     return ins;
 }
 
@@ -2296,7 +2225,7 @@ MUrsh *
 MUrsh::NewAsmJS(TempAllocator &alloc, MDefinition *left, MDefinition *right)
 {
     MUrsh *ins = new(alloc) MUrsh(left, right);
-    ins->specializeForAsmJS();
+    ins->specializeAsInt32();
 
     // Since Ion has no UInt32 type, we use Int32 and we have a special
     // exception to the type rules: we can return values in
@@ -2555,7 +2484,7 @@ MCompare::evaluateConstantOperands(bool *result)
         int32_t comp = 0; // Default to equal.
         if (left != right)
             comp = CompareAtoms(&lhs.toString()->asAtom(), &rhs.toString()->asAtom());
-
+        
         switch (jsop_) {
           case JSOP_LT:
             *result = (comp < 0);
@@ -2675,6 +2604,37 @@ MCompare::trySpecializeFloat32(TempAllocator &alloc)
         if (rhs->type() == MIRType_Float32)
             ConvertDefinitionToDouble<1>(alloc, rhs, this);
     }
+}
+
+void
+MCompare::filtersUndefinedOrNull(bool trueBranch, MDefinition **subject, bool *filtersUndefined,
+                                 bool *filtersNull)
+{
+    *filtersNull = *filtersUndefined = false;
+    *subject = nullptr;
+
+    if (compareType() != Compare_Undefined && compareType() != Compare_Null)
+        return;
+
+    JS_ASSERT(jsop() == JSOP_STRICTNE || jsop() == JSOP_NE ||
+              jsop() == JSOP_STRICTEQ || jsop() == JSOP_EQ);
+
+    // JSOP_*NE only removes undefined/null from if/true branch
+    if (!trueBranch && (jsop() == JSOP_STRICTNE || jsop() == JSOP_NE))
+        return;
+
+    // JSOP_*EQ only removes undefined/null from else/false branch
+    if (trueBranch && (jsop() == JSOP_STRICTEQ || jsop() == JSOP_EQ))
+        return;
+
+    if (jsop() == JSOP_STRICTEQ || jsop() == JSOP_STRICTNE) {
+        *filtersUndefined = compareType() == Compare_Undefined;
+        *filtersNull = compareType() == Compare_Null;
+    } else {
+        *filtersUndefined = *filtersNull = true;
+    }
+
+    *subject = lhs();
 }
 
 void
@@ -2876,10 +2836,8 @@ InlinePropertyTable::buildTypeSetForFunction(JSFunction *func) const
     if (!types)
         return nullptr;
     for (size_t i = 0; i < numEntries(); i++) {
-        if (entries_[i]->func == func) {
-            if (!types->addType(types::Type::ObjectType(entries_[i]->typeObj), alloc))
-                return nullptr;
-        }
+        if (entries_[i]->func == func)
+            types->addType(types::Type::ObjectType(entries_[i]->typeObj), alloc);
     }
     return types;
 }
@@ -3283,7 +3241,7 @@ jit::PropertyReadIsIdempotent(types::CompilerConstraintList *constraints,
     return true;
 }
 
-bool
+void
 jit::AddObjectsForPropertyRead(MDefinition *obj, PropertyName *name,
                                types::TemporaryTypeSet *observed)
 {
@@ -3293,16 +3251,20 @@ jit::AddObjectsForPropertyRead(MDefinition *obj, PropertyName *name,
     LifoAlloc *alloc = GetIonContext()->temp->lifoAlloc();
 
     types::TemporaryTypeSet *types = obj->resultTypeSet();
-    if (!types || types->unknownObject())
-        return observed->addType(types::Type::AnyObjectType(), alloc);
+    if (!types || types->unknownObject()) {
+        observed->addType(types::Type::AnyObjectType(), alloc);
+        return;
+    }
 
     for (size_t i = 0; i < types->getObjectCount(); i++) {
         types::TypeObjectKey *object = types->getObject(i);
         if (!object)
             continue;
 
-        if (object->unknownProperties())
-            return observed->addType(types::Type::AnyObjectType(), alloc);
+        if (object->unknownProperties()) {
+            observed->addType(types::Type::AnyObjectType(), alloc);
+            return;
+        }
 
         jsid id = name ? NameToId(name) : JSID_VOID;
         types::HeapTypeSetKey property = object->property(id);
@@ -3310,17 +3272,17 @@ jit::AddObjectsForPropertyRead(MDefinition *obj, PropertyName *name,
         if (!types)
             continue;
 
-        if (types->unknownObject())
-            return observed->addType(types::Type::AnyObjectType(), alloc);
+        if (types->unknownObject()) {
+            observed->addType(types::Type::AnyObjectType(), alloc);
+            return;
+        }
 
         for (size_t i = 0; i < types->getObjectCount(); i++) {
             types::TypeObjectKey *object = types->getObject(i);
-            if (object && !observed->addType(types::Type::ObjectType(object), alloc))
-                return false;
+            if (object)
+                observed->addType(types::Type::ObjectType(object), alloc);
         }
     }
-
-    return true;
 }
 
 static bool

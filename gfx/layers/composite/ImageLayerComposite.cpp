@@ -98,7 +98,7 @@ ImageLayerComposite::RenderLayer(const nsIntRect& aClipRect)
 
   mCompositor->MakeCurrent();
 
-  EffectChain effectChain;
+  EffectChain effectChain(this);
   LayerManagerComposite::AutoAddMaskEffect autoMaskEffect(mMaskLayer, effectChain);
 
   gfx::Rect clipRect(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
@@ -108,6 +108,7 @@ ImageLayerComposite::RenderLayer(const nsIntRect& aClipRect)
                         GetEffectiveTransform(),
                         gfx::ToFilter(mFilter),
                         clipRect);
+  mImageHost->BumpFlashCounter();
 }
 
 void

@@ -5,23 +5,25 @@
 
 #include "mozilla/dom/HTMLTrackElement.h"
 #include "mozilla/dom/TextTrackCue.h"
+#include "mozilla/dom/TextTrackRegion.h"
 #include "nsComponentManagerUtils.h"
 #include "mozilla/ClearOnShutdown.h"
 
 namespace mozilla {
 namespace dom {
 
-NS_IMPL_CYCLE_COLLECTION_INHERITED_4(TextTrackCue,
-                                     nsDOMEventTargetHelper,
+NS_IMPL_CYCLE_COLLECTION_INHERITED_5(TextTrackCue,
+                                     DOMEventTargetHelper,
                                      mDocument,
                                      mTrack,
                                      mTrackElement,
-                                     mDisplayState)
+                                     mDisplayState,
+                                     mRegion)
 
-NS_IMPL_ADDREF_INHERITED(TextTrackCue, nsDOMEventTargetHelper)
-NS_IMPL_RELEASE_INHERITED(TextTrackCue, nsDOMEventTargetHelper)
+NS_IMPL_ADDREF_INHERITED(TextTrackCue, DOMEventTargetHelper)
+NS_IMPL_RELEASE_INHERITED(TextTrackCue, DOMEventTargetHelper)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(TextTrackCue)
-NS_INTERFACE_MAP_END_INHERITING(nsDOMEventTargetHelper)
+NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 StaticRefPtr<nsIWebVTTParserWrapper> TextTrackCue::sParserWrapper;
 
@@ -146,12 +148,21 @@ TextTrackCue::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
   return VTTCueBinding::Wrap(aCx, aScope, this);
 }
 
-void
-TextTrackCue::CueChanged()
+TextTrackRegion*
+TextTrackCue::GetRegion()
 {
-  if (mTrack) {
-    mTrack->CueChanged(*this);
-  }
+  return mRegion;
 }
+
+void
+TextTrackCue::SetRegion(TextTrackRegion* aRegion)
+{
+  if (mRegion == aRegion) {
+    return;
+  }
+  mRegion = aRegion;
+  mReset = true;
+}
+
 } // namespace dom
 } // namespace mozilla

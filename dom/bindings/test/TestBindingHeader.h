@@ -48,6 +48,8 @@ public:
   virtual nsISupports* GetParentObject();
 };
 
+NS_DEFINE_STATIC_IID_ACCESSOR(nsRenamedInterface, NS_RENAMED_INTERFACE_IID)
+
 // IID for the IndirectlyImplementedInterface
 #define NS_INDIRECTLY_IMPLEMENTED_INTERFACE_IID \
 { 0xfed55b69, 0x7012, 0x4849, \
@@ -68,6 +70,8 @@ public:
   void IndirectlyImplementedMethod();
 };
 
+NS_DEFINE_STATIC_IID_ACCESSOR(IndirectlyImplementedInterface, NS_INDIRECTLY_IMPLEMENTED_INTERFACE_IID)
+
 // IID for the TestExternalInterface
 #define NS_TEST_EXTERNAL_INTERFACE_IID \
 { 0xd5ba0c99, 0x9b1d, 0x4e71, \
@@ -78,6 +82,8 @@ public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_TEST_EXTERNAL_INTERFACE_IID)
   NS_DECL_ISUPPORTS
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(TestExternalInterface, NS_TEST_EXTERNAL_INTERFACE_IID)
 
 class TestNonWrapperCacheInterface : public nsISupports
 {
@@ -524,6 +530,7 @@ public:
   void PassUnion12(const EventInitOrLong& arg);
   void PassUnion13(JSContext*, const ObjectOrLongOrNull& arg);
   void PassUnion14(JSContext*, const ObjectOrLongOrNull& arg);
+  void PassUnionWithCallback(const EventHandlerNonNullOrNullOrLong& arg);
 #endif
   void PassNullableUnion(JSContext*, const Nullable<ObjectOrLong>&);
   void PassOptionalUnion(JSContext*, const Optional<ObjectOrLong>&);
@@ -566,6 +573,7 @@ public:
   void PassNullableUnionWithDefaultValue12(const Nullable<UnrestrictedFloatOrString>& arg);
 
   void PassSequenceOfUnions(const Sequence<OwningCanvasPatternOrCanvasGradient>&);
+  void PassSequenceOfUnions2(JSContext*, const Sequence<OwningObjectOrLong>&);
   void PassVariadicUnion(const Sequence<OwningCanvasPatternOrCanvasGradient>&);
 
   void PassSequenceOfNullableUnions(const Sequence<Nullable<OwningCanvasPatternOrCanvasGradient>>&);
@@ -967,6 +975,7 @@ public:
   uint32_t Item(uint32_t&);
   uint32_t Item(uint32_t, bool&) MOZ_DELETE;
   uint32_t Length();
+  void LegacyCall(JS::Handle<JS::Value>);
 };
 
 class TestNamedGetterInterface : public nsISupports,

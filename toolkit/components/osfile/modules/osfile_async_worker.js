@@ -124,7 +124,7 @@ const EXCEPTION_NAMES = {
    } else if (exn.constructor.name in EXCEPTION_NAMES) {
      LOG("Sending back exception", exn.constructor.name);
      post({fail: {exn: exn.constructor.name, message: exn.message,
-                  fileName: exn.fileName, lineNumber: exn.lineNumber},
+                  fileName: exn.moduleName || exn.fileName, lineNumber: exn.lineNumber},
            id: id, durationMs: durationMs});
    } else {
      // Other exceptions do not, and should be propagated through DOM's
@@ -302,9 +302,9 @@ const EXCEPTION_NAMES = {
      }
    },
    // Functions of OS.File
-   stat: function stat(path) {
+   stat: function stat(path, options) {
      return exports.OS.File.Info.toMsg(
-       exports.OS.File.stat(Type.path.fromMsg(path)));
+       exports.OS.File.stat(Type.path.fromMsg(path), options));
    },
    setDates: function setDates(path, accessDate, modificationDate) {
      return exports.OS.File.setDates(Type.path.fromMsg(path), accessDate,
@@ -362,6 +362,9 @@ const EXCEPTION_NAMES = {
    },
    read: function read(path, bytes, options) {
      let data = File.read(Type.path.fromMsg(path), bytes, options);
+     if (typeof data == "string") {
+       return data;
+     }
      return new Meta({
          buffer: data.buffer,
          byteOffset: data.byteOffset,
@@ -504,6 +507,12 @@ const EXCEPTION_NAMES = {
        });
    }
   };
+  if (!SharedAll.Constants.Win) {
+    Agent.unixSymLink = function unixSymLink(sourcePath, destPath) {
+      return File.unixSymLink(Type.path.fromMsg(sourcePath),
+        Type.path.fromMsg(destPath));
+    };
+  }
 
   timeStamps.loaded = Date.now();
 })(this);

@@ -17,6 +17,9 @@
 
 #include "mozilla/dom/FragmentOrElement.h"
 
+#include "mozilla/AsyncEventDispatcher.h"
+#include "mozilla/EventDispatcher.h"
+#include "mozilla/EventListenerManager.h"
 #include "mozilla/dom/Attr.h"
 #include "nsDOMAttributeMap.h"
 #include "nsIAtom.h"
@@ -25,7 +28,6 @@
 #include "nsIDocumentEncoder.h"
 #include "nsIDOMNodeList.h"
 #include "nsIContentIterator.h"
-#include "nsEventListenerManager.h"
 #include "nsFocusManager.h"
 #include "nsILinkHandler.h"
 #include "nsIScriptGlobalObject.h"
@@ -38,7 +40,6 @@
 #include "nsStyleConsts.h"
 #include "nsString.h"
 #include "nsUnicharUtils.h"
-#include "nsEventStateManager.h"
 #include "nsIDOMEvent.h"
 #include "nsDOMCID.h"
 #include "nsIServiceManager.h"
@@ -90,7 +91,6 @@
 #include "nsGenericHTMLElement.h"
 #include "nsIEditor.h"
 #include "nsIEditorIMESupport.h"
-#include "nsEventDispatcher.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsIControllers.h"
 #include "nsView.h"
@@ -99,7 +99,6 @@
 #include "ChildIterator.h"
 #include "mozilla/css/StyleRule.h" /* For nsCSSSelectorList */
 #include "nsRuleProcessorData.h"
-#include "nsAsyncDOMEvent.h"
 #include "nsTextNode.h"
 #include "mozilla/dom/NodeListBinding.h"
 #include "mozilla/dom/UndoManager.h"
@@ -520,10 +519,6 @@ FragmentOrElement::nsDOMSlots::~nsDOMSlots()
   if (mAttributeMap) {
     mAttributeMap->DropReference();
   }
-
-  if (mClassList) {
-    mClassList->DropReference();
-  }
 }
 
 void
@@ -589,10 +584,7 @@ FragmentOrElement::nsDOMSlots::Unlink(bool aIsXUL)
   mChildrenList = nullptr;
   mUndoManager = nullptr;
   mCustomElementData = nullptr;
-  if (mClassList) {
-    mClassList->DropReference();
-    mClassList = nullptr;
-  }
+  mClassList = nullptr;
 }
 
 size_t
@@ -619,7 +611,12 @@ FragmentOrElement::nsDOMSlots::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) c
   return n;
 }
 
-FragmentOrElement::FragmentOrElement(already_AddRefed<nsINodeInfo> aNodeInfo)
+FragmentOrElement::FragmentOrElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
+  : nsIContent(aNodeInfo)
+{
+}
+
+FragmentOrElement::FragmentOrElement(already_AddRefed<nsINodeInfo>&& aNodeInfo)
   : nsIContent(aNodeInfo)
 {
 }
@@ -698,7 +695,7 @@ FindChromeAccessOnlySubtreeOwner(nsIContent* aContent)
 }
 
 nsresult
-nsIContent::PreHandleEvent(nsEventChainPreVisitor& aVisitor)
+nsIContent::PreHandleEvent(EventChainPreVisitor& aVisitor)
 {
   //FIXME! Document how this event retargeting works, Bug 329124.
   aVisitor.mCanHandle = true;
@@ -1062,7 +1059,8 @@ FragmentOrElement::RemoveChildAt(uint32_t aIndex, bool aNotify)
 void
 FragmentOrElement::GetTextContentInternal(nsAString& aTextContent)
 {
-  nsContentUtils::GetNodeTextContent(this, true, aTextContent);
+  if(!nsContentUtils::GetNodeTextContent(this, true, aTextContent))
+    NS_RUNTIMEABORT("OOM");
 }
 
 void
@@ -1118,7 +1116,7 @@ FragmentOrElement::FireNodeInserted(nsIDocument* aDoc,
       mutation.mRelatedNode = do_QueryInterface(aParent);
 
       mozAutoSubtreeModified subtree(aDoc, aParent);
-      (new nsAsyncDOMEvent(childContent, mutation))->RunDOMEventWhenSafe();
+      (new AsyncEventDispatcher(childContent, mutation))->RunDOMEventWhenSafe();
     }
   }
 }
@@ -1245,10 +1243,10 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(FragmentOrElement)
 
   if (tmp->HasProperties()) {
     if (tmp->IsHTML()) {
-      tmp->DeleteProperty(nsGkAtoms::microdataProperties);
-      tmp->DeleteProperty(nsGkAtoms::itemtype);
-      tmp->DeleteProperty(nsGkAtoms::itemref);
-      tmp->DeleteProperty(nsGkAtoms::itemprop);
+      nsIAtom*** props = nsGenericHTMLElement::PropertiesToTraverseAndUnlink();
+      for (uint32_t i = 0; props[i]; ++i) {
+        tmp->DeleteProperty(*props[i]);
+      }
     }
   }
 
@@ -1319,7 +1317,7 @@ FragmentOrElement::MarkNodeChildren(nsINode* aNode)
     JS::ExposeObjectToActiveJS(o);
   }
 
-  nsEventListenerManager* elm = aNode->GetExistingListenerManager();
+  EventListenerManager* elm = aNode->GetExistingListenerManager();
   if (elm) {
     elm->MarkForCC();
   }
@@ -1767,12 +1765,21 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(FragmentOrElement)
       classes.AppendLiteral("'");
     }
 
+    nsAutoCString orphan;
+    if (!tmp->IsInDoc() &&
+        // Ignore xbl:content, which is never in the document and hence always
+        // appears to be orphaned.
+        !tmp->NodeInfo()->Equals(nsGkAtoms::content, kNameSpaceID_XBL)) {
+      orphan.AppendLiteral(" (orphan)");
+    }
+
     const char* nsuri = nsid < ArrayLength(kNSURIs) ? kNSURIs[nsid] : "";
-    PR_snprintf(name, sizeof(name), "FragmentOrElement%s %s%s%s %s",
+    PR_snprintf(name, sizeof(name), "FragmentOrElement%s %s%s%s%s %s",
                 nsuri,
                 localName.get(),
                 NS_ConvertUTF16toUTF8(id).get(),
                 NS_ConvertUTF16toUTF8(classes).get(),
+                orphan.get(),
                 uri.get());
     cb.DescribeRefCountedNode(tmp->mRefCnt.get(), name);
   }
@@ -1792,15 +1799,12 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(FragmentOrElement)
 
   if (tmp->HasProperties()) {
     if (tmp->IsHTML()) {
-      nsISupports* property = static_cast<nsISupports*>
-                                         (tmp->GetProperty(nsGkAtoms::microdataProperties));
-      cb.NoteXPCOMChild(property);
-      property = static_cast<nsISupports*>(tmp->GetProperty(nsGkAtoms::itemref));
-      cb.NoteXPCOMChild(property);
-      property = static_cast<nsISupports*>(tmp->GetProperty(nsGkAtoms::itemprop));
-      cb.NoteXPCOMChild(property);
-      property = static_cast<nsISupports*>(tmp->GetProperty(nsGkAtoms::itemtype));
-      cb.NoteXPCOMChild(property);
+      nsIAtom*** props = nsGenericHTMLElement::PropertiesToTraverseAndUnlink();
+      for (uint32_t i = 0; props[i]; ++i) {
+        nsISupports* property =
+          static_cast<nsISupports*>(tmp->GetProperty(*props[i]));
+        cb.NoteXPCOMChild(property);
+      }
     }
   }
 
@@ -1920,6 +1924,16 @@ FragmentOrElement::AppendTextTo(nsAString& aResult)
   // We can remove this assertion if it turns out to be useful to be able
   // to depend on this appending nothing.
   NS_NOTREACHED("called FragmentOrElement::TextLength");
+}
+
+bool
+FragmentOrElement::AppendTextTo(nsAString& aResult, const mozilla::fallible_t&)
+{
+  // We can remove this assertion if it turns out to be useful to be able
+  // to depend on this appending nothing.
+  NS_NOTREACHED("called FragmentOrElement::TextLength");
+
+  return false;
 }
 
 uint32_t
@@ -2345,20 +2359,21 @@ StartElement(Element* aContent, StringBuilder& aBuilder)
       continue;
     }
     
+    aBuilder.Append(" ");
+
     if (MOZ_LIKELY(attNs == kNameSpaceID_None) ||
         (attNs == kNameSpaceID_XMLNS &&
          attName == nsGkAtoms::xmlns)) {
-      aBuilder.Append(" ");
+      // Nothing else required
     } else if (attNs == kNameSpaceID_XML) {
-      aBuilder.Append(" xml:");
+      aBuilder.Append("xml:");
     } else if (attNs == kNameSpaceID_XMLNS) {
-      aBuilder.Append(" xmlns:");
+      aBuilder.Append("xmlns:");
     } else if (attNs == kNameSpaceID_XLink) {
-      aBuilder.Append(" xlink:");
+      aBuilder.Append("xlink:");
     } else {
       nsIAtom* prefix = name->GetPrefix();
       if (prefix) {
-        aBuilder.Append(" ");
         aBuilder.Append(prefix);
         aBuilder.Append(":");
       }

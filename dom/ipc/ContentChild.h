@@ -40,6 +40,7 @@ class PrefObserver;
 class ConsoleListener;
 class PStorageChild;
 class ClonedMessageData;
+class PFileDescriptorSetChild;
 
 class ContentChild : public PContentChild
 {
@@ -64,6 +65,7 @@ public:
     bool Init(MessageLoop* aIOLoop,
               base::ProcessHandle aParentHandle,
               IPC::Channel* aChannel);
+    void InitProcessAttributes();
     void InitXPCOM();
 
     static ContentChild* GetSingleton() {
@@ -74,7 +76,7 @@ public:
         return mAppInfo;
     }
 
-    void SetProcessName(const nsAString& aName);
+    void SetProcessName(const nsAString& aName, bool aDontOverride = false);
     void GetProcessName(nsAString& aName);
     void GetProcessName(nsACString& aName);
     static void AppendProcessId(nsACString& aName);
@@ -86,7 +88,7 @@ public:
     AllocPImageBridgeChild(mozilla::ipc::Transport* aTransport,
                            base::ProcessId aOtherProcess) MOZ_OVERRIDE;
 
-    virtual bool RecvSetProcessPrivileges(const ChildPrivileges& aPrivs) MOZ_OVERRIDE;
+    virtual bool RecvSetProcessSandbox() MOZ_OVERRIDE;
 
     PBackgroundChild*
     AllocPBackgroundChild(Transport* aTransport, ProcessId aOtherProcess)
@@ -98,6 +100,9 @@ public:
 
     virtual PDeviceStorageRequestChild* AllocPDeviceStorageRequestChild(const DeviceStorageParams&);
     virtual bool DeallocPDeviceStorageRequestChild(PDeviceStorageRequestChild*);
+
+    virtual PFileSystemRequestChild* AllocPFileSystemRequestChild(const FileSystemParams&);
+    virtual bool DeallocPFileSystemRequestChild(PFileSystemRequestChild*);
 
     virtual PBlobChild* AllocPBlobChild(const BlobConstructorParams& aParams);
     virtual bool DeallocPBlobChild(PBlobChild*);
@@ -268,6 +273,12 @@ public:
 
     BlobChild* GetOrCreateActorForBlob(nsIDOMBlob* aBlob);
 
+    virtual PFileDescriptorSetChild*
+    AllocPFileDescriptorSetChild(const FileDescriptor&) MOZ_OVERRIDE;
+
+    virtual bool
+    DeallocPFileDescriptorSetChild(PFileDescriptorSetChild*) MOZ_OVERRIDE;
+
 protected:
     virtual bool RecvPBrowserConstructor(PBrowserChild* actor,
                                          const IPCTabContext& context,
@@ -304,6 +315,7 @@ private:
 
     bool mIsForApp;
     bool mIsForBrowser;
+    bool mCanOverrideProcessName;
     nsString mProcessName;
 
     static ContentChild* sSingleton;

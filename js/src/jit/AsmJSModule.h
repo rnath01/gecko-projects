@@ -221,11 +221,14 @@ class AsmJSModule
         struct Pod {
             ReturnType returnType_;
             uint32_t codeOffset_;
+            uint32_t line_;
+            uint32_t column_;
         } pod;
 
         friend class AsmJSModule;
 
         ExportedFunction(PropertyName *name,
+                         uint32_t line, uint32_t column,
                          PropertyName *maybeFieldName,
                          ArgCoercionVector &&argCoercions,
                          ReturnType returnType)
@@ -235,6 +238,8 @@ class AsmJSModule
             argCoercions_ = mozilla::Move(argCoercions);
             pod.returnType_ = returnType;
             pod.codeOffset_ = UINT32_MAX;
+            pod.line_ = line;
+            pod.column_ = column;
             JS_ASSERT_IF(maybeFieldName_, name_->isTenured());
         }
 
@@ -261,6 +266,12 @@ class AsmJSModule
         PropertyName *name() const {
             return name_;
         }
+        uint32_t line() const {
+            return pod.line_;
+        }
+        uint32_t column() const {
+            return pod.column_;
+        }
         PropertyName *maybeFieldName() const {
             return maybeFieldName_;
         }
@@ -284,26 +295,38 @@ class AsmJSModule
     // Function information to add to the VTune JIT profiler following linking.
     struct ProfiledFunction
     {
-        JSAtom *name;
-        unsigned startCodeOffset;
-        unsigned endCodeOffset;
-        unsigned lineno;
-        unsigned columnIndex;
+        PropertyName *name;
+        struct Pod {
+            unsigned startCodeOffset;
+            unsigned endCodeOffset;
+            unsigned lineno;
+            unsigned columnIndex;
+        } pod;
 
-        ProfiledFunction(JSAtom *name, unsigned start, unsigned end,
-                         unsigned line = 0U, unsigned column = 0U)
-          : name(name),
-            startCodeOffset(start),
-            endCodeOffset(end),
-            lineno(line),
-            columnIndex(column)
+        explicit ProfiledFunction()
+          : name(nullptr)
+        { }
+
+        ProfiledFunction(PropertyName *name, unsigned start, unsigned end,
+                         unsigned line = 0, unsigned column = 0)
+          : name(name)
         {
             JS_ASSERT(name->isTenured());
+
+            pod.startCodeOffset = start;
+            pod.endCodeOffset = end;
+            pod.lineno = line;
+            pod.columnIndex = column;
         }
 
         void trace(JSTracer *trc) {
-            MarkStringUnbarriered(trc, &name, "asm.js profiled function name");
+            if (name)
+                MarkStringUnbarriered(trc, &name, "asm.js profiled function name");
         }
+
+        size_t serializedSize() const;
+        uint8_t *serialize(uint8_t *cursor) const;
+        const uint8_t *deserialize(ExclusiveContext *cx, const uint8_t *cursor);
     };
 #endif
 
@@ -313,7 +336,7 @@ class AsmJSModule
         unsigned endInlineCodeOffset;
         jit::BasicBlocksVector blocks;
 
-        ProfiledBlocksFunction(JSAtom *name, unsigned start, unsigned endInline, unsigned end,
+        ProfiledBlocksFunction(PropertyName *name, unsigned start, unsigned endInline, unsigned end,
                                jit::BasicBlocksVector &blocksVector)
           : ProfiledFunction(name, start, end), endInlineCodeOffset(endInline),
             blocks(mozilla::Move(blocksVector))
@@ -322,7 +345,7 @@ class AsmJSModule
         }
 
         ProfiledBlocksFunction(ProfiledBlocksFunction &&copy)
-          : ProfiledFunction(copy.name, copy.startCodeOffset, copy.endCodeOffset),
+          : ProfiledFunction(copy.name, copy.pod.startCodeOffset, copy.pod.endCodeOffset),
             endInlineCodeOffset(copy.endInlineCodeOffset), blocks(mozilla::Move(copy.blocks))
         { }
     };
@@ -350,7 +373,7 @@ class AsmJSModule
     // AsmJSModule).
     struct StaticLinkData
     {
-        uint32_t operationCallbackExitOffset;
+        uint32_t interruptExitOffset;
         RelativeLinkVector relativeLinks;
         AbsoluteLinkVector absoluteLinks;
 
@@ -404,7 +427,7 @@ class AsmJSModule
     } pod;
 
     uint8_t *                             code_;
-    uint8_t *                             operationCallbackExit_;
+    uint8_t *                             interruptExit_;
 
     StaticLinkData                        staticLinkData_;
     bool                                  dynamicallyLinked_;
@@ -416,9 +439,8 @@ class AsmJSModule
 
     FunctionCountsVector                  functionCounts_;
 
-    // This field is accessed concurrently when triggering the operation
-    // callback and access must be synchronized via the runtime's operation
-    // callback lock.
+    // This field is accessed concurrently when requesting an interrupt.
+    // Access must be synchronized via the runtime's interrupt lock.
     mutable bool                          codeIsProtected_;
 
   public:
@@ -434,13 +456,11 @@ class AsmJSModule
             if (exitIndexToGlobalDatum(i).fun)
                 MarkObject(trc, &exitIndexToGlobalDatum(i).fun, "asm.js imported function");
         }
-#if defined(MOZ_VTUNE)
+#if defined(MOZ_VTUNE) || defined(JS_ION_PERF)
         for (unsigned i = 0; i < profiledFunctions_.length(); i++)
             profiledFunctions_[i].trace(trc);
 #endif
 #if defined(JS_ION_PERF)
-        for (unsigned i = 0; i < profiledFunctions_.length(); i++)
-            profiledFunctions_[i].trace(trc);
         for (unsigned i = 0; i < perfProfiledBlocksFunctions_.length(); i++)
             perfProfiledBlocksFunctions_[i].trace(trc);
 #endif
@@ -540,11 +560,12 @@ class AsmJSModule
         return functionCounts_.append(counts);
     }
 
-    bool addExportedFunction(PropertyName *name, PropertyName *maybeFieldName,
+    bool addExportedFunction(PropertyName *name, uint32_t line, uint32_t column,
+                             PropertyName *maybeFieldName,
                              ArgCoercionVector &&argCoercions,
                              ReturnType returnType)
     {
-        ExportedFunction func(name, maybeFieldName, mozilla::Move(argCoercions), returnType);
+        ExportedFunction func(name, line, column, maybeFieldName, mozilla::Move(argCoercions), returnType);
         return exports_.append(mozilla::Move(func));
     }
     unsigned numExportedFunctions() const {
@@ -560,9 +581,12 @@ class AsmJSModule
         JS_ASSERT(func.pod.codeOffset_ != UINT32_MAX);
         return JS_DATA_TO_FUNC_PTR(CodePtr, code_ + func.pod.codeOffset_);
     }
-#ifdef MOZ_VTUNE
-    bool trackProfiledFunction(JSAtom *name, unsigned startCodeOffset, unsigned endCodeOffset) {
-        ProfiledFunction func(name, startCodeOffset, endCodeOffset);
+
+#if defined(MOZ_VTUNE) || defined(JS_ION_PERF)
+    bool trackProfiledFunction(PropertyName *name, unsigned startCodeOffset, unsigned endCodeOffset,
+                               unsigned line, unsigned column)
+    {
+        ProfiledFunction func(name, startCodeOffset, endCodeOffset, line, column);
         return profiledFunctions_.append(func);
     }
     unsigned numProfiledFunctions() const {
@@ -572,21 +596,9 @@ class AsmJSModule
         return profiledFunctions_[i];
     }
 #endif
-#ifdef JS_ION_PERF
-    bool trackPerfProfiledFunction(JSAtom *name, unsigned startCodeOffset, unsigned endCodeOffset,
-                                   unsigned line, unsigned column)
-    {
-        ProfiledFunction func(name, startCodeOffset, endCodeOffset, line, column);
-        return profiledFunctions_.append(func);
-    }
-    unsigned numPerfFunctions() const {
-        return profiledFunctions_.length();
-    }
-    ProfiledFunction &perfProfiledFunction(unsigned i) {
-        return profiledFunctions_[i];
-    }
 
-    bool trackPerfProfiledBlocks(JSAtom *name, unsigned startCodeOffset, unsigned endInlineCodeOffset,
+#ifdef JS_ION_PERF
+    bool trackPerfProfiledBlocks(PropertyName *name, unsigned startCodeOffset, unsigned endInlineCodeOffset,
                                  unsigned endCodeOffset, jit::BasicBlocksVector &basicBlocks) {
         ProfiledBlocksFunction func(name, startCodeOffset, endInlineCodeOffset, endCodeOffset, basicBlocks);
         return perfProfiledBlocksFunctions_.append(mozilla::Move(func));
@@ -598,6 +610,7 @@ class AsmJSModule
         return perfProfiledBlocksFunctions_[i];
     }
 #endif
+
     bool hasArrayView() const {
         return pod.hasArrayView_;
     }
@@ -739,8 +752,8 @@ class AsmJSModule
     bool addAbsoluteLink(AbsoluteLink link) {
         return staticLinkData_.absoluteLinks.append(link);
     }
-    void setOperationCallbackOffset(uint32_t offset) {
-        staticLinkData_.operationCallbackExitOffset = offset;
+    void setInterruptOffset(uint32_t offset) {
+        staticLinkData_.interruptExitOffset = offset;
     }
 
     void restoreToInitialState(ArrayBufferObject *maybePrevBuffer, ExclusiveContext *cx);
@@ -752,8 +765,8 @@ class AsmJSModule
         return code_;
     }
 
-    uint8_t *operationCallbackExit() const {
-        return operationCallbackExit_;
+    uint8_t *interruptExit() const {
+        return interruptExit_;
     }
 
     void setIsDynamicallyLinked() {
@@ -813,8 +826,8 @@ class AsmJSModule
 
     bool clone(JSContext *cx, ScopedJSDeletePtr<AsmJSModule> *moduleOut) const;
 
-    // These methods may only be called while holding the Runtime's operation
-    // callback lock.
+    // These methods may only be called while holding the Runtime's interrupt
+    // lock.
     void protectCode(JSRuntime *rt) const;
     void unprotectCode(JSRuntime *rt) const;
     bool codeIsProtected(JSRuntime *rt) const;

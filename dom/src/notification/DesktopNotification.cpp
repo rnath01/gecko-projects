@@ -101,7 +101,7 @@ DesktopNotification::PostDesktopNotification()
       ops.mTextClickable = true;
       ops.mManifestURL = manifestUrl;
 
-      if (!ops.ToObject(cx, JS::NullPtr(), &val)) {
+      if (!ops.ToObject(cx, &val)) {
         return NS_ERROR_FAILURE;
       }
 
@@ -138,7 +138,7 @@ DesktopNotification::DesktopNotification(const nsAString & title,
                                          const nsAString & iconURL,
                                          nsPIDOMWindow *aWindow,
                                          nsIPrincipal* principal)
-  : nsDOMEventTargetHelper(aWindow)
+  : DOMEventTargetHelper(aWindow)
   , mTitle(title)
   , mDescription(description)
   , mIconURL(iconURL)
@@ -186,7 +186,7 @@ DesktopNotification::Init()
                             NS_LITERAL_CSTRING("desktop-notification"),
                             NS_LITERAL_CSTRING("unused"),
                             emptyOptions));
-    child->SendPContentPermissionRequestConstructor(copy.forget().get(),
+    child->SendPContentPermissionRequestConstructor(copy.forget().take(),
                                                     permArray,
                                                     IPC::Principal(mPrincipal));
 

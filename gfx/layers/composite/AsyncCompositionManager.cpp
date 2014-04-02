@@ -244,7 +244,7 @@ AsyncCompositionManager::AlignFixedAndStickyLayers(Layer* aLayer,
   bool isStickyForSubtree = aLayer->GetIsStickyPosition() &&
     aTransformedSubtreeRoot->AsContainerLayer() &&
     aLayer->GetStickyScrollContainerId() ==
-      aTransformedSubtreeRoot->AsContainerLayer()->GetFrameMetrics().mScrollId;
+      aTransformedSubtreeRoot->AsContainerLayer()->GetFrameMetrics().GetScrollId();
   if (aLayer != aTransformedSubtreeRoot && (isRootFixed || isStickyForSubtree)) {
     // Insert a translation so that the position of the anchor point is the same
     // before and after the change to the transform of aTransformedSubtreeRoot.
@@ -606,7 +606,7 @@ AsyncCompositionManager::ApplyAsyncTransformToScrollbar(ContainerLayer* aLayer)
       continue;
     }
     const FrameMetrics& metrics = scrollTarget->AsContainerLayer()->GetFrameMetrics();
-    if (metrics.mScrollId != aLayer->GetScrollbarTargetContainerId()) {
+    if (metrics.GetScrollId() != aLayer->GetScrollbarTargetContainerId()) {
       continue;
     }
     if (!LayerHasNonContainerDescendants(scrollTarget->AsContainerLayer())) {
@@ -619,12 +619,12 @@ AsyncCompositionManager::ApplyAsyncTransformToScrollbar(ContainerLayer* aLayer)
 
     Matrix4x4 scrollbarTransform;
     if (aLayer->GetScrollbarDirection() == Layer::VERTICAL) {
-      float scale = metrics.CalculateCompositedRectInCssPixels().height / metrics.mScrollableRect.height;
+      float scale = metrics.CalculateCompositedSizeInCssPixels().height / metrics.mScrollableRect.height;
       scrollbarTransform = scrollbarTransform * Matrix4x4().Scale(1.f, 1.f / transientTransform.GetYScale(), 1.f);
       scrollbarTransform = scrollbarTransform * Matrix4x4().Translate(0, -transientTransform._42 * scale, 0);
     }
     if (aLayer->GetScrollbarDirection() == Layer::HORIZONTAL) {
-      float scale = metrics.CalculateCompositedRectInCssPixels().width / metrics.mScrollableRect.width;
+      float scale = metrics.CalculateCompositedSizeInCssPixels().width / metrics.mScrollableRect.width;
       scrollbarTransform = scrollbarTransform * Matrix4x4().Scale(1.f / transientTransform.GetXScale(), 1.f, 1.f);
       scrollbarTransform = scrollbarTransform * Matrix4x4().Translate(-transientTransform._41 * scale, 0, 0);
     }
@@ -662,7 +662,7 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
 
   CSSToLayerScale geckoZoom = metrics.LayersPixelsPerCSSPixel();
 
-  LayerIntPoint scrollOffsetLayerPixels = RoundedToInt(metrics.mScrollOffset * geckoZoom);
+  LayerIntPoint scrollOffsetLayerPixels = RoundedToInt(metrics.GetScrollOffset() * geckoZoom);
 
   if (mIsFirstPaint) {
     mContentRect = metrics.mScrollableRect;
@@ -694,7 +694,7 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
   // however, we can assume there is no async zooming in progress and so the following statement
   // works fine.
   CSSToScreenScale userZoom(metrics.mDevPixelsPerCSSPixel * metrics.mCumulativeResolution * LayerToScreenScale(1));
-  ScreenPoint userScroll = metrics.mScrollOffset * userZoom;
+  ScreenPoint userScroll = metrics.GetScrollOffset() * userZoom;
   SyncViewportInfo(displayPort, geckoZoom, mLayersUpdated,
                    userScroll, userZoom, fixedLayerMargins,
                    offset);
@@ -713,7 +713,7 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
 
   LayerPoint geckoScroll(0, 0);
   if (metrics.IsScrollable()) {
-    geckoScroll = metrics.mScrollOffset * geckoZoom;
+    geckoScroll = metrics.GetScrollOffset() * geckoZoom;
   }
 
   LayerPoint translation = (userScroll / zoomAdjust) - geckoScroll;

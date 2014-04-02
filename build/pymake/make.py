@@ -6,9 +6,31 @@ make.py
 A drop-in or mostly drop-in replacement for GNU make.
 """
 
-import sys, os, subprocess
+import sys, os
+import pymake.command, pymake.process
+
+import gc
 
 if __name__ == '__main__':
-    make = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'make.exe')
-    cmd = [make] + sys.argv[1:] + ['SHELL=%s.exe' % os.environ['SHELL']]
-    sys.exit(subprocess.call(cmd))
+  if 'TINDERBOX_OUTPUT' in os.environ:
+    # When building on mozilla build slaves, execute mozmake instead. Until bug
+    # 978211, this is the easiest, albeit hackish, way to do this.
+    import subprocess
+    mozmake = os.path.join(os.path.dirname(__file__), '..', '..',
+        'mozmake.exe')
+    if os.path.exists(mozmake):
+        cmd = [mozmake]
+        cmd.extend(sys.argv[1:])
+        shell = os.environ.get('SHELL')
+        if shell and not shell.lower().endswith('.exe'):
+            cmd += ['SHELL=%s.exe' % shell]
+        sys.exit(subprocess.call(cmd))
+
+  sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
+  sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', 0)
+
+  gc.disable()
+
+  pymake.command.main(sys.argv[1:], os.environ, os.getcwd(), cb=sys.exit)
+  pymake.process.ParallelContext.spin()
+  assert False, "Not reached"

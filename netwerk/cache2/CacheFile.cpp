@@ -368,7 +368,7 @@ CacheFile::OnChunkWritten(nsresult aResult, CacheFileChunk *aChunk)
 
   aChunk->mRemovingChunk = true;
   ReleaseOutsideLock(static_cast<CacheFileChunkListener *>(
-                       aChunk->mFile.forget().get()));
+                       aChunk->mFile.forget().take()));
   mCachedChunks.Put(aChunk->Index(), aChunk);
   mChunks.Remove(aChunk->Index());
   WriteMetadataIfNeededLocked();
@@ -696,7 +696,7 @@ CacheFile::OpenOutputStream(CacheOutputCloseListener *aCloseListener, nsIOutputS
 nsresult
 CacheFile::SetMemoryOnly()
 {
-  LOG(("CacheFile::SetMemoryOnly() aMemoryOnly=%d [this=%p]",
+  LOG(("CacheFile::SetMemoryOnly() mMemoryOnly=%d [this=%p]",
        mMemoryOnly, this));
 
   if (mMemoryOnly)
@@ -760,6 +760,16 @@ CacheFile::ThrowMemoryCachedData()
 
   LOG(("CacheFile::ThrowMemoryCachedData() [this=%p]", this));
 
+  if (mMemoryOnly) {
+    // This method should not be called when the CacheFile was initialized as
+    // memory-only, but it can be called when CacheFile end up as memory-only
+    // due to e.g. IO failure since CacheEntry doesn't know it.
+    LOG(("CacheFile::ThrowMemoryCachedData() - Ignoring request because the "
+         "entry is memory-only. [this=%p]", this));
+
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
   if (mOpeningFile) {
     // mayhemer, note: we shouldn't get here, since CacheEntry prevents loading
     // entries from being purged.
@@ -775,13 +785,18 @@ CacheFile::ThrowMemoryCachedData()
 }
 
 nsresult
-CacheFile::GetElement(const char *aKey, const char **_retval)
+CacheFile::GetElement(const char *aKey, char **_retval)
 {
   CacheFileAutoLock lock(this);
   MOZ_ASSERT(mMetadata);
   NS_ENSURE_TRUE(mMetadata, NS_ERROR_UNEXPECTED);
 
-  *_retval = mMetadata->GetElement(aKey);
+  const char *value;
+  value = mMetadata->GetElement(aKey);
+  if (!value)
+    return NS_ERROR_NOT_AVAILABLE;
+
+  *_retval = NS_strdup(value);
   return NS_OK;
 }
 
@@ -991,6 +1006,15 @@ CacheFile::GetChunkLocked(uint32_t aIndex, bool aWriter,
   if (off < mDataSize) {
     // We cannot be here if this is memory only entry since the chunk must exist
     MOZ_ASSERT(!mMemoryOnly);
+    if (mMemoryOnly) {
+      // If this ever really happen it is better to fail rather than crashing on
+      // a null handle.
+      LOG(("CacheFile::GetChunkLocked() - Unexpected state! Offset < mDataSize "
+           "for memory-only entry. [this=%p, off=%lld, mDataSize=%lld]",
+           this, off, mDataSize));
+
+      return NS_ERROR_UNEXPECTED;
+    }
 
     chunk = new CacheFileChunk(this, aIndex);
     mChunks.Put(aIndex, chunk);
@@ -1005,7 +1029,7 @@ CacheFile::GetChunkLocked(uint32_t aIndex, bool aWriter,
     if (NS_FAILED(rv)) {
       chunk->mRemovingChunk = true;
       ReleaseOutsideLock(static_cast<CacheFileChunkListener *>(
-                           chunk->mFile.forget().get()));
+                           chunk->mFile.forget().take()));
       mChunks.Remove(aIndex);
       NS_ENSURE_SUCCESS(rv, rv);
     }
@@ -1176,7 +1200,7 @@ CacheFile::RemoveChunk(CacheFileChunk *aChunk)
 
     chunk->mRemovingChunk = true;
     ReleaseOutsideLock(static_cast<CacheFileChunkListener *>(
-                         chunk->mFile.forget().get()));
+                         chunk->mFile.forget().take()));
     mCachedChunks.Put(chunk->Index(), chunk);
     mChunks.Remove(chunk->Index());
     if (!mMemoryOnly)
@@ -1521,7 +1545,7 @@ CacheFile::PadChunkWithZeroes(uint32_t aChunkIdx)
   chunk->UpdateDataSize(chunk->DataSize(), kChunkSize - chunk->DataSize(),
                         false);
 
-  ReleaseOutsideLock(chunk.forget().get());
+  ReleaseOutsideLock(chunk.forget().take());
 
   return NS_OK;
 }

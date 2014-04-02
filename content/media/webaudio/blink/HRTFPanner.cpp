@@ -54,7 +54,7 @@ HRTFPanner::HRTFPanner(float sampleRate, mozilla::TemporaryRef<HRTFDatabaseLoade
     , m_convolverR1(m_convolverL1.fftSize())
     , m_convolverL2(m_convolverL1.fftSize())
     , m_convolverR2(m_convolverL1.fftSize())
-    , m_delayLine(ceilf(MaxDelayTimeSeconds * sampleRate), 1.0)
+    , m_delayLine(MaxDelayTimeSeconds * sampleRate, 1.0)
 {
     MOZ_ASSERT(m_databaseLoader);
     MOZ_COUNT_CTOR(HRTFPanner);
@@ -112,11 +112,13 @@ int HRTFPanner::calculateDesiredAzimuthIndexAndBlend(double azimuth, double& azi
 
 void HRTFPanner::pan(double desiredAzimuth, double elevation, const AudioChunk* inputBus, AudioChunk* outputBus)
 {
+#ifdef DEBUG
     unsigned numInputChannels =
         inputBus->IsNull() ? 0 : inputBus->mChannelData.Length();
 
     MOZ_ASSERT(numInputChannels <= 2);
     MOZ_ASSERT(inputBus->mDuration == WEBAUDIO_BLOCK_SIZE);
+#endif
 
     bool isOutputGood = outputBus && outputBus->mChannelData.Length() == 2 && outputBus->mDuration == WEBAUDIO_BLOCK_SIZE;
     MOZ_ASSERT(isOutputGood);

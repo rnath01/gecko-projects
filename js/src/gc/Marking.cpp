@@ -358,10 +358,11 @@ IsAboutToBeFinalized(T **thingp)
      * We should return false for things that have been allocated during
      * incremental sweeping, but this possibility doesn't occur at the moment
      * because this function is only called at the very start of the sweeping a
-     * compartment group.  Rather than do the extra check, we just assert that
-     * it's not necessary.
+     * compartment group and during minor gc. Rather than do the extra check,
+     * we just assert that it's not necessary.
      */
-    JS_ASSERT(!(*thingp)->arenaHeader()->allocatedDuringIncremental);
+    JS_ASSERT_IF(!(*thingp)->runtimeFromAnyThread()->isHeapMinorCollecting(),
+                 !(*thingp)->arenaHeader()->allocatedDuringIncremental);
 
     return !(*thingp)->isMarked();
 }
@@ -371,8 +372,10 @@ T *
 UpdateIfRelocated(JSRuntime *rt, T **thingp)
 {
     JS_ASSERT(thingp);
-    if (*thingp && rt->isHeapMinorCollecting())
-        IsAboutToBeFinalized<T>(thingp);
+#ifdef JSGC_GENERATIONAL
+    if (*thingp && rt->isHeapMinorCollecting() && rt->gcNursery.isInside(*thingp))
+        rt->gcNursery.getForwardedPointer(thingp);
+#endif
     return *thingp;
 }
 

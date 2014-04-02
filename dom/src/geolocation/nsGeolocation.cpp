@@ -6,6 +6,7 @@
 
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/TabChild.h"
+#include "mozilla/Telemetry.h"
 
 #include "nsISettingsService.h"
 
@@ -684,18 +685,17 @@ nsresult nsGeolocationService::Init()
 #endif
 
 #ifdef MOZ_WIDGET_GONK
-  mProvider = do_GetService(GONK_GPS_GEOLOCATION_PROVIDER_CONTRACTID);
+  mProvider = do_CreateInstance(GONK_GPS_GEOLOCATION_PROVIDER_CONTRACTID);
 #endif
 
 #ifdef MOZ_WIDGET_COCOA
-  if (Preferences::GetBool("geo.provider.use_corelocation", true) &&
-      CoreLocationLocationProvider::IsCoreLocationAvailable()) {
+  if (Preferences::GetBool("geo.provider.use_corelocation", false)) {
     mProvider = new CoreLocationLocationProvider();
   }
 #endif
 
   if (Preferences::GetBool("geo.provider.use_mls", false)) {
-    mProvider = do_GetService("@mozilla.org/geolocation/mls-provider;1");
+    mProvider = do_CreateInstance("@mozilla.org/geolocation/mls-provider;1");
   }
 
   // Override platform-specific providers with the default (network)
@@ -1144,6 +1144,16 @@ Geolocation::Update(nsIDOMGeoPosition *aSomewhere)
     return NS_OK;
   }
 
+  if (aSomewhere) {
+    nsCOMPtr<nsIDOMGeoPositionCoords> coords;
+    aSomewhere->GetCoords(getter_AddRefs(coords));
+    if (coords) {
+      double accuracy = -1;
+      coords->GetAccuracy(&accuracy);
+      mozilla::Telemetry::Accumulate(mozilla::Telemetry::GEOLOCATION_ACCURACY, accuracy);
+    }
+  }
+
   for (uint32_t i = mPendingCallbacks.Length(); i > 0; i--) {
     mPendingCallbacks[i-1]->Update(aSomewhere);
     RemoveRequest(mPendingCallbacks[i-1]);
@@ -1175,6 +1185,8 @@ Geolocation::NotifyError(uint16_t aErrorCode)
     Shutdown();
     return NS_OK;
   }
+
+  mozilla::Telemetry::Accumulate(mozilla::Telemetry::GEOLOCATION_ERROR, true);
 
   for (uint32_t i = mPendingCallbacks.Length(); i > 0; i--) {
     mPendingCallbacks[i-1]->NotifyErrorAndShutdown(aErrorCode);

@@ -391,6 +391,12 @@ class MochitestOptions(optparse.OptionParser):
                    "when not set, recoverable but misleading SIGSEGV instances "
                    "may occur in Ion/Odin JIT code."
         }],
+        [["--quiet"],
+         { "action": "store_true",
+           "default": False,
+           "dest": "quiet",
+           "help": "Do not print test log lines unless a failure occurs."
+         }],
     ]
 
     def __init__(self, **kwargs):
@@ -403,6 +409,8 @@ class MochitestOptions(optparse.OptionParser):
 
     def verifyOptions(self, options, mochitest):
         """ verify correct options and cleanup paths """
+
+        mozinfo.update({"e10s": options.e10s}) # for test manifest parsing.
 
         if options.app is None:
             if build_obj is not None:

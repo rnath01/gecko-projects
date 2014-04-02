@@ -24,15 +24,30 @@ XPCOMUtils.defineLazyModuleGetter(this, "Deprecated",
 
 XPCOMUtils.defineLazyGetter(this, "gTextDecoder", () => new TextDecoder());
 XPCOMUtils.defineLazyGetter(this, "gTextEncoder", () => new TextEncoder());
-XPCOMUtils.defineLazyGetter(this, "localFileCtor",
-  () => Components.Constructor("@mozilla.org/file/local;1",
-                               "nsILocalFile", "initWithPath"));
+
+/**
+ * Generates an hash for the given string.
+ *
+ * @note The generated hash is returned in base64 form.  Mind the fact base64
+ * is case-sensitive if you are going to reuse this code.
+ */
+function generateHash(aString) {
+  let cryptoHash = Cc["@mozilla.org/security/hash;1"]
+                     .createInstance(Ci.nsICryptoHash);
+  cryptoHash.init(Ci.nsICryptoHash.MD5);
+  let stringStream = Cc["@mozilla.org/io/string-input-stream;1"]
+                       .createInstance(Ci.nsIStringInputStream);
+  stringStream.data = aString;
+  cryptoHash.updateFromStream(stringStream, -1);
+  // base64 allows the '/' char, but we can't use it for filenames.
+  return cryptoHash.finish(true).replace("/", "-", "g");
+}
 
 this.BookmarkJSONUtils = Object.freeze({
   /**
    * Import bookmarks from a url.
    *
-   * @param aURL
+   * @param aSpec
    *        url of the bookmark data.
    * @param aReplace
    *        Boolean if true, replace existing bookmarks, else merge.
@@ -41,9 +56,19 @@ this.BookmarkJSONUtils = Object.freeze({
    * @resolves When the new bookmarks have been created.
    * @rejects JavaScript exception.
    */
-  importFromURL: function BJU_importFromURL(aURL, aReplace) {
-    let importer = new BookmarkImporter();
-    return importer.importFromURL(aURL, aReplace);
+  importFromURL: function BJU_importFromURL(aSpec, aReplace) {
+    return Task.spawn(function* () {
+      notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_BEGIN);
+      try {
+        let importer = new BookmarkImporter(aReplace);
+        yield importer.importFromURL(aSpec);
+
+        notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_SUCCESS);
+      } catch(ex) {
+        Cu.reportError("Failed to restore bookmarks from " + aSpec + ": " + ex);
+        notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_FAILED);
+      }
+    });
   },
 
   /**
@@ -52,37 +77,62 @@ this.BookmarkJSONUtils = Object.freeze({
    *       before executing the restore.
    *
    * @param aFilePath
-   *        OS.File path or nsIFile of bookmarks in JSON format to be restored.
+   *        OS.File path string of bookmarks in JSON format to be restored.
    * @param aReplace
    *        Boolean if true, replace existing bookmarks, else merge.
    *
    * @return {Promise}
    * @resolves When the new bookmarks have been created.
    * @rejects JavaScript exception.
+   * @deprecated passing an nsIFile is deprecated
    */
   importFromFile: function BJU_importFromFile(aFilePath, aReplace) {
-    let importer = new BookmarkImporter();
-    // TODO (bug 967192): convert to pure OS.File
-    let file = aFilePath instanceof Ci.nsIFile ? aFilePath
-                                               : new localFileCtor(aFilePath);
-    return importer.importFromFile(file, aReplace);
+    if (aFilePath instanceof Ci.nsIFile) {
+      Deprecated.warning("Passing an nsIFile to BookmarksJSONUtils.importFromFile " +
+                         "is deprecated. Please use an OS.File path string instead.",
+                         "https://developer.mozilla.org/docs/JavaScript_OS.File");
+      aFilePath = aFilePath.path;
+    }
+
+    return Task.spawn(function* () {
+      notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_BEGIN);
+      try {
+        if (!(yield OS.File.exists(aFilePath)))
+          throw new Error("Cannot restore from nonexisting json file");
+
+        let importer = new BookmarkImporter(aReplace);
+        yield importer.importFromURL(OS.Path.toFileURI(aFilePath));
+
+        notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_SUCCESS);
+      } catch(ex) {
+        Cu.reportError("Failed to restore bookmarks from " + aFilePath + ": " + ex);
+        notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_FAILED);
+        throw ex;
+      }
+    });
   },
 
   /**
    * Serializes bookmarks using JSON, and writes to the supplied file path.
    *
    * @param aFilePath
-   *        OS.File path for the "bookmarks.json" file to be created.
-   *
+   *        OS.File path string for the "bookmarks.json" file to be created.
+   * @param [optional] aOptions
+   *        Object containing options for the export:
+   *         - failIfHashIs: if the generated file would have the same hash
+   *                         defined here, will reject with ex.becauseSameHash
    * @return {Promise}
-   * @resolves To the exported bookmarks count when the file has been created.
+   * @resolves once the file has been created, to an object with the
+   *           following properties:
+   *            - count: number of exported bookmarks
+   *            - hash: file hash for contents comparison
    * @rejects JavaScript exception.
    * @deprecated passing an nsIFile is deprecated
    */
-  exportToFile: function BJU_exportToFile(aFilePath) {
+  exportToFile: function BJU_exportToFile(aFilePath, aOptions={}) {
     if (aFilePath instanceof Ci.nsIFile) {
       Deprecated.warning("Passing an nsIFile to BookmarksJSONUtils.exportToFile " +
-                         "is deprecated. Please use an OS.File path instead.",
+                         "is deprecated. Please use an OS.File path string instead.",
                          "https://developer.mozilla.org/docs/JavaScript_OS.File");
       aFilePath = aFilePath.path;
     }
@@ -99,12 +149,29 @@ this.BookmarkJSONUtils = Object.freeze({
         Components.utils.reportError("Unable to report telemetry.");
       }
 
+      startTime = Date.now();
+      let hash = generateHash(jsonString);
+      // Report the time taken to generate the hash.
+      try {
+        Services.telemetry
+                .getHistogramById("PLACES_BACKUPS_HASHING_MS")
+                .add(Date.now() - startTime);
+      } catch (ex) {
+        Components.utils.reportError("Unable to report telemetry.");
+      }
+
+      if (hash === aOptions.failIfHashIs) {
+        let e = new Error("Hash conflict");
+        e.becauseSameHash = true;
+        throw e;
+      }
+
       // Do not write to the tmp folder, otherwise if it has a different
       // filesystem writeAtomic will fail.  Eventual dangling .tmp files should
       // be cleaned up by the caller.
       yield OS.File.writeAtomic(aFilePath, jsonString,
                                 { tmpPath: OS.Path.join(aFilePath + ".tmp") });
-      return count;
+      return { count: count, hash: hash };
     });
   },
 
@@ -127,61 +194,26 @@ this.BookmarkJSONUtils = Object.freeze({
    *          cause it still has some internal usage.
    */
   serializeNodeAsJSONToOutputStream: function (aNode, aStream) {
-    let deferred = Promise.defer();
-    Services.tm.mainThread.dispatch(function() {
-      try {
-        BookmarkNode.serializeAsJSONToOutputStream(aNode, aStream);
-        deferred.resolve();
-      } catch (ex) {
-        deferred.reject(ex);
-      }
-    }, Ci.nsIThread.DISPATCH_NORMAL);
-    return deferred.promise;
+    return BookmarkNode.serializeAsJSONToOutputStream(aNode, aStream);
   }
 });
 
-function BookmarkImporter() {}
+function BookmarkImporter(aReplace) {
+  this._replace = aReplace;
+}
 BookmarkImporter.prototype = {
-  /**
-   * Import bookmarks from a file.
-   *
-   * @param aFile
-   *        the bookmark file.
-   * @param aReplace
-   *        Boolean if true, replace existing bookmarks, else merge.
-   *
-   * @return {Promise}
-   * @resolves When the new bookmarks have been created.
-   * @rejects JavaScript exception.
-   */
-  importFromFile: function(aFile, aReplace) {
-    if (aFile.exists()) {
-      return this.importFromURL(NetUtil.newURI(aFile).spec, aReplace);
-    }
-
-    notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_BEGIN);
-
-    return Task.spawn(function() {
-      notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_FAILED);
-      throw new Error("File does not exist.");
-    });
-  },
-
   /**
    * Import bookmarks from a url.
    *
-   * @param aURL
+   * @param aSpec
    *        url of the bookmark data.
-   * @param aReplace
-   *        Boolean if true, replace existing bookmarks, else merge.
    *
    * @return {Promise}
    * @resolves When the new bookmarks have been created.
    * @rejects JavaScript exception.
    */
-  importFromURL: function BI_importFromURL(aURL, aReplace) {
+  importFromURL: function BI_importFromURL(aSpec) {
     let deferred = Promise.defer();
-    notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_BEGIN);
 
     let streamObserver = {
       onStreamComplete: function (aLoader, aContext, aStatus, aLength,
@@ -190,32 +222,26 @@ BookmarkImporter.prototype = {
                         createInstance(Ci.nsIScriptableUnicodeConverter);
         converter.charset = "UTF-8";
 
-        Task.spawn(function() {
-          try {
-            let jsonString =
-              converter.convertFromByteArray(aResult, aResult.length);
-            yield this.importFromJSON(jsonString, aReplace);
-            notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_SUCCESS);
-            deferred.resolve();
-          } catch (ex) {
-            notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_FAILED);
-            Cu.reportError("Failed to import from URL: " + ex);
-            deferred.reject(ex);
-          }
-        }.bind(this));
+        try {
+          let jsonString = converter.convertFromByteArray(aResult,
+                                                          aResult.length);
+          deferred.resolve(this.importFromJSON(jsonString));
+        } catch (ex) {
+          Cu.reportError("Failed to import from URL: " + ex);
+          deferred.reject(ex);
+          throw ex;
+        }
       }.bind(this)
     };
 
     try {
-      let channel = Services.io.newChannelFromURI(NetUtil.newURI(aURL));
+      let channel = Services.io.newChannelFromURI(NetUtil.newURI(aSpec));
       let streamLoader = Cc["@mozilla.org/network/stream-loader;1"].
                          createInstance(Ci.nsIStreamLoader);
 
       streamLoader.init(streamObserver);
       channel.asyncOpen(streamLoader, channel);
     } catch (ex) {
-      notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_FAILED);
-      Cu.reportError("Failed to import from URL: " + ex);
       deferred.reject(ex);
     }
 
@@ -227,19 +253,15 @@ BookmarkImporter.prototype = {
    *
    * @param aString
    *        JSON string of serialized bookmark data.
-   * @param aReplace
-   *        Boolean if true, replace existing bookmarks, else merge.
    */
-  importFromJSON: function BI_importFromJSON(aString, aReplace) {
+  importFromJSON: function BI_importFromJSON(aString) {
     let deferred = Promise.defer();
     let nodes =
       PlacesUtils.unwrapNodes(aString, PlacesUtils.TYPE_X_MOZ_PLACE_CONTAINER);
 
     if (nodes.length == 0 || !nodes[0].children ||
         nodes[0].children.length == 0) {
-      Services.tm.mainThread.dispatch(function() {
-        deferred.resolve(); // Nothing to restore
-      }, Ci.nsIThread.DISPATCH_NORMAL);
+      deferred.resolve(); // Nothing to restore
     } else {
       // Ensure tag folder gets processed last
       nodes[0].children.sort(function sortRoots(aNode, bNode) {
@@ -250,7 +272,7 @@ BookmarkImporter.prototype = {
       let batch = {
         nodes: nodes[0].children,
         runBatched: function runBatched() {
-          if (aReplace) {
+          if (this._replace) {
             // Get roots excluded from the backup, we will not remove them
             // before restoring.
             let excludeItems = PlacesUtils.annotations.getItemsWithAnnotation(
@@ -398,15 +420,13 @@ BookmarkImporter.prototype = {
               index: aIndex,
               lastModified: aData.lastModified,
               siteURI: siteURI
-            }, function(aStatus, aLivemark) {
-              if (Components.isSuccessCode(aStatus)) {
-                let id = aLivemark.id;
-                if (aData.dateAdded)
-                  PlacesUtils.bookmarks.setItemDateAdded(id, aData.dateAdded);
-                if (aData.annos && aData.annos.length)
-                  PlacesUtils.setAnnotationsForItem(id, aData.annos);
-              }
-            });
+            }).then(function (aLivemark) {
+              let id = aLivemark.id;
+              if (aData.dateAdded)
+                PlacesUtils.bookmarks.setItemDateAdded(id, aData.dateAdded);
+              if (aData.annos && aData.annos.length)
+                PlacesUtils.setAnnotationsForItem(id, aData.annos);
+            }, Cu.reportError);
           }
         } else {
           id = PlacesUtils.bookmarks.createFolder(

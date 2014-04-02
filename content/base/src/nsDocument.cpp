@@ -40,8 +40,10 @@
 #include "nsDOMClassInfo.h"
 #include "nsCxPusher.h"
 
+#include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/BasicEvents.h"
-#include "nsAsyncDOMEvent.h"
+#include "mozilla/EventListenerManager.h"
+#include "mozilla/EventStateManager.h"
 #include "nsIDOMNodeFilter.h"
 
 #include "nsIDOMStyleSheet.h"
@@ -119,7 +121,7 @@
 
 #include "nsDateTimeFormatCID.h"
 #include "nsIDateTimeFormat.h"
-#include "nsEventDispatcher.h"
+#include "mozilla/EventDispatcher.h"
 #include "mozilla/InternalMutationEvent.h"
 #include "nsDOMCID.h"
 
@@ -157,7 +159,6 @@
 #include "mozilla/dom/EncodingUtils.h"
 #include "mozilla/dom/quota/QuotaManager.h"
 #include "nsDOMNavigationTiming.h"
-#include "nsEventStateManager.h"
 
 #include "nsSMILAnimationController.h"
 #include "imgIContainer.h"
@@ -181,7 +182,6 @@
 #include "nsXULAppAPI.h"
 #include "mozilla/dom/Touch.h"
 #include "mozilla/dom/TouchEvent.h"
-#include "DictionaryHelpers.h"
 #include "GeneratedEvents.h"
 
 #include "mozilla/Preferences.h"
@@ -317,6 +317,111 @@ struct FireChangeArgs {
 
 namespace mozilla {
 namespace dom {
+
+static PLDHashOperator
+CustomDefinitionsTraverse(CustomElementHashKey* aKey,
+                          CustomElementDefinition* aDefinition,
+                          void* aArg)
+{
+  nsCycleCollectionTraversalCallback* cb =
+    static_cast<nsCycleCollectionTraversalCallback*>(aArg);
+
+  nsAutoPtr<LifecycleCallbacks>& callbacks = aDefinition->mCallbacks;
+
+  if (callbacks->mAttributeChangedCallback.WasPassed()) {
+    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb,
+      "mCustomDefinitions->mCallbacks->mAttributeChangedCallback");
+    cb->NoteXPCOMChild(aDefinition->mCallbacks->mAttributeChangedCallback.Value());
+  }
+
+  if (callbacks->mCreatedCallback.WasPassed()) {
+    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb,
+      "mCustomDefinitions->mCallbacks->mCreatedCallback");
+    cb->NoteXPCOMChild(aDefinition->mCallbacks->mCreatedCallback.Value());
+  }
+
+  if (callbacks->mAttachedCallback.WasPassed()) {
+    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb,
+      "mCustomDefinitions->mCallbacks->mAttachedCallback");
+    cb->NoteXPCOMChild(aDefinition->mCallbacks->mAttachedCallback.Value());
+  }
+
+  if (callbacks->mDetachedCallback.WasPassed()) {
+    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb,
+      "mCustomDefinitions->mCallbacks->mDetachedCallback");
+    cb->NoteXPCOMChild(aDefinition->mCallbacks->mDetachedCallback.Value());
+  }
+
+  return PL_DHASH_NEXT;
+}
+
+static PLDHashOperator
+CandidatesTraverse(CustomElementHashKey* aKey,
+                   nsTArray<nsRefPtr<Element>>* aData,
+                   void* aArg)
+{
+  nsCycleCollectionTraversalCallback *cb =
+    static_cast<nsCycleCollectionTraversalCallback*>(aArg);
+  for (size_t i = 0; i < aData->Length(); ++i) {
+    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb, "mCandidatesMap->Element");
+    cb->NoteXPCOMChild(aData->ElementAt(i));
+  }
+  return PL_DHASH_NEXT;
+}
+
+struct CustomDefinitionTraceArgs
+{
+  const TraceCallbacks& callbacks;
+  void* closure;
+};
+
+static PLDHashOperator
+CustomDefinitionTrace(CustomElementHashKey *aKey,
+                      CustomElementDefinition *aData,
+                      void *aArg)
+{
+  CustomDefinitionTraceArgs* traceArgs = static_cast<CustomDefinitionTraceArgs*>(aArg);
+  MOZ_ASSERT(aData, "Definition must not be null");
+  traceArgs->callbacks.Trace(&aData->mPrototype, "mCustomDefinitions prototype",
+                             traceArgs->closure);
+  return PL_DHASH_NEXT;
+}
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(Registry)
+
+NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(Registry)
+  CustomDefinitionTraceArgs customDefinitionArgs = { aCallbacks, aClosure };
+  tmp->mCustomDefinitions.EnumerateRead(CustomDefinitionTrace,
+                                        &customDefinitionArgs);
+NS_IMPL_CYCLE_COLLECTION_TRACE_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Registry)
+  tmp->mCustomDefinitions.EnumerateRead(CustomDefinitionsTraverse, &cb);
+  tmp->mCandidatesMap.EnumerateRead(CandidatesTraverse, &cb);
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Registry)
+  tmp->mCustomDefinitions.Clear();
+  tmp->mCandidatesMap.Clear();
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(Registry)
+  NS_INTERFACE_MAP_ENTRY(nsISupports)
+NS_INTERFACE_MAP_END
+
+NS_IMPL_CYCLE_COLLECTING_ADDREF(Registry)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(Registry)
+
+Registry::Registry()
+{
+  mozilla::HoldJSObjects(this);
+}
+
+Registry::~Registry()
+{
+  mozilla::DropJSObjects(this);
+}
 
 void
 CustomElementCallback::Call()
@@ -1266,7 +1371,7 @@ IMPL_SHIM(nsIApplicationCacheContainer)
       if (!shim) {                                                         \
         return NS_ERROR_OUT_OF_MEMORY;                                     \
       }                                                                    \
-      *aSink = shim.forget().get();                                        \
+      shim.forget(aSink);                                                  \
       return NS_OK;                                                        \
     }                                                                      \
   PR_END_MACRO
@@ -1427,11 +1532,13 @@ struct nsIDocument::FrameRequest
   int32_t mHandle;
 };
 
+static already_AddRefed<nsINodeInfo> nullNodeInfo(nullptr);
+
 // ==================================================================
 // =
 // ==================================================================
 nsIDocument::nsIDocument()
-  : nsINode(nullptr),
+  : nsINode(nullNodeInfo),
     mCharacterSet(NS_LITERAL_CSTRING("ISO-8859-1")),
     mNodeInfoManager(nullptr),
     mCompatMode(eCompatibility_FullStandards),
@@ -1557,9 +1664,7 @@ nsDocument::~nsDocument()
   mInDestructor = true;
   mInUnlinkOrDeletion = true;
 
-  if (mRegistry) {
-    mRegistry->Clear();
-  }
+  mRegistry = nullptr;
 
   mozilla::DropJSObjects(this);
 
@@ -1678,7 +1783,7 @@ NS_INTERFACE_MAP_END
 
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(nsDocument)
-NS_IMETHODIMP_(nsrefcnt)
+NS_IMETHODIMP_(MozExternalRefCountType)
 nsDocument::Release()
 {
   NS_PRECONDITION(0 != mRefCnt, "dup release");
@@ -1712,7 +1817,7 @@ nsDocument::DeleteCycleCollectable()
 
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_BEGIN(nsDocument)
   if (Element::CanSkip(tmp, aRemovingAllowed)) {
-    nsEventListenerManager* elm = tmp->GetExistingListenerManager();
+    EventListenerManager* elm = tmp->GetExistingListenerManager();
     if (elm) {
       elm->MarkForCC();
     }
@@ -1727,57 +1832,6 @@ NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_IN_CC_END
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_BEGIN(nsDocument)
   return Element::CanSkipThis(tmp);
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_END
-
-static PLDHashOperator
-CustomDefinitionsTraverse(CustomElementHashKey* aKey,
-                          CustomElementDefinition* aDefinition,
-                          void* aArg)
-{
-  nsCycleCollectionTraversalCallback* cb =
-    static_cast<nsCycleCollectionTraversalCallback*>(aArg);
-
-  nsAutoPtr<LifecycleCallbacks>& callbacks = aDefinition->mCallbacks;
-
-  if (callbacks->mAttributeChangedCallback.WasPassed()) {
-    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb,
-      "mCustomDefinitions->mCallbacks->mAttributeChangedCallback");
-    cb->NoteXPCOMChild(aDefinition->mCallbacks->mAttributeChangedCallback.Value());
-  }
-
-  if (callbacks->mCreatedCallback.WasPassed()) {
-    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb,
-      "mCustomDefinitions->mCallbacks->mCreatedCallback");
-    cb->NoteXPCOMChild(aDefinition->mCallbacks->mCreatedCallback.Value());
-  }
-
-  if (callbacks->mAttachedCallback.WasPassed()) {
-    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb,
-      "mCustomDefinitions->mCallbacks->mAttachedCallback");
-    cb->NoteXPCOMChild(aDefinition->mCallbacks->mAttachedCallback.Value());
-  }
-
-  if (callbacks->mDetachedCallback.WasPassed()) {
-    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb,
-      "mCustomDefinitions->mCallbacks->mDetachedCallback");
-    cb->NoteXPCOMChild(aDefinition->mCallbacks->mDetachedCallback.Value());
-  }
-
-  return PL_DHASH_NEXT;
-}
-
-static PLDHashOperator
-CandidatesTraverse(CustomElementHashKey* aKey,
-                   nsTArray<nsRefPtr<Element>>* aData,
-                   void* aArg)
-{
-  nsCycleCollectionTraversalCallback *cb =
-    static_cast<nsCycleCollectionTraversalCallback*>(aArg);
-  for (size_t i = 0; i < aData->Length(); ++i) {
-    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(*cb, "mCandidatesMap->Element");
-    cb->NoteXPCOMChild(aData->ElementAt(i));
-  }
-  return PL_DHASH_NEXT;
-}
 
 static PLDHashOperator
 SubDocTraverser(PLDHashTable *table, PLDHashEntryHdr *hdr, uint32_t number,
@@ -1929,6 +1983,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsDocument)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mUndoManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTemplateContentsOwner)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mChildrenCollection)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRegistry)
 
   // Traverse all our nsCOMArrays.
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mStyleSheets)
@@ -1945,11 +2000,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsDocument)
     tmp->mAnimationController->Traverse(&cb);
   }
 
-  if (tmp->mRegistry) {
-    tmp->mRegistry->mCustomDefinitions.EnumerateRead(CustomDefinitionsTraverse, &cb);
-    tmp->mRegistry->mCandidatesMap.EnumerateRead(CandidatesTraverse, &cb);
-  }
-
   if (tmp->mSubDocuments && tmp->mSubDocuments->ops) {
     PL_DHashTableEnumerate(tmp->mSubDocuments, SubDocTraverser, &cb);
   }
@@ -1963,32 +2013,9 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsDocument)
   }
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
-struct CustomDefinitionTraceArgs
-{
-  const TraceCallbacks& callbacks;
-  void* closure;
-};
-
-static PLDHashOperator
-CustomDefinitionTrace(CustomElementHashKey *aKey,
-                      CustomElementDefinition *aData,
-                      void *aArg)
-{
-  CustomDefinitionTraceArgs* traceArgs = static_cast<CustomDefinitionTraceArgs*>(aArg);
-  MOZ_ASSERT(aData, "Definition must not be null");
-  traceArgs->callbacks.Trace(&aData->mPrototype, "mCustomDefinitions prototype",
-                             traceArgs->closure);
-  return PL_DHASH_NEXT;
-}
-
 NS_IMPL_CYCLE_COLLECTION_CLASS(nsDocument)
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(nsDocument)
-  CustomDefinitionTraceArgs customDefinitionArgs = { aCallbacks, aClosure };
-  if (tmp->mRegistry) {
-    tmp->mRegistry->mCustomDefinitions.EnumerateRead(CustomDefinitionTrace,
-                                                     &customDefinitionArgs);
-  }
   if (tmp->PreservingWrapper()) {
     NS_IMPL_CYCLE_COLLECTION_TRACE_JSVAL_MEMBER_CALLBACK(mExpandoAndGeneration.expando);
   }
@@ -2025,6 +2052,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mUndoManager)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mTemplateContentsOwner)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mChildrenCollection)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mRegistry)
 
   tmp->mParentDocument = nullptr;
 
@@ -2065,10 +2093,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDocument)
 
   tmp->mIdentifierMap.Clear();
   tmp->mExpandoAndGeneration.Unlink();
-
-  if (tmp->mRegistry) {
-    tmp->mRegistry->Clear();
-  }
 
   if (tmp->mAnimationController) {
     tmp->mAnimationController->Unlink();
@@ -2272,9 +2296,7 @@ nsDocument::ResetToURI(nsIURI *aURI, nsILoadGroup *aLoadGroup,
   }
   mInUnlinkOrDeletion = oldVal;
 
-  if (mRegistry) {
-    mRegistry->Clear();
-  }
+  mRegistry = nullptr;
 
   // Reset our stylesheets
   ResetStylesheetsToURI(aURI);
@@ -3369,7 +3391,7 @@ NS_IMETHODIMP
 nsDocument::GetElementsByClassName(const nsAString& aClasses,
                                    nsIDOMNodeList** aReturn)
 {
-  *aReturn = nsIDocument::GetElementsByClassName(aClasses).get();
+  *aReturn = nsIDocument::GetElementsByClassName(aClasses).take();
   return NS_OK;
 }
 
@@ -3979,9 +4001,10 @@ nsDocument::AddStyleSheetToStyleSets(nsIStyleSheet* aSheet)
                         cssSheet, __VA_ARGS__);                         \
     event->SetTrusted(true);                                            \
     event->SetTarget(this);                                             \
-    nsRefPtr<nsAsyncDOMEvent> asyncEvent = new nsAsyncDOMEvent(this, event); \
-    asyncEvent->mDispatchChromeOnly = true;                             \
-    asyncEvent->PostDOMEvent();                                         \
+    nsRefPtr<AsyncEventDispatcher> asyncDispatcher =                    \
+      new AsyncEventDispatcher(this, event);                            \
+    asyncDispatcher->mDispatchChromeOnly = true;                        \
+    asyncDispatcher->PostDOMEvent();                                    \
   } while (0);
 
 void
@@ -4853,7 +4876,7 @@ nsDocument::DispatchContentLoadedEvents()
         event->SetTrusted(true);
 
         // To dispatch this event we must manually call
-        // nsEventDispatcher::Dispatch() on the ancestor document since the
+        // EventDispatcher::Dispatch() on the ancestor document since the
         // target is not in the same document, so the event would never reach
         // the ancestor document if we used the normal event
         // dispatching code.
@@ -4867,8 +4890,8 @@ nsDocument::DispatchContentLoadedEvents()
             nsRefPtr<nsPresContext> context = shell->GetPresContext();
 
             if (context) {
-              nsEventDispatcher::Dispatch(parent, context, innerEvent, event,
-                                          &status);
+              EventDispatcher::Dispatch(parent, context, innerEvent, event,
+                                        &status);
             }
           }
         }
@@ -5107,7 +5130,7 @@ nsIDocument::CreateElement(const nsAString& aTagName, ErrorResult& rv)
   if (rv.Failed()) {
     return nullptr;
   }
-  return dont_AddRef(content.forget().get()->AsElement());
+  return dont_AddRef(content.forget().take()->AsElement());
 }
 
 void
@@ -5238,7 +5261,7 @@ nsDocument::CreateElementNS(const nsAString& aNamespaceURI,
 NS_IMETHODIMP
 nsDocument::CreateTextNode(const nsAString& aData, nsIDOMText** aReturn)
 {
-  *aReturn = nsIDocument::CreateTextNode(aData).get();
+  *aReturn = nsIDocument::CreateTextNode(aData).take();
   return NS_OK;
 }
 
@@ -5254,7 +5277,7 @@ nsIDocument::CreateTextNode(const nsAString& aData) const
 NS_IMETHODIMP
 nsDocument::CreateDocumentFragment(nsIDOMDocumentFragment** aReturn)
 {
-  *aReturn = nsIDocument::CreateDocumentFragment().get();
+  *aReturn = nsIDocument::CreateDocumentFragment().take();
   return NS_OK;
 }
 
@@ -5268,7 +5291,7 @@ nsIDocument::CreateDocumentFragment() const
 NS_IMETHODIMP
 nsDocument::CreateComment(const nsAString& aData, nsIDOMComment** aReturn)
 {
-  *aReturn = nsIDocument::CreateComment(aData).get();
+  *aReturn = nsIDocument::CreateComment(aData).take();
   return NS_OK;
 }
 
@@ -5289,7 +5312,7 @@ nsDocument::CreateCDATASection(const nsAString& aData,
 {
   NS_ENSURE_ARG_POINTER(aReturn);
   ErrorResult rv;
-  *aReturn = nsIDocument::CreateCDATASection(aData, rv).get();
+  *aReturn = nsIDocument::CreateCDATASection(aData, rv).take();
   return rv.ErrorCode();
 }
 
@@ -5321,7 +5344,8 @@ nsDocument::CreateProcessingInstruction(const nsAString& aTarget,
                                         nsIDOMProcessingInstruction** aReturn)
 {
   ErrorResult rv;
-  *aReturn = nsIDocument::CreateProcessingInstruction(aTarget, aData, rv).get();
+  *aReturn =
+    nsIDocument::CreateProcessingInstruction(aTarget, aData, rv).take();
   return rv.ErrorCode();
 }
 
@@ -5352,7 +5376,7 @@ nsDocument::CreateAttribute(const nsAString& aName,
                             nsIDOMAttr** aReturn)
 {
   ErrorResult rv;
-  *aReturn = nsIDocument::CreateAttribute(aName, rv).get();
+  *aReturn = nsIDocument::CreateAttribute(aName, rv).take();
   return rv.ErrorCode();
 }
 
@@ -5393,7 +5417,7 @@ nsDocument::CreateAttributeNS(const nsAString & aNamespaceURI,
 {
   ErrorResult rv;
   *aResult =
-    nsIDocument::CreateAttributeNS(aNamespaceURI, aQualifiedName, rv).get();
+    nsIDocument::CreateAttributeNS(aNamespaceURI, aQualifiedName, rv).take();
   return rv.ErrorCode();
 }
 
@@ -5440,9 +5464,10 @@ nsDocument::CustomElementConstructor(JSContext* aCx, unsigned aArgc, JS::Value* 
   }
 
   nsCOMPtr<nsIAtom> typeAtom(do_GetAtom(elemName));
-  CustomElementHashKey key(kNameSpaceID_None, typeAtom);
+  CustomElementHashKey key(kNameSpaceID_Unknown, typeAtom);
   CustomElementDefinition* definition;
-  if (!document->mRegistry->mCustomDefinitions.Get(&key, &definition)) {
+  if (!document->mRegistry ||
+      !document->mRegistry->mCustomDefinitions.Get(&key, &definition)) {
     return true;
   }
 
@@ -5467,6 +5492,14 @@ nsDocument::CustomElementConstructor(JSContext* aCx, unsigned aArgc, JS::Value* 
   NS_ENSURE_SUCCESS(rv, true);
 
   return true;
+}
+
+bool
+nsDocument::IsRegisterElementEnabled(JSContext* aCx, JSObject* aObject)
+{
+  JS::Rooted<JSObject*> obj(aCx, aObject);
+  return Preferences::GetBool("dom.webcomponents.enabled") ||
+    IsInCertifiedApp(aCx, obj);
 }
 
 nsresult
@@ -5758,7 +5791,7 @@ nsDocument::RegisterElement(JSContext* aCx, const nsAString& aType,
   // If there already exists a definition with the same TYPE, set ERROR to
   // DuplicateDefinition and stop.
   // Note that we need to find existing custom elements from either namespace.
-  CustomElementHashKey duplicateFinder(kNameSpaceID_None, typeAtom);
+  CustomElementHashKey duplicateFinder(kNameSpaceID_Unknown, typeAtom);
   if (definitions.Get(&duplicateFinder)) {
     rv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
     return nullptr;
@@ -5949,6 +5982,14 @@ nsDocument::RegisterElement(JSContext* aCx, const nsAString& aType,
   return constructorObject;
 }
 
+void
+nsDocument::UseRegistryFromDocument(nsIDocument* aDocument)
+{
+  nsDocument* doc = static_cast<nsDocument*>(aDocument);
+  MOZ_ASSERT(!mRegistry, "There should be no existing registry.");
+  mRegistry = doc->mRegistry;
+}
+
 NS_IMETHODIMP
 nsDocument::GetElementsByTagName(const nsAString& aTagname,
                                  nsIDOMNodeList** aReturn)
@@ -5957,7 +5998,7 @@ nsDocument::GetElementsByTagName(const nsAString& aTagname,
   NS_ENSURE_TRUE(list, NS_ERROR_OUT_OF_MEMORY);
 
   // transfer ref to aReturn
-  *aReturn = list.forget().get();
+  list.forget(aReturn);
   return NS_OK;
 }
 
@@ -5995,7 +6036,7 @@ nsDocument::GetElementsByTagNameNS(const nsAString& aNamespaceURI,
   }
 
   // transfer ref to aReturn
-  *aReturn = list.forget().get();
+  list.forget(aReturn);
   return NS_OK;
 }
 
@@ -6423,7 +6464,7 @@ NS_IMETHODIMP
 nsDocument::CreateRange(nsIDOMRange** aReturn)
 {
   ErrorResult rv;
-  *aReturn = nsIDocument::CreateRange(rv).get();
+  *aReturn = nsIDocument::CreateRange(rv).take();
   return rv.ErrorCode();
 }
 
@@ -6463,7 +6504,7 @@ nsDocument::CreateNodeIterator(nsIDOMNode *aRoot,
   ErrorResult rv;
   NodeFilterHolder holder(aFilter);
   *_retval = nsIDocument::CreateNodeIterator(*root, aWhatToShow, holder,
-                                             rv).get();
+                                             rv).take();
   return rv.ErrorCode();
 }
 
@@ -6506,7 +6547,7 @@ nsDocument::CreateTreeWalker(nsIDOMNode *aRoot,
   ErrorResult rv;
   NodeFilterHolder holder(aFilter);
   *_retval = nsIDocument::CreateTreeWalker(*root, aWhatToShow, holder,
-                                           rv).get();
+                                           rv).take();
   return rv.ErrorCode();
 }
 
@@ -6542,7 +6583,7 @@ nsDocument::GetDefaultView(nsIDOMWindow** aDefaultView)
 NS_IMETHODIMP
 nsDocument::GetLocation(nsIDOMLocation **_retval)
 {
-  *_retval = nsIDocument::GetLocation().get();
+  *_retval = nsIDocument::GetLocation().take();
   return NS_OK;
 }
 
@@ -6610,7 +6651,8 @@ nsDocument::GetTitleFromElement(uint32_t aNamespace, nsAString& aTitle)
   nsIContent* title = GetTitleContent(aNamespace);
   if (!title)
     return;
-  nsContentUtils::GetNodeTextContent(title, false, aTitle);
+  if(!nsContentUtils::GetNodeTextContent(title, false, aTitle))
+    NS_RUNTIMEABORT("OOM");
 }
 
 NS_IMETHODIMP
@@ -7252,7 +7294,10 @@ nsIDocument::AdoptNode(nsINode& aAdoptedNode, ErrorResult& rv)
       // Remove from ownerElement.
       nsRefPtr<Attr> adoptedAttr = static_cast<Attr*>(adoptedNode);
 
-      nsCOMPtr<Element> ownerElement = adoptedAttr->GetElement();
+      nsCOMPtr<Element> ownerElement = adoptedAttr->GetOwnerElement(rv);
+      if (rv.Failed()) {
+        return nullptr;
+      }
 
       if (ownerElement) {
         nsRefPtr<Attr> newAttr =
@@ -7613,26 +7658,26 @@ nsDocument::GetViewportInfo(const ScreenIntSize& aDisplaySize)
   }
 }
 
-nsEventListenerManager*
+EventListenerManager*
 nsDocument::GetOrCreateListenerManager()
 {
   if (!mListenerManager) {
     mListenerManager =
-      new nsEventListenerManager(static_cast<EventTarget*>(this));
+      new EventListenerManager(static_cast<EventTarget*>(this));
     SetFlags(NODE_HAS_LISTENERMANAGER);
   }
 
   return mListenerManager;
 }
 
-nsEventListenerManager*
+EventListenerManager*
 nsDocument::GetExistingListenerManager() const
 {
   return mListenerManager;
 }
 
 nsresult
-nsDocument::PreHandleEvent(nsEventChainPreVisitor& aVisitor)
+nsDocument::PreHandleEvent(EventChainPreVisitor& aVisitor)
 {
   aVisitor.mCanHandle = true;
    // FIXME! This is a hack to make middle mouse paste working also in Editor.
@@ -7653,7 +7698,7 @@ nsDocument::CreateEvent(const nsAString& aEventType, nsIDOMEvent** aReturn)
 {
   NS_ENSURE_ARG_POINTER(aReturn);
   ErrorResult rv;
-  *aReturn = nsIDocument::CreateEvent(aEventType, rv).get();
+  *aReturn = nsIDocument::CreateEvent(aEventType, rv).take();
   return rv.ErrorCode();
 }
 
@@ -7671,11 +7716,10 @@ nsIDocument::CreateEvent(const nsAString& aEventType, ErrorResult& rv) const
 
   // Create event even without presContext.
   nsCOMPtr<nsIDOMEvent> ev;
-  rv =
-    nsEventDispatcher::CreateEvent(const_cast<nsIDocument*>(this),
-                                   presContext, nullptr, aEventType,
-                                   getter_AddRefs(ev));
-  return ev ? dont_AddRef(ev.forget().get()->InternalDOMEvent()) : nullptr;
+  rv = EventDispatcher::CreateEvent(const_cast<nsIDocument*>(this),
+                                    presContext, nullptr, aEventType,
+                                    getter_AddRefs(ev));
+  return ev ? dont_AddRef(ev.forget().take()->InternalDOMEvent()) : nullptr;
 }
 
 void
@@ -8319,7 +8363,7 @@ nsDocument::CanSavePresentation(nsIRequest *aNewRequest)
   // Check our event listener manager for unload/beforeunload listeners.
   nsCOMPtr<EventTarget> piTarget = do_QueryInterface(mScriptGlobalObject);
   if (piTarget) {
-    nsEventListenerManager* manager = piTarget->GetExistingListenerManager();
+    EventListenerManager* manager = piTarget->GetExistingListenerManager();
     if (manager && manager->HasUnloadListeners()) {
       return false;
     }
@@ -8417,9 +8461,7 @@ nsDocument::Destroy()
   // tearing down all those frame trees right now is the right thing to do.
   mExternalResourceMap.Shutdown();
 
-  if (mRegistry) {
-    mRegistry->Clear();
-  }
+  mRegistry = nullptr;
 
   // XXX We really should let cycle collection do this, but that currently still
   //     leaks (see https://bugzilla.mozilla.org/show_bug.cgi?id=406684).
@@ -8564,12 +8606,12 @@ nsDocument::UnblockOnload(bool aFireSync)
       // event to indicate that the SVG should be considered fully loaded.
       // Because scripting is disabled on SVG-as-image documents, this event
       // is not accessible to content authors. (See bug 837135.)
-      nsRefPtr<nsAsyncDOMEvent> e =
-        new nsAsyncDOMEvent(this,
-                            NS_LITERAL_STRING("MozSVGAsImageDocumentLoad"),
-                            false,
-                            false);
-      e->PostDOMEvent();
+      nsRefPtr<AsyncEventDispatcher> asyncDispatcher =
+        new AsyncEventDispatcher(this,
+                                 NS_LITERAL_STRING("MozSVGAsImageDocumentLoad"),
+                                 false,
+                                 false);
+      asyncDispatcher->PostDOMEvent();
     }
   }
 }
@@ -8665,8 +8707,8 @@ nsDocument::DispatchPageTransition(EventTarget* aDispatchTarget,
                                                                  aPersisted))) {
       event->SetTrusted(true);
       event->SetTarget(this);
-      nsEventDispatcher::DispatchDOMEvent(aDispatchTarget, nullptr, event,
-                                          nullptr, nullptr);
+      EventDispatcher::DispatchDOMEvent(aDispatchTarget, nullptr, event,
+                                        nullptr, nullptr);
     }
   }
 }
@@ -8747,12 +8789,12 @@ NotifyPageHide(nsIDocument* aDocument, void* aData)
 static void
 DispatchFullScreenChange(nsIDocument* aTarget)
 {
-  nsRefPtr<nsAsyncDOMEvent> e =
-    new nsAsyncDOMEvent(aTarget,
-                        NS_LITERAL_STRING("mozfullscreenchange"),
-                        true,
-                        false);
-  e->PostDOMEvent();
+  nsRefPtr<AsyncEventDispatcher> asyncDispatcher =
+    new AsyncEventDispatcher(aTarget,
+                             NS_LITERAL_STRING("mozfullscreenchange"),
+                             true,
+                             false);
+  asyncDispatcher->PostDOMEvent();
 }
 
 void
@@ -8905,7 +8947,8 @@ nsDocument::MutationEventDispatched(nsINode* aTarget)
     int32_t realTargetCount = realTargets.Count();
     for (int32_t k = 0; k < realTargetCount; ++k) {
       InternalMutationEvent mutation(true, NS_MUTATION_SUBTREEMODIFIED);
-      (new nsAsyncDOMEvent(realTargets[k], mutation))->RunDOMEventWhenSafe();
+      (new AsyncEventDispatcher(realTargets[k], mutation))->
+        RunDOMEventWhenSafe();
     }
   }
 }
@@ -9068,11 +9111,10 @@ nsDocument::SetReadyStateInternal(ReadyState rs)
     mLoadingTimeStamp = mozilla::TimeStamp::Now();
   }
 
-  nsRefPtr<nsAsyncDOMEvent> plevent =
-    new nsAsyncDOMEvent(this, NS_LITERAL_STRING("readystatechange"), false, false);
-  if (plevent) {
-    plevent->RunDOMEventWhenSafe();
-  }
+  nsRefPtr<AsyncEventDispatcher> asyncDispatcher =
+    new AsyncEventDispatcher(this, NS_LITERAL_STRING("readystatechange"),
+                             false, false);
+  asyncDispatcher->RunDOMEventWhenSafe();
 }
 
 NS_IMETHODIMP
@@ -10135,7 +10177,7 @@ NS_IMETHODIMP
 nsDocument::CaretPositionFromPoint(float aX, float aY, nsISupports** aCaretPos)
 {
   NS_ENSURE_ARG_POINTER(aCaretPos);
-  *aCaretPos = nsIDocument::CaretPositionFromPoint(aX, aY).get();
+  *aCaretPos = nsIDocument::CaretPositionFromPoint(aX, aY).take();
   return NS_OK;
 }
 
@@ -10271,7 +10313,8 @@ FullscreenRoots::Add(nsIDocument* aRoot)
     if (!sInstance) {
       sInstance = new FullscreenRoots();
     }
-    sInstance->mRoots.AppendElement(do_GetWeakReference(aRoot));
+    nsWeakPtr weakRoot = do_GetWeakReference(aRoot);
+    sInstance->mRoots.AppendElement(weakRoot);
   }
 }
 
@@ -10550,7 +10593,7 @@ nsDocument::ExitFullscreen(nsIDocument* aDoc)
 {
   // Unlock the pointer, if it's locked.
   nsCOMPtr<Element> pointerLockedElement =
-    do_QueryReferent(nsEventStateManager::sPointerLockedElement);
+    do_QueryReferent(EventStateManager::sPointerLockedElement);
   if (pointerLockedElement) {
     UnlockPointer();
   }
@@ -10615,7 +10658,7 @@ nsDocument::RestorePreviousFullScreenState()
 
   // If fullscreen mode is updated the pointer should be unlocked
   nsCOMPtr<Element> pointerLockedElement =
-    do_QueryReferent(nsEventStateManager::sPointerLockedElement);
+    do_QueryReferent(EventStateManager::sPointerLockedElement);
   if (pointerLockedElement) {
     UnlockPointer();
   }
@@ -10667,12 +10710,12 @@ nsDocument::RestorePreviousFullScreenState()
         if (!nsContentUtils::HaveEqualPrincipals(fullScreenDoc, doc) ||
             (!nsContentUtils::IsSitePermAllow(doc->NodePrincipal(), "fullscreen") &&
              !static_cast<nsDocument*>(doc)->mIsApprovedForFullscreen)) {
-          nsRefPtr<nsAsyncDOMEvent> e =
-            new nsAsyncDOMEvent(doc,
-                                NS_LITERAL_STRING("MozEnteredDomFullscreen"),
-                                true,
-                                true);
-          e->PostDOMEvent();
+          nsRefPtr<AsyncEventDispatcher> asyncDispatcher =
+            new AsyncEventDispatcher(doc,
+                  NS_LITERAL_STRING("MozEnteredDomFullscreen"),
+                  true,
+                  true);
+          asyncDispatcher->PostDOMEvent();
         }
       }
 
@@ -10756,12 +10799,12 @@ LogFullScreenDenied(bool aLogFailure, const char* aMessage, nsIDocument* aDoc)
   if (!aLogFailure) {
     return;
   }
-  nsRefPtr<nsAsyncDOMEvent> e =
-    new nsAsyncDOMEvent(aDoc,
-                        NS_LITERAL_STRING("mozfullscreenerror"),
-                        true,
-                        false);
-  e->PostDOMEvent();
+  nsRefPtr<AsyncEventDispatcher> asyncDispatcher =
+    new AsyncEventDispatcher(aDoc,
+                             NS_LITERAL_STRING("mozfullscreenerror"),
+                             true,
+                             false);
+  asyncDispatcher->PostDOMEvent();
   nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
                                   NS_LITERAL_CSTRING("DOM"), aDoc,
                                   nsContentUtils::eDOM_PROPERTIES,
@@ -10814,7 +10857,7 @@ nsDocument::CleanupFullscreenState()
     Element* top = FullScreenStackTop();
     NS_ASSERTION(top, "Should have a top when full-screen stack isn't empty");
     if (top) {
-      nsEventStateManager::SetFullScreenState(top, false);
+      EventStateManager::SetFullScreenState(top, false);
     }
     mFullScreenStack.Clear();
   }
@@ -10835,10 +10878,11 @@ nsDocument::FullScreenStackPush(Element* aElement)
     // We're pushing a new element onto the full-screen stack, so we must
     // remove the ancestor and full-screen styles from the former top of the
     // stack.
-    nsEventStateManager::SetFullScreenState(top, false);
+    EventStateManager::SetFullScreenState(top, false);
   }
-  nsEventStateManager::SetFullScreenState(aElement, true);
-  mFullScreenStack.AppendElement(do_GetWeakReference(aElement));
+  EventStateManager::SetFullScreenState(aElement, true);
+  nsWeakPtr weakElement = do_GetWeakReference(aElement);
+  mFullScreenStack.AppendElement(weakElement);
   NS_ASSERTION(GetFullScreenElement() == aElement, "Should match");
   return true;
 }
@@ -10852,7 +10896,7 @@ nsDocument::FullScreenStackPop()
 
   // Remove styles from existing top element.
   Element* top = FullScreenStackTop();
-  nsEventStateManager::SetFullScreenState(top, false);
+  EventStateManager::SetFullScreenState(top, false);
 
   // Remove top element. Note the remaining top element in the stack
   // will not have full-screen style bits set, so we will need to restore
@@ -10873,7 +10917,7 @@ nsDocument::FullScreenStackPop()
     } else {
       // The top element of the stack is now an in-doc element. Apply the
       // full-screen styles and return.
-      nsEventStateManager::SetFullScreenState(element, true);
+      EventStateManager::SetFullScreenState(element, true);
       break;
     }
   }
@@ -11050,7 +11094,7 @@ nsDocument::RequestFullScreen(Element* aElement,
   // If a document is already in fullscreen, then unlock the mouse pointer
   // before setting a new document to fullscreen
   nsCOMPtr<Element> pointerLockedElement =
-    do_QueryReferent(nsEventStateManager::sPointerLockedElement);
+    do_QueryReferent(EventStateManager::sPointerLockedElement);
   if (pointerLockedElement) {
     UnlockPointer();
   }
@@ -11116,12 +11160,12 @@ nsDocument::RequestFullScreen(Element* aElement,
   // session.
   if (!mIsApprovedForFullscreen ||
       !nsContentUtils::HaveEqualPrincipals(previousFullscreenDoc, this)) {
-    nsRefPtr<nsAsyncDOMEvent> e =
-      new nsAsyncDOMEvent(this,
-                          NS_LITERAL_STRING("MozEnteredDomFullscreen"),
-                          true,
-                          true);
-    e->PostDOMEvent();
+    nsRefPtr<AsyncEventDispatcher> asyncDispatcher =
+      new AsyncEventDispatcher(this,
+                               NS_LITERAL_STRING("MozEnteredDomFullscreen"),
+                               true,
+                               true);
+    asyncDispatcher->PostDOMEvent();
   }
 
 #ifdef DEBUG
@@ -11273,12 +11317,12 @@ DispatchPointerLockChange(nsIDocument* aTarget)
     return;
   }
 
-  nsRefPtr<nsAsyncDOMEvent> e =
-    new nsAsyncDOMEvent(aTarget,
-                        NS_LITERAL_STRING("mozpointerlockchange"),
-                        true,
-                        false);
-  e->PostDOMEvent();
+  nsRefPtr<AsyncEventDispatcher> asyncDispatcher =
+    new AsyncEventDispatcher(aTarget,
+                             NS_LITERAL_STRING("mozpointerlockchange"),
+                             true,
+                             false);
+  asyncDispatcher->PostDOMEvent();
 }
 
 static void
@@ -11288,12 +11332,12 @@ DispatchPointerLockError(nsIDocument* aTarget)
     return;
   }
 
-  nsRefPtr<nsAsyncDOMEvent> e =
-    new nsAsyncDOMEvent(aTarget,
-                        NS_LITERAL_STRING("mozpointerlockerror"),
-                        true,
-                        false);
-  e->PostDOMEvent();
+  nsRefPtr<AsyncEventDispatcher> asyncDispatcher =
+    new AsyncEventDispatcher(aTarget,
+                             NS_LITERAL_STRING("mozpointerlockerror"),
+                             true,
+                             false);
+  asyncDispatcher->PostDOMEvent();
 }
 
 mozilla::StaticRefPtr<nsPointerLockPermissionRequest> gPendingPointerLockRequest;
@@ -11444,7 +11488,7 @@ nsPointerLockPermissionRequest::Allow(JS::HandleValue aChoices)
   Handled();
 
   nsCOMPtr<Element> pointerLockedElement =
-    do_QueryReferent(nsEventStateManager::sPointerLockedElement);
+    do_QueryReferent(EventStateManager::sPointerLockedElement);
   if (e == pointerLockedElement) {
     DispatchPointerLockChange(d);
     return NS_OK;
@@ -11463,10 +11507,10 @@ nsPointerLockPermissionRequest::Allow(JS::HandleValue aChoices)
 
   d->mCancelledPointerLockRequests = 0;
   e->SetPointerLock();
-  nsEventStateManager::sPointerLockedElement = do_GetWeakReference(e);
-  nsEventStateManager::sPointerLockedDoc = do_GetWeakReference(doc);
-  NS_ASSERTION(nsEventStateManager::sPointerLockedElement &&
-               nsEventStateManager::sPointerLockedDoc,
+  EventStateManager::sPointerLockedElement = do_GetWeakReference(e);
+  EventStateManager::sPointerLockedDoc = do_GetWeakReference(doc);
+  NS_ASSERTION(EventStateManager::sPointerLockedElement &&
+               EventStateManager::sPointerLockedDoc,
                "aElement and this should support weak references!");
 
   DispatchPointerLockChange(d);
@@ -11519,7 +11563,7 @@ nsDocument::RequestPointerLock(Element* aElement)
     "Must pass non-null element to nsDocument::RequestPointerLock");
 
   nsCOMPtr<Element> pointerLockedElement =
-    do_QueryReferent(nsEventStateManager::sPointerLockedElement);
+    do_QueryReferent(EventStateManager::sPointerLockedElement);
   if (aElement == pointerLockedElement) {
     DispatchPointerLockChange(this);
     return;
@@ -11530,7 +11574,7 @@ nsDocument::RequestPointerLock(Element* aElement)
     return;
   }
 
-  bool userInputOrChromeCaller = nsEventStateManager::IsHandlingUserInput() ||
+  bool userInputOrChromeCaller = EventStateManager::IsHandlingUserInput() ||
                                  nsContentUtils::IsCallerChrome();
 
   gPendingPointerLockRequest =
@@ -11650,7 +11694,7 @@ nsDocument::SetPointerLock(Element* aElement, int aCursorStyle)
   }
 
   // Hide the cursor and set pointer lock for future mouse events
-  nsRefPtr<nsEventStateManager> esm = presContext->EventStateManager();
+  nsRefPtr<EventStateManager> esm = presContext->EventStateManager();
   esm->SetCursor(aCursorStyle, nullptr, false,
                  0.0f, 0.0f, widget, true);
   esm->SetPointerLock(widget, aElement);
@@ -11661,12 +11705,12 @@ nsDocument::SetPointerLock(Element* aElement, int aCursorStyle)
 void
 nsDocument::UnlockPointer(nsIDocument* aDoc)
 {
-  if (!nsEventStateManager::sIsPointerLocked) {
+  if (!EventStateManager::sIsPointerLocked) {
     return;
   }
 
   nsCOMPtr<nsIDocument> pointerLockedDoc =
-    do_QueryReferent(nsEventStateManager::sPointerLockedDoc);
+    do_QueryReferent(EventStateManager::sPointerLockedDoc);
   if (!pointerLockedDoc || (aDoc && aDoc != pointerLockedDoc)) {
     return;
   }
@@ -11676,13 +11720,13 @@ nsDocument::UnlockPointer(nsIDocument* aDoc)
   }
 
   nsCOMPtr<Element> pointerLockedElement =
-    do_QueryReferent(nsEventStateManager::sPointerLockedElement);
+    do_QueryReferent(EventStateManager::sPointerLockedElement);
   if (pointerLockedElement) {
     pointerLockedElement->ClearPointerLock();
   }
 
-  nsEventStateManager::sPointerLockedElement = nullptr;
-  nsEventStateManager::sPointerLockedDoc = nullptr;
+  EventStateManager::sPointerLockedElement = nullptr;
+  EventStateManager::sPointerLockedDoc = nullptr;
   static_cast<nsDocument*>(pointerLockedDoc.get())->mAllowRelocking = !!aDoc;
   gPendingPointerLockRequest = nullptr;
   DispatchPointerLockChange(pointerLockedDoc);
@@ -11714,14 +11758,14 @@ Element*
 nsIDocument::GetMozPointerLockElement()
 {
   nsCOMPtr<Element> pointerLockedElement =
-    do_QueryReferent(nsEventStateManager::sPointerLockedElement);
+    do_QueryReferent(EventStateManager::sPointerLockedElement);
   if (!pointerLockedElement) {
     return nullptr;
   }
 
   // Make sure pointer locked element is in the same document.
   nsCOMPtr<nsIDocument> pointerLockedDoc =
-    do_QueryReferent(nsEventStateManager::sPointerLockedDoc);
+    do_QueryReferent(EventStateManager::sPointerLockedDoc);
   if (pointerLockedDoc != this) {
     return nullptr;
   }
@@ -11834,7 +11878,7 @@ nsIDocument::DocAddSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const
       mExtraPropertyTables[i]->SizeOfExcludingThis(aWindowSizes->mMallocSizeOf);
   }
 
-  if (nsEventListenerManager* elm = GetExistingListenerManager()) {
+  if (EventListenerManager* elm = GetExistingListenerManager()) {
     aWindowSizes->mDOMEventListenersCount += elm->ListenerCount();
   }
 
@@ -11900,7 +11944,7 @@ nsDocument::DocAddSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const
 
     *p += nodeSize;
 
-    if (nsEventListenerManager* elm = node->GetExistingListenerManager()) {
+    if (EventListenerManager* elm = node->GetExistingListenerManager()) {
       aWindowSizes->mDOMEventListenersCount += elm->ListenerCount();
     }
   }
@@ -12203,3 +12247,4 @@ nsAutoSyncOperation::~nsAutoSyncOperation()
   }
   nsContentUtils::SetMicroTaskLevel(mMicroTaskLevel);
 }
+

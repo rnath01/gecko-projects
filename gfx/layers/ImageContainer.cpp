@@ -132,11 +132,7 @@ ImageContainer::ImageContainer(int flag)
   if (flag == ENABLE_ASYNC && ImageBridgeChild::IsCreated()) {
     // the refcount of this ImageClient is 1. we don't use a RefPtr here because the refcount
     // of this class must be done on the ImageBridge thread.
-    if (gfxPlatform::GetPlatform()->UseDeprecatedTextures()) {
-      mImageClient = ImageBridgeChild::GetSingleton()->CreateImageClient(BUFFER_IMAGE_BUFFERED).drop();
-    } else {
-      mImageClient = ImageBridgeChild::GetSingleton()->CreateImageClient(BUFFER_IMAGE_SINGLE).drop();
-    }
+    mImageClient = ImageBridgeChild::GetSingleton()->CreateImageClient(BUFFER_IMAGE_SINGLE).drop();
     MOZ_ASSERT(mImageClient);
   }
 }
@@ -279,57 +275,6 @@ ImageContainer::LockCurrentImage()
 
   nsRefPtr<Image> retval = mActiveImage;
   return retval.forget();
-}
-
-already_AddRefed<gfxASurface>
-ImageContainer::DeprecatedLockCurrentAsSurface(gfx::IntSize *aSize, Image** aCurrentImage)
-{
-  ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-
-  if (mRemoteData) {
-    NS_ASSERTION(mRemoteDataMutex, "Should have remote data mutex when having remote data!");
-    mRemoteDataMutex->Lock();
-
-    EnsureActiveImage();
-
-    if (aCurrentImage) {
-      NS_IF_ADDREF(mActiveImage);
-      *aCurrentImage = mActiveImage.get();
-    }
-
-    if (!mActiveImage) {
-      return nullptr;
-    } 
-
-    if (mActiveImage->GetFormat() == ImageFormat::REMOTE_IMAGE_BITMAP) {
-      nsRefPtr<gfxImageSurface> newSurf =
-        new gfxImageSurface(mRemoteData->mBitmap.mData,
-                            ThebesIntSize(mRemoteData->mSize),
-                            mRemoteData->mBitmap.mStride,
-                            mRemoteData->mFormat == RemoteImageData::BGRX32 ?
-                                                   gfxImageFormat::ARGB32 :
-                                                   gfxImageFormat::RGB24);
-
-      *aSize = newSurf->GetSize().ToIntSize();
-    
-      return newSurf.forget();
-    }
-
-    *aSize = mActiveImage->GetSize();
-    return mActiveImage->DeprecatedGetAsSurface();
-  }
-
-  if (aCurrentImage) {
-    NS_IF_ADDREF(mActiveImage);
-    *aCurrentImage = mActiveImage.get();
-  }
-
-  if (!mActiveImage) {
-    return nullptr;
-  }
-
-  *aSize = mActiveImage->GetSize();
-  return mActiveImage->DeprecatedGetAsSurface();
 }
 
 TemporaryRef<gfx::SourceSurface>
@@ -521,6 +466,26 @@ PlanarYCbCrImage::~PlanarYCbCrImage()
   if (mBuffer) {
     mRecycleBin->RecycleBuffer(mBuffer.forget(), mBufferSize);
   }
+}
+
+size_t
+PlanarYCbCrImage::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
+{
+  // Ignoring:
+  // - mData - just wraps mBuffer
+  // - Surfaces should be reported under gfx-surfaces-*:
+  //   - mDeprecatedSurface
+  //   - mSourceSurface
+  // - Base class:
+  //   - mImplData is not used
+  // Not owned:
+  // - mRecycleBin
+  size_t size = mBuffer.SizeOfExcludingThis(aMallocSizeOf);
+
+  // Could add in the future:
+  // - mBackendData (from base class)
+
+  return size;
 }
 
 uint8_t* 
@@ -722,8 +687,11 @@ CairoImage::GetTextureClient(CompositableClient *aClient)
   RefPtr<SourceSurface> surface = GetAsSourceSurface();
   MOZ_ASSERT(surface);
 
+  // gfx::BackendType::NONE means default to content backend
   textureClient = aClient->CreateTextureClientForDrawing(surface->GetFormat(),
-                                                         TEXTURE_FLAGS_DEFAULT);
+                                                         TEXTURE_FLAGS_DEFAULT,
+                                                         gfx::BackendType::NONE,
+                                                         surface->GetSize());
   MOZ_ASSERT(textureClient->AsTextureClientDrawTarget());
   if (!textureClient->AsTextureClientDrawTarget()->AllocateForSurface(surface->GetSize()) ||
       !textureClient->Lock(OPEN_WRITE_ONLY)) {

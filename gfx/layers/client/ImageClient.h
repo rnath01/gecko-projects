@@ -67,7 +67,8 @@ public:
   virtual void FlushAllImages(bool aExceptFront) {}
 
 protected:
-  ImageClient(CompositableForwarder* aFwd, CompositableType aType);
+  ImageClient(CompositableForwarder* aFwd, TextureFlags aFlags,
+              CompositableType aType);
 
   CompositableType mType;
   int32_t mLastPaintedImageSerial;
@@ -90,10 +91,6 @@ public:
 
   virtual bool AddTextureClient(TextureClient* aTexture) MOZ_OVERRIDE;
 
-  virtual TemporaryRef<BufferTextureClient>
-  CreateBufferTextureClient(gfx::SurfaceFormat aFormat,
-                            TextureFlags aFlags = TEXTURE_FLAGS_DEFAULT) MOZ_OVERRIDE;
-
   virtual TextureInfo GetTextureInfo() const MOZ_OVERRIDE;
 
   virtual already_AddRefed<Image> CreateImage(ImageFormat aFormat) MOZ_OVERRIDE;
@@ -105,9 +102,6 @@ protected:
 
 protected:
   RefPtr<TextureClient> mFrontBuffer;
-  // Some layers may want to enforce some flags to all their textures
-  // (like disallowing tiling)
-  TextureFlags mTextureFlags;
 };
 
 /**
@@ -128,50 +122,6 @@ public:
 
 protected:
   RefPtr<TextureClient> mBackBuffer;
-};
-
-/**
- * An image client which uses a single texture client, may be single or double
- * buffered. (As opposed to using two texture clients for buffering, as in
- * ContentClientDoubleBuffered, or using multiple clients for YCbCr or tiled
- * images).
- *
- * XXX - this is deprecated, use ImageClientSingle
- */
-class DeprecatedImageClientSingle : public ImageClient
-{
-public:
-  DeprecatedImageClientSingle(CompositableForwarder* aFwd,
-                              TextureFlags aFlags,
-                              CompositableType aType);
-
-  virtual bool UpdateImage(ImageContainer* aContainer, uint32_t aContentFlags);
-
-  /**
-   * Creates a texture client of the requested type.
-   * Returns true if the texture client was created succesfully,
-   * false otherwise.
-   */
-  bool EnsureDeprecatedTextureClient(DeprecatedTextureClientType aType);
-
-  virtual void Updated();
-
-  virtual void SetDescriptorFromReply(TextureIdentifier aTextureId,
-                                      const SurfaceDescriptor& aDescriptor) MOZ_OVERRIDE
-  {
-    mDeprecatedTextureClient->SetDescriptorFromReply(aDescriptor);
-  }
-
-  virtual TextureInfo GetTextureInfo() const MOZ_OVERRIDE
-  {
-    return mTextureInfo;
-  }
-
-  virtual already_AddRefed<Image> CreateImage(ImageFormat aFormat) MOZ_OVERRIDE;
-
-private:
-  RefPtr<DeprecatedTextureClient> mDeprecatedTextureClient;
-  TextureInfo mTextureInfo;
 };
 
 /**

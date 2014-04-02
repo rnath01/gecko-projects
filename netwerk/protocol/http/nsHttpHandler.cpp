@@ -45,6 +45,8 @@
 #include "nsIStreamConverterService.h"
 #include "nsITimer.h"
 #include "nsCRT.h"
+#include "SpdyZlibReporter.h"
+#include "nsIMemoryReporter.h"
 
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/Telemetry.h"
@@ -209,6 +211,8 @@ nsHttpHandler::nsHttpHandler()
 
     LOG(("Creating nsHttpHandler [this=%p].\n", this));
 
+    RegisterStrongMemoryReporter(new SpdyZlibReporter());
+
     MOZ_ASSERT(!gHttpHandler, "HTTP handler already created!");
     gHttpHandler = this;
 }
@@ -230,13 +234,6 @@ nsHttpHandler::~nsHttpHandler()
     if (mPipelineTestTimer) {
         mPipelineTestTimer->Cancel();
         mPipelineTestTimer = nullptr;
-    }
-
-    if (!mDoNotTrackEnabled) {
-        Telemetry::Accumulate(Telemetry::DNT_USAGE, DONOTTRACK_VALUE_UNSET);
-    }
-    else {
-        Telemetry::Accumulate(Telemetry::DNT_USAGE, mDoNotTrackValue);
     }
 
     gHttpHandler = nullptr;
@@ -1811,6 +1808,13 @@ nsHttpHandler::Observe(nsISupports *subject,
         // need to reset the session start time since cache validation may
         // depend on this value.
         mSessionStartTime = NowInSeconds();
+
+        if (!mDoNotTrackEnabled) {
+            Telemetry::Accumulate(Telemetry::DNT_USAGE, DONOTTRACK_VALUE_UNSET);
+        }
+        else {
+            Telemetry::Accumulate(Telemetry::DNT_USAGE, mDoNotTrackValue);
+        }
     }
     else if (strcmp(topic, "profile-change-net-restore") == 0) {
         // initialize connection manager
@@ -1924,10 +1928,8 @@ nsHttpHandler::TickleWifi(nsIInterfaceRequestor *cb)
     if (!networkNavigator)
         return;
 
-    nsCOMPtr<nsISupports> mozConnection;
-    networkNavigator->GetMozConnection(getter_AddRefs(mozConnection));
-    nsCOMPtr<nsINetworkProperties> networkProperties =
-        do_QueryInterface(mozConnection);
+    nsCOMPtr<nsINetworkProperties> networkProperties;
+    networkNavigator->GetProperties(getter_AddRefs(networkProperties));
     if (!networkProperties)
         return;
 

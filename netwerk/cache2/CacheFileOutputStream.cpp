@@ -16,7 +16,7 @@ namespace mozilla {
 namespace net {
 
 NS_IMPL_ADDREF(CacheFileOutputStream)
-NS_IMETHODIMP_(nsrefcnt)
+NS_IMETHODIMP_(MozExternalRefCountType)
 CacheFileOutputStream::Release()
 {
   NS_PRECONDITION(0 != mRefCnt, "dup release");
@@ -313,7 +313,7 @@ CacheFileOutputStream::ReleaseChunk()
   LOG(("CacheFileOutputStream::ReleaseChunk() [this=%p, idx=%d]",
        this, mChunk->Index()));
 
-  mFile->ReleaseOutsideLock(mChunk.forget().get());
+  mFile->ReleaseOutsideLock(mChunk.forget().take());
 }
 
 void

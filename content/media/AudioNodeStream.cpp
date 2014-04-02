@@ -149,12 +149,12 @@ AudioNodeStream::SetThreeDPointParameter(uint32_t aIndex, const ThreeDPoint& aVa
 }
 
 void
-AudioNodeStream::SetBuffer(already_AddRefed<ThreadSharedFloatArrayBufferList> aBuffer)
+AudioNodeStream::SetBuffer(already_AddRefed<ThreadSharedFloatArrayBufferList>&& aBuffer)
 {
   class Message : public ControlMessage {
   public:
     Message(AudioNodeStream* aStream,
-            already_AddRefed<ThreadSharedFloatArrayBufferList> aBuffer)
+            already_AddRefed<ThreadSharedFloatArrayBufferList>& aBuffer)
       : ControlMessage(aStream), mBuffer(aBuffer) {}
     virtual void Run()
     {
@@ -239,7 +239,7 @@ AudioNodeStream::SetChannelMixingParametersImpl(uint32_t aNumberOfChannels,
 }
 
 uint32_t
-AudioNodeStream::ComputeFinalOuputChannelCount(uint32_t aInputChannelCount)
+AudioNodeStream::ComputedNumberOfChannels(uint32_t aInputChannelCount)
 {
   switch (mChannelCountMode) {
   case ChannelCountMode::Explicit:
@@ -298,7 +298,7 @@ AudioNodeStream::ObtainInputBlock(AudioChunk& aTmpChunk, uint32_t aPortIndex)
       GetAudioChannelsSuperset(outputChannelCount, chunk->mChannelData.Length());
   }
 
-  outputChannelCount = ComputeFinalOuputChannelCount(outputChannelCount);
+  outputChannelCount = ComputedNumberOfChannels(outputChannelCount);
 
   uint32_t inputChunkCount = inputChunks.Length();
   if (inputChunkCount == 0 ||

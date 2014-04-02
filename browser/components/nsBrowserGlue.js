@@ -12,7 +12,6 @@ const XULNS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource:///modules/SignInToWebsite.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "AboutHome",
                                   "resource:///modules/AboutHome.jsm");
@@ -22,6 +21,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
 
 XPCOMUtils.defineLazyModuleGetter(this, "ContentClick",
                                   "resource:///modules/ContentClick.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "DirectoryLinksProvider",
+                                  "resource://gre/modules/DirectoryLinksProvider.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
@@ -38,8 +40,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "BookmarkHTMLUtils",
 XPCOMUtils.defineLazyModuleGetter(this, "BookmarkJSONUtils",
                                   "resource://gre/modules/BookmarkJSONUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "webappsUI",
-                                  "resource:///modules/webappsUI.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "WebappManager",
+                                  "resource:///modules/WebappManager.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PageThumbs",
                                   "resource://gre/modules/PageThumbs.jsm");
@@ -87,6 +89,11 @@ XPCOMUtils.defineLazyModuleGetter(this, "BrowserUITelemetry",
 
 XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
                                   "resource://gre/modules/AsyncShutdown.jsm");
+
+#ifdef NIGHTLY_BUILD
+XPCOMUtils.defineLazyModuleGetter(this, "SignInToWebsiteUX",
+                                  "resource:///modules/SignInToWebsite.jsm");
+#endif
 
 const PREF_PLUGINS_NOTIFYUSER = "plugins.update.notifyUser";
 const PREF_PLUGINS_UPDATEURL  = "plugins.update.url";
@@ -468,11 +475,17 @@ BrowserGlue.prototype = {
 
     this._syncSearchEngines();
 
-    webappsUI.init();
+    WebappManager.init();
     PageThumbs.init();
     NewTabUtils.init();
+    DirectoryLinksProvider.init();
+    NewTabUtils.links.addProvider(DirectoryLinksProvider);
     BrowserNewTabPreloader.init();
-    SignInToWebsiteUX.init();
+#ifdef NIGHTLY_BUILD
+    if (Services.prefs.getBoolPref("dom.identity.enabled")) {
+      SignInToWebsiteUX.init();
+    }
+#endif
     PdfJs.init();
 #ifdef NIGHTLY_BUILD
     ShumwayUtils.init();
@@ -626,7 +639,11 @@ BrowserGlue.prototype = {
     // Offer to reset a user's profile if it hasn't been used for 60 days.
     const OFFER_PROFILE_RESET_INTERVAL_MS = 60 * 24 * 60 * 60 * 1000;
     let lastUse = Services.appinfo.replacedLockTime;
-    if (lastUse &&
+    let disableResetPrompt = false;
+    try {
+      disableResetPrompt = Services.prefs.getBoolPref("browser.disableResetPrompt");
+    } catch(e) {}
+    if (!disableResetPrompt && lastUse &&
         Date.now() - lastUse >= OFFER_PROFILE_RESET_INTERVAL_MS) {
       this._resetUnusedProfileNotification();
     }
@@ -654,8 +671,12 @@ BrowserGlue.prototype = {
 
     BrowserNewTabPreloader.uninit();
     CustomizationTabPreloader.uninit();
-    webappsUI.uninit();
-    SignInToWebsiteUX.uninit();
+    WebappManager.uninit();
+#ifdef NIGHTLY_BUILD
+    if (Services.prefs.getBoolPref("dom.identity.enabled")) {
+      SignInToWebsiteUX.uninit();
+    }
+#endif
     webrtcUI.uninit();
   },
 
@@ -1059,6 +1080,19 @@ BrowserGlue.prototype = {
         importBookmarks = true;
     } catch(ex) {}
 
+    // Support legacy bookmarks.html format for apps that depend on that format.
+    let autoExportHTML = false;
+    try {
+      autoExportHTML = Services.prefs.getBoolPref("browser.bookmarks.autoExportHTML");
+    } catch (ex) {} // Do not export.
+    if (autoExportHTML) {
+      // Sqlite.jsm and Places shutdown happen at profile-before-change, thus,
+      // to be on the safe side, this should run earlier.
+      AsyncShutdown.profileChangeTeardown.addBlocker(
+        "Places: export bookmarks.html",
+        () => BookmarkHTMLUtils.exportToFile(BookmarkHTMLUtils.defaultPath));
+    }
+
     Task.spawn(function() {
       // Check if Safe Mode or the user has required to restore bookmarks from
       // default profile's bookmarks.html
@@ -1116,10 +1150,6 @@ BrowserGlue.prototype = {
         // An import operation is about to run.
         // Don't try to recreate smart bookmarks if autoExportHTML is true or
         // smart bookmarks are disabled.
-        let autoExportHTML = false;
-        try {
-          autoExportHTML = Services.prefs.getBoolPref("browser.bookmarks.autoExportHTML");
-        } catch(ex) {}
         let smartBookmarksVersion = 0;
         try {
           smartBookmarksVersion = Services.prefs.getIntPref("browser.places.smartBookmarksVersion");
@@ -1222,19 +1252,6 @@ BrowserGlue.prototype = {
       this._idleService.removeIdleObserver(this, this._bookmarksBackupIdleTime);
       delete this._bookmarksBackupIdleTime;
     }
-
-    // Support legacy bookmarks.html format for apps that depend on that format.
-    try {
-      if (Services.prefs.getBoolPref("browser.bookmarks.autoExportHTML")) {
-        // places-shutdown happens at profile-change-teardown, so here we
-        // can safely add a profile-before-change blocker.
-        AsyncShutdown.profileBeforeChange.addBlocker(
-          "Places: bookmarks.html",
-          () => BookmarkHTMLUtils.exportToFile(BookmarkHTMLUtils.defaultPath)
-                                 .then(null, Cu.reportError)
-        );
-      }
-    } catch (ex) {} // Do not export.
   },
 
   /**
@@ -1292,7 +1309,7 @@ BrowserGlue.prototype = {
   },
 
   _migrateUI: function BG__migrateUI() {
-    const UI_VERSION = 20;
+    const UI_VERSION = 22;
     const BROWSER_DOCURL = "chrome://browser/content/browser.xul#";
     let currentUIVersion = 0;
     try {
@@ -1564,6 +1581,22 @@ BrowserGlue.prototype = {
       }
     }
 
+    if (currentUIVersion < 21) {
+      // Make sure the 'toolbarbutton-1' class will always be present from here
+      // on out.
+      let button = this._rdf.GetResource(BROWSER_DOCURL + "bookmarks-menu-button");
+      let classResource = this._rdf.GetResource("class");
+      if (this._getPersist(button, classResource)) {
+        this._setPersist(button, classResource);
+      }
+    }
+
+    if (currentUIVersion < 22) {
+      // Reset the Sync promobox count to promote the new FxAccount-based Sync.
+      Services.prefs.clearUserPref("browser.syncPromoViewsLeft");
+      Services.prefs.clearUserPref("browser.syncPromoViewsLeftMap");
+    }
+
     if (this._dirty)
       this._dataSource.QueryInterface(Ci.nsIRDFRemoteDataSource).Flush();
 
@@ -1623,7 +1656,7 @@ BrowserGlue.prototype = {
     // be set to the version it has been added in, we will compare its value
     // to users' smartBookmarksVersion and add new smart bookmarks without
     // recreating old deleted ones.
-    const SMART_BOOKMARKS_VERSION = 6;
+    const SMART_BOOKMARKS_VERSION = 7;
     const SMART_BOOKMARKS_ANNO = "Places/SmartBookmark";
     const SMART_BOOKMARKS_PREF = "browser.places.smartBookmarksVersion";
 
@@ -1655,7 +1688,7 @@ BrowserGlue.prototype = {
                                 Ci.nsINavHistoryQueryOptions.SORT_BY_VISITCOUNT_DESCENDING +
                                 "&maxResults=" + MAX_RESULTS),
             parent: PlacesUtils.toolbarFolderId,
-            position: toolbarIndex++,
+            get position() { return toolbarIndex++; },
             newInVersion: 1
           },
           RecentlyBookmarked: {
@@ -1670,7 +1703,7 @@ BrowserGlue.prototype = {
                                 "&maxResults=" + MAX_RESULTS +
                                 "&excludeQueries=1"),
             parent: PlacesUtils.bookmarksMenuFolderId,
-            position: menuIndex++,
+            get position() { return menuIndex++; },
             newInVersion: 1
           },
           RecentTags: {
@@ -1682,25 +1715,31 @@ BrowserGlue.prototype = {
                                 Ci.nsINavHistoryQueryOptions.SORT_BY_LASTMODIFIED_DESCENDING +
                                 "&maxResults=" + MAX_RESULTS),
             parent: PlacesUtils.bookmarksMenuFolderId,
-            position: menuIndex++,
+            get position() { return menuIndex++; },
             newInVersion: 1
           },
         };
 
         if (Services.metro && Services.metro.supported) {
           smartBookmarks.Windows8Touch = {
-            title: bundle.GetStringFromName("windows8TouchTitle"),
-            uri: NetUtil.newURI("place:folder=" +
-                                PlacesUtils.annotations.getItemsWithAnnotation('metro/bookmarksRoot', {})[0] +
-                                "&queryType=" +
-                                Ci.nsINavHistoryQueryOptions.QUERY_TYPE_BOOKMARKS +
-                                "&sort=" +
-                                Ci.nsINavHistoryQueryOptions.SORT_BY_DATEADDED_DESCENDING +
-                                "&maxResults=" + MAX_RESULTS +
-                                "&excludeQueries=1"),
+            title: PlacesUtils.getString("windows8TouchTitle"),
+            get uri() {
+              let metroBookmarksRoot = PlacesUtils.annotations.getItemsWithAnnotation('metro/bookmarksRoot', {});
+              if (metroBookmarksRoot.length > 0) {
+                return NetUtil.newURI("place:folder=" +
+                                      metroBookmarksRoot[0] +
+                                      "&queryType=" +
+                                      Ci.nsINavHistoryQueryOptions.QUERY_TYPE_BOOKMARKS +
+                                      "&sort=" +
+                                      Ci.nsINavHistoryQueryOptions.SORT_BY_DATEADDED_DESCENDING +
+                                      "&maxResults=" + MAX_RESULTS +
+                                      "&excludeQueries=1")
+              }
+              return null;
+            },
             parent: PlacesUtils.bookmarksMenuFolderId,
-            position: menuIndex++,
-            newInVersion: 6
+            get position() { return menuIndex++; },
+            newInVersion: 7
           };
         }
 
@@ -1712,9 +1751,13 @@ BrowserGlue.prototype = {
           let queryId = PlacesUtils.annotations.getItemAnnotation(itemId, SMART_BOOKMARKS_ANNO);
           if (queryId in smartBookmarks) {
             let smartBookmark = smartBookmarks[queryId];
+            if (!smartBookmark.uri) {
+              PlacesUtils.bookmarks.removeItem(itemId);
+              return;
+            }
             smartBookmark.itemId = itemId;
             smartBookmark.parent = PlacesUtils.bookmarks.getFolderIdForItem(itemId);
-            smartBookmark.position = PlacesUtils.bookmarks.getItemIndex(itemId);
+            smartBookmark.updatedPosition = PlacesUtils.bookmarks.getItemIndex(itemId);
           }
           else {
             // We don't remove old Smart Bookmarks because user could still
@@ -1732,7 +1775,7 @@ BrowserGlue.prototype = {
           // bookmark if it has been removed.
           if (smartBookmarksCurrentVersion > 0 &&
               smartBookmark.newInVersion <= smartBookmarksCurrentVersion &&
-              !smartBookmark.itemId)
+              !smartBookmark.itemId || !smartBookmark.uri)
             continue;
 
           // Remove old version of the smart bookmark if it exists, since it
@@ -1745,7 +1788,7 @@ BrowserGlue.prototype = {
           smartBookmark.itemId =
             PlacesUtils.bookmarks.insertBookmark(smartBookmark.parent,
                                                  smartBookmark.uri,
-                                                 smartBookmark.position,
+                                                 smartBookmark.updatedPosition || smartBookmark.position,
                                                  smartBookmark.title);
           PlacesUtils.annotations.setItemAnnotation(smartBookmark.itemId,
                                                     SMART_BOOKMARKS_ANNO,

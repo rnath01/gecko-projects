@@ -26,7 +26,6 @@
 #include "gc/Marking.h"
 #include "gc/Rooting.h"
 #include "js/HashTable.h"
-#include "js/MemoryMetrics.h"
 #include "js/RootingAPI.h"
 
 #ifdef _MSC_VER
@@ -339,7 +338,7 @@ class AutoPropDescRooter : private JS::CustomAutoRooter
   public:
     explicit AutoPropDescRooter(JSContext *cx
                                 MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : CustomAutoRooter(cx), skip(cx, &propDesc)
+      : CustomAutoRooter(cx)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     }
@@ -389,7 +388,6 @@ class AutoPropDescRooter : private JS::CustomAutoRooter
     virtual void trace(JSTracer *trc);
 
     PropDesc propDesc;
-    SkipRoot skip;
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
@@ -985,17 +983,12 @@ class Shape : public gc::BarrieredCell<Shape>
     ShapeTable &table() const { return base()->table(); }
 
     void addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf,
-                                JS::ClassInfo *info) const
-    {
-        if (hasTable()) {
-            if (inDictionary())
-                info->shapesMallocHeapDictTables += table().sizeOfIncludingThis(mallocSizeOf);
-            else
-                info->shapesMallocHeapTreeTables += table().sizeOfIncludingThis(mallocSizeOf);
-        }
+                                size_t *propTableSize, size_t *kidsSize) const {
+        if (hasTable())
+            *propTableSize += table().sizeOfIncludingThis(mallocSizeOf);
 
         if (!inDictionary() && kids.isHash())
-            info->shapesMallocHeapTreeKids += kids.toHash()->sizeOfIncludingThis(mallocSizeOf);
+            *kidsSize += kids.toHash()->sizeOfIncludingThis(mallocSizeOf);
     }
 
     bool isNative() const {
@@ -1327,7 +1320,6 @@ class AutoRooterGetterSetter
         uint8_t attrs;
         PropertyOp *pgetter;
         StrictPropertyOp *psetter;
-        SkipRoot getterRoot, setterRoot;
     };
 
   public:

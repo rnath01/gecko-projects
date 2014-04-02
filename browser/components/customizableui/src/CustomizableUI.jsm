@@ -112,6 +112,7 @@ let gRestoring = false;
 let gDirty = false;
 let gInBatchStack = 0;
 let gResetting = false;
+let gUndoResetting = false;
 
 /**
  * gBuildAreas maps area IDs to actual area nodes within browser windows.
@@ -522,6 +523,8 @@ let CustomizableUIInternal = {
         this.insertWidgetBefore(node, currentNode, container, aArea);
         if (gResetting) {
           this.notifyListeners("onWidgetReset", node, container);
+        } else if (gUndoResetting) {
+          this.notifyListeners("onWidgetUndoMove", node, container);
         }
       }
 
@@ -807,6 +810,8 @@ let CustomizableUIInternal = {
 
       aWindow.addEventListener("unload", this);
       aWindow.addEventListener("command", this, true);
+
+      this.notifyListeners("onWindowOpened", aWindow);
     }
   },
 
@@ -847,6 +852,8 @@ let CustomizableUIInternal = {
         areaMap.delete(toDelete);
       }
     }
+
+    this.notifyListeners("onWindowClosed", aWindow);
   },
 
   setLocationAttributes: function(aNode, aArea) {
@@ -881,15 +888,14 @@ let CustomizableUIInternal = {
       return;
     }
 
-    let nextNodeId = placements[aPosition + 1];
     // Go through each of the nodes associated with this area and move the
     // widget to the requested location.
     for (let areaNode of areaNodes) {
-      this.insertNodeInWindow(aWidgetId, areaNode, nextNodeId, isNew);
+      this.insertNodeInWindow(aWidgetId, areaNode, isNew);
     }
   },
 
-  insertNodeInWindow: function(aWidgetId, aAreaNode, aNextNodeId, isNew) {
+  insertNodeInWindow: function(aWidgetId, aAreaNode, isNew) {
     let window = aAreaNode.ownerDocument.defaultView;
     let showInPrivateBrowsing = gPalette.has(aWidgetId)
                               ? gPalette.get(aWidgetId).showInPrivateBrowsing
@@ -913,8 +919,7 @@ let CustomizableUIInternal = {
       }
     }
 
-    let container = aAreaNode.customizationTarget;
-    let [insertionContainer, nextNode] = this.findInsertionPoints(widgetNode, aNextNodeId, aAreaNode);
+    let [insertionContainer, nextNode] = this.findInsertionPoints(widgetNode, aAreaNode);
     this.insertWidgetBefore(widgetNode, nextNode, insertionContainer, areaId);
 
     if (gAreas.get(areaId).get("type") == CustomizableUI.TYPE_TOOLBAR) {
@@ -922,17 +927,29 @@ let CustomizableUIInternal = {
     }
   },
 
-  findInsertionPoints: function(aNode, aNextNodeId, aAreaNode) {
-    let props = gAreas.get(aAreaNode.id);
-    if (props.get("type") == CustomizableUI.TYPE_TOOLBAR && props.get("overflowable") &&
-        aAreaNode.getAttribute("overflowing") == "true") {
-      return aAreaNode.overflowable.getOverflowedInsertionPoints(aNode, aNextNodeId);
+  findInsertionPoints: function(aNode, aAreaNode) {
+    let areaId = aAreaNode.id;
+    let props = gAreas.get(areaId);
+
+    // For overflowable toolbars, rely on them (because the work is more complicated):
+    if (props.get("type") == CustomizableUI.TYPE_TOOLBAR && props.get("overflowable")) {
+      return aAreaNode.overflowable.findOverflowedInsertionPoints(aNode);
     }
-    let nextNode = null;
-    if (aNextNodeId) {
-      nextNode = aAreaNode.customizationTarget.getElementsByAttribute("id", aNextNodeId)[0];
+
+    let container = aAreaNode.customizationTarget;
+    let placements = gPlacements.get(areaId);
+    let nodeIndex = placements.indexOf(aNode.id);
+
+    while (++nodeIndex < placements.length) {
+      let nextNodeId = placements[nodeIndex];
+      let nextNode = container.getElementsByAttribute("id", nextNodeId).item(0);
+
+      if (nextNode) {
+        return [container, nextNode];
+      }
     }
-    return [aAreaNode.customizationTarget, nextNode];
+
+    return [container, null];
   },
 
   insertWidgetBefore: function(aNode, aNextNode, aContainer, aArea) {
@@ -1079,16 +1096,15 @@ let CustomizableUIInternal = {
     let node;
     if (aWidget.type == "custom") {
       if (aWidget.onBuild) {
-        try {
-          node = aWidget.onBuild(aDocument);
-        } catch (ex) {
-          ERROR("Custom widget with id " + aWidget.id + " threw an error: " + ex.message);
-        }
+        node = aWidget.onBuild(aDocument);
       }
       if (!node || !(node instanceof aDocument.defaultView.XULElement))
         ERROR("Custom widget with id " + aWidget.id + " does not return a valid node");
     }
     else {
+      if (aWidget.onBeforeCreated) {
+        aWidget.onBeforeCreated(aDocument);
+      }
       node = aDocument.createElementNS(kNSXUL, "toolbarbutton");
 
       node.setAttribute("id", aWidget.id);
@@ -1207,8 +1223,16 @@ let CustomizableUIInternal = {
       }
     } else if (aWidget.type == "view") {
       let ownerWindow = aNode.ownerDocument.defaultView;
-      ownerWindow.PanelUI.showSubView(aWidget.viewId, aNode,
-                                      this.getPlacementOfWidget(aNode.id).area);
+      let area = this.getPlacementOfWidget(aNode.id).area;
+      let anchor = aNode;
+      if (area != CustomizableUI.AREA_PANEL) {
+        let wrapper = this.wrapWidget(aWidget.id).forWindow(ownerWindow);
+        if (wrapper && wrapper.anchor) {
+          this.hidePanelForNode(aNode);
+          anchor = wrapper.anchor;
+        }
+      }
+      ownerWindow.PanelUI.showSubView(aWidget.viewId, anchor, area);
     }
   },
 
@@ -1968,6 +1992,7 @@ let CustomizableUIInternal = {
 
     widget.disabled = aData.disabled === true;
 
+    this.wrapWidgetEventHandler("onBeforeCreated", widget);
     this.wrapWidgetEventHandler("onClick", widget);
     this.wrapWidgetEventHandler("onCreated", widget);
 
@@ -2020,6 +2045,13 @@ let CustomizableUIInternal = {
   destroyWidget: function(aWidgetId) {
     let widget = gPalette.get(aWidgetId);
     if (!widget) {
+      gGroupWrapperCache.delete(aWidgetId);
+      for (let [window, ] of gBuildWindows) {
+        let windowCache = gSingleWrapperCache.get(window);
+        if (windowCache) {
+          windowCache.delete(aWidgetId);
+        }
+      }
       return;
     }
 
@@ -2125,15 +2157,15 @@ let CustomizableUIInternal = {
   },
 
   _resetExtraToolbars: function(aFilter = null) {
-    let firstWindow = true; // Only need to persist once
+    let firstWindow = true; // Only need to unregister and persist once
     for (let [win, ] of gBuildWindows) {
       let toolbox = win.gNavToolbox;
       for (let child of toolbox.children) {
         let matchesFilter = !aFilter || aFilter == child.id;
         if (child.hasAttribute("customindex") && matchesFilter) {
+          let toolbarId = "toolbar" + child.getAttribute("customindex");
+          toolbox.toolbarset.removeAttribute(toolbarId);
           if (firstWindow) {
-            let toolbarId = "toolbar" + child.getAttribute("customindex");
-            toolbox.toolbarset.removeAttribute(toolbarId);
             win.document.persist(toolbox.toolbarset.id, toolbarId);
             // We have to unregister it properly to ensure we don't kill
             // XUL widgets which might be in here
@@ -2149,6 +2181,7 @@ let CustomizableUIInternal = {
   _rebuildRegisteredAreas: function() {
     for (let [areaId, areaNodes] of gBuildAreas) {
       let placements = gPlacements.get(areaId);
+      let isFirstChangedToolbar = true;
       for (let areaNode of areaNodes) {
         this.buildArea(areaId, placements, areaNode);
 
@@ -2157,9 +2190,10 @@ let CustomizableUIInternal = {
           let defaultCollapsed = area.get("defaultCollapsed");
           let win = areaNode.ownerDocument.defaultView;
           if (defaultCollapsed !== null) {
-            win.setToolbarVisibility(areaNode, !defaultCollapsed);
+            win.setToolbarVisibility(areaNode, !defaultCollapsed, isFirstChangedToolbar);
           }
         }
+        isFirstChangedToolbar = false;
       }
     }
   },
@@ -2172,6 +2206,8 @@ let CustomizableUIInternal = {
         gUIStateBeforeReset.drawInTitlebar == null) {
       return;
     }
+    gUndoResetting = true;
+
     let uiCustomizationState = gUIStateBeforeReset.uiCustomizationState;
     let drawInTitlebar = gUIStateBeforeReset.drawInTitlebar;
 
@@ -2191,6 +2227,8 @@ let CustomizableUIInternal = {
       }
       this._rebuildRegisteredAreas();
     }
+
+    gUndoResetting = false;
   },
 
   _clearPreviousUIState: function() {
@@ -2277,9 +2315,7 @@ let CustomizableUIInternal = {
       return true;
     }
 
-    let placementAry = gPlacements.get(placement.area);
-    let nextNodeId = placementAry[placement.position + 1];
-    this.insertNodeInWindow(aWidgetId, container[0], nextNodeId, true);
+    this.insertNodeInWindow(aWidgetId, container[0], true);
     return true;
   },
 
@@ -2354,7 +2390,25 @@ let CustomizableUIInternal = {
     }
 
     return true;
-  }
+  },
+
+  setToolbarVisibility: function(aToolbarId, aIsVisible) {
+    let area = gAreas.get(aToolbarId);
+    if (area.get("type") != CustomizableUI.TYPE_TOOLBAR) {
+      return;
+    }
+    let areaNodes = gBuildAreas.get(aToolbarId);
+    if (!areaNodes) {
+      return;
+    }
+    // We only persist the attribute the first time.
+    let isFirstChangedToolbar = true;
+    for (let areaNode of areaNodes) {
+      let window = areaNode.ownerDocument.defaultView;
+      window.setToolbarVisibility(areaNode, aIsVisible, isFirstChangedToolbar);
+      isFirstChangedToolbar = false;
+    }
+  },
 };
 Object.freeze(CustomizableUIInternal);
 
@@ -2427,6 +2481,18 @@ this.CustomizableUI = {
   get PANEL_COLUMN_COUNT() 3,
 
   /**
+   * An iteratable property of windows managed by CustomizableUI.
+   * Note that this can *only* be used as an iterator. ie:
+   *     for (let window of CustomizableUI.windows) { ... }
+   */
+  windows: {
+    "@@iterator": function*() {
+      for (let [window,] of gBuildWindows)
+        yield window;
+    }
+  },
+
+  /**
    * Add a listener object that will get fired for various events regarding
    * customization.
    *
@@ -2464,6 +2530,11 @@ this.CustomizableUI = {
    *     different location. aNode is the widget's node, aContainer is the
    *     area it was moved into (NB: it might already have been there and been
    *     moved to a different position!)
+   *   - onWidgetUndoMove(aNode, aContainer)
+   *     Fired after undoing a reset to default placements moves a widget's
+   *     node to a different location. aNode is the widget's node, aContainer
+   *     is the area it was moved into (NB: it might already have been there
+   *     and been moved to a different position!)
    *   - onAreaReset(aArea, aContainer)
    *     Fired after a reset to default placements is complete on an area's
    *     DOM node. Note that this is fired for each DOM node. aArea is the area
@@ -2504,6 +2575,12 @@ this.CustomizableUI = {
    *   - onWidgetUnderflow(aNode, aContainer)
    *     Fired when a widget's DOM node is *not* overflowing its container, a
    *     toolbar, anymore.
+   *   - onWindowOpened(aWindow)
+   *     Fired when a window has been opened that is managed by CustomizableUI,
+   *     once all of the prerequisite setup has been done.
+   *   - onWindowClosed(aWindow)
+   *     Fired when a window that has been managed by CustomizableUI has been
+   *     closed.
    */
   addListener: function(aListener) {
     CustomizableUIInternal.addListener(aListener);
@@ -2716,6 +2793,12 @@ this.CustomizableUI = {
    *                  function that will be invoked with the document in which
    *                  to build a widget. Should return the DOM node that has
    *                  been constructed.
+   * - onBeforeCreated(aDoc): Attached to all non-custom widgets; a function
+   *                  that will be invoked before the widget gets a DOM node
+   *                  constructed, passing the document in which that will happen.
+   *                  This is useful especially for 'view' type widgets that need
+   *                  to construct their views on the fly (e.g. from bootstrapped
+   *                  add-ons)
    * - onCreated(aNode): Attached to all widgets; a function that will be invoked
    *                  whenever the widget has a DOM node constructed, passing the
    *                  constructed node as an argument.
@@ -3061,6 +3144,16 @@ this.CustomizableUI = {
   get inDefaultState() {
     return CustomizableUIInternal.inDefaultState;
   },
+
+  /**
+   * Set a toolbar's visibility state in all windows.
+   * @param aToolbarId    the toolbar whose visibility should be adjusted
+   * @param aIsVisible    whether the toolbar should be visible
+   */
+  setToolbarVisibility: function(aToolbarId, aIsVisible) {
+    CustomizableUIInternal.setToolbarVisibility(aToolbarId, aIsVisible);
+  },
+
   /**
    * Get a localized property off a (widget?) object.
    *
@@ -3203,7 +3296,7 @@ this.CustomizableUI = {
   }
 };
 Object.freeze(this.CustomizableUI);
-
+Object.freeze(this.CustomizableUI.windows);
 
 /**
  * All external consumers of widgets are really interacting with these wrappers
@@ -3327,7 +3420,7 @@ function WidgetSingleWrapper(aWidget, aNode) {
   });
 
   this.__defineGetter__("overflowed", function() {
-    return aNode.classList.contains("overflowedItem");
+    return aNode.getAttribute("overflowedItem") == "true";
   });
 
   Object.freeze(this);
@@ -3366,7 +3459,7 @@ function XULWidgetGroupWrapper(aWidgetId) {
       instance = aWindow.gNavToolbox.palette.getElementsByAttribute("id", aWidgetId)[0];
     }
 
-    let wrapper = new XULWidgetSingleWrapper(aWidgetId, instance);
+    let wrapper = new XULWidgetSingleWrapper(aWidgetId, instance, aWindow.document);
     wrapperMap.set(aWidgetId, wrapper);
     return wrapper;
   };
@@ -3392,14 +3485,47 @@ function XULWidgetGroupWrapper(aWidgetId) {
  * A XULWidgetSingleWrapper is a wrapper around a single instance of a XUL 
  * widget in a particular window.
  */
-function XULWidgetSingleWrapper(aWidgetId, aNode) {
+function XULWidgetSingleWrapper(aWidgetId, aNode, aDocument) {
   this.isGroup = false;
 
   this.id = aWidgetId;
   this.type = "custom";
   this.provider = CustomizableUI.PROVIDER_XUL;
 
-  this.node = aNode;
+  let weakDoc = Cu.getWeakReference(aDocument);
+  // If we keep a strong ref, the weak ref will never die, so null it out:
+  aDocument = null;
+
+  this.__defineGetter__("node", function() {
+    // If we've set this to null (further down), we're sure there's nothing to
+    // be gotten here, so bail out early:
+    if (!weakDoc) {
+      return null;
+    }
+    if (aNode) {
+      // Return the last known node if it's still in the DOM...
+      if (aNode.ownerDocument.contains(aNode)) {
+        return aNode;
+      }
+      // ... or the toolbox
+      let toolbox = aNode.ownerDocument.defaultView.gNavToolbox;
+      if (toolbox && toolbox.palette && aNode.parentNode == toolbox.palette) {
+        return aNode;
+      }
+      // If it isn't, clear the cached value and fall through to the "slow" case:
+      aNode = null;
+    }
+
+    let doc = weakDoc.get();
+    if (doc) {
+      // Store locally so we can cache the result:
+      aNode = CustomizableUIInternal.findWidgetInWindow(aWidgetId, doc.defaultView);
+      return aNode;
+    }
+    // The weakref to the document is dead, we're done here forever more:
+    weakDoc = null;
+    return null;
+  });
 
   this.__defineGetter__("anchor", function() {
     let anchorId;
@@ -3408,16 +3534,21 @@ function XULWidgetSingleWrapper(aWidgetId, aNode) {
     if (placement) {
       anchorId = gAreas.get(placement.area).get("anchor");
     }
-    if (!anchorId) {
-      anchorId = aNode.getAttribute("cui-anchorid");
+
+    let node = this.node;
+    if (!anchorId && node) {
+      anchorId = node.getAttribute("cui-anchorid");
     }
 
-    return anchorId ? aNode.ownerDocument.getElementById(anchorId)
-                    : aNode;
+    return (anchorId && node) ? node.ownerDocument.getElementById(anchorId) : node;
   });
 
   this.__defineGetter__("overflowed", function() {
-    return aNode.classList.contains("overflowedItem");
+    let node = this.node;
+    if (!node) {
+      return false;
+    }
+    return node.getAttribute("overflowedItem") == "true";
   });
 
   Object.freeze(this);
@@ -3437,7 +3568,12 @@ function OverflowableToolbar(aToolbarNode) {
   this._list.toolbox = this._toolbar.toolbox;
   this._list.customizationTarget = this._list;
 
-  Services.obs.addObserver(this, "browser-delayed-startup-finished", false);
+  let window = this._toolbar.ownerDocument.defaultView;
+  if (window.gBrowserInit.delayedStartupFinished) {
+    this.init();
+  } else {
+    Services.obs.addObserver(this, "browser-delayed-startup-finished", false);
+  }
 }
 
 OverflowableToolbar.prototype = {
@@ -3463,7 +3599,8 @@ OverflowableToolbar.prototype = {
     this._chevron = doc.getElementById(chevronId);
     this._chevron.addEventListener("command", this);
 
-    this._panel = doc.getElementById("widget-overflow");
+    let panelId = this._toolbar.getAttribute("overflowpanel");
+    this._panel = doc.getElementById(panelId);
     this._panel.addEventListener("popuphiding", this);
     CustomizableUIInternal.addPanelCloseListeners(this._panel);
 
@@ -3574,7 +3711,7 @@ OverflowableToolbar.prototype = {
 
       if (child.getAttribute("overflows") != "false") {
         this._collapsed.set(child.id, this._target.clientWidth);
-        child.classList.add("overflowedItem");
+        child.setAttribute("overflowedItem", true);
         child.setAttribute("cui-anchorid", this._chevron.id);
         CustomizableUIInternal.notifyListeners("onWidgetOverflow", child, this._target);
 
@@ -3632,7 +3769,7 @@ OverflowableToolbar.prototype = {
         this._target.appendChild(child);
       }
       child.removeAttribute("cui-anchorid");
-      child.classList.remove("overflowedItem");
+      child.removeAttribute("overflowedItem");
       CustomizableUIInternal.notifyListeners("onWidgetUnderflow", child, this._target);
     }
 
@@ -3649,7 +3786,11 @@ OverflowableToolbar.prototype = {
     if (!this._enabled)
       return;
 
-    this._moveItemsBackToTheirOrigin();
+    if (this._target.scrollLeftMax > 0) {
+      this.onOverflow();
+    } else {
+      this._moveItemsBackToTheirOrigin();
+    }
   },
 
   _disable: function() {
@@ -3707,7 +3848,7 @@ OverflowableToolbar.prototype = {
         let minSize = this._collapsed.get(prevId);
         this._collapsed.set(aNode.id, minSize);
         aNode.setAttribute("cui-anchorid", this._chevron.id);
-        aNode.classList.add("overflowedItem");
+        aNode.setAttribute("overflowedItem", true);
         CustomizableUIInternal.notifyListeners("onWidgetOverflow", aNode, this._target);
       }
       // If it is not overflowed and not in the toolbar, and was not overflowed
@@ -3725,7 +3866,7 @@ OverflowableToolbar.prototype = {
       if (!nowOverflowed) {
         this._collapsed.delete(aNode.id);
         aNode.removeAttribute("cui-anchorid");
-        aNode.classList.remove("overflowedItem");
+        aNode.removeAttribute("overflowedItem");
         CustomizableUIInternal.notifyListeners("onWidgetUnderflow", aNode, this._target);
 
         if (!this._collapsed.size) {
@@ -3748,27 +3889,41 @@ OverflowableToolbar.prototype = {
     }
   },
 
-  getOverflowedInsertionPoints: function(aNode, aNextNodeId) {
-    if (aNode.getAttribute("overflows") == "false") {
-      return [this._target, null];
-    }
-    // Inserting at the end means we're in the overflow list by definition:
-    if (!aNextNodeId) {
-      return [this._list, null];
+  findOverflowedInsertionPoints: function(aNode) {
+    let newNodeCanOverflow = aNode.getAttribute("overflows") != "false";
+    let areaId = this._toolbar.id;
+    let placements = gPlacements.get(areaId);
+    let nodeIndex = placements.indexOf(aNode.id);
+    let nodeBeforeNewNodeIsOverflown = false;
+
+    let loopIndex = -1;
+    while (++loopIndex < placements.length) {
+      let nextNodeId = placements[loopIndex];
+      if (loopIndex > nodeIndex) {
+        if (newNodeCanOverflow && this._collapsed.has(nextNodeId)) {
+          let nextNode = this._list.getElementsByAttribute("id", nextNodeId).item(0);
+          if (nextNode) {
+            return [this._list, nextNode];
+          }
+        }
+        if (!nodeBeforeNewNodeIsOverflown || !newNodeCanOverflow) {
+          let nextNode = this._target.getElementsByAttribute("id", nextNodeId).item(0);
+          if (nextNode) {
+            return [this._target, nextNode];
+          }
+        }
+      } else if (loopIndex < nodeIndex && this._collapsed.has(nextNodeId)) {
+        nodeBeforeNewNodeIsOverflown = true;
+      }
     }
 
-    let nextNode = this._list.getElementsByAttribute("id", aNextNodeId)[0];
-    // If this is the first item, we can actually just append the node
-    // to the end of the toolbar.  If it results in an overflow event, we'll move
-    // the new node to the overflow target.
-    if (!nextNode.previousSibling) {
-      return [this._target, null];
-    }
-    return [this._list, nextNode];
+    let containerForAppending = (this._collapsed.size && newNodeCanOverflow) ?
+                                this._list : this._target;
+    return [containerForAppending, null];
   },
 
   getContainerFor: function(aNode) {
-    if (aNode.classList.contains("overflowedItem")) {
+    if (aNode.getAttribute("overflowedItem") == "true") {
       return this._list;
     }
     return this._target;

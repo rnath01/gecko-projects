@@ -99,10 +99,6 @@ ifdef ENABLE_TESTS
 # locally against non-current test code.
 DIRS += $(TEST_DIRS)
 
-ifndef INCLUDED_TESTS_MOCHITEST_MK #{
-  include $(topsrcdir)/config/makefiles/mochitest.mk
-endif #}
-
 ifdef CPP_UNIT_TESTS
 ifdef COMPILE_ENVIRONMENT
 
@@ -235,10 +231,12 @@ ifndef GNU_CC
 #
 
 ifdef SIMPLE_PROGRAMS
-COMPILE_PDBFILE = $(basename $(@F)).pdb
+COMPILE_PDB_FLAG ?= -Fd$(basename $(@F)).pdb
 else
-COMPILE_PDBFILE = generated.pdb
+COMPILE_PDB_FLAG ?= -Fdgenerated.pdb
 endif
+COMPILE_CFLAGS += $(COMPILE_PDB_FLAG)
+COMPILE_CXXFLAGS += $(COMPILE_PDB_FLAG)
 
 LINK_PDBFILE = $(basename $(@F)).pdb
 ifdef MOZ_DEBUG
@@ -269,6 +267,9 @@ endif # Solaris Sun Studio C++
 
 ifeq ($(HOST_OS_ARCH),WINNT)
 HOST_PDBFILE=$(basename $(@F)).pdb
+HOST_PDB_FLAG ?= -Fd$(HOST_PDBFILE)
+HOST_CFLAGS += $(HOST_PDB_FLAG)
+HOST_CXXFLAGS += $(HOST_PDB_FLAG)
 endif
 
 # Don't build SIMPLE_PROGRAMS during the MOZ_PROFILE_GENERATE pass
@@ -375,9 +376,7 @@ define SUBMAKE # $(call SUBMAKE,target,directory,static)
 endef # The extra line is important here! don't delete it
 
 define TIER_DIR_SUBMAKE
-$(call BUILDSTATUS,TIERDIR_START  $(1) $(2) $(3))
 $(call SUBMAKE,$(4),$(3),$(5))
-$(call BUILDSTATUS,TIERDIR_FINISH $(1) $(2) $(3))
 
 endef # Ths empty line is important.
 
@@ -1635,12 +1634,6 @@ FREEZE_VARIABLES = \
   TIERS \
   EXTRA_COMPONENTS \
   EXTRA_PP_COMPONENTS \
-  MOCHITEST_FILES \
-  MOCHITEST_CHROME_FILES \
-  MOCHITEST_BROWSER_FILES \
-  MOCHITEST_A11Y_FILES \
-  MOCHITEST_METRO_FILES \
-  MOCHITEST_ROBOCOP_FILES \
   $(NULL)
 
 $(foreach var,$(FREEZE_VARIABLES),$(eval $(var)_FROZEN := '$($(var))'))

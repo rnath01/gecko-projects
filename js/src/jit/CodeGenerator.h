@@ -140,6 +140,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitOutOfLineNewObject(OutOfLineNewObject *ool);
     bool visitNewDeclEnvObject(LNewDeclEnvObject *lir);
     bool visitNewCallObject(LNewCallObject *lir);
+    bool visitNewSingletonCallObject(LNewSingletonCallObject *lir);
     bool visitNewCallObjectPar(LNewCallObjectPar *lir);
     bool visitNewStringObject(LNewStringObject *lir);
     bool visitNewPar(LNewPar *lir);
@@ -440,8 +441,8 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool emitAssertRangeI(const Range *r, Register input);
     bool emitAssertRangeD(const Range *r, FloatRegister input, FloatRegister temp);
 
-#ifdef DEBUG
     Vector<CodeOffsetLabel, 0, IonAllocPolicy> ionScriptLabels_;
+#ifdef DEBUG
     bool branchIfInvalidated(Register temp, Label *invalidated);
 
     bool emitDebugResultChecks(LInstruction *ins);

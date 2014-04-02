@@ -11,11 +11,17 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/DeviceStorageBinding.h"
+#include "mozilla/dom/DeviceStorageFileSystem.h"
 #include "mozilla/dom/devicestorage/PDeviceStorageRequestChild.h"
+#include "mozilla/dom/Directory.h"
+#include "mozilla/dom/FileSystemUtils.h"
 #include "mozilla/dom/ipc/Blob.h"
 #include "mozilla/dom/PBrowserChild.h"
 #include "mozilla/dom/PContentPermissionRequestChild.h"
 #include "mozilla/dom/PermissionMessageUtils.h"
+#include "mozilla/dom/Promise.h"
+#include "mozilla/EventDispatcher.h"
+#include "mozilla/EventListenerManager.h"
 #include "mozilla/LazyIdleThread.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Scoped.h"
@@ -33,7 +39,6 @@
 #include "nsCycleCollectionParticipant.h"
 #include "nsIPrincipal.h"
 #include "nsJSUtils.h"
-#include "DictionaryHelpers.h"
 #include "nsContentUtils.h"
 #include "nsCxPusher.h"
 #include "nsXULAppAPI.h"
@@ -49,6 +54,7 @@
 #include "nsIPermissionManager.h"
 #include "nsIStringBundle.h"
 #include "nsIDocument.h"
+#include "nsPrintfCString.h"
 #include <algorithm>
 #include "private/pprio.h"
 #include "nsContentPermissionHelper.h"
@@ -195,7 +201,7 @@ public:
 #endif
   nsCOMPtr<nsIFile> apps;
   nsCOMPtr<nsIFile> crashes;
-  nsCOMPtr<nsIFile> temp;
+  nsCOMPtr<nsIFile> overrideRootDir;
 };
 
 static StaticRefPtr<GlobalDirs> sDirs;
@@ -590,6 +596,116 @@ DeviceStorageFile::Init()
   MOZ_ASSERT(typeChecker);
 }
 
+// The OverrideRootDir is needed to facilitate testing of the
+// device.storage.overrideRootDir preference. The preference is normally
+// only read once during initialization, but since the test environment has
+// no convenient way to restart, we use a pref watcher instead.
+class OverrideRootDir MOZ_FINAL : public nsIObserver
+{
+public:
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSIOBSERVER
+
+  static OverrideRootDir* GetSingleton();
+  ~OverrideRootDir();
+  void Init();
+private:
+  static mozilla::StaticRefPtr<OverrideRootDir> sSingleton;
+};
+
+NS_IMPL_ISUPPORTS1(OverrideRootDir, nsIObserver)
+
+mozilla::StaticRefPtr<OverrideRootDir>
+  OverrideRootDir::sSingleton;
+
+OverrideRootDir*
+OverrideRootDir::GetSingleton()
+{
+  if (sSingleton) {
+    return sSingleton;
+  }
+  // Preference changes are automatically forwarded from parent to child
+  // in ContentParent::Observe, so we'll see the change in both the parent
+  // and the child process.
+
+  sSingleton = new OverrideRootDir();
+  Preferences::AddStrongObserver(sSingleton, "device.storage.overrideRootDir");
+  ClearOnShutdown(&sSingleton);
+
+  return sSingleton;
+}
+
+OverrideRootDir::~OverrideRootDir()
+{
+  Preferences::RemoveObserver(this, "device.storage.overrideRootDir");
+}
+
+NS_IMETHODIMP
+OverrideRootDir::Observe(nsISupports *aSubject,
+                              const char *aTopic,
+                              const char16_t *aData)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (sSingleton) {
+    sSingleton->Init();
+  }
+  return NS_OK;
+}
+
+void
+OverrideRootDir::Init()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (!sDirs) {
+    return;
+  }
+
+  if (mozilla::Preferences::GetBool("device.storage.testing", false)) {
+    nsCOMPtr<nsIProperties> dirService
+      = do_GetService(NS_DIRECTORY_SERVICE_CONTRACTID);
+    MOZ_ASSERT(dirService);
+    dirService->Get(NS_OS_TEMP_DIR, NS_GET_IID(nsIFile),
+                    getter_AddRefs(sDirs->overrideRootDir));
+    if (sDirs->overrideRootDir) {
+      sDirs->overrideRootDir->AppendRelativeNativePath(
+        NS_LITERAL_CSTRING("device-storage-testing"));
+    }
+  } else {
+    // For users running on desktop, it's convenient to be able to override
+    // all of the directories to point to a single tree, much like what happens
+    // on a real device.
+    const nsAdoptingString& overrideRootDir =
+      mozilla::Preferences::GetString("device.storage.overrideRootDir");
+    if (overrideRootDir && overrideRootDir.Length() > 0) {
+      NS_NewLocalFile(overrideRootDir, false,
+                      getter_AddRefs(sDirs->overrideRootDir));
+    } else {
+      sDirs->overrideRootDir = nullptr;
+    }
+  }
+
+  if (sDirs->overrideRootDir) {
+    if (XRE_GetProcessType() == GeckoProcessType_Default) {
+      // Only the parent process can create directories. In testing, because
+      // the preference is updated after startup, its entirely possible that
+      // the preference updated notification will be received by a child
+      // prior to the parent.
+      nsresult rv
+        = sDirs->overrideRootDir->Create(nsIFile::DIRECTORY_TYPE, 0777);
+      nsString path;
+      sDirs->overrideRootDir->GetPath(path);
+      if (NS_FAILED(rv) && rv != NS_ERROR_FILE_ALREADY_EXISTS) {
+        nsPrintfCString msg("DeviceStorage: Unable to create directory '%s'",
+                            NS_LossyConvertUTF16toASCII(path).get());
+        NS_WARNING(msg.get());
+      }
+    }
+    sDirs->overrideRootDir->Normalize();
+  }
+}
+
 // Directories which don't depend on a volume should be calculated once
 // here. Directories which depend on the root directory of a volume
 // should be calculated in DeviceStorageFile::GetRootDirectoryForType.
@@ -677,16 +793,7 @@ InitDirs()
 #endif
   }
 
-  if (mozilla::Preferences::GetBool("device.storage.testing", false)) {
-    dirService->Get(NS_OS_TEMP_DIR, NS_GET_IID(nsIFile),
-                    getter_AddRefs(sDirs->temp));
-    if (sDirs->temp) {
-      sDirs->temp->AppendRelativeNativePath(
-        NS_LITERAL_CSTRING("device-storage-testing"));
-      sDirs->temp->Create(nsIFile::DIRECTORY_TYPE, 0777);
-      sDirs->temp->Normalize();
-    }
-  }
+  OverrideRootDir::GetSingleton()->Init();
 }
 
 void
@@ -716,6 +823,7 @@ DeviceStorageFile::GetRootDirectoryForType(const nsAString& aStorageType,
 {
   nsCOMPtr<nsIFile> f;
   *aFile = nullptr;
+  bool allowOverride = true;
 
   InitDirs();
 
@@ -762,6 +870,7 @@ DeviceStorageFile::GetRootDirectoryForType(const nsAString& aStorageType,
   // Apps directory
   else if (aStorageType.EqualsLiteral(DEVICESTORAGE_APPS)) {
     f = sDirs->apps;
+    allowOverride = false;
   }
 
    // default SDCard
@@ -776,17 +885,19 @@ DeviceStorageFile::GetRootDirectoryForType(const nsAString& aStorageType,
   // crash reports directory.
   else if (aStorageType.EqualsLiteral(DEVICESTORAGE_CRASHES)) {
     f = sDirs->crashes;
+    allowOverride = false;
   } else {
     // Not a storage type that we recognize. Return null
     return;
   }
 
   // In testing, we default all device storage types to a temp directory.
-  // sDirs->temp will only have been initialized (in InitDirs) if the
-  // preference device.storage.testing was set to true. We can't test the
-  // preference directly here, since we may not be on the main thread.
-  if (sDirs->temp) {
-    f = sDirs->temp;
+  // sDirs->overrideRootDir will only have been initialized (in InitDirs)
+  // if the preference device.storage.testing was set to true, or if
+  // device.storage.overrideRootDir is set. We can't test the preferences
+  // directly here, since we may not be on the main thread.
+  if (allowOverride && sDirs->overrideRootDir) {
+    f = sDirs->overrideRootDir;
   }
 
   if (f) {
@@ -892,14 +1003,7 @@ DeviceStorageFile::IsSafePath(const nsAString& aPath)
 
 void
 DeviceStorageFile::NormalizeFilePath() {
-#if defined(XP_WIN)
-  char16_t* cur = mPath.BeginWriting();
-  char16_t* end = mPath.EndWriting();
-  for (; cur < end; ++cur) {
-    if (char16_t('\\') == *cur)
-      *cur = char16_t('/');
-  }
-#endif
+  FileSystemUtils::LocalPathToNormalizedPath(mPath, mPath);
 }
 
 void
@@ -917,23 +1021,9 @@ DeviceStorageFile::AppendRelativePath(const nsAString& aPath) {
     NS_WARNING(NS_LossyConvertUTF16toASCII(aPath).get());
     return;
   }
-#if defined(XP_WIN)
-  // replace forward slashes with backslashes,
-  // since nsLocalFileWin chokes on them
-  nsString temp;
-  temp.Assign(aPath);
-
-  char16_t* cur = temp.BeginWriting();
-  char16_t* end = temp.EndWriting();
-
-  for (; cur < end; ++cur) {
-    if (char16_t('/') == *cur)
-      *cur = char16_t('\\');
-  }
-  mFile->AppendRelativePath(temp);
-#else
-  mFile->AppendRelativePath(aPath);
-#endif
+  nsString localPath;
+  FileSystemUtils::NormalizedPathToLocalPath(aPath, localPath);
+  mFile->AppendRelativePath(localPath);
 }
 
 nsresult
@@ -3001,13 +3091,13 @@ NS_IMPL_CYCLE_COLLECTION_4(DeviceStorageRequest,
 NS_INTERFACE_MAP_BEGIN(nsDOMDeviceStorage)
   NS_INTERFACE_MAP_ENTRY(nsIDOMDeviceStorage)
   NS_INTERFACE_MAP_ENTRY(nsIObserver)
-NS_INTERFACE_MAP_END_INHERITING(nsDOMEventTargetHelper)
+NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
-NS_IMPL_ADDREF_INHERITED(nsDOMDeviceStorage, nsDOMEventTargetHelper)
-NS_IMPL_RELEASE_INHERITED(nsDOMDeviceStorage, nsDOMEventTargetHelper)
+NS_IMPL_ADDREF_INHERITED(nsDOMDeviceStorage, DOMEventTargetHelper)
+NS_IMPL_RELEASE_INHERITED(nsDOMDeviceStorage, DOMEventTargetHelper)
 
 nsDOMDeviceStorage::nsDOMDeviceStorage(nsPIDOMWindow* aWindow)
-  : nsDOMEventTargetHelper(aWindow)
+  : DOMEventTargetHelper(aWindow)
   , mIsWatchingFile(false)
   , mAllowedToWatchFile(false)
 {
@@ -3073,6 +3163,11 @@ void
 nsDOMDeviceStorage::Shutdown()
 {
   MOZ_ASSERT(NS_IsMainThread());
+
+  if (mFileSystem) {
+    mFileSystem->Shutdown();
+    mFileSystem = nullptr;
+  }
 
   if (!mStorageName.IsEmpty()) {
     UnregisterForSDCardChanges(this);
@@ -3812,6 +3907,16 @@ nsDOMDeviceStorage::Default()
   return mStorageName.Equals(defaultStorageName);
 }
 
+already_AddRefed<Promise>
+nsDOMDeviceStorage::GetRoot()
+{
+  if (!mFileSystem) {
+    mFileSystem = new DeviceStorageFileSystem(mStorageType, mStorageName);
+    mFileSystem->Init(this);
+  }
+  return mozilla::dom::Directory::GetRoot(mFileSystem);
+}
+
 NS_IMETHODIMP
 nsDOMDeviceStorage::GetDefault(bool* aDefault)
 {
@@ -4063,8 +4168,8 @@ nsDOMDeviceStorage::AddEventListener(const nsAString & aType,
     return rv;
   }
 
-  return nsDOMEventTargetHelper::AddEventListener(aType, aListener, aUseCapture,
-                                                  aWantsUntrusted, aArgc);
+  return DOMEventTargetHelper::AddEventListener(aType, aListener, aUseCapture,
+                                                aWantsUntrusted, aArgc);
 }
 
 void
@@ -4092,8 +4197,8 @@ nsDOMDeviceStorage::AddEventListener(const nsAString & aType,
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return;
   }
-  nsDOMEventTargetHelper::AddEventListener(aType, aListener, aUseCapture,
-                                           aWantsUntrusted, aRv);
+  DOMEventTargetHelper::AddEventListener(aType, aListener, aUseCapture,
+                                         aWantsUntrusted, aRv);
 }
 
 NS_IMETHODIMP
@@ -4118,7 +4223,7 @@ nsDOMDeviceStorage::RemoveEventListener(const nsAString & aType,
                                         nsIDOMEventListener *aListener,
                                         bool aUseCapture)
 {
-  nsDOMEventTargetHelper::RemoveEventListener(aType, aListener, false);
+  DOMEventTargetHelper::RemoveEventListener(aType, aListener, false);
 
   if (mIsWatchingFile && !HasListenersFor(nsGkAtoms::onchange)) {
     mIsWatchingFile = false;
@@ -4134,7 +4239,7 @@ nsDOMDeviceStorage::RemoveEventListener(const nsAString& aType,
                                         bool aCapture,
                                         ErrorResult& aRv)
 {
-  nsDOMEventTargetHelper::RemoveEventListener(aType, aListener, aCapture, aRv);
+  DOMEventTargetHelper::RemoveEventListener(aType, aListener, aCapture, aRv);
 
   if (mIsWatchingFile && !HasListenersFor(nsGkAtoms::onchange)) {
     mIsWatchingFile = false;
@@ -4155,37 +4260,37 @@ NS_IMETHODIMP
 nsDOMDeviceStorage::DispatchEvent(nsIDOMEvent *aEvt,
                                   bool *aRetval)
 {
-  return nsDOMEventTargetHelper::DispatchEvent(aEvt, aRetval);
+  return DOMEventTargetHelper::DispatchEvent(aEvt, aRetval);
 }
 
 EventTarget*
 nsDOMDeviceStorage::GetTargetForDOMEvent()
 {
-  return nsDOMEventTargetHelper::GetTargetForDOMEvent();
+  return DOMEventTargetHelper::GetTargetForDOMEvent();
 }
 
 EventTarget *
 nsDOMDeviceStorage::GetTargetForEventTargetChain()
 {
-  return nsDOMEventTargetHelper::GetTargetForEventTargetChain();
+  return DOMEventTargetHelper::GetTargetForEventTargetChain();
 }
 
 nsresult
-nsDOMDeviceStorage::PreHandleEvent(nsEventChainPreVisitor & aVisitor)
+nsDOMDeviceStorage::PreHandleEvent(EventChainPreVisitor& aVisitor)
 {
-  return nsDOMEventTargetHelper::PreHandleEvent(aVisitor);
+  return DOMEventTargetHelper::PreHandleEvent(aVisitor);
 }
 
 nsresult
-nsDOMDeviceStorage::WillHandleEvent(nsEventChainPostVisitor & aVisitor)
+nsDOMDeviceStorage::WillHandleEvent(EventChainPostVisitor& aVisitor)
 {
-  return nsDOMEventTargetHelper::WillHandleEvent(aVisitor);
+  return DOMEventTargetHelper::WillHandleEvent(aVisitor);
 }
 
 nsresult
-nsDOMDeviceStorage::PostHandleEvent(nsEventChainPostVisitor & aVisitor)
+nsDOMDeviceStorage::PostHandleEvent(EventChainPostVisitor& aVisitor)
 {
-  return nsDOMEventTargetHelper::PostHandleEvent(aVisitor);
+  return DOMEventTargetHelper::PostHandleEvent(aVisitor);
 }
 
 nsresult
@@ -4194,34 +4299,34 @@ nsDOMDeviceStorage::DispatchDOMEvent(WidgetEvent* aEvent,
                                      nsPresContext* aPresContext,
                                      nsEventStatus* aEventStatus)
 {
-  return nsDOMEventTargetHelper::DispatchDOMEvent(aEvent,
-                                                  aDOMEvent,
-                                                  aPresContext,
-                                                  aEventStatus);
+  return DOMEventTargetHelper::DispatchDOMEvent(aEvent,
+                                                aDOMEvent,
+                                                aPresContext,
+                                                aEventStatus);
 }
 
-nsEventListenerManager *
+EventListenerManager*
 nsDOMDeviceStorage::GetOrCreateListenerManager()
 {
-  return nsDOMEventTargetHelper::GetOrCreateListenerManager();
+  return DOMEventTargetHelper::GetOrCreateListenerManager();
 }
 
-nsEventListenerManager *
+EventListenerManager*
 nsDOMDeviceStorage::GetExistingListenerManager() const
 {
-  return nsDOMEventTargetHelper::GetExistingListenerManager();
+  return DOMEventTargetHelper::GetExistingListenerManager();
 }
 
 nsIScriptContext *
 nsDOMDeviceStorage::GetContextForEventHandlers(nsresult *aRv)
 {
-  return nsDOMEventTargetHelper::GetContextForEventHandlers(aRv);
+  return DOMEventTargetHelper::GetContextForEventHandlers(aRv);
 }
 
 JSContext *
 nsDOMDeviceStorage::GetJSContextForEventHandlers()
 {
-  return nsDOMEventTargetHelper::GetJSContextForEventHandlers();
+  return DOMEventTargetHelper::GetJSContextForEventHandlers();
 }
 
 NS_IMPL_EVENT_HANDLER(nsDOMDeviceStorage, change)

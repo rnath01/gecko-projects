@@ -2756,7 +2756,7 @@ nsXPCComponents_Utils::ImportGlobalProperties(HandleValue aPropertyList,
 {
     RootedObject global(cx, CurrentGlobalOrNull(cx));
     MOZ_ASSERT(global);
-    GlobalProperties options;
+    GlobalProperties options(false);
     NS_ENSURE_TRUE(aPropertyList.isObject(), NS_ERROR_INVALID_ARG);
     RootedObject propertyList(cx, &aPropertyList.toObject());
     NS_ENSURE_TRUE(JS_IsArrayObject(cx, propertyList), NS_ERROR_INVALID_ARG);
@@ -2881,7 +2881,8 @@ nsXPCComponents_Utils::NondeterministicGetWeakMapKeys(HandleValue aMap,
         return NS_OK;
     }
     RootedObject objRet(aCx);
-    if (!JS_NondeterministicGetWeakMapKeys(aCx, &aMap.toObject(), objRet.address()))
+    RootedObject mapObj(aCx, &aMap.toObject());
+    if (!JS_NondeterministicGetWeakMapKeys(aCx, mapObj, &objRet))
         return NS_ERROR_OUT_OF_MEMORY;
      aKeys.set(objRet ? ObjectValue(*objRet) : UndefinedValue());
     return NS_OK;
@@ -3008,7 +3009,7 @@ nsXPCComponents_Utils::EvalInWindow(const nsAString &source, HandleValue window,
     return NS_OK;
 }
 
-/* jsval exportFunction(in jsval vfunction, in jsval vscope, in jsval vname); */
+/* jsval exportFunction(in jsval vfunction, in jsval vscope, in jsval voptions); */
 NS_IMETHODIMP
 nsXPCComponents_Utils::ExportFunction(HandleValue vfunction, HandleValue vscope,
                                       HandleValue voptions, JSContext *cx,
@@ -3035,62 +3036,6 @@ nsXPCComponents_Utils::CreateObjectIn(HandleValue vobj, HandleValue voptions,
 
     if (!xpc::CreateObjectIn(cx, vobj, options, rval))
         return NS_ERROR_FAILURE;
-    return NS_OK;
-}
-
-/* jsval createObjectIn(in jsval vobj); */
-NS_IMETHODIMP
-nsXPCComponents_Utils::CreateArrayIn(HandleValue vobj, JSContext *cx,
-                                     MutableHandleValue rval)
-{
-    if (!cx)
-        return NS_ERROR_FAILURE;
-
-    // first argument must be an object
-    if (vobj.isPrimitive())
-        return NS_ERROR_XPC_BAD_CONVERT_JS;
-
-    RootedObject scope(cx, js::UncheckedUnwrap(&vobj.toObject()));
-    RootedObject obj(cx);
-    {
-        JSAutoCompartment ac(cx, scope);
-        obj =  JS_NewArrayObject(cx, 0);
-        if (!obj)
-            return NS_ERROR_FAILURE;
-    }
-
-    if (!JS_WrapObject(cx, &obj))
-        return NS_ERROR_FAILURE;
-
-    rval.setObject(*obj);
-    return NS_OK;
-}
-
-/* jsval createDateIn(in jsval vobj, in long long msec); */
-NS_IMETHODIMP
-nsXPCComponents_Utils::CreateDateIn(HandleValue vobj, int64_t msec, JSContext *cx,
-                                    MutableHandleValue rval)
-{
-    if (!cx)
-        return NS_ERROR_FAILURE;
-
-    // first argument must be an object
-    if (!vobj.isObject())
-        return NS_ERROR_XPC_BAD_CONVERT_JS;
-
-    RootedObject obj(cx);
-    {
-        JSObject *scope = js::UncheckedUnwrap(&vobj.toObject());
-        JSAutoCompartment ac(cx, scope);
-        obj =  JS_NewDateObjectMsec(cx, msec);
-        if (!obj)
-            return NS_ERROR_FAILURE;
-    }
-
-    if (!JS_WrapObject(cx, &obj))
-        return NS_ERROR_FAILURE;
-
-    rval.setObject(*obj);
     return NS_OK;
 }
 
@@ -3246,26 +3191,41 @@ nsXPCComponents_Utils::Dispatch(HandleValue runnableArg, HandleValue scope,
     return NS_DispatchToMainThread(run);
 }
 
-#define GENERATE_JSOPTION_GETTER_SETTER(_attr, _getter, _setter)    \
-    NS_IMETHODIMP                                                   \
-    nsXPCComponents_Utils::Get## _attr(JSContext* cx, bool* aValue) \
-    {                                                               \
-        *aValue = ContextOptionsRef(cx)._getter();                  \
-        return NS_OK;                                               \
-    }                                                               \
-    NS_IMETHODIMP                                                   \
-    nsXPCComponents_Utils::Set## _attr(JSContext* cx, bool aValue)  \
-    {                                                               \
-        ContextOptionsRef(cx)._setter(aValue);                      \
-        return NS_OK;                                               \
+#define GENERATE_JSCONTEXTOPTION_GETTER_SETTER(_attr, _getter, _setter) \
+    NS_IMETHODIMP                                                       \
+    nsXPCComponents_Utils::Get## _attr(JSContext* cx, bool* aValue)     \
+    {                                                                   \
+        *aValue = ContextOptionsRef(cx)._getter();                      \
+        return NS_OK;                                                   \
+    }                                                                   \
+    NS_IMETHODIMP                                                       \
+    nsXPCComponents_Utils::Set## _attr(JSContext* cx, bool aValue)      \
+    {                                                                   \
+        ContextOptionsRef(cx)._setter(aValue);                          \
+        return NS_OK;                                                   \
     }
 
-GENERATE_JSOPTION_GETTER_SETTER(Strict, extraWarnings, setExtraWarnings)
-GENERATE_JSOPTION_GETTER_SETTER(Werror, werror, setWerror)
-GENERATE_JSOPTION_GETTER_SETTER(Strict_mode, strictMode, setStrictMode)
-GENERATE_JSOPTION_GETTER_SETTER(Ion, ion, setIon)
+#define GENERATE_JSRUNTIMEOPTION_GETTER_SETTER(_attr, _getter, _setter) \
+    NS_IMETHODIMP                                                       \
+    nsXPCComponents_Utils::Get## _attr(JSContext* cx, bool* aValue)     \
+    {                                                                   \
+        *aValue = RuntimeOptionsRef(cx)._getter();                      \
+        return NS_OK;                                                   \
+    }                                                                   \
+    NS_IMETHODIMP                                                       \
+    nsXPCComponents_Utils::Set## _attr(JSContext* cx, bool aValue)      \
+    {                                                                   \
+        RuntimeOptionsRef(cx)._setter(aValue);                          \
+        return NS_OK;                                                   \
+    }
 
-#undef GENERATE_JSOPTION_GETTER_SETTER
+GENERATE_JSCONTEXTOPTION_GETTER_SETTER(Strict, extraWarnings, setExtraWarnings)
+GENERATE_JSCONTEXTOPTION_GETTER_SETTER(Werror, werror, setWerror)
+GENERATE_JSCONTEXTOPTION_GETTER_SETTER(Strict_mode, strictMode, setStrictMode)
+GENERATE_JSRUNTIMEOPTION_GETTER_SETTER(Ion, ion, setIon)
+
+#undef GENERATE_JSCONTEXTOPTION_GETTER_SETTER
+#undef GENERATE_JSRUNTIMEOPTION_GETTER_SETTER
 
 NS_IMETHODIMP
 nsXPCComponents_Utils::SetGCZeal(int32_t aValue, JSContext* cx)
@@ -3603,40 +3563,48 @@ static JSStructuredCloneCallbacks CloneIntoCallbacks = {
     nullptr
 };
 
-NS_IMETHODIMP
-nsXPCComponents_Utils::CloneInto(HandleValue aValue, HandleValue aScope,
-                                 HandleValue aOptions, JSContext *aCx,
-                                 MutableHandleValue aCloned)
+bool
+xpc::CloneInto(JSContext *aCx, HandleValue aValue, HandleValue aScope,
+               HandleValue aOptions, MutableHandleValue aCloned)
 {
     if (!aScope.isObject())
-        return NS_ERROR_INVALID_ARG;
+        return false;
 
     RootedObject scope(aCx, &aScope.toObject());
     scope = js::CheckedUnwrap(scope);
-    NS_ENSURE_TRUE(scope, NS_ERROR_FAILURE);
+    if(!scope) {
+        JS_ReportError(aCx, "Permission denied to clone object into scope");
+        return false;
+    }
 
     if (!aOptions.isUndefined() && !aOptions.isObject()) {
         JS_ReportError(aCx, "Invalid argument");
-        return NS_ERROR_FAILURE;
+        return false;
     }
 
     RootedObject optionsObject(aCx, aOptions.isObject() ? &aOptions.toObject()
                                                         : nullptr);
     CloneIntoOptions options(aCx, optionsObject);
     if (aOptions.isObject() && !options.Parse())
-        return NS_ERROR_FAILURE;
+        return false;
 
     {
         CloneIntoCallbacksData data(aCx, &options);
         JSAutoCompartment ac(aCx, scope);
         if (!JS_StructuredClone(aCx, aValue, aCloned, &CloneIntoCallbacks, &data))
-            return NS_ERROR_FAILURE;
+            return false;
     }
 
-    if (!JS_WrapValue(aCx, aCloned))
-        return NS_ERROR_FAILURE;
+    return JS_WrapValue(aCx, aCloned);
+}
 
-    return NS_OK;
+NS_IMETHODIMP
+nsXPCComponents_Utils::CloneInto(HandleValue aValue, HandleValue aScope,
+                                 HandleValue aOptions, JSContext *aCx,
+                                 MutableHandleValue aCloned)
+{
+    return xpc::CloneInto(aCx, aValue, aScope, aOptions, aCloned) ?
+           NS_OK : NS_ERROR_FAILURE;
 }
 
 NS_IMETHODIMP
@@ -3821,8 +3789,8 @@ private:
 ComponentsSH ComponentsSH::singleton(0);
 
 // Singleton refcounting.
-NS_IMETHODIMP_(nsrefcnt) ComponentsSH::AddRef(void) { return 1; }
-NS_IMETHODIMP_(nsrefcnt) ComponentsSH::Release(void) { return 1; }
+NS_IMETHODIMP_(MozExternalRefCountType) ComponentsSH::AddRef(void) { return 1; }
+NS_IMETHODIMP_(MozExternalRefCountType) ComponentsSH::Release(void) { return 1; }
 
 NS_INTERFACE_MAP_BEGIN(ComponentsSH)
   NS_INTERFACE_MAP_ENTRY(nsIXPCScriptable)

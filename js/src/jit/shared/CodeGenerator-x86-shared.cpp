@@ -451,7 +451,6 @@ CodeGeneratorX86Shared::visitOutOfLineBailout(OutOfLineBailout *ool)
     return true;
 }
 
-
 bool
 CodeGeneratorX86Shared::visitMinMaxD(LMinMaxD *ins)
 {
@@ -2011,9 +2010,9 @@ JitRuntime::generateForkJoinGetSliceStub(JSContext *cx)
     masm.pop(cxReg);
     masm.ret();
 
-    // There's no more slices to give out, return -1.
+    // There's no more slices to give out, return a sentinel value.
     masm.bind(&noMoreWork);
-    masm.move32(Imm32(-1), output);
+    masm.move32(Imm32(ThreadPool::MAX_SLICE_ID), output);
     masm.pop(cxReg);
     masm.ret();
 

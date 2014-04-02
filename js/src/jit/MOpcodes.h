@@ -63,11 +63,6 @@ namespace jit {
     _(PowHalf)                                                              \
     _(Random)                                                               \
     _(MathFunction)                                                         \
-    _(SIMDNullaryFunction)                                                  \
-    _(SIMDUnaryFunction)                                                    \
-    _(SIMDBinaryFunction)                                                   \
-    _(SIMDTernaryFunction)                                                  \
-    _(SIMDQuarternaryFunction)                                              \
     _(Add)                                                                  \
     _(Sub)                                                                  \
     _(Mul)                                                                  \
@@ -95,6 +90,7 @@ namespace jit {
     _(NewObject)                                                            \
     _(NewDeclEnvObject)                                                     \
     _(NewCallObject)                                                        \
+    _(NewRunOnceCallObject)                                                 \
     _(NewStringObject)                                                      \
     _(InitElem)                                                             \
     _(InitElemGetterSetter)                                                 \
@@ -119,6 +115,7 @@ namespace jit {
     _(LoadSlot)                                                             \
     _(StoreSlot)                                                            \
     _(FunctionEnvironment)                                                  \
+    _(FilterTypeSet)                                                        \
     _(TypeBarrier)                                                          \
     _(MonitorTypes)                                                         \
     _(PostWriteBarrier)                                                     \

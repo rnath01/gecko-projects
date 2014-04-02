@@ -19,27 +19,21 @@
 #include "mozilla/dom/ValidityState.h"
 #include "mozilla/dom/ElementInlines.h"
 
-class nsIDOMAttr;
-class nsIDOMEventListener;
-class nsIDOMNodeList;
-class nsIFrame;
-class nsIStyleRule;
-class nsChildContentList;
-class nsDOMCSSDeclaration;
-class nsIDOMCSSStyleDeclaration;
-class nsIURI;
-class nsIFormControlFrame;
-class nsIForm;
-class nsPresState;
-class nsILayoutHistoryState;
-class nsIEditor;
-struct nsRect;
-struct nsSize;
-class nsIDOMHTMLMenuElement;
-class nsIDOMHTMLCollection;
 class nsDOMSettableTokenList;
+class nsIDOMHTMLMenuElement;
+class nsIEditor;
+class nsIFormControlFrame;
+class nsIFrame;
+class nsILayoutHistoryState;
+class nsIURI;
+class nsPresState;
+struct nsSize;
 
 namespace mozilla {
+class EventChainPostVisitor;
+class EventChainPreVisitor;
+class EventChainVisitor;
+class EventListenerManager;
 namespace dom {
 class HTMLFormElement;
 class HTMLPropertiesCollection;
@@ -56,7 +50,7 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase,
                              public nsIDOMHTMLElement
 {
 public:
-  nsGenericHTMLElement(already_AddRefed<nsINodeInfo> aNodeInfo)
+  nsGenericHTMLElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
     : nsGenericHTMLElementBase(aNodeInfo),
       mScrollgrab(false)
   {
@@ -256,7 +250,7 @@ public:
   using nsINode::SetOn##name_;                                                \
   already_AddRefed<mozilla::dom::EventHandlerNonNull> GetOn##name_();         \
   void SetOn##name_(mozilla::dom::EventHandlerNonNull* handler);
-#include "nsEventNameList.h" // IWYU pragma: keep
+#include "mozilla/EventNameList.h" // IWYU pragma: keep
 #undef ERROR_EVENT
 #undef FORWARDED_EVENT
 #undef EVENT
@@ -302,6 +296,7 @@ public:
     return rcFrame.height;
   }
 
+  static nsIAtom*** PropertiesToTraverseAndUnlink();
 protected:
   // These methods are used to implement element-specific behavior of Get/SetItemValue
   // when an element has @itemprop but no @itemscope.
@@ -319,8 +314,10 @@ public:
 
   /**
    * Get width and height, using given image request if attributes are unset.
+   * Pass a reference to the image request, since the method may change the
+   * value and we want to use the updated value.
    */
-  nsSize GetWidthHeightForImage(imgIRequest *aImageRequest);
+  nsSize GetWidthHeightForImage(nsRefPtr<imgRequestProxy>& aImageRequest);
 
   // XPIDL methods
   NS_FORWARD_NSIDOMNODE_TO_NSINODE
@@ -587,9 +584,10 @@ public:
    * Check if an event for an anchor can be handled
    * @return true if the event can be handled, false otherwise
    */
-  bool CheckHandleEventForAnchorsPreconditions(nsEventChainVisitor& aVisitor);
-  nsresult PreHandleEventForAnchors(nsEventChainPreVisitor& aVisitor);
-  nsresult PostHandleEventForAnchors(nsEventChainPostVisitor& aVisitor);
+  bool CheckHandleEventForAnchorsPreconditions(
+         mozilla::EventChainVisitor& aVisitor);
+  nsresult PreHandleEventForAnchors(mozilla::EventChainPreVisitor& aVisitor);
+  nsresult PostHandleEventForAnchors(mozilla::EventChainPostVisitor& aVisitor);
   bool IsHTMLLink(nsIURI** aURI) const;
 
   // HTML element methods
@@ -987,8 +985,9 @@ protected:
   virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsIAtom* aName,
                                 const nsAttrValue* aValue, bool aNotify) MOZ_OVERRIDE;
 
-  virtual nsEventListenerManager*
-    GetEventListenerManagerForAttr(nsIAtom* aAttrName, bool* aDefer) MOZ_OVERRIDE;
+  virtual mozilla::EventListenerManager*
+    GetEventListenerManagerForAttr(nsIAtom* aAttrName,
+                                   bool* aDefer) MOZ_OVERRIDE;
 
   virtual const nsAttrName* InternalGetExistingAttrNameFromQName(const nsAString& aStr) const MOZ_OVERRIDE;
 
@@ -1279,12 +1278,12 @@ class nsGenericHTMLFormElement : public nsGenericHTMLElement,
                                  public nsIFormControl
 {
 public:
-  nsGenericHTMLFormElement(already_AddRefed<nsINodeInfo> aNodeInfo);
+  nsGenericHTMLFormElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
   virtual ~nsGenericHTMLFormElement();
 
   NS_DECL_ISUPPORTS_INHERITED
 
-  nsINode* GetParentObject() const;
+  mozilla::dom::ParentObject GetParentObject() const;
 
   virtual bool IsNodeOfType(uint32_t aFlags) const MOZ_OVERRIDE;
   virtual void SaveSubtreeState() MOZ_OVERRIDE;
@@ -1324,7 +1323,8 @@ public:
   virtual IMEState GetDesiredIMEState() MOZ_OVERRIDE;
   virtual nsEventStates IntrinsicState() const MOZ_OVERRIDE;
 
-  virtual nsresult PreHandleEvent(nsEventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
+  virtual nsresult PreHandleEvent(
+                     mozilla::EventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
 
   virtual bool IsDisabled() const MOZ_OVERRIDE;
 
@@ -1435,7 +1435,7 @@ protected:
 class nsGenericHTMLFormElementWithState : public nsGenericHTMLFormElement
 {
 public:
-  nsGenericHTMLFormElementWithState(already_AddRefed<nsINodeInfo> aNodeInfo);
+  nsGenericHTMLFormElementWithState(already_AddRefed<nsINodeInfo>& aNodeInfo);
 
   /**
    * Get the presentation state for a piece of content, or create it if it does
@@ -1702,15 +1702,15 @@ class HTML##_elementName##Element;                                         \
 }                                                                          \
 }                                                                          \
 nsGenericHTMLElement*                                                      \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo> aNodeInfo, \
+NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser = mozilla::dom::NOT_FROM_PARSER);
 
 #define NS_DECLARE_NS_NEW_HTML_ELEMENT_AS_SHARED(_elementName)             \
 inline nsGenericHTMLElement*                                               \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo> aNodeInfo, \
+NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser = mozilla::dom::NOT_FROM_PARSER) \
 {                                                                          \
-  return NS_NewHTMLSharedElement(aNodeInfo, aFromParser);                  \
+  return NS_NewHTMLSharedElement(mozilla::Move(aNodeInfo), aFromParser);   \
 }
 
 /**
@@ -1718,7 +1718,7 @@ NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo> aNodeInfo, \
  */
 #define NS_IMPL_NS_NEW_HTML_ELEMENT(_elementName)                            \
 nsGenericHTMLElement*                                                        \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo> aNodeInfo,   \
+NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser)      \
 {                                                                            \
   return new mozilla::dom::HTML##_elementName##Element(aNodeInfo);           \
@@ -1726,7 +1726,7 @@ NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo> aNodeInfo,   \
 
 #define NS_IMPL_NS_NEW_HTML_ELEMENT_CHECK_PARSER(_elementName)               \
 nsGenericHTMLElement*                                                        \
-NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo> aNodeInfo,   \
+NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo>&& aNodeInfo, \
                                   mozilla::dom::FromParser aFromParser)      \
 {                                                                            \
   return new mozilla::dom::HTML##_elementName##Element(aNodeInfo,            \
@@ -1736,7 +1736,7 @@ NS_NewHTML##_elementName##Element(already_AddRefed<nsINodeInfo> aNodeInfo,   \
 // Here, we expand 'NS_DECLARE_NS_NEW_HTML_ELEMENT()' by hand.
 // (Calling the macro directly (with no args) produces compiler warnings.)
 nsGenericHTMLElement*
-NS_NewHTMLElement(already_AddRefed<nsINodeInfo> aNodeInfo,
+NS_NewHTMLElement(already_AddRefed<nsINodeInfo>&& aNodeInfo,
                   mozilla::dom::FromParser aFromParser = mozilla::dom::NOT_FROM_PARSER);
 
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Shared)

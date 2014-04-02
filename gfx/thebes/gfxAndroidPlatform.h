@@ -35,9 +35,6 @@ public:
     virtual already_AddRefed<gfxASurface>
     CreateOffscreenSurface(const IntSize& size,
                            gfxContentType contentType);
-    virtual already_AddRefed<gfxASurface>
-    OptimizeImage(gfxImageSurface *aSurface,
-                  gfxImageFormat format) MOZ_OVERRIDE;
     
     virtual gfxImageFormat GetOffscreenFormat() { return mOffscreenFormat; }
     
@@ -81,9 +78,19 @@ public:
 
     virtual int GetScreenDepth() const;
 
+    virtual bool UseAcceleratedSkiaCanvas() MOZ_OVERRIDE;
+
+#ifdef MOZ_WIDGET_GONK
+    virtual bool IsInGonkEmulator() const { return mIsInGonkEmulator; }
+#endif
+
 private:
     int mScreenDepth;
     gfxImageFormat mOffscreenFormat;
+
+#ifdef MOZ_WIDGET_GONK
+    bool mIsInGonkEmulator;
+#endif
 };
 
 #endif /* GFX_PLATFORM_ANDROID_H */

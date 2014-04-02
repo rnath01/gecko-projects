@@ -38,14 +38,16 @@ let developerHUD = {
   _targets: new Map(),
   _frames: new Map(),
   _client: null,
-  _webappsActor: null,
+  _conn: null,
   _watchers: [],
+  _logging: true,
 
   /**
    * This method registers a metric watcher that will watch one or more metrics
-   * of apps that are being tracked. A watcher must implement the trackApp(app)
-   * and untrackApp(app) methods, add entries to the app.metrics map, keep them
-   * up-to-date, and call app.display() when values were changed.
+   * on app frames that are being tracked. A watcher must implement the
+   * `trackTarget(target)` and `untrackTarget(target)` methods, register
+   * observed metrics with `target.register(metric)`, and keep them up-to-date
+   * with `target.update(metric, value, message)` when necessary.
    */
   registerWatcher: function dwp_registerWatcher(watcher) {
     this._watchers.unshift(watcher);
@@ -59,31 +61,36 @@ let developerHUD = {
       RemoteDebugger.start();
     }
 
-    this._client = new DebuggerClient(DebuggerServer.connectPipe());
-    this._client.connect((type, traits) => {
+    // We instantiate a local debugger connection so that watchers can use our
+    // DebuggerClient to send requests to tab actors (e.g. the consoleActor).
+    // Note the special usage of the private _serverConnection, which we need
+    // to call connectToChild and set up child process actors on a frame we
+    // intend to track. These actors will use the connection to communicate with
+    // our DebuggerServer in the parent process.
+    let transport = DebuggerServer.connectPipe();
+    this._conn = transport._serverConnection;
+    this._client = new DebuggerClient(transport);
 
-      // FIXME(Bug 962577) see below.
-      this._client.listTabs((res) => {
-        this._webappsActor = res.webappsActor;
+    for (let w of this._watchers) {
+      if (w.init) {
+        w.init(this._client);
+      }
+    }
 
-        for (let w of this._watchers) {
-          if (w.init) {
-            w.init(this._client);
-          }
-        }
+    Services.obs.addObserver(this, 'remote-browser-shown', false);
+    Services.obs.addObserver(this, 'inprocess-browser-shown', false);
+    Services.obs.addObserver(this, 'message-manager-disconnect', false);
 
-        Services.obs.addObserver(this, 'remote-browser-shown', false);
-        Services.obs.addObserver(this, 'inprocess-browser-shown', false);
-        Services.obs.addObserver(this, 'message-manager-disconnect', false);
+    let systemapp = document.querySelector('#systemapp');
+    this.trackFrame(systemapp);
 
-        let systemapp = document.querySelector('#systemapp');
-        this.trackFrame(systemapp);
+    let frames = systemapp.contentWindow.document.querySelectorAll('iframe[mozapp]');
+    for (let frame of frames) {
+      this.trackFrame(frame);
+    }
 
-        let frames = systemapp.contentWindow.document.querySelectorAll('iframe[mozapp]');
-        for (let frame of frames) {
-          this.trackFrame(frame);
-        }
-      });
+    SettingsListener.observe('hud.logging', this._logging, enabled => {
+      this._logging = enabled;
     });
   },
 
@@ -111,17 +118,12 @@ let developerHUD = {
     if (this._targets.has(frame))
       return;
 
-    // FIXME(Bug 962577) Factor getAppActor out of webappsActor.
-    this._client.request({
-      to: this._webappsActor,
-      type: 'getAppActor',
-      manifestURL: frame.appManifestURL
-    }, (res) => {
-      if (res.error) {
-        return;
-      }
+    let mm = frame.QueryInterface(Ci.nsIFrameLoaderOwner)
+                  .frameLoader
+                  .messageManager;
 
-      let target = new Target(frame, res.actor);
+    DebuggerServer.connectToChild(this._conn, mm).then(actor => {
+      let target = new Target(frame, actor);
       this._targets.set(frame, target);
 
       for (let w of this._watchers) {
@@ -137,10 +139,7 @@ let developerHUD = {
         w.untrackTarget(target);
       }
 
-      // Delete the metrics and call display() to clean up the front-end.
-      delete target.metrics;
-      target.display();
-
+      target.destroy();
       this._targets.delete(frame);
     }
   },
@@ -183,16 +182,18 @@ let developerHUD = {
   },
 
   log: function dwp_log(message) {
-    dump(DEVELOPER_HUD_LOG_PREFIX + ': ' + message + '\n');
+    if (this._logging) {
+      dump(DEVELOPER_HUD_LOG_PREFIX + ': ' + message + '\n');
+    }
   }
 
 };
 
 
 /**
- * An App object represents all there is to know about a Firefox OS app that is
- * being tracked, e.g. its manifest information, current values of watched
- * metrics, and how to update these values on the front-end.
+ * A Target object represents all there is to know about a Firefox OS app frame
+ * that is being tracked, e.g. a pointer to the frame, current values of watched
+ * metrics, and how to notify the front-end when metrics have changed.
  */
 function Target(frame, actor) {
   this.frame = frame;
@@ -201,22 +202,70 @@ function Target(frame, actor) {
 }
 
 Target.prototype = {
-  display: function target_display() {
+
+  /**
+   * Register a metric that can later be updated. Does not update the front-end.
+   */
+  register: function target_register(metric) {
+    this.metrics.set(metric, 0);
+  },
+
+  /**
+   * Modify one of a target's metrics, and send out an event to notify relevant
+   * parties (e.g. the developer HUD, automated tests, etc).
+   */
+  update: function target_update(metric, value = 0, message) {
+    let metrics = this.metrics;
+    metrics.set(metric, value);
+
     let data = {
-      metrics: []
+      metrics: [], // FIXME(Bug 982066) Remove this field.
+      manifest: this.frame.appManifestURL,
+      metric: metric,
+      value: value,
+      message: message
     };
 
-    let metrics = this.metrics;
+    // FIXME(Bug 982066) Remove this loop.
     if (metrics && metrics.size > 0) {
       for (let name of metrics.keys()) {
         data.metrics.push({name: name, value: metrics.get(name)});
       }
     }
 
-    shell.sendEvent(this.frame, 'developer-hud-update', Cu.cloneInto(data, this.frame));
+    if (message) {
+      developerHUD.log('[' + data.manifest + '] ' + data.message);
+    }
+    this._send(data);
+  },
 
-    // FIXME(after bug 963239 lands) return event.isDefaultPrevented();
-    return false;
+  /**
+   * Nicer way to call update() when the metric value is a number that needs
+   * to be incremented.
+   */
+  bump: function target_bump(metric, message) {
+    this.update(metric, this.metrics.get(metric) + 1, message);
+  },
+
+  /**
+   * Void a metric value and make sure it isn't displayed on the front-end
+   * anymore.
+   */
+  clear: function target_clear(metric) {
+    this.update(metric, 0);
+  },
+
+  /**
+   * Tear everything down, including the front-end by sending a message without
+   * widgets.
+   */
+  destroy: function target_destroy() {
+    delete this.metrics;
+    this._send({});
+  },
+
+  _send: function target_send(data) {
+    shell.sendEvent(this.frame, 'developer-hud-update', Cu.cloneInto(data, this.frame));
   }
 
 };
@@ -224,17 +273,27 @@ Target.prototype = {
 
 /**
  * The Console Watcher tracks the following metrics in apps: reflows, warnings,
- * and errors.
+ * and errors, with security errors reported separately.
  */
 let consoleWatcher = {
 
+  _client: null,
   _targets: new Map(),
   _watching: {
     reflows: false,
     warnings: false,
-    errors: false
+    errors: false,
+    security: false
   },
-  _client: null,
+  _security: [
+    'Mixed Content Blocker',
+    'Mixed Content Message',
+    'CSP',
+    'Invalid HSTS Headers',
+    'Insecure Password Field',
+    'SSL',
+    'CORS'
+  ],
 
   init: function cw_init(client) {
     this._client = client;
@@ -244,7 +303,7 @@ let consoleWatcher = {
 
     for (let key in watching) {
       let metric = key;
-      SettingsListener.observe('hud.' + metric, false, watch => {
+      SettingsListener.observe('hud.' + metric, watching[metric], watch => {
         // Watch or unwatch the metric.
         if (watching[metric] = watch) {
           return;
@@ -252,8 +311,7 @@ let consoleWatcher = {
 
         // If unwatched, remove any existing widgets for that metric.
         for (let target of this._targets.values()) {
-          target.metrics.set(metric, 0);
-          target.display();
+          target.clear(metric);
         }
       });
     }
@@ -265,9 +323,10 @@ let consoleWatcher = {
   },
 
   trackTarget: function cw_trackTarget(target) {
-    target.metrics.set('reflows', 0);
-    target.metrics.set('warnings', 0);
-    target.metrics.set('errors', 0);
+    target.register('reflows');
+    target.register('warnings');
+    target.register('errors');
+    target.register('security');
 
     this._client.request({
       to: target.actor.consoleActor,
@@ -288,18 +347,9 @@ let consoleWatcher = {
     this._targets.delete(target.actor.consoleActor);
   },
 
-  bump: function cw_bump(target, metric) {
-    if (!this._watching[metric]) {
-      return false;
-    }
-
-    let metrics = target.metrics;
-    metrics.set(metric, metrics.get(metric) + 1);
-    return true;
-  },
-
   consoleListener: function cw_consoleListener(type, packet) {
     let target = this._targets.get(packet.from);
+    let metric;
     let output = '';
 
     switch (packet.type) {
@@ -308,15 +358,15 @@ let consoleWatcher = {
         let pageError = packet.pageError;
 
         if (pageError.warning || pageError.strict) {
-          if (!this.bump(target, 'warnings')) {
-            return;
-          }
-          output = 'warning (';
+          metric = 'warnings';
+          output += 'warning (';
         } else {
-          if (!this.bump(target, 'errors')) {
-            return;
-          }
+          metric = 'errors';
           output += 'error (';
+        }
+
+        if (this._security.indexOf(pageError.category) > -1) {
+          metric = 'security';
         }
 
         let {errorMessage, sourceName, category, lineNumber, columnNumber} = pageError;
@@ -328,17 +378,13 @@ let consoleWatcher = {
         switch (packet.message.level) {
 
           case 'error':
-            if (!this.bump(target, 'errors')) {
-              return;
-            }
-            output = 'error (console)';
+            metric = 'errors';
+            output += 'error (console)';
             break;
 
           case 'warn':
-            if (!this.bump(target, 'warnings')) {
-              return;
-            }
-            output = 'warning (console)';
+            metric = 'warnings';
+            output += 'warning (console)';
             break;
 
           default:
@@ -347,23 +393,22 @@ let consoleWatcher = {
         break;
 
       case 'reflowActivity':
-        if (!this.bump(target, 'reflows')) {
-          return;
-        }
+        metric = 'reflows';
 
         let {start, end, sourceURL} = packet;
         let duration = Math.round((end - start) * 100) / 100;
-        output = 'reflow: ' + duration + 'ms';
+        output += 'reflow: ' + duration + 'ms';
         if (sourceURL) {
           output += ' ' + this.formatSourceURL(packet);
         }
         break;
     }
 
-    if (!target.display()) {
-      // If the information was not displayed, log it.
-      developerHUD.log(output);
+    if (!this._watching[metric]) {
+      return;
     }
+
+    target.bump(metric, output);
   },
 
   formatSourceURL: function cw_formatSourceURL(packet) {
@@ -405,24 +450,19 @@ let eventLoopLagWatcher = {
         fronts.get(target).start();
       } else {
         fronts.get(target).stop();
-        target.metrics.set('jank', 0);
-        target.display();
+        target.clear('jank');
       }
     }
   },
 
   trackTarget: function(target) {
-    target.metrics.set('jank', 0);
+    target.register('jank');
 
     let front = new EventLoopLagFront(this._client, target.actor);
     this._fronts.set(target, front);
 
     front.on('event-loop-lag', time => {
-      target.metrics.set('jank', time);
-
-      if (!target.display()) {
-        developerHUD.log('jank: ' + time + 'ms');
-      }
+      target.update('jank', time, 'jank: ' + time + 'ms');
     });
 
     if (this._active) {
@@ -478,8 +518,7 @@ let memoryWatcher = {
       } else {
         for (let target of this._fronts.keys()) {
           clearTimeout(this._timers.get(target));
-          target.metrics.set('memory', 0);
-          target.display();
+          target.clear('memory');
         }
       }
     });
@@ -515,8 +554,7 @@ let memoryWatcher = {
       }
       // TODO Also count images size (bug #976007).
 
-      target.metrics.set('memory', total);
-      target.display();
+      target.update('memory', total);
       let duration = parseInt(data.jsMilliseconds) + parseInt(data.nonJSMilliseconds);
       let timer = setTimeout(() => this.measure(target), 100 * duration);
       this._timers.set(target, timer);
@@ -526,8 +564,8 @@ let memoryWatcher = {
   },
 
   trackTarget: function mw_trackTarget(target) {
-    target.metrics.set('uss', 0);
-    target.metrics.set('memory', 0);
+    target.register('uss');
+    target.register('memory');
     this._fronts.set(target, MemoryFront(this._client, target.actor));
     if (this._active) {
       this.measure(target);

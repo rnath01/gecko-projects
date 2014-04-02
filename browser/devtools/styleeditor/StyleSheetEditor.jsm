@@ -13,7 +13,7 @@ const Cu = Components.utils;
 
 const require = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools.require;
 const Editor  = require("devtools/sourceeditor/editor");
-const promise = require("sdk/core/promise");
+const {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
 const {CssLogic} = require("devtools/styleinspector/css-logic");
 const AutoCompleter = require("devtools/sourceeditor/autocomplete");
 
@@ -246,6 +246,9 @@ StyleSheetEditor.prototype = {
    * Create source editor and load state into it.
    * @param  {DOMElement} inputElement
    *         Element to load source editor in
+   *
+   * @return {Promise}
+   *         Promise that will resolve when the style editor is loaded.
    */
   load: function(inputElement) {
     this._inputElement = inputElement;
@@ -261,7 +264,9 @@ StyleSheetEditor.prototype = {
     };
     let sourceEditor = new Editor(config);
 
-    sourceEditor.appendTo(inputElement).then(() => {
+    sourceEditor.on("dirty-change", this._onPropertyChange);
+
+    return sourceEditor.appendTo(inputElement).then(() => {
       if (Services.prefs.getBoolPref(AUTOCOMPLETION_PREF)) {
         sourceEditor.extend(AutoCompleter);
         sourceEditor.setupAutoCompletion(this.walker);
@@ -289,8 +294,6 @@ StyleSheetEditor.prototype = {
 
       this.emit("source-editor-load");
     });
-
-    sourceEditor.on("dirty-change", this._onPropertyChange);
   },
 
   /**
@@ -596,9 +599,9 @@ function prettifyCSS(text)
 
     if (shouldIndent) {
       let la = text[i+1]; // one-character lookahead
-      if (!/\s/.test(la)) {
-        // following character should be a new line (or whitespace) but it isn't
-        // force indentation then
+      if (!/\n/.test(la) || /^\s+$/.test(text.substring(i+1, text.length))) {
+        // following character should be a new line, but isn't,
+        // or it's whitespace at the end of the file
         parts.push(indent + text.substring(partStart, i + 1));
         if (c == "}") {
           parts.push(""); // for extra line separator

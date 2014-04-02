@@ -576,23 +576,33 @@ BluetoothA2dpManager::Connect(const nsAString& aDeviceAddress,
 
   BluetoothService* bs = BluetoothService::Get();
   if (!bs || sInShutdown) {
-    aController->OnConnect(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
     return;
   }
 
   if (mA2dpConnected) {
-    aController->OnConnect(NS_LITERAL_STRING(ERR_ALREADY_CONNECTED));
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_ALREADY_CONNECTED));
     return;
   }
 
   mDeviceAddress = aDeviceAddress;
   mController = aController;
 
+  if (!sBtA2dpInterface) {
+    BT_LOGR("sBluetoothA2dpInterface is null");
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    return;
+  }
+
   bt_bdaddr_t remoteAddress;
   StringToBdAddressType(aDeviceAddress, &remoteAddress);
-  NS_ENSURE_TRUE_VOID(sBtA2dpInterface);
-  NS_ENSURE_TRUE_VOID(BT_STATUS_SUCCESS ==
-                      sBtA2dpInterface->connect(&remoteAddress));
+
+  bt_status_t result = sBtA2dpInterface->connect(&remoteAddress);
+  if (BT_STATUS_SUCCESS != result) {
+    BT_LOGR("Failed to connect: %x", result);
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_CONNECTION_FAILED));
+    return;
+  }
 }
 
 void
@@ -604,14 +614,14 @@ BluetoothA2dpManager::Disconnect(BluetoothProfileController* aController)
   BluetoothService* bs = BluetoothService::Get();
   if (!bs) {
     if (aController) {
-      aController->OnDisconnect(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+      aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
     }
     return;
   }
 
   if (!mA2dpConnected) {
     if (aController) {
-      aController->OnDisconnect(NS_LITERAL_STRING(ERR_ALREADY_DISCONNECTED));
+      aController->NotifyCompletion(NS_LITERAL_STRING(ERR_ALREADY_DISCONNECTED));
     }
     return;
   }
@@ -620,11 +630,20 @@ BluetoothA2dpManager::Disconnect(BluetoothProfileController* aController)
 
   mController = aController;
 
+  if (!sBtA2dpInterface) {
+    BT_LOGR("sBluetoothA2dpInterface is null");
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    return;
+  }
+
   bt_bdaddr_t remoteAddress;
   StringToBdAddressType(mDeviceAddress, &remoteAddress);
-  if (sBtA2dpInterface) {
-    NS_ENSURE_TRUE_VOID(BT_STATUS_SUCCESS ==
-                        sBtA2dpInterface->disconnect(&remoteAddress));
+
+  bt_status_t result = sBtA2dpInterface->disconnect(&remoteAddress);
+  if (BT_STATUS_SUCCESS != result) {
+    BT_LOGR("Failed to disconnect: %x", result);
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_DISCONNECTION_FAILED));
+    return;
   }
 }
 
@@ -640,7 +659,7 @@ BluetoothA2dpManager::OnConnect(const nsAString& aErrorStr)
   NS_ENSURE_TRUE_VOID(mController);
 
   nsRefPtr<BluetoothProfileController> controller = mController.forget();
-  controller->OnConnect(aErrorStr);
+  controller->NotifyCompletion(aErrorStr);
 }
 
 void
@@ -655,7 +674,8 @@ BluetoothA2dpManager::OnDisconnect(const nsAString& aErrorStr)
   NS_ENSURE_TRUE_VOID(mController);
 
   nsRefPtr<BluetoothProfileController> controller = mController.forget();
-  controller->OnDisconnect(aErrorStr);
+  controller->NotifyCompletion(aErrorStr);
+
   Reset();
 }
 
@@ -744,7 +764,7 @@ BluetoothA2dpManager::HandleSinkPropertyChanged(const BluetoothSignal& aSignal)
     case SinkState::SINK_DISCONNECTED:
       // case 2: Connection attempt failed
       if (prevState == SinkState::SINK_CONNECTING) {
-        OnConnect(NS_LITERAL_STRING("A2dpConnectionError"));
+        OnConnect(NS_LITERAL_STRING(ERR_CONNECTION_FAILED));
         break;
       }
 
@@ -890,6 +910,9 @@ BluetoothA2dpManager::UpdatePlayStatus(uint32_t aDuration,
 
 #if ANDROID_VERSION > 17
   NS_ENSURE_TRUE_VOID(sBtAvrcpInterface);
+  // always update playstatus first
+  sBtAvrcpInterface->get_play_status_rsp((btrc_play_status_t)aPlayStatus,
+                                         aDuration, aPosition);
   // when play status changed, send both play status and position
   if (mPlayStatus != aPlayStatus &&
       mPlayStatusChangedNotifyType == BTRC_NOTIFICATION_TYPE_INTERIM) {
@@ -911,8 +934,6 @@ BluetoothA2dpManager::UpdatePlayStatus(uint32_t aDuration,
                                                  &param);
   }
 
-  sBtAvrcpInterface->get_play_status_rsp((btrc_play_status_t)aPlayStatus,
-                                         aDuration, aPosition);
   mDuration = aDuration;
   mPosition = aPosition;
   mPlayStatus = aPlayStatus;
@@ -938,7 +959,7 @@ BluetoothA2dpManager::UpdateRegisterNotification(int aEventId, int aParam)
 
   switch (aEventId) {
     case BTRC_EVT_PLAY_STATUS_CHANGED:
-      mPlayPosChangedNotifyType = BTRC_NOTIFICATION_TYPE_INTERIM;
+      mPlayStatusChangedNotifyType = BTRC_NOTIFICATION_TYPE_INTERIM;
       param.play_status = (btrc_play_status_t)mPlayStatus;
       break;
     case BTRC_EVT_TRACK_CHANGE:

@@ -15,6 +15,8 @@
 
 class nsIPrincipal;
 class nsIDocument;
+struct JSContext;
+class JSObject;
 
 namespace mozilla {
 namespace css {
@@ -34,8 +36,8 @@ public:
   // Declare addref and release so they can be called on us, but don't
   // implement them.  Our subclasses must handle their own
   // refcounting.
-  NS_IMETHOD_(nsrefcnt) AddRef() MOZ_OVERRIDE = 0;
-  NS_IMETHOD_(nsrefcnt) Release() MOZ_OVERRIDE = 0;
+  NS_IMETHOD_(MozExternalRefCountType) AddRef() MOZ_OVERRIDE = 0;
+  NS_IMETHOD_(MozExternalRefCountType) Release() MOZ_OVERRIDE = 0;
 
   NS_DECL_NSICSSDECLARATION
   using nsICSSDeclaration::GetLength;
@@ -151,5 +153,13 @@ protected:
     SetIsDOMBinding();
   }
 };
+
+bool IsCSSPropertyExposedToJS(nsCSSProperty aProperty, JSContext* cx, JSObject* obj);
+
+template <nsCSSProperty Property>
+MOZ_ALWAYS_INLINE bool IsCSSPropertyExposedToJS(JSContext* cx, JSObject* obj)
+{
+  return IsCSSPropertyExposedToJS(Property, cx, obj);
+}
 
 #endif // nsDOMCSSDeclaration_h___

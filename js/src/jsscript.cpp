@@ -35,6 +35,7 @@
 #include "gc/Marking.h"
 #include "jit/BaselineJIT.h"
 #include "jit/IonCode.h"
+#include "js/MemoryMetrics.h"
 #include "js/OldDebugAPI.h"
 #include "js/Utility.h"
 #include "vm/ArgumentsObject.h"
@@ -1391,33 +1392,77 @@ JSScript::sourceData(JSContext *cx)
     return scriptSource()->substring(cx, sourceStart(), sourceEnd());
 }
 
-SourceDataCache::AutoSuppressPurge::AutoSuppressPurge(JSContext *cx)
- : cache_(cx->runtime()->sourceDataCache)
+SourceDataCache::AutoHoldEntry::AutoHoldEntry()
+  : cache_(nullptr), source_(nullptr), charsToFree_(nullptr)
 {
-    oldValue_ = cache_.numSuppressPurges_++;
 }
 
-SourceDataCache::AutoSuppressPurge::~AutoSuppressPurge()
+void
+SourceDataCache::AutoHoldEntry::holdEntry(SourceDataCache *cache, ScriptSource *source)
 {
-    cache_.numSuppressPurges_--;
-    JS_ASSERT(cache_.numSuppressPurges_ == oldValue_);
+    // Initialise the holder for a specific cache and script source. This will
+    // hold on to the cached source chars in the event that the cache is purged.
+    JS_ASSERT(!cache_ && !source_ && !charsToFree_);
+    cache_ = cache;
+    source_ = source;
+}
+
+void
+SourceDataCache::AutoHoldEntry::deferDelete(const jschar *chars)
+{
+    // Take ownership of source chars now the cache is being purged. Remove our
+    // reference to the ScriptSource which might soon be destroyed.
+    JS_ASSERT(cache_ && source_ && !charsToFree_);
+    cache_ = nullptr;
+    source_ = nullptr;
+    charsToFree_ = chars;
+}
+
+SourceDataCache::AutoHoldEntry::~AutoHoldEntry()
+{
+    // The holder is going out of scope. If it has taken ownership of cached
+    // chars then delete them, otherwise unregister ourself with the cache.
+    if (charsToFree_) {
+        JS_ASSERT(!cache_ && !source_);
+        js_free(const_cast<jschar *>(charsToFree_));
+    } else if (cache_) {
+        JS_ASSERT(source_);
+        cache_->releaseEntry(*this);
+    }
+}
+
+void
+SourceDataCache::holdEntry(AutoHoldEntry &holder, ScriptSource *ss)
+{
+    JS_ASSERT(!holder_);
+    holder.holdEntry(this, ss);
+    holder_ = &holder;
+}
+
+void
+SourceDataCache::releaseEntry(AutoHoldEntry &holder)
+{
+    JS_ASSERT(holder_ == &holder);
+    holder_ = nullptr;
 }
 
 const jschar *
-SourceDataCache::lookup(ScriptSource *ss, const AutoSuppressPurge &asp)
+SourceDataCache::lookup(ScriptSource *ss, AutoHoldEntry &holder)
 {
-    JS_ASSERT(this == &asp.cache());
+    JS_ASSERT(!holder_);
     if (!map_)
         return nullptr;
-    if (Map::Ptr p = map_->lookup(ss))
+    if (Map::Ptr p = map_->lookup(ss)) {
+        holdEntry(holder, ss);
         return p->value();
+    }
     return nullptr;
 }
 
 bool
-SourceDataCache::put(ScriptSource *ss, const jschar *str, const AutoSuppressPurge &asp)
+SourceDataCache::put(ScriptSource *ss, const jschar *str, AutoHoldEntry &holder)
 {
-    JS_ASSERT(this == &asp.cache());
+    JS_ASSERT(!holder_);
 
     if (!map_) {
         map_ = js_new<Map>();
@@ -1431,17 +1476,28 @@ SourceDataCache::put(ScriptSource *ss, const jschar *str, const AutoSuppressPurg
         }
     }
 
-    return map_->put(ss, str);
+    if (!map_->put(ss, str))
+        return false;
+
+    holdEntry(holder, ss);
+    return true;
 }
 
 void
 SourceDataCache::purge()
 {
-    if (!map_ || numSuppressPurges_ > 0)
+    if (!map_)
         return;
 
-    for (Map::Range r = map_->all(); !r.empty(); r.popFront())
-        js_delete(const_cast<jschar*>(r.front().value()));
+    for (Map::Range r = map_->all(); !r.empty(); r.popFront()) {
+        const jschar *chars = r.front().value();
+        if (holder_ && r.front().key() == holder_->source()) {
+            holder_->deferDelete(chars);
+            holder_ = nullptr;
+        } else {
+            js_free(const_cast<jschar*>(chars));
+        }
+    }
 
     js_delete(map_);
     map_ = nullptr;
@@ -1462,7 +1518,7 @@ SourceDataCache::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf)
 }
 
 const jschar *
-ScriptSource::chars(JSContext *cx, const SourceDataCache::AutoSuppressPurge &asp)
+ScriptSource::chars(JSContext *cx, SourceDataCache::AutoHoldEntry &holder)
 {
     if (const jschar *chars = getOffThreadCompressionChars(cx))
         return chars;
@@ -1470,9 +1526,9 @@ ScriptSource::chars(JSContext *cx, const SourceDataCache::AutoSuppressPurge &asp
 
 #ifdef USE_ZLIB
     if (compressed()) {
-        if (const jschar *decompressed = cx->runtime()->sourceDataCache.lookup(this, asp))
+        if (const jschar *decompressed = cx->runtime()->sourceDataCache.lookup(this, holder))
             return decompressed;
-      
+
         const size_t nbytes = sizeof(jschar) * (length_ + 1);
         jschar *decompressed = static_cast<jschar *>(js_malloc(nbytes));
         if (!decompressed)
@@ -1487,7 +1543,7 @@ ScriptSource::chars(JSContext *cx, const SourceDataCache::AutoSuppressPurge &asp
 
         decompressed[length_] = 0;
 
-        if (!cx->runtime()->sourceDataCache.put(this, decompressed, asp)) {
+        if (!cx->runtime()->sourceDataCache.put(this, decompressed, holder)) {
             JS_ReportOutOfMemory(cx);
             js_free(decompressed);
             return nullptr;
@@ -1503,8 +1559,8 @@ JSFlatString *
 ScriptSource::substring(JSContext *cx, uint32_t start, uint32_t stop)
 {
     JS_ASSERT(start <= stop);
-    SourceDataCache::AutoSuppressPurge asp(cx);
-    const jschar *chars = this->chars(cx, asp);
+    SourceDataCache::AutoHoldEntry holder;
+    const jschar *chars = this->chars(cx, holder);
     if (!chars)
         return nullptr;
     return js_NewStringCopyN<CanGC>(cx, chars + start, stop - start);
@@ -1823,7 +1879,7 @@ ScriptSource::initFromOptions(ExclusiveContext *cx, const ReadOnlyCompileOptions
     JS_ASSERT(!filename_);
     JS_ASSERT(!introducerFilename_);
 
-    originPrincipals_ = options.originPrincipals();
+    originPrincipals_ = options.originPrincipals(cx);
     if (originPrincipals_)
         JS_HoldPrincipals(originPrincipals_);
 
@@ -2668,7 +2724,7 @@ js::PCToLineNumber(unsigned startLine, jssrcnote *notes, jsbytecode *code, jsbyt
 unsigned
 js::PCToLineNumber(JSScript *script, jsbytecode *pc, unsigned *columnp)
 {
-    /* Cope with StackFrame.pc value prior to entering js_Interpret. */
+    /* Cope with InterpreterFrame.pc value prior to entering Interpret. */
     if (!pc)
         return 0;
 
@@ -2730,28 +2786,29 @@ js_GetScriptLineExtent(JSScript *script)
 }
 
 void
-js::CurrentScriptFileLineOrigin(JSContext *cx, JSScript **script,
-                                const char **file, unsigned *linenop,
-                                uint32_t *pcOffset, JSPrincipals **origin, LineOption opt)
+js::DescribeScriptedCallerForCompilation(JSContext *cx, JSScript **maybeScript,
+                                         const char **file, unsigned *linenop,
+                                         uint32_t *pcOffset, JSPrincipals **origin,
+                                         LineOption opt)
 {
     if (opt == CALLED_FROM_JSOP_EVAL) {
         jsbytecode *pc = nullptr;
-        *script = cx->currentScript(&pc);
+        *maybeScript = cx->currentScript(&pc);
         JS_ASSERT(JSOp(*pc) == JSOP_EVAL || JSOp(*pc) == JSOP_SPREADEVAL);
         JS_ASSERT(*(pc + (JSOp(*pc) == JSOP_EVAL ? JSOP_EVAL_LENGTH
                                                  : JSOP_SPREADEVAL_LENGTH)) == JSOP_LINENO);
-        *file = (*script)->filename();
+        *file = (*maybeScript)->filename();
         *linenop = GET_UINT16(pc + (JSOp(*pc) == JSOP_EVAL ? JSOP_EVAL_LENGTH
                                                            : JSOP_SPREADEVAL_LENGTH));
-        *pcOffset = pc - (*script)->code();
-        *origin = (*script)->originPrincipals();
+        *pcOffset = pc - (*maybeScript)->code();
+        *origin = (*maybeScript)->originPrincipals();
         return;
     }
 
-    NonBuiltinScriptFrameIter iter(cx);
+    NonBuiltinFrameIter iter(cx);
 
     if (iter.done()) {
-        *script = nullptr;
+        *maybeScript = nullptr;
         *file = nullptr;
         *linenop = 0;
         *pcOffset = 0;
@@ -2759,11 +2816,19 @@ js::CurrentScriptFileLineOrigin(JSContext *cx, JSScript **script,
         return;
     }
 
-    *script = iter.script();
-    *file = (*script)->filename();
-    *linenop = PCToLineNumber(*script, iter.pc());
-    *pcOffset = iter.pc() - (*script)->code();
-    *origin = (*script)->originPrincipals();
+    *file = iter.scriptFilename();
+    *linenop = iter.computeLine();
+    *origin = iter.originPrincipals();
+
+    // These values are only used for introducer fields which are debugging
+    // information and can be safely left null for asm.js frames.
+    if (iter.hasScript()) {
+        *maybeScript = iter.script();
+        *pcOffset = iter.pc() - (*maybeScript)->code();
+    } else {
+        *maybeScript = nullptr;
+        *pcOffset = 0;
+    }
 }
 
 template <class T>
@@ -2897,8 +2962,7 @@ js::CloneScript(JSContext *cx, HandleObject enclosingScope, HandleFunction fun, 
     /* Now that all fallible allocation is complete, create the GC thing. */
 
     CompileOptions options(cx);
-    options.setPrincipals(cx->compartment()->principals)
-           .setOriginPrincipals(src->originPrincipals())
+    options.setOriginPrincipals(src->originPrincipals())
            .setCompileAndGo(src->compileAndGo())
            .setSelfHostingMode(src->selfHosted())
            .setNoScriptRval(src->noScriptRval())
@@ -3473,10 +3537,8 @@ JSScript::argumentsOptimizationFailed(JSContext *cx, HandleScript script)
          * We cannot reliably create an arguments object for Ion activations of
          * this script.  To maintain the invariant that "script->needsArgsObj
          * implies fp->hasArgsObj", the Ion bail mechanism will create an
-         * arguments object right after restoring the StackFrame and before
-         * entering the interpreter (in jit::ThunkToInterpreter).  This delay is
-         * safe since the engine avoids any observation of a StackFrame when it's
-         * runningInJit (see ScriptFrameIter::interpFrame comment).
+         * arguments object right after restoring the BaselineFrame and before
+         * entering Baseline code (in jit::FinishBailoutToBaseline).
          */
         if (i.isIon())
             continue;
@@ -3664,6 +3726,24 @@ LazyScript::initRuntimeFields(uint64_t packedFields)
     p_.treatAsRunOnce = p.treatAsRunOnce;
 }
 
+bool
+LazyScript::hasUncompiledEnclosingScript() const
+{
+    // It can happen that we created lazy scripts while compiling an enclosing
+    // script, but we errored out while compiling that script. When we iterate
+    // over lazy script in a compartment, we might see lazy scripts that never
+    // escaped to script and should be ignored.
+    //
+    // If the enclosing scope is a function with a null script or has a script
+    // without code, it was not successfully compiled.
+
+    if (!enclosingScope() || !enclosingScope()->is<JSFunction>())
+        return false;
+
+    JSFunction &fun = enclosingScope()->as<JSFunction>();
+    return fun.isInterpreted() && (!fun.mutableScript() || !fun.nonLazyScript()->code());
+}
+
 uint32_t
 LazyScript::staticLevel(JSContext *cx) const
 {
@@ -3759,13 +3839,13 @@ LazyScriptHashPolicy::match(JSScript *script, const Lookup &lookup)
         return false;
     }
 
-    SourceDataCache::AutoSuppressPurge asp(cx);
+    SourceDataCache::AutoHoldEntry holder;
 
-    const jschar *scriptChars = script->scriptSource()->chars(cx, asp);
+    const jschar *scriptChars = script->scriptSource()->chars(cx, holder);
     if (!scriptChars)
         return false;
 
-    const jschar *lazyChars = lazy->source()->chars(cx, asp);
+    const jschar *lazyChars = lazy->source()->chars(cx, holder);
     if (!lazyChars)
         return false;
 

@@ -81,7 +81,7 @@ class TypedArrayObject : public ArrayBufferViewObject
     Value getElement(uint32_t index);
     bool setElement(ThreadSafeContext *cx, uint32_t index, const Value &value);
 
-    void neuter(JSContext *cx);
+    void neuter(void *newData);
 
     static uint32_t slotWidth(int atype) {
         switch (atype) {
@@ -140,11 +140,14 @@ IsTypedArrayBuffer(HandleValue v);
 ArrayBufferObject &
 AsTypedArrayBuffer(HandleValue v);
 
+// Return value is whether the string is some integer. If the string is an
+// integer which is not representable as a uint64_t, the return value is true
+// and the resulting index is UINT64_MAX.
 bool
-StringIsTypedArrayIndex(JSLinearString *str, double *indexp);
+StringIsTypedArrayIndex(JSLinearString *str, uint64_t *indexp);
 
 inline bool
-IsTypedArrayIndex(jsid id, double *indexp)
+IsTypedArrayIndex(jsid id, uint64_t *indexp)
 {
     if (JSID_IS_INT(id)) {
         int32_t i = JSID_TO_INT(id);
@@ -156,7 +159,13 @@ IsTypedArrayIndex(jsid id, double *indexp)
     if (MOZ_UNLIKELY(!JSID_IS_STRING(id)))
         return false;
 
-    return StringIsTypedArrayIndex(JSID_TO_ATOM(id), indexp);
+    JSAtom *atom = JSID_TO_ATOM(id);
+
+    jschar c = atom->chars()[0];
+    if (!JS7_ISDEC(c) && c != '-')
+        return false;
+
+    return StringIsTypedArrayIndex(atom, indexp);
 }
 
 static inline unsigned
@@ -301,7 +310,7 @@ class DataViewObject : public ArrayBufferViewObject
     static bool setFloat64Impl(JSContext *cx, CallArgs args);
     static bool fun_setFloat64(JSContext *cx, unsigned argc, Value *vp);
 
-    static JSObject *initClass(JSContext *cx);
+    static bool initClass(JSContext *cx);
     static void neuter(JSObject *view);
     static bool getDataPointer(JSContext *cx, Handle<DataViewObject*> obj,
                                CallArgs args, size_t typeSize, uint8_t **data);
@@ -312,7 +321,7 @@ class DataViewObject : public ArrayBufferViewObject
     static bool write(JSContext *cx, Handle<DataViewObject*> obj,
                       CallArgs &args, const char *method);
 
-    void neuter();
+    void neuter(void *newData);
 
   private:
     static const JSFunctionSpec jsfuncs[];
@@ -328,7 +337,7 @@ ClampIntForUint8Array(int32_t x)
     return x;
 }
 
-extern js::ArrayBufferObject * const UNSET_BUFFER_LINK;
+bool ToDoubleForTypedArray(JSContext *cx, JS::HandleValue vp, double *d);
 
 } // namespace js
 

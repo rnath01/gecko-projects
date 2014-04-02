@@ -46,6 +46,31 @@ function ensureMobileMessage() {
 }
 
 /**
+ * Wait for one named MobileMessageManager event.
+ *
+ * Resolve if that named event occurs.  Never reject.
+ *
+ * Fulfill params: the DOMEvent passed.
+ *
+ * @param aEventName
+ *        A string event name.
+ *
+ * @return A deferred promise.
+ */
+function waitForManagerEvent(aEventName) {
+  let deferred = Promise.defer();
+
+  manager.addEventListener(aEventName, function onevent(aEvent) {
+    manager.removeEventListener(aEventName, onevent);
+
+    ok(true, "MobileMessageManager event '" + aEventName + "' got.");
+    deferred.resolve(aEvent);
+  });
+
+  return deferred.promise;
+}
+
+/**
  * Send a SMS message to a single receiver.  Resolve if it succeeds, reject
  * otherwise.
  *
@@ -331,6 +356,9 @@ function sendTextSmsToEmulator(aFrom, aText) {
 /**
  * Send raw SMS TPDU to emulator.
  *
+ * @param: aPdu
+ *         A hex string representing the whole SMS T-PDU.
+ *
  * Fulfill params:
  *   result -- an array of emulator response lines.
  *
@@ -345,62 +373,30 @@ function sendRawSmsToEmulator(aPdu) {
 }
 
 /**
- * Name space for MobileMessageDB.jsm.  Only initialized after first call to
- * newMobileMessageDB.
- */
-let MMDB;
-
-// Create a new MobileMessageDB instance.
-function newMobileMessageDB() {
-  if (!MMDB) {
-    MMDB = Cu.import("resource://gre/modules/MobileMessageDB.jsm", {});
-    is(typeof MMDB.MobileMessageDB, "function", "MMDB.MobileMessageDB");
-  }
-
-  let mmdb = new MMDB.MobileMessageDB();
-  ok(mmdb, "MobileMessageDB instance");
-  return mmdb;
-}
-
-/**
- * Initialize a MobileMessageDB.  Resolve if initialized with success, reject
- * otherwise.
+ * Send multiple raw SMS TPDU to emulator and wait
  *
- * Fulfill params: a MobileMessageDB instance.
- * Reject params: a MobileMessageDB instance.
+ * @param: aPdus
+ *         A array of hex strings. Each represents a SMS T-PDU.
  *
- * @param aMmdb
- *        A MobileMessageDB instance.
- * @param aDbName
- *        A string name for that database.
- * @param aDbVersion
- *        The version that MobileMessageDB should upgrade to. 0 for the lastest
- *        version.
+ * Fulfill params:
+ *   result -- array of resolved Promise, where
+ *             result[0].message representing the received message.
+ *             result[1-n] represents the response of sent emulator command.
+ *
+ * Reject params:
+ *   result -- an array of emulator response lines.
  *
  * @return A deferred promise.
  */
-function initMobileMessageDB(aMmdb, aDbName, aDbVersion) {
-  let deferred = Promise.defer();
+function sendMultipleRawSmsToEmulatorAndWait(aPdus) {
+  let promises = [];
 
-  aMmdb.init(aDbName, aDbVersion, function(aError) {
-    if (aError) {
-      deferred.reject(aMmdb);
-    } else {
-      deferred.resolve(aMmdb);
-    }
-  });
+  promises.push(waitForManagerEvent("received"));
+  for (let pdu of aPdus) {
+    promises.push(sendRawSmsToEmulator(pdu));
+  }
 
-  return deferred.promise;
-}
-
-/**
- * Close a MobileMessageDB.
- *
- * @return The passed MobileMessageDB instance.
- */
-function closeMobileMessageDB(aMmdb) {
-  aMmdb.close();
-  return aMmdb;
+  return Promise.all(promises);
 }
 
 /**
@@ -416,24 +412,6 @@ function messagesToIds(aMessages) {
     ids.push(message.id);
   }
   return ids;
-}
-
-// A reference to a nsIUUIDGenerator service.
-let uuidGenerator;
-
-/**
- * Generate a new UUID.
- *
- * @return A UUID string.
- */
-function newUUID() {
-  if (!uuidGenerator) {
-    uuidGenerator = Cc["@mozilla.org/uuid-generator;1"]
-                    .getService(Ci.nsIUUIDGenerator);
-    ok(uuidGenerator, "uuidGenerator");
-  }
-
-  return uuidGenerator.generateUUID().toString();
 }
 
 /**

@@ -206,9 +206,6 @@ class TreeMetadataEmitter(LoggingMixin):
                         'doesn\'t exist in %s (%s) in %s'
                         % (symbol, src, sandbox['RELATIVEDIR']))
 
-        if sandbox.get('LIBXUL_LIBRARY') and sandbox.get('FORCE_STATIC_LIB'):
-            raise SandboxValidationError('LIBXUL_LIBRARY implies FORCE_STATIC_LIB')
-
         # Proxy some variables as-is until we have richer classes to represent
         # them. We should aim to keep this set small because it violates the
         # desired abstraction of the build definition away from makefiles.
@@ -222,6 +219,7 @@ class TreeMetadataEmitter(LoggingMixin):
             'EXTRA_ASSEMBLER_FLAGS',
             'EXTRA_COMPILE_FLAGS',
             'EXTRA_COMPONENTS',
+            'EXTRA_DSO_LDOPTS',
             'EXTRA_JS_MODULES',
             'EXTRA_PP_COMPONENTS',
             'EXTRA_PP_JS_MODULES',
@@ -236,7 +234,6 @@ class TreeMetadataEmitter(LoggingMixin):
             'IS_GYP_DIR',
             'JS_MODULES_PATH',
             'LIBS',
-            'LIBXUL_LIBRARY',
             'MSVC_ENABLE_PGO',
             'NO_DIST_INSTALL',
             'OS_LIBS',
@@ -476,9 +473,25 @@ class TreeMetadataEmitter(LoggingMixin):
             filtered = m.tests
 
             if filter_inactive:
-                filtered = m.active_tests(disabled=False, **self.mozinfo)
+                # We return tests that don't exist because we want manifests
+                # defining tests that don't exist to result in error.
+                filtered = m.active_tests(exists=False, disabled=False,
+                    **self.mozinfo)
+
+                missing = [t['name'] for t in filtered if not os.path.exists(t['path'])]
+                if missing:
+                    raise SandboxValidationError('Test manifest (%s) lists '
+                        'test that does not exist: %s' % (
+                        path, ', '.join(missing)))
 
             out_dir = mozpath.join(install_prefix, manifest_reldir)
+            if 'install-to-subdir' in defaults:
+                # This is terrible, but what are you going to do?
+                out_dir = mozpath.join(out_dir, defaults['install-to-subdir'])
+                obj.manifest_obj_relpath = mozpath.join(manifest_reldir,
+                                                        defaults['install-to-subdir'],
+                                                        mozpath.basename(path))
+
 
             # "head" and "tail" lists.
             # All manifests support support-files.
@@ -549,9 +562,12 @@ class TreeMetadataEmitter(LoggingMixin):
                 # If there are no tests, look for support-files under DEFAULT.
                 process_support_files(defaults)
 
-            # We also copy the manifest into the output directory.
-            out_path = mozpath.join(out_dir, mozpath.basename(manifest_path))
-            obj.installs[path] = (out_path, False)
+            # We also copy manifests into the output directory,
+            # including manifests from [include:foo] directives.
+            for mpath in m.manifests():
+                mpath = mozpath.normpath(mpath)
+                out_path = mozpath.join(out_dir, mozpath.basename(mpath))
+                obj.installs[mpath] = (out_path, False)
 
             # Some manifests reference files that are auto generated as
             # part of the build or shouldn't be installed for some

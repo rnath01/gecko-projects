@@ -433,7 +433,7 @@
      };
 
      /**
-      * Create a directory.
+      * Create a directory and, optionally, its parent directories.
       *
       * @param {string} path The name of the directory.
       * @param {*=} options Additional options. This
@@ -445,8 +445,15 @@
       * parent directory.
       * - {bool} ignoreExisting If |false|, throw an error if the directory
       * already exists. |true| by default
-      */
-     File.makeDir = function makeDir(path, options = {}) {
+      * - {string} from If specified, the call to |makeDir| creates all the
+      * ancestors of |path| that are descendants of |from|. Note that |from|
+      * and its existing descendants must be user-writeable and that |path|
+      * must be a descendant of |from|.
+      * Example:
+      *   makeDir(Path.join(profileDir, "foo", "bar"), { from: profileDir });
+      *  creates directories profileDir/foo, profileDir/foo/bar
+       */
+     File._makeDir = function makeDir(path, options = {}) {
        let security = options.winSecurity || null;
        let result = WinFile.CreateDirectory(path, security);
 
@@ -974,7 +981,40 @@
      File.read = exports.OS.Shared.AbstractFile.read;
      File.writeAtomic = exports.OS.Shared.AbstractFile.writeAtomic;
      File.openUnique = exports.OS.Shared.AbstractFile.openUnique;
-     File.removeDir = exports.OS.Shared.AbstractFile.removeDir;
+     File.makeDir = exports.OS.Shared.AbstractFile.makeDir;
+
+     /**
+      * Remove an existing directory and its contents.
+      *
+      * @param {string} path The name of the directory.
+      * @param {*=} options Additional options.
+      *   - {bool} ignoreAbsent If |false|, throw an error if the directory doesn't
+      *     exist. |true| by default.
+      *   - {boolean} ignorePermissions If |true|, remove the file even when lacking write
+      *     permission.
+      *
+      * @throws {OS.File.Error} In case of I/O error, in particular if |path| is
+      *         not a directory.
+      */
+     File.removeDir = function(path, options) {
+       // We can't use File.stat here because it will follow the symlink.
+       let attributes = WinFile.GetFileAttributes(path);
+       if (attributes == Const.INVALID_FILE_ATTRIBUTES) {
+         if ((!("ignoreAbsent" in options) || options.ignoreAbsent) &&
+             ctypes.winLastError == Const.ERROR_FILE_NOT_FOUND) {
+           return;
+         }
+         throw new File.Error("removeEmptyDir", ctypes.winLastError, path);
+       }
+       if (attributes & Const.FILE_ATTRIBUTE_REPARSE_POINT) {
+         // Unlike Unix symlinks, NTFS junctions or NTFS symlinks to
+         // directories are directories themselves. OS.File.remove()
+         // will not work for them.
+         OS.File.removeEmptyDir(path, options);
+         return;
+       }
+       exports.OS.Shared.AbstractFile.removeRecursive(path, options);
+     };
 
      /**
       * Get the current directory by getCurrentDirectory.

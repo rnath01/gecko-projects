@@ -245,6 +245,10 @@ Leading by example::
                   "google": 1
                 },
                 "_v": "4"
+              },
+              "org.mozilla.experiment": {
+                "lastActive": "some.experiment.id"
+                "_v": "1"
               }
             }
           }
@@ -1024,6 +1028,25 @@ org.mozilla.crashes.crashes
 
 This measurement contains a historical record of application crashes.
 
+Version 2
+^^^^^^^^^
+
+The switch to version 2 coincides with the introduction of the
+:ref:`crashes_crashmanager`, which provides a more robust source of
+crash data.
+
+This measurement will be reported on each day there was a crash. The
+following fields may be present in each record:
+
+mainCrash
+   The number of main process crashes that occurred on the given day.
+
+Yes, version 2 does not track submissions like version 1. It is very
+likely submissions will be re-added later.
+
+Also absent from version 2 are plugin crashes and hangs. These will be
+re-added, likely in version 3.
+
 Version 1
 ^^^^^^^^^
 
@@ -1038,10 +1061,10 @@ submitted
 Notes
 ^^^^^
 
-Crashes are typically submitted immediately after they occur (by checking
-a box in the crash reporter, which should appear automatically after a
-crash). If the crash reporter submits the crash successfully, we get a
-submitted crash. Else, we leave it as pending.
+Main process crashes are typically submitted immediately after they
+occur (by checking a box in the crash reporter, which should appear
+automatically after a crash). If the crash reporter submits the crash
+successfully, we get a submitted crash. Else, we leave it as pending.
 
 A pending crash does not mean it will eventually be submitted.
 
@@ -1062,6 +1085,10 @@ Example
       "_v": 1,
       "pending": 1,
       "submitted": 2
+    },
+    "org.mozilla.crashes.crashes": {
+      "_v": 2,
+      "mainCrash": 2
     }
 
 org.mozilla.healthreport.submissions
@@ -1436,5 +1463,31 @@ Example
       "architecture": "x86-64",
       "name": "Darwin",
       "version": "12.2.0"
+    }
+
+
+
+org.mozilla.experiments.info
+----------------------------------
+
+Daily measurement reporting information about the Telemetry Experiments service.
+
+Version 1
+^^^^^^^^^
+
+Property:
+
+lastActive
+    ID of the final Telemetry Experiment that is active on a given day, if any.
+
+
+Example
+^^^^^^^
+
+::
+
+    "org.mozilla.experiments.info": {
+      "_v": 1,
+      "lastActive": "some.experiment.id"
     }
 

@@ -49,7 +49,7 @@ class Shmem;
 
 namespace layers {
 
-class BasicTiledLayerBuffer;
+class ClientTiledLayerBuffer;
 
 typedef nsTArray<SurfaceDescriptor> BufferArray;
 typedef std::vector<Edit> EditVector;
@@ -177,7 +177,6 @@ void
 CompositableForwarder::IdentifyTextureHost(const TextureFactoryIdentifier& aIdentifier)
 {
   mTextureFactoryIdentifier = aIdentifier;
-  mMultiProcess = aIdentifier.mParentProcessId != XRE_GetProcessType();
 }
 
 ShadowLayerForwarder::ShadowLayerForwarder()
@@ -327,47 +326,11 @@ ShadowLayerForwarder::CheckSurfaceDescriptor(const SurfaceDescriptor* aDescripto
 #endif
 
 void
-ShadowLayerForwarder::PaintedTiledLayerBuffer(CompositableClient* aCompositable,
-                                              const SurfaceDescriptorTiles& aTileLayerDescriptor)
+ShadowLayerForwarder::UseTiledLayerBuffer(CompositableClient* aCompositable,
+                                          const SurfaceDescriptorTiles& aTileLayerDescriptor)
 {
-  mTxn->AddNoSwapPaint(OpPaintTiledLayerBuffer(nullptr, aCompositable->GetIPDLActor(),
-                                               aTileLayerDescriptor));
-}
-
-void
-ShadowLayerForwarder::UpdateTexture(CompositableClient* aCompositable,
-                                    TextureIdentifier aTextureId,
-                                    SurfaceDescriptor* aDescriptor)
-{
-  if (aDescriptor->type() != SurfaceDescriptor::T__None &&
-      aDescriptor->type() != SurfaceDescriptor::Tnull_t) {
-    CheckSurfaceDescriptor(aDescriptor);
-    MOZ_ASSERT(aCompositable);
-    MOZ_ASSERT(aCompositable->GetIPDLActor());
-    mTxn->AddPaint(OpPaintTexture(nullptr, aCompositable->GetIPDLActor(), 1,
-                                  SurfaceDescriptor(*aDescriptor)));
-    *aDescriptor = SurfaceDescriptor();
-  } else {
-    NS_WARNING("Trying to send a null SurfaceDescriptor.");
-  }
-}
-
-void
-ShadowLayerForwarder::UpdateTextureNoSwap(CompositableClient* aCompositable,
-                                          TextureIdentifier aTextureId,
-                                          SurfaceDescriptor* aDescriptor)
-{
-  if (aDescriptor->type() != SurfaceDescriptor::T__None &&
-      aDescriptor->type() != SurfaceDescriptor::Tnull_t) {
-    CheckSurfaceDescriptor(aDescriptor);
-    MOZ_ASSERT(aCompositable);
-    MOZ_ASSERT(aCompositable->GetIPDLActor());
-    mTxn->AddNoSwapPaint(OpPaintTexture(nullptr, aCompositable->GetIPDLActor(), 1,
-                                        SurfaceDescriptor(*aDescriptor)));
-    *aDescriptor = SurfaceDescriptor();
-  } else {
-    NS_WARNING("Trying to send a null SurfaceDescriptor.");
-  }
+  mTxn->AddNoSwapPaint(OpUseTiledLayerBuffer(nullptr, aCompositable->GetIPDLActor(),
+                                             aTileLayerDescriptor));
 }
 
 void
@@ -440,6 +403,7 @@ ShadowLayerForwarder::UseComponentAlphaTextures(CompositableClient* aCompositabl
                                                 TextureClient* aTextureOnBlack,
                                                 TextureClient* aTextureOnWhite)
 {
+  MOZ_ASSERT(aTextureOnBlack->GetSize() == aTextureOnWhite->GetSize());
   mTxn->AddEdit(OpUseComponentAlphaTextures(nullptr, aCompositable->GetIPDLActor(),
                                             nullptr, aTextureOnBlack->GetIPDLActor(),
                                             nullptr, aTextureOnWhite->GetIPDLActor()));
@@ -465,7 +429,10 @@ ShadowLayerForwarder::RemoveTexture(TextureClient* aTexture)
 }
 
 bool
-ShadowLayerForwarder::EndTransaction(InfallibleTArray<EditReply>* aReplies, bool aScheduleComposite, bool* aSent)
+ShadowLayerForwarder::EndTransaction(InfallibleTArray<EditReply>* aReplies,
+                                     const nsIntRegion& aRegionToClear,
+                                     bool aScheduleComposite,
+                                     bool* aSent)
 {
   *aSent = false;
 
@@ -561,7 +528,11 @@ ShadowLayerForwarder::EndTransaction(InfallibleTArray<EditReply>* aReplies, bool
 
   mWindowOverlayChanged = false;
 
-  TargetConfig targetConfig(mTxn->mTargetBounds, mTxn->mTargetRotation, mTxn->mClientBounds, mTxn->mTargetOrientation);
+  TargetConfig targetConfig(mTxn->mTargetBounds,
+                            mTxn->mTargetRotation,
+                            mTxn->mClientBounds,
+                            mTxn->mTargetOrientation,
+                            aRegionToClear);
 
   MOZ_LAYERS_LOG(("[LayersForwarder] syncing before send..."));
   PlatformSyncBeforeUpdate();
@@ -683,7 +654,7 @@ ShadowLayerForwarder::GetDescriptorSurfaceContentType(
 
   nsRefPtr<gfxASurface> surface = OpenDescriptor(aMode, aDescriptor);
   content = surface->GetContentType();
-  *aSurface = surface.forget().get();
+  surface.forget(aSurface);
   return content;
 }
 
@@ -723,7 +694,7 @@ ShadowLayerForwarder::GetDescriptorSurfaceImageFormat(
   NS_ASSERTION(format != gfxImageFormat::Unknown,
                "ImageSurface RGB format should be known");
 
-  *aSurface = surface.forget().get();
+  surface.forget(aSurface);
   return format;
 }
 
@@ -898,78 +869,12 @@ ShadowLayerForwarder::Connect(CompositableClient* aCompositable)
 }
 
 void
-ShadowLayerForwarder::CreatedSingleBuffer(CompositableClient* aCompositable,
-                                          const SurfaceDescriptor& aDescriptor,
-                                          const TextureInfo& aTextureInfo,
-                                          const SurfaceDescriptor* aDescriptorOnWhite)
-{
-  CheckSurfaceDescriptor(&aDescriptor);
-  CheckSurfaceDescriptor(aDescriptorOnWhite);
-
-  MOZ_ASSERT(aDescriptor.type() != SurfaceDescriptor::T__None &&
-             aDescriptor.type() != SurfaceDescriptor::Tnull_t);
-  mTxn->AddEdit(OpCreatedTexture(nullptr, aCompositable->GetIPDLActor(),
-                                 TextureFront,
-                                 aDescriptor,
-                                 aTextureInfo));
-  if (aDescriptorOnWhite) {
-    mTxn->AddEdit(OpCreatedTexture(nullptr, aCompositable->GetIPDLActor(),
-                                   TextureOnWhiteFront,
-                                   *aDescriptorOnWhite,
-                                   aTextureInfo));
-  }
-}
-
-void
 ShadowLayerForwarder::CreatedIncrementalBuffer(CompositableClient* aCompositable,
                                                const TextureInfo& aTextureInfo,
                                                const nsIntRect& aBufferRect)
 {
   mTxn->AddNoSwapPaint(OpCreatedIncrementalTexture(nullptr, aCompositable->GetIPDLActor(),
                                                    aTextureInfo, aBufferRect));
-}
-
-void
-ShadowLayerForwarder::CreatedDoubleBuffer(CompositableClient* aCompositable,
-                                          const SurfaceDescriptor& aFrontDescriptor,
-                                          const SurfaceDescriptor& aBackDescriptor,
-                                          const TextureInfo& aTextureInfo,
-                                          const SurfaceDescriptor* aFrontDescriptorOnWhite,
-                                          const SurfaceDescriptor* aBackDescriptorOnWhite)
-{
-  CheckSurfaceDescriptor(&aFrontDescriptor);
-  CheckSurfaceDescriptor(&aBackDescriptor);
-  CheckSurfaceDescriptor(aFrontDescriptorOnWhite);
-  CheckSurfaceDescriptor(aBackDescriptorOnWhite);
-  MOZ_ASSERT(aFrontDescriptor.type() != SurfaceDescriptor::T__None &&
-             aBackDescriptor.type() != SurfaceDescriptor::T__None &&
-             aFrontDescriptor.type() != SurfaceDescriptor::Tnull_t &&
-             aBackDescriptor.type() != SurfaceDescriptor::Tnull_t);
-  mTxn->AddEdit(OpCreatedTexture(nullptr, aCompositable->GetIPDLActor(),
-                                 TextureFront,
-                                 aFrontDescriptor,
-                                 aTextureInfo));
-  mTxn->AddEdit(OpCreatedTexture(nullptr, aCompositable->GetIPDLActor(),
-                                 TextureBack,
-                                 aBackDescriptor,
-                                 aTextureInfo));
-  if (aFrontDescriptorOnWhite) {
-    MOZ_ASSERT(aBackDescriptorOnWhite);
-    mTxn->AddEdit(OpCreatedTexture(nullptr, aCompositable->GetIPDLActor(),
-                                   TextureOnWhiteFront,
-                                   *aFrontDescriptorOnWhite,
-                                   aTextureInfo));
-    mTxn->AddEdit(OpCreatedTexture(nullptr, aCompositable->GetIPDLActor(),
-                                   TextureOnWhiteBack,
-                                   *aBackDescriptorOnWhite,
-                                   aTextureInfo));
-  }
-}
-
-void
-ShadowLayerForwarder::DestroyThebesBuffer(CompositableClient* aCompositable)
-{
-  mTxn->AddEdit(OpDestroyThebesBuffer(nullptr, aCompositable->GetIPDLActor()));
 }
 
 void ShadowLayerForwarder::Attach(CompositableClient* aCompositable,

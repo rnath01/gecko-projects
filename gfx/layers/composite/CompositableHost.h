@@ -202,29 +202,6 @@ public:
   }
 
   /**
-   * Ensure that a suitable texture host exists in this compositable. The
-   * compositable host may or may not create a new texture host. If a texture
-   * host is replaced, then the compositable is responsible for enusring it is
-   * destroyed correctly (without leaking resources).
-   * aTextureId - identifies the texture within the compositable, how the
-   * compositable chooses to use this is between the compositable client and
-   * host and will vary between types of compositable.
-   * aSurface - the new or existing texture host should support surface
-   * descriptors of the same type and, if necessary, this specific surface
-   * descriptor. Whether it is necessary or not depends on the protocol between
-   * the compositable client and host.
-   * aAllocator - the allocator used to allocate and de-allocate resources.
-   * aTextureInfo - contains flags for the texture.
-   */
-  virtual void EnsureDeprecatedTextureHost(TextureIdentifier aTextureId,
-                                 const SurfaceDescriptor& aSurface,
-                                 ISurfaceAllocator* aAllocator,
-                                 const TextureInfo& aTextureInfo)
-  {
-    MOZ_ASSERT(false, "should be implemented or not used");
-  }
-
-  /**
    * Ensure that a suitable texture host exists in this compsitable.
    *
    * Only used with ContentHostIncremental.
@@ -233,9 +210,9 @@ public:
    * don't have a single surface for the texture contents, and we
    * need to allocate our own one to be updated later.
    */
-  virtual void EnsureDeprecatedTextureHostIncremental(ISurfaceAllocator* aAllocator,
-                                            const TextureInfo& aTextureInfo,
-                                            const nsIntRect& aBufferRect)
+  virtual void CreatedIncrementalTexture(ISurfaceAllocator* aAllocator,
+                                         const TextureInfo& aTextureInfo,
+                                         const nsIntRect& aBufferRect)
   {
     MOZ_ASSERT(false, "should be implemented or not used");
   }
@@ -333,11 +310,17 @@ public:
 
   virtual void RemoveTextureHost(TextureHost* aTexture);
 
+  // Called every time this is composited
+  void BumpFlashCounter() {
+    mFlashCounter = mFlashCounter >= DIAGNOSTIC_FLASH_COUNTER_MAX
+                  ? DIAGNOSTIC_FLASH_COUNTER_MAX : mFlashCounter + 1;
+  }
 protected:
   TextureInfo mTextureInfo;
   Compositor* mCompositor;
   Layer* mLayer;
   RefPtr<CompositableBackendSpecificData> mBackendData;
+  uint32_t mFlashCounter; // used when the pref "layers.flash-borders" is true.
   bool mAttached;
   bool mKeepAttached;
 };

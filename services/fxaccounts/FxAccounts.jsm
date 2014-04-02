@@ -15,9 +15,11 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
-Cu.import("resource://gre/modules/FxAccountsClient.jsm");
 Cu.import("resource://gre/modules/FxAccountsCommon.js");
 Cu.import("resource://gre/modules/FxAccountsUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "FxAccountsClient",
+  "resource://gre/modules/FxAccountsClient.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "jwcrypto",
   "resource://gre/modules/identity/jwcrypto.jsm");
@@ -26,7 +28,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "jwcrypto",
 let publicProperties = [
   "getAccountsClient",
   "getAccountsSignInURI",
-  "getAccountsURI",
+  "getAccountsSignUpURI",
   "getAssertion",
   "getKeys",
   "getSignedInUser",
@@ -67,22 +69,22 @@ AccountState.prototype = {
   cert: null,
   keyPair: null,
   signedInUser: null,
-  whenVerifiedPromise: null,
-  whenKeysReadyPromise: null,
+  whenVerifiedDeferred: null,
+  whenKeysReadyDeferred: null,
 
   get isCurrent() this.fxaInternal && this.fxaInternal.currentAccountState === this,
 
   abort: function() {
-    if (this.whenVerifiedPromise) {
-      this.whenVerifiedPromise.reject(
+    if (this.whenVerifiedDeferred) {
+      this.whenVerifiedDeferred.reject(
         new Error("Verification aborted; Another user signing in"));
-      this.whenVerifiedPromise = null;
+      this.whenVerifiedDeferred = null;
     }
 
-    if (this.whenKeysReadyPromise) {
-      this.whenKeysReadyPromise.reject(
+    if (this.whenKeysReadyDeferred) {
+      this.whenKeysReadyDeferred.reject(
         new Error("Verification aborted; Another user signing in"));
-      this.whenKeysReadyPromise = null;
+      this.whenKeysReadyDeferred = null;
     }
     this.cert = null;
     this.keyPair = null;
@@ -249,8 +251,6 @@ function FxAccountsInternal() {
   this.currentTimer = null;
   this.currentAccountState = new AccountState(this);
 
-  this.fxAccountsClient = new FxAccountsClient();
-
   // We don't reference |profileDir| in the top-level module scope
   // as we may be imported before we know where it is.
   this.signedInUserStorage = new JSONStorage({
@@ -268,6 +268,15 @@ FxAccountsInternal.prototype = {
    * The current data format's version number.
    */
   version: DATA_FORMAT_VERSION,
+
+  _fxAccountsClient: null,
+
+  get fxAccountsClient() {
+    if (!this._fxAccountsClient) {
+      this._fxAccountsClient = new FxAccountsClient();
+    }
+    return this._fxAccountsClient;
+  },
 
   /**
    * Return the current time in milliseconds as an integer.  Allows tests to
@@ -360,13 +369,15 @@ FxAccountsInternal.prototype = {
    *        The credentials object obtained by logging in or creating
    *        an account on the FxA server:
    *        {
-   *          email: The users email address
-   *          uid: The user's unique id
-   *          sessionToken: Session for the FxA server
-   *          keyFetchToken: an unused keyFetchToken
-   *          verified: true/false
    *          authAt: The time (seconds since epoch) that this record was
    *                  authenticated
+   *          email: The users email address
+   *          keyFetchToken: a keyFetchToken which has not yet been used
+   *          sessionToken: Session for the FxA server
+   *          uid: The user's unique id
+   *          unwrapBKey: used to unwrap kB, derived locally from the
+   *                      password (not revealed to the FxA server)
+   *          verified: true/false
    *        }
    * @return Promise
    *         The promise resolves to null when the data is saved
@@ -398,7 +409,7 @@ FxAccountsInternal.prototype = {
   getAssertion: function getAssertion(audience) {
     log.debug("enter getAssertion()");
     let currentState = this.currentAccountState;
-    let mustBeValidUntil = this.now() + ASSERTION_LIFETIME;
+    let mustBeValidUntil = this.now() + ASSERTION_USE_PERIOD;
     return currentState.getUserAccountData().then(data => {
       if (!data) {
         // No signed-in user
@@ -484,13 +495,19 @@ FxAccountsInternal.prototype = {
       if (data.kA && data.kB) {
         return data;
       }
-      if (!currentState.whenKeysReadyPromise) {
-        currentState.whenKeysReadyPromise = Promise.defer();
+      if (!currentState.whenKeysReadyDeferred) {
+        currentState.whenKeysReadyDeferred = Promise.defer();
         this.fetchAndUnwrapKeys(data.keyFetchToken).then(data => {
-          currentState.whenKeysReadyPromise.resolve(data);
+          if (!data.kA || !data.kB) {
+            currentState.whenKeysReadyDeferred.reject(
+              new Error("user data missing kA or kB")
+            );
+            return;
+          }
+          currentState.whenKeysReadyDeferred.resolve(data);
         });
       }
-      return currentState.whenKeysReadyPromise.promise;
+      return currentState.whenKeysReadyDeferred.promise;
     }).then(result => currentState.resolve(result));
    },
 
@@ -540,6 +557,7 @@ FxAccountsInternal.prototype = {
     let payload = {};
     let d = Promise.defer();
     let options = {
+      duration: ASSERTION_LIFETIME,
       localtimeOffsetMsec: this.localtimeOffsetMsec,
       now: this.now()
     };
@@ -607,11 +625,11 @@ FxAccountsInternal.prototype = {
       log.debug("already verified");
       return currentState.resolve(data);
     }
-    if (!currentState.whenVerifiedPromise) {
+    if (!currentState.whenVerifiedDeferred) {
       log.debug("whenVerified promise starts polling for verified email");
       this.pollEmailStatus(currentState, data.sessionToken, "start");
     }
-    return currentState.whenVerifiedPromise.promise.then(
+    return currentState.whenVerifiedDeferred.promise.then(
       result => currentState.resolve(result)
     );
   },
@@ -629,8 +647,8 @@ FxAccountsInternal.prototype = {
       // if the user requested the verification email to be resent while we
       // were already polling for receipt of an earlier email.
       this.pollTimeRemaining = this.POLL_SESSION;
-      if (!currentState.whenVerifiedPromise) {
-        currentState.whenVerifiedPromise = Promise.defer();
+      if (!currentState.whenVerifiedDeferred) {
+        currentState.whenVerifiedDeferred = Promise.defer();
       }
     }
 
@@ -647,9 +665,9 @@ FxAccountsInternal.prototype = {
             })
             .then((data) => {
               // Now that the user is verified, we can proceed to fetch keys
-              if (currentState.whenVerifiedPromise) {
-                currentState.whenVerifiedPromise.resolve(data);
-                delete currentState.whenVerifiedPromise;
+              if (currentState.whenVerifiedDeferred) {
+                currentState.whenVerifiedDeferred.resolve(data);
+                delete currentState.whenVerifiedDeferred;
               }
             });
         } else {
@@ -661,11 +679,11 @@ FxAccountsInternal.prototype = {
               this.pollEmailStatus(currentState, sessionToken, "timer")}, this.POLL_STEP);
             log.debug("started timer " + this.currentTimer);
           } else {
-            if (currentState.whenVerifiedPromise) {
-              currentState.whenVerifiedPromise.reject(
+            if (currentState.whenVerifiedDeferred) {
+              currentState.whenVerifiedDeferred.reject(
                 new Error("User email verification timed out.")
               );
-              delete currentState.whenVerifiedPromise;
+              delete currentState.whenVerifiedDeferred;
             }
           }
         }
@@ -673,8 +691,8 @@ FxAccountsInternal.prototype = {
     },
 
   // Return the URI of the remote UI flows.
-  getAccountsURI: function() {
-    let url = Services.urlFormatter.formatURLPref("identity.fxaccounts.remote.uri");
+  getAccountsSignUpURI: function() {
+    let url = Services.urlFormatter.formatURLPref("identity.fxaccounts.remote.signup.uri");
     if (!/^https:/.test(url)) { // Comment to un-break emacs js-mode highlighting
       throw new Error("Firefox Accounts server must use HTTPS");
     }

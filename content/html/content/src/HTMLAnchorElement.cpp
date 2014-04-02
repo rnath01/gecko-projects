@@ -7,6 +7,7 @@
 #include "mozilla/dom/HTMLAnchorElement.h"
 
 #include "mozilla/dom/HTMLAnchorElementBinding.h"
+#include "mozilla/EventDispatcher.h"
 #include "mozilla/MemoryReporting.h"
 #include "nsCOMPtr.h"
 #include "nsContentUtils.h"
@@ -55,11 +56,13 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(HTMLAnchorElement)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(HTMLAnchorElement,
                                                   nsGenericHTMLElement)
   tmp->Link::Traverse(cb);
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRelList)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLAnchorElement,
                                                 nsGenericHTMLElement)
   tmp->Link::Unlink();
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mRelList)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_ELEMENT_CLONE(HTMLAnchorElement)
@@ -242,13 +245,13 @@ HTMLAnchorElement::IsHTMLFocusable(bool aWithMouse,
 }
 
 nsresult
-HTMLAnchorElement::PreHandleEvent(nsEventChainPreVisitor& aVisitor)
+HTMLAnchorElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
 {
   return PreHandleEventForAnchors(aVisitor);
 }
 
 nsresult
-HTMLAnchorElement::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
+HTMLAnchorElement::PostHandleEvent(EventChainPostVisitor& aVisitor)
 {
   return PostHandleEventForAnchors(aVisitor);
 }
@@ -283,6 +286,15 @@ HTMLAnchorElement::SetTarget(const nsAString& aValue)
   return SetAttr(kNameSpaceID_None, nsGkAtoms::target, aValue, true);
 }
 
+nsDOMTokenList*
+HTMLAnchorElement::RelList()
+{
+  if (!mRelList) {
+    mRelList = new nsDOMTokenList(this, nsGkAtoms::rel);
+  }
+  return mRelList;
+}
+
 #define IMPL_URI_PART(_part)                                 \
   NS_IMETHODIMP                                              \
   HTMLAnchorElement::Get##_part(nsAString& a##_part)         \
@@ -310,7 +322,9 @@ IMPL_URI_PART(Hash)
 NS_IMETHODIMP    
 HTMLAnchorElement::GetText(nsAString& aText)
 {
-  nsContentUtils::GetNodeTextContent(this, true, aText);
+  if(!nsContentUtils::GetNodeTextContent(this, true, aText)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
   return NS_OK;
 }
 

@@ -1,3 +1,4 @@
+// -*- Mode: js2; tab-width: 2; indent-tabs-mode: nil; js2-basic-offset: 2; js2-skip-preprocessor-directives: t; -*-
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -19,7 +20,7 @@ var SelectionHandler = {
   // stored here are relative to the _contentWindow window.
   _cache: null,
   _activeType: 0, // TYPE_NONE
-  _ignoreSelectionChanges: false, // True while user drags text selection handles
+  _draggingHandles: false, // True while user drags text selection handles
   _ignoreCompositionChanges: false, // Persist caret during IME composition updates
 
   // The window that holds the selection (can be a sub-frame)
@@ -61,6 +62,7 @@ var SelectionHandler = {
 
     BrowserApp.deck.addEventListener("pagehide", this, false);
     BrowserApp.deck.addEventListener("blur", this, true);
+    BrowserApp.deck.addEventListener("scroll", this, true);
   },
 
   _removeObservers: function sh_removeObservers() {
@@ -74,6 +76,7 @@ var SelectionHandler = {
 
     BrowserApp.deck.removeEventListener("pagehide", this);
     BrowserApp.deck.removeEventListener("blur", this);
+    BrowserApp.deck.removeEventListener("scroll", this);
   },
 
   observe: function sh_observe(aSubject, aTopic, aData) {
@@ -118,9 +121,9 @@ var SelectionHandler = {
       case "TextSelection:Move": {
         let data = JSON.parse(aData);
         if (this._activeType == this.TYPE_SELECTION) {
-          // Ignore selectionChange notifications when handle movement starts
-          this._ignoreSelectionChanges = true;
+          this._startDraggingHandles();
           this._moveSelection(data.handleType == this.HANDLE_TYPE_START, data.x, data.y);
+
         } else if (this._activeType == this.TYPE_CURSOR) {
           // Ignore IMM composition notifications when caret movement starts
           this._ignoreCompositionChanges = true;
@@ -135,11 +138,10 @@ var SelectionHandler = {
       }
       case "TextSelection:Position": {
         if (this._activeType == this.TYPE_SELECTION) {
-          // Ignore selectionChange notifications when handle movement starts
-          this._ignoreSelectionChanges = true;
+          this._startDraggingHandles();
+
           // Check to see if the handles should be reversed.
           let isStartHandle = JSON.parse(aData).handleType == this.HANDLE_TYPE_START;
-
           try {
             let selectionReversed = this._updateCacheForSelection(isStartHandle);
             if (selectionReversed) {
@@ -156,8 +158,7 @@ var SelectionHandler = {
             break;
           }
 
-          // Act on selectionChange notifications after handle movement ends
-          this._ignoreSelectionChanges = false;
+          this._stopDraggingHandles();
           this._positionHandles();
 
         } else if (this._activeType == this.TYPE_CURSOR) {
@@ -182,8 +183,31 @@ var SelectionHandler = {
     }
   },
 
+  // Ignore selectionChange notifications during handle dragging, disable dynamic
+  // IME text compositions (autoSuggest, autoCorrect, etc)
+  _startDraggingHandles: function sh_startDraggingHandles() {
+    if (!this._draggingHandles) {
+      this._draggingHandles = true;
+      sendMessageToJava({ type: "TextSelection:IMECompositions", suppress: true });
+    }
+  },
+
+  // Act on selectionChange notifications when not dragging handles, allow dynamic
+  // IME text compositions (autoSuggest, autoCorrect, etc)
+  _stopDraggingHandles: function sh_stopDraggingHandles() {
+    if (this._draggingHandles) {
+      this._draggingHandles = false;
+      sendMessageToJava({ type: "TextSelection:IMECompositions", suppress: false });
+    }
+  },
+
   handleEvent: function sh_handleEvent(aEvent) {
     switch (aEvent.type) {
+      case "scroll":
+        // Maintain position when top-level document is scrolled
+        this._positionHandles();
+        break;
+
       case "pagehide":
       case "blur":
         this._closeSelection();
@@ -224,7 +248,7 @@ var SelectionHandler = {
 
   notifySelectionChanged: function sh_notifySelectionChanged(aDocument, aSelection, aReason) {
     // Ignore selectionChange notifications during handle movements
-    if (this._ignoreSelectionChanges) {
+    if (this._draggingHandles) {
       return;
     }
 
@@ -257,7 +281,7 @@ var SelectionHandler = {
     // Clear out any existing active selection
     this._closeSelection();
 
-    this._initTargetInfo(aElement);
+    this._initTargetInfo(aElement, this.TYPE_SELECTION);
 
     // Clear any existing selection from the document
     this._contentWindow.getSelection().removeAllRanges();
@@ -273,6 +297,42 @@ var SelectionHandler = {
     if (!selection || selection.rangeCount == 0 || selection.getRangeAt(0).collapsed) {
       this._deactivate();
       return false;
+    }
+
+    if (this._isPhoneNumber(selection.toString())) {
+      let anchorNode = selection.anchorNode;
+      let anchorOffset = selection.anchorOffset;
+      let focusNode = null;
+      let focusOffset = null;
+      while (this._isPhoneNumber(selection.toString().trim())) {
+        focusNode = selection.focusNode;
+        focusOffset = selection.focusOffset;
+        selection.modify("extend", "forward", "word");
+        // if we hit the end of the text on the page, we can't advance the selection
+        if (focusNode == selection.focusNode && focusOffset == selection.focusOffset) {
+          break;
+        }
+      }
+
+      // reverse selection
+      selection.collapse(focusNode, focusOffset);
+      selection.extend(anchorNode, anchorOffset);
+
+      anchorNode = focusNode;
+      anchorOffset = focusOffset
+
+      while (this._isPhoneNumber(selection.toString().trim())) {
+        focusNode = selection.focusNode;
+        focusOffset = selection.focusOffset;
+        selection.modify("extend", "backward", "word");
+        // if we hit the end of the text on the page, we can't advance the selection
+        if (focusNode == selection.focusNode && focusOffset == selection.focusOffset) {
+          break;
+        }
+      }
+
+      selection.collapse(focusNode, focusOffset);
+      selection.extend(anchorNode, anchorOffset);
     }
 
     // Add a listener to end the selection if it's removed programatically
@@ -494,6 +554,20 @@ var SelectionHandler = {
       selector: ClipboardHelper.searchWithContext,
     },
 
+    CALL: {
+      label: Strings.browser.GetStringFromName("contextmenu.call"),
+      id: "call_action",
+      icon: "drawable://phone",
+      action: function() {
+        SelectionHandler.callSelection();
+      },
+      order: 1,
+      selector: {
+        matches: function isPhoneNumber(aElement, aX, aY) {
+          return null != SelectionHandler._getSelectedPhoneNumber();
+        }
+      },
+    },
   },
 
   /*
@@ -510,7 +584,7 @@ var SelectionHandler = {
           (aElement instanceof HTMLTextAreaElement)))
       return;
 
-    this._initTargetInfo(aElement);
+    this._initTargetInfo(aElement, this.TYPE_CURSOR);
 
     // Caret-specific observer/listeners
     Services.obs.addObserver(this, "TextSelection:UpdateCaretPos", false);
@@ -525,16 +599,19 @@ var SelectionHandler = {
   },
 
   // Target initialization for both TYPE_CURSOR and TYPE_SELECTION
-  _initTargetInfo: function sh_initTargetInfo(aElement) {
+  _initTargetInfo: function sh_initTargetInfo(aElement, aSelectionType) {
     this._targetElement = aElement;
     if (aElement instanceof Ci.nsIDOMNSEditableElement) {
-      // Blur the targetElement to force IME code to undo previous style compositions
-      // (visible underlines / etc generated by autoCorrection, autoSuggestion)
-      aElement.blur();
+      if (aSelectionType === this.TYPE_SELECTION) {
+        // Blur the targetElement to force IME code to undo previous style compositions
+        // (visible underlines / etc generated by autoCorrection, autoSuggestion)
+        aElement.blur();
+      }
       // Ensure targetElement is now focused normally
       aElement.focus();
     }
 
+    this._stopDraggingHandles();
     this._contentWindow = aElement.ownerDocument.defaultView;
     this._isRTL = (this._contentWindow.getComputedStyle(aElement, "").direction == "rtl");
 
@@ -742,6 +819,24 @@ var SelectionHandler = {
     this._closeSelection();
   },
 
+  _phoneRegex: /^\+?[0-9\s,-.\(\)*#pw]{1,30}$/,
+
+  _getSelectedPhoneNumber: function sh_getSelectedPhoneNumber() {
+    return this._isPhoneNumber(this._getSelectedText().trim());
+  },
+
+  _isPhoneNumber: function sh_isPhoneNumber(selectedText) {
+    return (this._phoneRegex.test(selectedText) ? selectedText : null);
+  },
+
+  callSelection: function sh_callSelection() {
+    let selectedText = this._getSelectedPhoneNumber();
+    if (selectedText) {
+      BrowserApp.loadURI("tel:" + selectedText);
+    }
+    this._closeSelection();
+  },
+
   /*
    * Shuts SelectionHandler down.
    */
@@ -769,6 +864,7 @@ var SelectionHandler = {
   },
 
   _deactivate: function sh_deactivate() {
+    this._stopDraggingHandles();
     sendMessageToJava({ type: "TextSelection:HideHandles" });
 
     this._removeObservers();
@@ -785,7 +881,6 @@ var SelectionHandler = {
     this._targetElement = null;
     this._isRTL = false;
     this._cache = null;
-    this._ignoreSelectionChanges = false;
     this._ignoreCompositionChanges = false;
 
     this._activeType = this.TYPE_NONE;
@@ -902,6 +997,7 @@ var SelectionHandler = {
       positions: positions,
       rtl: this._isRTL
     });
+    this._updateMenu();
   },
 
   subdocumentScrolled: function sh_subdocumentScrolled(aElement) {

@@ -32,7 +32,7 @@
 #include "nsIScriptObjectPrincipal.h"
 #include "nsITimer.h"
 #include "nsIDOMModalContentWindow.h"
-#include "nsEventListenerManager.h"
+#include "mozilla/EventListenerManager.h"
 #include "nsIPrincipal.h"
 #include "nsSize.h"
 #include "mozFlushType.h"
@@ -94,7 +94,6 @@ class nsScreen;
 class nsHistory;
 class nsGlobalWindowObserver;
 class nsGlobalWindow;
-class nsDOMEventTargetHelper;
 class nsDOMWindowUtils;
 class nsIIdleService;
 struct nsIntSize;
@@ -103,14 +102,17 @@ struct nsRect;
 class nsWindowSizes;
 
 namespace mozilla {
+class DOMEventTargetHelper;
 class Selection;
 namespace dom {
 class BarProp;
 class Console;
+class External;
 class Function;
 class Gamepad;
 class MediaQueryList;
 class Navigator;
+class OwningExternalOrWindowProxy;
 class SpeechSynthesis;
 class WakeLock;
 namespace indexedDB {
@@ -384,11 +386,11 @@ public:
   // nsIDOMEventTarget
   NS_DECL_NSIDOMEVENTTARGET
 
-  virtual nsEventListenerManager*
-  GetExistingListenerManager() const MOZ_OVERRIDE;
+  virtual mozilla::EventListenerManager*
+    GetExistingListenerManager() const MOZ_OVERRIDE;
 
-  virtual nsEventListenerManager*
-  GetOrCreateListenerManager() MOZ_OVERRIDE;
+  virtual mozilla::EventListenerManager*
+    GetOrCreateListenerManager() MOZ_OVERRIDE;
 
   using mozilla::dom::EventTarget::RemoveEventListener;
   virtual void AddEventListener(const nsAString& aType,
@@ -682,8 +684,8 @@ public:
 
   void UnmarkGrayTimers();
 
-  void AddEventTargetObject(nsDOMEventTargetHelper* aObject);
-  void RemoveEventTargetObject(nsDOMEventTargetHelper* aObject);
+  void AddEventTargetObject(mozilla::DOMEventTargetHelper* aObject);
+  void RemoveEventTargetObject(mozilla::DOMEventTargetHelper* aObject);
 
   void NotifyIdleObserver(IdleObserverHolder* aIdleObserverHolder,
                           bool aCallOnidle);
@@ -727,13 +729,13 @@ public:
 #define EVENT(name_, id_, type_, struct_)                                     \
   mozilla::dom::EventHandlerNonNull* GetOn##name_()                           \
   {                                                                           \
-    nsEventListenerManager *elm = GetExistingListenerManager();               \
+    mozilla::EventListenerManager* elm = GetExistingListenerManager();        \
     return elm ? elm->GetEventHandler(nsGkAtoms::on##name_, EmptyString())    \
                : nullptr;                                                     \
   }                                                                           \
   void SetOn##name_(mozilla::dom::EventHandlerNonNull* handler)               \
   {                                                                           \
-    nsEventListenerManager *elm = GetOrCreateListenerManager();               \
+    mozilla::EventListenerManager* elm = GetOrCreateListenerManager();        \
     if (elm) {                                                                \
       elm->SetEventHandler(nsGkAtoms::on##name_, EmptyString(), handler);     \
     }                                                                         \
@@ -741,12 +743,12 @@ public:
 #define ERROR_EVENT(name_, id_, type_, struct_)                               \
   mozilla::dom::OnErrorEventHandlerNonNull* GetOn##name_()                    \
   {                                                                           \
-    nsEventListenerManager *elm = GetExistingListenerManager();               \
+    mozilla::EventListenerManager* elm = GetExistingListenerManager();        \
     return elm ? elm->GetOnErrorEventHandler() : nullptr;                     \
   }                                                                           \
   void SetOn##name_(mozilla::dom::OnErrorEventHandlerNonNull* handler)        \
   {                                                                           \
-    nsEventListenerManager *elm = GetOrCreateListenerManager();               \
+    mozilla::EventListenerManager* elm = GetOrCreateListenerManager();        \
     if (elm) {                                                                \
       elm->SetEventHandler(handler);                                          \
     }                                                                         \
@@ -754,19 +756,19 @@ public:
 #define BEFOREUNLOAD_EVENT(name_, id_, type_, struct_)                        \
   mozilla::dom::OnBeforeUnloadEventHandlerNonNull* GetOn##name_()             \
   {                                                                           \
-    nsEventListenerManager *elm = GetExistingListenerManager();               \
+    mozilla::EventListenerManager* elm = GetExistingListenerManager();        \
     return elm ? elm->GetOnBeforeUnloadEventHandler() : nullptr;              \
   }                                                                           \
   void SetOn##name_(mozilla::dom::OnBeforeUnloadEventHandlerNonNull* handler) \
   {                                                                           \
-    nsEventListenerManager *elm = GetOrCreateListenerManager();               \
+    mozilla::EventListenerManager* elm = GetOrCreateListenerManager();        \
     if (elm) {                                                                \
       elm->SetEventHandler(handler);                                          \
     }                                                                         \
   }
 #define WINDOW_ONLY_EVENT EVENT
 #define TOUCH_EVENT EVENT
-#include "nsEventNameList.h"
+#include "mozilla/EventNameList.h"
 #undef TOUCH_EVENT
 #undef WINDOW_ONLY_EVENT
 #undef BEFOREUNLOAD_EVENT
@@ -822,6 +824,10 @@ public:
   nsIDOMOfflineResourceList* GetApplicationCache(mozilla::ErrorResult& aError);
 
   mozilla::dom::Console* GetConsole(mozilla::ErrorResult& aRv);
+
+  void GetSidebar(mozilla::dom::OwningExternalOrWindowProxy& aResult,
+                  mozilla::ErrorResult& aRv);
+  already_AddRefed<mozilla::dom::External> GetExternal(mozilla::ErrorResult& aRv);
 
 protected:
   bool AlertOrConfirm(bool aAlert, const nsAString& aMessage,
@@ -1170,9 +1176,8 @@ protected:
   already_AddRefed<nsIBaseWindow> GetTreeOwnerWindow();
   already_AddRefed<nsIWebBrowserChrome> GetWebBrowserChrome();
   nsresult SecurityCheckURL(const char *aURL);
-  nsresult BuildURIfromBase(const char *aURL,
-                            nsIURI **aBuiltURI,
-                            bool *aFreeSecurityPass, JSContext **aCXused);
+  nsresult BuildURIfromBase(const char *aURL, nsIURI **aBuiltURI,
+                            JSContext **aCXused);
   bool PopupWhitelisted();
   PopupControlState RevisePopupAbuseLevel(PopupControlState);
   void     FireAbuseEvents(bool aBlocked, bool aWindow,
@@ -1302,8 +1307,6 @@ protected:
 
   inline int32_t DOMMinTimeoutValue() const;
 
-  nsresult CreateOuterObject(nsGlobalWindow* aNewInner);
-  nsresult SetOuterObject(JSContext* aCx, JS::Handle<JSObject*> aOuterObject);
   nsresult CloneStorageEvent(const nsAString& aType,
                              nsCOMPtr<nsIDOMStorageEvent>& aEvent);
 
@@ -1458,6 +1461,11 @@ protected:
   nsGlobalWindowObserver*       mObserver; // Inner windows only.
   nsCOMPtr<nsIDOMCrypto>        mCrypto;
   nsRefPtr<mozilla::dom::Console> mConsole;
+  // We need to store an nsISupports pointer to this object because the
+  // mozilla::dom::External class doesn't exist on b2g and using the type
+  // forward declared here means that ~nsGlobalWindow wouldn't compile because
+  // it wouldn't see the ~External function's declaration.
+  nsCOMPtr<nsISupports>         mExternal;
 
   nsCOMPtr<nsIDOMStorage>      mLocalStorage;
   nsCOMPtr<nsIDOMStorage>      mSessionStorage;
@@ -1465,7 +1473,7 @@ protected:
   nsCOMPtr<nsIXPConnectJSObjectHolder> mInnerWindowHolder;
 
   // These member variable are used only on inner windows.
-  nsRefPtr<nsEventListenerManager> mListenerManager;
+  nsRefPtr<mozilla::EventListenerManager> mListenerManager;
   // mTimeouts is generally sorted by mWhen, unless mTimeoutInsertionPoint is
   // non-null.  In that case, the dummy timeout pointed to by
   // mTimeoutInsertionPoint may have a later mWhen than some of the timeouts
@@ -1538,7 +1546,7 @@ protected:
   // currently enabled on this window.
   bool                          mAreDialogsEnabled;
 
-  nsTHashtable<nsPtrHashKey<nsDOMEventTargetHelper> > mEventTargetObjects;
+  nsTHashtable<nsPtrHashKey<mozilla::DOMEventTargetHelper> > mEventTargetObjects;
 
   nsTArray<uint32_t> mEnabledSensors;
 

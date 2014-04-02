@@ -27,7 +27,7 @@
 #include "nsBindingManager.h"
 #include "ChildIterator.h"
 #include "nsComputedDOMStyle.h"
-#include "nsEventStateManager.h"
+#include "mozilla/EventStateManager.h"
 #include "nsIAtom.h"
 #include "nsRange.h"
 #include "nsContentList.h"
@@ -383,8 +383,8 @@ inDOMUtils::SelectorMatchesElement(nsIDOMElement* aElement,
 NS_IMETHODIMP
 inDOMUtils::IsInheritedProperty(const nsAString &aPropertyName, bool *_retval)
 {
-  nsCSSProperty prop = nsCSSProps::LookupProperty(aPropertyName,
-                                                  nsCSSProps::eAny);
+  nsCSSProperty prop =
+    nsCSSProps::LookupProperty(aPropertyName, nsCSSProps::eIgnoreEnabledState);
   if (prop == eCSSProperty_UNKNOWN) {
     *_retval = false;
     return NS_OK;
@@ -557,6 +557,16 @@ static void GetOtherValuesForProperty(const uint32_t aParserVariant,
   if (aParserVariant & VARIANT_URL) {
     InsertNoDuplicates(aArray, NS_LITERAL_STRING("url"));
   }
+  if (aParserVariant & VARIANT_GRADIENT) {
+    InsertNoDuplicates(aArray, NS_LITERAL_STRING("linear-gradient"));
+    InsertNoDuplicates(aArray, NS_LITERAL_STRING("radial-gradient"));
+    InsertNoDuplicates(aArray, NS_LITERAL_STRING("repeating-linear-gradient"));
+    InsertNoDuplicates(aArray, NS_LITERAL_STRING("repeating-radial-gradient"));
+    InsertNoDuplicates(aArray, NS_LITERAL_STRING("-moz-linear-gradient"));
+    InsertNoDuplicates(aArray, NS_LITERAL_STRING("-moz-radial-gradient"));
+    InsertNoDuplicates(aArray, NS_LITERAL_STRING("-moz-repeating-linear-gradient"));
+    InsertNoDuplicates(aArray, NS_LITERAL_STRING("-moz-repeating-radial-gradient"));
+  }
 }
 
 NS_IMETHODIMP
@@ -565,7 +575,7 @@ inDOMUtils::GetCSSValuesForProperty(const nsAString& aProperty,
                                     char16_t*** aValues)
 {
   nsCSSProperty propertyID = nsCSSProps::LookupProperty(aProperty,
-                                                        nsCSSProps::eEnabled);
+                                                        nsCSSProps::eEnabledForAllContent);
   if (propertyID == eCSSProperty_UNKNOWN) {
     return NS_ERROR_FAILURE;
   }
@@ -631,7 +641,7 @@ inDOMUtils::ColorNameToRGB(const nsAString& aColorName, JSContext* aCx,
   triple.mG = NS_GET_G(color);
   triple.mB = NS_GET_B(color);
 
-  if (!triple.ToObject(aCx, JS::NullPtr(), aValue)) {
+  if (!triple.ToObject(aCx, aValue)) {
     return NS_ERROR_FAILURE;
   }
 
@@ -682,7 +692,8 @@ inDOMUtils::SetContentState(nsIDOMElement *aElement, nsEventStates::InternalType
 {
   NS_ENSURE_ARG_POINTER(aElement);
 
-  nsRefPtr<nsEventStateManager> esm = inLayoutUtils::GetEventStateManagerFor(aElement);
+  nsRefPtr<EventStateManager> esm =
+    inLayoutUtils::GetEventStateManagerFor(aElement);
   if (esm) {
     nsCOMPtr<nsIContent> content;
     content = do_QueryInterface(aElement);

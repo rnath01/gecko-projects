@@ -105,6 +105,7 @@ public:
     NS_IMETHOD Cancel(nsresult status);
     NS_IMETHOD Suspend();
     NS_IMETHOD Resume();
+    NS_IMETHOD IsPending(bool *aIsPending);
     // nsIChannel
     NS_IMETHOD GetSecurityInfo(nsISupports **aSecurityInfo);
     NS_IMETHOD AsyncOpen(nsIStreamListener *listener, nsISupports *aContext);
@@ -181,6 +182,8 @@ public: /* internal necko use only */
       nsHttpChannel* mChannel;
       uint32_t mKeep : 2;
     };
+
+    void ForcePending(bool aForcePending);
 
 private:
     typedef nsresult (nsHttpChannel::*nsContinueRedirectionFunc)(nsresult result);
@@ -313,7 +316,7 @@ private:
     // and ensure the transaction is updated to use it.
     void UpdateAggregateCallbacks();
 
-    static bool HasQueryString(nsHttpAtom method, nsIURI * uri);
+    static bool HasQueryString(nsHttpRequestHead::ParsedMethodType method, nsIURI * uri);
     bool ResponseWouldVary(nsICacheEntry* entry) const;
     bool MustValidateBasedOnQueryUrl() const;
     bool IsResumable(int64_t partialLen, int64_t contentLength,
@@ -424,6 +427,7 @@ private: // cache telemetry
 private:
     nsIPrincipal *GetPrincipal();
     nsCOMPtr<nsIPrincipal> mPrincipal;
+    bool mForcePending;
 };
 
 } } // namespace mozilla::net

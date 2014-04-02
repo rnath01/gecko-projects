@@ -27,6 +27,7 @@ CompositableHost::CompositableHost(const TextureInfo& aTextureInfo)
   : mTextureInfo(aTextureInfo)
   , mCompositor(nullptr)
   , mLayer(nullptr)
+  , mFlashCounter(0)
   , mAttached(false)
   , mKeepAttached(false)
 {
@@ -141,25 +142,14 @@ CompositableHost::Create(const TextureInfo& aTextureInfo)
 {
   RefPtr<CompositableHost> result;
   switch (aTextureInfo.mCompositableType) {
-  case BUFFER_IMAGE_SINGLE:
-    result = new DeprecatedImageHostSingle(aTextureInfo);
-    break;
-  case BUFFER_IMAGE_BUFFERED:
-    result = new DeprecatedImageHostBuffered(aTextureInfo);
-    break;
   case BUFFER_BRIDGE:
     MOZ_CRASH("Cannot create an image bridge compositable this way");
-    break;
-  case BUFFER_CONTENT:
-    result = new DeprecatedContentHostSingleBuffered(aTextureInfo);
-    break;
-  case BUFFER_CONTENT_DIRECT:
-    result = new DeprecatedContentHostDoubleBuffered(aTextureInfo);
     break;
   case BUFFER_CONTENT_INC:
     result = new ContentHostIncremental(aTextureInfo);
     break;
   case BUFFER_TILED:
+  case BUFFER_SIMPLE_TILED:
     result = new TiledContentHost(aTextureInfo);
     break;
   case COMPOSITABLE_IMAGE:
@@ -174,7 +164,9 @@ CompositableHost::Create(const TextureInfo& aTextureInfo)
   default:
     MOZ_CRASH("Unknown CompositableType");
   }
-  if (result) {
+  // We know that Tiled buffers don't use the compositable backend-specific
+  // data, so don't bother creating it.
+  if (result && aTextureInfo.mCompositableType != BUFFER_TILED) {
     RefPtr<CompositableBackendSpecificData> data = CreateCompositableBackendSpecificDataOGL();
     result->SetCompositableBackendSpecificData(data);
   }
@@ -208,6 +200,9 @@ CompositableHost::DumpTextureHost(FILE* aFile, TextureHost* aTexture)
     return;
   }
   RefPtr<gfx::DataSourceSurface> dSurf = aTexture->GetAsSurface();
+  if (!dSurf) {
+    return;
+  }
   gfxPlatform *platform = gfxPlatform::GetPlatform();
   RefPtr<gfx::DrawTarget> dt = platform->CreateDrawTargetForData(dSurf->GetData(),
                                                                  dSurf->GetSize(),

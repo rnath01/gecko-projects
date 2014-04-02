@@ -49,6 +49,10 @@ user_pref("toolkit.telemetry.notifiedOptOut", 999);
 user_pref("font.size.inflation.emPerLine", 0);
 user_pref("font.size.inflation.minTwips", 0);
 
+// AddonManager tests require that the experiments feature be enabled.
+user_pref("experiments.enabled", true);
+user_pref("experiments.supported", true);
+
 // Only load extensions from the application and user profile
 // AddonManager.SCOPE_PROFILE + AddonManager.SCOPE_APPLICATION
 user_pref("extensions.enabledScopes", 5);
@@ -60,7 +64,8 @@ user_pref("extensions.installDistroAddons", false);
 user_pref("extensions.defaultProviders.enabled", true);
 
 user_pref("geo.wifi.uri", "http://%(server)s/tests/dom/tests/mochitest/geolocation/network_geolocation.sjs");
-user_pref("geo.wifi.testing", true);
+user_pref("geo.wifi.timeToWaitBeforeSending", 200);
+user_pref("geo.wifi.scan", false);
 user_pref("geo.wifi.logging.enabled", true);
 
 user_pref("camino.warn_when_closing", false); // Camino-only, harmless to others

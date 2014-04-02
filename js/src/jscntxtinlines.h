@@ -142,7 +142,7 @@ class CompartmentChecker
             check(script->compartment());
     }
 
-    void check(StackFrame *fp);
+    void check(InterpreterFrame *fp);
     void check(AbstractFramePtr frame);
 };
 #endif /* JS_CRASH_DIAGNOSTICS */
@@ -473,11 +473,14 @@ JSContext::currentScript(jsbytecode **ppc,
             return nullptr;
         return script;
     }
+
+    if (act->isAsmJS())
+        return nullptr;
 #endif
 
     JS_ASSERT(act->isInterpreter());
 
-    js::StackFrame *fp = act->asInterpreter()->current();
+    js::InterpreterFrame *fp = act->asInterpreter()->current();
     JS_ASSERT(!fp->runningInJit());
 
     JSScript *script = fp->script();

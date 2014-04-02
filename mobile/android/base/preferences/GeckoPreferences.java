@@ -17,6 +17,7 @@ import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoApplication;
 import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.GeckoProfile;
+import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.PrefsHelper;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.background.announcements.AnnouncementsConstants;
@@ -45,7 +46,6 @@ import android.preference.Preference.OnPreferenceChangeListener;
 import android.preference.Preference.OnPreferenceClickListener;
 import android.preference.PreferenceActivity;
 import android.preference.PreferenceGroup;
-import android.preference.PreferenceManager;
 import android.preference.PreferenceScreen;
 import android.preference.TwoStatePreference;
 import android.text.Editable;
@@ -75,6 +75,7 @@ public class GeckoPreferences
     private static boolean sIsCharEncodingEnabled = false;
     private boolean mInitialized = false;
     private int mPrefsRequestId = 0;
+    private PanelsPreferenceCategory mPanelsPreferenceCategory;
 
     // These match keys in resources/xml*/preferences*.xml
     private static final String PREFS_SEARCH_RESTORE_DEFAULTS = NON_PREF_PREFIX + "search.restore_defaults";
@@ -279,9 +280,8 @@ public class GeckoPreferences
           case HomePanelPicker.REQUEST_CODE_ADD_PANEL:
               switch (resultCode) {
                   case Activity.RESULT_OK:
-                      // XXX: Bug 976925 - UI after adding a panel.
-                      setResult(RESULT_CODE_EXIT_SETTINGS);
-                      finish();
+                     // Panel installed, refresh panels list.
+                     mPanelsPreferenceCategory.refresh();
                       break;
                   case Activity.RESULT_CANCELED:
                       // Dialog was cancelled, do nothing.
@@ -348,6 +348,8 @@ public class GeckoPreferences
                         i--;
                         continue;
                     }
+                } else if (pref instanceof PanelsPreferenceCategory) {
+                    mPanelsPreferenceCategory = (PanelsPreferenceCategory) pref;
                 }
                 setupPreferences((PreferenceGroup) pref, prefs);
             } else {
@@ -500,7 +502,7 @@ public class GeckoPreferences
                                            final boolean value) {
         final Intent intent = new Intent(action)
                 .putExtra("pref", pref)
-                .putExtra("branch", GeckoApp.PREFS_NAME)
+                .putExtra("branch", GeckoSharedPrefs.APP_PREFS_NAME)
                 .putExtra("enabled", value);
         broadcastAction(context, intent);
     }
@@ -575,7 +577,7 @@ public class GeckoPreferences
      * @return        the value of the preference, or the default.
      */
     public static boolean getBooleanPref(final Context context, final String name, boolean def) {
-        final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        final SharedPreferences prefs = GeckoSharedPrefs.forApp(context);
         return prefs.getBoolean(name, def);
     }
 
@@ -634,7 +636,6 @@ public class GeckoPreferences
         inputtype |= InputType.TYPE_TEXT_VARIATION_PASSWORD | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
         input.setInputType(inputtype);
 
-        String hint = getResources().getString(aHintText);
         input.setHint(aHintText);
         return input;
     }

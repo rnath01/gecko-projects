@@ -26,6 +26,7 @@
 #include "nsSize.h"                     // for nsIntSize
 #include "nsTArray.h"                   // for nsTArray
 #include "mozilla/Atomics.h"
+#include "mozilla/WeakPtr.h"
 #include "nsThreadUtils.h"
 #include "mozilla/gfx/2D.h"
 #include "nsDataHashtable.h"
@@ -145,7 +146,6 @@ namespace layers {
 
 class ImageClient;
 class SharedPlanarYCbCrImage;
-class DeprecatedSharedPlanarYCbCrImage;
 class TextureClient;
 class CompositableClient;
 class CompositableForwarder;
@@ -380,9 +380,10 @@ struct RemoteImageData {
  * updates the shared state to point to the new image and the old image
  * is immediately released (not true in Normal or Asynchronous modes).
  */
-class ImageContainer {
+class ImageContainer : public SupportsWeakPtr<ImageContainer> {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(ImageContainer)
 public:
+  MOZ_DECLARE_REFCOUNTED_TYPENAME(ImageContainer)
 
   enum { DISABLE_ASYNC = 0x0, ENABLE_ASYNC = 0x01 };
 
@@ -519,17 +520,6 @@ public:
    * avoided if the surface is required for a long period of time.
    */
   already_AddRefed<gfxASurface> DeprecatedGetCurrentAsSurface(gfx::IntSize* aSizeResult);
-
-  /**
-   * This is similar to GetCurrentAsSurface, however this does not make a copy
-   * of the image data and requires the user to call UnlockCurrentImage when
-   * done with the image data. Once UnlockCurrentImage has been called the
-   * surface returned by this function is no longer valid! This works for any
-   * type of image. Optionally a pointer can be passed to receive the current
-   * image.
-   */
-  already_AddRefed<gfxASurface> DeprecatedLockCurrentAsSurface(gfx::IntSize* aSizeResult,
-                                                               Image** aCurrentImage = nullptr);
 
   /**
    * Same as GetCurrentAsSurface but for Moz2D
@@ -870,7 +860,12 @@ public:
   PlanarYCbCrImage(BufferRecycleBin *aRecycleBin);
 
   virtual SharedPlanarYCbCrImage *AsSharedPlanarYCbCrImage() { return nullptr; }
-  virtual DeprecatedSharedPlanarYCbCrImage *AsDeprecatedSharedPlanarYCbCrImage() { return nullptr; }
+
+  virtual size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const {
+    return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
+  }
+
+  virtual size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const;
 
 protected:
   /**

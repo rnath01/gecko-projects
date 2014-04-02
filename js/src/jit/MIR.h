@@ -134,7 +134,7 @@ typedef InlineList<MUse>::iterator MUseIterator;
 // A node is an entry in the MIR graph. It has two kinds:
 //   MInstruction: an instruction which appears in the IR stream.
 //   MResumePoint: a list of instructions that correspond to the state of the
-//              interpreter stack.
+//                 interpreter/Baseline stack.
 //
 // Nodes can hold references to MDefinitions. Each MDefinition has a list of
 // nodes holding such a reference (its use chain).
@@ -745,7 +745,7 @@ class MBinaryInstruction : public MAryInstruction<2>
         replaceOperand(1, temp);
     }
 
-    bool congruentTo(MDefinition *ins) const
+    bool binaryCongruentTo(MDefinition *ins) const
     {
         if (op() != ins->op())
             return false;
@@ -804,30 +804,6 @@ class MTernaryInstruction : public MAryInstruction<3>
 
         return op() ^ first->valueNumber() ^ second->valueNumber() ^ third->valueNumber();
     }
-
-    bool congruentTo(MDefinition *ins) const
-    {
-        if (op() != ins->op())
-            return false;
-
-        if (type() != ins->type())
-            return false;
-
-        if (isEffectful() || ins->isEffectful())
-            return false;
-
-        MTernaryInstruction *ter = static_cast<MTernaryInstruction *>(ins);
-        MDefinition *first = getOperand(0);
-        MDefinition *second = getOperand(1);
-        MDefinition *third = getOperand(2);
-        MDefinition *insFirst = ter->getOperand(0);
-        MDefinition *insSecond = ter->getOperand(1);
-        MDefinition *insThird = ter->getOperand(2);
-
-        return first->valueNumber() == insFirst->valueNumber() &&
-               second->valueNumber() == insSecond->valueNumber() &&
-               third->valueNumber() == insThird->valueNumber();
-    }
 };
 
 class MQuaternaryInstruction : public MAryInstruction<4>
@@ -852,33 +828,6 @@ class MQuaternaryInstruction : public MAryInstruction<4>
 
         return op() ^ first->valueNumber() ^ second->valueNumber() ^
                       third->valueNumber() ^ fourth->valueNumber();
-    }
-
-    bool congruentTo(MDefinition *ins) const
-    {
-        if (op() != ins->op())
-            return false;
-
-        if (type() != ins->type())
-            return false;
-
-        if (isEffectful() || ins->isEffectful())
-            return false;
-
-        MQuaternaryInstruction *qua = static_cast<MQuaternaryInstruction *>(ins);
-        MDefinition *first = getOperand(0);
-        MDefinition *second = getOperand(1);
-        MDefinition *third = getOperand(2);
-        MDefinition *fourth = getOperand(3);
-        MDefinition *insFirst = qua->getOperand(0);
-        MDefinition *insSecond = qua->getOperand(1);
-        MDefinition *insThird = qua->getOperand(2);
-        MDefinition *insFourth = qua->getOperand(3);
-
-        return first->valueNumber() == insFirst->valueNumber() &&
-               second->valueNumber() == insSecond->valueNumber() &&
-               third->valueNumber() == insThird->valueNumber() &&
-               fourth->valueNumber() == insFourth->valueNumber();
     }
 };
 
@@ -1321,6 +1270,8 @@ class MTest
     }
     void infer();
     MDefinition *foldsTo(TempAllocator &alloc, bool useValueNumbers);
+    void filtersUndefinedOrNull(bool trueBranch, MDefinition **subject, bool *filtersUndefined,
+                                bool *filtersNull);
 
     void markOperandCantEmulateUndefined() {
         operandMightEmulateUndefined_ = false;
@@ -2278,6 +2229,8 @@ class MCompare
     bool tryFold(bool *result);
     bool evaluateConstantOperands(bool *result);
     MDefinition *foldsTo(TempAllocator &alloc, bool useValueNumbers);
+    void filtersUndefinedOrNull(bool trueBranch, MDefinition **subject, bool *filtersUndefined,
+                                bool *filtersNull);
 
     void infer(BaselineInspector *inspector, jsbytecode *pc);
     CompareType compareType() const {
@@ -2344,7 +2297,7 @@ class MCompare
 
   protected:
     bool congruentTo(MDefinition *ins) const {
-        if (!MBinaryInstruction::congruentTo(ins))
+        if (!binaryCongruentTo(ins))
             return false;
         return compareType() == ins->toCompare()->compareType() &&
                jsop() == ins->toCompare()->jsop();
@@ -3267,7 +3220,7 @@ class MBinaryBitwiseInstruction
         setMovable();
     }
 
-    void specializeForAsmJS();
+    void specializeAsInt32();
 
   public:
     TypePolicy *typePolicy() {
@@ -3282,7 +3235,7 @@ class MBinaryBitwiseInstruction
     virtual void infer(BaselineInspector *inspector, jsbytecode *pc);
 
     bool congruentTo(MDefinition *ins) const {
-        return congruentIfOperandsEqual(ins);
+        return binaryCongruentTo(ins);
     }
     AliasSet getAliasSet() const {
         if (specialization_ >= MIRType_Object)
@@ -3498,7 +3451,7 @@ class MBinaryArithInstruction
     virtual void trySpecializeFloat32(TempAllocator &alloc);
 
     bool congruentTo(MDefinition *ins) const {
-        return MBinaryInstruction::congruentTo(ins);
+        return binaryCongruentTo(ins);
     }
     AliasSet getAliasSet() const {
         if (specialization_ >= MIRType_Object)
@@ -3936,283 +3889,6 @@ class MMathFunction
     void computeRange(TempAllocator &alloc);
 };
 
-#define DECLARE_COMMON_SIMD_FUNCTION(opcode)                        \
-    static MIRType ReturnTypes[];                                   \
-    static const char *Names[];                                     \
-    Id id() const {                                                 \
-        return id_;                                                 \
-    }                                                               \
-    bool congruentTo(MDefinition *ins) const {                      \
-        if (!ins->is##opcode())                                     \
-            return false;                                           \
-        if (ins->to##opcode()->id() != id())                        \
-            return false;                                           \
-        return congruentIfOperandsEqual(ins);                       \
-    }                                                               \
-    AliasSet getAliasSet() const {                                  \
-        return AliasSet::None();                                    \
-    }                                                               \
-    bool possiblyCalls() const {                                    \
-        return true;                                                \
-    }                                                               \
-    void printOpcode(FILE *fp) const {                              \
-        MDefinition::printOpcode(fp);                               \
-        fprintf(fp, " %s", Names[id()]);                            \
-    }
-
-#define MSIMD_NULLARY_FUNCTION_LIST(V)                              \
-  V(Float32x4Zero, "float32x4.zero", MIRType_Float32x4)             \
-  V(Int32x4Zero, "int32x4.zero", MIRType_Int32x4)
-
-class MSIMDNullaryFunction
-  : public MNullaryInstruction
-{
-  public:
-    enum Id {
-#define MSIMD_NULLARY_FUNCTION_ID(Id, Name, Type) Id,
-        MSIMD_NULLARY_FUNCTION_LIST(MSIMD_NULLARY_FUNCTION_ID)
-        NUMBER_OF_IDS
-#undef MSIMD_NULLARY_FUNCTION_ID
-    };
-
-  private:
-    Id id_;
-
-    MSIMDNullaryFunction(Id id)
-      : MNullaryInstruction(), id_(id)
-    {
-        setMovable();
-        setResultType(ReturnTypes[id]);
-    }
-
-  public:
-    INSTRUCTION_HEADER(SIMDNullaryFunction)
-    DECLARE_COMMON_SIMD_FUNCTION(SIMDNullaryFunction)
-    static MSIMDNullaryFunction *New(TempAllocator &alloc, Id id)
-    {
-        return new(alloc) MSIMDNullaryFunction(id);
-    }
-};
-
-#define MSIMD_UNARY_FUNCTION_LIST(V)                                                            \
-  V(Float32x4Abs, "float32x4.abs", MIRType_Float32x4, MIRType_Float32x4)                        \
-  V(Float32x4BitsToInt32x4, "float32x4.bitstoInt32x4", MIRType_Int32x4, MIRType_Float32x4)      \
-  V(Float32x4Neg, "float32x4.neg", MIRType_Float32x4, MIRType_Float32x4)                        \
-  V(Float32x4Reciprocal, "float32x4.reciprocal", MIRType_Float32x4, MIRType_Float32x4)          \
-  V(Float32x4ReciprocalSqrt, "float32x4.reciprocalSqrt", MIRType_Float32x4, MIRType_Float32x4)  \
-  V(Float32x4Splat, "float32x4.splat", MIRType_Float32x4, MIRType_Float32)                      \
-  V(Float32x4Sqrt, "float32x4.sqrt", MIRType_Float32x4, MIRType_Float32x4)                      \
-  V(Float32x4ToInt32x4, "float32x4.toInt32x4", MIRType_Int32x4, MIRType_Float32x4)              \
-  V(Float32x4GetX, "float32x4.getX", MIRType_Float32, MIRType_Float32x4)                        \
-  V(Float32x4GetY, "float32x4.getY", MIRType_Float32, MIRType_Float32x4)                        \
-  V(Float32x4GetZ, "float32x4.getZ", MIRType_Float32, MIRType_Float32x4)                        \
-  V(Float32x4GetW, "float32x4.getW", MIRType_Float32, MIRType_Float32x4)                        \
-  V(Float32x4GetSignMask, "float32x4.getSignMask", MIRType_Int32, MIRType_Float32x4)            \
-  V(Int32x4BitsToFloat32x4, "int32x4.bitsToFloat32x4", MIRType_Float32x4, MIRType_Int32x4)      \
-  V(Int32x4Neg, "int32x4.neg", MIRType_Int32x4, MIRType_Int32x4)                                \
-  V(Int32x4Not, "int32x4.not", MIRType_Int32x4, MIRType_Int32x4)                                \
-  V(Int32x4Splat, "int32x4.splat", MIRType_Int32x4, MIRType_Int32)                              \
-  V(Int32x4ToFloat32x4, "int32x4.toFloat32x4", MIRType_Float32x4, MIRType_Int32x4)              \
-  V(Int32x4GetX, "int32x4.getX", MIRType_Int32, MIRType_Int32x4)                                \
-  V(Int32x4GetY, "int32x4.getY", MIRType_Int32, MIRType_Int32x4)                                \
-  V(Int32x4GetZ, "int32x4.getZ", MIRType_Int32, MIRType_Int32x4)                                \
-  V(Int32x4GetW, "int32x4.getW", MIRType_Int32, MIRType_Int32x4)                                \
-  V(Int32x4GetSignMask, "int32x4.getSignMask", MIRType_Int32, MIRType_Int32x4)                  \
-  V(Int32x4GetFlagX, "int32x4.getFlagX", MIRType_Boolean, MIRType_Int32x4)                      \
-  V(Int32x4GetFlagY, "int32x4.getFlagY", MIRType_Boolean, MIRType_Int32x4)                      \
-  V(Int32x4GetFlagZ, "int32x4.getFlagZ", MIRType_Boolean, MIRType_Int32x4)                      \
-  V(Int32x4GetFlagW, "int32x4.getFlagW", MIRType_Boolean, MIRType_Int32x4)
-
-class MSIMDUnaryFunction
-  : public MUnaryInstruction
-{
-  public:
-    enum Id {
-#define MSIMD_UNARY_FUNCTION_ID(Id, Name, ReturnType, ArgumentType) Id,
-        MSIMD_UNARY_FUNCTION_LIST(MSIMD_UNARY_FUNCTION_ID)
-        NUMBER_OF_IDS
-#undef MSIMD_UNARY_FUNCTION_ID
-    };
-
-    static MIRType ArgumentTypes[];
-
-  private:
-    Id id_;
-
-    MSIMDUnaryFunction(MDefinition *argument, Id id)
-      : MUnaryInstruction(argument), id_(id)
-    {
-        setMovable();
-        setResultType(ReturnTypes[id]);
-    }
-
-  public:
-    INSTRUCTION_HEADER(SIMDUnaryFunction)
-    DECLARE_COMMON_SIMD_FUNCTION(SIMDUnaryFunction)
-    static MSIMDUnaryFunction *New(TempAllocator &alloc, MDefinition *argument, Id id)
-    {
-        return new(alloc) MSIMDUnaryFunction(argument, id);
-    }
-    bool canProduceFloat32() const {
-        return type() == MIRType_Float32;
-    }
-    bool canConsumeFloat32(MUse *use) const {
-        return id() == Float32x4Splat;
-    }
-#ifdef DEBUG
-    bool isConsistentFloat32Use(MUse *use) const { return canProduceFloat32() || canConsumeFloat32(use); }
-#endif
-};
-
-#define MSIMD_BINARY_FUNCTION_LIST(V)                                                                                   \
-  V(Float32x4Add, "float32x4.add", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32x4)                             \
-  V(Float32x4Div, "float32x4.div", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32x4)                             \
-  V(Float32x4Equal, "float32x4.equal", MIRType_Int32x4, MIRType_Float32x4, MIRType_Float32x4)                           \
-  V(Float32x4GreaterThan, "float32x4.greaterThan", MIRType_Int32x4, MIRType_Float32x4, MIRType_Float32x4)               \
-  V(Float32x4GreaterThanOrEqual, "float32x4.greaterThanOrEqual", MIRType_Int32x4, MIRType_Float32x4, MIRType_Float32x4) \
-  V(Float32x4LessThan, "float32x4.lessThan", MIRType_Int32x4, MIRType_Float32x4, MIRType_Float32x4)                     \
-  V(Float32x4LessThanOrEqual, "float32x4.lessThanOrEqual", MIRType_Int32x4, MIRType_Float32x4, MIRType_Float32x4)       \
-  V(Float32x4Max, "float32x4.max", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32x4)                             \
-  V(Float32x4Min, "float32x4.min", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32x4)                             \
-  V(Float32x4Mul, "float32x4.mul", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32x4)                             \
-  V(Float32x4NotEqual, "float32x4.notEqual", MIRType_Int32x4, MIRType_Float32x4, MIRType_Float32x4)                     \
-  V(Float32x4Shuffle, "float32x4.shuffle", MIRType_Float32x4, MIRType_Float32x4, MIRType_Int32)                         \
-  V(Float32x4Scale, "float32x4.scale", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32)                           \
-  V(Float32x4Sub, "float32x4.sub", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32x4)                             \
-  V(Float32x4WithX, "float32x4.withX", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32)                           \
-  V(Float32x4WithY, "float32x4.withY", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32)                           \
-  V(Float32x4WithZ, "float32x4.withZ", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32)                           \
-  V(Float32x4WithW, "float32x4.withW", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32)                           \
-  V(Int32x4Add, "int32x4.add", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32x4)                                       \
-  V(Int32x4And, "int32x4.and", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32x4)                                       \
-  V(Int32x4Mul, "int32x4.mul", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32x4)                                       \
-  V(Int32x4Or, "int32x4.or", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32x4)                                         \
-  V(Int32x4Sub, "int32x4.sub", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32x4)                                       \
-  V(Int32x4Shuffle, "int32x4.shuffle", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32)                                 \
-  V(Int32x4WithFlagX, "int32x4.withFlagX", MIRType_Int32x4, MIRType_Int32x4, MIRType_Boolean)                           \
-  V(Int32x4WithFlagY, "int32x4.withFlagY", MIRType_Int32x4, MIRType_Int32x4, MIRType_Boolean)                           \
-  V(Int32x4WithFlagZ, "int32x4.withFlagZ", MIRType_Int32x4, MIRType_Int32x4, MIRType_Boolean)                           \
-  V(Int32x4WithFlagW, "int32x4.withFlagW", MIRType_Int32x4, MIRType_Int32x4, MIRType_Boolean)                           \
-  V(Int32x4WithX, "int32x4.withX", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32)                                     \
-  V(Int32x4WithY, "int32x4.withY", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32)                                     \
-  V(Int32x4WithZ, "int32x4.withZ", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32)                                     \
-  V(Int32x4WithW, "int32x4.withW", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32)                                     \
-  V(Int32x4Xor, "int32x4.xor", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32x4)
-
-class MSIMDBinaryFunction
-  : public MBinaryInstruction
-{
-  public:
-    enum Id {
-#define MSIMD_BINARY_FUNCTION_ID(Id, Name, Type, Argument1Type, Argument2Type) Id,
-        MSIMD_BINARY_FUNCTION_LIST(MSIMD_BINARY_FUNCTION_ID)
-        NUMBER_OF_IDS
-#undef MSIMD_BINARY_FUNCTION_ID
-    };
-
-    static MIRType ArgumentTypes[][2];
-
-  private:
-    Id id_;
-
-    MSIMDBinaryFunction(MDefinition *left, MDefinition *right, Id id)
-      : MBinaryInstruction(left, right), id_(id)
-    {
-        setMovable();
-        setResultType(ReturnTypes[id]);
-    }
-
-  public:
-    INSTRUCTION_HEADER(SIMDBinaryFunction)
-    DECLARE_COMMON_SIMD_FUNCTION(SIMDBinaryFunction)
-    static MSIMDBinaryFunction *New(TempAllocator &alloc, MDefinition *left, MDefinition *right, Id id)
-    {
-        return new(alloc) MSIMDBinaryFunction(left, right, id);
-    }
-    bool canConsumeFloat32(MUse *use) const {
-        return id() == Float32x4Scale || id() == Float32x4WithX || id() == Float32x4WithY ||
-               id() == Float32x4WithZ || id() == Float32x4WithW;
-    }
-#ifdef DEBUG
-    bool isConsistentFloat32Use(MUse *use) const {
-        return canConsumeFloat32(use);
-    }
-#endif
-};
-
-#define MSIMD_TERNARY_FUNCTION_LIST(V)                                                                                      \
-  V(Float32x4Clamp, "float32x4.clamp", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32x4)          \
-  V(Float32x4ShuffleMix, "float32x4.shuffleMix", MIRType_Float32x4, MIRType_Float32x4, MIRType_Float32x4, MIRType_Int32)    \
-  V(Int32x4Select, "int32x4.select", MIRType_Float32x4, MIRType_Int32x4, MIRType_Float32x4, MIRType_Float32x4)              \
-  V(Int32x4ShuffleMix, "int32x4.shuffleMix", MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32x4, MIRType_Int32)
-
-class MSIMDTernaryFunction
-  : public MTernaryInstruction
-{
-  public:
-    enum Id {
-#define MSIMD_TERNARY_FUNCTION_ID(Id, Name, Type, Argument1Type, Argument2Type, Argument3Type) Id,
-        MSIMD_TERNARY_FUNCTION_LIST(MSIMD_TERNARY_FUNCTION_ID)
-        NUMBER_OF_IDS
-#undef MSIMD_TERNARY_FUNCTION_ID
-    };
-
-    static MIRType ArgumentTypes[][3];
-
-  private:
-    Id id_;
-
-    MSIMDTernaryFunction(MDefinition *first, MDefinition *second, MDefinition *third, Id id)
-      : MTernaryInstruction(first, second, third), id_(id)
-    {
-        setMovable();
-        setResultType(ReturnTypes[id]);
-    }
-
-  public:
-    INSTRUCTION_HEADER(SIMDTernaryFunction)
-    DECLARE_COMMON_SIMD_FUNCTION(SIMDTernaryFunction)
-    static MSIMDTernaryFunction *New(TempAllocator &alloc, MDefinition *first, MDefinition *second, MDefinition *third, Id id)
-    {
-        return new(alloc) MSIMDTernaryFunction(first, second, third, id);
-    }
-};
-
-#define MSIMD_QUARTERNARY_FUNCTION_LIST(V)                                                                              \
-  V(Int32x4Bool, "int32x4.bool", MIRType_Int32x4, MIRType_Boolean, MIRType_Boolean, MIRType_Boolean, MIRType_Boolean)
-
-class MSIMDQuarternaryFunction
-  : public MQuaternaryInstruction
-{
-  public:
-    enum Id {
-#define MSIMD_QUARTERNARY_FUNCTION_ID(Id, Name, Type, Argument1Type, Argument2Type, Argument3Type, Argument4Type) Id,
-        MSIMD_QUARTERNARY_FUNCTION_LIST(MSIMD_QUARTERNARY_FUNCTION_ID)
-        NUMBER_OF_IDS
-#undef MSIMD_QUARTERNARY_FUNCTION_ID
-    };
-
-    static MIRType ArgumentTypes[][4];
-
-  private:
-    Id id_;
-
-    MSIMDQuarternaryFunction(MDefinition *first, MDefinition *second, MDefinition *third, MDefinition *fourth, Id id)
-      : MQuaternaryInstruction(first, second, third, fourth), id_(id)
-    {
-        setMovable();
-        setResultType(ReturnTypes[id]);
-    }
-
-  public:
-    INSTRUCTION_HEADER(SIMDQuarternaryFunction)
-    DECLARE_COMMON_SIMD_FUNCTION(SIMDQuarternaryFunction)
-    static MSIMDQuarternaryFunction *New(TempAllocator &alloc, MDefinition *first, MDefinition *second, MDefinition *third, MDefinition *fourth, Id id)
-    {
-        return new(alloc) MSIMDQuarternaryFunction(first, second, third, fourth, id);
-    }
-};
-
 class MAdd : public MBinaryArithInstruction
 {
     // Is this instruction really an int at heart?
@@ -4353,7 +4029,7 @@ class MMul : public MBinaryArithInstruction
         if (mode_ != mul->mode())
             return false;
 
-        return MBinaryInstruction::congruentTo(ins);
+        return binaryCongruentTo(ins);
     }
 
     bool canOverflow() const;
@@ -4608,6 +4284,10 @@ class MCharCodeAt
         return this;
     }
 
+    bool congruentTo(MDefinition *ins) const {
+        return congruentIfOperandsEqual(ins);
+    }
+
     virtual AliasSet getAliasSet() const {
         // Strings are immutable, so there is no implicit dependency.
         return AliasSet::None();
@@ -4829,17 +4509,7 @@ class MPhi MOZ_FINAL : public MDefinition, public InlineForwardListNode<MPhi>
     }
     void computeRange(TempAllocator &alloc);
 
-    MDefinition *operandIfRedundant() {
-        // If this phi is redundant (e.g., phi(a,a) or b=phi(a,this)),
-        // returns the operand that it will always be equal to (a, in
-        // those two cases).
-        MDefinition *first = getOperand(0);
-        for (size_t i = 1, e = numOperands(); i < e; i++) {
-            if (getOperand(i) != first && getOperand(i) != this)
-                return nullptr;
-        }
-        return first;
-    }
+    MDefinition *operandIfRedundant();
 
     bool canProduceFloat32() const {
         return canProduceFloat32_;
@@ -4892,7 +4562,7 @@ class MBeta : public MUnaryInstruction
     void computeRange(TempAllocator &alloc);
 };
 
-// MIR representation of a Value on the OSR StackFrame.
+// MIR representation of a Value on the OSR BaselineFrame.
 // The Value is indexed off of OsrFrameReg.
 class MOsrValue : public MUnaryInstruction
 {
@@ -4925,7 +4595,7 @@ class MOsrValue : public MUnaryInstruction
     }
 };
 
-// MIR representation of a JSObject scope chain pointer on the OSR StackFrame.
+// MIR representation of a JSObject scope chain pointer on the OSR BaselineFrame.
 // The pointer is indexed off of OsrFrameReg.
 class MOsrScopeChain : public MUnaryInstruction
 {
@@ -4947,7 +4617,7 @@ class MOsrScopeChain : public MUnaryInstruction
     }
 };
 
-// MIR representation of a JSObject ArgumentsObject pointer on the OSR StackFrame.
+// MIR representation of a JSObject ArgumentsObject pointer on the OSR BaselineFrame.
 // The pointer is indexed off of OsrFrameReg.
 class MOsrArgumentsObject : public MUnaryInstruction
 {
@@ -4969,7 +4639,7 @@ class MOsrArgumentsObject : public MUnaryInstruction
     }
 };
 
-// MIR representation of the return value on the OSR StackFrame.
+// MIR representation of the return value on the OSR BaselineFrame.
 // The Value is indexed off of OsrFrameReg.
 class MOsrReturnValue : public MUnaryInstruction
 {
@@ -5310,6 +4980,9 @@ class MStringReplace
         return new(alloc) MStringReplace(string, pattern, replacement);
     }
 
+    bool congruentTo(MDefinition *ins) const {
+        return congruentIfOperandsEqual(ins);
+    }
     AliasSet getAliasSet() const {
         return AliasSet::None();
     }
@@ -6093,6 +5766,16 @@ class MLoadElement
     bool fallible() const {
         return needsHoleCheck();
     }
+    bool congruentTo(MDefinition *ins) const {
+        if (!ins->isLoadElement())
+            return false;
+        MLoadElement *other = ins->toLoadElement();
+        if (needsHoleCheck() != other->needsHoleCheck())
+            return false;
+        if (loadDoubles() != other->loadDoubles())
+            return false;
+        return congruentIfOperandsEqual(other);
+    }
     AliasSet getAliasSet() const {
         return AliasSet::Load(AliasSet::Element);
     }
@@ -6145,6 +5828,16 @@ class MLoadElementHole
     }
     bool needsHoleCheck() const {
         return needsHoleCheck_;
+    }
+    bool congruentTo(MDefinition *ins) const {
+        if (!ins->isLoadElementHole())
+            return false;
+        MLoadElementHole *other = ins->toLoadElementHole();
+        if (needsHoleCheck() != other->needsHoleCheck())
+            return false;
+        if (needsNegativeIntCheck() != other->needsNegativeIntCheck())
+            return false;
+        return congruentIfOperandsEqual(other);
     }
     AliasSet getAliasSet() const {
         return AliasSet::Load(AliasSet::Element);
@@ -6455,6 +6148,15 @@ class MLoadTypedArrayElement
         return AliasSet::Load(AliasSet::TypedArrayElement);
     }
 
+    bool congruentTo(MDefinition *ins) const {
+        if (!ins->isLoadTypedArrayElement())
+            return false;
+        MLoadTypedArrayElement *other = ins->toLoadTypedArrayElement();
+        if (arrayType_ != other->arrayType_)
+            return false;
+        return congruentIfOperandsEqual(other);
+    }
+
     void printOpcode(FILE *fp) const;
 
     void computeRange(TempAllocator &alloc);
@@ -6506,6 +6208,16 @@ class MLoadTypedArrayElementHole
     }
     MDefinition *index() const {
         return getOperand(1);
+    }
+    bool congruentTo(MDefinition *ins) const {
+        if (!ins->isLoadTypedArrayElementHole())
+            return false;
+        MLoadTypedArrayElementHole *other = ins->toLoadTypedArrayElementHole();
+        if (arrayType() != other->arrayType())
+            return false;
+        if (allowDouble() != other->allowDouble())
+            return false;
+        return congruentIfOperandsEqual(other);
     }
     AliasSet getAliasSet() const {
         return AliasSet::Load(AliasSet::TypedArrayElement);
@@ -8782,6 +8494,16 @@ class MInArray
     AliasSet getAliasSet() const {
         return AliasSet::Load(AliasSet::Element);
     }
+    bool congruentTo(MDefinition *ins) const {
+        if (!ins->isInArray())
+            return false;
+        MInArray *other = ins->toInArray();
+        if (needsHoleCheck() != other->needsHoleCheck())
+            return false;
+        if (needsNegativeIntCheck() != other->needsNegativeIntCheck())
+            return false;
+        return congruentIfOperandsEqual(other);
+    }
     TypePolicy *typePolicy() {
         return this;
     }
@@ -9075,11 +8797,45 @@ class MGuardThreadExclusive
     BailoutKind bailoutKind() const {
         return Bailout_Normal;
     }
+    bool congruentTo(MDefinition *ins) const {
+        return congruentIfOperandsEqual(ins);
+    }
     AliasSet getAliasSet() const {
         return AliasSet::None();
     }
     bool possiblyCalls() const {
         return true;
+    }
+};
+
+class MFilterTypeSet
+  : public MUnaryInstruction
+{
+    MFilterTypeSet(MDefinition *def, types::TemporaryTypeSet *types)
+      : MUnaryInstruction(def)
+    {
+        JS_ASSERT(!types->unknown());
+
+        MIRType type = MIRTypeFromValueType(types->getKnownTypeTag());
+        setResultType(type);
+        setResultTypeSet(types);
+    }
+
+  public:
+    INSTRUCTION_HEADER(FilterTypeSet)
+
+    static MFilterTypeSet *New(TempAllocator &alloc, MDefinition *def, types::TemporaryTypeSet *types) {
+        return new(alloc) MFilterTypeSet(def, types);
+    }
+
+    bool congruentTo(MDefinition *def) const {
+        return false;
+    }
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+    virtual bool neverHoist() const {
+        return resultTypeSet()->empty();
     }
 };
 
@@ -9200,6 +8956,10 @@ class MPostWriteBarrier : public MBinaryInstruction, public ObjectPolicy<0>
         return getOperand(1);
     }
 
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+
 #ifdef DEBUG
     bool isConsistentFloat32Use(MUse *use) const {
         // During lowering, values that neither have object nor value MIR type
@@ -9262,39 +9022,59 @@ class MNewDeclEnvObject : public MNullaryInstruction
     }
 };
 
-class MNewCallObject : public MUnaryInstruction
+class MNewCallObjectBase : public MUnaryInstruction
 {
     CompilerRootObject templateObj_;
-    bool needsSingletonType_;
 
-    MNewCallObject(JSObject *templateObj, bool needsSingletonType, MDefinition *slots)
+  protected:
+    MNewCallObjectBase(JSObject *templateObj, MDefinition *slots)
       : MUnaryInstruction(slots),
-        templateObj_(templateObj),
-        needsSingletonType_(needsSingletonType)
+        templateObj_(templateObj)
     {
         setResultType(MIRType_Object);
     }
 
   public:
-    INSTRUCTION_HEADER(NewCallObject)
-
-    static MNewCallObject *New(TempAllocator &alloc, JSObject *templateObj, bool needsSingletonType,
-                               MDefinition *slots)
-    {
-        return new(alloc) MNewCallObject(templateObj, needsSingletonType, slots);
-    }
-
     MDefinition *slots() {
         return getOperand(0);
     }
     JSObject *templateObject() {
         return templateObj_;
     }
-    bool needsSingletonType() const {
-        return needsSingletonType_;
-    }
     AliasSet getAliasSet() const {
         return AliasSet::None();
+    }
+};
+
+class MNewCallObject : public MNewCallObjectBase
+{
+  public:
+    INSTRUCTION_HEADER(NewCallObject)
+
+    MNewCallObject(JSObject *templateObj, MDefinition *slots)
+      : MNewCallObjectBase(templateObj, slots)
+    {}
+
+    static MNewCallObject *
+    New(TempAllocator &alloc, JSObject *templateObj, MDefinition *slots)
+    {
+        return new(alloc) MNewCallObject(templateObj, slots);
+    }
+};
+
+class MNewRunOnceCallObject : public MNewCallObjectBase
+{
+  public:
+    INSTRUCTION_HEADER(NewRunOnceCallObject)
+
+    MNewRunOnceCallObject(JSObject *templateObj, MDefinition *slots)
+      : MNewCallObjectBase(templateObj, slots)
+    {}
+
+    static MNewRunOnceCallObject *
+    New(TempAllocator &alloc, JSObject *templateObj, MDefinition *slots)
+    {
+        return new(alloc) MNewRunOnceCallObject(templateObj, slots);
     }
 };
 
@@ -9312,7 +9092,7 @@ class MNewCallObjectPar : public MBinaryInstruction
   public:
     INSTRUCTION_HEADER(NewCallObjectPar);
 
-    static MNewCallObjectPar *New(TempAllocator &alloc, MDefinition *cx, MNewCallObject *callObj) {
+    static MNewCallObjectPar *New(TempAllocator &alloc, MDefinition *cx, MNewCallObjectBase *callObj) {
         return new(alloc) MNewCallObjectPar(cx, callObj->templateObject(), callObj->slots());
     }
 
@@ -9474,7 +9254,7 @@ class MNewDenseArrayPar : public MBinaryInstruction
     }
 };
 
-// A resume point contains the information needed to reconstruct the interpreter
+// A resume point contains the information needed to reconstruct the Baseline
 // state from a position in the JIT. See the big comment near resumeAfter() in
 // IonBuilder.cpp.
 class MResumePoint MOZ_FINAL : public MNode, public InlineForwardListNode<MResumePoint>
@@ -9657,6 +9437,9 @@ class MHaveSameClass
 
     TypePolicy *typePolicy() {
         return this;
+    }
+    bool congruentTo(MDefinition *ins) const {
+        return congruentIfOperandsEqual(ins);
     }
     AliasSet getAliasSet() const {
         return AliasSet::None();
@@ -10143,7 +9926,7 @@ bool PropertyReadOnPrototypeNeedsTypeBarrier(types::CompilerConstraintList *cons
                                              types::TemporaryTypeSet *observed);
 bool PropertyReadIsIdempotent(types::CompilerConstraintList *constraints,
                               MDefinition *obj, PropertyName *name);
-bool AddObjectsForPropertyRead(MDefinition *obj, PropertyName *name,
+void AddObjectsForPropertyRead(MDefinition *obj, PropertyName *name,
                                types::TemporaryTypeSet *observed);
 bool PropertyWriteNeedsTypeBarrier(TempAllocator &alloc, types::CompilerConstraintList *constraints,
                                    MBasicBlock *current, MDefinition **pobj,

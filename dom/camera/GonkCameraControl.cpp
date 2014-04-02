@@ -30,6 +30,7 @@
 #include "mozilla/FileUtils.h"
 #include "mozilla/Services.h"
 #include "mozilla/unused.h"
+#include "mozilla/ipc/FileDescriptorUtils.h"
 #include "nsAlgorithm.h"
 #include <media/mediaplayer.h>
 #include "nsPrintfCString.h"
@@ -46,6 +47,7 @@
 using namespace mozilla;
 using namespace mozilla::layers;
 using namespace mozilla::gfx;
+using namespace mozilla::ipc;
 using namespace android;
 
 #define RETURN_IF_NO_CAMERA_HW()                                          \
@@ -855,6 +857,14 @@ nsGonkCameraControl::StartRecordingImpl(DeviceStorageFileDescriptor* aFileDescri
     return NS_ERROR_INVALID_ARG;
   }
 
+  // SetupRecording creates a dup of the file descriptor, so we need to
+  // close the file descriptor when we leave this function. Also note, that
+  // since we're already off the main thread, we don't need to dispatch this.
+  // We just let the CloseFileRunnable destructor do the work.
+  nsRefPtr<CloseFileRunnable> closer;
+  if (aFileDescriptor->mFileDescriptor.IsValid()) {
+    closer = new CloseFileRunnable(aFileDescriptor->mFileDescriptor);
+  }
   nsresult rv;
   int fd = aFileDescriptor->mFileDescriptor.PlatformHandle();
   if (aOptions) {
@@ -1057,7 +1067,8 @@ nsGonkCameraControl::SetupVideoMode(const nsAString& aProfile)
   mMediaProfiles = MediaProfiles::getInstance();
 
   nsAutoCString profile = NS_ConvertUTF16toUTF8(aProfile);
-  mRecorderProfile = GetGonkRecorderProfileManager().get()->Get(profile.get());
+  // XXXkhuey are we leaking?
+  mRecorderProfile = GetGonkRecorderProfileManager().take()->Get(profile.get());
   if (!mRecorderProfile) {
     DOM_CAMERA_LOGE("Recorder profile '%s' is not supported\n", profile.get());
     return NS_ERROR_INVALID_ARG;
@@ -1354,14 +1365,14 @@ nsGonkCameraControl::GetRecorderProfileManagerImpl()
 }
 
 void
-nsGonkCameraControl::OnNewPreviewFrame(layers::GraphicBufferLocked* aBuffer)
+nsGonkCameraControl::OnNewPreviewFrame(layers::TextureClient* aBuffer)
 {
   nsRefPtr<Image> frame = mImageContainer->CreateImage(ImageFormat::GRALLOC_PLANAR_YCBCR);
 
   GrallocImage* videoImage = static_cast<GrallocImage*>(frame.get());
 
   GrallocImage::GrallocData data;
-  data.mGraphicBuffer = static_cast<layers::GraphicBufferLocked*>(aBuffer);
+  data.mGraphicBuffer = aBuffer;
   data.mPicSize = IntSize(mCurrentConfiguration.mPreviewSize.width,
                           mCurrentConfiguration.mPreviewSize.height);
   videoImage->SetData(data);
@@ -1404,7 +1415,7 @@ OnAutoFocusComplete(nsGonkCameraControl* gc, bool aSuccess)
 }
 
 void
-OnNewPreviewFrame(nsGonkCameraControl* gc, layers::GraphicBufferLocked* aBuffer)
+OnNewPreviewFrame(nsGonkCameraControl* gc, layers::TextureClient* aBuffer)
 {
   gc->OnNewPreviewFrame(aBuffer);
 }

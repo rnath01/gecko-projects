@@ -25,7 +25,6 @@
 
 #include "nsITimer.h"
 
-#include "nsEventDispatcher.h"
 #include "nsIDOMProgressEvent.h"
 #include "MediaError.h"
 #include "MediaDecoder.h"
@@ -66,7 +65,7 @@ NS_IMETHODIMP HTMLVideoElement::GetVideoHeight(uint32_t *aVideoHeight)
   return NS_OK;
 }
 
-HTMLVideoElement::HTMLVideoElement(already_AddRefed<nsINodeInfo> aNodeInfo)
+HTMLVideoElement::HTMLVideoElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
   : HTMLMediaElement(aNodeInfo)
 {
 }
@@ -244,7 +243,7 @@ void
 HTMLVideoElement::NotifyOwnerDocumentActivityChanged()
 {
   HTMLMediaElement::NotifyOwnerDocumentActivityChanged();
-  WakeLockUpdate();
+  UpdateScreenWakeLock();
 }
 
 already_AddRefed<VideoPlaybackQuality>
@@ -281,17 +280,19 @@ HTMLVideoElement::GetVideoPlaybackQuality()
 void
 HTMLVideoElement::WakeLockCreate()
 {
-  WakeLockUpdate();
+  HTMLMediaElement::WakeLockCreate();
+  UpdateScreenWakeLock();
 }
 
 void
 HTMLVideoElement::WakeLockRelease()
 {
-  WakeLockUpdate();
+  UpdateScreenWakeLock();
+  HTMLMediaElement::WakeLockRelease();
 }
 
 void
-HTMLVideoElement::WakeLockUpdate()
+HTMLVideoElement::UpdateScreenWakeLock()
 {
   bool hidden = OwnerDoc()->Hidden();
 

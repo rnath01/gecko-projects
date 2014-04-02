@@ -252,19 +252,15 @@ NS_IMPL_ISUPPORTS1(GrallocReporter, nsIMemoryReporter)
 
 int64_t GrallocReporter::sAmount = 0;
 
+void InitGralloc() {
+  NS_ASSERTION(NS_IsMainThread(), "Should be on main thread.");
+  RegisterStrongMemoryReporter(new GrallocReporter());
+}
+
 GrallocBufferActor::GrallocBufferActor()
 : mAllocBytes(0)
 , mTextureHost(nullptr)
 {
-  static bool registered;
-  if (!registered) {
-    // We want to be sure that the first call here will always run on
-    // the main thread.
-    NS_ASSERTION(NS_IsMainThread(), "Should be on main thread.");
-
-    RegisterStrongMemoryReporter(new GrallocReporter());
-    registered = true;
-  }
 }
 
 GrallocBufferActor::~GrallocBufferActor()
@@ -317,31 +313,11 @@ GrallocBufferActor::Create(const gfx::IntSize& aSize,
 
 void GrallocBufferActor::ActorDestroy(ActorDestroyReason)
 {
-  // used only for hacky fix for bug 862324
-  for (size_t i = 0; i < mDeprecatedTextureHosts.Length(); i++) {
-    mDeprecatedTextureHosts[i]->ForgetBuffer();
-  }
-
   // Used only for hacky fix for bug 966446.
   if (mTextureHost) {
     mTextureHost->ForgetBufferActor();
     mTextureHost = nullptr;
   }
-}
-
-// used only for hacky fix for bug 862324
-void GrallocBufferActor::AddDeprecatedTextureHost(DeprecatedTextureHost* aDeprecatedTextureHost)
-{
-  mDeprecatedTextureHosts.AppendElement(aDeprecatedTextureHost);
-}
-
-// used only for hacky fix for bug 862324
-void GrallocBufferActor::RemoveDeprecatedTextureHost(DeprecatedTextureHost* aDeprecatedTextureHost)
-{
-  mDeprecatedTextureHosts.RemoveElement(aDeprecatedTextureHost);
-  // that should be the only occurence, otherwise we'd leak this TextureHost...
-  // assert that that's not happening.
-  MOZ_ASSERT(!mDeprecatedTextureHosts.Contains(aDeprecatedTextureHost));
 }
 
 void GrallocBufferActor::AddTextureHost(TextureHost* aTextureHost)
@@ -382,7 +358,7 @@ ISurfaceAllocator::PlatformDestroySharedSurface(SurfaceDescriptor* aSurface)
   } else {
     PGrallocBufferChild* gbc =
       aSurface->get_SurfaceDescriptorGralloc().bufferChild();
-    unused << PGrallocBufferChild::Send__delete__(gbc);
+    DeallocGrallocBuffer(gbc);
   }
 
   *aSurface = SurfaceDescriptor();
@@ -416,6 +392,13 @@ ShadowLayerForwarder::AllocGrallocBuffer(const gfx::IntSize& aSize,
   return mShadowManager->SendPGrallocBufferConstructor(aSize, aFormat, aUsage, aHandle);
 }
 
+void
+ShadowLayerForwarder::DeallocGrallocBuffer(PGrallocBufferChild* aChild)
+{
+  MOZ_ASSERT(aChild);
+  PGrallocBufferChild::Send__delete__(aChild);
+}
+
 bool
 ISurfaceAllocator::PlatformAllocSurfaceDescriptor(const gfx::IntSize& aSize,
                                                   gfxContentType aContent,
@@ -423,36 +406,16 @@ ISurfaceAllocator::PlatformAllocSurfaceDescriptor(const gfx::IntSize& aSize,
                                                   SurfaceDescriptor* aBuffer)
 {
 
-  // Check for devices that have problems with gralloc. We only check for
-  // this on ICS or earlier, in hopes that JB will work.
-#if ANDROID_VERSION <= 15
-  static bool checkedDevice = false;
-  static bool disableGralloc = false;
-
-  if (!checkedDevice) {
-    char propValue[PROPERTY_VALUE_MAX];
-    property_get("ro.product.device", propValue, "None");
-
-    if (strcmp("crespo",propValue) == 0) {
-      NS_WARNING("Nexus S has issues with gralloc, falling back to shmem");
-      disableGralloc = true;
-    }
-
-    checkedDevice = true;
+  if (aSize.width <= 0 || aSize.height <= 0) {
+    return false;
   }
-
-  if (disableGralloc) {
+#if ANDROID_VERSION <= 15
+  // Adreno 200 fails to render gralloc textures with width < 64
+  // or with height < 32.
+  if (aSize.width < 64 || aSize.height < 32) {
     return false;
   }
 #endif
-
-  // Some GL implementations fail to render gralloc textures with
-  // width < 64.  There's not much point in gralloc'ing buffers that
-  // small anyway, so fall back on shared memory plus a texture
-  // upload.
-  if (aSize.width < 64) {
-    return false;
-  }
   PROFILER_LABEL("ShadowLayerForwarder", "PlatformAllocSurfaceDescriptor");
   // Gralloc buffers are efficiently mappable as gfxImageSurface, so
   // no need to check |aCaps & MAP_AS_IMAGE_SURFACE|.

@@ -335,7 +335,7 @@ intrinsic_ForkJoinGetSlicePar(ForkJoinContext *cx, unsigned argc, Value *vp)
     if (cx->getSlice(&sliceId))
         args.rval().setInt32(sliceId);
     else
-        args.rval().setInt32(-1);
+        args.rval().setInt32(ThreadPool::MAX_SLICE_ID);
 
     return true;
 }
@@ -414,14 +414,15 @@ js::intrinsic_UnsafePutElements(JSContext *cx, unsigned argc, Value *vp)
         uint32_t elemi = base+2;
 
         JS_ASSERT(args[arri].isObject());
-        JS_ASSERT(args[arri].toObject().isNative());
+        JS_ASSERT(args[arri].toObject().isNative() || IsTypedObjectArray(args[arri].toObject()));
         JS_ASSERT(args[idxi].isInt32());
 
         RootedObject arrobj(cx, &args[arri].toObject());
         uint32_t idx = args[idxi].toInt32();
 
-        if (arrobj->is<TypedArrayObject>()) {
-            JS_ASSERT(idx < arrobj->as<TypedArrayObject>().length());
+        if (arrobj->is<TypedArrayObject>() || arrobj->is<TypedObject>()) {
+            JS_ASSERT(!arrobj->is<TypedArrayObject>() || idx < arrobj->as<TypedArrayObject>().length());
+            JS_ASSERT(!arrobj->is<TypedObject>() || idx < arrobj->as<TypedObject>().length());
             RootedValue tmp(cx, args[elemi]);
             // XXX: Always non-strict.
             if (!JSObject::setElement(cx, arrobj, arrobj, idx, &tmp, false))
@@ -623,6 +624,12 @@ JS_JITINFO_NATIVE_PARALLEL(intrinsic_InParallelSection_jitInfo,
  * directly because they take a ThreadSafeContext* argument.
  */
 bool
+js::intrinsic_ObjectIsTypedObject(JSContext *cx, unsigned argc, Value *vp)
+{
+    return js::ObjectIsTypedObject(cx, argc, vp);
+}
+
+bool
 js::intrinsic_ObjectIsTransparentTypedObject(JSContext *cx, unsigned argc, Value *vp)
 {
     return js::ObjectIsTransparentTypedObject(cx, argc, vp);
@@ -638,6 +645,30 @@ bool
 js::intrinsic_ObjectIsTypeDescr(JSContext *cx, unsigned argc, Value *vp)
 {
     return js::ObjectIsTypeDescr(cx, argc, vp);
+}
+
+bool
+js::intrinsic_TypeDescrIsSimpleType(JSContext *cx, unsigned argc, Value *vp)
+{
+    return js::TypeDescrIsSimpleType(cx, argc, vp);
+}
+
+bool
+js::intrinsic_TypeDescrIsArrayType(JSContext *cx, unsigned argc, Value *vp)
+{
+    return js::TypeDescrIsArrayType(cx, argc, vp);
+}
+
+bool
+js::intrinsic_TypeDescrIsUnsizedArrayType(JSContext *cx, unsigned argc, Value *vp)
+{
+    return js::TypeDescrIsUnsizedArrayType(cx, argc, vp);
+}
+
+bool
+js::intrinsic_TypeDescrIsSizedArrayType(JSContext *cx, unsigned argc, Value *vp)
+{
+    return js::TypeDescrIsSizedArrayType(cx, argc, vp);
 }
 
 /**
@@ -693,6 +724,9 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("NewDenseArray",           intrinsic_NewDenseArray,           1,0),
     JS_FN("ShouldForceSequential",   intrinsic_ShouldForceSequential,   0,0),
     JS_FN("ParallelTestsShouldPass", intrinsic_ParallelTestsShouldPass, 0,0),
+    JS_FNINFO("ClearThreadLocalArenas",
+              intrinsic_ClearThreadLocalArenas,
+              &intrinsic_ClearThreadLocalArenasInfo, 0,0),
     JS_FNINFO("SetForkJoinTargetRegion",
               intrinsic_SetForkJoinTargetRegion,
               &intrinsic_SetForkJoinTargetRegionInfo, 2, 0),
@@ -712,22 +746,37 @@ static const JSFunctionSpec intrinsic_functions[] = {
           3, 0),
     JS_FNINFO("AttachTypedObject",
               JSNativeThreadSafeWrapper<js::AttachTypedObject>,
-              &js::AttachTypedObjectJitInfo, 5, 0),
+              &js::AttachTypedObjectJitInfo, 3, 0),
     JS_FNINFO("SetTypedObjectOffset",
               JSNativeThreadSafeWrapper<js::SetTypedObjectOffset>,
               &js::SetTypedObjectOffsetJitInfo, 2, 0),
     JS_FNINFO("ObjectIsTypeDescr",
               intrinsic_ObjectIsTypeDescr,
-              &js::ObjectIsTypeDescrJitInfo, 5, 0),
+              &js::ObjectIsTypeDescrJitInfo, 1, 0),
+    JS_FNINFO("ObjectIsTypedObject",
+              intrinsic_ObjectIsTypedObject,
+              &js::ObjectIsTypedObjectJitInfo, 1, 0),
     JS_FNINFO("ObjectIsTransparentTypedObject",
               intrinsic_ObjectIsTransparentTypedObject,
-              &js::ObjectIsTransparentTypedObjectJitInfo, 5, 0),
+              &js::ObjectIsTransparentTypedObjectJitInfo, 1, 0),
     JS_FNINFO("TypedObjectIsAttached",
               JSNativeThreadSafeWrapper<js::TypedObjectIsAttached>,
               &js::TypedObjectIsAttachedJitInfo, 1, 0),
     JS_FNINFO("ObjectIsOpaqueTypedObject",
               intrinsic_ObjectIsOpaqueTypedObject,
-              &js::ObjectIsOpaqueTypedObjectJitInfo, 5, 0),
+              &js::ObjectIsOpaqueTypedObjectJitInfo, 1, 0),
+    JS_FNINFO("TypeDescrIsArrayType",
+              intrinsic_TypeDescrIsArrayType,
+              &js::TypeDescrIsArrayTypeJitInfo, 1, 0),
+    JS_FNINFO("TypeDescrIsUnsizedArrayType",
+              intrinsic_TypeDescrIsUnsizedArrayType,
+              &js::TypeDescrIsUnsizedArrayTypeJitInfo, 1, 0),
+    JS_FNINFO("TypeDescrIsSizedArrayType",
+              intrinsic_TypeDescrIsSizedArrayType,
+              &js::TypeDescrIsSizedArrayTypeJitInfo, 1, 0),
+    JS_FNINFO("TypeDescrIsSimpleType",
+              intrinsic_TypeDescrIsSimpleType,
+              &js::TypeDescrIsSimpleTypeJitInfo, 1, 0),
     JS_FNINFO("ClampToUint8",
               JSNativeThreadSafeWrapper<js::ClampToUint8>,
               &js::ClampToUint8JitInfo, 1, 0),
@@ -894,7 +943,7 @@ JSRuntime::initSelfHosting(JSContext *cx)
         const char *src = rawSources;
 #endif
 
-        ok = Evaluate(cx, shg, options, src, srcLen, rv.address());
+        ok = Evaluate(cx, shg, options, src, srcLen, &rv);
     }
     JS_SetErrorReporter(cx, oldReporter);
     if (receivesDefaultObject)
@@ -921,25 +970,20 @@ JSRuntime::isSelfHostingCompartment(JSCompartment *comp)
     return selfHostingGlobal_->compartment() == comp;
 }
 
-// CloneMemory maps objects to each other which may be in different
-// runtimes. This class should only be used within an AutoSuppressGC,
-// so that issues of managing which objects should be traced can be ignored.
-typedef HashMap<JSObject *, JSObject *> CloneMemory;
+static bool
+CloneValue(JSContext *cx, HandleValue selfHostedValue, MutableHandleValue vp);
 
 static bool
-CloneValue(JSContext *cx, const Value &selfHostedValue, MutableHandleValue vp, CloneMemory &clonedObjects);
-
-static bool
-GetUnclonedValue(JSContext *cx, JSObject *selfHostedObject, jsid id, Value *vp)
+GetUnclonedValue(JSContext *cx, HandleObject selfHostedObject, HandleId id, MutableHandleValue vp)
 {
-    *vp = UndefinedValue();
+    vp.setUndefined();
 
     if (JSID_IS_INT(id)) {
         size_t index = JSID_TO_INT(id);
         if (index < selfHostedObject->getDenseInitializedLength() &&
             !selfHostedObject->getDenseElement(index).isMagic(JS_ELEMENTS_HOLE))
         {
-            *vp = selfHostedObject->getDenseElement(JSID_TO_INT(id));
+            vp.set(selfHostedObject->getDenseElement(JSID_TO_INT(id)));
             return true;
         }
     }
@@ -950,28 +994,27 @@ GetUnclonedValue(JSContext *cx, JSObject *selfHostedObject, jsid id, Value *vp)
     // hosted global which aren't present.
     if (JSID_IS_STRING(id) && !JSID_TO_STRING(id)->isPermanentAtom()) {
         JS_ASSERT(selfHostedObject->is<GlobalObject>());
-        gc::AutoSuppressGC suppress(cx);
-        JS_ReportError(cx, "No such property on self hosted object");
-        return false;
+        RootedValue value(cx, IdToValue(id));
+        return js_ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_NO_SUCH_SELF_HOSTED_PROP,
+                                        JSDVG_IGNORE_STACK, value, NullPtr(), nullptr, nullptr);
     }
 
-    Shape *shape = selfHostedObject->nativeLookupPure(id);
+    RootedShape shape(cx, selfHostedObject->nativeLookupPure(id));
     if (!shape) {
-        gc::AutoSuppressGC suppress(cx);
-        JS_ReportError(cx, "No such property on self hosted object");
-        return false;
+        RootedValue value(cx, IdToValue(id));
+        return js_ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_NO_SUCH_SELF_HOSTED_PROP,
+                                        JSDVG_IGNORE_STACK, value, NullPtr(), nullptr, nullptr);
     }
 
     JS_ASSERT(shape->hasSlot() && shape->hasDefaultGetter());
-    *vp = selfHostedObject->getSlot(shape->slot());
+    vp.set(selfHostedObject->getSlot(shape->slot()));
     return true;
 }
 
 static bool
-CloneProperties(JSContext *cx, JSObject *selfHostedObject,
-                HandleObject clone, CloneMemory &clonedObjects)
+CloneProperties(JSContext *cx, HandleObject selfHostedObject, HandleObject clone)
 {
-    Vector<jsid> ids(cx);
+    AutoIdVector ids(cx);
 
     for (size_t i = 0; i < selfHostedObject->getDenseInitializedLength(); i++) {
         if (!selfHostedObject->getDenseElement(i).isMagic(JS_ELEMENTS_HOLE)) {
@@ -988,12 +1031,12 @@ CloneProperties(JSContext *cx, JSObject *selfHostedObject,
 
     RootedId id(cx);
     RootedValue val(cx);
+    RootedValue selfHostedValue(cx);
     for (uint32_t i = 0; i < ids.length(); i++) {
         id = ids[i];
-        Value selfHostedValue;
         if (!GetUnclonedValue(cx, selfHostedObject, id, &selfHostedValue))
             return false;
-        if (!CloneValue(cx, selfHostedValue, &val, clonedObjects) ||
+        if (!CloneValue(cx, selfHostedValue, &val) ||
             !JS_DefinePropertyById(cx, clone, id, val.get(), nullptr, nullptr, 0))
         {
             return false;
@@ -1004,20 +1047,24 @@ CloneProperties(JSContext *cx, JSObject *selfHostedObject,
 }
 
 static JSObject *
-CloneObject(JSContext *cx, JSObject *selfHostedObject, CloneMemory &clonedObjects)
+CloneObject(JSContext *cx, HandleObject selfHostedObject)
 {
-    DependentAddPtr<CloneMemory> p(cx, clonedObjects, selfHostedObject);
-    if (p)
-        return p->value();
+    AutoCycleDetector detect(cx, selfHostedObject);
+    if (!detect.init())
+        return nullptr;
+    if (detect.foundCycle()) {
+        JS_ReportError(cx, "SelfHosted cloning cannot handle cyclic object graphs.");
+        return nullptr;
+    }
+
     RootedObject clone(cx);
     if (selfHostedObject->is<JSFunction>()) {
-        JSFunction *selfHostedFunction = &selfHostedObject->as<JSFunction>();
+        RootedFunction selfHostedFunction(cx, &selfHostedObject->as<JSFunction>());
         bool hasName = selfHostedFunction->atom() != nullptr;
         js::gc::AllocKind kind = hasName
                                  ? JSFunction::ExtendedFinalizeKind
                                  : selfHostedFunction->getAllocKind();
-        clone = CloneFunctionObject(cx, HandleFunction::fromMarkedLocation(&selfHostedFunction),
-                                    cx->global(), kind, TenuredObject);
+        clone = CloneFunctionObject(cx, selfHostedFunction, cx->global(), kind, TenuredObject);
         // To be able to re-lazify the cloned function, its name in the
         // self-hosting compartment has to be stored on the clone.
         if (clone && hasName)
@@ -1053,21 +1100,17 @@ CloneObject(JSContext *cx, JSObject *selfHostedObject, CloneMemory &clonedObject
     }
     if (!clone)
         return nullptr;
-    if (!p.add(cx, clonedObjects, selfHostedObject, clone))
+    if (!CloneProperties(cx, selfHostedObject, clone))
         return nullptr;
-    if (!CloneProperties(cx, selfHostedObject, clone, clonedObjects)) {
-        clonedObjects.remove(selfHostedObject);
-        return nullptr;
-    }
     return clone;
 }
 
 static bool
-CloneValue(JSContext *cx, const Value &selfHostedValue, MutableHandleValue vp, CloneMemory &clonedObjects)
+CloneValue(JSContext *cx, HandleValue selfHostedValue, MutableHandleValue vp)
 {
     if (selfHostedValue.isObject()) {
-        JSObject *selfHostedObject = &selfHostedValue.toObject();
-        RootedObject clone(cx, CloneObject(cx, selfHostedObject, clonedObjects));
+        RootedObject selfHostedObject(cx, &selfHostedValue.toObject());
+        JSObject *clone = CloneObject(cx, selfHostedObject);
         if (!clone)
             return false;
         vp.setObject(*clone);
@@ -1078,25 +1121,25 @@ CloneValue(JSContext *cx, const Value &selfHostedValue, MutableHandleValue vp, C
         if (!selfHostedValue.toString()->isFlat())
             MOZ_CRASH();
         JSFlatString *selfHostedString = &selfHostedValue.toString()->asFlat();
-        RootedString clone(cx, js_NewStringCopyN<CanGC>(cx,
-                                                        selfHostedString->chars(),
-                                                        selfHostedString->length()));
+        JSString *clone = js_NewStringCopyN<CanGC>(cx,
+                                                   selfHostedString->chars(),
+                                                   selfHostedString->length());
         if (!clone)
             return false;
         vp.setString(clone);
     } else {
-        MOZ_ASSUME_UNREACHABLE("Self-hosting CloneValue can't clone given value.");
+        MOZ_CRASH("Self-hosting CloneValue can't clone given value.");
     }
     return true;
 }
 
 bool
-JSRuntime::cloneSelfHostedFunctionScript(JSContext *cx, Handle<PropertyName*> name,
-                                         Handle<JSFunction*> targetFun)
+JSRuntime::cloneSelfHostedFunctionScript(JSContext *cx, HandlePropertyName name,
+                                         HandleFunction targetFun)
 {
     RootedId id(cx, NameToId(name));
-    Value funVal;
-    if (!GetUnclonedValue(cx, selfHostingGlobal_, id, &funVal))
+    RootedValue funVal(cx);
+    if (!GetUnclonedValue(cx, HandleObject::fromMarkedLocation(&selfHostingGlobal_), id, &funVal))
         return false;
 
     RootedFunction sourceFun(cx, &funVal.toObject().as<JSFunction>());
@@ -1122,11 +1165,11 @@ JSRuntime::cloneSelfHostedFunctionScript(JSContext *cx, Handle<PropertyName*> na
 }
 
 bool
-JSRuntime::cloneSelfHostedValue(JSContext *cx, Handle<PropertyName*> name, MutableHandleValue vp)
+JSRuntime::cloneSelfHostedValue(JSContext *cx, HandlePropertyName name, MutableHandleValue vp)
 {
     RootedId id(cx, NameToId(name));
-    Value selfHostedValue;
-    if (!GetUnclonedValue(cx, selfHostingGlobal_, id, &selfHostedValue))
+    RootedValue selfHostedValue(cx);
+    if (!GetUnclonedValue(cx, HandleObject::fromMarkedLocation(&selfHostingGlobal_), id, &selfHostedValue))
         return false;
 
     /*
@@ -1134,15 +1177,12 @@ JSRuntime::cloneSelfHostedValue(JSContext *cx, Handle<PropertyName*> name, Mutab
      * means we're currently executing the self-hosting script while
      * initializing the runtime (see JSRuntime::initSelfHosting).
      */
-    if (cx->global() != selfHostingGlobal_) {
-        gc::AutoSuppressGC suppress(cx);
-        CloneMemory clonedObjects(cx);
-        if (!clonedObjects.init() || !CloneValue(cx, selfHostedValue, vp, clonedObjects))
-            return false;
-    } else {
+    if (cx->global() == selfHostingGlobal_) {
         vp.set(selfHostedValue);
+        return true;
     }
-    return true;
+
+    return CloneValue(cx, selfHostedValue, vp);
 }
 
 JSFunction *

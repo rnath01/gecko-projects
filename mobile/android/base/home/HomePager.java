@@ -10,6 +10,8 @@ import java.util.EnumSet;
 import java.util.List;
 
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.Telemetry;
+import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.animation.PropertyAnimator;
 import org.mozilla.gecko.animation.ViewHelper;
 import org.mozilla.gecko.home.HomeAdapter.OnAddPanelListener;
@@ -30,7 +32,6 @@ import android.view.View;
 import android.view.ViewGroup;
 
 public class HomePager extends ViewPager {
-
     private static final int LOADER_ID_CONFIG = 0;
 
     private final Context mContext;
@@ -49,6 +50,9 @@ public class HomePager extends ViewPager {
 
     // Cached original ViewPager background.
     private final Drawable mOriginalBackground;
+
+    // Telemetry session for current panel.
+    private String mCurrentPanelSession;
 
     // This is mostly used by UI tests to easily fetch
     // specific list views at runtime.
@@ -155,6 +159,11 @@ public class HomePager extends ViewPager {
         mLoaded = true;
         mInitialPanelId = panelId;
 
+        // Update the home banner message each time the HomePager is loaded.
+        if (mHomeBanner != null) {
+            mHomeBanner.update();
+        }
+
         // Only animate on post-HC devices, when a non-null animator is given
         final boolean shouldAnimate = (animator != null && Build.VERSION.SDK_INT >= 11);
 
@@ -190,6 +199,7 @@ public class HomePager extends ViewPager {
                             PropertyAnimator.Property.ALPHA,
                             1.0f);
         }
+        Telemetry.startUISession(TelemetryContract.Session.HOME);
     }
 
     /**
@@ -198,6 +208,10 @@ public class HomePager extends ViewPager {
     public void unload() {
         mLoaded = false;
         setAdapter(null);
+
+        // Stop UI Telemetry sessions.
+        stopCurrentPanelTelemetrySession();
+        Telemetry.stopUISession(TelemetryContract.Session.HOME);
     }
 
     /**
@@ -216,10 +230,12 @@ public class HomePager extends ViewPager {
     public void setCurrentItem(int item, boolean smoothScroll) {
         super.setCurrentItem(item, smoothScroll);
 
-        // Android doesn't call onPageSelected when there is only one page. Make sure we activate
-        // the banner in this case.
-        if (mHomeBanner != null && getAdapter().getCount() == 1) {
-            mHomeBanner.setActive(true);
+        if (mDecor != null) {
+            mDecor.onPageSelected(item);
+        }
+
+        if (mHomeBanner != null) {
+            mHomeBanner.setActive(item == mDefaultPageIndex);
         }
     }
 
@@ -247,12 +263,16 @@ public class HomePager extends ViewPager {
     }
 
     public void onToolbarFocusChange(boolean hasFocus) {
+        if (mHomeBanner == null) {
+            return;
+        }
+
         // We should only make the banner active if the toolbar is not focused and we are on the default page
         final boolean active = !hasFocus && getCurrentItem() == mDefaultPageIndex;
         mHomeBanner.setActive(active);
     }
 
-    private void updateUiFromPanelConfigs(List<PanelConfig> panelConfigs) {
+    private void updateUiFromConfigState(HomeConfig.State configState) {
         // We only care about the adapter if HomePager is currently
         // loaded, which means it's visible in the activity.
         if (!mLoaded) {
@@ -261,10 +281,6 @@ public class HomePager extends ViewPager {
 
         if (mDecor != null) {
             mDecor.removeAllPagerViews();
-        }
-
-        if (mHomeBanner != null) {
-            mHomeBanner.setActive(false);
         }
 
         final HomeAdapter adapter = (HomeAdapter) getAdapter();
@@ -276,7 +292,7 @@ public class HomePager extends ViewPager {
         // Only keep enabled panels.
         final List<PanelConfig> enabledPanels = new ArrayList<PanelConfig>();
 
-        for (PanelConfig panelConfig : panelConfigs) {
+        for (PanelConfig panelConfig : configState) {
             if (!panelConfig.isDisabled()) {
                 enabledPanels.add(panelConfig);
             }
@@ -301,38 +317,46 @@ public class HomePager extends ViewPager {
         // in the pager.
         setAdapter(adapter);
 
-        // Use the default panel as defined in the HomePager's configuration
-        // if the initial panel wasn't explicitly set by the load() caller,
-        // or if the initial panel is not found in the adapter.
-        final int itemPosition = (mInitialPanelId == null) ? -1 : adapter.getItemPosition(mInitialPanelId);
-        if (itemPosition > -1) {
-            setCurrentItem(itemPosition, false);
-            mInitialPanelId = null;
+        if (count == 0) {
+            mDefaultPageIndex = -1;
+
+            // Hide the banner if there are no enabled panels.
+            if (mHomeBanner != null) {
+                mHomeBanner.setActive(false);
+            }
         } else {
             for (int i = 0; i < count; i++) {
-                final PanelConfig panelConfig = enabledPanels.get(i);
-                if (panelConfig.isDefault()) {
+                if (enabledPanels.get(i).isDefault()) {
                     mDefaultPageIndex = i;
-                    setCurrentItem(i, false);
                     break;
                 }
+            }
+
+            // Use the default panel if the initial panel wasn't explicitly set by the
+            // load() caller, or if the initial panel is not found in the adapter.
+            final int itemPosition = (mInitialPanelId == null) ? -1 : adapter.getItemPosition(mInitialPanelId);
+            if (itemPosition > -1) {
+                setCurrentItem(itemPosition, false);
+                mInitialPanelId = null;
+            } else {
+                setCurrentItem(mDefaultPageIndex, false);
             }
         }
     }
 
-    private class ConfigLoaderCallbacks implements LoaderCallbacks<List<PanelConfig>> {
+    private class ConfigLoaderCallbacks implements LoaderCallbacks<HomeConfig.State> {
         @Override
-        public Loader<List<PanelConfig>> onCreateLoader(int id, Bundle args) {
+        public Loader<HomeConfig.State> onCreateLoader(int id, Bundle args) {
             return new HomeConfigLoader(mContext, mConfig);
         }
 
         @Override
-        public void onLoadFinished(Loader<List<PanelConfig>> loader, List<PanelConfig> panelConfigs) {
-            updateUiFromPanelConfigs(panelConfigs);
+        public void onLoadFinished(Loader<HomeConfig.State> loader, HomeConfig.State configState) {
+            updateUiFromConfigState(configState);
         }
 
         @Override
-        public void onLoaderReset(Loader<List<PanelConfig>> loader) {
+        public void onLoaderReset(Loader<HomeConfig.State> loader) {
         }
     }
 
@@ -346,6 +370,10 @@ public class HomePager extends ViewPager {
             if (mHomeBanner != null) {
                 mHomeBanner.setActive(position == mDefaultPageIndex);
             }
+
+            // Start a UI telemetry session for the newly selected panel.
+            final String newPanelId = ((HomeAdapter) getAdapter()).getPanelIdAtPosition(position);
+            startNewPanelTelemetrySession(newPanelId);
         }
 
         @Override
@@ -361,5 +389,30 @@ public class HomePager extends ViewPager {
 
         @Override
         public void onPageScrollStateChanged(int state) { }
+    }
+
+    /**
+     * Start UI telemetry session for the a panel.
+     * If there is currently a session open for a panel,
+     * it will be stopped before a new one is started.
+     *
+     * @param panelId of panel to start a session for
+     */
+    private void startNewPanelTelemetrySession(String panelId) {
+        // Stop the current panel's session if we have one.
+        stopCurrentPanelTelemetrySession();
+
+        mCurrentPanelSession = TelemetryContract.Session.HOME_PANEL + panelId;
+        Telemetry.startUISession(mCurrentPanelSession);
+    }
+
+    /**
+     * Stop the current panel telemetry session if one exists.
+     */
+    private void stopCurrentPanelTelemetrySession() {
+        if (mCurrentPanelSession != null) {
+            Telemetry.stopUISession(mCurrentPanelSession);
+            mCurrentPanelSession = null;
+        }
     }
 }

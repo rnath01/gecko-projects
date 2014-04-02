@@ -44,6 +44,7 @@ browser.jar:
   skin/classic/browser/identity-icons-https-mixed-display@2x.png
   skin/classic/browser/Info.png
   skin/classic/browser/keyhole-circle.png
+  skin/classic/browser/keyhole-circle@2x.png
   skin/classic/browser/KUI-background.png
   skin/classic/browser/subtle-pattern.png
   skin/classic/browser/menu-back.png
@@ -122,15 +123,29 @@ browser.jar:
   skin/classic/browser/customizableui/background-noise-toolbar.png  (customizableui/background-noise-toolbar.png)
   skin/classic/browser/customizableui/customize-titleBar-toggle.png  (customizableui/customize-titleBar-toggle.png)
   skin/classic/browser/customizableui/customize-titleBar-toggle@2x.png  (customizableui/customize-titleBar-toggle@2x.png)
+  skin/classic/browser/customizableui/customize-illustration.png  (../shared/customizableui/customize-illustration.png)
+  skin/classic/browser/customizableui/customize-illustration@2x.png  (../shared/customizableui/customize-illustration@2x.png)
+  skin/classic/browser/customizableui/customize-illustration-rtl.png  (../shared/customizableui/customize-illustration-rtl.png)
+  skin/classic/browser/customizableui/customize-illustration-rtl@2x.png  (../shared/customizableui/customize-illustration-rtl@2x.png)
   skin/classic/browser/customizableui/customizeFavicon.ico  (../shared/customizableui/customizeFavicon.ico)
   skin/classic/browser/customizableui/customizeMode-gridTexture.png  (customizableui/customizeMode-gridTexture.png)
   skin/classic/browser/customizableui/customizeMode-separatorHorizontal.png  (customizableui/customizeMode-separatorHorizontal.png)
   skin/classic/browser/customizableui/customizeMode-separatorVertical.png  (customizableui/customizeMode-separatorVertical.png)
+  skin/classic/browser/customizableui/info-icon-customizeTip.png  (../shared/customizableui/info-icon-customizeTip.png)
+  skin/classic/browser/customizableui/info-icon-customizeTip@2x.png  (../shared/customizableui/info-icon-customizeTip@2x.png)
   skin/classic/browser/customizableui/menuPanel-customizeFinish.png  (../shared/customizableui/menuPanel-customizeFinish.png)
   skin/classic/browser/customizableui/menuPanel-customizeFinish@2x.png  (../shared/customizableui/menuPanel-customizeFinish@2x.png)
+  skin/classic/browser/customizableui/panelarrow-customizeTip.png  (../shared/customizableui/panelarrow-customizeTip.png)
+  skin/classic/browser/customizableui/panelarrow-customizeTip@2x.png  (../shared/customizableui/panelarrow-customizeTip@2x.png)
   skin/classic/browser/customizableui/subView-arrow-back-inverted.png  (../shared/customizableui/subView-arrow-back-inverted.png)
   skin/classic/browser/customizableui/subView-arrow-back-inverted@2x.png  (../shared/customizableui/subView-arrow-back-inverted@2x.png)
+  skin/classic/browser/customizableui/subView-arrow-back-inverted-rtl.png  (../shared/customizableui/subView-arrow-back-inverted-rtl.png)
+  skin/classic/browser/customizableui/subView-arrow-back-inverted-rtl@2x.png  (../shared/customizableui/subView-arrow-back-inverted-rtl@2x.png)
 * skin/classic/browser/customizableui/panelUIOverlay.css    (customizableui/panelUIOverlay.css)
+  skin/classic/browser/customizableui/whimsy.png          (../shared/customizableui/whimsy.png)
+  skin/classic/browser/customizableui/whimsy@2x.png       (../shared/customizableui/whimsy@2x.png)
+  skin/classic/browser/customizableui/whimsy-bw.png       (../shared/customizableui/whimsy-bw.png)
+  skin/classic/browser/customizableui/whimsy-bw@2x.png    (../shared/customizableui/whimsy-bw@2x.png)
   skin/classic/browser/downloads/allDownloadsViewOverlay.css (downloads/allDownloadsViewOverlay.css)
   skin/classic/browser/downloads/buttons.png                (downloads/buttons.png)
   skin/classic/browser/downloads/buttons@2x.png             (downloads/buttons@2x.png)
@@ -153,8 +168,9 @@ browser.jar:
   skin/classic/browser/feeds/videoFeedIcon16.png            (feeds/feedIcon16.png)
   skin/classic/browser/feeds/audioFeedIcon.png              (feeds/feedIcon.png)
   skin/classic/browser/feeds/audioFeedIcon16.png            (feeds/feedIcon16.png)
+  skin/classic/browser/fonts/ClearSans-Regular.ttf          (../shared/ClearSans-Regular.ttf)
   skin/classic/browser/newtab/newTab.css                    (newtab/newTab.css)
-  skin/classic/browser/newtab/controls.png                  (newtab/controls.png)
+  skin/classic/browser/newtab/controls.png                  (../shared/newtab/controls.png)
   skin/classic/browser/newtab/controls@2x.png               (newtab/controls@2x.png)
   skin/classic/browser/setDesktopBackground.css
   skin/classic/browser/monitor.png
@@ -185,6 +201,7 @@ browser.jar:
   skin/classic/browser/places/plus.png                      (places/plus.png)
   skin/classic/browser/places/plus-active.png               (places/plus-active.png)
   skin/classic/browser/places/starred48.png                 (places/starred48.png)
+  skin/classic/browser/places/starred48@2x.png              (places/starred48@2x.png)
   skin/classic/browser/places/unstarred48.png               (places/unstarred48.png)
   skin/classic/browser/places/unfiledBookmarks.png          (places/unfiledBookmarks.png)
   skin/classic/browser/places/unfiledBookmarks@2x.png       (places/unfiledBookmarks@2x.png)
@@ -207,6 +224,14 @@ browser.jar:
   skin/classic/browser/preferences/saveFile.png             (preferences/saveFile.png)
 * skin/classic/browser/preferences/preferences.css          (preferences/preferences.css)
 * skin/classic/browser/preferences/in-content/preferences.css (preferences/in-content/preferences.css)
+  skin/classic/browser/preferences/in-content/check.png     (preferences/in-content/check.png)
+  skin/classic/browser/preferences/in-content/check@2x.png  (preferences/in-content/check@2x.png)
+  skin/classic/browser/preferences/in-content/icons.png     (preferences/in-content/icons.png)
+  skin/classic/browser/preferences/in-content/icons@2x.png  (preferences/in-content/icons@2x.png)
+  skin/classic/browser/preferences/in-content/header.png    (preferences/in-content/icons@2x.png)
+  skin/classic/browser/preferences/in-content/sorter.png    (preferences/in-content/sorter.png)
+  skin/classic/browser/preferences/in-content/dropdown.png  (preferences/in-content/dropdown.png)
+  skin/classic/browser/preferences/in-content/dropdown-disabled.png  (preferences/in-content/dropdown-disabled.png)
   skin/classic/browser/preferences/applications.css         (preferences/applications.css)
   skin/classic/browser/preferences/aboutPermissions.css     (preferences/aboutPermissions.css)
   skin/classic/browser/social/services-16.png               (social/services-16.png)
@@ -305,6 +330,7 @@ browser.jar:
 * skin/classic/browser/devtools/splitview.css               (../shared/devtools/splitview.css)
   skin/classic/browser/devtools/styleeditor.css             (../shared/devtools/styleeditor.css)
 * skin/classic/browser/devtools/shadereditor.css            (devtools/shadereditor.css)
+* skin/classic/browser/devtools/canvasdebugger.css          (devtools/canvasdebugger.css)
 * skin/classic/browser/devtools/debugger.css                (devtools/debugger.css)
 * skin/classic/browser/devtools/profiler.css                (devtools/profiler.css)
 * skin/classic/browser/devtools/netmonitor.css              (devtools/netmonitor.css)
@@ -323,8 +349,7 @@ browser.jar:
   skin/classic/browser/devtools/background-noise-toolbar.png (devtools/background-noise-toolbar.png)
   skin/classic/browser/devtools/noise.png                   (devtools/noise.png)
   skin/classic/browser/devtools/dropmarker.png              (devtools/dropmarker.png)
-  skin/classic/browser/devtools/layout-background-grid.png  (devtools/layout-background-grid.png)
-  skin/classic/browser/devtools/layoutview.css              (devtools/layoutview.css)
+  skin/classic/browser/devtools/layoutview.css              (../shared/devtools/layoutview.css)
   skin/classic/browser/devtools/debugger-collapse.png       (../shared/devtools/images/debugger-collapse.png)
   skin/classic/browser/devtools/debugger-expand.png         (../shared/devtools/images/debugger-expand.png)
   skin/classic/browser/devtools/debugger-pause.png          (../shared/devtools/images/debugger-pause.png)
@@ -386,7 +411,6 @@ browser.jar:
   skin/classic/browser/devtools/app-manager/noise.png                 (../shared/devtools/app-manager/images/noise.png)
   skin/classic/browser/devtools/app-manager/default-app-icon.png      (../shared/devtools/app-manager/images/default-app-icon.png)
 #ifdef MOZ_SERVICES_SYNC
-  skin/classic/browser/sync-throbber.png
   skin/classic/browser/sync-16.png
   skin/classic/browser/sync-32.png
   skin/classic/browser/sync-bg.png
@@ -402,9 +426,13 @@ browser.jar:
   skin/classic/browser/syncProgress.css
   skin/classic/browser/syncProgress-horizontalbar.png
   skin/classic/browser/syncProgress-horizontalbar@2x.png
+  skin/classic/browser/syncProgress-menuPanel.png
+  skin/classic/browser/syncProgress-menuPanel@2x.png
+  skin/classic/browser/syncProgress-toolbar.png
+  skin/classic/browser/syncProgress-toolbar@2x.png
+  skin/classic/browser/syncProgress-toolbar-inverted.png
+  skin/classic/browser/syncProgress-toolbar-inverted@2x.png
 #endif
-  skin/classic/browser/lion/keyhole-circle.png              (keyhole-circle-lion.png)
-  skin/classic/browser/keyhole-circle@2x.png                (keyhole-circle-lion@2x.png)
   skin/classic/browser/Toolbar-background-noise.png         (Toolbar-background-noise.png)
   skin/classic/browser/lion/toolbarbutton-dropmarker.png    (toolbarbutton-dropmarker-lion.png)
   skin/classic/browser/toolbarbutton-dropmarker@2x.png      (toolbarbutton-dropmarker-lion@2x.png)
@@ -427,7 +455,6 @@ browser.jar:
   skin/classic/browser/devtools/tooltip/arrow-vertical-light.png   (../shared/devtools/tooltip/arrow-vertical-light.png)
   skin/classic/browser/devtools/tooltip/arrow-vertical-light@2x.png   (../shared/devtools/tooltip/arrow-vertical-light@2x.png)
 
-% override chrome://browser/skin/keyhole-circle.png                        chrome://browser/skin/lion/keyhole-circle.png                           os=Darwin osversion>=10.7
 % override chrome://browser/skin/toolbarbutton-dropmarker.png              chrome://browser/skin/lion/toolbarbutton-dropmarker.png                 os=Darwin osversion>=10.7
 % override chrome://browser/skin/tabbrowser/alltabs-box-bkgnd-icon.png     chrome://browser/skin/lion/tabbrowser/alltabs-box-bkgnd-icon.png        os=Darwin osversion>=10.7
 % override chrome://browser/skin/tabview/tabview.png                       chrome://browser/skin/lion/tabview/tabview.png                          os=Darwin osversion>=10.7

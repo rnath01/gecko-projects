@@ -145,9 +145,7 @@ MNewStringObject::templateObj() const {
 
 CodeGenerator::CodeGenerator(MIRGenerator *gen, LIRGraph *graph, MacroAssembler *masm)
   : CodeGeneratorSpecific(gen, graph, masm)
-#ifdef DEBUG
   , ionScriptLabels_(gen->alloc())
-#endif
   , unassociatedScriptCounts_(nullptr)
 {
 }
@@ -2116,7 +2114,7 @@ CodeGenerator::visitCallGeneric(LCallGeneric *call)
     masm.freeStack(unusedStack);
 
     // Construct the IonFramePrefix.
-    uint32_t descriptor = MakeFrameDescriptor(masm.framePushed(), IonFrame_OptimizedJS);
+    uint32_t descriptor = MakeFrameDescriptor(masm.framePushed(), JitFrame_IonJS);
     masm.Push(Imm32(call->numActualArgs()));
     masm.Push(calleereg);
     masm.Push(Imm32(descriptor));
@@ -2237,7 +2235,7 @@ CodeGenerator::visitCallKnown(LCallKnown *call)
     masm.freeStack(unusedStack);
 
     // Construct the IonFramePrefix.
-    uint32_t descriptor = MakeFrameDescriptor(masm.framePushed(), IonFrame_OptimizedJS);
+    uint32_t descriptor = MakeFrameDescriptor(masm.framePushed(), JitFrame_IonJS);
     masm.Push(Imm32(call->numActualArgs()));
     masm.Push(calleereg);
     masm.Push(Imm32(descriptor));
@@ -2444,7 +2442,7 @@ CodeGenerator::visitApplyArgsGeneric(LApplyArgsGeneric *apply)
         // Create the frame descriptor.
         unsigned pushed = masm.framePushed();
         masm.addPtr(Imm32(pushed), copyreg);
-        masm.makeFrameDescriptor(copyreg, IonFrame_OptimizedJS);
+        masm.makeFrameDescriptor(copyreg, JitFrame_IonJS);
 
         masm.Push(argcreg);
         masm.Push(calleereg);
@@ -3539,8 +3537,7 @@ CodeGenerator::visitNewDeclEnvObject(LNewDeclEnvObject *lir)
     return true;
 }
 
-typedef JSObject *(*NewCallObjectFn)(JSContext *, HandleScript, HandleShape,
-                                     HandleTypeObject, HeapSlot *);
+typedef JSObject *(*NewCallObjectFn)(JSContext *, HandleShape, HandleTypeObject, HeapSlot *);
 static const VMFunction NewCallObjectInfo =
     FunctionInfo<NewCallObjectFn>(NewCallObject);
 
@@ -3552,38 +3549,75 @@ CodeGenerator::visitNewCallObject(LNewCallObject *lir)
 
     JSObject *templateObj = lir->mir()->templateObject();
 
-    // If we have a template object, we can inline call object creation.
     OutOfLineCode *ool;
     if (lir->slots()->isRegister()) {
         ool = oolCallVM(NewCallObjectInfo, lir,
-                        (ArgList(), ImmGCPtr(lir->mir()->block()->info().script()),
-                                    ImmGCPtr(templateObj->lastProperty()),
-                                    ImmGCPtr(templateObj->hasSingletonType() ? nullptr : templateObj->type()),
+                        (ArgList(), ImmGCPtr(templateObj->lastProperty()),
+                                    ImmGCPtr(templateObj->type()),
                                     ToRegister(lir->slots())),
                         StoreRegisterTo(objReg));
     } else {
         ool = oolCallVM(NewCallObjectInfo, lir,
-                        (ArgList(), ImmGCPtr(lir->mir()->block()->info().script()),
-                                    ImmGCPtr(templateObj->lastProperty()),
-                                    ImmGCPtr(templateObj->hasSingletonType() ? nullptr : templateObj->type()),
+                        (ArgList(), ImmGCPtr(templateObj->lastProperty()),
+                                    ImmGCPtr(templateObj->type()),
                                     ImmPtr(nullptr)),
                         StoreRegisterTo(objReg));
     }
     if (!ool)
         return false;
 
-    if (lir->mir()->needsSingletonType()) {
-        // Objects can only be given singleton types in VM calls.
+#ifdef JSGC_GENERATIONAL
+    if (templateObj->hasDynamicSlots()) {
+        // Slot initialization is unbarriered in this case, so we must either
+        // allocate in the nursery or bail if that is not possible.
         masm.jump(ool->entry());
-    } else {
+    } else
+#endif
+    {
+        // Inline call object creation, using the OOL path only for tricky cases.
         masm.newGCThing(objReg, tempReg, templateObj, ool->entry(), gc::DefaultHeap);
         masm.initGCThing(objReg, tempReg, templateObj);
-
-        if (lir->slots()->isRegister())
-            masm.storePtr(ToRegister(lir->slots()), Address(objReg, JSObject::offsetOfSlots()));
     }
 
+    if (lir->slots()->isRegister())
+        masm.storePtr(ToRegister(lir->slots()), Address(objReg, JSObject::offsetOfSlots()));
+
     masm.bind(ool->rejoin());
+    return true;
+}
+
+typedef JSObject *(*NewSingletonCallObjectFn)(JSContext *, HandleShape, HeapSlot *);
+static const VMFunction NewSingletonCallObjectInfo =
+    FunctionInfo<NewSingletonCallObjectFn>(NewSingletonCallObject);
+
+bool
+CodeGenerator::visitNewSingletonCallObject(LNewSingletonCallObject *lir)
+{
+    Register objReg = ToRegister(lir->output());
+
+    JSObject *templateObj = lir->mir()->templateObject();
+
+    OutOfLineCode *ool;
+    if (lir->slots()->isRegister()) {
+        ool = oolCallVM(NewSingletonCallObjectInfo, lir,
+                        (ArgList(), ImmGCPtr(templateObj->lastProperty()),
+                                    ToRegister(lir->slots())),
+                        StoreRegisterTo(objReg));
+    } else {
+        ool = oolCallVM(NewSingletonCallObjectInfo, lir,
+                        (ArgList(), ImmGCPtr(templateObj->lastProperty()),
+                                    ImmPtr(nullptr)),
+                        StoreRegisterTo(objReg));
+    }
+    if (!ool)
+        return false;
+
+    // Objects can only be given singleton types in VM calls.  We make the call
+    // out of line to not bloat inline code, even if (naively) this seems like
+    // extra work.
+    masm.jump(ool->entry());
+    masm.bind(ool->rejoin());
+
     return true;
 }
 
@@ -4071,9 +4105,12 @@ CodeGenerator::visitNeuterCheck(LNeuterCheck *lir)
 {
     Register obj = ToRegister(lir->object());
     Register temp = ToRegister(lir->temp());
-    masm.loadPtr(Address(obj, TypedObject::dataOffset()), temp);
-    masm.testPtr(temp, temp);
-    if (!bailoutIf(Assembler::Zero, lir->snapshot()))
+
+    masm.extractObject(Address(obj, TypedObject::ownerOffset()), temp);
+    masm.unboxInt32(Address(temp, ArrayBufferObject::flagsOffset()), temp);
+    masm.and32(Imm32(ArrayBufferObject::neuteredFlag()), temp);
+
+    if (!bailoutIf(Assembler::NonZero, lir->snapshot()))
         return false;
     return true;
 }
@@ -6041,6 +6078,9 @@ CodeGenerator::generateAsmJS()
 {
     IonSpew(IonSpew_Codegen, "# Emitting asm.js code");
 
+    // AsmJS doesn't do profiler instrumentation.
+    sps_.disable();
+
     // The caller (either another asm.js function or the external-entry
     // trampoline) has placed all arguments in registers and on the stack
     // according to the system ABI. The MAsmJSParameters which represent these
@@ -6068,7 +6108,9 @@ CodeGenerator::generateAsmJS()
     // is nothing else to do after this point since the LifoAlloc memory
     // holding the MIR graph is about to be popped and reused. In particular,
     // every step in CodeGenerator::link must be a nop, as asserted here:
-    JS_ASSERT(snapshots_.size() == 0);
+    JS_ASSERT(snapshots_.listSize() == 0);
+    JS_ASSERT(snapshots_.RVATableSize() == 0);
+    JS_ASSERT(recovers_.size() == 0);
     JS_ASSERT(bailouts_.empty());
     JS_ASSERT(graph.numConstants() == 0);
     JS_ASSERT(safepointIndices_.empty());
@@ -6084,6 +6126,9 @@ CodeGenerator::generate()
     IonSpew(IonSpew_Codegen, "# Emitting code for script %s:%d",
             gen->info().script()->filename(),
             gen->info().script()->lineno());
+
+    if (!snapshots_.init())
+        return false;
 
     if (!safepoints_.init(gen->alloc(), graph.totalSlotCount()))
         return false;
@@ -6187,8 +6232,9 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
 
     IonScript *ionScript =
       IonScript::New(cx, recompileInfo,
-                     graph.totalSlotCount(), scriptFrameSize, snapshots_.size(),
-                     bailouts_.length(), graph.numConstants(),
+                     graph.totalSlotCount(), scriptFrameSize,
+                     snapshots_.listSize(), snapshots_.RVATableSize(),
+                     recovers_.size(), bailouts_.length(), graph.numConstants(),
                      safepointIndices_.length(), osiIndices_.length(),
                      cacheList_.length(), runtimeData_.length(),
                      safepoints_.size(), callTargets.length(),
@@ -6198,11 +6244,11 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
         return false;
     }
 
-    // Lock the runtime against operation callbacks during the link.
-    // We don't want an operation callback to protect the code for the script
+    // Lock the runtime against interrupt callbacks during the link.
+    // We don't want an interrupt request to protect the code for the script
     // before it has been filled in, as we could segv before the runtime's
     // patchable backedges have been fully updated.
-    JSRuntime::AutoLockForOperationCallback lock(cx->runtime());
+    JSRuntime::AutoLockForInterrupt lock(cx->runtime());
 
     // Make sure we don't segv while filling in the code, to avoid deadlocking
     // inside the signal handler.
@@ -6272,14 +6318,12 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
         perfSpewer_.writeProfile(script, code, masm);
 #endif
 
-#ifdef DEBUG
     for (size_t i = 0; i < ionScriptLabels_.length(); i++) {
         ionScriptLabels_[i].fixup(&masm);
         Assembler::patchDataWithValueCheck(CodeLocationLabel(code, ionScriptLabels_[i]),
                                            ImmPtr(ionScript),
                                            ImmPtr((void*)-1));
     }
-#endif
 
     // for generating inline caches during the execution.
     if (runtimeData_.length())
@@ -6298,8 +6342,11 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
         ionScript->copyBailoutTable(&bailouts_[0]);
     if (osiIndices_.length())
         ionScript->copyOsiIndices(&osiIndices_[0], masm);
-    if (snapshots_.size())
+    if (snapshots_.listSize())
         ionScript->copySnapshots(&snapshots_);
+    MOZ_ASSERT_IF(snapshots_.listSize(), recovers_.size());
+    if (recovers_.size())
+        ionScript->copyRecovers(&recovers_);
     if (graph.numConstants())
         ionScript->copyConstants(graph.constantPool());
     if (callTargets.length() > 0)
@@ -7834,6 +7881,7 @@ bool
 CodeGenerator::visitFunctionBoundary(LFunctionBoundary *lir)
 {
     Register temp = ToRegister(lir->temp()->output());
+    bool inlinedFunction = lir->inlineLevel() > 0;
 
     switch (lir->type()) {
         case MFunctionBoundary::Inline_Enter:
@@ -7852,47 +7900,51 @@ CodeGenerator::visitFunctionBoundary(LFunctionBoundary *lir)
                 sps_.reenter(masm, temp);
             }
 
-            sps_.leave(masm, temp);
+            sps_.leave(masm, temp, /* inlinedFunction = */ true);
             if (!sps_.enterInlineFrame())
                 return false;
             // fallthrough
 
         case MFunctionBoundary::Enter:
             if (gen->options.spsSlowAssertionsEnabled()) {
-                saveLive(lir);
-                pushArg(ImmGCPtr(lir->script()));
-                if (!callVM(SPSEnterInfo, lir))
-                    return false;
-                restoreLive(lir);
-                sps_.pushManual(lir->script(), masm, temp);
+                if (!inlinedFunction || js_JitOptions.profileInlineFrames) {
+                    saveLive(lir);
+                    pushArg(ImmGCPtr(lir->script()));
+                    if (!callVM(SPSEnterInfo, lir))
+                        return false;
+                    restoreLive(lir);
+                }
+                sps_.pushManual(lir->script(), masm, temp, /* inlinedFunction = */ inlinedFunction);
                 return true;
             }
 
-            return sps_.push(lir->script(), masm, temp);
+            return sps_.push(lir->script(), masm, temp, /* inlinedFunction = */ inlinedFunction);
 
         case MFunctionBoundary::Inline_Exit:
             // all inline returns were covered with ::Exit, so we just need to
             // maintain the state of inline frames currently active and then
             // reenter the caller
             sps_.leaveInlineFrame();
-            sps_.reenter(masm, temp);
+            sps_.reenter(masm, temp, /* inlinedFunction = */ true);
             return true;
 
         case MFunctionBoundary::Exit:
             if (gen->options.spsSlowAssertionsEnabled()) {
-                saveLive(lir);
-                pushArg(ImmGCPtr(lir->script()));
-                // Once we've exited, then we shouldn't emit instrumentation for
-                // the corresponding reenter() because we no longer have a
-                // frame.
-                sps_.skipNextReenter();
-                if (!callVM(SPSExitInfo, lir))
-                    return false;
-                restoreLive(lir);
+                if (!inlinedFunction || js_JitOptions.profileInlineFrames) {
+                    saveLive(lir);
+                    pushArg(ImmGCPtr(lir->script()));
+                    // Once we've exited, then we shouldn't emit instrumentation for
+                    // the corresponding reenter() because we no longer have a
+                    // frame.
+                    sps_.skipNextReenter();
+                    if (!callVM(SPSExitInfo, lir))
+                        return false;
+                    restoreLive(lir);
+                }
                 return true;
             }
 
-            sps_.pop(masm, temp);
+            sps_.pop(masm, temp, /* inlinedFunction = */ inlinedFunction);
             return true;
 
         default:
@@ -8264,15 +8316,26 @@ static const VMFunction RecompileFnInfo = FunctionInfo<RecompileFn>(Recompile);
 bool
 CodeGenerator::visitRecompileCheck(LRecompileCheck *ins)
 {
-    Register useCount = ToRegister(ins->scratch());
+    Label done;
+    Register tmp = ToRegister(ins->scratch());
+    OutOfLineCode *ool = oolCallVM(RecompileFnInfo, ins, (ArgList()), StoreRegisterTo(tmp));
 
-    masm.movePtr(ImmPtr(ins->mir()->script()->addressOfUseCount()), useCount);
-    Address ptr(useCount, 0);
-    masm.add32(Imm32(1), ptr);
+    // Check if usecount is high enough.
+    masm.movePtr(ImmPtr(ins->mir()->script()->addressOfUseCount()), tmp);
+    Address ptr(tmp, 0);
+    masm.add32(Imm32(1), tmp);
+    masm.branch32(Assembler::BelowOrEqual, ptr, Imm32(ins->mir()->useCount()), &done);
 
-    OutOfLineCode *ool = oolCallVM(RecompileFnInfo, ins, (ArgList()), StoreRegisterTo(useCount));
-    masm.branch32(Assembler::Above, ptr, Imm32(ins->mir()->useCount()), ool->entry());
+    // Check if not yet recompiling.
+    CodeOffsetLabel label = masm.movWithPatch(ImmWord(uintptr_t(-1)), tmp);
+    if (!ionScriptLabels_.append(label))
+        return false;
+    masm.branch32(Assembler::Equal,
+                  Address(tmp, IonScript::offsetOfRecompiling()),
+                  Imm32(0),
+                  ool->entry());
     masm.bind(ool->rejoin());
+    masm.bind(&done);
 
     return true;
 }

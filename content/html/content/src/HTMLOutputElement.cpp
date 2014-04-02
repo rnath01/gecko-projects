@@ -18,7 +18,7 @@ NS_IMPL_NS_NEW_HTML_ELEMENT(Output)
 namespace mozilla {
 namespace dom {
 
-HTMLOutputElement::HTMLOutputElement(already_AddRefed<nsINodeInfo> aNodeInfo)
+HTMLOutputElement::HTMLOutputElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
   : nsGenericHTMLFormElement(aNodeInfo)
   , mValueModeFlag(eModeDefault)
 {
@@ -30,9 +30,6 @@ HTMLOutputElement::HTMLOutputElement(already_AddRefed<nsINodeInfo> aNodeInfo)
 
 HTMLOutputElement::~HTMLOutputElement()
 {
-  if (mTokenList) {
-    mTokenList->DropReference();
-  }
 }
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(HTMLOutputElement)
@@ -40,10 +37,7 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(HTMLOutputElement)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLOutputElement,
                                                 nsGenericHTMLFormElement)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mValidity)
-  if (tmp->mTokenList) {
-    tmp->mTokenList->DropReference();
-    NS_IMPL_CYCLE_COLLECTION_UNLINK(mTokenList)
-  }
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mTokenList)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(HTMLOutputElement,
                                                   nsGenericHTMLFormElement)
@@ -144,7 +138,9 @@ HTMLOutputElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
 void
 HTMLOutputElement::GetValue(nsAString& aValue)
 {
-  nsContentUtils::GetNodeTextContent(this, true, aValue);
+  if (!nsContentUtils::GetNodeTextContent(this, true, aValue)) {
+    NS_RUNTIMEABORT("OOM");
+  }
 }
 
 void
@@ -175,7 +171,9 @@ HTMLOutputElement::HtmlFor()
 void HTMLOutputElement::DescendantsChanged()
 {
   if (mValueModeFlag == eModeDefault) {
-    nsContentUtils::GetNodeTextContent(this, true, mDefaultValue);
+    if (!nsContentUtils::GetNodeTextContent(this, true, mDefaultValue)) {
+      NS_RUNTIMEABORT("OOM");
+    }
   }
 }
 

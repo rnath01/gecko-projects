@@ -16,6 +16,7 @@
 #include "GStreamerFormatHelper.h"
 #include "VideoUtils.h"
 #include "mozilla/dom/TimeRanges.h"
+#include "mozilla/Endian.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/unused.h"
 #include "GStreamerLoader.h"
@@ -757,8 +758,11 @@ nsresult GStreamerReader::Seek(int64_t aTarget,
   LOG(PR_LOG_DEBUG, "%p About to seek to %" GST_TIME_FORMAT,
         mDecoder, GST_TIME_ARGS(seekPos));
 
-  if (!gst_element_seek_simple(mPlayBin, GST_FORMAT_TIME,
-    static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE), seekPos)) {
+  int flags = GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT;
+  if (!gst_element_seek_simple(mPlayBin,
+                               GST_FORMAT_TIME,
+                               static_cast<GstSeekFlags>(flags),
+                               seekPos)) {
     LOG(PR_LOG_ERROR, "seek failed");
     return NS_ERROR_FAILURE;
   }
@@ -768,7 +772,7 @@ nsresult GStreamerReader::Seek(int64_t aTarget,
   gst_message_unref(message);
   LOG(PR_LOG_DEBUG, "seek completed");
 
-  return DecodeToTarget(aTarget);
+  return NS_OK;
 }
 
 nsresult GStreamerReader::GetBuffered(dom::TimeRanges* aBuffered,
@@ -1204,13 +1208,13 @@ GstCaps* GStreamerReader::BuildAudioSinkCaps()
   GstCaps* caps = gst_caps_from_string("audio/x-raw, channels={1,2}");
   const char* format;
 #ifdef MOZ_SAMPLE_TYPE_FLOAT32
-#ifdef IS_LITTLE_ENDIAN
+#if MOZ_LITTLE_ENDIAN
   format = "F32LE";
 #else
   format = "F32BE";
 #endif
 #else /* !MOZ_SAMPLE_TYPE_FLOAT32 */
-#ifdef IS_LITTLE_ENDIAN
+#if MOZ_LITTLE_ENDIAN
   format = "S16LE";
 #else
   format = "S16BE";

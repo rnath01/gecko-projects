@@ -56,6 +56,9 @@ Sampler *SamplerRegistry::sampler = NULL;
 // a pointer.
 static const pthread_t kNoThread = (pthread_t) 0;
 
+void OS::Startup() {
+}
+
 void OS::Sleep(int milliseconds) {
   usleep(1000 * milliseconds);
 }
@@ -205,6 +208,14 @@ class SamplerThread : public Thread {
           // This will be null if we're not interested in profiling this thread.
           if (!info->Profile())
             continue;
+
+          PseudoStack::SleepState sleeping = info->Stack()->observeSleeping();
+          if (sleeping == PseudoStack::SLEEPING_AGAIN) {
+            info->Profile()->DuplicateLastSample();
+            //XXX: This causes flushes regardless of jank-only mode
+            info->Profile()->flush();
+            continue;
+          }
 
           ThreadProfile* thread_profile = info->Profile();
 

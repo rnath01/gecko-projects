@@ -14,6 +14,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/IOInterposer.h"
 #include "mozilla/Likely.h"
 #include "mozilla/Poison.h"
 #include "mozilla/Preferences.h"
@@ -616,13 +617,13 @@ NS_INTERFACE_MAP_BEGIN(nsXULAppInfo)
                                      XRE_GetProcessType() == GeckoProcessType_Content)
 NS_INTERFACE_MAP_END
 
-NS_IMETHODIMP_(nsrefcnt)
+NS_IMETHODIMP_(MozExternalRefCountType)
 nsXULAppInfo::AddRef()
 {
   return 1;
 }
 
-NS_IMETHODIMP_(nsrefcnt)
+NS_IMETHODIMP_(MozExternalRefCountType)
 nsXULAppInfo::Release()
 {
   return 1;
@@ -786,6 +787,17 @@ nsXULAppInfo::GetProcessType(uint32_t* aResult)
 {
   NS_ENSURE_ARG_POINTER(aResult);
   *aResult = XRE_GetProcessType();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetProcessID(uint32_t* aResult)
+{
+#ifdef XP_WIN
+  *aResult = GetCurrentProcessId();
+#else
+  *aResult = getpid();
+#endif
   return NS_OK;
 }
 
@@ -1976,9 +1988,10 @@ SetCurrentProfileAsDefault(nsIToolkitProfileService* aProfileSvc,
     return rv;
 
   bool foundMatchingProfile = false;
-  nsCOMPtr<nsIToolkitProfile> profile;
-  rv = profiles->GetNext(getter_AddRefs(profile));
+  nsCOMPtr<nsISupports> supports;
+  rv = profiles->GetNext(getter_AddRefs(supports));
   while (NS_SUCCEEDED(rv)) {
+    nsCOMPtr<nsIToolkitProfile> profile = do_QueryInterface(supports);
     nsCOMPtr<nsIFile> profileRoot;
     profile->GetRootDir(getter_AddRefs(profileRoot));
     profileRoot->Equals(aCurrentProfileRoot, &foundMatchingProfile);
@@ -1988,7 +2001,7 @@ SetCurrentProfileAsDefault(nsIToolkitProfileService* aProfileSvc,
         rv = aProfileSvc->Flush();
       return rv;
     }
-    rv = profiles->GetNext(getter_AddRefs(profile));
+    rv = profiles->GetNext(getter_AddRefs(supports));
   }
   return rv;
 }
@@ -2851,10 +2864,10 @@ XREMain::XRE_mainInit(bool* aExitFlag)
   // error handling. indeed, this process is expected to be crashy, and we
   // don't want the user to see its crashes. That's the whole reason for
   // doing this in a separate process.
-  if (fire_glxtest_process()) {
-    *aExitFlag = true;
-    return 0;
-  }
+  //
+  // This call will cause a fork and the fork will terminate itself separately
+  // from the usual shutdown sequence
+  fire_glxtest_process();
 #endif
 
 #if defined(XP_WIN) && defined(MOZ_METRO)
@@ -2966,10 +2979,8 @@ XREMain::XRE_mainInit(bool* aExitFlag)
     rv = lf->GetParent(getter_AddRefs(greDir));
     if (NS_FAILED(rv))
       return 2;
-    
-    rv = CallQueryInterface(greDir, &mAppData->xreDirectory);
-    if (NS_FAILED(rv))
-      return 2;
+
+    greDir.forget(&mAppData->xreDirectory);
   }
 
   if (!mAppData->directory) {
@@ -4025,6 +4036,8 @@ XREMain::XRE_main(int argc, char* argv[], const nsXREAppData* aAppData)
   GeckoProfilerInitRAII profilerGuard(&aLocal);
   PROFILER_LABEL("Startup", "XRE_Main");
 
+  mozilla::IOInterposerInit ioInterposerGuard;
+
   nsresult rv = NS_OK;
 
   gArgc = argc;
@@ -4227,6 +4240,8 @@ XRE_mainMetro(int argc, char* argv[], const nsXREAppData* aAppData)
   char aLocal;
   GeckoProfilerInitRAII profilerGuard(&aLocal);
   PROFILER_LABEL("Startup", "XRE_Main");
+
+  mozilla::IOInterposerInit ioInterposerGuard;
 
   nsresult rv = NS_OK;
 

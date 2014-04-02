@@ -28,7 +28,9 @@
   }
 
   .devtools-responsive-container > .devtools-side-splitter {
-    border: 0;
+    border-width: 0;
+    border-top-width: 1px;
+    border-top-style: solid;
     margin: 0;
     min-height: 3px;
     height: 3px;
@@ -562,10 +564,12 @@
 }
 
 .theme-dark .side-menu-widget-empty-text {
+  background: url(background-noise-toolbar.png), #343c45; /* Toolbars */
   color: #b6babf; /* Foreground (Text) - Grey */
 }
 
 .theme-light .side-menu-widget-empty-text {
+  background: #f7f7f7; /* Toolbars */
   color: #585959; /* Grey foreground text */
 }
 

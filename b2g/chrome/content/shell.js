@@ -23,7 +23,10 @@ Cu.import('resource://gre/modules/NetworkStatsService.jsm');
 // Identity
 Cu.import('resource://gre/modules/SignInToWebsite.jsm');
 SignInToWebsiteController.init();
+
+#ifdef MOZ_SERVICES_FXACCOUNTS
 Cu.import('resource://gre/modules/FxAccountsMgmtService.jsm');
+#endif
 
 Cu.import('resource://gre/modules/DownloadsAPI.jsm');
 
@@ -199,7 +202,7 @@ var shell = {
 
         Services.obs.removeObserver(observer, topic);
       }
-    }, "network-interface-state-changed", false);
+    }, "network-connection-state-changed", false);
   },
 
   get contentBrowser() {
@@ -300,7 +303,11 @@ var shell = {
     systemAppFrame.setAttribute('src', "data:text/html;charset=utf-8,%3C!DOCTYPE html>%3Cbody style='background:black;");
     let container = document.getElementById('container');
 #ifdef MOZ_WIDGET_COCOA
-    container.removeChild(document.getElementById('placeholder'));
+    // See shell.html
+    let hotfix = document.getElementById('placeholder');
+    if (hotfix) {
+      container.removeChild(hotfix);
+    }
 #endif
     container.appendChild(systemAppFrame);
 
@@ -589,10 +596,9 @@ var shell = {
   },
 
   openAppForSystemMessage: function shell_openAppForSystemMessage(msg) {
-    let origin = Services.io.newURI(msg.manifest, null, null).prePath;
     let payload = {
-      url: msg.uri,
-      manifestURL: msg.manifest,
+      url: msg.pageURL,
+      manifestURL: msg.manifestURL,
       isActivity: (msg.type == 'activity'),
       onlyShowApp: msg.onlyShowApp,
       showApp: msg.showApp,
@@ -870,7 +876,7 @@ var AlertsHelper = {
     });
   },
 
-  showNotification: function alert_showNotification(imageUrl,
+  showNotification: function alert_showNotification(imageURL,
                                                     title,
                                                     text,
                                                     textClickable,
@@ -878,37 +884,37 @@ var AlertsHelper = {
                                                     uid,
                                                     bidi,
                                                     lang,
-                                                    manifestUrl) {
+                                                    manifestURL) {
     function send(appName, appIcon) {
       shell.sendChromeEvent({
         type: "desktop-notification",
         id: uid,
-        icon: imageUrl,
+        icon: imageURL,
         title: title,
         text: text,
         bidi: bidi,
         lang: lang,
         appName: appName,
         appIcon: appIcon,
-        manifestURL: manifestUrl
+        manifestURL: manifestURL
       });
     }
 
-    if (!manifestUrl || !manifestUrl.length) {
+    if (!manifestURL || !manifestURL.length) {
       send(null, null);
       return;
     }
 
     // If we have a manifest URL, get the icon and title from the manifest
     // to prevent spoofing.
-    let app = DOMApplicationRegistry.getAppByManifestURL(manifestUrl);
-    DOMApplicationRegistry.getManifestFor(manifestUrl).then((aManifest) => {
+    let app = DOMApplicationRegistry.getAppByManifestURL(manifestURL);
+    DOMApplicationRegistry.getManifestFor(manifestURL).then((aManifest) => {
       let helper = new ManifestHelper(aManifest, app.origin);
       send(helper.name, helper.iconURLForSize(128));
     });
   },
 
-  showAlertNotification: function alert_showAlertNotification(imageUrl,
+  showAlertNotification: function alert_showAlertNotification(imageURL,
                                                               title,
                                                               text,
                                                               textClickable,
@@ -923,7 +929,7 @@ var AlertsHelper = {
     }
 
     this.registerListener(name, cookie, alertListener);
-    this.showNotification(imageUrl, title, text, textClickable, cookie,
+    this.showNotification(imageURL, title, text, textClickable, cookie,
                           name, bidi, lang, null);
   },
 
@@ -1131,7 +1137,7 @@ let RemoteDebugger = {
        */
       DebuggerServer.createRootActor = function createRootActor(connection)
       {
-        let promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
+        let { Promise: promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
         let parameters = {
           // We do not expose browser tab actors yet,
           // but we still have to define tabList.getList(),
@@ -1146,7 +1152,7 @@ let RemoteDebugger = {
           // unexpected actors
           globalActorFactories: restrictPrivileges ? {
             webappsActor: DebuggerServer.globalActorFactories.webappsActor,
-            deviceActor: DebuggerServer.globalActorFactories.deviceActor
+            deviceActor: DebuggerServer.globalActorFactories.deviceActor,
           } : DebuggerServer.globalActorFactories
         };
         let root = new DebuggerServer.RootActor(connection, parameters);

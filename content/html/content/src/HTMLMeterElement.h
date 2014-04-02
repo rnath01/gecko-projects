@@ -10,7 +10,6 @@
 #include "nsGenericHTMLElement.h"
 #include "nsAttrValue.h"
 #include "nsAttrValueInlines.h"
-#include "nsEventStateManager.h"
 #include "nsAlgorithm.h"
 #include <algorithm>
 
@@ -20,7 +19,7 @@ namespace dom {
 class HTMLMeterElement MOZ_FINAL : public nsGenericHTMLElement
 {
 public:
-  HTMLMeterElement(already_AddRefed<nsINodeInfo> aNodeInfo);
+  HTMLMeterElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
   virtual ~HTMLMeterElement();
 
   virtual nsEventStates IntrinsicState() const MOZ_OVERRIDE;

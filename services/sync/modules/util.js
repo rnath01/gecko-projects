@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-this.EXPORTED_SYMBOLS = ["XPCOMUtils", "Services", "NetUtil", "PlacesUtils",
+this.EXPORTED_SYMBOLS = ["XPCOMUtils", "Services", "NetUtil",
                          "FileUtils", "Utils", "Async", "Svc", "Str"];
 
 const {classes: Cc, interfaces: Ci, results: Cr, utils: Cu} = Components;
@@ -16,7 +16,6 @@ Cu.import("resource://services-crypto/utils.js");
 Cu.import("resource://services-sync/constants.js");
 Cu.import("resource://gre/modules/FileUtils.jsm", this);
 Cu.import("resource://gre/modules/NetUtil.jsm", this);
-Cu.import("resource://gre/modules/PlacesUtils.jsm", this);
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Services.jsm", this);
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
@@ -410,17 +409,6 @@ this.Utils = {
     });
   },
 
-  getIcon: function(iconUri, defaultIcon) {
-    try {
-      let iconURI = Utils.makeURI(iconUri);
-      return PlacesUtils.favicons.getFaviconLinkForIcon(iconURI).spec;
-    }
-    catch(ex) {}
-
-    // Just give the provided default icon or the system's default
-    return defaultIcon || PlacesUtils.favicons.defaultFavicon.spec;
-  },
-
   getErrorString: function Utils_getErrorString(error, args) {
     try {
       return Str.errors.get(error, args || null);
@@ -555,6 +543,22 @@ this.Utils = {
     return function innerBind() { return method.apply(object, arguments); };
   },
 
+  /**
+   * Is there a master password configured, regardless of current lock state?
+   */
+  mpEnabled: function mpEnabled() {
+    let modules = Cc["@mozilla.org/security/pkcs11moduledb;1"]
+                    .getService(Ci.nsIPKCS11ModuleDB);
+    let sdrSlot = modules.findSlotByName("");
+    let status  = sdrSlot.status;
+    let slots = Ci.nsIPKCS11Slot;
+
+    return status != slots.SLOT_UNINITIALIZED && status != slots.SLOT_READY;
+  },
+
+  /**
+   * Is there a master password configured and currently locked?
+   */
   mpLocked: function mpLocked() {
     let modules = Cc["@mozilla.org/security/pkcs11moduledb;1"]
                     .getService(Ci.nsIPKCS11ModuleDB);
@@ -620,7 +624,8 @@ this.Utils = {
     // The FxA hosts - these almost certainly all have the same hostname, but
     // better safe than sorry...
     for (let prefName of ["identity.fxaccounts.remote.force_auth.uri",
-                          "identity.fxaccounts.remote.uri",
+                          "identity.fxaccounts.remote.signup.uri",
+                          "identity.fxaccounts.remote.signin.uri",
                           "identity.fxaccounts.settings.uri"]) {
       let prefVal;
       try {

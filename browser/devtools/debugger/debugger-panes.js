@@ -7,8 +7,14 @@
 "use strict";
 
 // Used to detect minification for automatic pretty printing
-const SAMPLE_SIZE = 30; // no of lines
-const INDENT_COUNT_THRESHOLD = 20; // percentage
+const SAMPLE_SIZE = 50; // no of lines
+const INDENT_COUNT_THRESHOLD = 5; // percentage
+const CHARACTER_LIMIT = 250; // line character limit
+
+// Maps known URLs to friendly source group names
+const KNOWN_SOURCE_GROUPS = {
+  "Add-on SDK": "resource://gre/modules/commonjs/",
+};
 
 /**
  * Functions handling the sources UI.
@@ -47,6 +53,15 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     this.widget = new SideMenuWidget(document.getElementById("sources"), {
       showArrows: true
     });
+
+    // Sort known source groups towards the end of the list
+    this.widget.groupSortPredicate = function(a, b) {
+      if ((a in KNOWN_SOURCE_GROUPS) == (b in KNOWN_SOURCE_GROUPS)) {
+        return a.localeCompare(b);
+      }
+
+      return (a in KNOWN_SOURCE_GROUPS) ? 1 : -1;
+    };
 
     this.emptyText = L10N.getStr("noSourcesText");
     this._blackBoxCheckboxTooltip = L10N.getStr("blackBoxCheckboxTooltip");
@@ -125,10 +140,11 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    *        - staged: true to stage the item to be appended later
    */
   addSource: function(aSource, aOptions = {}) {
-    let url = aSource.url;
-    let label = SourceUtils.getSourceLabel(url.split(" -> ").pop());
-    let group = SourceUtils.getSourceGroup(url.split(" -> ").pop());
-    let unicodeUrl = NetworkHelper.convertToUnicode(unescape(url));
+    let fullUrl = aSource.url;
+    let url = fullUrl.split(" -> ").pop();
+    let label = aSource.addonPath ? aSource.addonPath : SourceUtils.getSourceLabel(url);
+    let group = aSource.addonID ? aSource.addonID : SourceUtils.getSourceGroup(url);
+    let unicodeUrl = NetworkHelper.convertToUnicode(unescape(fullUrl));
 
     let contents = document.createElement("label");
     contents.className = "plain dbg-source-item";
@@ -138,7 +154,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     contents.setAttribute("tooltiptext", unicodeUrl);
 
     // Append a source item to this container.
-    this.push([contents, url], {
+    this.push([contents, fullUrl], {
       staged: aOptions.staged, /* stage the item to be appended later? */
       attachment: {
         label: label,
@@ -1500,6 +1516,7 @@ let SourceUtils = {
     let lineStartIndex = 0;
     let lines = 0;
     let indentCount = 0;
+    let overCharLimit = false;
 
     // Strip comments.
     aText = aText.replace(/\/\*[\S\s]*?\*\/|\/\/(.+|\n)/g, "");
@@ -1512,9 +1529,15 @@ let SourceUtils = {
       if (/^\s+/.test(aText.slice(lineStartIndex, lineEndIndex))) {
         indentCount++;
       }
+      // For files with no indents but are not minified.
+      if ((lineEndIndex - lineStartIndex) > CHARACTER_LIMIT) {
+        overCharLimit = true;
+        break;
+      }
       lineStartIndex = lineEndIndex + 1;
     }
-    isMinified = ((indentCount / lines ) * 100) < INDENT_COUNT_THRESHOLD;
+    isMinified = ((indentCount / lines ) * 100) < INDENT_COUNT_THRESHOLD ||
+                 overCharLimit;
 
     this._minifiedCache.set(sourceClient, isMinified);
     return isMinified;
@@ -1545,7 +1568,17 @@ let SourceUtils = {
       return cachedLabel;
     }
 
-    let sourceLabel = this.trimUrl(aUrl);
+    let sourceLabel = null;
+
+    for (let name of Object.keys(KNOWN_SOURCE_GROUPS)) {
+      if (aUrl.startsWith(KNOWN_SOURCE_GROUPS[name])) {
+        sourceLabel = aUrl.substring(KNOWN_SOURCE_GROUPS[name].length);
+      }
+    }
+
+    if (!sourceLabel) {
+      sourceLabel = this.trimUrl(aUrl);
+    }
     let unicodeLabel = NetworkHelper.convertToUnicode(unescape(sourceLabel));
     this._labelsCache.set(aUrl, unicodeLabel);
     return unicodeLabel;
@@ -1568,14 +1601,20 @@ let SourceUtils = {
 
     try {
       // Use an nsIURL to parse all the url path parts.
-      let url = aUrl.split(" -> ").pop();
-      var uri = Services.io.newURI(url, null, null).QueryInterface(Ci.nsIURL);
+      var uri = Services.io.newURI(aUrl, null, null).QueryInterface(Ci.nsIURL);
     } catch (e) {
       // This doesn't look like a url, or nsIURL can't handle it.
       return "";
     }
 
     let groupLabel = uri.prePath;
+
+    for (let name of Object.keys(KNOWN_SOURCE_GROUPS)) {
+      if (aUrl.startsWith(KNOWN_SOURCE_GROUPS[name])) {
+        groupLabel = name;
+      }
+    }
+
     let unicodeLabel = NetworkHelper.convertToUnicode(unescape(groupLabel));
     this._groupsCache.set(aUrl, unicodeLabel)
     return unicodeLabel;
@@ -1961,10 +2000,14 @@ VariableBubbleView.prototype = {
   /**
    * The mousemove listener for the source editor.
    */
-  _onMouseMove: function({ clientX: x, clientY: y }) {
+  _onMouseMove: function({ clientX: x, clientY: y, buttons: btns }) {
     // Prevent the variable inspection popup from showing when the thread client
-    // is not paused, or while a popup is already visible.
-    if (gThreadClient && gThreadClient.state != "paused" || !this._tooltip.isHidden()) {
+    // is not paused, or while a popup is already visible, or when the user tries
+    // to select text in the editor.
+    if (gThreadClient && gThreadClient.state != "paused"
+        || !this._tooltip.isHidden()
+        || (DebuggerView.editor.somethingSelected()
+         && btns > 0)) {
       clearNamedTimeout("editor-mouse-move");
       return;
     }

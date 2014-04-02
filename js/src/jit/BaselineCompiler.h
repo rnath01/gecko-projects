@@ -97,6 +97,7 @@ namespace jit {
     _(JSOP_INITPROP_GETTER)    \
     _(JSOP_INITPROP_SETTER)    \
     _(JSOP_ENDINIT)            \
+    _(JSOP_ARRAYPUSH)          \
     _(JSOP_GETELEM)            \
     _(JSOP_SETELEM)            \
     _(JSOP_CALLELEM)           \
@@ -215,7 +216,7 @@ class BaselineCompiler : public BaselineCompilerSpecific
 
     bool emitStackCheck(bool earlyCheck=false);
     bool emitInterruptCheck();
-    bool emitUseCountIncrement();
+    bool emitUseCountIncrement(bool allowOsr=true);
     bool emitArgumentTypeChecks();
     bool emitDebugPrologue();
     bool emitDebugTrap();

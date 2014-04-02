@@ -140,13 +140,14 @@ nsresult MediaOmxReader::ReadMetadata(MediaInfo* aInfo,
   mDecoder->SetMediaSeekable(mExtractor->flags() & MediaExtractor::CAN_SEEK);
 
   if (mOmxDecoder->HasVideo()) {
-    int32_t width, height;
-    mOmxDecoder->GetVideoParameters(&width, &height);
+    int32_t displayWidth, displayHeight, width, height;
+    mOmxDecoder->GetVideoParameters(&displayWidth, &displayHeight,
+                                    &width, &height);
     nsIntRect pictureRect(0, 0, width, height);
 
     // Validate the container-reported frame and pictureRect sizes. This ensures
     // that our video frame creation code doesn't overflow.
-    nsIntSize displaySize(width, height);
+    nsIntSize displaySize(displayWidth, displayHeight);
     nsIntSize frameSize(width, height);
     if (!IsValidVideoRegion(frameSize, pictureRect, displaySize)) {
       return NS_ERROR_FAILURE;
@@ -349,9 +350,23 @@ nsresult MediaOmxReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndT
     container->GetImageContainer()->ClearAllImagesExceptFront();
   }
 
-  mAudioSeekTimeUs = mVideoSeekTimeUs = aTarget;
+  if (mHasAudio && mHasVideo) {
+    // The OMXDecoder seeks/demuxes audio and video streams separately. So if
+    // we seek both audio and video to aTarget, the audio stream can typically
+    // seek closer to the seek target, since typically every audio block is
+    // a sync point, whereas for video there are only keyframes once every few
+    // seconds. So if we have both audio and video, we must seek the video
+    // stream to the preceeding keyframe first, get the stream time, and then
+    // seek the audio stream to match the video stream's time. Otherwise, the
+    // audio and video streams won't be in sync after the seek.
+    mVideoSeekTimeUs = aTarget;
+    const VideoData* v = DecodeToFirstVideoData();
+    mAudioSeekTimeUs = v ? v->mTime : aTarget;
+  } else {
+    mAudioSeekTimeUs = mVideoSeekTimeUs = aTarget;
+  }
 
-  return DecodeToTarget(aTarget);
+  return NS_OK;
 }
 
 static uint64_t BytesToTime(int64_t offset, uint64_t length, uint64_t durationUs) {
@@ -361,17 +376,19 @@ static uint64_t BytesToTime(int64_t offset, uint64_t length, uint64_t durationUs
   return uint64_t(double(durationUs) * perc);
 }
 
-void MediaOmxReader::OnDecodeThreadFinish() {
-  if (mOmxDecoder.get()) {
-    mOmxDecoder->Pause();
+void MediaOmxReader::SetIdle() {
+  if (!mOmxDecoder.get()) {
+    return;
   }
+  mOmxDecoder->Pause();
 }
 
-void MediaOmxReader::OnDecodeThreadStart() {
-  if (mOmxDecoder.get()) {
-    DebugOnly<nsresult> result = mOmxDecoder->Play();
-    NS_ASSERTION(result == NS_OK, "OmxDecoder should be in play state to continue decoding");
+void MediaOmxReader::SetActive() {
+  if (!mOmxDecoder.get()) {
+    return;
   }
+  DebugOnly<nsresult> result = mOmxDecoder->Play();
+  NS_ASSERTION(result == NS_OK, "OmxDecoder should be in play state to continue decoding");
 }
 
 } // namespace mozilla

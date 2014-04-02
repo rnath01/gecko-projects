@@ -19,6 +19,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/AudioChannelBinding.h"
 #include "mozilla/dom/TextTrackManager.h"
+#include "MediaDecoder.h"
 
 // Define to output information on decoding and painting framerate
 /* #define DEBUG_FRAME_RATE 1 */
@@ -72,7 +73,7 @@ public:
     return mCORSMode;
   }
 
-  HTMLMediaElement(already_AddRefed<nsINodeInfo> aNodeInfo);
+  HTMLMediaElement(already_AddRefed<nsINodeInfo>& aNodeInfo);
   virtual ~HTMLMediaElement();
 
   /**
@@ -393,6 +394,8 @@ public:
 
   void SetCurrentTime(double aCurrentTime, ErrorResult& aRv);
 
+  void FastSeek(double aTime, ErrorResult& aRv);
+
   double Duration() const;
 
   bool Paused() const
@@ -518,16 +521,14 @@ public:
   AudioChannel MozAudioChannelType() const;
   void SetMozAudioChannelType(AudioChannel aValue, ErrorResult& aRv);
 
-  TextTrackList* TextTracks() const;
+  TextTrackList* TextTracks();
 
   already_AddRefed<TextTrack> AddTextTrack(TextTrackKind aKind,
                                            const nsAString& aLabel,
                                            const nsAString& aLanguage);
 
   void AddTextTrack(TextTrack* aTextTrack) {
-    if (mTextTrackManager) {
-      mTextTrackManager->AddTextTrack(aTextTrack);
-    }
+    GetOrCreateTextTrackManager()->AddTextTrack(aTextTrack);
   }
 
   void RemoveTextTrack(TextTrack* aTextTrack, bool aPendingListOnly = false) {
@@ -863,6 +864,12 @@ protected:
   // This method does the check for muting/fading/unmuting the audio channel.
   nsresult UpdateChannelMuteState(mozilla::dom::AudioChannelState aCanPlay);
 
+  // Seeks to aTime seconds. aSeekType can be Exact to seek to exactly the
+  // seek target, or PrevSyncPoint if a quicker but less precise seek is
+  // desired, and we'll seek to the sync point (keyframe and/or start of the
+  // next block of audio samples) preceeding seek target.
+  void Seek(double aTime, SeekTarget::Type aSeekType, ErrorResult& aRv);
+  
   // Update the audio channel playing state
   virtual void UpdateAudioChannelPlayingState();
 
@@ -870,6 +877,10 @@ protected:
   // in the element's list of text tracks whose text track mode is not disabled
   // and whose text track readiness state is loading.
   void PopulatePendingTextTrackList();
+
+  // Gets a reference to the MediaElement's TextTrackManager. If the
+  // MediaElement doesn't yet have one then it will create it.
+  TextTrackManager* GetOrCreateTextTrackManager();
 
   // The current decoder. Load() has been called on this decoder.
   // At most one of mDecoder and mSrcStream can be non-null.

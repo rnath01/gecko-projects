@@ -35,11 +35,6 @@ var secMan = Cc["@mozilla.org/scriptsecuritymanager;1"].getService(Ci.nsIScriptS
 let permissionSpecificChecker = {};
 
 XPCOMUtils.defineLazyServiceGetter(this,
-                                   "PermSettings",
-                                   "@mozilla.org/permissionSettings;1",
-                                   "nsIDOMPermissionSettings");
-
-XPCOMUtils.defineLazyServiceGetter(this,
                                    "AudioManager",
                                    "@mozilla.org/telephony/audiomanager;1",
                                    "nsIAudioManager");
@@ -334,7 +329,7 @@ ContentPermissionPrompt.prototype = {
         if (remember) {
           Services.perms.addFromPrincipal(request.principal, type.access,
                                           Ci.nsIPermissionManager.DENY_ACTION);
-        } else if (PERMISSION_NO_SESSION.indexOf(aPerm) < 0) {
+        } else if (PERMISSION_NO_SESSION.indexOf(type.access) < 0) {
           Services.perms.addFromPrincipal(request.principal, type.access,
                                           Ci.nsIPermissionManager.DENY_ACTION,
                                           Ci.nsIPermissionManager.EXPIRE_SESSION,
