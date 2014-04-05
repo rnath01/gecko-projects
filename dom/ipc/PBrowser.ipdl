@@ -350,6 +350,9 @@ parent:
 
     ReplyKeyEvent(WidgetKeyboardEvent event);
 
+    intr SynthesizeRealKeyEvent(WidgetKeyboardEvent event)
+        returns (bool defaultActionTaken);
+
 child:
     /**
      * Notify the remote browser that it has been Show()n on this
@@ -431,6 +434,8 @@ child:
                int32_t aClickCount,
                int32_t aModifiers,
                bool aIgnoreRootScrollFrame);
+
+    intr SyntheticRealKeyEvent(WidgetKeyboardEvent event, MaybeNativeKeyBinding keyBinding);
 
     RealMouseEvent(WidgetMouseEvent event);
     RealKeyEvent(WidgetKeyboardEvent event, MaybeNativeKeyBinding keyBinding);

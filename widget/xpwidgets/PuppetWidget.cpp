@@ -79,6 +79,7 @@ PuppetWidget::PuppetWidget(TabChild* aTabChild)
   : mTabChild(aTabChild)
   , mDPI(-1)
   , mDefaultScale(-1)
+  , mNativeKeyCommandsValid(false)
 {
   MOZ_COUNT_CTOR(PuppetWidget);
 
@@ -319,6 +320,8 @@ PuppetWidget::ExecuteNativeKeyBinding(NativeKeyBindingsType aType,
                                       DoCommandCallback aCallback,
                                       void* aCallbackData)
 {
+  MOZ_ASSERT(mNativeKeyCommandsValid);
+
   nsTArray<mozilla::CommandInt>& commands = mSingleLineCommands;
   switch (aType) {
     case nsIWidget::NativeKeyBindingsForSingleLineEditor:

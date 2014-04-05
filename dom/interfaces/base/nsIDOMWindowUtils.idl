@@ -519,6 +519,11 @@ interface nsIDOMWindowUtils : nsISupports {
   const unsigned long KEY_FLAG_LOCATION_MOBILE   = 0x0100;
   const unsigned long KEY_FLAG_LOCATION_JOYSTICK = 0x0200;
 
+  // If this flag is set, content processes will ask the parent to
+  // process the keystroke to emulate normal key handling more
+  // realistically.
+  const unsigned long KEY_FLAG_ALLOW_IPC         = 0x0400;
+
   boolean sendKeyEvent(in AString aType,
                        in long aKeyCode,
                        in long aCharCode,

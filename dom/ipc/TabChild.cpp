@@ -1,4 +1,4 @@
-/* -*- Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 8; -*- */
+/* -*- Mode: C++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 8; -*- */
 /* vim: set sw=2 sts=2 ts=8 et tw=80 : */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -1966,11 +1966,19 @@ TabChild::RecvRealTouchMoveEvent(const WidgetTouchEvent& aEvent,
 }
 
 bool
+TabChild::AnswerSyntheticRealKeyEvent(const WidgetKeyboardEvent& aEvent,
+                                      const MaybeNativeKeyBinding& aBindings)
+{
+  return RecvRealKeyEvent(aEvent, aBindings);
+}
+
+bool
 TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& event,
                            const MaybeNativeKeyBinding& aBindings)
- {
+{
+  PuppetWidget* widget = static_cast<PuppetWidget*>(mWidget.get());
+
   if (event.message == NS_KEY_PRESS) {
-    PuppetWidget* widget = static_cast<PuppetWidget*>(mWidget.get());
     if (aBindings.type() == MaybeNativeKeyBinding::TNativeKeyBinding) {
       const NativeKeyBinding& bindings = aBindings;
       widget->CacheNativeKeyCommands(bindings.singleLineCommands(),
@@ -1989,6 +1997,8 @@ TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& event,
   WidgetKeyboardEvent localEvent(event);
   localEvent.widget = mWidget;
   nsEventStatus status = DispatchWidgetEvent(localEvent);
+
+  widget->InvalidateNativeKeyCommands();
 
   if (event.message == NS_KEY_DOWN) {
     mIgnoreKeyPressEvent = status == nsEventStatus_eConsumeNoDefault;

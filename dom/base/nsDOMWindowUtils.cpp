@@ -68,6 +68,7 @@
 #include "mozilla/dom/file/FileHandle.h"
 #include "mozilla/dom/FileHandleBinding.h"
 #include "mozilla/dom/IDBFactoryBinding.h"
+#include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/indexedDB/IndexedDatabaseManager.h"
 #include "mozilla/dom/quota/PersistenceType.h"
 #include "mozilla/dom/quota/QuotaManager.h"
@@ -1229,12 +1230,22 @@ nsDOMWindowUtils::SendKeyEvent(const nsAString& aType,
     event.mFlags.mDefaultPrevented = true;
   }
 
-  nsEventStatus status;
-  nsresult rv = widget->DispatchEvent(&event, status);
-  NS_ENSURE_SUCCESS(rv, rv);
+  if ((aAdditionalFlags & KEY_FLAG_ALLOW_IPC) &&
+      XRE_GetProcessType() == GeckoProcessType_Content) {
+    nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
+    NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
+    TabChild* tabChild = TabChild::GetFrom(window->GetDocShell());
+    if (!tabChild->CallSynthesizeRealKeyEvent(event, aDefaultActionTaken)) {
+      return NS_ERROR_FAILURE;
+    }
+  } else {
+    nsEventStatus status;
+    nsresult rv = widget->DispatchEvent(&event, status);
+    NS_ENSURE_SUCCESS(rv, rv);
 
-  *aDefaultActionTaken = (status != nsEventStatus_eConsumeNoDefault);
-  
+    *aDefaultActionTaken = (status != nsEventStatus_eConsumeNoDefault);
+  }
+
   return NS_OK;
 }
 

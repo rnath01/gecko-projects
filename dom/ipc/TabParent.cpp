@@ -795,6 +795,20 @@ DoCommandCallback(mozilla::Command aCommand, void* aData)
   static_cast<InfallibleTArray<mozilla::CommandInt>*>(aData)->AppendElement(aCommand);
 }
 
+bool
+TabParent::AnswerSynthesizeRealKeyEvent(const WidgetKeyboardEvent& aEvent,
+                                        bool* aDefaultActionTaken)
+{
+  nsEventStatus status;
+  WidgetKeyboardEvent localEvent(aEvent);
+  nsCOMPtr<nsIWidget> widget = GetWidget();
+  localEvent.widget = widget;
+  localEvent.mFlags.mInSyntheticKeyEvent = true;
+  widget->DispatchEvent(&localEvent, status);
+  *aDefaultActionTaken = (status != nsEventStatus_eConsumeNoDefault);
+  return true;
+}
+
 bool TabParent::SendRealKeyEvent(WidgetKeyboardEvent& event)
 {
   if (mIsDestroyed) {
@@ -827,7 +841,11 @@ bool TabParent::SendRealKeyEvent(WidgetKeyboardEvent& event)
     }
   }
 
-  return PBrowserParent::SendRealKeyEvent(event, bindings);
+  if (event.mFlags.mInSyntheticKeyEvent) {
+    return PBrowserParent::CallSyntheticRealKeyEvent(event, bindings);
+  } else {
+    return PBrowserParent::SendRealKeyEvent(event, bindings);
+  }
 }
 
 bool TabParent::SendRealTouchEvent(WidgetTouchEvent& event)
