@@ -804,18 +804,28 @@ TabParent::RecvRequestNativeKeyBindings(const WidgetKeyboardEvent& aEvent,
   AutoInfallibleTArray<mozilla::CommandInt, 4> multiLine;
   AutoInfallibleTArray<mozilla::CommandInt, 4> richText;
 
+  *aBindings = mozilla::void_t();
+
   nsCOMPtr<nsIWidget> widget = GetWidget();
+  if (!widget) {
+    return true;
+  }
+
+  WidgetKeyboardEvent localEvent(aEvent);
+
+  if (!NS_SUCCEEDED(widget->AttachNativeKeyEvent(localEvent))) {
+    return true;
+  }
+
   widget->ExecuteNativeKeyBinding(nsIWidget::NativeKeyBindingsForSingleLineEditor,
-                                  aEvent, DoCommandCallback, &singleLine);
+                                  localEvent, DoCommandCallback, &singleLine);
   widget->ExecuteNativeKeyBinding(nsIWidget::NativeKeyBindingsForMultiLineEditor,
-                                  aEvent, DoCommandCallback, &multiLine);
+                                  localEvent, DoCommandCallback, &multiLine);
   widget->ExecuteNativeKeyBinding(nsIWidget::NativeKeyBindingsForRichTextEditor,
-                                  aEvent, DoCommandCallback, &richText);
+                                  localEvent, DoCommandCallback, &richText);
 
   if (!singleLine.IsEmpty() || !multiLine.IsEmpty() || !richText.IsEmpty()) {
     *aBindings = NativeKeyBinding(singleLine, multiLine, richText);
-  } else {
-    *aBindings = mozilla::void_t();
   }
 
   return true;
