@@ -55,6 +55,9 @@ using namespace js::frontend;
 using mozilla::ArrayLength;
 using mozilla::PodCopy;
 
+const js::gc::AllocKind JSFunction::FinalizeKind;
+const js::gc::AllocKind JSFunction::ExtendedFinalizeKind;
+
 static bool
 fun_getProperty(JSContext *cx, HandleObject obj_, HandleId id, MutableHandleValue vp)
 {

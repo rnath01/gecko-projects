@@ -103,9 +103,9 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=238987
     var utils = SpecialPowers.DOMWindowUtils;
     // Send tab key events.
     var key = Components.interfaces.nsIDOMKeyEvent.DOM_VK_TAB;
-    utils.sendKeyEvent("keydown", key, 0, modifier);
-    utils.sendKeyEvent("keypress", key, 0, modifier);
-    utils.sendKeyEvent("keyup", key, 0, modifier);
+    utils.sendKeyEvent("keydown", key, 0, modifier, utils.KEY_FLAG_ALLOW_IPC);
+    utils.sendKeyEvent("keypress", key, 0, modifier, utils.KEY_FLAG_ALLOW_IPC);
+    utils.sendKeyEvent("keyup", key, 0, modifier, utils.KEY_FLAG_ALLOW_IPC);
     if (shouldStop) {
       // Did focus handling succeed
       is(forwardFocusArray.length, 0,

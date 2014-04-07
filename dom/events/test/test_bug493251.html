@@ -41,7 +41,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=493251
     ok(true, "Dipatching key event: type=" + type);
     utils.sendKeyEvent(type, 
                        SpecialPowers.Ci.nsIDOMKeyEvent.DOM_VK_A,
-                       0, 0);
+                       0, 0, utils.KEY_FLAG_ALLOW_IPC);
   }
 
   function dispatchMouseEvent(aType, aX, aY, aButton, aClickCount, aModifiers) {
