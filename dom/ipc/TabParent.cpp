@@ -797,16 +797,27 @@ DoCommandCallback(mozilla::Command aCommand, void* aData)
 }
 
 bool
-TabParent::AnswerSynthesizeRealKeyEvent(const WidgetKeyboardEvent& aEvent,
-                                        bool* aDefaultActionTaken)
+TabParent::RecvRequestNativeKeyBindings(const WidgetKeyboardEvent& aEvent,
+                                        MaybeNativeKeyBinding* aBindings)
 {
-  nsEventStatus status;
-  WidgetKeyboardEvent localEvent(aEvent);
+  AutoInfallibleTArray<mozilla::CommandInt, 4> singleLine;
+  AutoInfallibleTArray<mozilla::CommandInt, 4> multiLine;
+  AutoInfallibleTArray<mozilla::CommandInt, 4> richText;
+
   nsCOMPtr<nsIWidget> widget = GetWidget();
-  localEvent.widget = widget;
-  localEvent.mFlags.mInSyntheticKeyEvent = true;
-  widget->DispatchEvent(&localEvent, status);
-  *aDefaultActionTaken = (status != nsEventStatus_eConsumeNoDefault);
+  widget->ExecuteNativeKeyBinding(nsIWidget::NativeKeyBindingsForSingleLineEditor,
+                                  aEvent, DoCommandCallback, &singleLine);
+  widget->ExecuteNativeKeyBinding(nsIWidget::NativeKeyBindingsForMultiLineEditor,
+                                  aEvent, DoCommandCallback, &multiLine);
+  widget->ExecuteNativeKeyBinding(nsIWidget::NativeKeyBindingsForRichTextEditor,
+                                  aEvent, DoCommandCallback, &richText);
+
+  if (!singleLine.IsEmpty() || !multiLine.IsEmpty() || !richText.IsEmpty()) {
+    *aBindings = NativeKeyBinding(singleLine, multiLine, richText);
+  } else {
+    *aBindings = mozilla::void_t();
+  }
+
   return true;
 }
 
@@ -842,11 +853,7 @@ bool TabParent::SendRealKeyEvent(WidgetKeyboardEvent& event)
     }
   }
 
-  if (event.mFlags.mInSyntheticKeyEvent) {
-    return PBrowserParent::CallSyntheticRealKeyEvent(event, bindings);
-  } else {
-    return PBrowserParent::SendRealKeyEvent(event, bindings);
-  }
+  return PBrowserParent::SendRealKeyEvent(event, bindings);
 }
 
 bool TabParent::SendRealTouchEvent(WidgetTouchEvent& event)

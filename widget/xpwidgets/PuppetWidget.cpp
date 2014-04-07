@@ -276,6 +276,14 @@ PuppetWidget::DispatchEvent(WidgetGUIEvent* event, nsEventStatus& aStatus)
   NS_ABORT_IF_FALSE(!mChild || mChild->mWindowType == eWindowType_popup,
                     "Unexpected event dispatch!");
 
+  if (event->mFlags.mIsSynthesizedForTests) {
+    WidgetKeyboardEvent* keyEvent = event->AsKeyboardEvent();
+    if (keyEvent) {
+      mTabChild->RequestNativeKeyBindings(keyEvent);
+      mNativeKeyCommandsValid = true;
+    }
+  }
+
   aStatus = nsEventStatus_eIgnore;
 
   if (event->message == NS_COMPOSITION_START) {
@@ -310,6 +318,8 @@ PuppetWidget::DispatchEvent(WidgetGUIEvent* event, nsEventStatus& aStatus)
     mIMEComposing = false;
   }
 
+  mNativeKeyCommandsValid = false;
+
   return NS_OK;
 }
 
@@ -320,7 +330,9 @@ PuppetWidget::ExecuteNativeKeyBinding(NativeKeyBindingsType aType,
                                       DoCommandCallback aCallback,
                                       void* aCallbackData)
 {
+#ifndef MOZ_B2G
   MOZ_ASSERT(mNativeKeyCommandsValid);
+#endif
 
   nsTArray<mozilla::CommandInt>& commands = mSingleLineCommands;
   switch (aType) {

@@ -566,21 +566,7 @@ function synthesizeKey(aKey, aEvent, aWindow)
     }
 
     var modifiers = _parseModifiers(aEvent);
-
-    // In e10s, this flag tells us to send the key to the parent
-    // process. Eventually it should filter down to the child
-    // again. Doing this tests the parent -> child path when we
-    // otherwise wouldn't. B2G doesn't expect key events in the
-    // parent process since it uses the software keyboard for
-    // everything. So we don't want to forward key events to the
-    // parent on B2G.
-    var appInfo = SpecialPowers.Cc['@mozilla.org/xre/app-info;1']
-                               .getService(SpecialPowers.Ci.nsIXULAppInfo);
     var flags = 0;
-    if (appInfo.name != 'B2G') {
-      flags = utils.KEY_FLAG_ALLOW_IPC;
-    }
-
     if (aEvent.location != undefined) {
       switch (aEvent.location) {
         case KeyboardEvent.DOM_KEY_LOCATION_STANDARD:

@@ -263,5 +263,3 @@ JS_EnumerateDiagnosticMemoryRegions(JSEnumerateDiagnosticMemoryCallback callback
     }
 #endif
 }
-
- 

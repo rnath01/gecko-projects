@@ -352,8 +352,8 @@ parent:
 
     ReplyKeyEvent(WidgetKeyboardEvent event);
 
-    rpc SynthesizeRealKeyEvent(WidgetKeyboardEvent event)
-        returns (bool defaultActionTaken);
+    sync RequestNativeKeyBindings(WidgetKeyboardEvent event)
+        returns (MaybeNativeKeyBinding bindings);
 
 child:
     /**
@@ -436,8 +436,6 @@ child:
                int32_t aClickCount,
                int32_t aModifiers,
                bool aIgnoreRootScrollFrame);
-
-    rpc SyntheticRealKeyEvent(WidgetKeyboardEvent event, MaybeNativeKeyBinding keyBinding);
 
     RealMouseEvent(WidgetMouseEvent event);
     RealKeyEvent(WidgetKeyboardEvent event, MaybeNativeKeyBinding keyBinding);

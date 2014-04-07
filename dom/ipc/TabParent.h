@@ -221,8 +221,8 @@ public:
     void MapEventCoordinatesForChildProcess(const LayoutDeviceIntPoint& aOffset,
                                             mozilla::WidgetEvent* aEvent);
 
-    virtual bool AnswerSynthesizeRealKeyEvent(const mozilla::WidgetKeyboardEvent& aEvent,
-                                              bool* aDefaultActionTaken) MOZ_OVERRIDE;
+    virtual bool RecvRequestNativeKeyBindings(const mozilla::WidgetKeyboardEvent& aEvent,
+                                                MaybeNativeKeyBinding* aBindings) MOZ_OVERRIDE;
 
     void SendMouseEvent(const nsAString& aType, float aX, float aY,
                         int32_t aButton, int32_t aClickCount,
