@@ -32,7 +32,6 @@
 #include "frontend/TokenStream.h"
 #include "gc/Marking.h"
 #ifdef JS_ION
-#include "jit/AsmJSModule.h"
 #include "jit/Ion.h"
 #include "jit/IonFrameIterator.h"
 #endif
@@ -578,6 +577,7 @@ JSFunction::trace(JSTracer *trc)
             // - they are not in the self-hosting compartment
             // - they aren't generators
             // - they don't have JIT code attached
+            // - they haven't ever been inlined
             // - they don't have child functions
             // - they have information for un-lazifying them again later
             // This information can either be a LazyScript, or the name of a

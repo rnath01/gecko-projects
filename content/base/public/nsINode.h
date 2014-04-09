@@ -101,7 +101,7 @@ enum {
   // ancestor.  This flag is set-once: once a node has it, it must not be
   // removed.
   // NOTE: Should only be used on nsIContent nodes
-  NODE_IS_IN_ANONYMOUS_SUBTREE =          NODE_FLAG_BIT(3),
+  NODE_IS_IN_NATIVE_ANONYMOUS_SUBTREE =          NODE_FLAG_BIT(3),
 
   // Whether this node is the root of a native anonymous (from the perspective
   // of its parent) subtree.  This flag is set-once: once a node has it, it
@@ -275,8 +275,8 @@ private:
 
 // IID for the nsINode interface
 #define NS_INODE_IID \
-{ 0xe24a9ddc, 0x2979, 0x40e3, \
-  { 0x82, 0xb0, 0x9d, 0xf8, 0xb0, 0x41, 0xe5, 0x6a } }
+{ 0x77a62cd0, 0xb34f, 0x42cb, \
+  { 0x94, 0x52, 0xae, 0xb2, 0x4d, 0x93, 0x2c, 0xb4 } }
 
 /**
  * An internal interface that abstracts some DOMNode-related parts that both
@@ -414,7 +414,9 @@ protected:
   //
   mozilla::dom::ParentObject GetParentObjectInternal(nsINode* aNativeParent) const {
     mozilla::dom::ParentObject p(aNativeParent);
-    p.mUseXBLScope = ChromeOnlyAccess();
+    // Note that mUseXBLScope is a no-op for chrome, and other places where we
+    // don't use XBL scopes.
+    p.mUseXBLScope = IsInAnonymousSubtree();
     return p;
   }
 
@@ -440,6 +442,10 @@ public:
    * IsContent() is true.  This is defined inline in nsIContent.h.
    */
   nsIContent* AsContent();
+  const nsIContent* AsContent() const
+  {
+    return const_cast<nsINode*>(this)->AsContent();
+  }
 
   virtual nsIDOMNode* AsDOMNode() = 0;
 
@@ -950,7 +956,7 @@ public:
   {
     NS_ASSERTION(!(aFlagsToSet & (NODE_IS_ANONYMOUS_ROOT |
                                   NODE_IS_NATIVE_ANONYMOUS_ROOT |
-                                  NODE_IS_IN_ANONYMOUS_SUBTREE |
+                                  NODE_IS_IN_NATIVE_ANONYMOUS_SUBTREE |
                                   NODE_ATTACH_BINDING_ON_POSTCREATE |
                                   NODE_DESCENDANTS_NEED_FRAMES |
                                   NODE_NEEDS_FRAME |
@@ -964,7 +970,7 @@ public:
   {
     NS_ASSERTION(!(aFlagsToUnset &
                    (NODE_IS_ANONYMOUS_ROOT |
-                    NODE_IS_IN_ANONYMOUS_SUBTREE |
+                    NODE_IS_IN_NATIVE_ANONYMOUS_SUBTREE |
                     NODE_IS_NATIVE_ANONYMOUS_ROOT)),
                  "Trying to unset write-only flags");
     nsWrapperCache::UnsetFlags(aFlagsToUnset);
@@ -995,21 +1001,23 @@ public:
   bool IsInNativeAnonymousSubtree() const
   {
 #ifdef DEBUG
-    if (HasFlag(NODE_IS_IN_ANONYMOUS_SUBTREE)) {
+    if (HasFlag(NODE_IS_IN_NATIVE_ANONYMOUS_SUBTREE)) {
       return true;
     }
     CheckNotNativeAnonymous();
     return false;
 #else
-    return HasFlag(NODE_IS_IN_ANONYMOUS_SUBTREE);
+    return HasFlag(NODE_IS_IN_NATIVE_ANONYMOUS_SUBTREE);
 #endif
   }
+
+  bool IsInAnonymousSubtree() const;
 
   // True for native anonymous content and for XBL content if the binging
   // has chromeOnlyContent="true".
   bool ChromeOnlyAccess() const
   {
-    return HasFlag(NODE_IS_IN_ANONYMOUS_SUBTREE | NODE_CHROME_ONLY_ACCESS);
+    return HasFlag(NODE_IS_IN_NATIVE_ANONYMOUS_SUBTREE | NODE_CHROME_ONLY_ACCESS);
   }
 
   /**
@@ -1067,11 +1075,8 @@ public:
    *
    * @return the base URI
    */
-  virtual already_AddRefed<nsIURI> GetBaseURI() const = 0;
-  already_AddRefed<nsIURI> GetBaseURIObject() const
-  {
-    return GetBaseURI();
-  }
+  virtual already_AddRefed<nsIURI> GetBaseURI(bool aTryUseXHRDocBaseURI = false) const = 0;
+  already_AddRefed<nsIURI> GetBaseURIObject() const;
 
   /**
    * Facility for explicitly setting a base URI on a node.
@@ -1544,6 +1549,11 @@ public:
                               nodeName.Length());
   }
   void GetBaseURI(nsAString& aBaseURI) const;
+  // Return the base URI for the document.
+  // The returned value may differ if the document is loaded via XHR, and
+  // when accessed from chrome privileged script and
+  // from content privileged script for compatibility.
+  void GetBaseURIFromJS(nsAString& aBaseURI) const;
   bool HasChildNodes() const
   {
     return HasChildren();
