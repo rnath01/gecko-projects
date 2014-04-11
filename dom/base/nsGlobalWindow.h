@@ -345,8 +345,7 @@ public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
 
   // nsWrapperCache
-  virtual JSObject *WrapObject(JSContext *cx,
-                               JS::Handle<JSObject*> scope) MOZ_OVERRIDE
+  virtual JSObject *WrapObject(JSContext *cx) MOZ_OVERRIDE
   {
     NS_ASSERTION(IsOuterWindow(),
                  "Inner window supports nsWrapperCache, fix WrapObject!");
@@ -372,7 +371,7 @@ public:
 
   virtual bool IsBlackForCC(bool aTracingNeeded = true);
 
-  static JSObject* OuterObject(JSContext* aCx, JS::HandleObject aObj);
+  static JSObject* OuterObject(JSContext* aCx, JS::Handle<JSObject*> aObj);
 
   // nsIScriptObjectPrincipal
   virtual nsIPrincipal* GetPrincipal();
@@ -793,6 +792,8 @@ public:
     return nullptr;
   }
 
+  static bool WindowOnWebIDL(JSContext* /* unused */, JSObject* aObj);
+
   nsIDOMWindow* GetWindow(mozilla::ErrorResult& aError);
   nsIDOMWindow* GetSelf(mozilla::ErrorResult& aError);
   nsIDocument* GetDocument()
@@ -1057,7 +1058,7 @@ protected:
 
   // Only to be called on an inner window.
   // aDocument must not be null.
-  void InnerSetNewDocument(nsIDocument* aDocument);
+  void InnerSetNewDocument(JSContext* aCx, nsIDocument* aDocument);
 
   nsresult DefineArgumentsProperty(nsIArray *aArguments);
 
@@ -1490,8 +1491,6 @@ protected:
 
   nsCOMPtr<nsIDOMStorage>      mLocalStorage;
   nsCOMPtr<nsIDOMStorage>      mSessionStorage;
-
-  nsCOMPtr<nsIXPConnectJSObjectHolder> mInnerWindowHolder;
 
   // These member variable are used only on inner windows.
   nsRefPtr<mozilla::EventListenerManager> mListenerManager;

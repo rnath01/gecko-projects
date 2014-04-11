@@ -2069,6 +2069,18 @@ LIRGenerator::visitLambda(MLambda *ins)
 }
 
 bool
+LIRGenerator::visitLambdaArrow(MLambdaArrow *ins)
+{
+    MOZ_ASSERT(ins->scopeChain()->type() == MIRType_Object);
+    MOZ_ASSERT(ins->thisDef()->type() == MIRType_Value);
+
+    LLambdaArrow *lir = new(alloc()) LLambdaArrow(useRegister(ins->scopeChain()), temp());
+    if (!useBox(lir, LLambdaArrow::ThisValue, ins->thisDef()))
+        return false;
+    return define(lir, ins) && assignSafepoint(lir, ins);
+}
+
+bool
 LIRGenerator::visitLambdaPar(MLambdaPar *ins)
 {
     JS_ASSERT(!ins->info().singletonType);
@@ -3585,6 +3597,9 @@ LIRGenerator::visitInstruction(MInstruction *ins)
         return false;
     if (!ins->accept(this))
         return false;
+
+    if (ins->possiblyCalls())
+        gen->setPerformsCall();
 
     if (ins->resumePoint())
         updateResumeState(ins);

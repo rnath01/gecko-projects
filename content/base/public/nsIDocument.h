@@ -2241,8 +2241,7 @@ public:
 
   virtual nsHTMLDocument* AsHTMLDocument() { return nullptr; }
 
-  virtual JSObject* WrapObject(JSContext *aCx,
-                               JS::Handle<JSObject*> aScope) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext *aCx) MOZ_OVERRIDE;
 
 private:
   uint64_t mWarnedAbout;
@@ -2306,8 +2305,9 @@ protected:
   // A reference to the element last returned from GetRootElement().
   mozilla::dom::Element* mCachedRootElement;
 
-  // We hold a strong reference to mNodeInfoManager through mNodeInfo
-  nsNodeInfoManager* mNodeInfoManager; // [STRONG]
+  // This is a weak reference, but we hold a strong reference to mNodeInfo,
+  // which in turn holds a strong reference to this mNodeInfoManager.
+  nsNodeInfoManager* mNodeInfoManager;
   nsRefPtr<mozilla::css::Loader> mCSSLoader;
   nsRefPtr<mozilla::css::ImageLoader> mStyleImageLoader;
   nsRefPtr<nsHTMLStyleSheet> mAttrStyleSheet;

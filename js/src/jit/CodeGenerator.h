@@ -99,6 +99,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitRegExpReplace(LRegExpReplace *lir);
     bool visitStringReplace(LStringReplace *lir);
     bool visitLambda(LLambda *lir);
+    bool visitLambdaArrow(LLambdaArrow *lir);
     bool visitLambdaForSingleton(LLambdaForSingleton *lir);
     bool visitLambdaPar(LLambdaPar *lir);
     bool visitPointer(LPointer *lir);
@@ -442,6 +443,8 @@ class CodeGenerator : public CodeGeneratorSpecific
 
     bool emitAssertRangeI(const Range *r, Register input);
     bool emitAssertRangeD(const Range *r, FloatRegister input, FloatRegister temp);
+
+    bool omitOverRecursedCheck() const;
 
     Vector<CodeOffsetLabel, 0, IonAllocPolicy> ionScriptLabels_;
 #ifdef DEBUG

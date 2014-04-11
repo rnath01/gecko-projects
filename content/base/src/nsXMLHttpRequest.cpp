@@ -264,9 +264,9 @@ NS_IMPL_ADDREF_INHERITED(nsXMLHttpRequestUpload, nsXHREventTarget)
 NS_IMPL_RELEASE_INHERITED(nsXMLHttpRequestUpload, nsXHREventTarget)
 
 /* virtual */ JSObject*
-nsXMLHttpRequestUpload::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
+nsXMLHttpRequestUpload::WrapObject(JSContext* aCx)
 {
-  return XMLHttpRequestUploadBinding::Wrap(aCx, aScope, this);
+  return XMLHttpRequestUploadBinding::Wrap(aCx, this);
 }
 
 /////////////////////////////////////////////
@@ -991,9 +991,8 @@ nsXMLHttpRequest::GetResponse(JSContext* aCx, ErrorResult& aRv)
       return JSVAL_NULL;
     }
 
-    JS::Rooted<JS::Value> result(aCx, JSVAL_NULL);
-    JS::Rooted<JSObject*> scope(aCx, JS::CurrentGlobalOrNull(aCx));
-    aRv = nsContentUtils::WrapNative(aCx, scope, mResponseBlob, &result);
+    JS::Rooted<JS::Value> result(aCx);
+    aRv = nsContentUtils::WrapNative(aCx, mResponseBlob, &result);
     return result;
   }
   case XML_HTTP_RESPONSE_TYPE_DOCUMENT:
@@ -1002,9 +1001,8 @@ nsXMLHttpRequest::GetResponse(JSContext* aCx, ErrorResult& aRv)
       return JSVAL_NULL;
     }
 
-    JS::Rooted<JSObject*> scope(aCx, JS::CurrentGlobalOrNull(aCx));
-    JS::Rooted<JS::Value> result(aCx, JSVAL_NULL);
-    aRv = nsContentUtils::WrapNative(aCx, scope, mResponseXML, &result);
+    JS::Rooted<JS::Value> result(aCx);
+    aRv = nsContentUtils::WrapNative(aCx, mResponseXML, &result);
     return result;
   }
   case XML_HTTP_RESPONSE_TYPE_JSON:

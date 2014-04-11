@@ -1651,8 +1651,7 @@ InterfaceToJsval(nsPIDOMWindow* aWindow,
 
 
   JS::Rooted<JS::Value> someJsVal(cx);
-  nsresult rv =
-    nsContentUtils::WrapNative(cx, scopeObj, aObject, aIID, &someJsVal);
+  nsresult rv = nsContentUtils::WrapNative(cx, aObject, aIID, &someJsVal);
   if (NS_FAILED(rv)) {
     return JSVAL_NULL;
   }
@@ -3106,9 +3105,9 @@ nsDOMDeviceStorage::nsDOMDeviceStorage(nsPIDOMWindow* aWindow)
 }
 
 /* virtual */ JSObject*
-nsDOMDeviceStorage::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
+nsDOMDeviceStorage::WrapObject(JSContext* aCx)
 {
-  return DeviceStorageBinding::Wrap(aCx, aScope, this);
+  return DeviceStorageBinding::Wrap(aCx, this);
 }
 
 nsresult

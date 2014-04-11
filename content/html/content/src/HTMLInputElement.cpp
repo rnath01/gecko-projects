@@ -3493,7 +3493,7 @@ HTMLInputElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
       textControl = numberControlFrame->GetAnonTextControl();
     }
     if (textControl && aVisitor.mEvent->originalTarget == textControl) {
-      if (aVisitor.mEvent->message == NS_FORM_INPUT) {
+      if (aVisitor.mEvent->message == NS_EDITOR_INPUT) {
         // Propogate the anon text control's new value to our HTMLInputElement:
         nsAutoString value;
         numberControlFrame->GetValueOfAnonTextControl(value);
@@ -7409,9 +7409,9 @@ HTMLInputElement::PickerClosed()
 }
 
 JSObject*
-HTMLInputElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aScope)
+HTMLInputElement::WrapNode(JSContext* aCx)
 {
-  return HTMLInputElementBinding::Wrap(aCx, aScope, this);
+  return HTMLInputElementBinding::Wrap(aCx, this);
 }
 
 } // namespace dom
