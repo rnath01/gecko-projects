@@ -45,6 +45,13 @@ class TextureClient;
  * Returns true if the current thread is the ImageBrdigeChild's thread.
  *
  * Can be called from any thread.
+ *
+ * This will return false if the ImageBridge singleton is already destroyed.
+ * Warning: Due to the ordering of the Gecko's shutdown sequence, it may happen
+ * that some objects that use ImageBridgeChild get cycle collected after the
+ * destruction of ImageBridgeChild. This means that the pattern of having a function
+ * check whether it is in the IBC thread and dispatching itself in the IBC thread
+ * if is is not is dangerous if we don't also check that ImageBridge is created.
  */
 bool InImageBridgeChildThread();
 
