@@ -315,9 +315,6 @@ static void ReleaseImageClientNow(ImageClient* aClient)
 // static
 void ImageBridgeChild::DispatchReleaseImageClient(ImageClient* aClient)
 {
-  if (!IsCreated()) {
-    return;
-  }
   sImageBridgeChildSingleton->GetMessageLoop()->PostTask(
     FROM_HERE,
     NewRunnableFunction(&ReleaseImageClientNow, aClient));
@@ -332,10 +329,6 @@ static void ReleaseTextureClientNow(TextureClient* aClient)
 // static
 void ImageBridgeChild::DispatchReleaseTextureClient(TextureClient* aClient)
 {
-  if (!IsCreated()) {
-    return;
-  }
-
   sImageBridgeChildSingleton->GetMessageLoop()->PostTask(
     FROM_HERE,
     NewRunnableFunction(&ReleaseTextureClientNow, aClient));
@@ -355,10 +348,6 @@ static void UpdateImageClientNow(ImageClient* aClient, ImageContainer* aContaine
 void ImageBridgeChild::DispatchImageClientUpdate(ImageClient* aClient,
                                                  ImageContainer* aContainer)
 {
-  if (!IsCreated()) {
-    return;
-  }
-
   if (InImageBridgeChildThread()) {
     UpdateImageClientNow(aClient, aContainer);
     return;
@@ -383,10 +372,6 @@ static void FlushAllImagesSync(ImageClient* aClient, ImageContainer* aContainer,
 //static
 void ImageBridgeChild::FlushAllImages(ImageClient* aClient, ImageContainer* aContainer, bool aExceptFront)
 {
-  if (!IsCreated()) {
-    return;
-  }
-
   if (InImageBridgeChildThread()) {
     FlushAllImagesNow(aClient, aContainer, aExceptFront);
     return;
@@ -576,13 +561,14 @@ bool ImageBridgeChild::StartUpOnThread(Thread* aThread)
 
 void ImageBridgeChild::DestroyBridge()
 {
-  if (!IsCreated()) {
-    return;
-  }
   NS_ABORT_IF_FALSE(!InImageBridgeChildThread(),
                     "This method must not be called in this thread.");
   // ...because we are about to dispatch synchronous messages to the
   // ImageBridgeChild thread.
+
+  if (!IsCreated()) {
+    return;
+  }
 
   ReentrantMonitor barrier("ImageBridgeDestroyTask lock");
   ReentrantMonitorAutoEnter autoMon(barrier);
@@ -605,13 +591,11 @@ void ImageBridgeChild::DestroyBridge()
 
 bool InImageBridgeChildThread()
 {
-  return ImageBridgeChild::IsCreated() &&
-    sImageBridgeChildThread->thread_id() == PlatformThread::CurrentId();
+  return sImageBridgeChildThread->thread_id() == PlatformThread::CurrentId();
 }
 
 MessageLoop * ImageBridgeChild::GetMessageLoop() const
 {
-  MOZ_ASSERT(IsCreated());
   return sImageBridgeChildThread->message_loop();
 }
 
@@ -624,8 +608,6 @@ void ImageBridgeChild::ConnectAsync(ImageBridgeParent* aParent)
 void
 ImageBridgeChild::IdentifyCompositorTextureHost(const TextureFactoryIdentifier& aIdentifier)
 {
-  MOZ_ASSERT(IsCreated());
-
   if (sImageBridgeChildSingleton) {
     sImageBridgeChildSingleton->IdentifyTextureHost(aIdentifier);
   }
@@ -634,8 +616,6 @@ ImageBridgeChild::IdentifyCompositorTextureHost(const TextureFactoryIdentifier& 
 TemporaryRef<ImageClient>
 ImageBridgeChild::CreateImageClient(CompositableType aType)
 {
-  MOZ_ASSERT(IsCreated());
-
   if (InImageBridgeChildThread()) {
     return CreateImageClientNow(aType);
   }
@@ -695,8 +675,6 @@ ImageBridgeChild::AllocUnsafeShmem(size_t aSize,
                                    ipc::SharedMemory::SharedMemoryType aType,
                                    ipc::Shmem* aShmem)
 {
-  MOZ_ASSERT(IsCreated());
-
   if (InImageBridgeChildThread()) {
     return PImageBridgeChild::AllocUnsafeShmem(aSize, aType, aShmem);
   } else {
@@ -709,8 +687,6 @@ ImageBridgeChild::AllocShmem(size_t aSize,
                              ipc::SharedMemory::SharedMemoryType aType,
                              ipc::Shmem* aShmem)
 {
-  MOZ_ASSERT(IsCreated());
-
   if (InImageBridgeChildThread()) {
     return PImageBridgeChild::AllocShmem(aSize, aType, aShmem);
   } else {
@@ -796,8 +772,6 @@ static void ProxyDeallocShmemNow(ISurfaceAllocator* aAllocator,
 void
 ImageBridgeChild::DeallocShmem(ipc::Shmem& aShmem)
 {
-  MOZ_ASSERT(IsCreated());
-
   if (InImageBridgeChildThread()) {
     PImageBridgeChild::DeallocShmem(aShmem);
   } else {
@@ -823,8 +797,6 @@ ImageBridgeChild::AllocGrallocBuffer(const IntSize& aSize,
                                      uint32_t aUsage,
                                      MaybeMagicGrallocBufferHandle* aHandle)
 {
-  MOZ_ASSERT(IsCreated());
-
   if (InImageBridgeChildThread()) {
     PGrallocBufferChild* child = nullptr;
     ImageBridgeChild::AllocGrallocBufferNow(aSize, aFormat, aUsage, aHandle, &child);
@@ -888,8 +860,6 @@ static void ProxyDeallocGrallocBufferNow(ISurfaceAllocator* aAllocator,
 void
 ImageBridgeChild::DeallocGrallocBuffer(PGrallocBufferChild* aChild)
 {
-  MOZ_ASSERT(IsCreated());
-
   MOZ_ASSERT(aChild);
   if (InImageBridgeChildThread()) {
 #ifdef MOZ_WIDGET_GONK
@@ -931,8 +901,6 @@ PTextureChild*
 ImageBridgeChild::CreateTexture(const SurfaceDescriptor& aSharedData,
                                 TextureFlags aFlags)
 {
-  MOZ_ASSERT(IsCreated());
-
   return SendPTextureConstructor(aSharedData, aFlags);
 }
 
@@ -940,8 +908,6 @@ void
 ImageBridgeChild::RemoveTextureFromCompositable(CompositableClient* aCompositable,
                                                 TextureClient* aTexture)
 {
-  MOZ_ASSERT(IsCreated());
-
   if (aTexture->GetFlags() & TEXTURE_DEALLOCATE_CLIENT) {
     mTxn->AddEdit(OpRemoveTexture(nullptr, aCompositable->GetIPDLActor(),
                                   nullptr, aTexture->GetIPDLActor()));
@@ -964,8 +930,6 @@ static void RemoveTextureSync(TextureClient* aTexture, ReentrantMonitor* aBarrie
 
 void ImageBridgeChild::RemoveTexture(TextureClient* aTexture)
 {
-  MOZ_ASSERT(IsCreated());
-
   if (InImageBridgeChildThread()) {
     aTexture->ForceRemove();
     return;

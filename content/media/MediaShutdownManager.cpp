@@ -57,17 +57,10 @@ MediaShutdownManager::EnsureCorrectShutdownObserverState()
   bool needShutdownObserver = mDecoders.Count() > 0;
   if (needShutdownObserver != mIsObservingShutdown) {
     mIsObservingShutdown = needShutdownObserver;
-    nsCOMPtr<nsIObserverService> observerService =
-      mozilla::services::GetObserverService();
     if (mIsObservingShutdown) {
-      if (observerService) {
-        observerService->AddObserver(this, NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID,
-                                     false);
-      }
+      nsContentUtils::RegisterShutdownObserver(this);
     } else {
-      if (observerService) {
-        observerService->RemoveObserver(this, NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID);
-      }
+      nsContentUtils::UnregisterShutdownObserver(this);
       // Clear our singleton reference. This will probably delete
       // this instance, so don't deref |this| clearing sInstance.
       sInstance = nullptr;
@@ -105,7 +98,7 @@ MediaShutdownManager::Observe(nsISupports *aSubjet,
                               const char16_t *someData)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  if (strcmp(aTopic, NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID) == 0) {
+  if (strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID) == 0) {
     Shutdown();
   }
   return NS_OK;

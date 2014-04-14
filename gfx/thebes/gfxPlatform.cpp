@@ -218,32 +218,6 @@ MemoryPressureObserver::Observe(nsISupports *aSubject,
     return NS_OK;
 }
 
-// ImageBridgeChild Shutdown and CompositorParent::Shutdown must happen before
-// the shutdown of XPCOM threads, which takes place before gfx::Platform::Shutdown
-class GfxIpcShutdownObserver MOZ_FINAL : public nsIObserver
-{
-public:
-    NS_DECL_ISUPPORTS
-    NS_DECL_NSIOBSERVER
-};
-
-NS_IMPL_ISUPPORTS1(GfxIpcShutdownObserver, nsIObserver)
-
-NS_IMETHODIMP
-GfxIpcShutdownObserver::Observe(nsISupports *aSubject,
-                                const char *aTopic,
-                                const char16_t *someData)
-{
-    NS_ASSERTION(strcmp(aTopic, NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID) == 0,
-                 "unexpected event topic");
-
-    // This will block this thread untill the ImageBridge protocol is completely
-    // deleted.
-    ImageBridgeChild::ShutDown();
-    CompositorParent::ShutDown();
-    return NS_OK;
-}
-
 // this needs to match the list of pref font.default.xx entries listed in all.js!
 // the order *must* match the order in eFontPrefLang
 static const char *gPrefLangNames[] = {
@@ -456,8 +430,6 @@ gfxPlatform::Init()
     if (obs) {
         gPlatform->mMemoryPressureObserver = new MemoryPressureObserver();
         obs->AddObserver(gPlatform->mMemoryPressureObserver, "memory-pressure", false);
-        obs->AddObserver(new GfxIpcShutdownObserver(),
-                         NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
     }
 
     RegisterStrongMemoryReporter(new GfxMemoryImageReporter());
@@ -518,6 +490,12 @@ gfxPlatform::Shutdown()
     // WebGL on Optimus.
     mozilla::gl::GLContextProviderEGL::Shutdown();
 #endif
+
+    // This will block this thread untill the ImageBridge protocol is completely
+    // deleted.
+    ImageBridgeChild::ShutDown();
+
+    CompositorParent::ShutDown();
 
     delete gGfxPlatformPrefsLock;
 

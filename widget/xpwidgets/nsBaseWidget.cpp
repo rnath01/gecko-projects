@@ -134,13 +134,7 @@ nsBaseWidget::nsBaseWidget()
 #endif
 
   mShutdownObserver = new WidgetShutdownObserver(this);
-  nsCOMPtr<nsIObserverService> observerService =
-    mozilla::services::GetObserverService();
-  if (observerService) {
-    observerService->AddObserver(mShutdownObserver,
-                                 NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID,
-                                 false);
-  }
+  nsContentUtils::RegisterShutdownObserver(mShutdownObserver);
 }
 
 NS_IMPL_ISUPPORTS1(WidgetShutdownObserver, nsIObserver)
@@ -150,13 +144,10 @@ WidgetShutdownObserver::Observe(nsISupports *aSubject,
                                 const char *aTopic,
                                 const char16_t *aData)
 {
-  if (strcmp(aTopic, NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID) == 0 && mWidget) {
+  if (strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID) == 0 &&
+      mWidget) {
     mWidget->Shutdown();
-    nsCOMPtr<nsIObserverService> observerService =
-      mozilla::services::GetObserverService();
-    if (observerService) {
-      observerService->RemoveObserver(this, NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID);
-    }
+    nsContentUtils::UnregisterShutdownObserver(this);
   }
  return NS_OK;
 }
