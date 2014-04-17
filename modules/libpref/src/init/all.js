@@ -456,29 +456,8 @@ pref("gfx.font_rendering.directwrite.use_gdi_table_loading", true);
 
 pref("gfx.font_rendering.opentype_svg.enabled", true);
 
-#ifdef XP_WIN
-// comma separated list of backends to use in order of preference
-// e.g., pref("gfx.canvas.azure.backends", "direct2d,skia,cairo");
-pref("gfx.canvas.azure.backends", "direct2d,skia,cairo");
-pref("gfx.content.azure.backends", "direct2d,cairo");
-#else
-#ifdef XP_MACOSX
-pref("gfx.content.azure.backends", "cg");
-pref("gfx.canvas.azure.backends", "cg");
-// Accelerated cg canvas where available (10.7+)
-pref("gfx.canvas.azure.accelerated", false);
-#else
-pref("gfx.canvas.azure.backends", "cairo");
-pref("gfx.content.azure.backends", "cairo");
-#endif
-#endif
-
-#ifdef MOZ_WIDGET_GTK2
-pref("gfx.content.azure.backends", "cairo");
-#endif
-#ifdef ANDROID
-pref("gfx.content.azure.backends", "cairo");
-#endif
+pref("gfx.canvas.azure.backends", "skia");
+pref("gfx.content.azure.backends", "skia,cairo");
 
 pref("gfx.work-around-driver-bugs", true);
 pref("gfx.prefer-mesa-llvmpipe", false);
