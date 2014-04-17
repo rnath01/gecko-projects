@@ -21,6 +21,39 @@ static void S32_Opaque_BlitRow32(SkPMColor* SK_RESTRICT dst,
     memcpy(dst, src, count * sizeof(SkPMColor));
 }
 
+#ifdef ACCURATE_BLENDING
+static void S32_Blend_BlitRow32(SkPMColor* SK_RESTRICT dst,
+                                const SkPMColor* SK_RESTRICT src,
+                                int count, U8CPU alpha) {
+    SkASSERT(alpha <= 255);
+    if (count > 0) {
+        unsigned src_scale = alpha;
+        unsigned dst_scale = 255 - src_scale;
+
+#ifdef UNROLL
+        if (count & 1) {
+            *dst = SkAlphaMulQ_Accurate(*(src++), src_scale) + SkAlphaMulQ_Accurate(*dst, dst_scale);
+            dst += 1;
+            count -= 1;
+        }
+
+        const SkPMColor* SK_RESTRICT srcEnd = src + count;
+        while (src != srcEnd) {
+            *dst = SkAlphaMulQ_Accurate(*(src++), src_scale) + SkAlphaMulQ_Accurate(*dst, dst_scale);
+            dst += 1;
+            *dst = SkAlphaMulQ_Accurate(*(src++), src_scale) + SkAlphaMulQ_Accurate(*dst, dst_scale);
+            dst += 1;
+        }
+#else
+        do {
+            *dst = SkAlphaMulQ_Accurate(*src, src_scale) + SkAlphaMulQ_Accurate(*dst, dst_scale);
+            src += 1;
+            dst += 1;
+        } while (--count > 0);
+#endif
+    }
+}
+#else
 static void S32_Blend_BlitRow32(SkPMColor* SK_RESTRICT dst,
                                 const SkPMColor* SK_RESTRICT src,
                                 int count, U8CPU alpha) {
@@ -52,7 +85,7 @@ static void S32_Blend_BlitRow32(SkPMColor* SK_RESTRICT dst,
 #endif
     }
 }
-
+#endif
 static void S32A_Opaque_BlitRow32(SkPMColor* SK_RESTRICT dst,
                                   const SkPMColor* SK_RESTRICT src,
                                   int count, U8CPU alpha) {
@@ -141,7 +174,32 @@ SkBlitRow::Proc32 SkBlitRow::ColorProcFactory() {
     SkASSERT(proc);
     return proc;
 }
+#ifdef ACCURATE_BLENDING
+void SkBlitRow::Color32(SkPMColor* SK_RESTRICT dst,
+                        const SkPMColor* SK_RESTRICT src,
+                        int count, SkPMColor color) {
+    if (count > 0) {
+        if (0 == color) {
+            if (src != dst) {
+                memcpy(dst, src, count * sizeof(SkPMColor));
+            }
+            return;
+        }
+        unsigned colorA = SkGetPackedA32(color);
+        if (255 == colorA) {
+            sk_memset32(dst, color, count);
+        } else {
+            unsigned scale = 255 - colorA;
+            do {
+                *dst = color + SkAlphaMulQ_Accurate(*src, scale);
+                src += 1;
+                dst += 1;
+            } while (--count);
+        }
+    }
+}
 
+#else
 void SkBlitRow::Color32(SkPMColor* SK_RESTRICT dst,
                         const SkPMColor* SK_RESTRICT src,
                         int count, SkPMColor color) {
@@ -165,6 +223,7 @@ void SkBlitRow::Color32(SkPMColor* SK_RESTRICT dst,
         }
     }
 }
+#endif
 
 template <size_t N> void assignLoop(SkPMColor* dst, SkPMColor color) {
     for (size_t i = 0; i < N; ++i) {

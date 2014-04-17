@@ -389,6 +389,32 @@ static inline uint32_t SkAlphaMulQ(uint32_t c, unsigned scale) {
     return (rb & mask) | (ag & ~mask);
 }
 
+static inline uint32_t SkAlphaMulQ_Accurate(uint32_t c, unsigned scale) {
+    uint32_t mask = gMask_00FF00FF;
+
+    uint32_t rbt = ((c & mask) * scale) + 0x800080;
+    uint32_t rb = (rbt + ((rbt >> 8) & mask)) >> 8;
+    uint32_t agt = (((c >> 8) & mask) * scale) + 0x800080;
+    uint32_t ag = (agt + ((agt >> 8) & mask));
+    return (rb & mask) | (ag & ~mask);
+}
+
+#define ACCURATE_BLENDING
+//#ifdef ACCURATE_BLENDING
+#if 1
+static inline SkPMColor SkPMSrcOver(SkPMColor src, SkPMColor dst) {
+    return src + SkAlphaMulQ_Accurate(dst, 255 - SkGetPackedA32(src));
+}
+
+static inline SkPMColor SkBlendARGB32(SkPMColor src, SkPMColor dst, U8CPU aa) {
+    SkASSERT((unsigned)aa <= 255);
+
+    unsigned src_scale = aa;
+    unsigned dst_scale = 255 - SkAlphaBlend255(SkGetPackedA32(src), 0, src_scale);
+
+    return SkAlphaMulQ(src, src_scale) + SkAlphaMulQ(dst, dst_scale);
+}
+#else
 static inline SkPMColor SkPMSrcOver(SkPMColor src, SkPMColor dst) {
     return src + SkAlphaMulQ(dst, SkAlpha255To256(255 - SkGetPackedA32(src)));
 }
@@ -401,6 +427,8 @@ static inline SkPMColor SkBlendARGB32(SkPMColor src, SkPMColor dst, U8CPU aa) {
 
     return SkAlphaMulQ(src, src_scale) + SkAlphaMulQ(dst, dst_scale);
 }
+#endif
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////
 // Convert a 32bit pixel to a 16bit pixel (no dither)
