@@ -20,7 +20,6 @@
 #ifdef JSGC_GENERATIONAL
 # include "gc/Nursery.h"
 #endif
-#include "jit/ExecutionModeInlines.h"
 #include "jit/IonCaches.h"
 #include "jit/IonLinker.h"
 #include "jit/IonOptimizationLevels.h"
@@ -35,6 +34,7 @@
 
 #include "jsboolinlines.h"
 
+#include "jit/ExecutionMode-inl.h"
 #include "jit/shared/CodeGenerator-shared-inl.h"
 #include "vm/Interpreter-inl.h"
 
@@ -105,6 +105,9 @@ class OutOfLineUpdateCache :
 bool
 CodeGeneratorShared::addCache(LInstruction *lir, size_t cacheIndex)
 {
+    if (cacheIndex == SIZE_MAX)
+        return false;
+
     DataPtr<IonCache> cache(this, cacheIndex);
     MInstruction *mir = lir->mirRaw()->toInstruction();
     if (mir->resumePoint())
@@ -1826,20 +1829,21 @@ CodeGenerator::visitPostWriteBarrierO(LPostWriteBarrierO *lir)
         return false;
 
     const Nursery &nursery = GetIonContext()->runtime->gcNursery();
+    Register temp = ToRegister(lir->temp());
 
     if (lir->object()->isConstant()) {
         JS_ASSERT(!nursery.isInside(&lir->object()->toConstant()->toObject()));
     } else {
-        Label tenured;
         Register objreg = ToRegister(lir->object());
-        masm.branchPtr(Assembler::Below, objreg, ImmWord(nursery.start()), &tenured);
-        masm.branchPtr(Assembler::Below, objreg, ImmWord(nursery.heapEnd()), ool->rejoin());
-        masm.bind(&tenured);
+        masm.movePtr(ImmWord(-ptrdiff_t(nursery.start())), temp);
+        masm.addPtr(objreg, temp);
+        masm.branchPtr(Assembler::Below, temp, Imm32(Nursery::NurserySize), ool->rejoin());
     }
 
     Register valuereg = ToRegister(lir->value());
-    masm.branchPtr(Assembler::Below, valuereg, ImmWord(nursery.start()), ool->rejoin());
-    masm.branchPtr(Assembler::Below, valuereg, ImmWord(nursery.heapEnd()), ool->entry());
+    masm.movePtr(ImmWord(-ptrdiff_t(nursery.start())), temp);
+    masm.addPtr(valuereg, temp);
+    masm.branchPtr(Assembler::Below, temp, Imm32(Nursery::NurserySize), ool->entry());
 
     masm.bind(ool->rejoin());
 #endif
@@ -1862,16 +1866,19 @@ CodeGenerator::visitPostWriteBarrierV(LPostWriteBarrierV *lir)
     if (lir->object()->isConstant()) {
         JS_ASSERT(!nursery.isInside(&lir->object()->toConstant()->toObject()));
     } else {
-        Label tenured;
+        Register temp = ToRegister(lir->temp());
         Register objreg = ToRegister(lir->object());
-        masm.branchPtr(Assembler::Below, objreg, ImmWord(nursery.start()), &tenured);
-        masm.branchPtr(Assembler::Below, objreg, ImmWord(nursery.heapEnd()), ool->rejoin());
-        masm.bind(&tenured);
+        masm.movePtr(ImmWord(-ptrdiff_t(nursery.start())), temp);
+        masm.addPtr(objreg, temp);
+        masm.branchPtr(Assembler::Below, temp, Imm32(Nursery::NurserySize), ool->rejoin());
     }
 
-    Register valuereg = masm.extractObject(value, ToTempUnboxRegister(lir->temp()));
-    masm.branchPtr(Assembler::Below, valuereg, ImmWord(nursery.start()), ool->rejoin());
-    masm.branchPtr(Assembler::Below, valuereg, ImmWord(nursery.heapEnd()), ool->entry());
+    // This section is a little different because we mustn't trash the temp
+    // register before we use its contents.
+    Register temp = ToRegister(lir->temp());
+    masm.unboxObject(value, temp);
+    masm.addPtr(ImmWord(-ptrdiff_t(nursery.start())), temp);
+    masm.branchPtr(Assembler::Below, temp, Imm32(Nursery::NurserySize), ool->entry());
 
     masm.bind(ool->rejoin());
 #endif
@@ -5508,12 +5515,12 @@ CodeGenerator::visitStoreElementHoleV(LStoreElementHoleV *lir)
     return true;
 }
 
-typedef bool (*SetObjectElementFn)(JSContext *, HandleObject, HandleValue, HandleValue,
-                                   bool strict);
-typedef bool (*SetElementParFn)(ForkJoinContext *, HandleObject, HandleValue, HandleValue, bool);
-static const VMFunctionsModal SetObjectElementInfo = VMFunctionsModal(
-    FunctionInfo<SetObjectElementFn>(SetObjectElement),
-    FunctionInfo<SetElementParFn>(SetElementPar));
+typedef bool (*SetDenseElementFn)(JSContext *, HandleObject, int32_t, HandleValue,
+                                  bool strict);
+typedef bool (*SetDenseElementParFn)(ForkJoinContext *, HandleObject, int32_t, HandleValue, bool);
+static const VMFunctionsModal SetDenseElementInfo = VMFunctionsModal(
+    FunctionInfo<SetDenseElementFn>(SetDenseElement),
+    FunctionInfo<SetDenseElementParFn>(SetDenseElementPar));
 
 bool
 CodeGenerator::visitOutOfLineStoreElementHole(OutOfLineStoreElementHole *ool)
@@ -5593,11 +5600,11 @@ CodeGenerator::visitOutOfLineStoreElementHole(OutOfLineStoreElementHole *ool)
     pushArg(Imm32(current->mir()->strict()));
     pushArg(value);
     if (index->isConstant())
-        pushArg(*index->toConstant());
+        pushArg(Imm32(ToInt32(index)));
     else
-        pushArg(TypedOrValueRegister(MIRType_Int32, ToAnyRegister(index)));
+        pushArg(ToRegister(index));
     pushArg(object);
-    if (!callVM(SetObjectElementInfo, ins))
+    if (!callVM(SetDenseElementInfo, ins))
         return false;
 
     restoreLive(ins);
@@ -6500,7 +6507,7 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
     for (uint32_t i = 0; i < patchableTLScripts_.length(); i++) {
         patchableTLScripts_[i].fixup(&masm);
         Assembler::patchDataWithValueCheck(CodeLocationLabel(code, patchableTLScripts_[i]),
-                                           ImmPtr((void *)scriptId),
+                                           ImmPtr((void *) uintptr_t(scriptId)),
                                            ImmPtr((void *)0));
     }
 #endif
@@ -6615,6 +6622,13 @@ CodeGenerator::visitCallGetElement(LCallGetElement *lir)
         return callVM(CallElementInfo, lir);
     }
 }
+
+typedef bool (*SetObjectElementFn)(JSContext *, HandleObject, HandleValue, HandleValue,
+                                   bool strict);
+typedef bool (*SetElementParFn)(ForkJoinContext *, HandleObject, HandleValue, HandleValue, bool);
+static const VMFunctionsModal SetObjectElementInfo = VMFunctionsModal(
+    FunctionInfo<SetObjectElementFn>(SetObjectElement),
+    FunctionInfo<SetElementParFn>(SetElementPar));
 
 bool
 CodeGenerator::visitCallSetElement(LCallSetElement *lir)

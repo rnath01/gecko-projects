@@ -105,6 +105,9 @@ pref("dom.workers.sharedWorkers.enabled", true);
 // Whether nonzero values can be returned from performance.timing.*
 pref("dom.enable_performance", true);
 
+// Whether resource timing will be gathered and returned by performance.GetEntries*
+pref("dom.enable_resource_timing", false);
+
 // Whether the Gamepad API is enabled
 pref("dom.gamepad.enabled", true);
 #ifdef RELEASE_BUILD
@@ -242,6 +245,7 @@ pref("media.peerconnection.enabled", true);
 pref("media.peerconnection.video.enabled", true);
 pref("media.navigator.video.max_fs", 1200); // 640x480 == 1200mb
 pref("media.navigator.video.max_fr", 30);
+pref("media.peerconnection.video.h264_enabled", false);
 #else
 pref("media.navigator.video.default_width",640);
 pref("media.navigator.video.default_height",480);
@@ -3086,7 +3090,7 @@ pref("font.single-face-list", "Osaka-Mono");
 
 // optimization hint for fonts with localized names to be read in at startup, otherwise read in at lookup miss
 // names are canonical family names (typically English names)
-pref("font.preload-names-list", "Hiragino Kaku Gothic Pro,Hiragino Mincho Pro,STSong");
+pref("font.preload-names-list", "Hiragino Kaku Gothic ProN,Hiragino Mincho ProN,STSong");
 
 // Override font-weight values for some problematic families Apple ships
 // (see bug 931426).
@@ -3914,6 +3918,10 @@ pref("image.mem.max_ms_before_yield", 5);
 // The maximum amount of decoded image data we'll willingly keep around (we
 // might keep around more than this, but we'll try to get down to this value).
 pref("image.mem.max_decoded_image_kb", 51200);
+
+// Hard limit for the amount of decoded image data, 0 means we don't have the
+// hard limit for it.
+pref("image.mem.hard_limit_decoded_image_kb", 0);
 
 // Minimum timeout for expiring unused images from the surface cache, in
 // milliseconds. This controls how long we store cached temporary surfaces.

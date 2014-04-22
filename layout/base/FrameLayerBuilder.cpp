@@ -1843,6 +1843,29 @@ AddTransformedBoundsToRegion(const nsIntRegion& aRegion,
   aDest->Or(*aDest, intRect);
 }
 
+static bool
+CanOptimizeAwayThebesLayer(ThebesLayerData* aData,
+                           FrameLayerBuilder* aLayerBuilder)
+{
+  bool isRetained = aData->mLayer->Manager()->IsWidgetLayerManager();
+  if (!isRetained) {
+    return false;
+  }
+
+  // If there's no thebes layer with valid content in it that we can reuse,
+  // always create a color or image layer (and potentially throw away an
+  // existing completely invalid thebes layer).
+  if (aData->mLayer->GetValidRegion().IsEmpty()) {
+    return true;
+  }
+
+  // There is an existing thebes layer we can reuse. Throwing it away can make
+  // compositing cheaper (see bug 946952), but it might cause us to re-allocate
+  // the thebes layer frequently due to an animation. So we only discard it if
+  // we're in tree compression mode, which is triggered at a low frequency.
+  return aLayerBuilder->CheckInLayerTreeCompressionMode();
+}
+
 void
 ContainerState::PopThebesLayerData()
 {
@@ -1858,9 +1881,8 @@ ContainerState::PopThebesLayerData()
   nsRefPtr<Layer> layer;
   nsRefPtr<ImageContainer> imageContainer = data->CanOptimizeImageLayer(mBuilder);
 
-  bool isRetained = data->mLayer->Manager()->IsWidgetLayerManager();
-  if (isRetained && (data->mIsSolidColorInVisibleRegion || imageContainer) &&
-      (data->mLayer->GetValidRegion().IsEmpty() || mLayerBuilder->CheckInLayerTreeCompressionMode())) {
+  if ((data->mIsSolidColorInVisibleRegion || imageContainer) &&
+      CanOptimizeAwayThebesLayer(data, mLayerBuilder)) {
     NS_ASSERTION(!(data->mIsSolidColorInVisibleRegion && imageContainer),
                  "Can't be a solid color as well as an image!");
     if (imageContainer) {
@@ -2375,18 +2397,16 @@ ContainerState::ProcessDisplayItems(const nsDisplayList& aList,
 {
   PROFILER_LABEL("ContainerState", "ProcessDisplayItems");
 
-  const nsIFrame* lastAnimatedGeometryRoot = nullptr;
-  nsPoint topLeft;
+  const nsIFrame* lastAnimatedGeometryRoot = mContainerReferenceFrame;
+  nsPoint topLeft(0,0);
 
   // When NO_COMPONENT_ALPHA is set, items will be flattened into a single
   // layer, so we need to choose which active scrolled root to use for all
   // items.
   if (aFlags & NO_COMPONENT_ALPHA) {
-    if (!ChooseAnimatedGeometryRoot(aList, &lastAnimatedGeometryRoot)) {
-      lastAnimatedGeometryRoot = mContainerReferenceFrame;
+    if (ChooseAnimatedGeometryRoot(aList, &lastAnimatedGeometryRoot)) {
+      topLeft = lastAnimatedGeometryRoot->GetOffsetToCrossDoc(mContainerReferenceFrame);
     }
-
-    topLeft = lastAnimatedGeometryRoot->GetOffsetToCrossDoc(mContainerReferenceFrame);
   }
 
   int32_t maxLayers = nsDisplayItem::MaxActiveLayers();
@@ -2426,7 +2446,14 @@ ContainerState::ProcessDisplayItems(const nsDisplayList& aList,
       animatedGeometryRoot = lastAnimatedGeometryRoot;
     } else {
       forceInactive = false;
-      animatedGeometryRoot = nsLayoutUtils::GetAnimatedGeometryRootFor(item, mBuilder);
+      if (mManager->IsWidgetLayerManager()) {
+        animatedGeometryRoot = nsLayoutUtils::GetAnimatedGeometryRootFor(item, mBuilder);
+      } else {
+        // For inactive layer subtrees, splitting content into ThebesLayers
+        // based on animated geometry roots is pointless. It's more efficient
+        // to build the minimum number of layers.
+        animatedGeometryRoot = mContainerReferenceFrame;
+      }
       if (animatedGeometryRoot != lastAnimatedGeometryRoot) {
         lastAnimatedGeometryRoot = animatedGeometryRoot;
         topLeft = animatedGeometryRoot->GetOffsetToCrossDoc(mContainerReferenceFrame);

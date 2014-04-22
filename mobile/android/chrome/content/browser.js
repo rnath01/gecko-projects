@@ -13,6 +13,7 @@ let Cr = Components.results;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/AddonManager.jsm");
+Cu.import("resource://gre/modules/DownloadNotifications.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/JNI.jsm");
 Cu.import('resource://gre/modules/Payment.jsm');
@@ -131,7 +132,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "CharsetMenu",
 
 // Lazily-loaded JS modules that use observer notifications
 [
-  ["Home", ["HomePanels:Get", "HomePanels:Authenticate",
+  ["Home", ["HomeBanner:Get", "HomePanels:Get", "HomePanels:Authenticate", "HomePanels:RefreshView",
             "HomePanels:Installed", "HomePanels:Uninstalled"], "resource://gre/modules/Home.jsm"],
 ].forEach(module => {
   let [name, notifications, resource] = module;
@@ -360,7 +361,7 @@ var BrowserApp = {
 
     NativeWindow.init();
     LightWeightThemeWebInstaller.init();
-    Downloads.init();
+    DownloadNotifications.init();
     FormAssistant.init();
     IndexedDB.init();
     HealthReportStatusListener.init();
@@ -648,7 +649,7 @@ var BrowserApp = {
       function(aTarget) {
         aTarget.muted = true;
       });
-  
+
     NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.unmute"),
       NativeWindow.contextmenus.mediaContext("media-muted"),
       function(aTarget) {
@@ -741,6 +742,7 @@ var BrowserApp = {
 
   shutdown: function shutdown() {
     NativeWindow.uninit();
+    DownloadNotifications.uninit();
     LightWeightThemeWebInstaller.uninit();
     FormAssistant.uninit();
     IndexedDB.uninit();
@@ -1306,16 +1308,6 @@ var BrowserApp = {
 
       try {
         switch (key) {
-          case "history_downloads":
-            Sanitizer.clearItem("history");
-
-            // If we're also removing downloaded files, don't clear the
-            // download history yet since it will be handled when the files are
-            // removed.
-            if (!json["downloadFiles"]) {
-              Sanitizer.clearItem("downloads");
-            }
-            break;
           case "cookies_sessions":
             Sanitizer.clearItem("cookies");
             Sanitizer.clearItem("sessions");
@@ -1820,7 +1812,7 @@ var NativeWindow = {
         return;
 
       sendMessageToJava({
-        type: "Menu:Update", 
+        type: "Menu:Update",
         id: aId,
         options: aOptions
       });
@@ -1846,7 +1838,7 @@ var NativeWindow = {
    *                     automatically dismiss before this time.
    *        checkbox:    A string to appear next to a checkbox under the notification
    *                     message. The button callback functions will be called with
-   *                     the checked state as an argument.                   
+   *                     the checked state as an argument.
    */
     show: function(aMessage, aValue, aButtons, aTabID, aOptions) {
       if (aButtons == null) {
@@ -2110,6 +2102,11 @@ var NativeWindow = {
       else this._targetRef = null;
     },
 
+    get defaultContext() {
+      delete this.defaultContext;
+      return this.defaultContext = Strings.browser.GetStringFromName("browser.menu.context.default");
+    },
+
     /* Gets menuitems for an arbitrary node
      * Parameters:
      *   element - The element to look at. If this element has a contextmenu attribute, the
@@ -2191,7 +2188,7 @@ var NativeWindow = {
       } catch(ex) { }
 
       // Fallback to the default
-      return Strings.browser.GetStringFromName("browser.menu.context.default");
+      return this.defaultContext;
     },
 
     // Adds context menu items added through the add-on api
@@ -2243,7 +2240,7 @@ var NativeWindow = {
             mode: SelectionHandler.SELECT_AT_POINT,
             x: x,
             y: y
-          })) { 
+          })) {
             SelectionHandler.attachCaret(target);
           }
         }
@@ -2346,7 +2343,8 @@ var NativeWindow = {
      */
     _reformatList: function(target) {
       let contexts = Object.keys(this.menus);
-      if (contexts.length == 1) {
+
+      if (contexts.length === 1) {
         // If there's only one context, we'll only show a single flat single select list
         return this._reformatMenuItems(target, this.menus[contexts[0]]);
       }
@@ -2365,12 +2363,24 @@ var NativeWindow = {
      */
     _reformatListAsTabs: function(target, menus) {
       let itemArray = [];
-      for (let context in menus) {
+
+      // Sort the keys so that "link" is always first
+      let contexts = Object.keys(this.menus);
+      contexts.sort((context1, context2) => {
+        if (context1 === this.defaultContext) {
+          return -1;
+        } else if (context2 === this.defaultContext) {
+          return 1;
+        }
+        return 0;
+      });
+
+      contexts.forEach(context => {
         itemArray.push({
           label: context,
           items: this._reformatMenuItems(target, menus[context])
         });
-      }
+      });
 
       return itemArray;
     },
@@ -3000,10 +3010,13 @@ Tab.prototype = {
     this.browser.addEventListener("blur", this, true);
     this.browser.addEventListener("scroll", this, true);
     this.browser.addEventListener("MozScrolledAreaChanged", this, true);
-    // Note that the XBL binding is untrusted
-    this.browser.addEventListener("PluginBindingAttached", this, true, true);
     this.browser.addEventListener("pageshow", this, true);
     this.browser.addEventListener("MozApplicationManifest", this, true);
+
+    // Note that the XBL binding is untrusted
+    this.browser.addEventListener("PluginBindingAttached", this, true, true);
+    this.browser.addEventListener("VideoBindingAttached", this, true, true);
+    this.browser.addEventListener("VideoBindingCast", this, true, true);
 
     Services.obs.addObserver(this, "before-first-paint", false);
     Services.obs.addObserver(this, "after-viewport-change", false);
@@ -3120,7 +3133,7 @@ Tab.prototype = {
                                 viewportWidth - 15);
   },
 
-  /** 
+  /**
    * Reloads the tab with the desktop mode setting.
    */
   reloadWithMode: function (aDesktopMode) {
@@ -3169,9 +3182,12 @@ Tab.prototype = {
     this.browser.removeEventListener("blur", this, true);
     this.browser.removeEventListener("scroll", this, true);
     this.browser.removeEventListener("MozScrolledAreaChanged", this, true);
-    this.browser.removeEventListener("PluginBindingAttached", this, true);
     this.browser.removeEventListener("pageshow", this, true);
     this.browser.removeEventListener("MozApplicationManifest", this, true);
+
+    this.browser.removeEventListener("PluginBindingAttached", this, true, true);
+    this.browser.removeEventListener("VideoBindingAttached", this, true, true);
+    this.browser.removeEventListener("VideoBindingCast", this, true, true);
 
     Services.obs.removeObserver(this, "before-first-paint");
     Services.obs.removeObserver(this, "after-viewport-change");
@@ -3750,7 +3766,7 @@ Tab.prototype = {
 
             if (sizes == "any") {
               // Since Java expects an integer, use -1 to represent icons with sizes="any"
-              maxSize = -1; 
+              maxSize = -1;
             } else {
               let tokens = sizes.split(" ");
               tokens.forEach(function(token) {
@@ -3921,6 +3937,16 @@ Tab.prototype = {
 
       case "PluginBindingAttached": {
         PluginHelper.handlePluginBindingAttached(this, aEvent);
+        break;
+      }
+
+      case "VideoBindingAttached": {
+        CastingApps.handleVideoBindingAttached(this, aEvent);
+        break;
+      }
+
+      case "VideoBindingCast": {
+        CastingApps.handleVideoBindingCast(this, aEvent);
         break;
       }
 
@@ -6590,7 +6616,7 @@ var IdentityHandler = {
                                .QueryInterface(Components.interfaces.nsISSLStatusProvider)
                                .SSLStatus;
 
-    // Don't pass in the actual location object, since it can cause us to 
+    // Don't pass in the actual location object, since it can cause us to
     // hold on to the window object too long.  Just pass in the fields we
     // care about. (bug 424829)
     let locationObj = {};
@@ -6640,7 +6666,7 @@ var IdentityHandler = {
 
       return result;
     }
-    
+
     // Otherwise, we don't know the cert owner
     result.owner = Strings.browser.GetStringFromName("identity.ownerUnknown3");
 
@@ -7252,7 +7278,7 @@ var WebappsUI = {
         favicon.src = WebappsUI.DEFAULT_ICON;
       }
     };
-  
+
     favicon.src = aIconURL;
   },
 
@@ -8394,8 +8420,10 @@ HTMLContextMenuItem.prototype = Object.create(ContextMenuItem.prototype, {
           }
 
           var items = NativeWindow.contextmenus._getHTMLContextMenuItemsForMenu(elt, target);
+          // This menu will always only have one context, but we still make sure its the "right" one.
+          var context = NativeWindow.contextmenus._getContextType(target);
           if (items.length > 0) {
-            NativeWindow.contextmenus._addMenuItems(items, "link");
+            NativeWindow.contextmenus._addMenuItems(items, context);
           }
 
         } catch(ex) {
@@ -8429,3 +8457,21 @@ HTMLContextMenuItem.prototype = Object.create(ContextMenuItem.prototype, {
     }
   },
 });
+
+/**
+ * CID of Downloads.jsm's implementation of nsITransfer.
+ */
+const kTransferCid = Components.ID("{1b4c85df-cbdd-4bb6-b04e-613caece083c}");
+
+/**
+ * Contract ID of the service implementing nsITransfer.
+ */
+const kTransferContractId = "@mozilla.org/transfer;1";
+
+// Override Toolkit's nsITransfer implementation with the one from the
+// JavaScript API for downloads.  This will eventually be removed when
+// nsIDownloadManager will not be available anymore (bug 851471).  The
+// old code in this module will be removed in bug 899110.
+Components.manager.QueryInterface(Ci.nsIComponentRegistrar)
+                  .registerFactory(kTransferCid, "",
+                                   kTransferContractId, null);
