@@ -1,4 +1,4 @@
-/* -*- Mode: C++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 8; -*- */
+/* -*- Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 8; -*- */
 /* vim: set sw=2 sts=2 ts=8 et tw=80 : */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -1965,32 +1965,12 @@ TabChild::RecvRealTouchMoveEvent(const WidgetTouchEvent& aEvent,
   return RecvRealTouchEvent(aEvent, aGuid);
 }
 
-void
-TabChild::RequestNativeKeyBindings(WidgetKeyboardEvent* aEvent)
-{
-  MaybeNativeKeyBinding maybeBindings;
-  if (!SendRequestNativeKeyBindings(*aEvent, &maybeBindings)) {
-    return;
-  }
-
-  PuppetWidget* widget = static_cast<PuppetWidget*>(mWidget.get());
-  if (maybeBindings.type() == MaybeNativeKeyBinding::TNativeKeyBinding) {
-    const NativeKeyBinding& bindings = maybeBindings;
-    widget->CacheNativeKeyCommands(bindings.singleLineCommands(),
-                                   bindings.multiLineCommands(),
-                                   bindings.richTextCommands());
-  } else {
-    widget->ClearNativeKeyCommands();
-  }
-}
-
 bool
 TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& event,
                            const MaybeNativeKeyBinding& aBindings)
-{
-  PuppetWidget* widget = static_cast<PuppetWidget*>(mWidget.get());
-
+ {
   if (event.message == NS_KEY_PRESS) {
+    PuppetWidget* widget = static_cast<PuppetWidget*>(mWidget.get());
     if (aBindings.type() == MaybeNativeKeyBinding::TNativeKeyBinding) {
       const NativeKeyBinding& bindings = aBindings;
       widget->CacheNativeKeyCommands(bindings.singleLineCommands(),
@@ -2003,15 +1983,12 @@ TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& event,
   // If content code called preventDefault() on a keydown event, then we don't
   // want to process any following keypress events.
   if (event.message == NS_KEY_PRESS && mIgnoreKeyPressEvent) {
-    widget->InvalidateNativeKeyCommands();
     return true;
   }
 
   WidgetKeyboardEvent localEvent(event);
   localEvent.widget = mWidget;
   nsEventStatus status = DispatchWidgetEvent(localEvent);
-
-  widget->InvalidateNativeKeyCommands();
 
   if (event.message == NS_KEY_DOWN) {
     mIgnoreKeyPressEvent = status == nsEventStatus_eConsumeNoDefault;

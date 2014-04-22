@@ -1811,8 +1811,6 @@ public:
      */
     NS_IMETHOD_(InputContext) GetInputContext() = 0;
 
-    NS_IMETHOD AttachNativeKeyEvent(mozilla::WidgetKeyboardEvent& aEvent) = 0;
-
     /*
      * Execute native key bindings for aType.
      */

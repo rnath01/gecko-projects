@@ -315,10 +315,6 @@ static void ReleaseImageClientNow(ImageClient* aClient)
 // static
 void ImageBridgeChild::DispatchReleaseImageClient(ImageClient* aClient)
 {
-  if (!IsCreated()) {
-    return;
-  }
-
   sImageBridgeChildSingleton->GetMessageLoop()->PostTask(
     FROM_HERE,
     NewRunnableFunction(&ReleaseImageClientNow, aClient));
@@ -333,10 +329,6 @@ static void ReleaseTextureClientNow(TextureClient* aClient)
 // static
 void ImageBridgeChild::DispatchReleaseTextureClient(TextureClient* aClient)
 {
-  if (!IsCreated()) {
-    return;
-  }
-
   sImageBridgeChildSingleton->GetMessageLoop()->PostTask(
     FROM_HERE,
     NewRunnableFunction(&ReleaseTextureClientNow, aClient));
@@ -356,10 +348,6 @@ static void UpdateImageClientNow(ImageClient* aClient, ImageContainer* aContaine
 void ImageBridgeChild::DispatchImageClientUpdate(ImageClient* aClient,
                                                  ImageContainer* aContainer)
 {
-  if (!IsCreated()) {
-    return;
-  }
-
   if (InImageBridgeChildThread()) {
     UpdateImageClientNow(aClient, aContainer);
     return;
@@ -384,10 +372,6 @@ static void FlushAllImagesSync(ImageClient* aClient, ImageContainer* aContainer,
 //static
 void ImageBridgeChild::FlushAllImages(ImageClient* aClient, ImageContainer* aContainer, bool aExceptFront)
 {
-  if (!IsCreated()) {
-    return;
-  }
-
   if (InImageBridgeChildThread()) {
     FlushAllImagesNow(aClient, aContainer, aExceptFront);
     return;
@@ -577,13 +561,14 @@ bool ImageBridgeChild::StartUpOnThread(Thread* aThread)
 
 void ImageBridgeChild::DestroyBridge()
 {
-  if (!IsCreated()) {
-    return;
-  }
   NS_ABORT_IF_FALSE(!InImageBridgeChildThread(),
                     "This method must not be called in this thread.");
   // ...because we are about to dispatch synchronous messages to the
   // ImageBridgeChild thread.
+
+  if (!IsCreated()) {
+    return;
+  }
 
   ReentrantMonitor barrier("ImageBridgeDestroyTask lock");
   ReentrantMonitorAutoEnter autoMon(barrier);
@@ -606,8 +591,7 @@ void ImageBridgeChild::DestroyBridge()
 
 bool InImageBridgeChildThread()
 {
-  return ImageBridgeChild::IsCreated() &&
-    sImageBridgeChildThread->thread_id() == PlatformThread::CurrentId();
+  return sImageBridgeChildThread->thread_id() == PlatformThread::CurrentId();
 }
 
 MessageLoop * ImageBridgeChild::GetMessageLoop() const
@@ -624,7 +608,6 @@ void ImageBridgeChild::ConnectAsync(ImageBridgeParent* aParent)
 void
 ImageBridgeChild::IdentifyCompositorTextureHost(const TextureFactoryIdentifier& aIdentifier)
 {
-  MOZ_ASSERT(IsCreated());
   if (sImageBridgeChildSingleton) {
     sImageBridgeChildSingleton->IdentifyTextureHost(aIdentifier);
   }

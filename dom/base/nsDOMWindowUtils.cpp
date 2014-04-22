@@ -1217,7 +1217,7 @@ nsDOMWindowUtils::SendKeyEvent(const nsAString& aType,
   NS_ENSURE_SUCCESS(rv, rv);
 
   *aDefaultActionTaken = (status != nsEventStatus_eConsumeNoDefault);
-
+  
   return NS_OK;
 }
 

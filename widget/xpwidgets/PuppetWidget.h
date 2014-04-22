@@ -140,7 +140,6 @@ public:
                               const InfallibleTArray<mozilla::CommandInt>& aMultiLineCommands,
                               const InfallibleTArray<mozilla::CommandInt>& aRichTextCommands)
   {
-    mNativeKeyCommandsValid = true;
     mSingleLineCommands = aSingleLineCommands;
     mMultiLineCommands = aMultiLineCommands;
     mRichTextCommands = aRichTextCommands;
@@ -148,15 +147,9 @@ public:
 
   void ClearNativeKeyCommands()
   {
-    mNativeKeyCommandsValid = true;
     mSingleLineCommands.Clear();
     mMultiLineCommands.Clear();
     mRichTextCommands.Clear();
-  }
-
-  void InvalidateNativeKeyCommands()
-  {
-    mNativeKeyCommandsValid = false;
   }
 
   //
@@ -257,7 +250,6 @@ private:
   double mDefaultScale;
 
   // Precomputed answers for ExecuteNativeKeyBinding
-  bool mNativeKeyCommandsValid;
   InfallibleTArray<mozilla::CommandInt> mSingleLineCommands;
   InfallibleTArray<mozilla::CommandInt> mMultiLineCommands;
   InfallibleTArray<mozilla::CommandInt> mRichTextCommands;

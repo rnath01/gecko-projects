@@ -387,7 +387,6 @@ public:
 
     void NotifyPainted();
 
-    void RequestNativeKeyBindings(WidgetKeyboardEvent* aEvent);
 
     /** Return a boolean indicating if the page has called preventDefault on
      *  the event.
