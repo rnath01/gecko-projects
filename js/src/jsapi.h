@@ -2120,20 +2120,6 @@ typedef enum JSGCParamKey {
     JSGC_DECOMMIT_THRESHOLD = 20
 } JSGCParamKey;
 
-typedef enum JSGCMode {
-    /* Perform only global GCs. */
-    JSGC_MODE_GLOBAL = 0,
-
-    /* Perform per-compartment GCs until too much garbage has accumulated. */
-    JSGC_MODE_COMPARTMENT = 1,
-
-    /*
-     * Collect in short time slices rather than all at once. Implies
-     * JSGC_MODE_COMPARTMENT.
-     */
-    JSGC_MODE_INCREMENTAL = 2
-} JSGCMode;
-
 extern JS_PUBLIC_API(void)
 JS_SetGCParameter(JSRuntime *rt, JSGCParamKey key, uint32_t value);
 
@@ -2549,6 +2535,7 @@ class JS_PUBLIC_API(CompartmentOptions)
       : version_(JSVERSION_UNKNOWN)
       , invisibleToDebugger_(false)
       , mergeable_(false)
+      , discardSource_(false)
       , traceGlobal_(nullptr)
       , singletonsAsTemplates_(true)
     {
@@ -2582,6 +2569,15 @@ class JS_PUBLIC_API(CompartmentOptions)
         return *this;
     }
 
+    // For certain globals, we know enough about the code that will run in them
+    // that we can discard script source entirely.
+    bool discardSource() const { return discardSource_; }
+    CompartmentOptions &setDiscardSource(bool flag) {
+        discardSource_ = flag;
+        return *this;
+    }
+
+
     bool cloneSingletons(JSContext *cx) const;
     Override &cloneSingletonsOverride() { return cloneSingletonsOverride_; }
 
@@ -2612,6 +2608,7 @@ class JS_PUBLIC_API(CompartmentOptions)
     JSVersion version_;
     bool invisibleToDebugger_;
     bool mergeable_;
+    bool discardSource_;
     Override cloneSingletonsOverride_;
     union {
         ZoneSpecifier spec;
@@ -2627,6 +2624,9 @@ class JS_PUBLIC_API(CompartmentOptions)
 
 JS_PUBLIC_API(CompartmentOptions &)
 CompartmentOptionsRef(JSCompartment *compartment);
+
+JS_PUBLIC_API(CompartmentOptions &)
+CompartmentOptionsRef(JSObject *obj);
 
 JS_PUBLIC_API(CompartmentOptions &)
 CompartmentOptionsRef(JSContext *cx);
@@ -3402,7 +3402,7 @@ class JS_FRIEND_API(ReadOnlyCompileOptions)
         asmJSOption(false),
         forceAsync(false),
         installedFile(false),
-        sourcePolicy(SAVE_SOURCE),
+        sourceIsLazy(false),
         introductionType(nullptr),
         introductionLineno(0),
         introductionOffset(0),
@@ -3442,11 +3442,7 @@ class JS_FRIEND_API(ReadOnlyCompileOptions)
     bool asmJSOption;
     bool forceAsync;
     bool installedFile;  // 'true' iff pre-compiling js file in packaged app
-    enum SourcePolicy {
-        NO_SOURCE,
-        LAZY_SOURCE,
-        SAVE_SOURCE
-    } sourcePolicy;
+    bool sourceIsLazy;
 
     // |introductionType| is a statically allocated C string:
     // one of "eval", "Function", or "GeneratorFunction".
@@ -3538,7 +3534,7 @@ class JS_FRIEND_API(OwningCompileOptions) : public ReadOnlyCompileOptions
     OwningCompileOptions &setNoScriptRval(bool nsr) { noScriptRval = nsr; return *this; }
     OwningCompileOptions &setSelfHostingMode(bool shm) { selfHostingMode = shm; return *this; }
     OwningCompileOptions &setCanLazilyParse(bool clp) { canLazilyParse = clp; return *this; }
-    OwningCompileOptions &setSourcePolicy(SourcePolicy sp) { sourcePolicy = sp; return *this; }
+    OwningCompileOptions &setSourceIsLazy(bool l) { sourceIsLazy = l; return *this; }
     OwningCompileOptions &setIntroductionType(const char *t) { introductionType = t; return *this; }
     bool setIntroductionInfo(JSContext *cx, const char *introducerFn, const char *intro,
                              unsigned line, JSScript *script, uint32_t offset)
@@ -3624,7 +3620,7 @@ class MOZ_STACK_CLASS JS_FRIEND_API(CompileOptions) : public ReadOnlyCompileOpti
     CompileOptions &setNoScriptRval(bool nsr) { noScriptRval = nsr; return *this; }
     CompileOptions &setSelfHostingMode(bool shm) { selfHostingMode = shm; return *this; }
     CompileOptions &setCanLazilyParse(bool clp) { canLazilyParse = clp; return *this; }
-    CompileOptions &setSourcePolicy(SourcePolicy sp) { sourcePolicy = sp; return *this; }
+    CompileOptions &setSourceIsLazy(bool l) { sourceIsLazy = l; return *this; }
     CompileOptions &setIntroductionType(const char *t) { introductionType = t; return *this; }
     CompileOptions &setIntroductionInfo(const char *introducerFn, const char *intro,
                                         unsigned line, JSScript *script, uint32_t offset)
@@ -4635,11 +4631,12 @@ JS_SetParallelParsingEnabled(JSRuntime *rt, bool enabled);
 extern JS_PUBLIC_API(void)
 JS_SetParallelIonCompilationEnabled(JSRuntime *rt, bool enabled);
 
-#define JIT_COMPILER_OPTIONS(Register)                             \
-  Register(BASELINE_USECOUNT_TRIGGER, "baseline.usecount.trigger") \
-  Register(ION_USECOUNT_TRIGGER, "ion.usecount.trigger")           \
-  Register(ION_ENABLE, "ion.enable")                               \
-  Register(BASELINE_ENABLE, "baseline.enable")
+#define JIT_COMPILER_OPTIONS(Register)                                  \
+    Register(BASELINE_USECOUNT_TRIGGER, "baseline.usecount.trigger")    \
+    Register(ION_USECOUNT_TRIGGER, "ion.usecount.trigger")              \
+    Register(ION_ENABLE, "ion.enable")                                  \
+    Register(BASELINE_ENABLE, "baseline.enable")                        \
+    Register(PARALLEL_COMPILATION_ENABLE, "parallel-compilation.enable")
 
 typedef enum JSJitCompilerOption {
 #define JIT_COMPILER_DECLARE(key, str) \

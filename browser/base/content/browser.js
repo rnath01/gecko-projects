@@ -79,14 +79,8 @@ this.__defineSetter__("AddonManager", function (val) {
   return this.AddonManager = val;
 });
 
-this.__defineGetter__("PluralForm", function() {
-  Cu.import("resource://gre/modules/PluralForm.jsm");
-  return this.PluralForm;
-});
-this.__defineSetter__("PluralForm", function (val) {
-  delete this.PluralForm;
-  return this.PluralForm = val;
-});
+XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
+  "resource://gre/modules/PluralForm.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetryStopwatch",
   "resource://gre/modules/TelemetryStopwatch.jsm");
@@ -266,15 +260,7 @@ function UpdateBackForwardCommands(aWebNavigation) {
       backBroadcaster.setAttribute("disabled", true);
   }
 
-  let canGoForward = aWebNavigation.canGoForward;
-  if (forwardDisabled) {
-    // Force the button to either be hidden (if we are already disabled,
-    // and should be), or to show if we're about to un-disable it:
-    // otherwise no transition will occur and it'll never show:
-    CombinedBackForward.setForwardButtonOcclusion(!canGoForward);
-  }
-
-  if (forwardDisabled == canGoForward) {
+  if (forwardDisabled == aWebNavigation.canGoForward) {
     if (forwardDisabled)
       forwardBroadcaster.removeAttribute("disabled");
     else
@@ -926,7 +912,6 @@ var gBrowserInit = {
 
     // Misc. inits.
     CombinedStopReload.init();
-    CombinedBackForward.init();
     gPrivateBrowsingUI.init();
     TabsInTitlebar.init();
 
@@ -1273,7 +1258,6 @@ var gBrowserInit = {
     // uninit methods don't depend on the services having been initialized).
 
     CombinedStopReload.uninit();
-    CombinedBackForward.uninit();
 
     gGestureSupport.init(false);
 
@@ -3805,7 +3789,6 @@ var XULBrowserWindow = {
   onUpdateCurrentBrowser: function XWB_onUpdateCurrentBrowser(aStateFlags, aStatus, aMessage, aTotalProgress) {
     if (FullZoom.updateBackgroundTabs)
       FullZoom.onLocationChange(gBrowser.currentURI, true);
-    CombinedBackForward.setForwardButtonOcclusion(!gBrowser.webProgress.canGoForward);
     var nsIWebProgressListener = Components.interfaces.nsIWebProgressListener;
     var loadingDone = aStateFlags & nsIWebProgressListener.STATE_STOP;
     // use a pseudo-object instead of a (potentially nonexistent) channel for getting
@@ -3879,43 +3862,6 @@ var LinkTargetDisplay = {
     XULBrowserWindow.updateStatusField();
   }
 };
-
-let CombinedBackForward = {
-  init: function() {
-    this.forwardButton = document.getElementById("forward-button");
-    // Add a transition listener to the url bar to hide the forward button
-    // when necessary
-    if (gURLBar)
-      gURLBar.addEventListener("transitionend", this);
-    // On startup, or if the user customizes, our listener isn't attached,
-    // and no transitions fire anyway, so we need to make sure we've hidden the
-    // button if necessary:
-    if (this.forwardButton && this.forwardButton.hasAttribute("disabled")) {
-      this.setForwardButtonOcclusion(true);
-    }
-  },
-  uninit: function() {
-    if (gURLBar)
-      gURLBar.removeEventListener("transitionend", this);
-  },
-  handleEvent: function(aEvent) {
-    if (aEvent.type == "transitionend" &&
-        (aEvent.propertyName == "margin-left" || aEvent.propertyName == "margin-right") &&
-        this.forwardButton.hasAttribute("disabled")) {
-      this.setForwardButtonOcclusion(true);
-    }
-  },
-  setForwardButtonOcclusion: function(shouldBeOccluded) {
-    if (!this.forwardButton)
-      return;
-
-    let hasAttribute = this.forwardButton.hasAttribute("occluded-by-urlbar");
-    if (shouldBeOccluded && !hasAttribute)
-      this.forwardButton.setAttribute("occluded-by-urlbar", "true");
-    else if (!shouldBeOccluded && hasAttribute)
-      this.forwardButton.removeAttribute("occluded-by-urlbar");
-  }
-}
 
 var CombinedStopReload = {
   init: function () {

@@ -29,6 +29,7 @@
 #include "mozilla/Services.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TimeStamp.h"
+#include "mozilla/LoadContext.h"
 
 #include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
@@ -298,7 +299,7 @@ PendingDBLookup::HandleEvent(const nsACString& tables)
   // Blocklisting trumps allowlisting.
   nsAutoCString blockList;
   Preferences::GetCString(PREF_DOWNLOAD_BLOCK_TABLE, &blockList);
-  if (!mAllowlistOnly && FindInReadable(tables, blockList)) {
+  if (!mAllowlistOnly && FindInReadable(blockList, tables)) {
     Accumulate(mozilla::Telemetry::APPLICATION_REPUTATION_LOCAL, BLOCK_LIST);
     LOG(("Found principal %s on blocklist [this = %p]", mSpec.get(), this));
     return mPendingLookup->OnComplete(true, NS_OK);
@@ -306,7 +307,7 @@ PendingDBLookup::HandleEvent(const nsACString& tables)
 
   nsAutoCString allowList;
   Preferences::GetCString(PREF_DOWNLOAD_ALLOW_TABLE, &allowList);
-  if (FindInReadable(tables, allowList)) {
+  if (FindInReadable(allowList, tables)) {
     Accumulate(mozilla::Telemetry::APPLICATION_REPUTATION_LOCAL, ALLOW_LIST);
     LOG(("Found principal %s on allowlist [this = %p]", mSpec.get(), this));
     return mPendingLookup->OnComplete(false, NS_OK);
@@ -765,6 +766,13 @@ PendingLookup::SendRemoteQueryInternal()
   rv = uploadChannel->ExplicitSetUploadStream(sstream,
     NS_LITERAL_CSTRING("application/octet-stream"), serialized.size(),
     NS_LITERAL_CSTRING("POST"), false);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Set the Safebrowsing cookie jar, so that the regular Google cookie is not
+  // sent with this request. See bug 897516.
+  nsCOMPtr<nsIInterfaceRequestor> loadContext =
+    new mozilla::LoadContext(NECKO_SAFEBROWSING_APP_ID);
+  rv = channel->SetNotificationCallbacks(loadContext);
   NS_ENSURE_SUCCESS(rv, rv);
 
   rv = channel->AsyncOpen(this, nullptr);

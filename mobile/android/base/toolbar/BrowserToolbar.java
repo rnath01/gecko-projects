@@ -50,6 +50,7 @@ import android.view.LayoutInflater;
 import android.view.MenuInflater;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.animation.AccelerateInterpolator;
 import android.view.animation.Interpolator;
 import android.view.inputmethod.InputMethodManager;
@@ -146,7 +147,7 @@ public class BrowserToolbar extends ThemedRelativeLayout
     private OnStartEditingListener startEditingListener;
     private OnStopEditingListener stopEditingListener;
 
-    final private BrowserApp activity;
+    private final BrowserApp activity;
     private boolean hasSoftMenuButton;
 
     private UIMode uiMode;
@@ -190,7 +191,10 @@ public class BrowserToolbar extends ThemedRelativeLayout
         urlEditLayout = (ToolbarEditLayout) findViewById(R.id.edit_layout);
 
         urlBarEntryDefaultLayoutParams = (RelativeLayout.LayoutParams) urlBarEntry.getLayoutParams();
-        urlBarEntryShrunkenLayoutParams = new RelativeLayout.LayoutParams(urlBarEntryDefaultLayoutParams);
+        // API level 19 adds a RelativeLayout.LayoutParams copy constructor, so we explicitly cast
+        // to ViewGroup.MarginLayoutParams to ensure consistency across platforms.
+        urlBarEntryShrunkenLayoutParams = new RelativeLayout.LayoutParams(
+                (ViewGroup.MarginLayoutParams) urlBarEntryDefaultLayoutParams);
         urlBarEntryShrunkenLayoutParams.addRule(RelativeLayout.ALIGN_RIGHT, R.id.edit_layout);
         urlBarEntryShrunkenLayoutParams.rightMargin = 0;
 
@@ -397,7 +401,7 @@ public class BrowserToolbar extends ThemedRelativeLayout
 
     public boolean onBackPressed() {
         if (isEditing()) {
-            stopEditing();
+            cancelEdit();
             return true;
         }
 
@@ -581,7 +585,7 @@ public class BrowserToolbar extends ThemedRelativeLayout
         }
     }
 
-    public boolean isVisible() {
+    private boolean isVisible() {
         return ViewHelper.getTranslationY(this) == 0;
     }
 
@@ -1200,7 +1204,7 @@ public class BrowserToolbar extends ThemedRelativeLayout
         contentAnimator.start();
     }
 
-    public void setButtonEnabled(ImageButton button, boolean enabled) {
+    private void setButtonEnabled(ImageButton button, boolean enabled) {
         final Drawable drawable = button.getDrawable();
         if (drawable != null) {
             // This alpha value has to be in sync with the one used
