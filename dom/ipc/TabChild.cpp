@@ -96,7 +96,7 @@ using namespace mozilla::dom::indexedDB;
 using namespace mozilla::widget;
 using namespace mozilla::jsipc;
 
-NS_IMPL_ISUPPORTS1(ContentListener, nsIDOMEventListener)
+NS_IMPL_ISUPPORTS(ContentListener, nsIDOMEventListener)
 
 static const CSSSize kDefaultViewportSize(980, 480);
 
@@ -123,7 +123,7 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(TabChildBase)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(TabChildBase)
 NS_INTERFACE_MAP_END
 
-NS_IMPL_CYCLE_COLLECTION_2(TabChildBase, mTabChildGlobal, mGlobal)
+NS_IMPL_CYCLE_COLLECTION(TabChildBase, mTabChildGlobal, mGlobal)
 
 void
 TabChildBase::InitializeRootMetrics()
@@ -747,6 +747,7 @@ TabChild::Observe(nsISupports *aSubject,
 
       if (SameCOMIdentity(subject, doc)) {
         nsCOMPtr<nsIDOMWindowUtils> utils(GetDOMWindowUtils());
+        utils->SetIsFirstPaint(true);
 
         mContentDocumentIsDisplayed = true;
 
@@ -809,9 +810,6 @@ TabChild::OnLocationChange(nsIWebProgress* aWebProgress,
   if (!window) {
     return NS_OK;
   }
-
-  nsCOMPtr<nsIDOMWindowUtils> utils(do_GetInterface(window));
-  utils->SetIsFirstPaint(true);
 
   nsCOMPtr<nsIDOMDocument> progressDoc;
   window->GetDocument(getter_AddRefs(progressDoc));
@@ -2720,8 +2718,8 @@ TabChildGlobal::Init()
                                               MM_CHILD);
 }
 
-NS_IMPL_CYCLE_COLLECTION_INHERITED_2(TabChildGlobal, DOMEventTargetHelper,
-                                     mMessageManager, mTabChild)
+NS_IMPL_CYCLE_COLLECTION_INHERITED(TabChildGlobal, DOMEventTargetHelper,
+                                   mMessageManager, mTabChild)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(TabChildGlobal)
   NS_INTERFACE_MAP_ENTRY(nsIMessageListenerManager)

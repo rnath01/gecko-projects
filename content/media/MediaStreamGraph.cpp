@@ -849,7 +849,7 @@ MediaStreamGraphImpl::CreateOrDestroyAudioStreams(GraphTime aAudioOutputStartTim
         // match the system's ideal channel configuration.
         // NOTE: we presume this is either fast or async-under-the-covers
         audioOutputStream->mStream->Init(2, mSampleRate,
-                                         AudioChannel::Normal,
+                                         aStream->mAudioChannelType,
                                          AudioStream::LowLatency);
         audioOutputStream->mTrackID = tracks->GetID();
 
@@ -1784,6 +1784,7 @@ MediaStream::MediaStream(DOMMediaStream* aWrapper)
   , mMainThreadFinished(false)
   , mMainThreadDestroyed(false)
   , mGraph(nullptr)
+  , mAudioChannelType(dom::AudioChannel::Normal)
 {
   MOZ_COUNT_CTOR(MediaStream);
   // aWrapper should not already be connected to a MediaStream! It needs
@@ -2672,7 +2673,7 @@ MediaStreamGraphImpl::Destroy()
   mSelfRef = nullptr;
 }
 
-NS_IMPL_ISUPPORTS1(MediaStreamGraphShutdownObserver, nsIObserver)
+NS_IMPL_ISUPPORTS(MediaStreamGraphShutdownObserver, nsIObserver)
 
 static bool gShutdownObserverRegistered = false;
 
@@ -2739,7 +2740,7 @@ MediaStreamGraph::DestroyNonRealtimeInstance(MediaStreamGraph* aGraph)
   graph->ForceShutDown();
 }
 
-NS_IMPL_ISUPPORTS1(MediaStreamGraphImpl, nsIMemoryReporter)
+NS_IMPL_ISUPPORTS(MediaStreamGraphImpl, nsIMemoryReporter)
 
 struct ArrayClearer
 {

@@ -113,7 +113,6 @@ EnterBaseline(JSContext *cx, EnterJitData &data)
     {
         AssertCompartmentUnchanged pcc(cx);
         JitActivation activation(cx, data.constructing);
-        JSAutoResolveFlags rf(cx, RESOLVE_INFER);
         AutoFlushInhibitor afi(cx->runtime()->jitRuntime());
 
         if (data.osrFrame)
@@ -958,7 +957,7 @@ jit::MarkActiveBaselineScripts(Zone *zone)
 {
     JSRuntime *rt = zone->runtimeFromMainThread();
     for (JitActivationIterator iter(rt); !iter.done(); ++iter) {
-        if (iter.activation()->compartment()->zone() == zone)
+        if (iter->compartment()->zone() == zone)
             MarkActiveBaselineScripts(rt, iter);
     }
 }

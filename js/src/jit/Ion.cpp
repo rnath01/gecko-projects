@@ -1628,29 +1628,22 @@ GenerateLIR(MIRGenerator *mir)
 }
 
 CodeGenerator *
-GenerateCode(MIRGenerator *mir, LIRGraph *lir, MacroAssembler *maybeMasm)
+GenerateCode(MIRGenerator *mir, LIRGraph *lir)
 {
-    CodeGenerator *codegen = js_new<CodeGenerator>(mir, lir, maybeMasm);
+    CodeGenerator *codegen = js_new<CodeGenerator>(mir, lir);
     if (!codegen)
         return nullptr;
 
-    if (mir->compilingAsmJS()) {
-        if (!codegen->generateAsmJS()) {
-            js_delete(codegen);
-            return nullptr;
-        }
-    } else {
-        if (!codegen->generate()) {
-            js_delete(codegen);
-            return nullptr;
-        }
+    if (!codegen->generate()) {
+        js_delete(codegen);
+        return nullptr;
     }
 
     return codegen;
 }
 
 CodeGenerator *
-CompileBackEnd(MIRGenerator *mir, MacroAssembler *maybeMasm)
+CompileBackEnd(MIRGenerator *mir)
 {
     if (!OptimizeMIR(mir))
         return nullptr;
@@ -1659,7 +1652,7 @@ CompileBackEnd(MIRGenerator *mir, MacroAssembler *maybeMasm)
     if (!lir)
         return nullptr;
 
-    return GenerateCode(mir, lir, maybeMasm);
+    return GenerateCode(mir, lir);
 }
 
 void
@@ -1944,11 +1937,6 @@ CheckScript(JSContext *cx, JSScript *script, bool osr)
         // logic in pushBailoutFrame to deal with linking prev.
         // Additionally, JSOP_DEFVAR support will require baking in isEvalFrame().
         IonSpew(IonSpew_Abort, "eval script");
-        return false;
-    }
-
-    if (!script->analyzedArgsUsage() && !script->ensureRanAnalysis(cx)) {
-        IonSpew(IonSpew_Abort, "OOM under ensureRanAnalysis");
         return false;
     }
 
@@ -2393,7 +2381,6 @@ EnterIon(JSContext *cx, EnterJitData &data)
     {
         AssertCompartmentUnchanged pcc(cx);
         JitActivation activation(cx, data.constructing);
-        JSAutoResolveFlags rf(cx, RESOLVE_INFER);
         AutoFlushInhibitor afi(cx->runtime()->jitRuntime());
 
         CALL_GENERATED_CODE(enter, data.jitcode, data.maxArgc, data.maxArgv, /* osrFrame = */nullptr, data.calleeToken,
@@ -2504,8 +2491,6 @@ jit::FastInvoke(JSContext *cx, HandleFunction fun, CallArgs &args)
 
     RootedValue result(cx, Int32Value(args.length()));
     JS_ASSERT(args.length() >= fun->nargs());
-
-    JSAutoResolveFlags rf(cx, RESOLVE_INFER);
 
     CALL_GENERATED_CODE(enter, jitcode, args.length() + 1, args.array() - 1, /* osrFrame = */nullptr,
                         calleeToken, /* scopeChain = */ nullptr, 0, result.address());
@@ -2660,7 +2645,7 @@ jit::InvalidateAll(FreeOp *fop, Zone *zone)
         StopAllOffThreadCompilations(comp);
 
     for (JitActivationIterator iter(fop->runtime()); !iter.done(); ++iter) {
-        if (iter.activation()->compartment()->zone() == zone) {
+        if (iter->compartment()->zone() == zone) {
             IonContext ictx(CompileRuntime::get(fop->runtime()));
             AutoFlushCache afc("InvalidateAll", fop->runtime()->jitRuntime());
             IonSpew(IonSpew_Invalidate, "Invalidating all frames for GC");
@@ -3081,7 +3066,7 @@ AutoDebugModeInvalidation::~AutoDebugModeInvalidation()
     jit::MarkActiveBaselineScripts(zone);
 
     for (JitActivationIterator iter(rt); !iter.done(); ++iter) {
-        JSCompartment *comp = iter.activation()->compartment();
+        JSCompartment *comp = iter->compartment();
         if (comp_ == comp || zone_ == comp->zone()) {
             IonContext ictx(CompileRuntime::get(rt));
             AutoFlushCache afc("AutoDebugModeInvalidation", rt->jitRuntime());

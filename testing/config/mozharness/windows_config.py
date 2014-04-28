@@ -15,6 +15,13 @@ config = {
         "--console-level=INFO",
         "--quiet", "--e10s"
     ],
+    "webapprt_options": [
+        "--app=%(app_path)s", "--utility-path=tests/bin",
+        "--extra-profile-file=tests/bin/plugins", "--symbols-path=%(symbols_path)s",
+        "--certificate-path=tests/certs", "--autorun", "--close-when-done",
+        "--console-level=INFO", "--testing-modules-dir=tests/modules",
+        "--quiet"
+    ],
     "xpcshell_options": [
         "--symbols-path=%(symbols_path)s",
         "--test-plugin-path=%(test_plugin_path)s"
