@@ -124,13 +124,5 @@ CompositableClient::OnTransaction()
 {
 }
 
-CompositableClient*
-CompositableClient::AsCompositableClient(PCompositableChild* aActor)
-{
-  MOZ_ASSERT(aActor);
-  return static_cast<CompositableChild*>(aActor)->GetCompositableClient();
-}
-
-
 } // namespace layers
 } // namespace mozilla

@@ -146,8 +146,6 @@ public:
    */
   virtual void ClearCachedResources() {}
 
-  static CompositableClient* AsCompositableClient(PCompositableChild* aActor);
-
 protected:
   CompositableChild* mCompositableChild;
   CompositableForwarder* mForwarder;
