@@ -2338,7 +2338,7 @@ bool HTMLMediaElement::CheckAudioChannelPermissions(const nsAString& aString)
   }
 
   nsCOMPtr<nsIPermissionManager> permissionManager =
-    do_GetService(NS_PERMISSIONMANAGER_CONTRACTID);
+    services::GetPermissionManager();
   if (!permissionManager) {
     return false;
   }
@@ -3847,6 +3847,11 @@ void HTMLMediaElement::UpdateAudioChannelPlayingState()
       }
       mAudioChannelAgent->SetVisibilityState(!OwnerDoc()->Hidden());
     }
+
+    // This is needed to pass nsContentUtils::IsCallerChrome().
+    // AudioChannel API should not called from content but it can happen that
+    // this method has some content JS in its stack.
+    AutoNoJSAPI nojsapi;
 
     if (mPlayingThroughTheAudioChannel) {
       int32_t canPlay;

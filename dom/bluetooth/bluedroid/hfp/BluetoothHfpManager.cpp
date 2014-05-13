@@ -17,9 +17,10 @@
 #include "nsContentUtils.h"
 #include "nsIAudioManager.h"
 #include "nsIDOMIccInfo.h"
-#include "nsIDOMMobileConnection.h"
 #include "nsIIccProvider.h"
+#include "nsIMobileConnectionInfo.h"
 #include "nsIMobileConnectionProvider.h"
+#include "nsIMobileNetworkInfo.h"
 #include "nsIObserverService.h"
 #include "nsISettingsService.h"
 #include "nsITelephonyProvider.h"
@@ -406,6 +407,10 @@ BluetoothHfpManager::Init()
   }
 
   hal::RegisterBatteryObserver(this);
+  // Update to the latest battery level
+  hal::BatteryInformation batteryInfo;
+  hal::GetCurrentBatteryInformation(&batteryInfo);
+  Notify(batteryInfo);
 
   mListener = new BluetoothRilListener();
   NS_ENSURE_TRUE(mListener->Listen(true), false);
@@ -521,7 +526,7 @@ BluetoothHfpManager::Notify(const hal::BatteryInformation& aBatteryInfo)
 {
   // Range of battery level: [0, 1], double
   // Range of CIND::BATTCHG: [0, 5], int
-  mBattChg = (int) ceil(aBatteryInfo.level() * 5.0);
+  mBattChg = (int) round(aBatteryInfo.level() * 5.0);
   UpdateDeviceCIND();
 }
 
@@ -889,7 +894,7 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
     do_GetService(NS_RILCONTENTHELPER_CONTRACTID);
   NS_ENSURE_TRUE_VOID(connection);
 
-  nsCOMPtr<nsIDOMMozMobileConnectionInfo> voiceInfo;
+  nsCOMPtr<nsIMobileConnectionInfo> voiceInfo;
   connection->GetVoiceConnectionInfo(aClientId, getter_AddRefs(voiceInfo));
   NS_ENSURE_TRUE_VOID(voiceInfo);
 
@@ -897,6 +902,7 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
   voiceInfo->GetType(type);
   mPhoneType = GetPhoneType(type);
 
+  // Roam
   bool roaming;
   voiceInfo->GetRoaming(&roaming);
   mRoam = (roaming) ? 1 : 0;
@@ -904,7 +910,13 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
   // Service
   nsString regState;
   voiceInfo->GetState(regState);
-  mService = (regState.EqualsLiteral("registered")) ? 1 : 0;
+
+  int service = (regState.EqualsLiteral("registered")) ? 1 : 0;
+  if (service != mService) {
+    // Notify BluetoothRilListener of service change
+    mListener->ServiceChanged(aClientId, service);
+  }
+  mService = service;
 
   // Signal
   JSContext* cx = nsContentUtils::GetSafeJSContext();
@@ -917,7 +929,7 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
   UpdateDeviceCIND();
 
   // Operator name
-  nsCOMPtr<nsIDOMMozMobileNetworkInfo> network;
+  nsCOMPtr<nsIMobileNetworkInfo> network;
   voiceInfo->GetNetwork(getter_AddRefs(network));
   NS_ENSURE_TRUE_VOID(network);
   network->GetLongName(mOperatorName);

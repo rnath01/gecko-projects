@@ -102,6 +102,7 @@ struct Zone : public JS::shadow::Zone,
 {
   private:
     friend bool js::CurrentThreadCanAccessZone(Zone *zone);
+    friend class js::gc::GCRuntime;
 
   public:
     js::Allocator                allocator;
@@ -321,6 +322,7 @@ struct Zone : public JS::shadow::Zone,
 
   private:
     void sweepBreakpoints(js::FreeOp *fop);
+    void sweepCompartments(js::FreeOp *fop, bool keepAtleastOne, bool lastGC);
 
 #ifdef JS_ION
     js::jit::JitZone *jitZone_;
@@ -357,8 +359,8 @@ class ZonesIter {
 
   public:
     ZonesIter(JSRuntime *rt, ZoneSelector selector) {
-        it = rt->zones.begin();
-        end = rt->zones.end();
+        it = rt->gc.zones.begin();
+        end = rt->gc.zones.end();
 
         if (selector == SkipAtoms) {
             JS_ASSERT(rt->isAtomsZone(*it));
@@ -473,6 +475,10 @@ class CompartmentsIterT
 };
 
 typedef CompartmentsIterT<ZonesIter> CompartmentsIter;
+
+/* Return the Zone* of a Value. Asserts if the Value is not a GC thing. */
+Zone *
+ZoneOfValue(const JS::Value &value);
 
 } /* namespace js */
 

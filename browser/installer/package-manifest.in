@@ -344,6 +344,8 @@
 @BINPATH@/components/telemetry.xpt
 
 ; JavaScript components
+@BINPATH@/components/ChromeNotifications.js
+@BINPATH@/components/ChromeNotifications.manifest
 @BINPATH@/components/ConsoleAPI.manifest
 @BINPATH@/components/ConsoleAPIStorage.js
 @BINPATH@/components/BrowserElementParent.manifest
@@ -596,8 +598,15 @@
 #ifdef MOZ_ANGLE_RENDERER
 @BINPATH@/libEGL.dll
 @BINPATH@/libGLESv2.dll
-@BINPATH@/@MOZ_D3DCOMPILER_DLL@
+
+#ifdef MOZ_D3DCOMPILER_VISTA_DLL
+@BINPATH@/@MOZ_D3DCOMPILER_VISTA_DLL@
 #endif
+
+#ifdef MOZ_D3DCOMPILER_XP_DLL
+@BINPATH@/@MOZ_D3DCOMPILER_XP_DLL@
+#endif
+#endif # MOZ_ANGLE_RENDERER
 
 ; [Browser Chrome Files]
 @BINPATH@/browser/chrome.manifest
@@ -764,6 +773,7 @@ bin/libfreebl_32int64_3.so
 #ifdef MOZ_CRASHREPORTER
 @BINPATH@/components/CrashService.manifest
 @BINPATH@/components/CrashService.js
+@BINPATH@/components/toolkit_crashservice.xpt
 #ifdef XP_MACOSX
 @BINPATH@/crashreporter.app/
 #else

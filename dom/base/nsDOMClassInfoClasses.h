@@ -15,7 +15,6 @@ DOMCI_CLASS(CSSCharsetRule)
 DOMCI_CLASS(CSSImportRule)
 DOMCI_CLASS(CSSMediaRule)
 DOMCI_CLASS(CSSNameSpaceRule)
-DOMCI_CLASS(CSSRuleList)
 DOMCI_CLASS(CSSStyleSheet)
 
 // XUL classes
@@ -73,10 +72,6 @@ DOMCI_CLASS(MozMmsMessage)
 DOMCI_CLASS(MozSmsFilter)
 DOMCI_CLASS(MozSmsSegmentInfo)
 DOMCI_CLASS(MozMobileMessageThread)
-
-#ifdef MOZ_B2G_RIL
-DOMCI_CLASS(MozMobileConnection)
-#endif
 
 // @font-face in CSS
 DOMCI_CLASS(CSSFontFaceRule)

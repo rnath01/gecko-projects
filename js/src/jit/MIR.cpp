@@ -230,7 +230,7 @@ MTest::New(TempAllocator &alloc, MDefinition *ins, MBasicBlock *ifTrue, MBasicBl
 }
 
 void
-MTest::infer()
+MTest::cacheOperandMightEmulateUndefined()
 {
     JS_ASSERT(operandMightEmulateUndefined());
 
@@ -292,6 +292,11 @@ MDefinition::dump(FILE *fp) const
     fprintf(fp, " = ");
     printOpcode(fp);
     fprintf(fp, "\n");
+
+    if (isInstruction()) {
+        if (MResumePoint *resume = toInstruction()->resumePoint())
+            resume->dump(fp);
+    }
 }
 
 void
@@ -300,6 +305,7 @@ MDefinition::dump() const
     dump(stderr);
 }
 
+#ifdef DEBUG
 size_t
 MDefinition::useCount() const
 {
@@ -318,6 +324,7 @@ MDefinition::defUseCount() const
             count++;
     return count;
 }
+#endif
 
 bool
 MDefinition::hasOneUse() const
@@ -353,6 +360,20 @@ MDefinition::hasDefUses() const
 {
     for (MUseIterator i(uses_.begin()); i != uses_.end(); i++) {
         if ((*i)->consumer()->isDefinition())
+            return true;
+    }
+
+    return false;
+}
+
+bool
+MDefinition::hasLiveDefUses() const
+{
+    for (MUseIterator i(uses_.begin()); i != uses_.end(); i++) {
+        MNode *ins = (*i)->consumer();
+        if (!ins->isDefinition())
+            continue;
+        if (!ins->toDefinition()->isRecoveredOnBailout())
             return true;
     }
 
@@ -456,6 +477,13 @@ MConstant::NewAsmJS(TempAllocator &alloc, const Value &v, MIRType type)
     return constant;
 }
 
+MConstant *
+MConstant::NewConstraintlessObject(TempAllocator &alloc, JSObject *v)
+{
+    return new(alloc) MConstant(v);
+}
+
+
 types::TemporaryTypeSet *
 jit::MakeSingletonTypeSet(types::CompilerConstraintList *constraints, JSObject *obj)
 {
@@ -480,6 +508,13 @@ MConstant::MConstant(const js::Value &vp, types::CompilerConstraintList *constra
         setResultTypeSet(MakeSingletonTypeSet(constraints, &vp.toObject()));
     }
 
+    setMovable();
+}
+
+MConstant::MConstant(JSObject *obj)
+  : value_(ObjectValue(*obj))
+{
+    setResultType(MIRType_Object);
     setMovable();
 }
 
@@ -556,6 +591,9 @@ MConstant::printOpcode(FILE *fp) const
         break;
       case MIRType_MagicIsConstructing:
         fprintf(fp, "magic is-constructing");
+        break;
+      case MIRType_MagicOptimizedOut:
+        fprintf(fp, "magic optimized-out");
         break;
       default:
         MOZ_ASSUME_UNREACHABLE("unexpected type");
@@ -1604,7 +1642,7 @@ MAdd::fallible() const
 {
     // the add is fallible if range analysis does not say that it is finite, AND
     // either the truncation analysis shows that there are non-truncated uses.
-    if (isTruncated())
+    if (truncateKind() >= IndirectTruncate)
         return false;
     if (range() && range()->hasInt32Bounds())
         return false;
@@ -1615,7 +1653,7 @@ bool
 MSub::fallible() const
 {
     // see comment in MAdd::fallible()
-    if (isTruncated())
+    if (truncateKind() >= IndirectTruncate)
         return false;
     if (range() && range()->hasInt32Bounds())
         return false;
@@ -2157,7 +2195,7 @@ MTypeOf::foldsTo(TempAllocator &alloc, bool useValueNumbers)
 }
 
 void
-MTypeOf::infer()
+MTypeOf::cacheInputMaybeCallableOrEmulatesUndefined()
 {
     JS_ASSERT(inputMaybeCallableOrEmulatesUndefined());
 
@@ -2287,6 +2325,41 @@ MResumePoint::inherit(MBasicBlock *block)
         MDefinition *def = block->getSlot(i);
         setOperand(i, def);
     }
+}
+
+void MResumePoint::dump(FILE *fp) const
+{
+    fprintf(fp, "resumepoint mode=");
+
+    switch (mode()) {
+      case MResumePoint::ResumeAt:
+        fprintf(fp, "At");
+        break;
+      case MResumePoint::ResumeAfter:
+        fprintf(fp, "After");
+        break;
+      case MResumePoint::Outer:
+        fprintf(fp, "Outer");
+        break;
+    }
+
+    if (MResumePoint *c = caller())
+        fprintf(fp, " (caller in block%u)", c->block()->id());
+
+    for (size_t i = 0; i < numOperands(); i++) {
+        fprintf(fp, " ");
+        if (operands_[i].hasProducer())
+            getOperand(i)->printName(fp);
+        else
+            fprintf(fp, "(null)");
+    }
+    fprintf(fp, "\n");
+}
+
+void
+MResumePoint::dump() const
+{
+    dump(stderr);
 }
 
 MDefinition *
@@ -2652,7 +2725,7 @@ MCompare::filtersUndefinedOrNull(bool trueBranch, MDefinition **subject, bool *f
 }
 
 void
-MNot::infer()
+MNot::cacheOperandMightEmulateUndefined()
 {
     JS_ASSERT(operandMightEmulateUndefined());
 
@@ -2706,8 +2779,8 @@ MBeta::printOpcode(FILE *fp) const
 bool
 MNewObject::shouldUseVM() const
 {
-    return templateObject()->hasSingletonType() ||
-           templateObject()->hasDynamicSlots();
+    JSObject *obj = templateObject();
+    return obj->hasSingletonType() || obj->hasDynamicSlots();
 }
 
 bool
@@ -2784,6 +2857,24 @@ MLoadSlot::mightAlias(const MDefinition *store) const
     if (store->isStoreSlot() && store->toStoreSlot()->slot() != slot())
         return false;
     return true;
+}
+
+bool
+MGuardShapePolymorphic::congruentTo(const MDefinition *ins) const
+{
+    if (!ins->isGuardShapePolymorphic())
+        return false;
+
+    const MGuardShapePolymorphic *other = ins->toGuardShapePolymorphic();
+    if (numShapes() != other->numShapes())
+        return false;
+
+    for (size_t i = 0; i < numShapes(); i++) {
+        if (getShape(i) != other->getShape(i))
+            return false;
+    }
+
+    return congruentIfOperandsEqual(ins);
 }
 
 void
@@ -3086,7 +3177,7 @@ jit::DenseNativeElementType(types::CompilerConstraintList *constraints, MDefinit
     return elementType;
 }
 
-static bool
+static BarrierKind
 PropertyReadNeedsTypeBarrier(types::CompilerConstraintList *constraints,
                              types::TypeObjectKey *object, PropertyName *name,
                              types::TypeSet *observed)
@@ -3102,13 +3193,22 @@ PropertyReadNeedsTypeBarrier(types::CompilerConstraintList *constraints,
     if (object->unknownProperties() || observed->empty() ||
         object->clasp()->isProxy())
     {
-        return true;
+        return BarrierKind::TypeSet;
     }
 
     jsid id = name ? NameToId(name) : JSID_VOID;
     types::HeapTypeSetKey property = object->property(id);
-    if (property.maybeTypes() && !TypeSetIncludes(observed, MIRType_Value, property.maybeTypes()))
-        return true;
+    if (property.maybeTypes()) {
+        if (!TypeSetIncludes(observed, MIRType_Value, property.maybeTypes())) {
+            // If all possible objects have been observed, we don't have to
+            // guard on the specific object types.
+            if (property.maybeTypes()->objectsAreSubset(observed)) {
+                property.freeze(constraints);
+                return BarrierKind::TypeTagOnly;
+            }
+            return BarrierKind::TypeSet;
+        }
+    }
 
     // Type information for global objects is not required to reflect the
     // initial 'undefined' value for properties, in particular global
@@ -3118,15 +3218,15 @@ PropertyReadNeedsTypeBarrier(types::CompilerConstraintList *constraints,
         if (name && types::CanHaveEmptyPropertyTypesForOwnProperty(obj) &&
             (!property.maybeTypes() || property.maybeTypes()->empty()))
         {
-            return true;
+            return BarrierKind::TypeSet;
         }
     }
 
     property.freeze(constraints);
-    return false;
+    return BarrierKind::NoBarrier;
 }
 
-bool
+BarrierKind
 jit::PropertyReadNeedsTypeBarrier(JSContext *propertycx,
                                   types::CompilerConstraintList *constraints,
                                   types::TypeObjectKey *object, PropertyName *name,
@@ -3174,45 +3274,55 @@ jit::PropertyReadNeedsTypeBarrier(JSContext *propertycx,
     return PropertyReadNeedsTypeBarrier(constraints, object, name, observed);
 }
 
-bool
+BarrierKind
 jit::PropertyReadNeedsTypeBarrier(JSContext *propertycx,
                                   types::CompilerConstraintList *constraints,
                                   MDefinition *obj, PropertyName *name,
                                   types::TemporaryTypeSet *observed)
 {
     if (observed->unknown())
-        return false;
+        return BarrierKind::NoBarrier;
 
     types::TypeSet *types = obj->resultTypeSet();
     if (!types || types->unknownObject())
-        return true;
+        return BarrierKind::TypeSet;
+
+    BarrierKind res = BarrierKind::NoBarrier;
 
     bool updateObserved = types->getObjectCount() == 1;
     for (size_t i = 0; i < types->getObjectCount(); i++) {
         types::TypeObjectKey *object = types->getObject(i);
         if (object) {
-            if (PropertyReadNeedsTypeBarrier(propertycx, constraints, object, name,
-                                             observed, updateObserved))
-            {
-                return true;
+            BarrierKind kind = PropertyReadNeedsTypeBarrier(propertycx, constraints, object, name,
+                                                            observed, updateObserved);
+            if (kind == BarrierKind::TypeSet)
+                return BarrierKind::TypeSet;
+
+            if (kind == BarrierKind::TypeTagOnly) {
+                MOZ_ASSERT(res == BarrierKind::NoBarrier || res == BarrierKind::TypeTagOnly);
+                res = BarrierKind::TypeTagOnly;
+            } else {
+                MOZ_ASSERT(kind == BarrierKind::NoBarrier);
             }
         }
     }
 
-    return false;
+    return res;
 }
 
-bool
+BarrierKind
 jit::PropertyReadOnPrototypeNeedsTypeBarrier(types::CompilerConstraintList *constraints,
                                              MDefinition *obj, PropertyName *name,
                                              types::TemporaryTypeSet *observed)
 {
     if (observed->unknown())
-        return false;
+        return BarrierKind::NoBarrier;
 
     types::TypeSet *types = obj->resultTypeSet();
     if (!types || types->unknownObject())
-        return true;
+        return BarrierKind::TypeSet;
+
+    BarrierKind res = BarrierKind::NoBarrier;
 
     for (size_t i = 0; i < types->getObjectCount(); i++) {
         types::TypeObjectKey *object = types->getObject(i);
@@ -3220,16 +3330,24 @@ jit::PropertyReadOnPrototypeNeedsTypeBarrier(types::CompilerConstraintList *cons
             continue;
         while (true) {
             if (!object->hasTenuredProto())
-                return true;
+                return BarrierKind::TypeSet;
             if (!object->proto().isObject())
                 break;
             object = types::TypeObjectKey::get(object->proto().toObject());
-            if (PropertyReadNeedsTypeBarrier(constraints, object, name, observed))
-                return true;
+            BarrierKind kind = PropertyReadNeedsTypeBarrier(constraints, object, name, observed);
+            if (kind == BarrierKind::TypeSet)
+                return BarrierKind::TypeSet;
+
+            if (kind == BarrierKind::TypeTagOnly) {
+                MOZ_ASSERT(res == BarrierKind::NoBarrier || res == BarrierKind::TypeTagOnly);
+                res = BarrierKind::TypeTagOnly;
+            } else {
+                MOZ_ASSERT(kind == BarrierKind::NoBarrier);
+            }
         }
     }
 
-    return false;
+    return res;
 }
 
 bool
@@ -3379,7 +3497,13 @@ TryAddTypeBarrierForWrite(TempAllocator &alloc, types::CompilerConstraintList *c
     if (!types)
         return false;
 
-    MInstruction *ins = MMonitorTypes::New(alloc, *pvalue, types);
+    // If all possible objects can be stored without a barrier, we don't have to
+    // guard on the specific object types.
+    BarrierKind kind = BarrierKind::TypeSet;
+    if ((*pvalue)->resultTypeSet() && (*pvalue)->resultTypeSet()->objectsAreSubset(types))
+        kind = BarrierKind::TypeTagOnly;
+
+    MInstruction *ins = MMonitorTypes::New(alloc, *pvalue, types, kind);
     current->add(ins);
     return true;
 }

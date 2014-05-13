@@ -8,6 +8,8 @@
 
 #include "mozilla/DebugOnly.h"
 
+#include "jsprf.h"
+
 #include "jit/IonCode.h"
 #include "js/SliceBudget.h"
 #include "vm/ArgumentsObject.h"
@@ -146,12 +148,27 @@ template <> bool ThingIsPermanentAtom<PropertyName>(PropertyName *name) { return
 
 template<typename T>
 static inline void
-CheckMarkedThing(JSTracer *trc, T *thing)
+CheckMarkedThing(JSTracer *trc, T **thingp)
 {
-#ifdef DEBUG
     JS_ASSERT(trc);
-    JS_ASSERT(thing);
+    JS_ASSERT(thingp);
 
+    T *thing = *thingp;
+
+#ifdef JS_CRASH_DIAGNOSTICS
+    if (uintptr_t(thing) <= ArenaSize || (uintptr_t(thing) & 1) != 0) {
+        char msgbuf[1024];
+        const char *label = trc->tracingName("<unknown>");
+        JS_snprintf(msgbuf, sizeof(msgbuf),
+                    "[crash diagnostics] Marking invalid pointer %p @ %p of type %s, named \"%s\"",
+                    thing, thingp, TraceKindAsAscii(MapTypeToTraceKind<T>::kind), label);
+        MOZ_ReportAssertionFailure(msgbuf, __FILE__, __LINE__);
+        MOZ_CRASH();
+    }
+#endif
+    JS_ASSERT(*thingp);
+
+#ifdef DEBUG
     /* This function uses data that's not available in the nursery. */
     if (IsInsideNursery(trc->runtime(), thing))
         return;
@@ -169,7 +186,7 @@ CheckMarkedThing(JSTracer *trc, T *thing)
 
     DebugOnly<JSRuntime *> rt = trc->runtime();
 
-    JS_ASSERT_IF(IS_GC_MARKING_TRACER(trc) && rt->gcManipulatingDeadZones,
+    JS_ASSERT_IF(IS_GC_MARKING_TRACER(trc) && rt->gc.manipulatingDeadZones,
                  !thing->zone()->scheduledForDestruction);
 
     JS_ASSERT(CurrentThreadCanAccessRuntime(rt));
@@ -181,7 +198,7 @@ CheckMarkedThing(JSTracer *trc, T *thing)
 
     JS_ASSERT(MapTypeToTraceKind<T>::kind == GetGCThingTraceKind(thing));
 
-    JS_ASSERT_IF(rt->gcStrictCompartmentChecking,
+    JS_ASSERT_IF(rt->gc.strictCompartmentChecking,
                  thing->zone()->isCollecting() || rt->isAtomsZone(thing->zone()));
 
     JS_ASSERT_IF(IS_GC_MARKING_TRACER(trc) && AsGCMarker(trc)->getMarkColor() == GRAY,
@@ -199,16 +216,15 @@ CheckMarkedThing(JSTracer *trc, T *thing)
     JS_ASSERT_IF(IsThingPoisoned(thing) && rt->isHeapBusy(),
                  !InFreeList(thing->arenaHeader(), thing));
 #endif
+
 }
 
 template<typename T>
 static void
 MarkInternal(JSTracer *trc, T **thingp)
 {
-    JS_ASSERT(thingp);
+    CheckMarkedThing(trc, thingp);
     T *thing = *thingp;
-
-    CheckMarkedThing(trc, thing);
 
     if (!trc->callback) {
         /*
@@ -247,8 +263,8 @@ MarkInternal(JSTracer *trc, T **thingp)
 
 #define JS_ROOT_MARKING_ASSERT(trc)                                     \
     JS_ASSERT_IF(IS_GC_MARKING_TRACER(trc),                             \
-                 trc->runtime()->gcIncrementalState == NO_INCREMENTAL ||  \
-                 trc->runtime()->gcIncrementalState == MARK_ROOTS);
+                 trc->runtime()->gc.incrementalState == NO_INCREMENTAL ||       \
+                 trc->runtime()->gc.incrementalState == MARK_ROOTS);
 
 namespace js {
 namespace gc {
@@ -263,7 +279,7 @@ MarkUnbarriered(JSTracer *trc, T **thingp, const char *name)
 
 template <typename T>
 static void
-Mark(JSTracer *trc, BarrieredPtr<T> *thing, const char *name)
+Mark(JSTracer *trc, BarrieredBase<T*> *thing, const char *name)
 {
     trc->setTracingName(name);
     MarkInternal(trc, thing->unsafeGet());
@@ -276,7 +292,7 @@ MarkPermanentAtom(JSTracer *trc, JSAtom *atom, const char *name)
 
     JS_ASSERT(atom->isPermanent());
 
-    CheckMarkedThing(trc, atom);
+    CheckMarkedThing(trc, &atom);
 
     if (!trc->callback) {
         // Atoms do not refer to other GC things so don't need to go on the mark stack.
@@ -306,7 +322,7 @@ MarkRoot(JSTracer *trc, T **thingp, const char *name)
 
 template <typename T>
 static void
-MarkRange(JSTracer *trc, size_t len, HeapPtr<T> *vec, const char *name)
+MarkRange(JSTracer *trc, size_t len, HeapPtr<T*> *vec, const char *name)
 {
     for (size_t i = 0; i < len; ++i) {
         if (vec[i].get()) {
@@ -339,7 +355,7 @@ IsMarked(T **thingp)
     JS_ASSERT(thingp);
     JS_ASSERT(*thingp);
 #ifdef JSGC_GENERATIONAL
-    Nursery &nursery = (*thingp)->runtimeFromMainThread()->gcNursery;
+    Nursery &nursery = (*thingp)->runtimeFromMainThread()->gc.nursery;
     if (nursery.isInside(*thingp))
         return nursery.getForwardedPointer(thingp);
 #endif
@@ -364,7 +380,7 @@ IsAboutToBeFinalized(T **thingp)
         return false;
 
 #ifdef JSGC_GENERATIONAL
-    Nursery &nursery = rt->gcNursery;
+    Nursery &nursery = rt->gc.nursery;
     JS_ASSERT_IF(!rt->isHeapMinorCollecting(), !nursery.isInside(thing));
     if (rt->isHeapMinorCollecting()) {
         if (nursery.isInside(thing))
@@ -394,15 +410,15 @@ UpdateIfRelocated(JSRuntime *rt, T **thingp)
 {
     JS_ASSERT(thingp);
 #ifdef JSGC_GENERATIONAL
-    if (*thingp && rt->isHeapMinorCollecting() && rt->gcNursery.isInside(*thingp))
-        rt->gcNursery.getForwardedPointer(thingp);
+    if (*thingp && rt->isHeapMinorCollecting() && rt->gc.nursery.isInside(*thingp))
+        rt->gc.nursery.getForwardedPointer(thingp);
 #endif
     return *thingp;
 }
 
 #define DeclMarkerImpl(base, type)                                                                \
 void                                                                                              \
-Mark##base(JSTracer *trc, BarrieredPtr<type> *thing, const char *name)                            \
+Mark##base(JSTracer *trc, BarrieredBase<type*> *thing, const char *name)                          \
 {                                                                                                 \
     Mark<type>(trc, thing, name);                                                                 \
 }                                                                                                 \
@@ -419,13 +435,13 @@ Mark##base##Unbarriered(JSTracer *trc, type **thingp, const char *name)         
     MarkUnbarriered<type>(trc, thingp, name);                                                     \
 }                                                                                                 \
                                                                                                   \
-/* Explicitly instantiate MarkUnbarriered<type>. It is referenced from */                         \
+/* Explicitly instantiate MarkUnbarriered<type*>. It is referenced from */                        \
 /* other translation units and the instantiation might otherwise get */                           \
 /* inlined away. */                                                                               \
 template void MarkUnbarriered<type>(JSTracer *, type **, const char *);                           \
                                                                                                   \
 void                                                                                              \
-Mark##base##Range(JSTracer *trc, size_t len, HeapPtr<type> *vec, const char *name)                \
+Mark##base##Range(JSTracer *trc, size_t len, HeapPtr<type*> *vec, const char *name)               \
 {                                                                                                 \
     MarkRange<type>(trc, len, vec, name);                                                         \
 }                                                                                                 \
@@ -443,7 +459,7 @@ Is##base##Marked(type **thingp)                                                 
 }                                                                                                 \
                                                                                                   \
 bool                                                                                              \
-Is##base##Marked(BarrieredPtr<type> *thingp)                                                      \
+Is##base##Marked(BarrieredBase<type*> *thingp)                                                    \
 {                                                                                                 \
     return IsMarked<type>(thingp->unsafeGet());                                                   \
 }                                                                                                 \
@@ -455,13 +471,13 @@ Is##base##AboutToBeFinalized(type **thingp)                                     
 }                                                                                                 \
                                                                                                   \
 bool                                                                                              \
-Is##base##AboutToBeFinalized(BarrieredPtr<type> *thingp)                                          \
+Is##base##AboutToBeFinalized(BarrieredBase<type*> *thingp)                                        \
 {                                                                                                 \
     return IsAboutToBeFinalized<type>(thingp->unsafeGet());                                       \
 }                                                                                                 \
                                                                                                   \
 type *                                                                                            \
-Update##base##IfRelocated(JSRuntime *rt, BarrieredPtr<type> *thingp)                              \
+Update##base##IfRelocated(JSRuntime *rt, BarrieredBase<type*> *thingp)                            \
 {                                                                                                 \
     return UpdateIfRelocated<type>(rt, thingp->unsafeGet());                                      \
 }                                                                                                 \
@@ -581,7 +597,7 @@ MarkIdInternal(JSTracer *trc, jsid *id)
 }
 
 void
-gc::MarkId(JSTracer *trc, BarrieredId *id, const char *name)
+gc::MarkId(JSTracer *trc, BarrieredBase<jsid> *id, const char *name)
 {
     trc->setTracingName(name);
     MarkIdInternal(trc, id->unsafeGet());
@@ -642,7 +658,7 @@ MarkValueInternal(JSTracer *trc, Value *v)
 }
 
 void
-gc::MarkValue(JSTracer *trc, BarrieredValue *v, const char *name)
+gc::MarkValue(JSTracer *trc, BarrieredBase<Value> *v, const char *name)
 {
     trc->setTracingName(name);
     MarkValueInternal(trc, v->unsafeGet());
@@ -673,7 +689,7 @@ gc::MarkTypeRoot(JSTracer *trc, types::Type *v, const char *name)
 }
 
 void
-gc::MarkValueRange(JSTracer *trc, size_t len, BarrieredValue *vec, const char *name)
+gc::MarkValueRange(JSTracer *trc, size_t len, BarrieredBase<Value> *vec, const char *name)
 {
     for (size_t i = 0; i < len; ++i) {
         trc->setTracingIndex(name, i);
@@ -784,7 +800,7 @@ ShouldMarkCrossCompartment(JSTracer *trc, JSObject *src, Cell *cell)
          */
         if (cell->isMarked(GRAY)) {
             JS_ASSERT(!zone->isCollecting());
-            trc->runtime()->gcFoundBlackGrayEdges = true;
+            trc->runtime()->gc.foundBlackGrayEdges = true;
         }
         return zone->isGCMarking();
     } else {
@@ -825,13 +841,6 @@ gc::MarkCrossCompartmentSlot(JSTracer *trc, JSObject *src, HeapSlot *dst, const 
 }
 
 /*** Special Marking ***/
-
-void
-gc::MarkObject(JSTracer *trc, HeapPtr<GlobalObject, JSScript *> *thingp, const char *name)
-{
-    trc->setTracingName(name);
-    MarkInternal(trc, thingp->unsafeGet());
-}
 
 void
 gc::MarkValueUnbarriered(JSTracer *trc, Value *v, const char *name)
@@ -982,7 +991,7 @@ ScanShape(GCMarker *gcmarker, Shape *shape)
   restart:
     PushMarkStack(gcmarker, shape->base());
 
-    const BarrieredId &id = shape->propidRef();
+    const BarrieredBase<jsid> &id = shape->propidRef();
     if (JSID_IS_STRING(id))
         PushMarkStack(gcmarker, JSID_TO_STRING(id));
     else if (MOZ_UNLIKELY(JSID_IS_OBJECT(id)))
@@ -1295,7 +1304,7 @@ template<typename T>
 static void
 PushArenaTyped(GCMarker *gcmarker, ArenaHeader *aheader)
 {
-    for (CellIterUnderGC i(aheader); !i.done(); i.next())
+    for (ArenaCellIterUnderGC i(aheader); !i.done(); i.next())
         PushMarkStack(gcmarker, i.get<T>());
 }
 
@@ -1547,7 +1556,7 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
             // if the gloal has no custom trace hook of it's own, or has been moved to a different
             // compartment, and so can't have one.
             JS_ASSERT_IF(runtime()->gcMode() == JSGC_MODE_INCREMENTAL &&
-                         runtime()->gcIncrementalEnabled &&
+                         runtime()->gc.incrementalEnabled &&
                          !(clasp->trace == JS_GlobalObjectTraceHook &&
                            (!obj->compartment()->options().getTrace() ||
                             !obj->isOwnGlobal())),
@@ -1593,10 +1602,10 @@ GCMarker::drainMarkStack(SliceBudget &budget)
     struct AutoCheckCompartment {
         JSRuntime *runtime;
         AutoCheckCompartment(JSRuntime *rt) : runtime(rt) {
-            JS_ASSERT(!rt->gcStrictCompartmentChecking);
-            runtime->gcStrictCompartmentChecking = true;
+            JS_ASSERT(!rt->gc.strictCompartmentChecking);
+            runtime->gc.strictCompartmentChecking = true;
         }
-        ~AutoCheckCompartment() { runtime->gcStrictCompartmentChecking = false; }
+        ~AutoCheckCompartment() { runtime->gc.strictCompartmentChecking = false; }
     } acc(rt);
 #endif
 
@@ -1746,7 +1755,7 @@ UnmarkGrayChildren(JSTracer *trc, void **thingp, JSGCTraceKind kind)
          * If we run out of stack, we take a more drastic measure: require that
          * we GC again before the next CC.
          */
-        trc->runtime()->gcGrayBitsValid = false;
+        trc->runtime()->gc.grayBitsValid = false;
         return;
     }
 

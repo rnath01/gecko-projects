@@ -34,6 +34,7 @@ void SetGCZeal(JSRuntime *, uint8_t, uint32_t);
 
 namespace gc {
 class Cell;
+class Collector;
 class MinorCollectionTracer;
 } /* namespace gc */
 
@@ -150,6 +151,27 @@ class Nursery
         return ((JS::shadow::Runtime *)runtime_)->gcNurseryEnd_;
     }
 
+#ifdef JS_GC_ZEAL
+    /*
+     * In debug and zeal builds, these bytes indicate the state of an unused
+     * segment of nursery-allocated memory.
+     */
+    void enterZealMode() {
+        if (isEnabled())
+            numActiveChunks_ = NumNurseryChunks;
+    }
+    void leaveZealMode() {
+        if (isEnabled()) {
+            JS_ASSERT(isEmpty());
+            setCurrentChunk(0);
+            currentStart_ = start();
+        }
+    }
+#else
+    void enterZealMode() {}
+    void leaveZealMode() {}
+#endif
+
   private:
     /*
      * The start and end pointers are stored under the runtime so that we can
@@ -203,6 +225,7 @@ class Nursery
 
     MOZ_ALWAYS_INLINE void initChunk(int chunkno) {
         NurseryChunkLayout &c = chunk(chunkno);
+        c.trailer.storeBuffer = JS::shadow::Runtime::asShadowRuntime(runtime())->gcStoreBufferPtr();
         c.trailer.location = gc::ChunkLocationNursery;
         c.trailer.runtime = runtime();
     }
@@ -216,19 +239,7 @@ class Nursery
         initChunk(chunkno);
     }
 
-    void updateDecommittedRegion() {
-#ifndef JS_GC_ZEAL
-        if (numActiveChunks_ < NumNurseryChunks) {
-            // Bug 994054: madvise on MacOS is too slow to make this
-            //             optimization worthwhile.
-# ifndef XP_MACOSX
-            uintptr_t decommitStart = chunk(numActiveChunks_).start();
-            JS_ASSERT(decommitStart == AlignBytes(decommitStart, 1 << 20));
-            gc::MarkPagesUnused(runtime(), (void *)decommitStart, heapEnd() - decommitStart);
-# endif
-        }
-#endif
-    }
+    void updateDecommittedRegion();
 
     MOZ_ALWAYS_INLINE uintptr_t allocationEnd() const {
         JS_ASSERT(numActiveChunks_ > 0);
@@ -300,30 +311,8 @@ class Nursery
 
     static void MinorGCCallback(JSTracer *trc, void **thingp, JSGCTraceKind kind);
 
-#ifdef JS_GC_ZEAL
-    /*
-     * In debug and zeal builds, these bytes indicate the state of an unused
-     * segment of nursery-allocated memory.
-     */
-    void enterZealMode() {
-        if (isEnabled())
-            numActiveChunks_ = NumNurseryChunks;
-    }
-    void leaveZealMode() {
-        if (isEnabled()) {
-            JS_ASSERT(isEmpty());
-            setCurrentChunk(0);
-            currentStart_ = start();
-        }
-    }
-#else
-    void enterZealMode() {}
-    void leaveZealMode() {}
-#endif
-
     friend class gc::MinorCollectionTracer;
     friend class jit::MacroAssembler;
-    friend void SetGCZeal(JSRuntime *, uint8_t, uint32_t);
 };
 
 } /* namespace js */

@@ -20,7 +20,7 @@
 #include "mozilla/gfx/Rect.h"           // for Rect, IntRect
 #include "mozilla/gfx/Types.h"          // for Float, SurfaceFormat, etc
 #include "mozilla/layers/Compositor.h"  // for SurfaceInitMode, Compositor, etc
-#include "mozilla/layers/CompositorTypes.h"  // for MaskType::NumMaskTypes, etc
+#include "mozilla/layers/CompositorTypes.h"  // for MaskType::MaskType::NumMaskTypes, etc
 #include "mozilla/layers/LayersTypes.h"
 #include "nsAutoPtr.h"                  // for nsRefPtr, nsAutoPtr
 #include "nsCOMPtr.h"                   // for already_AddRefed
@@ -154,7 +154,9 @@ protected:
   nsTArray<GLuint> mUnusedTextures;
 };
 
-class CompositorOGL : public Compositor
+// If you want to make this class not MOZ_FINAL, first remove calls to virtual
+// methods (Destroy) that are made in the destructor.
+class CompositorOGL MOZ_FINAL : public Compositor
 {
   typedef mozilla::gl::GLContext GLContext;
 
@@ -168,7 +170,7 @@ public:
   virtual ~CompositorOGL();
 
   virtual TemporaryRef<DataTextureSource>
-  CreateDataTextureSource(TextureFlags aFlags = 0) MOZ_OVERRIDE;
+  CreateDataTextureSource(TextureFlags aFlags = TextureFlags::NO_FLAGS) MOZ_OVERRIDE;
 
   virtual bool Initialize() MOZ_OVERRIDE;
 
@@ -176,11 +178,15 @@ public:
 
   virtual TextureFactoryIdentifier GetTextureFactoryIdentifier() MOZ_OVERRIDE
   {
-    return TextureFactoryIdentifier(LayersBackend::LAYERS_OPENGL,
-                                    XRE_GetProcessType(),
-                                    GetMaxTextureSize(),
-                                    mFBOTextureTarget == LOCAL_GL_TEXTURE_2D,
-                                    SupportsPartialTextureUpdate());
+    TextureFactoryIdentifier result =
+      TextureFactoryIdentifier(LayersBackend::LAYERS_OPENGL,
+                               XRE_GetProcessType(),
+                               GetMaxTextureSize(),
+                               mFBOTextureTarget == LOCAL_GL_TEXTURE_2D,
+                               SupportsPartialTextureUpdate());
+    result.mSupportedBlendModes += gfx::CompositionOp::OP_SCREEN;
+    result.mSupportedBlendModes += gfx::CompositionOp::OP_MULTIPLY;
+    return result;
   }
 
   virtual TemporaryRef<CompositingRenderTarget>
@@ -358,7 +364,9 @@ private:
                           gfx::Rect *aClipRectOut = nullptr,
                           gfx::Rect *aRenderBoundsOut = nullptr) MOZ_OVERRIDE;
 
-  ShaderConfigOGL GetShaderConfigFor(Effect *aEffect, MaskType aMask = MaskNone) const;
+  ShaderConfigOGL GetShaderConfigFor(Effect *aEffect,
+                                     MaskType aMask = MaskType::MaskNone,
+                                     gfx::CompositionOp aOp = gfx::CompositionOp::OP_OVER) const;
   ShaderProgramOGL* GetShaderProgramFor(const ShaderConfigOGL &aConfig);
 
   /**

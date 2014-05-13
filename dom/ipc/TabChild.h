@@ -205,7 +205,6 @@ protected:
 
     nsEventStatus DispatchWidgetEvent(WidgetGUIEvent& event);
 
-    bool HasValidInnerSize();
     void InitializeRootMetrics();
 
     mozilla::layers::FrameMetrics ProcessUpdateFrame(const mozilla::layers::FrameMetrics& aFrameMetrics);
@@ -221,7 +220,8 @@ protected:
     mozilla::layout::ScrollingBehavior mScrolling;
 };
 
-class TabChild : public PBrowserChild,
+class TabChild : public TabChildBase,
+                 public PBrowserChild,
                  public nsIWebBrowserChrome2,
                  public nsIEmbeddingSiteWindow,
                  public nsIWebBrowserChromeFocus,
@@ -233,8 +233,7 @@ class TabChild : public PBrowserChild,
                  public nsITabChild,
                  public nsIObserver,
                  public TabContext,
-                 public nsITooltipListener,
-                 public TabChildBase
+                 public nsITooltipListener
 {
     typedef mozilla::dom::ClonedMessageData ClonedMessageData;
     typedef mozilla::layout::RenderFrameChild RenderFrameChild;
@@ -257,7 +256,7 @@ public:
 
     bool IsRootContentDocument();
 
-    NS_DECL_ISUPPORTS
+    NS_DECL_ISUPPORTS_INHERITED
     NS_DECL_NSIWEBBROWSERCHROME
     NS_DECL_NSIWEBBROWSERCHROME2
     NS_DECL_NSIEMBEDDINGSITEWINDOW
@@ -458,7 +457,10 @@ public:
     }
 
 protected:
-    virtual PRenderFrameChild* AllocPRenderFrameChild() MOZ_OVERRIDE;
+    virtual PRenderFrameChild* AllocPRenderFrameChild(ScrollingBehavior* aScrolling,
+                                                      TextureFactoryIdentifier* aTextureFactoryIdentifier,
+                                                      uint64_t* aLayersId,
+                                                      bool* aSuccess) MOZ_OVERRIDE;
     virtual bool DeallocPRenderFrameChild(PRenderFrameChild* aFrame) MOZ_OVERRIDE;
     virtual bool RecvDestroy() MOZ_OVERRIDE;
     virtual bool RecvSetUpdateHitRegion(const bool& aEnabled) MOZ_OVERRIDE;
@@ -522,6 +524,8 @@ private:
                               bool* aWindowIsNew,
                               nsIDOMWindow** aReturn);
 
+    bool HasValidInnerSize();
+
     class CachedFileDescriptorInfo;
     class CachedFileDescriptorCallbackRunnable;
 
@@ -560,6 +564,7 @@ private:
 
     bool mIgnoreKeyPressEvent;
     nsRefPtr<ActiveElementManager> mActiveElementManager;
+    bool mHasValidInnerSize;
 
     DISALLOW_EVIL_CONSTRUCTORS(TabChild);
 };

@@ -193,7 +193,7 @@ ResolveInterpretedFunctionPrototype(JSContext *cx, HandleObject obj)
 {
 #ifdef DEBUG
     JSFunction *fun = &obj->as<JSFunction>();
-    JS_ASSERT(fun->isInterpreted());
+    JS_ASSERT(fun->isInterpreted() || fun->isAsmJSNative());
     JS_ASSERT(!fun->isFunctionPrototype());
 #endif
 
@@ -576,7 +576,6 @@ JSFunction::trace(JSTracer *trc)
             // - they are not in the self-hosting compartment
             // - they aren't generators
             // - they don't have JIT code attached
-            // - they haven't ever been inlined
             // - they don't have child functions
             // - they have information for un-lazifying them again later
             // This information can either be a LazyScript, or the name of a
@@ -1057,7 +1056,7 @@ JSFunction::initBoundFunction(JSContext *cx, HandleValue thisArg,
     return true;
 }
 
-inline const js::Value &
+const js::Value &
 JSFunction::getBoundFunctionThis() const
 {
     JS_ASSERT(isBoundFunction());
@@ -1065,7 +1064,7 @@ JSFunction::getBoundFunctionThis() const
     return getSlot(JSSLOT_BOUND_FUNCTION_THIS);
 }
 
-inline const js::Value &
+const js::Value &
 JSFunction::getBoundFunctionArgument(unsigned which) const
 {
     JS_ASSERT(isBoundFunction());
@@ -1074,7 +1073,7 @@ JSFunction::getBoundFunctionArgument(unsigned which) const
     return getSlot(BOUND_FUNCTION_RESERVED_SLOTS + which);
 }
 
-inline size_t
+size_t
 JSFunction::getBoundFunctionArgumentCount() const
 {
     JS_ASSERT(isBoundFunction());

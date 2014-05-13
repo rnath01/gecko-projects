@@ -323,6 +323,35 @@ struct ParamTraits<mozilla::gfx::ColorSpace>
              mozilla::gfx::ColorSpace::Max>
 {};
 
+template <>
+struct ParamTraits<mozilla::layers::TextureFlags>
+  : public BitFlagsTypedEnumSerializer<
+            mozilla::layers::TextureFlags,
+            mozilla::layers::TextureFlags::ALL_BITS>
+{};
+
+template <>
+struct ParamTraits<mozilla::layers::TextureIdentifier>
+  : public ContiguousTypedEnumSerializer<
+             mozilla::layers::TextureIdentifier,
+             mozilla::layers::TextureIdentifier::Front,
+             mozilla::layers::TextureIdentifier::HighBound>
+{};
+
+template <>
+struct ParamTraits<mozilla::layers::DeprecatedTextureHostFlags>
+  : public BitFlagsTypedEnumSerializer<
+             mozilla::layers::DeprecatedTextureHostFlags,
+             mozilla::layers::DeprecatedTextureHostFlags::ALL_BITS>
+{};
+
+template <>
+struct ParamTraits<mozilla::layers::DiagnosticTypes>
+  : public BitFlagsTypedEnumSerializer<
+             mozilla::layers::DiagnosticTypes,
+             mozilla::layers::DiagnosticTypes::ALL_BITS>
+{};
+
 /*
 template <>
 struct ParamTraits<mozilla::PixelFormat>
@@ -773,6 +802,7 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
   static void Write(Message* aMsg, const paramType& aParam)
   {
     WriteParam(aMsg, aParam.mParentBackend);
+    WriteParam(aMsg, aParam.mSupportedBlendModes.serialize());
     WriteParam(aMsg, aParam.mMaxTextureSize);
     WriteParam(aMsg, aParam.mSupportsTextureBlitting);
     WriteParam(aMsg, aParam.mSupportsPartialUploads);
@@ -780,10 +810,14 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
 
   static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
   {
-    return ReadParam(aMsg, aIter, &aResult->mParentBackend) &&
-           ReadParam(aMsg, aIter, &aResult->mMaxTextureSize) &&
-           ReadParam(aMsg, aIter, &aResult->mSupportsTextureBlitting) &&
-           ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads);
+    uint32_t supportedBlendModes = 0;
+    bool result = ReadParam(aMsg, aIter, &aResult->mParentBackend) &&
+                  ReadParam(aMsg, aIter, &supportedBlendModes) &&
+                  ReadParam(aMsg, aIter, &aResult->mMaxTextureSize) &&
+                  ReadParam(aMsg, aIter, &aResult->mSupportsTextureBlitting) &&
+                  ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads);
+    aResult->mSupportedBlendModes.deserialize(supportedBlendModes);
+    return result;
   }
 };
 
@@ -809,10 +843,10 @@ struct ParamTraits<mozilla::layers::TextureInfo>
 
 template <>
 struct ParamTraits<mozilla::layers::CompositableType>
-  : public ContiguousEnumSerializer<
+  : public ContiguousTypedEnumSerializer<
              mozilla::layers::CompositableType,
-             mozilla::layers::BUFFER_UNKNOWN,
-             mozilla::layers::BUFFER_COUNT>
+             mozilla::layers::CompositableType::BUFFER_UNKNOWN,
+             mozilla::layers::CompositableType::BUFFER_COUNT>
 {};
 
 template <>

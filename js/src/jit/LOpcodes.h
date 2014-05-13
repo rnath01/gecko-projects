@@ -26,7 +26,6 @@
     _(NewArray)                     \
     _(ArraySplice)                  \
     _(NewObject)                    \
-    _(NewSlots)                     \
     _(NewDeclEnvObject)             \
     _(NewCallObject)                \
     _(NewSingletonCallObject)       \
@@ -174,6 +173,7 @@
     _(StoreSlotV)                   \
     _(StoreSlotT)                   \
     _(GuardShape)                   \
+    _(GuardShapePolymorphic)        \
     _(GuardObjectType)              \
     _(GuardObjectIdentity)          \
     _(GuardClass)                   \

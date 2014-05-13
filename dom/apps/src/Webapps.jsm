@@ -71,11 +71,20 @@ XPCOMUtils.defineLazyGetter(this, "libcutils", function() {
 });
 #endif
 
+#ifdef MOZ_WIDGET_ANDROID
+// On Android, define the "debug" function as a binding of the "d" function
+// from the AndroidLog module so it gets the "debug" priority and a log tag.
+// We always report debug messages on Android because it's hard to use a debug
+// build on Android and unnecessary to restrict reporting, per bug 1003469.
+let debug = Cu.import("resource://gre/modules/AndroidLog.jsm", {})
+              .AndroidLog.d.bind(null, "Webapps");
+#else
 function debug(aMsg) {
 #ifdef DEBUG
   dump("-*- Webapps.jsm : " + aMsg + "\n");
 #endif
 }
+#endif
 
 function getNSPRErrorCode(err) {
   return -1 * ((err) & 0xffff);
@@ -2244,8 +2253,7 @@ this.DOMApplicationRegistry = {
   queuedDownload: {},
   queuedPackageDownload: {},
 
-onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
-                                                  aDontNeedNetwork) {
+  onInstallSuccessAck: function(aManifestURL, aDontNeedNetwork) {
     // If we are offline, register to run when we'll be online.
     if ((Services.io.offline) && !aDontNeedNetwork) {
       let onlineWrapper = {
@@ -2345,7 +2353,7 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
 
     let dir = this._getAppDir(aId).path;
     let manFile = OS.Path.join(dir, manifestName);
-    this._writeFile(manFile, JSON.stringify(aJsonManifest));
+    return this._writeFile(manFile, JSON.stringify(aJsonManifest));
   },
 
   // Add an app that is already installed to the registry.
@@ -2418,7 +2426,7 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
     });
   }),
 
-  confirmInstall: function(aData, aProfileDir, aInstallSuccessCallback) {
+  confirmInstall: Task.async(function*(aData, aProfileDir, aInstallSuccessCallback) {
     debug("confirmInstall");
 
     let origin = Services.io.newURI(aData.app.origin, null, null);
@@ -2443,7 +2451,7 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
     let app = this._setupApp(aData, id);
 
     let jsonManifest = aData.isPackage ? app.updateManifest : app.manifest;
-    this._writeManifestFile(id, aData.isPackage, jsonManifest);
+    yield this._writeManifestFile(id, aData.isPackage, jsonManifest);
 
     debug("app.origin: " + app.origin);
     let manifest = new ManifestHelper(jsonManifest, app.origin);
@@ -2477,42 +2485,15 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
       aData.app[prop] = appObject[prop];
     }
 
+    let dontNeedNetwork = false;
+
     if (manifest.appcache_path) {
       this.queuedDownload[app.manifestURL] = {
         manifest: manifest,
         app: appObject,
         profileDir: aProfileDir
       }
-    }
-
-    // We notify about the successful installation via mgmt.oninstall and the
-    // corresponging DOMRequest.onsuccess event as soon as the app is properly
-    // saved in the registry.
-    this._saveApps().then(() => {
-      this.broadcastMessage("Webapps:AddApp", { id: id, app: appObject });
-      if (aData.isPackage && aData.autoInstall) {
-        // Skip directly to onInstallSuccessAck, since there isn't
-        // a WebappsRegistry to receive Webapps:Install:Return:OK and respond
-        // Webapps:Install:Return:Ack when an app is being auto-installed.
-        this.onInstallSuccessAck(app.manifestURL);
-      } else {
-        // Broadcast Webapps:Install:Return:OK so the WebappsRegistry can notify
-        // the installing page about the successful install, after which it'll
-        // respond Webapps:Install:Return:Ack, which calls onInstallSuccessAck.
-        this.broadcastMessage("Webapps:Install:Return:OK", aData);
-      }
-      if (!aData.isPackage) {
-        this.updateAppHandlers(null, app.manifest, app);
-        if (aInstallSuccessCallback) {
-          aInstallSuccessCallback(app.manifest);
-        }
-      }
-      Services.obs.notifyObservers(null, "webapps-installed",
-        JSON.stringify({ manifestURL: app.manifestURL }));
-    });
-
-    let dontNeedNetwork = false;
-    if (manifest.package_path) {
+    } else if (manifest.package_path) {
       // If it is a local app then it must been installed from a local file
       // instead of web.
 #ifdef MOZ_ANDROID_SYNTHAPKS
@@ -2537,12 +2518,40 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
       };
     }
 
+    // We notify about the successful installation via mgmt.oninstall and the
+    // corresponding DOMRequest.onsuccess event as soon as the app is properly
+    // saved in the registry.
+    yield this._saveApps();
+
+    this.broadcastMessage("Webapps:AddApp", { id: id, app: appObject });
+    if (aData.isPackage && aData.autoInstall) {
+      // Skip directly to onInstallSuccessAck, since there isn't
+      // a WebappsRegistry to receive Webapps:Install:Return:OK and respond
+      // Webapps:Install:Return:Ack when an app is being auto-installed.
+      this.onInstallSuccessAck(app.manifestURL);
+    } else {
+      // Broadcast Webapps:Install:Return:OK so the WebappsRegistry can notify
+      // the installing page about the successful install, after which it'll
+      // respond Webapps:Install:Return:Ack, which calls onInstallSuccessAck.
+      this.broadcastMessage("Webapps:Install:Return:OK", aData);
+    }
+
+    if (!aData.isPackage) {
+      this.updateAppHandlers(null, app.manifest, app);
+      if (aInstallSuccessCallback) {
+        aInstallSuccessCallback(app.manifest);
+      }
+    }
+
+    Services.obs.notifyObservers(null, "webapps-installed",
+      JSON.stringify({ manifestURL: app.manifestURL }));
+
     if (aData.forceSuccessAck) {
       // If it's a local install, there's no content process so just
       // ack the install.
       this.onInstallSuccessAck(app.manifestURL, dontNeedNetwork);
     }
-  },
+  }),
 
 /**
    * Install the package after successfully downloading it
@@ -3104,7 +3113,10 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
         throw "CERTDB_ERROR";
       }
 
-      let [result, zipReader] = yield this._openSignedPackage(aZipFile, certDb);
+      let [result, zipReader] = yield this._openSignedPackage(aApp.installOrigin,
+                                                              aApp.manifestURL,
+                                                              aZipFile,
+                                                              certDb);
 
       // We cannot really know if the system date is correct or
       // not. What we can know is if it's after the build date or not,
@@ -3147,11 +3159,39 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
     }).bind(this));
   },
 
-  _openSignedPackage: function(aZipFile, aCertDb) {
+  _openSignedPackage: function(aInstallOrigin, aManifestURL, aZipFile, aCertDb) {
     let deferred = Promise.defer();
 
+    let root = TrustedRootCertificate.index;
+
+    let useReviewerCerts = false;
+    try {
+      useReviewerCerts = Services.prefs.
+                           getBoolPref("dom.mozApps.use_reviewer_certs");
+    } catch (ex) { }
+
+    // We'll use the reviewer and dev certificates only if the pref is set to
+    // true.
+    if (useReviewerCerts) {
+      let manifestPath = Services.io.newURI(aManifestURL, null, null).path;
+
+      switch (aInstallOrigin) {
+        case "https://marketplace.firefox.com":
+          root = manifestPath.startsWith("/reviewers/")
+               ? Ci.nsIX509CertDB.AppMarketplaceProdReviewersRoot
+               : Ci.nsIX509CertDB.AppMarketplaceProdPublicRoot;
+          break;
+
+        case "https://marketplace-dev.allizom.org":
+          root = manifestPath.startsWith("/reviewers/")
+               ? Ci.nsIX509CertDB.AppMarketplaceDevReviewersRoot
+               : Ci.nsIX509CertDB.AppMarketplaceDevPublicRoot;
+          break;
+      }
+    }
+
     aCertDb.openSignedAppFileAsync(
-       TrustedRootCertificate.index, aZipFile,
+       root, aZipFile,
        function(aRv, aZipReader) {
          deferred.resolve([aRv, aZipReader]);
        }
@@ -4021,10 +4061,10 @@ AppcacheObserver.prototype = {
       app.downloading = false;
       DOMApplicationRegistry.broadcastMessage("Webapps:UpdateState", {
         app: app,
+        error: aError,
         manifestURL: app.manifestURL
       });
       DOMApplicationRegistry.broadcastMessage("Webapps:FireEvent", {
-        error: aError,
         eventType: "downloaderror",
         manifestURL: app.manifestURL
       });

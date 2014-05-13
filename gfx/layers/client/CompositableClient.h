@@ -14,12 +14,12 @@
 #include "mozilla/gfx/Types.h"          // for SurfaceFormat
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/LayersTypes.h"  // for LayersBackend
-#include "mozilla/layers/PCompositableChild.h"  // for PCompositableChild
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 
 namespace mozilla {
 namespace layers {
 
+class AsyncTransactionTracker;
 class CompositableClient;
 class TextureClient;
 class BufferTextureClient;
@@ -28,7 +28,7 @@ class CompositableForwarder;
 class CompositableChild;
 class SurfaceDescriptor;
 class TextureClientData;
-
+class PCompositableChild;
 /**
  * CompositableClient manages the texture-specific logic for composite layers,
  * independently of the layer. It is the content side of a CompositableClient/
@@ -75,7 +75,7 @@ protected:
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(CompositableClient)
 
-  CompositableClient(CompositableForwarder* aForwarder, TextureFlags aFlags = 0);
+  CompositableClient(CompositableForwarder* aForwarder, TextureFlags aFlags = TextureFlags::NO_FLAGS);
 
   virtual TextureInfo GetTextureInfo() const = 0;
 
@@ -83,7 +83,7 @@ public:
 
   TemporaryRef<BufferTextureClient>
   CreateBufferTextureClient(gfx::SurfaceFormat aFormat,
-                            TextureFlags aFlags = TEXTURE_FLAGS_DEFAULT,
+                            TextureFlags aFlags = TextureFlags::DEFAULT,
                             gfx::BackendType aMoz2dBackend = gfx::BackendType::NONE);
 
   TemporaryRef<TextureClient>
@@ -161,6 +161,10 @@ public:
   static bool DestroyIPDLActor(PCompositableChild* actor);
 
   void InitIPDLActor(PCompositableChild* aActor, uint64_t aAsyncID = 0);
+
+  static void TransactionCompleteted(PCompositableChild* aActor, uint64_t aTransactionId);
+
+  static void HoldUntilComplete(PCompositableChild* aActor, AsyncTransactionTracker* aTracker);
 
 protected:
   CompositableChild* mCompositableChild;

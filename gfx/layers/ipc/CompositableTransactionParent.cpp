@@ -16,6 +16,7 @@
 #include "mozilla/RefPtr.h"             // for RefPtr
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/ContentHost.h"  // for ContentHostBase
+#include "mozilla/layers/SharedBufferManagerParent.h"
 #include "mozilla/layers/LayerManagerComposite.h"
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor
 #include "mozilla/layers/LayersTypes.h"  // for MOZ_LAYERS_LOG
@@ -23,6 +24,7 @@
 #include "mozilla/layers/TextureHostOGL.h"  // for TextureHostOGL
 #include "mozilla/layers/ThebesLayerComposite.h"
 #include "mozilla/mozalloc.h"           // for operator delete
+#include "mozilla/unused.h"
 #include "nsDebug.h"                    // for NS_WARNING, NS_ASSERTION
 #include "nsRegion.h"                   // for nsIntRegion
 
@@ -159,6 +161,21 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
       compositable->RemoveTextureHost(tex);
       // return texure data to client if necessary
       ReturnTextureDataIfNecessary(compositable, replyv, op.compositableParent());
+      break;
+    }
+    case CompositableOperation::TOpRemoveTextureAsync: {
+      const OpRemoveTextureAsync& op = aEdit.get_OpRemoveTextureAsync();
+      CompositableHost* compositable = AsCompositable(op);
+      RefPtr<TextureHost> tex = TextureHost::AsTextureHost(op.textureParent());
+
+      MOZ_ASSERT(tex.get());
+      compositable->RemoveTextureHost(tex);
+      // send FenceHandle if present.
+      TextureHost::SendFenceHandleIfPresent(op.textureParent());
+
+      ReplyRemoveTexture(OpReplyRemoveTexture(op.transactionId(),
+                                              op.compositableParent(), nullptr,
+                                              tex->GetIPDLActor(), nullptr));
       break;
     }
     case CompositableOperation::TOpUseTexture: {

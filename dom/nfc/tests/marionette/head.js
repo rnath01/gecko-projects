@@ -3,6 +3,10 @@
 
 let pendingEmulatorCmdCount = 0;
 
+let Promise =
+  SpecialPowers.Cu.import("resource://gre/modules/Promise.jsm").Promise;
+let nfc = window.navigator.mozNfc;
+
 SpecialPowers.addPermission("nfc-manager", true, document);
 
 /**
@@ -35,7 +39,6 @@ let emulator = (function() {
 function toggleNFC(enabled, callback) {
   isnot(callback, null);
 
-  let nfc = window.navigator.mozNfc;
   let req;
   if (enabled) {
     req = nfc.startPoll();
@@ -84,3 +87,17 @@ function runTests() {
     finish();
   }
 }
+
+const NDEF = {
+  TNF_WELL_KNOWN: 1
+};
+
+var NfcUtils = {
+  fromUTF8: function(str) {
+    let buf = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; ++i) {
+      buf[i] = str.charCodeAt(i);
+    }
+    return buf;
+  }
+};

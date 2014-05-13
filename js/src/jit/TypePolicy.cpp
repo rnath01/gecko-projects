@@ -296,7 +296,7 @@ TypeBarrierPolicy::adjustInputs(TempAllocator &alloc, MInstruction *def)
         // We can't unbox a value to null/undefined/lazyargs. So keep output
         // also a value.
         if (IsNullOrUndefined(outputType) || outputType == MIRType_MagicOptimizedArguments) {
-            JS_ASSERT(ins->defUseCount() == 0);
+            JS_ASSERT(!ins->hasDefUses());
             ins->setResultType(MIRType_Value);
             return true;
         }
@@ -771,10 +771,9 @@ StoreTypedArrayPolicy::adjustValueInput(TempAllocator &alloc, MInstruction *ins,
         MOZ_ASSUME_UNREACHABLE("Invalid array type");
     }
 
-    if (value != curValue) {
+    if (value != curValue)
         ins->replaceOperand(valueOperand, value);
-        curValue = value;
-    }
+
     return true;
 }
 
