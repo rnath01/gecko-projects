@@ -13,7 +13,7 @@ fuzzy-if(Android,9,600000) == viewport-translucent-color-1.html viewport-translu
 == iframe-translucent-color-1.html iframe-translucent-color-ref.html
 == translucent-color-1.html translucent-color-ref.html
 == translucent-color-2.html translucent-color-ref.html
-== translucent-color-3.html translucent-color-ref.html
+fuzzy(1,1024) == translucent-color-3.html translucent-color-ref.html
 != translucent-color-ref.html about:blank
 skip-if(B2G) == root-element-display-none-1.html root-element-display-none-ref.html
 == continuous-inline-1a.html continuous-inline-1ab-ref.html
@@ -148,15 +148,13 @@ fails-if(Android&&(AndroidVersion==10||AndroidVersion==17)) HTTP == background-r
 == attachment-local-clipping-color-1.html attachment-local-clipping-color-1-ref.html
 == attachment-local-clipping-color-2.html attachment-local-clipping-color-1-ref.html  # Same ref as the previous test.
 == attachment-local-clipping-color-3.html attachment-local-clipping-color-3-ref.html
-fails-if(Android&&AndroidVersion==15) == attachment-local-clipping-color-4.html attachment-local-clipping-color-4-ref.html #Bug 959165
-fails-if(Android&&AndroidVersion==15) == attachment-local-clipping-color-5.html attachment-local-clipping-color-4-ref.html  # Same ref as the previous test. #Bug 959165
-fails-if(Android&&AndroidVersion==15) fuzzy-if(!Android||(Android&&AndroidVersion!=15),50,500) == attachment-local-clipping-color-6.html attachment-local-clipping-color-6-ref.html #Bug 959165
+fails-if(Android&&AndroidVersion==15) fuzzy-if(!Android||(Android&&AndroidVersion!=15),1,1024) == attachment-local-clipping-color-4.html attachment-local-clipping-color-4-ref.html #Bug 959165
+fails-if(Android&&AndroidVersion==15) fuzzy-if(!Android||(Android&&AndroidVersion!=15),1,1024) == attachment-local-clipping-color-5.html attachment-local-clipping-color-4-ref.html  # Same ref as the previous test. #Bug 959165
+fails-if(Android&&AndroidVersion==15) fuzzy-if(!Android||(Android&&AndroidVersion!=15),50,1278) == attachment-local-clipping-color-6.html attachment-local-clipping-color-6-ref.html #Bug 959165
 
 == attachment-local-clipping-image-1.html attachment-local-clipping-image-1-ref.html
 == attachment-local-clipping-image-2.html attachment-local-clipping-image-1-ref.html  # Same ref as the previous test.
 == attachment-local-clipping-image-3.html attachment-local-clipping-image-3-ref.html
-fails-if(Android&&AndroidVersion==15) == attachment-local-clipping-image-4.html attachment-local-clipping-image-4-ref.html #Bug 959165
-fails-if(Android&&AndroidVersion==15) == attachment-local-clipping-image-5.html attachment-local-clipping-image-4-ref.html  # Same ref as the previous test. #Bug 959165
-fails-if(Android&&AndroidVersion==15) fuzzy-if(!Android||(Android&&AndroidVersion!=15),80,500) == attachment-local-clipping-image-6.html attachment-local-clipping-image-6-ref.html #Bug 959165
-
-== background-multiple-with-border-radius.html background-multiple-with-border-radius-ref.html
+fails-if(Android&&AndroidVersion==15) fuzzy-if(!Android||(Android&&AndroidVersion!=15),1,1024) == attachment-local-clipping-image-4.html attachment-local-clipping-image-4-ref.html #Bug 959165
+fails-if(Android&&AndroidVersion==15) fuzzy-if(!Android||(Android&&AndroidVersion!=15),1,1024) == attachment-local-clipping-image-5.html attachment-local-clipping-image-4-ref.html  # Same ref as the previous test. #Bug 959165
+fails-if(Android&&AndroidVersion==15) fuzzy-if(!Android||(Android&&AndroidVersion!=15),80,1274) == attachment-local-clipping-image-6.html attachment-local-clipping-image-6-ref.html #Bug 959165
