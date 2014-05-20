@@ -3,7 +3,7 @@ random-if(Android) skip-if(B2G&&browserIsRemote) == basic-negcoord.xul basic-neg
 skip-if(B2G&&browserIsRemote) != blur.xul blur-notref.xul
 skip-if(B2G&&browserIsRemote) == color-inherit.xul color-inherit-ref.xul
 skip-if(B2G&&browserIsRemote) == multiple-noblur.xul multiple-noblur-ref.xul
-HTTP(..) == blur-opacity.html blur-opacity-ref.html
+fuzzy(2,6400) HTTP(..) == blur-opacity.html blur-opacity-ref.html
 
 == basic.html basic-ref.html
 == basic-negcoord.html basic-negcoord-ref.html

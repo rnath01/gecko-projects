@@ -40,18 +40,18 @@ skip-if(B2G) == border-collapse-table-column.html border-collapse-table-column-r
 skip-if(B2G) == border-collapse-table-row-group.html border-collapse-table-row-group-ref.html # bug 773482
 == border-collapse-table-row.html border-collapse-table-row-ref.html
 == border-collapse-table.html border-collapse-table-ref.html
-skip-if(B2G) == border-collapse-opacity-table-cell.html border-collapse-opacity-table-cell-ref.html # bug 773482
+fuzzy(2,19998) skip-if(B2G) == border-collapse-opacity-table-cell.html border-collapse-opacity-table-cell-ref.html # bug 773482
 fails == border-collapse-opacity-table-column-group.html border-collapse-opacity-table-column-group-ref.html # bug 424274
 fails == border-collapse-opacity-table-column.html border-collapse-opacity-table-column-ref.html # bug 424274
-skip-if(B2G) == border-collapse-opacity-table-row-group.html border-collapse-opacity-table-row-group-ref.html # bug 773482
-skip-if(B2G) == border-collapse-opacity-table-row.html border-collapse-opacity-table-row-ref.html # bug 773482
-skip-if(B2G) == border-collapse-opacity-table.html border-collapse-opacity-table-ref.html # bug 773482
-skip-if(B2G) == border-separate-opacity-table-cell.html border-separate-opacity-table-cell-ref.html # bug 773482
+fuzzy(2,54417) skip-if(B2G) == border-collapse-opacity-table-row-group.html border-collapse-opacity-table-row-group-ref.html # bug 773482
+fuzzy(2,24444) skip-if(B2G) == border-collapse-opacity-table-row.html border-collapse-opacity-table-row-ref.html # bug 773482
+fuzzy(1,17751) skip-if(B2G) == border-collapse-opacity-table.html border-collapse-opacity-table-ref.html # bug 773482
+fuzzy(2,7602) skip-if(B2G) == border-separate-opacity-table-cell.html border-separate-opacity-table-cell-ref.html # bug 773482
 fails == border-separate-opacity-table-column-group.html border-separate-opacity-table-column-group-ref.html # bug 424274
 fails == border-separate-opacity-table-column.html border-separate-opacity-table-column-ref.html # bug 424274
-== border-separate-opacity-table-row-group.html border-separate-opacity-table-row-group-ref.html
-skip-if(B2G) == border-separate-opacity-table-row.html border-separate-opacity-table-row-ref.html # bug 773482
-skip-if(B2G) == border-separate-opacity-table.html border-separate-opacity-table-ref.html # bug 773482
+fuzzy(2,48177) == border-separate-opacity-table-row-group.html border-separate-opacity-table-row-group-ref.html
+fuzzy(2,28509) skip-if(B2G) == border-separate-opacity-table-row.html border-separate-opacity-table-row-ref.html # bug 773482
+fuzzy(1,20907) skip-if(B2G) == border-separate-opacity-table.html border-separate-opacity-table-ref.html # bug 773482
 != scrollable-rowgroup-collapse-background.html scrollable-rowgroup-collapse-notref.html 
 != scrollable-rowgroup-collapse-border.html scrollable-rowgroup-collapse-notref.html     
 != scrollable-rowgroup-separate-background.html scrollable-rowgroup-separate-notref.html

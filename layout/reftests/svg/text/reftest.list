@@ -168,14 +168,14 @@ fuzzy-if(!d2d,14,2) fuzzy-if(azureQuartz,1,6) == dynamic-non-scaling-stroke.svg 
 == dynamic-text-shadow.svg text-shadow-ref.svg
 
 # text and masks
-HTTP(../..) == mask-applied.svg mask-applied-ref.svg
-HTTP(../..) == mask-content.svg mask-content-ref.svg
-HTTP(../..) == mask-content-2.svg mask-content-2-ref.svg
+fuzzy(1,11248) HTTP(../..) == mask-applied.svg mask-applied-ref.svg
+fuzzy(1,2576) HTTP(../..) == mask-content.svg mask-content-ref.svg
+fuzzy(1,2768) HTTP(../..) == mask-content-2.svg mask-content-2-ref.svg
 
 # text and clipPaths
 HTTP(../..) == clipPath-applied.svg clipPath-applied-ref.svg
-HTTP(../..) == clipPath-content.svg clipPath-content-ref.svg
-HTTP(../..) == clipPath-content-2.svg clipPath-content-2-ref.svg
+fuzzy(1,2576) HTTP(../..) == clipPath-content.svg clipPath-content-ref.svg
+fuzzy(1,2768) HTTP(../..) == clipPath-content-2.svg clipPath-content-2-ref.svg
 
 # text and patterns
 fuzzy-if(cocoaWidget,1,6) == pattern-content.svg pattern-content-ref.svg
