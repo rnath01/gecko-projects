@@ -412,7 +412,7 @@ static inline SkPMColor SkBlendARGB32(SkPMColor src, SkPMColor dst, U8CPU aa) {
     unsigned src_scale = aa;
     unsigned dst_scale = 255 - SkAlphaBlend255(SkGetPackedA32(src), 0, src_scale);
 
-    return SkAlphaMulQ(src, src_scale) + SkAlphaMulQ(dst, dst_scale);
+    return SkAlphaMulQ_Accurate(src, src_scale) + SkAlphaMulQ_Accurate(dst, dst_scale);
 }
 #else
 static inline SkPMColor SkPMSrcOver(SkPMColor src, SkPMColor dst) {
