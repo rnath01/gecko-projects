@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -78,7 +79,9 @@ public:
    * @param aSrcLen: length of the source, in characters. If -1, the source is assumed to be a null-
    *              terminated string.
    */
-  static nsresult ConvertStringLineBreaks(nsString& ioString, ELinebreakType aSrcBreaks, ELinebreakType aDestBreaks);
+  static nsresult ConvertStringLineBreaks(nsString& aIoString,
+                                          ELinebreakType aSrcBreaks,
+                                          ELinebreakType aDestBreaks);
 
 
   /* ConvertLineBreaksInSitu
@@ -96,8 +99,11 @@ public:
    *              terminated string.
    * @param aOutLen: used to return character length of returned buffer, if not null.
    */
-  static nsresult ConvertLineBreaksInSitu(char **ioBuffer, ELinebreakType aSrcBreaks, ELinebreakType aDestBreaks,
-                                          int32_t aSrcLen = kIgnoreLen, int32_t* aOutLen = nullptr);
+  static nsresult ConvertLineBreaksInSitu(char** aIoBuffer,
+                                          ELinebreakType aSrcBreaks,
+                                          ELinebreakType aDestBreaks,
+                                          int32_t aSrcLen = kIgnoreLen,
+                                          int32_t* aOutLen = nullptr);
 
 
   /* ConvertUnicharLineBreaksInSitu
@@ -114,8 +120,11 @@ public:
    *              terminated string.
    * @param aOutLen: used to return character length of returned buffer, if not null.
    */
-  static nsresult ConvertUnicharLineBreaksInSitu(char16_t **ioBuffer, ELinebreakType aSrcBreaks, ELinebreakType aDestBreaks,
-                                                 int32_t aSrcLen = kIgnoreLen, int32_t* aOutLen = nullptr);
+  static nsresult ConvertUnicharLineBreaksInSitu(char16_t** aIoBuffer,
+                                                 ELinebreakType aSrcBreaks,
+                                                 ELinebreakType aDestBreaks,
+                                                 int32_t aSrcLen = kIgnoreLen,
+                                                 int32_t* aOutLen = nullptr);
 
 };
 

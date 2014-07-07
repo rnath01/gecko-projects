@@ -693,7 +693,7 @@ falling back to not using job objects for managing child processes"""
             return self.wait()
         except AttributeError:
             # Try to print a relevant error message.
-            if not self.proc:
+            if not hasattr(self, 'proc'):
                 print >> sys.stderr, "Unable to kill Process because call to ProcessHandler constructor failed."
             else:
                 raise
@@ -913,7 +913,12 @@ class StreamOutput(object):
         self.stream = stream
 
     def __call__(self, line):
-        self.stream.write(line + '\n')
+        try:
+            self.stream.write(line + '\n')
+        except UnicodeDecodeError as err:
+            # TODO: Workaround for bug #991866 to make sure we can display when
+            # when normal UTF-8 display is failing
+            self.stream.write(line.decode('iso8859-1') + '\n')
         self.stream.flush()
 
 class LogOutput(StreamOutput):

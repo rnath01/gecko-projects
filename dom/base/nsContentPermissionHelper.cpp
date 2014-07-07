@@ -309,15 +309,17 @@ nsContentPermissionRequestProxy::Allow(JS::HandleValue aChoices)
 #ifdef MOZ_WIDGET_GONK
   uint32_t len = mPermissionRequests.Length();
   for (uint32_t i = 0; i < len; i++) {
-    if (mPermissionRequests[i].type().Equals("audio-capture")) {
+    if (mPermissionRequests[i].type().EqualsLiteral("audio-capture")) {
       GonkPermissionService::GetInstance()->addGrantInfo(
         "android.permission.RECORD_AUDIO",
-        static_cast<TabParent*>(mParent->Manager())->Manager()->Pid());
+        static_cast<TabParent*>(
+          mParent->Manager())->Manager()->AsContentParent()->Pid());
     }
-    if (mPermissionRequests[i].type().Equals("video-capture")) {
+    if (mPermissionRequests[i].type().EqualsLiteral("video-capture")) {
       GonkPermissionService::GetInstance()->addGrantInfo(
         "android.permission.CAMERA",
-        static_cast<TabParent*>(mParent->Manager())->Manager()->Pid());
+        static_cast<TabParent*>(
+          mParent->Manager())->Manager()->AsContentParent()->Pid());
     }
   }
 #endif
@@ -340,7 +342,7 @@ nsContentPermissionRequestProxy::Allow(JS::HandleValue aChoices)
           !val.isString()) {
         // no setting for the permission type, skip it
       } else {
-        nsDependentJSString choice;
+        nsAutoJSString choice;
         if (!choice.init(cx, val)) {
           return NS_ERROR_FAILURE;
         }

@@ -46,7 +46,7 @@ NS_IMPL_ISUPPORTS_INHERITED(SVGIFrameElement, SVGIFrameElementBase,
 //----------------------------------------------------------------------
 // Implementation
 
-SVGIFrameElement::SVGIFrameElement(already_AddRefed<nsINodeInfo>& aNodeInfo,
+SVGIFrameElement::SVGIFrameElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                                    FromParser aFromParser)
   : SVGIFrameElementBase(aNodeInfo)
   , nsElementFrameLoaderOwner(aFromParser)
@@ -86,10 +86,10 @@ SVGIFrameElement::PrependLocalTransformsTo(const gfxMatrix &aMatrix,
 // nsIDOMNode methods
 
 nsresult
-SVGIFrameElement::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const
+SVGIFrameElement::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const
 {
   *aResult = nullptr;
-  already_AddRefed<nsINodeInfo> ni = nsCOMPtr<nsINodeInfo>(aNodeInfo).forget();
+  already_AddRefed<mozilla::dom::NodeInfo> ni = nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();
   SVGIFrameElement *it = new SVGIFrameElement(ni, NOT_FROM_PARSER);
 
   nsCOMPtr<nsINode> kungFuDeathGrip = it;
@@ -172,7 +172,7 @@ SVGIFrameElement::GetSrcdoc(DOMString& srcdoc)
   GetAttr(kNameSpaceID_None, nsGkAtoms::srcdoc, srcdoc);
 }
 
-already_AddRefed<nsDOMSettableTokenList>
+nsDOMSettableTokenList*
 SVGIFrameElement::Sandbox()
 {
   return GetTokenList(nsGkAtoms::sandbox);
@@ -275,7 +275,8 @@ SVGIFrameElement::BindToTree(nsIDocument* aDocument,
     NS_ASSERTION(!nsContentUtils::IsSafeToRunScript(),
                  "Missing a script blocker!");
 
-    PROFILER_LABEL("SVGIFrameElement", "BindToTree");
+    PROFILER_LABEL("SVGIFrameElement", "BindToTree",
+      js::ProfileEntry::Category::OTHER);
 
     // We're in a document now.  Kick off the frame load.
     LoadSrc();

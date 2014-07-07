@@ -8,7 +8,6 @@
 #define FORCE_PR_LOG /* Allow logging in the release build */
 #endif
 #include "jsapi.h"
-#include "nsIXPCSecurityManager.h"
 #include "nsIXPConnect.h"
 #include "nsIJSRuntimeService.h"
 #include "nsCOMPtr.h"
@@ -113,8 +112,8 @@ nsresult EvaluateAdminConfigScript(const char *js_buffer, size_t length,
 
     nsAutoCString script(js_buffer, length);
     JS::RootedValue v(cx);
-    rv = xpc->EvalInSandboxObject(NS_ConvertASCIItoUTF16(script), filename, cx, autoconfigSb.ref(),
-                                  /* returnStringOnly = */ false, &v);
+    rv = xpc->EvalInSandboxObject(NS_ConvertASCIItoUTF16(script), filename, cx,
+                                  autoconfigSb.ref(), &v);
     NS_ENSURE_SUCCESS(rv, rv);
 
     return NS_OK;

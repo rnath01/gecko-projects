@@ -138,6 +138,7 @@ MOZ_END_ENUM_CLASS(GLVendor)
 MOZ_BEGIN_ENUM_CLASS(GLRenderer)
     Adreno200,
     Adreno205,
+    AdrenoTM200,
     AdrenoTM205,
     AdrenoTM320,
     SGX530,
@@ -145,6 +146,7 @@ MOZ_BEGIN_ENUM_CLASS(GLRenderer)
     Tegra,
     AndroidEmulator,
     GalliumLlvmpipe,
+    IntelHD3000,
     Other
 MOZ_END_ENUM_CLASS(GLRenderer)
 
@@ -329,6 +331,7 @@ public:
      * in GLContext.cpp.
      */
     enum GLExtensions {
+        Extension_None = 0,
         EXT_framebuffer_object,
         ARB_framebuffer_object,
         ARB_texture_rectangle,
@@ -338,6 +341,7 @@ public:
         OES_depth32,
         OES_stencil8,
         OES_texture_npot,
+        IMG_texture_npot,
         ARB_depth_texture,
         OES_depth_texture,
         OES_packed_depth_stencil,
@@ -490,6 +494,11 @@ private:
      * Mark the feature and associated extensions as unsupported
      */
     void MarkUnsupported(GLFeature feature);
+
+    /**
+     * Is this feature supported using the core (unsuffixed) symbols?
+     */
+    bool IsFeatureProvidedByCoreSymbols(GLFeature feature);
 
 // -----------------------------------------------------------------------------
 // Robustness handling
@@ -2697,19 +2706,6 @@ public:
                                  const char *extension);
 
     GLint GetMaxTextureImageSize() { return mMaxTextureImageSize; }
-
-public:
-    /**
-     * Context reset constants.
-     * These are used to determine who is guilty when a context reset
-     * happens.
-     */
-    enum ContextResetARB {
-        CONTEXT_NO_ERROR = 0,
-        CONTEXT_GUILTY_CONTEXT_RESET_ARB = 0x8253,
-        CONTEXT_INNOCENT_CONTEXT_RESET_ARB = 0x8254,
-        CONTEXT_UNKNOWN_CONTEXT_RESET_ARB = 0x8255
-    };
 
 public:
     std::map<GLuint, SharedSurface_GL*> mFBOMapping;

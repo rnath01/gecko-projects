@@ -191,13 +191,13 @@ Classifier::TableRequest(nsACString& aResult)
       continue;
 
     aResult.Append(store->TableName());
-    aResult.Append(";");
+    aResult.Append(';');
 
     ChunkSet &adds = store->AddChunks();
     ChunkSet &subs = store->SubChunks();
 
     if (adds.Length() > 0) {
-      aResult.Append("a:");
+      aResult.AppendLiteral("a:");
       nsAutoCString addList;
       adds.Serialize(addList);
       aResult.Append(addList);
@@ -206,7 +206,7 @@ Classifier::TableRequest(nsACString& aResult)
     if (subs.Length() > 0) {
       if (adds.Length() > 0)
         aResult.Append(':');
-      aResult.Append("s:");
+      aResult.AppendLiteral("s:");
       nsAutoCString subList;
       subs.Serialize(subList);
       aResult.Append(subList);
@@ -318,7 +318,7 @@ Classifier::ApplyUpdates(nsTArray<TableUpdate*>* aUpdates)
   nsresult rv = BackupTables();
   NS_ENSURE_SUCCESS(rv, rv);
 
-  LOG(("Applying table updates."));
+  LOG(("Applying %d table updates.", aUpdates->Length()));
 
   for (uint32_t i = 0; i < aUpdates->Length(); i++) {
     // Previous ApplyTableUpdates() may have consumed this update..
@@ -576,8 +576,9 @@ Classifier::ApplyTableUpdates(nsTArray<TableUpdate*>* aUpdates,
 
   nsAutoPtr<HashStore> store(new HashStore(aTable, mStoreDirectory));
 
-  if (!store)
+  if (!store) {
     return NS_ERROR_FAILURE;
+  }
 
   // take the quick exit if there is no valid update for us
   // (common case)

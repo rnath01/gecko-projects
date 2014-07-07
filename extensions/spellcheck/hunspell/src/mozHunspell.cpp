@@ -79,8 +79,6 @@
 
 using mozilla::dom::EncodingUtils;
 
-static NS_DEFINE_CID(kUnicharUtilCID, NS_UNICHARUTIL_CID);
-
 NS_IMPL_CYCLE_COLLECTING_ADDREF(mozHunspell)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(mozHunspell)
 
@@ -155,9 +153,9 @@ NS_IMETHODIMP mozHunspell::SetDictionary(const char16_t *aDictionary)
   if (nsDependentString(aDictionary).IsEmpty()) {
     delete mHunspell;
     mHunspell = nullptr;
-    mDictionary.AssignLiteral("");
-    mAffixFileName.AssignLiteral("");
-    mLanguage.AssignLiteral("");
+    mDictionary.Truncate();
+    mAffixFileName.Truncate();
+    mLanguage.Truncate();
     mDecoder = nullptr;
     mEncoder = nullptr;
 

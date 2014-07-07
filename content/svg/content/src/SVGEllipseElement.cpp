@@ -7,6 +7,7 @@
 #include "mozilla/dom/SVGEllipseElementBinding.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
+#include "mozilla/RefPtr.h"
 #include "gfxContext.h"
 
 NS_IMPL_NS_NEW_NAMESPACED_SVG_ELEMENT(Ellipse)
@@ -33,7 +34,7 @@ nsSVGElement::LengthInfo SVGEllipseElement::sLengthInfo[4] =
 //----------------------------------------------------------------------
 // Implementation
 
-SVGEllipseElement::SVGEllipseElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
+SVGEllipseElement::SVGEllipseElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : SVGEllipseElementBase(aNodeInfo)
 {
 }
@@ -96,7 +97,12 @@ void
 SVGEllipseElement::ConstructPath(gfxContext *aCtx)
 {
   if (!aCtx->IsCairo()) {
-    RefPtr<Path> path = BuildPath();
+    RefPtr<DrawTarget> dt = aCtx->GetDrawTarget();
+    FillRule fillRule =
+      aCtx->CurrentFillRule() == gfxContext::FILL_RULE_WINDING ?
+        FillRule::FILL_WINDING : FillRule::FILL_EVEN_ODD;
+    RefPtr<PathBuilder> builder = dt->CreatePathBuilder(fillRule);
+    RefPtr<Path> path = BuildPath(builder);
     if (path) {
       nsRefPtr<gfxPath> gfxpath = new gfxPath(path);
       aCtx->SetPath(gfxpath);
@@ -114,7 +120,7 @@ SVGEllipseElement::ConstructPath(gfxContext *aCtx)
 }
 
 TemporaryRef<Path>
-SVGEllipseElement::BuildPath()
+SVGEllipseElement::BuildPath(PathBuilder* aBuilder)
 {
   float x, y, rx, ry;
   GetAnimatedLengthValues(&x, &y, &rx, &ry, nullptr);
@@ -123,9 +129,9 @@ SVGEllipseElement::BuildPath()
     return nullptr;
   }
 
-  RefPtr<PathBuilder> pathBuilder = CreatePathBuilder();
+  RefPtr<PathBuilder> pathBuilder = aBuilder ? aBuilder : CreatePathBuilder();
 
-  ArcToBezier(pathBuilder.get(), Point(x, y), Size(rx, ry), 0, Float(2*M_PI), false);
+  EllipseToBezier(pathBuilder.get(), Point(x, y), Size(rx, ry));
 
   return pathBuilder->Finish();
 }

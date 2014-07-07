@@ -16,8 +16,9 @@
 
 'use strict';
 
-var promise = require('./util/promise');
+var Promise = require('./util/promise').Promise;
 var util = require('./util/util');
+var host = require('./util/host');
 var l10n = require('./util/l10n');
 
 var view = require('./ui/view');
@@ -39,7 +40,7 @@ var TrueNamedArgument = require('./types/types').TrueNamedArgument;
 var MergedArgument = require('./types/types').MergedArgument;
 var ScriptArgument = require('./types/types').ScriptArgument;
 
-var RESOLVED = promise.resolve(undefined);
+var RESOLVED = Promise.resolve(undefined);
 
 /**
  * This is a list of the known command line components to enable certain
@@ -195,7 +196,7 @@ Assignment.prototype.getPredictionRanked = function(context, rank) {
   }
 
   if (this.isInName()) {
-    return promise.resolve(undefined);
+    return Promise.resolve(undefined);
   }
 
   return this.getPredictions(context).then(function(predictions) {
@@ -491,6 +492,10 @@ function Requisition(options) {
 
   addMapping(this);
   this._setBlankAssignment(this.commandAssignment);
+
+  // If a command calls context.update then the UI needs some way to be
+  // informed of the change
+  this.onExternalUpdate = util.createEvent('Requisition.onExternalUpdate');
 }
 
 /**
@@ -549,7 +554,7 @@ Object.defineProperty(Requisition.prototype, 'executionContext', {
     if (this._executionContext == null) {
       this._executionContext = {
         defer: function() {
-          return promise.defer();
+          return Promise.defer();
         },
         typedData: function(type, data) {
           return {
@@ -583,8 +588,8 @@ Object.defineProperty(Requisition.prototype, 'executionContext', {
       if (legacy) {
         this._executionContext.createView = view.createView;
         this._executionContext.exec = this.exec.bind(this);
-        this._executionContext.update = this.update.bind(this);
-        this._executionContext.updateExec = this.updateExec.bind(this);
+        this._executionContext.update = this._contextUpdate.bind(this);
+        this._executionContext.updateExec = this._contextUpdateExec.bind(this);
 
         Object.defineProperty(this._executionContext, 'document', {
           get: function() { return requisition.document; },
@@ -606,13 +611,13 @@ Object.defineProperty(Requisition.prototype, 'conversionContext', {
     if (this._conversionContext == null) {
       this._conversionContext = {
         defer: function() {
-          return promise.defer();
+          return Promise.defer();
         },
 
         createView: view.createView,
         exec: this.exec.bind(this),
-        update: this.update.bind(this),
-        updateExec: this.updateExec.bind(this)
+        update: this._contextUpdate.bind(this),
+        updateExec: this._contextUpdateExec.bind(this)
       };
 
       // Alias requisition so we're clear about what's what
@@ -766,16 +771,35 @@ Requisition.prototype._getFirstBlankPositionalAssignment = function() {
 };
 
 /**
+ * The update process is asynchronous, so there is (unavoidably) a window
+ * where we've worked out the command but don't yet understand all the params.
+ * If we try to do things to a requisition in this window we may get
+ * inconsistent results. Asynchronous promises have made the window bigger.
+ * The only time we've seen this in practice is during focus events due to
+ * clicking on a shortcut. The focus want to check the cursor position while
+ * the shortcut is updating the command line.
+ * This function allows us to detect and back out of this problem.
+ * We should be able to remove this function when all the state in a
+ * requisition can be encapsulated and updated atomically.
+ */
+Requisition.prototype.isUpToDate = function() {
+  if (!this._args) {
+    return false;
+  }
+  for (var i = 0; i < this._args.length; i++) {
+    if (this._args[i].assignment == null) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/**
  * Look through the arguments attached to our assignments for the assignment
  * at the given position.
  * @param {number} cursor The cursor position to query
  */
 Requisition.prototype.getAssignmentAt = function(cursor) {
-  if (!this._args) {
-    console.trace();
-    throw new Error('Missing args');
-  }
-
   // We short circuit this one because we may have no args, or no args with
   // any size and the alg below only finds arguments with size.
   if (cursor === 0) {
@@ -821,14 +845,7 @@ Requisition.prototype.getAssignmentAt = function(cursor) {
   // Possible shortcut, we don't really need to go through all the args
   // to work out the solution to this
 
-  var reply = assignForPos[cursor - 1];
-
-  if (!reply) {
-    throw new Error('Missing assignment.' +
-        ' cursor=' + cursor + ' text=' + this.toString());
-  }
-
-  return reply;
+  return assignForPos[cursor - 1];
 };
 
 /**
@@ -860,7 +877,7 @@ Requisition.prototype.toCanonicalString = function() {
     }
 
     var val = assignment.param.type.stringify(assignment.value, ctx);
-    return promise.resolve(val).then(function(str) {
+    return Promise.resolve(val).then(function(str) {
       return ' ' + str;
     }.bind(this));
   }.bind(this));
@@ -1016,7 +1033,7 @@ Requisition.prototype.setAssignment = function(assignment, arg, options) {
       this._endChangeCheckOrder(updateId);
     }
 
-    return promise.resolve(undefined);
+    return Promise.resolve(undefined);
   }.bind(this);
 
   if (arg == null) {
@@ -1209,7 +1226,7 @@ Requisition.prototype.getStateData = function(start, rank) {
   var context = this.executionContext;
   var predictionPromise = (typed.trim().length !== 0) ?
                           current.getPredictionRanked(context, rank) :
-                          promise.resolve(null);
+                          Promise.resolve(null);
 
   return predictionPromise.then(function(prediction) {
     // directTabText is for when the current input is a prefix of the completion
@@ -1348,7 +1365,7 @@ Requisition.prototype._addSpace = function(assignment) {
     return this.setAssignment(assignment, arg);
   }
   else {
-    return promise.resolve(undefined);
+    return Promise.resolve(undefined);
   }
 };
 
@@ -1425,7 +1442,7 @@ Requisition.prototype.complete = function(cursor, rank) {
       outstanding.push(assignPromise);
     }
 
-    return promise.all(outstanding).then(function() {
+    return Promise.all(outstanding).then(function() {
       return true;
     }.bind(this));
   }.bind(this));
@@ -1437,10 +1454,10 @@ Requisition.prototype.complete = function(cursor, rank) {
 Requisition.prototype.decrement = function(assignment) {
   var ctx = this.executionContext;
   var val = assignment.param.type.decrement(assignment.value, ctx);
-  return promise.resolve(val).then(function(replacement) {
+  return Promise.resolve(val).then(function(replacement) {
     if (replacement != null) {
       var val = assignment.param.type.stringify(replacement, ctx);
-      return promise.resolve(val).then(function(str) {
+      return Promise.resolve(val).then(function(str) {
         var arg = assignment.arg.beget({ text: str });
         return this.setAssignment(assignment, arg);
       }.bind(this));
@@ -1454,10 +1471,10 @@ Requisition.prototype.decrement = function(assignment) {
 Requisition.prototype.increment = function(assignment) {
   var ctx = this.executionContext;
   var val = assignment.param.type.increment(assignment.value, ctx);
-  return promise.resolve(val).then(function(replacement) {
+  return Promise.resolve(val).then(function(replacement) {
     if (replacement != null) {
       var val = assignment.param.type.stringify(replacement, ctx);
-      return promise.resolve(val).then(function(str) {
+      return Promise.resolve(val).then(function(str) {
         var arg = assignment.arg.beget({ text: str });
         return this.setAssignment(assignment, arg);
       }.bind(this));
@@ -1478,14 +1495,30 @@ function getDataCommandAttribute(element) {
 }
 
 /**
+ * Designed to be called from context.update(). Acts just like update() except
+ * that it also calls onExternalUpdate() to inform the UI of an unexpected
+ * change to the current command.
+ */
+Requisition.prototype._contextUpdate = function(typed) {
+  return this.update(typed).then(function(reply) {
+    this.onExternalUpdate({ typed: typed });
+    return reply;
+  }.bind(this));
+};
+
+/**
  * Called by the UI when ever the user interacts with a command line input
- * @param typed The contents of the input field
+ * @param typed The contents of the input field OR an HTML element (or an event
+ * that targets an HTML element) which has a data-command attribute or a child
+ * with the same that contains the command to update with
  */
 Requisition.prototype.update = function(typed) {
-  if (typeof HTMLElement !== 'undefined' && typed instanceof HTMLElement) {
+  // Should be "if (typed instanceof HTMLElement)" except Gecko
+  if (typeof typed.querySelector === 'function') {
     typed = getDataCommandAttribute(typed);
   }
-  if (typeof Event !== 'undefined' && typed instanceof Event) {
+  // Should be "if (typed instanceof Event)" except Gecko
+  if (typeof typed.currentTarget === 'object') {
     typed = getDataCommandAttribute(typed.currentTarget);
   }
 
@@ -2045,25 +2078,38 @@ Requisition.prototype.exec = function(options) {
     var ex = new Error(this.getStatusMessage());
     // We only reject a call to exec if GCLI breaks. Errors with commands are
     // exposed in the 'error' status of the Output object
-    return promise.resolve(onError(ex)).then(function(output) {
+    return Promise.resolve(onError(ex)).then(function(output) {
       this.clear();
       return output;
     }.bind(this));
   }
   else {
     try {
-      var reply = command.exec(args, this.executionContext);
-      return promise.resolve(reply).then(onDone, onError);
+      return host.exec(function() {
+        return command.exec(args, this.executionContext);
+      }.bind(this)).then(onDone, onError);
     }
     catch (ex) {
       var data = (typeof ex.message === 'string' && ex.stack != null) ?
                  ex.message : ex;
-      return promise.resolve(onError(data, ex));
+      return Promise.resolve(onError(data, ex));
     }
     finally {
       this.clear();
     }
   }
+};
+
+/**
+ * Designed to be called from context.updateExec(). Acts just like updateExec()
+ * except that it also calls onExternalUpdate() to inform the UI of an
+ * unexpected change to the current command.
+ */
+Requisition.prototype._contextUpdateExec = function(typed, options) {
+  return this.updateExec(typed, options).then(function(reply) {
+    this.onExternalUpdate({ typed: typed });
+    return reply;
+  }.bind(this));
 };
 
 /**
@@ -2097,8 +2143,9 @@ function Output(options) {
   this.error = false;
   this.start = new Date();
 
-  this._deferred = promise.defer();
-  this.promise = this._deferred.promise;
+  this.promise = new Promise(function(resolve, reject) {
+    this._resolve = resolve;
+  }.bind(this));
 }
 
 /**
@@ -2126,7 +2173,7 @@ Output.prototype.complete = function(data, error) {
     throw new Error('No type from output of ' + this.typed);
   }
 
-  this._deferred.resolve();
+  this._resolve();
 };
 
 /**

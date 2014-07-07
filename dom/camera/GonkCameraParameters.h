@@ -23,6 +23,7 @@
 #include "nsString.h"
 #include "AutoRwLock.h"
 #include "nsPrintfCString.h"
+#include "nsClassHashtable.h"
 #include "ICameraControl.h"
 
 namespace mozilla {
@@ -95,10 +96,12 @@ protected:
   bool mInitialized;
 
   // Required internal properties
-  double mExposureCompensationMin;
   double mExposureCompensationStep;
+  int32_t mExposureCompensationMinIndex;
+  int32_t mExposureCompensationMaxIndex;
   nsTArray<int> mZoomRatios;
   nsTArray<nsString> mIsoModes;
+  nsClassHashtable<nsStringHashKey, nsCString> mIsoModeMap;
 
   // This subclass of android::CameraParameters just gives
   // all of the AOSP getters and setters the same signature.

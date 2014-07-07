@@ -100,14 +100,16 @@ DataTextureSourceD3D11::~DataTextureSourceD3D11()
 
 
 template<typename T> // ID3D10Texture2D or ID3D11Texture2D
-static void LockD3DTexture(T* aTexture)
+static bool LockD3DTexture(T* aTexture)
 {
   MOZ_ASSERT(aTexture);
   RefPtr<IDXGIKeyedMutex> mutex;
   aTexture->QueryInterface((IDXGIKeyedMutex**)byRef(mutex));
-  if (mutex) {
-    mutex->AcquireSync(0, INFINITE);
+  if (!mutex) {
+    return false;
   }
+  mutex->AcquireSync(0, INFINITE);
+  return true;
 }
 
 template<typename T> // ID3D10Texture2D or ID3D11Texture2D
@@ -138,6 +140,9 @@ CreateTextureHostD3D11(const SurfaceDescriptor& aDesc,
                                         aDesc.get_SurfaceDescriptorD3D10());
       break;
     }
+    case SurfaceDescriptor::TSurfaceStreamDescriptor: {
+      MOZ_CRASH("Should never hit this.");
+    }
     default: {
       NS_WARNING("Unsupported SurfaceDescriptor type");
     }
@@ -150,6 +155,7 @@ TextureClientD3D11::TextureClientD3D11(gfx::SurfaceFormat aFormat, TextureFlags 
   , mFormat(aFormat)
   , mIsLocked(false)
   , mNeedsClear(false)
+  , mNeedsClearWhite(false)
 {}
 
 TextureClientD3D11::~TextureClientD3D11()
@@ -176,13 +182,31 @@ TextureClientD3D11::Lock(OpenMode aMode)
     return false;
   }
   MOZ_ASSERT(!mIsLocked, "The Texture is already locked!");
-  LockD3DTexture(mTexture.get());
-  mIsLocked = true;
+
+  mIsLocked = LockD3DTexture(mTexture.get());
+  if (!mIsLocked) {
+    return false;
+  }
+
+  // Make sure that successful write-lock means we will have a DrawTarget to
+  // write into.
+  if (aMode & OpenMode::OPEN_WRITE) {
+    mDrawTarget = BorrowDrawTarget();
+    if (!mDrawTarget) {
+      Unlock();
+      return false;
+    }
+  }
 
   if (mNeedsClear) {
-    mDrawTarget = GetAsDrawTarget();
+    mDrawTarget = BorrowDrawTarget();
     mDrawTarget->ClearRect(Rect(0, 0, GetSize().width, GetSize().height));
     mNeedsClear = false;
+  }
+  if (mNeedsClearWhite) {
+    mDrawTarget = BorrowDrawTarget();
+    mDrawTarget->FillRect(Rect(0, 0, GetSize().width, GetSize().height), ColorPattern(Color(1.0, 1.0, 1.0, 1.0)));
+    mNeedsClearWhite = false;
   }
 
   return true;
@@ -194,7 +218,7 @@ TextureClientD3D11::Unlock()
   MOZ_ASSERT(mIsLocked, "Unlocked called while the texture is not locked!");
 
   if (mDrawTarget) {
-    // see the comment on TextureClient::GetAsDrawTarget.
+    // see the comment on TextureClient::BorrowDrawTarget.
     // This DrawTarget is internal to the TextureClient and is only exposed to the
     // outside world between Lock() and Unlock(). This assertion checks that no outside
     // reference remains by the time Unlock() is called.
@@ -208,10 +232,10 @@ TextureClientD3D11::Unlock()
   mIsLocked = false;
 }
 
-TemporaryRef<DrawTarget>
-TextureClientD3D11::GetAsDrawTarget()
+DrawTarget*
+TextureClientD3D11::BorrowDrawTarget()
 {
-  MOZ_ASSERT(mIsLocked, "Calling TextureClient::GetAsDrawTarget without locking :(");
+  MOZ_ASSERT(mIsLocked, "Calling TextureClient::BorrowDrawTarget without locking :(");
 
   if (!mTexture) {
     return nullptr;
@@ -221,6 +245,7 @@ TextureClientD3D11::GetAsDrawTarget()
     return mDrawTarget;
   }
 
+  // This may return a null DrawTarget
   mDrawTarget = Factory::CreateDrawTargetForD3D10Texture(mTexture, mFormat);
   return mDrawTarget;
 }
@@ -246,6 +271,7 @@ TextureClientD3D11::AllocateForSurface(gfx::IntSize aSize, TextureAllocationFlag
 
   // Defer clearing to the next time we lock to avoid an extra (expensive) lock.
   mNeedsClear = aFlags & ALLOC_CLEAR_BUFFER;
+  mNeedsClearWhite = aFlags & ALLOC_CLEAR_BUFFER_WHITE;
 
   return true;
 }
@@ -314,10 +340,9 @@ DXGITextureHostD3D11::Lock()
     mSize = IntSize(desc.Width, desc.Height);
   }
 
-  LockD3DTexture(mTextureSource->GetD3D11Texture());
+  mIsLocked = LockD3DTexture(mTextureSource->GetD3D11Texture());
 
-  mIsLocked = true;
-  return true;
+  return mIsLocked;
 }
 
 void

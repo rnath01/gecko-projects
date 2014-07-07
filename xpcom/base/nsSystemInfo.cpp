@@ -20,6 +20,7 @@
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsDirectoryServiceUtils.h"
+#include "nsIObserverService.h"
 #endif
 
 #ifdef MOZ_WIDGET_GTK
@@ -51,8 +52,9 @@ uint32_t nsSystemInfo::gUserUmask = 0;
 
 #if defined(XP_WIN)
 namespace {
-nsresult GetHDDInfo(const char* aSpecialDirName, nsAutoCString& aModel,
-                    nsAutoCString& aRevision)
+nsresult
+GetHDDInfo(const char* aSpecialDirName, nsAutoCString& aModel,
+           nsAutoCString& aRevision)
 {
   aModel.Truncate();
   aRevision.Truncate();
@@ -84,8 +86,9 @@ nsresult GetHDDInfo(const char* aSpecialDirName, nsAutoCString& aModel,
   if (!handle.IsValid()) {
     return NS_ERROR_UNEXPECTED;
   }
-  STORAGE_PROPERTY_QUERY queryParameters = {StorageDeviceProperty,
-                                            PropertyStandardQuery};
+  STORAGE_PROPERTY_QUERY queryParameters = {
+    StorageDeviceProperty, PropertyStandardQuery
+  };
   STORAGE_DEVICE_DESCRIPTOR outputHeader = {sizeof(STORAGE_DEVICE_DESCRIPTOR)};
   DWORD bytesRead = 0;
   if (!::DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY,
@@ -137,8 +140,9 @@ nsSystemInfo::~nsSystemInfo()
 }
 
 // CPU-specific information.
-static const struct PropItems {
-  const char *name;
+static const struct PropItems
+{
+  const char* name;
   bool (*propfun)(void);
 } cpuPropItems[] = {
   // x86-specific bits.
@@ -162,9 +166,10 @@ nsSystemInfo::Init()
 {
   nsresult rv;
 
-  static const struct {
+  static const struct
+  {
     PRSysInfo cmd;
-    const char *name;
+    const char* name;
   } items[] = {
     { PR_SI_SYSNAME, "name" },
     { PR_SI_HOSTNAME, "host" },
@@ -177,10 +182,10 @@ nsSystemInfo::Init()
     if (PR_GetSystemInfo(items[i].cmd, buf, sizeof(buf)) == PR_SUCCESS) {
       rv = SetPropertyAsACString(NS_ConvertASCIItoUTF16(items[i].name),
                                  nsDependentCString(buf));
-      if (NS_WARN_IF(NS_FAILED(rv)))
+      if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
-    }
-    else {
+      }
+    } else {
       NS_WARNING("PR_GetSystemInfo failed");
     }
   }
@@ -212,8 +217,9 @@ nsSystemInfo::Init()
   for (uint32_t i = 0; i < ArrayLength(cpuPropItems); i++) {
     rv = SetPropertyAsBool(NS_ConvertASCIItoUTF16(cpuPropItems[i].name),
                            cpuPropItems[i].propfun());
-    if (NS_WARN_IF(NS_FAILED(rv)))
+    if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
+    }
   }
 
 #ifdef XP_WIN
@@ -222,18 +228,23 @@ nsSystemInfo::Init()
   NS_WARN_IF_FALSE(gotWow64Value, "IsWow64Process failed");
   if (gotWow64Value) {
     rv = SetPropertyAsBool(NS_LITERAL_STRING("isWow64"), !!isWow64);
-    if (NS_WARN_IF(NS_FAILED(rv)))
+    if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
+    }
+  }
+  if (NS_FAILED(GetProfileHDDInfo())) {
+    // We might have been called before profile-do-change. We'll observe that
+    // event so that we can fill this in later.
+    nsCOMPtr<nsIObserverService> obsService = do_GetService(NS_OBSERVERSERVICE_CONTRACTID, &rv);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+    rv = obsService->AddObserver(this, "profile-do-change", false);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
   }
   nsAutoCString hddModel, hddRevision;
-  if (NS_SUCCEEDED(GetHDDInfo(NS_APP_USER_PROFILE_50_DIR, hddModel,
-                              hddRevision))) {
-    rv = SetPropertyAsACString(NS_LITERAL_STRING("profileHDDModel"), hddModel);
-    NS_ENSURE_SUCCESS(rv, rv);
-    rv = SetPropertyAsACString(NS_LITERAL_STRING("profileHDDRevision"),
-                               hddRevision);
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
   if (NS_SUCCEEDED(GetHDDInfo(NS_GRE_DIR, hddModel, hddRevision))) {
     rv = SetPropertyAsACString(NS_LITERAL_STRING("binHDDModel"), hddModel);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -257,26 +268,38 @@ nsSystemInfo::Init()
     rv = SetPropertyAsACString(NS_LITERAL_STRING("secondaryLibrary"),
                                nsDependentCString(gtkver));
     PR_smprintf_free(gtkver);
-    if (NS_WARN_IF(NS_FAILED(rv)))
+    if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
+    }
   }
 #endif
 
 #ifdef MOZ_WIDGET_ANDROID
   if (mozilla::AndroidBridge::Bridge()) {
     nsAutoString str;
-    if (mozilla::AndroidBridge::Bridge()->GetStaticStringField("android/os/Build", "MODEL", str))
+    if (mozilla::AndroidBridge::Bridge()->GetStaticStringField(
+          "android/os/Build", "MODEL", str)) {
       SetPropertyAsAString(NS_LITERAL_STRING("device"), str);
-    if (mozilla::AndroidBridge::Bridge()->GetStaticStringField("android/os/Build", "MANUFACTURER", str))
+    }
+    if (mozilla::AndroidBridge::Bridge()->GetStaticStringField(
+          "android/os/Build", "MANUFACTURER", str)) {
       SetPropertyAsAString(NS_LITERAL_STRING("manufacturer"), str);
-    if (mozilla::AndroidBridge::Bridge()->GetStaticStringField("android/os/Build$VERSION", "RELEASE", str))
+    }
+    if (mozilla::AndroidBridge::Bridge()->GetStaticStringField(
+          "android/os/Build$VERSION", "RELEASE", str)) {
       SetPropertyAsAString(NS_LITERAL_STRING("release_version"), str);
+    }
     int32_t version;
-    if (!mozilla::AndroidBridge::Bridge()->GetStaticIntField("android/os/Build$VERSION", "SDK_INT", &version))
+    if (!mozilla::AndroidBridge::Bridge()->GetStaticIntField(
+          "android/os/Build$VERSION", "SDK_INT", &version)) {
       version = 0;
+    }
     android_sdk_version = version;
-    if (version >= 8 && mozilla::AndroidBridge::Bridge()->GetStaticStringField("android/os/Build", "HARDWARE", str))
+    if (version >= 8 &&
+        mozilla::AndroidBridge::Bridge()->GetStaticStringField(
+          "android/os/Build", "HARDWARE", str)) {
       SetPropertyAsAString(NS_LITERAL_STRING("hardware"), str);
+    }
     bool isTablet = mozilla::widget::android::GeckoAppShell::IsTablet();
     SetPropertyAsBool(NS_LITERAL_STRING("tablet"), isTablet);
     // NSPR "version" is the kernel version. For Android we want the Android version.
@@ -298,8 +321,9 @@ nsSystemInfo::Init()
 
   char characteristics[PROP_VALUE_MAX];
   if (__system_property_get("ro.build.characteristics", characteristics)) {
-    if (!strcmp(characteristics, "tablet"))
+    if (!strcmp(characteristics, "tablet")) {
       SetPropertyAsBool(NS_LITERAL_STRING("tablet"), true);
+    }
   }
 
   nsAutoString str;
@@ -325,7 +349,7 @@ nsSystemInfo::Init()
 }
 
 void
-nsSystemInfo::SetInt32Property(const nsAString &aPropertyName,
+nsSystemInfo::SetInt32Property(const nsAString& aPropertyName,
                                const int32_t aValue)
 {
   NS_WARN_IF_FALSE(aValue > 0, "Unable to read system value");
@@ -339,7 +363,7 @@ nsSystemInfo::SetInt32Property(const nsAString &aPropertyName,
 }
 
 void
-nsSystemInfo::SetUint32Property(const nsAString &aPropertyName,
+nsSystemInfo::SetUint32Property(const nsAString& aPropertyName,
                                 const uint32_t aValue)
 {
   // Only one property is currently set via this function.
@@ -352,7 +376,7 @@ nsSystemInfo::SetUint32Property(const nsAString &aPropertyName,
 }
 
 void
-nsSystemInfo::SetUint64Property(const nsAString &aPropertyName,
+nsSystemInfo::SetUint64Property(const nsAString& aPropertyName,
                                 const uint64_t aValue)
 {
   NS_WARN_IF_FALSE(aValue > 0, "Unable to read system value");
@@ -364,3 +388,45 @@ nsSystemInfo::SetUint64Property(const nsAString &aPropertyName,
     NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Unable to set property");
   }
 }
+
+#if defined(XP_WIN)
+NS_IMETHODIMP
+nsSystemInfo::Observe(nsISupports* aSubject, const char* aTopic,
+                      const char16_t* aData)
+{
+  if (!strcmp(aTopic, "profile-do-change")) {
+    nsresult rv;
+    nsCOMPtr<nsIObserverService> obsService = do_GetService(
+                                              NS_OBSERVERSERVICE_CONTRACTID, &rv);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+    rv = obsService->RemoveObserver(this, "profile-do-change");
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+    return GetProfileHDDInfo();
+  }
+  return NS_OK;
+}
+
+nsresult
+nsSystemInfo::GetProfileHDDInfo()
+{
+  nsAutoCString hddModel, hddRevision;
+  nsresult rv = GetHDDInfo(NS_APP_USER_PROFILE_50_DIR, hddModel, hddRevision);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  rv = SetPropertyAsACString(NS_LITERAL_STRING("profileHDDModel"), hddModel);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  rv = SetPropertyAsACString(NS_LITERAL_STRING("profileHDDRevision"),
+                             hddRevision);
+  return rv;
+}
+
+NS_IMPL_ISUPPORTS_INHERITED(nsSystemInfo, nsHashPropertyBag, nsIObserver)
+#endif // defined(XP_WIN)
+

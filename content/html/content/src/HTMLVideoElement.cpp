@@ -25,7 +25,6 @@
 
 #include "nsITimer.h"
 
-#include "nsIDOMProgressEvent.h"
 #include "MediaError.h"
 #include "MediaDecoder.h"
 #include "mozilla/Preferences.h"
@@ -65,7 +64,7 @@ NS_IMETHODIMP HTMLVideoElement::GetVideoHeight(uint32_t *aVideoHeight)
   return NS_OK;
 }
 
-HTMLVideoElement::HTMLVideoElement(already_AddRefed<nsINodeInfo>& aNodeInfo)
+HTMLVideoElement::HTMLVideoElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : HTMLMediaElement(aNodeInfo)
 {
 }
@@ -77,6 +76,10 @@ HTMLVideoElement::~HTMLVideoElement()
 nsresult HTMLVideoElement::GetVideoSize(nsIntSize* size)
 {
   if (mMediaSize.width == -1 && mMediaSize.height == -1) {
+    return NS_ERROR_FAILURE;
+  }
+
+  if (mDisableVideo) {
     return NS_ERROR_FAILURE;
   }
 

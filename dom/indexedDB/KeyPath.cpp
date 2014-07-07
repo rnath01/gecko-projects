@@ -285,7 +285,7 @@ KeyPath::Parse(JSContext* aCx, const JS::Value& aValue_, KeyPath* aKeyPath)
     for (uint32_t index = 0; index < length; index++) {
       JS::Rooted<JS::Value> val(aCx);
       JSString* jsstr;
-      nsDependentJSString str;
+      nsAutoJSString str;
       if (!JS_GetElement(aCx, obj, index, &val) ||
           !(jsstr = JS::ToString(aCx, val)) ||
           !str.init(aCx, jsstr)) {
@@ -300,7 +300,7 @@ KeyPath::Parse(JSContext* aCx, const JS::Value& aValue_, KeyPath* aKeyPath)
   // Otherwise convert it to a string.
   else if (!aValue.isNull() && !aValue.isUndefined()) {
     JSString* jsstr;
-    nsDependentJSString str;
+    nsAutoJSString str;
     if (!(jsstr = JS::ToString(aCx, aValue)) ||
         !str.init(aCx, jsstr)) {
       return NS_ERROR_FAILURE;
@@ -457,7 +457,8 @@ KeyPath::SerializeToString(nsAString& aString) const
     // It also makes serializing easier :-)
     uint32_t len = mStrings.Length();
     for (uint32_t i = 0; i < len; ++i) {
-      aString.Append(NS_LITERAL_STRING(",") + mStrings[i]);
+      aString.Append(',');
+      aString.Append(mStrings[i]);
     }
 
     return;

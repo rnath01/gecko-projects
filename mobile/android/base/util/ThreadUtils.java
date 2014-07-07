@@ -120,6 +120,10 @@ public final class ThreadUtils {
         assertOnThread(getUiThread(), AssertBehavior.THROW);
     }
 
+    public static void assertNotOnUiThread() {
+        assertNotOnThread(getUiThread(), AssertBehavior.THROW);
+    }
+
     @RobocopTarget
     public static void assertOnGeckoThread() {
         assertOnThread(sGeckoThread, AssertBehavior.THROW);
@@ -134,18 +138,32 @@ public final class ThreadUtils {
     }
 
     public static void assertOnThread(final Thread expectedThread, AssertBehavior behavior) {
+        assertOnThreadComparison(expectedThread, behavior, true);
+    }
+
+    public static void assertNotOnThread(final Thread expectedThread, AssertBehavior behavior) {
+        assertOnThreadComparison(expectedThread, behavior, false);
+    }
+
+    private static void assertOnThreadComparison(final Thread expectedThread, AssertBehavior behavior, boolean expected) {
         final Thread currentThread = Thread.currentThread();
         final long currentThreadId = currentThread.getId();
         final long expectedThreadId = expectedThread.getId();
 
-        if (currentThreadId == expectedThreadId) {
+        if ((currentThreadId == expectedThreadId) == expected) {
             return;
         }
 
-        final String message = "Expected thread " +
-                               expectedThreadId + " (\"" + expectedThread.getName() +
-                               "\"), but running on thread " +
-                               currentThreadId + " (\"" + currentThread.getName() + ")";
+        final String message;
+        if (expected) {
+            message = "Expected thread " + expectedThreadId +
+                      " (\"" + expectedThread.getName() + "\"), but running on thread " +
+                      currentThreadId + " (\"" + currentThread.getName() + "\")";
+        } else {
+            message = "Expected anything but " + expectedThreadId +
+                      " (\"" + expectedThread.getName() + "\"), but running there.";
+        }
+
         final IllegalThreadStateException e = new IllegalThreadStateException(message);
 
         switch (behavior) {

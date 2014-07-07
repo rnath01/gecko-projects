@@ -14,7 +14,7 @@ namespace dom {
 class IccManager;
 class Icc;
 
-class IccListener : public nsIIccListener
+class IccListener MOZ_FINAL : public nsIIccListener
 {
 public:
   NS_DECL_ISUPPORTS
@@ -26,11 +26,10 @@ public:
   void
   Shutdown();
 
-  already_AddRefed<Icc>
+  Icc*
   GetIcc()
   {
-    nsRefPtr<Icc> icc = mIcc;
-    return icc.forget();
+    return mIcc;
   }
 
 private:

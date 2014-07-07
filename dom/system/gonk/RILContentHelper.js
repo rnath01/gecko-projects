@@ -308,14 +308,15 @@ MobileCallForwardingInfo.prototype = {
                       serviceClass: 'r'}
 };
 
-function CellBroadcastMessage(pdu) {
+function CellBroadcastMessage(clientId, pdu) {
+  this.serviceId = clientId;
   this.gsmGeographicalScope = RIL.CB_GSM_GEOGRAPHICAL_SCOPE_NAMES[pdu.geographicalScope];
   this.messageCode = pdu.messageCode;
   this.messageId = pdu.messageId;
   this.language = pdu.language;
   this.body = pdu.fullBody;
   this.messageClass = pdu.messageClass;
-  this.timestamp = new Date(pdu.timestamp);
+  this.timestamp = pdu.timestamp;
 
   if (pdu.etws != null) {
     this.etws = new CellBroadcastEtwsInfo(pdu.etws);
@@ -334,6 +335,7 @@ CellBroadcastMessage.prototype = {
   }),
 
   // nsIDOMMozCellBroadcastMessage
+  serviceId: -1,
 
   gsmGeographicalScope: null,
   messageCode: null,
@@ -444,7 +446,6 @@ function RILContentHelper() {
 
   this.initDOMRequestHelper(/* aWindow */ null, RIL_IPC_MSG_NAMES);
   this._windowsMap = [];
-  this._selectingNetworks = [];
   this._mobileConnectionListeners = [];
   this._cellBroadcastListeners = [];
   this._voicemailListeners = [];
@@ -674,12 +675,6 @@ RILContentHelper.prototype = {
     })[0];
   },
 
-  /**
-   * The networks that are currently trying to be selected (or "automatic").
-   * This helps ensure that only one network per client is selected at a time.
-   */
-  _selectingNetworks: null,
-
   getNetworks: function(clientId, window) {
     if (window == null) {
       throw Components.Exception("Can't get window object",
@@ -707,35 +702,22 @@ RILContentHelper.prototype = {
                                   Cr.NS_ERROR_UNEXPECTED);
     }
 
-    if (this._selectingNetworks[clientId]) {
-      throw new Error("Already selecting a network: " + this._selectingNetworks[clientId]);
-    }
-
-    if (!network) {
-      throw new Error("Invalid network provided: " + network);
-    }
-
-    if (isNaN(parseInt(network.mnc, 10))) {
-      throw new Error("Invalid network MNC: " + network.mnc);
-    }
-
-    if (isNaN(parseInt(network.mcc, 10))) {
-      throw new Error("Invalid network MCC: " + network.mcc);
-    }
-
     let request = Services.DOMRequest.createRequest(window);
     let requestId = this.getRequestId(request);
 
+    if (!network ||
+        isNaN(parseInt(network.mcc, 10)) || isNaN(parseInt(network.mnc, 10))) {
+      this.dispatchFireRequestError(RIL.GECKO_ERROR_INVALID_PARAMETER);
+      return request;
+    }
+
     if (this.rilContexts[clientId].networkSelectionMode == RIL.GECKO_NETWORK_SELECTION_MANUAL &&
         this.rilContexts[clientId].voiceConnectionInfo.network === network) {
-
       // Already manually selected this network, so schedule
       // onsuccess to be fired on the next tick
       this.dispatchFireRequestSuccess(requestId, null);
       return request;
     }
-
-    this._selectingNetworks[clientId] = network;
 
     cpmm.sendAsyncMessage("RIL:SelectNetwork", {
       clientId: clientId,
@@ -750,14 +732,9 @@ RILContentHelper.prototype = {
   },
 
   selectNetworkAutomatically: function(clientId, window) {
-
     if (window == null) {
       throw Components.Exception("Can't get window object",
                                   Cr.NS_ERROR_UNEXPECTED);
-    }
-
-    if (this._selectingNetworks[clientId]) {
-      throw new Error("Already selecting a network: " + this._selectingNetworks[clientId]);
     }
 
     let request = Services.DOMRequest.createRequest(window);
@@ -770,7 +747,6 @@ RILContentHelper.prototype = {
       return request;
     }
 
-    this._selectingNetworks[clientId] = "automatic";
     cpmm.sendAsyncMessage("RIL:SelectNetworkAuto", {
       clientId: clientId,
       data: {
@@ -788,6 +764,13 @@ RILContentHelper.prototype = {
 
     let request = Services.DOMRequest.createRequest(window);
     let requestId = this.getRequestId(request);
+
+    let radioState = this.rilContexts[clientId].radioState;
+    if (radioState !== RIL.GECKO_DETAILED_RADIOSTATE_ENABLED) {
+      this.dispatchFireRequestError(requestId,
+                                    RIL.GECKO_ERROR_RADIO_NOT_AVAILABLE);
+      return request;
+    }
 
     cpmm.sendAsyncMessage("RIL:SetPreferredNetworkType", {
       clientId: clientId,
@@ -807,6 +790,13 @@ RILContentHelper.prototype = {
 
     let request = Services.DOMRequest.createRequest(window);
     let requestId = this.getRequestId(request);
+
+    let radioState = this.rilContexts[clientId].radioState;
+    if (radioState !== RIL.GECKO_DETAILED_RADIOSTATE_ENABLED) {
+      this.dispatchFireRequestError(requestId,
+                                    RIL.GECKO_ERROR_RADIO_NOT_AVAILABLE);
+      return request;
+    }
 
     cpmm.sendAsyncMessage("RIL:GetPreferredNetworkType", {
       clientId: clientId,
@@ -1559,13 +1549,17 @@ RILContentHelper.prototype = {
 
   registerCellBroadcastMsg: function(listener) {
     if (DEBUG) debug("Registering for Cell Broadcast related messages");
-    //TODO: Bug 921326 - Cellbroadcast API: support multiple sim cards
+    // Instead of registering multiple listeners for Multi-SIM, we reuse
+    // clientId 0 to route all CBS messages to single listener and provide the
+    // |clientId| info by |CellBroadcastMessage.serviceId|.
     this.registerListener("_cellBroadcastListeners", 0, listener);
     cpmm.sendAsyncMessage("RIL:RegisterCellBroadcastMsg");
   },
 
   unregisterCellBroadcastMsg: function(listener) {
-    //TODO: Bug 921326 - Cellbroadcast API: support multiple sim cards
+    // Instead of unregistering multiple listeners for Multi-SIM, we reuse
+    // clientId 0 to route all CBS messages to single listener and provide the
+    // |clientId| info by |CellBroadcastMessage.serviceId|.
     this.unregisterListener("_cellBroadcastListeners", 0, listener);
   },
 
@@ -1715,12 +1709,10 @@ RILContentHelper.prototype = {
         this.rilContexts[clientId].networkSelectionMode = data.mode;
         break;
       case "RIL:SelectNetwork":
-        this.handleSelectNetwork(clientId, data,
-                                 RIL.GECKO_NETWORK_SELECTION_MANUAL);
+        this.handleSimpleRequest(data.requestId, data.errorMsg, null);
         break;
       case "RIL:SelectNetworkAuto":
-        this.handleSelectNetwork(clientId, data,
-                                 RIL.GECKO_NETWORK_SELECTION_AUTOMATIC);
+        this.handleSimpleRequest(data.requestId, data.errorMsg, null);
         break;
       case "RIL:SetPreferredNetworkType":
         this.handleSimpleRequest(data.requestId, data.errorMsg, null);
@@ -1841,8 +1833,10 @@ RILContentHelper.prototype = {
         this.handleSimpleRequest(data.requestId, data.errorMsg, null);
         break;
       case "RIL:CellBroadcastReceived": {
-        let message = new CellBroadcastMessage(data);
-        this._deliverEvent(clientId,
+        // All CBS messages are to routed the listener for clientId 0 and
+        // provide the |clientId| info by |CellBroadcastMessage.serviceId|.
+        let message = new CellBroadcastMessage(clientId, data);
+        this._deliverEvent(0, // route to clientId 0.
                            "_cellBroadcastListeners",
                            "notifyMessageReceived",
                            [message]);
@@ -1924,17 +1918,6 @@ RILContentHelper.prototype = {
     }
 
     this.fireRequestSuccess(message.requestId, networks);
-  },
-
-  handleSelectNetwork: function(clientId, message, mode) {
-    this._selectingNetworks[clientId] = null;
-    this.rilContexts[clientId].networkSelectionMode = mode;
-
-    if (message.errorMsg) {
-      this.fireRequestError(message.requestId, message.errorMsg);
-    } else {
-      this.fireRequestSuccess(message.requestId, null);
-    }
   },
 
   handleIccExchangeAPDU: function(message) {

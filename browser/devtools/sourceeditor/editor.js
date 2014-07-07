@@ -1,3 +1,4 @@
+/* -*- indent-tabs-mode: nil; js-indent-level: 2; fill-column: 80 -*- */
 /* vim:set ts=2 sw=2 sts=2 et tw=80:
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,6 +12,7 @@ const TAB_SIZE    = "devtools.editor.tabsize";
 const EXPAND_TAB  = "devtools.editor.expandtab";
 const KEYMAP      = "devtools.editor.keymap";
 const AUTO_CLOSE  = "devtools.editor.autoclosebrackets";
+const AUTOCOMPLETE  = "devtools.editor.autocomplete";
 const DETECT_INDENT = "devtools.editor.detectindentation";
 const DETECT_INDENT_MAX_LINES = 500;
 const L10N_BUNDLE = "chrome://browser/locale/devtools/sourceeditor.properties";
@@ -19,6 +21,11 @@ const XUL_NS      = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.x
 // Maximum allowed margin (in number of lines) from top or bottom of the editor
 // while shifting to a line which was initially out of view.
 const MAX_VERTICAL_OFFSET = 3;
+
+// Match @Scratchpad/N:LINE[:COLUMN] or (LINE[:COLUMN]) anywhere at an end of
+// line in text selection.
+const RE_SCRATCHPAD_ERROR = /(?:@Scratchpad\/\d+:|\()(\d+):?(\d+)?(?:\)|\n)/;
+const RE_JUMP_TO_LINE = /^(\d+):?(\d+)?/;
 
 const {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
 const events  = require("devtools/toolkit/event-emitter");
@@ -92,9 +99,7 @@ const CM_MAPPING = [
   "clearHistory",
   "openDialog",
   "refresh",
-  "getScrollInfo",
-  "getOption",
-  "setOption"
+  "getScrollInfo"
 ];
 
 const { cssProperties, cssValues, cssColors } = getCSSKeywords();
@@ -150,7 +155,9 @@ function Editor(config) {
     styleActiveLine:   true,
     autoCloseBrackets: "()[]{}''\"\"",
     autoCloseEnabled:  useAutoClose,
-    theme:             "mozilla"
+    theme:             "mozilla",
+    themeSwitching:    true,
+    autocomplete:      false
   };
 
   // Additional shortcuts.
@@ -251,6 +258,9 @@ Editor.prototype = {
       env.removeEventListener("load", onLoad, true);
       let win = env.contentWindow.wrappedJSObject;
 
+      if (!this.config.themeSwitching)
+        win.document.documentElement.setAttribute("force-theme", "light");
+
       CM_SCRIPTS.forEach((url) =>
         Services.scriptloader.loadSubScript(url, win, "utf8"));
 
@@ -303,7 +313,7 @@ Editor.prototype = {
           return;
         }
 
-        this.emit("gutterClick", line);
+        this.emit("gutterClick", line, ev.button);
       });
 
       win.CodeMirror.defineExtension("l10n", (name) => {
@@ -337,11 +347,29 @@ Editor.prototype = {
   },
 
   /**
+   * Load a script into editor's containing window.
+   */
+  loadScript: function (url) {
+    if (!this.container) {
+      throw new Error("Can't load a script until the editor is loaded.")
+    }
+    let win = this.container.contentWindow.wrappedJSObject;
+    Services.scriptloader.loadSubScript(url, win, "utf8");
+  },
+
+  /**
    * Changes the value of a currently used highlighting mode.
-   * See Editor.modes for the list of all suppoert modes.
+   * See Editor.modes for the list of all supported modes.
    */
   setMode: function (value) {
     this.setOption("mode", value);
+
+    // If autocomplete was set up and the mode is changing, then
+    // turn it off and back on again so the proper mode can be used.
+    if (this.config.autocomplete) {
+      this.setOption("autocomplete", false);
+      this.setOption("autocomplete", true);
+    }
   },
 
   /**
@@ -740,7 +768,28 @@ Editor.prototype = {
     div.appendChild(txt);
     div.appendChild(inp);
 
-    this.openDialog(div, (line) => this.setCursor({ line: line - 1, ch: 0 }));
+    if (!this.hasMultipleSelections()) {
+      let cm = editors.get(this);
+      let sel = cm.getSelection();
+      // Scratchpad inserts and selects a comment after an error happens:
+      // "@Scratchpad/1:10:2". Parse this to get the line and column.
+      // In the string above this is line 10, column 2.
+      let match = sel.match(RE_SCRATCHPAD_ERROR);
+      if (match) {
+        let [ , line, column ] = match;
+        inp.value = column ? line + ":" + column : line;
+        inp.selectionStart = inp.selectionEnd = inp.value.length;
+      }
+    }
+
+    this.openDialog(div, (line) => {
+      // Handle LINE:COLUMN as well as LINE
+      let match = line.toString().match(RE_JUMP_TO_LINE);
+      if (match) {
+        let [ , line, column ] = match;
+        this.setCursor({line: line - 1, ch: column ? column - 1 : 0 });
+      }
+    });
   },
 
   /**
@@ -820,6 +869,57 @@ Editor.prototype = {
     let cm = editors.get(this);
     cm.getWrapperElement().style.fontSize = parseInt(size, 10) + "px";
     cm.refresh();
+  },
+
+  /**
+   * Sets an option for the editor.  For most options it just defers to
+   * CodeMirror.setOption, but certain ones are maintained within the editor
+   * instance.
+   */
+  setOption: function(o, v) {
+    let cm = editors.get(this);
+    if (o === "autocomplete") {
+      this.config.autocomplete = v;
+      this.setupAutoCompletion();
+    } else {
+      cm.setOption(o, v);
+    }
+  },
+
+  /**
+   * Gets an option for the editor.  For most options it just defers to
+   * CodeMirror.getOption, but certain ones are maintained within the editor
+   * instance.
+   */
+  getOption: function(o) {
+    let cm = editors.get(this);
+    if (o === "autocomplete") {
+      return this.config.autocomplete;
+    } else {
+      return cm.getOption(o);
+    }
+  },
+
+  /**
+   * Sets up autocompletion for the editor. Lazily imports the required
+   * dependencies because they vary by editor mode.
+   *
+   * Autocompletion is special, because we don't want to automatically use
+   * it just because it is preffed on (it still needs to be requested by the
+   * editor), but we do want to always disable it if it is preffed off.
+   */
+  setupAutoCompletion: function (options = {}) {
+    // The autocomplete module will overwrite this.initializeAutoCompletion
+    // with a mode specific autocompletion handler.
+    if (!this.initializeAutoCompletion) {
+      this.extend(require("./autocomplete"));
+    }
+
+    if (this.config.autocomplete && Services.prefs.getBoolPref(AUTOCOMPLETE)) {
+      this.initializeAutoCompletion(options);
+    } else {
+      this.destroyAutoCompletion();
+    }
   },
 
   /**

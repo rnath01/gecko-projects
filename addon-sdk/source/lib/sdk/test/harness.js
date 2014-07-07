@@ -30,8 +30,7 @@ function emptyPromise() {
   return promise;
 }
 
-var cService = Cc['@mozilla.org/consoleservice;1'].getService()
-               .QueryInterface(Ci.nsIConsoleService);
+var cService = Cc['@mozilla.org/consoleservice;1'].getService(Ci.nsIConsoleService);
 
 // The console used to log messages
 var testConsole;
@@ -161,7 +160,7 @@ function reportMemoryUsage() {
     function logReporter(process, path, kind, units, amount, description) {
       print(((++count == 1) ? "\n" : "") + description + ": " + amount + "\n");
     }
-    mgr.getReportsForThisProcess(logReporter, null);
+    mgr.getReportsForThisProcess(logReporter, null, /* anonymize = */ false);
 
     var weakrefs = [info.weakref.get()
                     for each (info in memory.getObjects())];
@@ -380,7 +379,7 @@ function getPotentialLeaks() {
 
   Cc["@mozilla.org/memory-reporter-manager;1"]
     .getService(Ci.nsIMemoryReporterManager)
-    .getReportsForThisProcess(logReporter, null);
+    .getReportsForThisProcess(logReporter, null, /* anonymize = */ false);
 
   return { compartments: compartments, windows: windows };
 }
@@ -621,7 +620,4 @@ var runTests = exports.runTests = function runTests(options) {
   }
 };
 
-unload(function() {
-  cService.unregisterListener(consoleListener);
-});
-
+unload(_ => cService.unregisterListener(consoleListener));

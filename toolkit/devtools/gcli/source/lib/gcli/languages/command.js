@@ -17,7 +17,7 @@
 'use strict';
 
 var util = require('../util/util');
-var promise = require('../util/promise');
+var Promise = require('../util/promise').Promise;
 var domtemplate = require('../util/domtemplate');
 var host = require('../util/host');
 
@@ -28,7 +28,7 @@ var CommandAssignment = require('../cli').CommandAssignment;
 var fields = require('../fields/fields');
 var intro = require('../ui/intro');
 
-var RESOLVED = promise.resolve(true);
+var RESOLVED = Promise.resolve(true);
 
 /**
  * Various ways in which we need to manipulate the caret/selection position.
@@ -100,11 +100,13 @@ var commandLanguage = exports.commandLanguage = {
     }
 
     return commandHtmlPromise.then(function(commandHtml) {
-      this.commandDom = util.toDom(this.document, commandHtml);
+      this.commandDom = host.toDom(this.document, commandHtml);
 
       this.requisition.commandOutputManager.onOutput.add(this.outputted, this);
       var mapping = cli.getMapping(this.requisition.executionContext);
       mapping.terminal = this.terminal;
+
+      this.requisition.onExternalUpdate.add(this.textChanged, this);
 
       return this;
     }.bind(this));
@@ -115,6 +117,7 @@ var commandLanguage = exports.commandLanguage = {
     delete mapping.terminal;
 
     this.requisition.commandOutputManager.onOutput.remove(this.outputted, this);
+    this.requisition.onExternalUpdate.remove(this.textChanged, this);
 
     this.terminal = undefined;
     this.requisition = undefined;
@@ -163,7 +166,14 @@ var commandLanguage = exports.commandLanguage = {
   // Called internally whenever we think that the current assignment might
   // have changed, typically on mouse-clicks or key presses.
   caretMoved: function(start) {
+    if (!this.requisition.isUpToDate()) {
+      return;
+    }
     var newAssignment = this.requisition.getAssignmentAt(start);
+    if (newAssignment == null) {
+      return;
+    }
+
     if (this.assignment !== newAssignment) {
       if (this.assignment.param.type.onLeave) {
         this.assignment.param.type.onLeave(this.assignment);
@@ -248,7 +258,7 @@ var commandLanguage = exports.commandLanguage = {
       }.bind(this));
     }
 
-    return promise.resolve(false);
+    return Promise.resolve(false);
   },
 
   /**
@@ -263,7 +273,7 @@ var commandLanguage = exports.commandLanguage = {
       }.bind(this));
     }
 
-    return promise.resolve(false);
+    return Promise.resolve(false);
   },
 
   /**
@@ -272,7 +282,7 @@ var commandLanguage = exports.commandLanguage = {
   handleReturn: function(input) {
     // Deny RETURN unless the command might work
     if (this.requisition.status !== Status.VALID) {
-      return promise.resolve(false);
+      return Promise.resolve(false);
     }
 
     this.terminal.history.add(input);

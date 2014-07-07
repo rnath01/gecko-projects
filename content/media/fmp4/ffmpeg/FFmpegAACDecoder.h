@@ -8,16 +8,22 @@
 #define __FFmpegAACDecoder_h__
 
 #include "FFmpegDataDecoder.h"
+#include "mp4_demuxer/DecoderData.h"
 
 namespace mozilla
 {
 
-class FFmpegAACDecoder : public FFmpegDataDecoder
+template <int V> class FFmpegAACDecoder
+{
+};
+
+template <>
+class FFmpegAACDecoder<LIBAV_VER> : public FFmpegDataDecoder<LIBAV_VER>
 {
 public:
   FFmpegAACDecoder(MediaTaskQueue* aTaskQueue,
                    MediaDataDecoderCallback* aCallback,
-                   const mp4_demuxer::AudioDecoderConfig &aConfig);
+                   const mp4_demuxer::AudioDecoderConfig& aConfig);
   virtual ~FFmpegAACDecoder();
 
   virtual nsresult Init() MOZ_OVERRIDE;
@@ -28,7 +34,6 @@ private:
   void DecodePacket(mp4_demuxer::MP4Sample* aSample);
 
   MediaDataDecoderCallback* mCallback;
-  mp4_demuxer::AudioDecoderConfig mConfig;
 };
 
 } // namespace mozilla

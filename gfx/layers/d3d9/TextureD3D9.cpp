@@ -288,43 +288,29 @@ TextureSourceD3D9::SurfaceToTexture(DeviceManagerD3D9* aDeviceManager,
     return nullptr;
   }
 
-  nsRefPtr<gfxImageSurface> imgSurface =
-    new gfxImageSurface(reinterpret_cast<unsigned char*>(lockedRect.pBits),
-                        gfxIntSize(aSize.width, aSize.height),
-                        lockedRect.Pitch,
-                        gfxPlatform::GetPlatform()->OptimalFormatForContent(aSurface->GetContentType()));
+  {
+    RefPtr<DrawTarget> dt =
+      Factory::CreateDrawTargetForData(BackendType::CAIRO,
+                                       reinterpret_cast<unsigned char*>(lockedRect.pBits),
+                                       aSize, lockedRect.Pitch,
+                                       gfxPlatform::GetPlatform()->Optimal2DFormatForContent(aSurface->GetContentType()));
+    NativeSurface nativeSurf;
+    nativeSurf.mSize = aSize;
+    nativeSurf.mType = NativeSurfaceType::CAIRO_SURFACE;
+    // We don't know that this is actually the right format, but it's the best
+    // we can get for the content type. In practice this probably always works.
+    nativeSurf.mFormat = dt->GetFormat();
+    nativeSurf.mSurface = aSurface->CairoSurface();
 
-  nsRefPtr<gfxContext> context = new gfxContext(imgSurface);
-  context->SetSource(aSurface);
-  context->SetOperator(gfxContext::OPERATOR_SOURCE);
-  context->Paint();
+    RefPtr<SourceSurface> surf = dt->CreateSourceSurfaceFromNativeSurface(nativeSurf);
+
+    dt->CopySurface(surf, IntRect(IntPoint(), aSize), IntPoint());
+  }
 
   FinishTextures(aDeviceManager, texture, surface);
 
   return texture;
 }
-
-class D3D9TextureClientData : public TextureClientData
-{
-public:
-  D3D9TextureClientData(IDirect3DTexture9* aTexture)
-    : mTexture(aTexture)
-  {}
-
-  D3D9TextureClientData(gfxWindowsSurface* aWindowSurface)
-    : mWindowSurface(aWindowSurface)
-  {}
-
-  virtual void DeallocateSharedData(ISurfaceAllocator*) MOZ_OVERRIDE
-  {
-    mWindowSurface = nullptr;
-    mTexture = nullptr;
-  }
-
-private:
-  RefPtr<IDirect3DTexture9> mTexture;
-  nsRefPtr<gfxWindowsSurface> mWindowSurface;
-};
 
 DataTextureSourceD3D9::DataTextureSourceD3D9(gfx::SurfaceFormat aFormat,
                                              CompositorD3D9* aCompositor,
@@ -573,6 +559,7 @@ CairoTextureClientD3D9::CairoTextureClientD3D9(gfx::SurfaceFormat aFormat, Textu
   , mFormat(aFormat)
   , mIsLocked(false)
   , mNeedsClear(false)
+  , mNeedsClearWhite(false)
   , mLockRect(false)
 {
   MOZ_COUNT_CTOR(CairoTextureClientD3D9);
@@ -584,7 +571,7 @@ CairoTextureClientD3D9::~CairoTextureClientD3D9()
 }
 
 bool
-CairoTextureClientD3D9::Lock(OpenMode)
+CairoTextureClientD3D9::Lock(OpenMode aMode)
 {
   MOZ_ASSERT(!mIsLocked);
   if (!IsValid() || !IsAllocated()) {
@@ -608,10 +595,25 @@ CairoTextureClientD3D9::Lock(OpenMode)
 
   mIsLocked = true;
 
+  // Make sure that successful write-lock means we will have a DrawTarget to
+  // write into.
+  if (aMode & OpenMode::OPEN_WRITE) {
+    mDrawTarget = BorrowDrawTarget();
+    if (!mDrawTarget) {
+      Unlock();
+      return false;
+    }
+  }
+
   if (mNeedsClear) {
-    mDrawTarget = GetAsDrawTarget();
+    mDrawTarget = BorrowDrawTarget();
     mDrawTarget->ClearRect(Rect(0, 0, GetSize().width, GetSize().height));
     mNeedsClear = false;
+  }
+  if (mNeedsClearWhite) {
+    mDrawTarget = BorrowDrawTarget();
+    mDrawTarget->FillRect(Rect(0, 0, GetSize().width, GetSize().height), ColorPattern(Color(1.0, 1.0, 1.0, 1.0)));
+    mNeedsClearWhite = false;
   }
 
   return true;
@@ -650,8 +652,8 @@ CairoTextureClientD3D9::ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor)
   return true;
 }
 
-TemporaryRef<gfx::DrawTarget>
-CairoTextureClientD3D9::GetAsDrawTarget()
+gfx::DrawTarget*
+CairoTextureClientD3D9::BorrowDrawTarget()
 {
   MOZ_ASSERT(mIsLocked && mD3D9Surface);
   if (mDrawTarget) {
@@ -697,18 +699,10 @@ CairoTextureClientD3D9::AllocateForSurface(gfx::IntSize aSize, TextureAllocation
   }
 
   mNeedsClear = aFlags & ALLOC_CLEAR_BUFFER;
+  mNeedsClearWhite = aFlags & ALLOC_CLEAR_BUFFER_WHITE;
 
   MOZ_ASSERT(mTexture);
   return true;
-}
-
-TextureClientData*
-CairoTextureClientD3D9::DropTextureData()
-{
-  TextureClientData* data = new D3D9TextureClientData(mTexture);
-  mTexture = nullptr;
-  MarkInvalid();
-  return data;
 }
 
 DIBTextureClientD3D9::DIBTextureClientD3D9(gfx::SurfaceFormat aFormat, TextureFlags aFlags)
@@ -762,8 +756,8 @@ DIBTextureClientD3D9::ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor)
   return true;
 }
 
-TemporaryRef<gfx::DrawTarget>
-DIBTextureClientD3D9::GetAsDrawTarget()
+gfx::DrawTarget*
+DIBTextureClientD3D9::BorrowDrawTarget()
 {
   MOZ_ASSERT(mIsLocked && IsAllocated());
 
@@ -793,15 +787,6 @@ DIBTextureClientD3D9::AllocateForSurface(gfx::IntSize aSize, TextureAllocationFl
   return true;
 }
 
-TextureClientData*
-DIBTextureClientD3D9::DropTextureData()
-{
-  TextureClientData* data = new D3D9TextureClientData(mSurface);
-  mSurface = nullptr;
-  MarkInvalid();
-  return data;
-}
-
 SharedTextureClientD3D9::SharedTextureClientD3D9(gfx::SurfaceFormat aFormat, TextureFlags aFlags)
   : TextureClient(aFlags)
   , mFormat(aFormat)
@@ -814,15 +799,6 @@ SharedTextureClientD3D9::SharedTextureClientD3D9(gfx::SurfaceFormat aFormat, Tex
 SharedTextureClientD3D9::~SharedTextureClientD3D9()
 {
   MOZ_COUNT_DTOR(SharedTextureClientD3D9);
-}
-
-TextureClientData*
-SharedTextureClientD3D9::DropTextureData()
-{
-  TextureClientData* data = new D3D9TextureClientData(mTexture);
-  mTexture = nullptr;
-  MarkInvalid();
-  return data;
 }
 
 bool

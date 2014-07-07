@@ -35,6 +35,10 @@ TextTrackList::TextTrackList(nsPIDOMWindow* aOwnerWindow,
 {
 }
 
+TextTrackList::~TextTrackList()
+{
+}
+
 void
 TextTrackList::UpdateAndGetShowingCues(nsTArray<nsRefPtr<TextTrackCue> >& aCues)
 {
@@ -172,7 +176,7 @@ TextTrackList::CreateAndDispatchChangeEvent()
   event->SetTrusted(true);
 
   nsCOMPtr<nsIRunnable> eventRunner = new TrackEventRunner(this, event);
-  NS_DispatchToMainThread(eventRunner, NS_DISPATCH_NORMAL);
+  NS_DispatchToMainThread(eventRunner);
 }
 
 void
@@ -180,15 +184,13 @@ TextTrackList::CreateAndDispatchTrackEventRunner(TextTrack* aTrack,
                                                  const nsAString& aEventName)
 {
   TrackEventInit eventInit;
-  eventInit.mBubbles = false;
-  eventInit.mCancelable = false;
-  eventInit.mTrack = aTrack;
+  eventInit.mTrack.SetValue().SetAsTextTrack() = aTrack;
   nsRefPtr<TrackEvent> event =
     TrackEvent::Constructor(this, aEventName, eventInit);
 
   // Dispatch the TrackEvent asynchronously.
   nsCOMPtr<nsIRunnable> eventRunner = new TrackEventRunner(this, event);
-  NS_DispatchToMainThread(eventRunner, NS_DISPATCH_NORMAL);
+  NS_DispatchToMainThread(eventRunner);
 }
 
 HTMLMediaElement*

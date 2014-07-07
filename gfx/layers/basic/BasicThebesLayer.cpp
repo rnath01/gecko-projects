@@ -28,10 +28,10 @@
 #include "AutoMaskData.h"
 #include "gfx2DGlue.h"
 
-using namespace mozilla::gfx;
-
 namespace mozilla {
 namespace layers {
+
+using namespace mozilla::gfx;
 
 static nsIntRegion
 IntersectWithClip(const nsIntRegion& aRegion, gfxContext* aContext)
@@ -50,7 +50,9 @@ BasicThebesLayer::PaintThebes(gfxContext* aContext,
                               LayerManager::DrawThebesLayerCallback aCallback,
                               void* aCallbackData)
 {
-  PROFILER_LABEL("BasicThebesLayer", "PaintThebes");
+  PROFILER_LABEL("BasicThebesLayer", "PaintThebes",
+    js::ProfileEntry::Category::GRAPHICS);
+
   NS_ASSERTION(BasicManager()->InDrawing(),
                "Can only draw in drawing phase");
 
@@ -91,7 +93,7 @@ BasicThebesLayer::PaintThebes(gfxContext* aContext,
       SetAntialiasingFlags(this, groupContext);
       aCallback(this, groupContext, toDraw, DrawRegionClip::CLIP_NONE, nsIntRegion(), aCallbackData);
       if (needsGroup) {
-        BasicManager()->PopGroupToSourceWithCachedSurface(aContext, groupContext);
+        aContext->PopGroupToSource();
         if (needsClipToVisibleRegion) {
           gfxUtils::ClipToRegion(aContext, toDraw);
         }
@@ -117,7 +119,7 @@ BasicThebesLayer::PaintThebes(gfxContext* aContext,
   AutoMoz2DMaskData mask;
   SourceSurface* maskSurface = nullptr;
   Matrix maskTransform;
-  if (GetMaskData(aMaskLayer, Point(), &mask)) {
+  if (GetMaskData(aMaskLayer, aContext->GetDeviceOffset(), &mask)) {
     maskSurface = mask.GetSurface();
     maskTransform = mask.GetTransform();
   }

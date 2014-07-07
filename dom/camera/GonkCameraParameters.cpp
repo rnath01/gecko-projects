@@ -85,6 +85,8 @@ GonkCameraParameters::Parameters::GetTextKey(uint32_t aKey)
       // Not every platform defines KEY_QC_HDR_NEED_1X;
       // for those that don't, we use the raw string key.
       return "hdr-need-1x";
+    case CAMERA_PARAM_RECORDINGHINT:
+      return KEY_RECORDING_HINT;
 
     case CAMERA_PARAM_SUPPORTED_PREVIEWSIZES:
       return KEY_SUPPORTED_PREVIEW_SIZES;
@@ -136,6 +138,7 @@ GonkCameraParameters::GonkCameraParameters()
   : mLock(PR_NewRWLock(PR_RWLOCK_RANK_NONE, "GonkCameraParameters.Lock"))
   , mDirty(false)
   , mInitialized(false)
+  , mExposureCompensationStep(0.0)
 {
   MOZ_COUNT_CTOR(GonkCameraParameters);
   if (!mLock) {
@@ -146,6 +149,7 @@ GonkCameraParameters::GonkCameraParameters()
 GonkCameraParameters::~GonkCameraParameters()
 {
   MOZ_COUNT_DTOR(GonkCameraParameters);
+  mIsoModeMap.Clear();
   MOZ_ASSERT(mLock, "mLock missing in ~GonkCameraParameters()");
   if (mLock) {
     PR_DestroyRWLock(mLock);
@@ -156,20 +160,19 @@ GonkCameraParameters::~GonkCameraParameters()
 nsresult
 GonkCameraParameters::MapIsoToGonk(const nsAString& aIso, nsACString& aIsoOut)
 {
-  if (aIso.EqualsASCII("hjr")) {
-    aIsoOut = "ISO_HJR";
-  } else if (aIso.EqualsASCII("auto")) {
-    aIsoOut = "auto";
-  } else {
-    nsAutoCString v = NS_LossyConvertUTF16toASCII(aIso);
-    unsigned int iso;
-    if (sscanf(v.get(), "%u", &iso) != 1) {
-      return NS_ERROR_INVALID_ARG;
+  nsCString* s;
+  if (mIsoModeMap.Get(aIso, &s)) {
+    if (!s) {
+      DOM_CAMERA_LOGE("ISO mode '%s' maps to null Gonk ISO value\n",
+        NS_LossyConvertUTF16toASCII(aIso).get());
+      return NS_ERROR_FAILURE;
     }
-    aIsoOut = nsPrintfCString("ISO%u", iso);
+
+    aIsoOut = *s;
+    return NS_OK;
   }
 
-  return NS_OK;
+  return NS_ERROR_INVALID_ARG;
 }
 
 nsresult
@@ -181,9 +184,13 @@ GonkCameraParameters::MapIsoFromGonk(const char* aIso, nsAString& aIsoOut)
     aIsoOut.AssignASCII("auto");
   } else {
     unsigned int iso;
-    if (sscanf(aIso, "ISO%u", &iso) != 1) {
+    char ignored;
+    // Some camera libraries return ISO modes as "ISO100", others as "100".
+    if (sscanf(aIso, "ISO%u%c", &iso, &ignored) != 1 &&
+        sscanf(aIso, "%u%c", &iso, &ignored) != 1) {
       return NS_ERROR_INVALID_ARG;
     }
+    aIsoOut.Truncate(0);
     aIsoOut.AppendInt(iso);
   }
 
@@ -197,15 +204,20 @@ GonkCameraParameters::Initialize()
 {
   nsresult rv;
 
-  rv = GetImpl(CAMERA_PARAM_SUPPORTED_MINEXPOSURECOMPENSATION, mExposureCompensationMin);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to initialize minimum exposure compensation");
-    mExposureCompensationMin = 0;
-  }
-  rv = GetImpl(CAMERA_PARAM_SUPPORTED_EXPOSURECOMPENSATIONSTEP, mExposureCompensationStep);
+  rv = GetImpl(Parameters::KEY_EXPOSURE_COMPENSATION_STEP, mExposureCompensationStep);
   if (NS_FAILED(rv)) {
     NS_WARNING("Failed to initialize exposure compensation step size");
-    mExposureCompensationStep = 0;
+    mExposureCompensationStep = 0.0;
+  }
+  rv = GetImpl(Parameters::KEY_MIN_EXPOSURE_COMPENSATION, mExposureCompensationMinIndex);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Failed to initialize minimum exposure compensation index");
+    mExposureCompensationMinIndex = 0;
+  }
+  rv = GetImpl(Parameters::KEY_MAX_EXPOSURE_COMPENSATION, mExposureCompensationMaxIndex);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Failed to initialize maximum exposure compensation index");
+    mExposureCompensationMaxIndex = 0;
   }
 
   rv = GetListAsArray(CAMERA_PARAM_SUPPORTED_ZOOMRATIOS, mZoomRatios);
@@ -231,14 +243,17 @@ GonkCameraParameters::Initialize()
   // The return code from GetListAsArray() doesn't matter. If it fails,
   // the isoModes array will be empty, and the subsequent loop won't
   // execute.
+  nsString s;
   nsTArray<nsCString> isoModes;
   GetListAsArray(CAMERA_PARAM_SUPPORTED_ISOMODES, isoModes);
   for (uint32_t i = 0; i < isoModes.Length(); ++i) {
-    nsString v;
-    rv = MapIsoFromGonk(isoModes[i].get(), v);
-    if (NS_SUCCEEDED(rv)) {
-      *mIsoModes.AppendElement() = v;
+    rv = MapIsoFromGonk(isoModes[i].get(), s);
+    if (NS_FAILED(rv)) {
+      DOM_CAMERA_LOGW("Unrecognized ISO mode value '%s'\n", isoModes[i].get());
+      continue;
     }
+    *mIsoModes.AppendElement() = s;
+    mIsoModeMap.Put(s, new nsCString(isoModes[i]));
   }
 
   mInitialized = true;
@@ -385,7 +400,7 @@ GonkCameraParameters::SetTranslated(uint32_t aKey, const nsTArray<ICameraControl
 
   for (uint32_t i = 0; i < length; ++i) {
     const ICameraControl::Region* r = &aRegions[i];
-    s.AppendPrintf("(%d,%d,%d,%d,%d),", r->top, r->left, r->bottom, r->right, r->weight);
+    s.AppendPrintf("(%d,%d,%d,%d,%d),", r->left, r->top, r->right, r->bottom, r->weight);
   }
 
   // remove the trailing comma
@@ -425,7 +440,7 @@ GonkCameraParameters::GetTranslated(uint32_t aKey, nsTArray<ICameraControl::Regi
   uint32_t i;
   for (i = 0, p = value; p && i < count; ++i, p = strchr(p + 1, '(')) {
     r = aRegions.AppendElement();
-    if (sscanf(p, "(%d,%d,%d,%d,%u)", &r->top, &r->left, &r->bottom, &r->right, &r->weight) != 5) {
+    if (sscanf(p, "(%d,%d,%d,%d,%u)", &r->left, &r->top, &r->right, &r->bottom, &r->weight) != 5) {
       DOM_CAMERA_LOGE("Camera parameter aKey=%d region tuple has bad format: '%s'\n", aKey, p);
       aRegions.Clear();
       return NS_ERROR_NOT_AVAILABLE;
@@ -538,8 +553,8 @@ GonkCameraParameters::SetTranslated(uint32_t aKey, const double& aValue)
 
   switch (aKey) {
     case CAMERA_PARAM_EXPOSURECOMPENSATION:
-      if (mExposureCompensationStep == 0) {
-        DOM_CAMERA_LOGE("Exposure compensation not supported, can't set %f\n", aValue);
+      if (mExposureCompensationStep == 0.0) {
+        DOM_CAMERA_LOGE("Exposure compensation not supported, can't set EV=%f\n", aValue);
         return NS_ERROR_NOT_AVAILABLE;
       }
 
@@ -547,9 +562,16 @@ GonkCameraParameters::SetTranslated(uint32_t aKey, const double& aValue)
        * Convert from real value to a Gonk index, round
        * to the nearest step; index is 1-based.
        */
-      index =
-        (aValue - mExposureCompensationMin + mExposureCompensationStep / 2) /
-        mExposureCompensationStep + 1;
+      {
+        double i = round(aValue / mExposureCompensationStep);
+        if (i < mExposureCompensationMinIndex) {
+          index = mExposureCompensationMinIndex;
+        } else if (i > mExposureCompensationMaxIndex) {
+          index = mExposureCompensationMaxIndex;
+        } else {
+          index = i;
+        }
+      }
       DOM_CAMERA_LOGI("Exposure compensation = %f --> index = %d\n", aValue, index);
       return SetImpl(CAMERA_PARAM_EXPOSURECOMPENSATION, index);
 
@@ -641,15 +663,16 @@ GonkCameraParameters::GetTranslated(uint32_t aKey, double& aValue)
       break;
 
     case CAMERA_PARAM_EXPOSURECOMPENSATION:
+    case CAMERA_PARAM_SUPPORTED_MINEXPOSURECOMPENSATION:
+    case CAMERA_PARAM_SUPPORTED_MAXEXPOSURECOMPENSATION:
+      if (mExposureCompensationStep == 0.0) {
+        DOM_CAMERA_LOGE("Exposure compensation not supported, can't get EV\n");
+        return NS_ERROR_NOT_AVAILABLE;
+      }
       rv = GetImpl(aKey, index);
       if (NS_SUCCEEDED(rv)) {
-        if (!index) {
-          // NaN indicates automatic exposure compensation
-          val = NAN;
-        } else {
-          val = (index - 1) * mExposureCompensationStep + mExposureCompensationMin;
-          DOM_CAMERA_LOGI("index = %d --> compensation = %f\n", index, val);
-        }
+        val = index * mExposureCompensationStep;
+        DOM_CAMERA_LOGI("exposure compensation (aKey=%d): index=%d --> EV=%f\n", aKey, index, val);
       }
       break;
 

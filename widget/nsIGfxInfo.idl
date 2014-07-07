@@ -8,7 +8,7 @@
 
 /* NOTE: this interface is completely undesigned, not stable and likely to change */
 
-[scriptable, uuid(8a9797ae-22d4-431d-a628-18fd5900c53c)]
+[scriptable, uuid(1194ba76-aeb5-48df-abfd-844740ce3696)]
 interface nsIGfxInfo : nsISupports
 {
   /*
@@ -81,14 +81,15 @@ interface nsIGfxInfo : nsISupports
   const long FEATURE_STAGEFRIGHT = 9;
   /* Whether Webrtc Hardware acceleration is supported */
   const long FEATURE_WEBRTC_HW_ACCELERATION = 10;
+  /* Whether Direct3D 11 is supported for layers. */
+  const long FEATURE_DIRECT3D_11_LAYERS = 11;
 
   /*
    * A set of return values from GetFeatureStatus
    */
 
-  /* We don't explicitly block or discourage the feature. Which means we'll try getting it from the
-   * hardware, and see what happens. */
-  const long FEATURE_NO_INFO = 1;
+  /* The driver is save to the best of our knowledge */
+  const long FEATURE_STATUS_OK = 1;
   /* We don't know the status of the feature yet. The analysis probably hasn't finished yet. */
   const long FEATURE_STATUS_UNKNOWN = 2;
   /* This feature is blocked on this driver version. Updating driver will typically unblock it. */

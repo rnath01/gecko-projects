@@ -52,6 +52,7 @@ enum {
   CAMERA_PARAM_ISOMODE,
   CAMERA_PARAM_LUMINANCE,
   CAMERA_PARAM_SCENEMODE_HDR_RETURNNORMALPICTURE,
+  CAMERA_PARAM_RECORDINGHINT,
 
   // supported features
   CAMERA_PARAM_SUPPORTED_PREVIEWSIZES,
@@ -132,8 +133,8 @@ public:
 
   struct StartRecordingOptions {
     uint32_t  rotation;
-    uint32_t  maxFileSizeBytes;
-    uint32_t  maxVideoLengthMs;
+    uint64_t  maxFileSizeBytes;
+    uint64_t  maxVideoLengthMs;
     bool      autoEnableLowLightTorch;
   };
 
@@ -205,6 +206,8 @@ public:
   virtual nsresult Get(uint32_t aKey, int32_t& aValue) = 0;
   virtual nsresult Set(uint32_t aKey, int64_t aValue) = 0;
   virtual nsresult Get(uint32_t aKey, int64_t& aValue) = 0;
+  virtual nsresult Set(uint32_t aKey, bool aValue) = 0;
+  virtual nsresult Get(uint32_t aKey, bool& aValue) = 0;
   virtual nsresult Set(uint32_t aKey, const Size& aValue) = 0;
   virtual nsresult Get(uint32_t aKey, Size& aValue) = 0;
   virtual nsresult Set(uint32_t aKey, const nsTArray<Region>& aRegions) = 0;

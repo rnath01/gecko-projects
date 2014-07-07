@@ -102,13 +102,16 @@ static nsTArray<QueueData> gCommandQueue;
 static CurrentCommand gCurrentCommand;
 static bool gPending = false;
 static nsTArray<nsCString> gReason;
+static NetworkParams *gWifiTetheringParms = 0;
+
 
 CommandFunc NetworkUtils::sWifiEnableChain[] = {
+  NetworkUtils::clearWifiTetherParms,
   NetworkUtils::wifiFirmwareReload,
   NetworkUtils::startAccessPointDriver,
   NetworkUtils::setAccessPoint,
   NetworkUtils::startSoftAP,
-  NetworkUtils::setInterfaceUp,
+  NetworkUtils::setConfig,
   NetworkUtils::tetherInterface,
   NetworkUtils::setIpForwardingEnabled,
   NetworkUtils::tetheringStatus,
@@ -119,6 +122,7 @@ CommandFunc NetworkUtils::sWifiEnableChain[] = {
 };
 
 CommandFunc NetworkUtils::sWifiDisableChain[] = {
+  NetworkUtils::clearWifiTetherParms,
   NetworkUtils::stopSoftAP,
   NetworkUtils::stopAccessPointDriver,
   NetworkUtils::wifiFirmwareReload,
@@ -132,9 +136,30 @@ CommandFunc NetworkUtils::sWifiDisableChain[] = {
 };
 
 CommandFunc NetworkUtils::sWifiFailChain[] = {
+  NetworkUtils::clearWifiTetherParms,
   NetworkUtils::stopSoftAP,
   NetworkUtils::setIpForwardingEnabled,
   NetworkUtils::stopTethering
+};
+
+CommandFunc NetworkUtils::sWifiRetryChain[] = {
+  NetworkUtils::clearWifiTetherParms,
+  NetworkUtils::stopSoftAP,
+  NetworkUtils::stopTethering,
+
+  // sWifiEnableChain:
+  NetworkUtils::wifiFirmwareReload,
+  NetworkUtils::startAccessPointDriver,
+  NetworkUtils::setAccessPoint,
+  NetworkUtils::startSoftAP,
+  NetworkUtils::setConfig,
+  NetworkUtils::tetherInterface,
+  NetworkUtils::setIpForwardingEnabled,
+  NetworkUtils::tetheringStatus,
+  NetworkUtils::startTethering,
+  NetworkUtils::setDnsForwarders,
+  NetworkUtils::enableNat,
+  NetworkUtils::wifiTetheringSuccess
 };
 
 CommandFunc NetworkUtils::sWifiOperationModeChain[] = {
@@ -143,7 +168,7 @@ CommandFunc NetworkUtils::sWifiOperationModeChain[] = {
 };
 
 CommandFunc NetworkUtils::sUSBEnableChain[] = {
-  NetworkUtils::setInterfaceUp,
+  NetworkUtils::setConfig,
   NetworkUtils::enableNat,
   NetworkUtils::setIpForwardingEnabled,
   NetworkUtils::tetherInterface,
@@ -176,7 +201,7 @@ CommandFunc NetworkUtils::sUpdateUpStreamChain[] = {
 };
 
 CommandFunc NetworkUtils::sStartDhcpServerChain[] = {
-  NetworkUtils::setInterfaceUp,
+  NetworkUtils::setConfig,
   NetworkUtils::startTethering,
   NetworkUtils::setDhcpServerSuccess
 };
@@ -213,6 +238,21 @@ CommandFunc NetworkUtils::sNetworkInterfaceSetAlarmChain[] = {
 CommandFunc NetworkUtils::sSetDnsChain[] = {
   NetworkUtils::setDefaultInterface,
   NetworkUtils::setInterfaceDns
+};
+
+CommandFunc NetworkUtils::sGetInterfacesChain[] = {
+  NetworkUtils::getInterfaceList,
+  NetworkUtils::getInterfacesSuccess
+};
+
+CommandFunc NetworkUtils::sSetInterfaceConfigChain[] = {
+  NetworkUtils::setConfig,
+  NetworkUtils::setInterfaceConfigSuccess
+};
+
+CommandFunc NetworkUtils::sGetInterfaceConfigChain[] = {
+  NetworkUtils::getConfig,
+  NetworkUtils::getInterfaceConfigSuccess
 };
 
 /**
@@ -295,6 +335,15 @@ static void join(nsTArray<nsCString>& array,
   }
 
 #undef CHECK_LEN
+}
+
+static void convertUTF8toUTF16(nsTArray<nsCString>& narrow,
+                               nsTArray<nsString>& wide,
+                               uint32_t length)
+{
+  for (uint32_t i = 0; i < length; i++) {
+    wide.AppendElement(NS_ConvertUTF8toUTF16(narrow[i].get()));
+  }
 }
 
 /**
@@ -583,6 +632,15 @@ void NetworkUtils::stopSoftAP(CommandChain* aChain,
   doCommand(command, aChain, aCallback);
 }
 
+void NetworkUtils::clearWifiTetherParms(CommandChain* aChain,
+                                        CommandCallback aCallback,
+                                        NetworkResultOptions& aResult)
+{
+  delete gWifiTetheringParms;
+  gWifiTetheringParms = 0;
+  next(aChain, false, aResult);
+}
+
 void NetworkUtils::getRxBytes(CommandChain* aChain,
                               CommandCallback aCallback,
                               NetworkResultOptions& aResult)
@@ -652,9 +710,9 @@ void NetworkUtils::setAlarm(CommandChain* aChain,
   doCommand(command, aChain, aCallback);
 }
 
-void NetworkUtils::setInterfaceUp(CommandChain* aChain,
-                                  CommandCallback aCallback,
-                                  NetworkResultOptions& aResult)
+void NetworkUtils::setConfig(CommandChain* aChain,
+                             CommandCallback aCallback,
+                             NetworkResultOptions& aResult)
 {
   char command[MAX_COMMAND_SIZE];
   if (SDK_VERSION >= 16) {
@@ -889,6 +947,26 @@ void NetworkUtils::setInterfaceDns(CommandChain* aChain,
   doCommand(command, aChain, aCallback);
 }
 
+void NetworkUtils::getInterfaceList(CommandChain* aChain,
+                                    CommandCallback aCallback,
+                                    NetworkResultOptions& aResult)
+{
+  char command[MAX_COMMAND_SIZE];
+  snprintf(command, MAX_COMMAND_SIZE - 1, "interface list");
+
+  doCommand(command, aChain, aCallback);
+}
+
+void NetworkUtils::getConfig(CommandChain* aChain,
+                             CommandCallback aCallback,
+                             NetworkResultOptions& aResult)
+{
+  char command[MAX_COMMAND_SIZE];
+  snprintf(command, MAX_COMMAND_SIZE - 1, "interface getcfg %s", GET_CHAR(mIfname));
+
+  doCommand(command, aChain, aCallback);
+}
+
 #undef GET_CHAR
 #undef GET_FIELD
 
@@ -920,6 +998,11 @@ void NetworkUtils::wifiTetheringSuccess(CommandChain* aChain,
                                         NetworkResultOptions& aResult)
 {
   ASSIGN_FIELD(mEnable)
+
+  if (aChain->getParams().mEnable) {
+    MOZ_ASSERT(!gWifiTetheringParms);
+    gWifiTetheringParms = new NetworkParams(aChain->getParams());
+  }
   postMessage(aChain->getParams(), aResult);
 }
 
@@ -1024,6 +1107,75 @@ void NetworkUtils::setDnsFail(NetworkParams& aOptions, NetworkResultOptions& aRe
   postMessage(aOptions, aResult);
 }
 
+void NetworkUtils::getInterfacesFail(NetworkParams& aOptions, NetworkResultOptions& aResult)
+{
+  postMessage(aOptions, aResult);
+}
+
+void NetworkUtils::getInterfacesSuccess(CommandChain* aChain,
+                                        CommandCallback aCallback,
+                                        NetworkResultOptions& aResult)
+{
+  char buf[BUF_SIZE];
+  NS_ConvertUTF16toUTF8 reason(aResult.mResultReason);
+  memcpy(buf, reason.get(), strlen(reason.get()));
+
+  nsTArray<nsCString> result;
+  split(buf, INTERFACE_DELIMIT, result);
+
+  nsTArray<nsString> interfaceList;
+  uint32_t length = result.Length();
+  convertUTF8toUTF16(result, interfaceList, length);
+
+  aResult.mInterfaceList.Construct();
+  for (uint32_t i = 0; i < length; i++) {
+    aResult.mInterfaceList.Value().AppendElement(interfaceList[i]);
+  }
+
+  postMessage(aChain->getParams(), aResult);
+}
+
+void NetworkUtils::setInterfaceConfigFail(NetworkParams& aOptions, NetworkResultOptions& aResult)
+{
+  postMessage(aOptions, aResult);
+}
+
+void NetworkUtils::setInterfaceConfigSuccess(CommandChain* aChain,
+                                             CommandCallback aCallback,
+                                             NetworkResultOptions& aResult)
+{
+  postMessage(aChain->getParams(), aResult);
+}
+
+void NetworkUtils::getInterfaceConfigFail(NetworkParams& aOptions, NetworkResultOptions& aResult)
+{
+  postMessage(aOptions, aResult);
+}
+
+void NetworkUtils::getInterfaceConfigSuccess(CommandChain* aChain,
+                                             CommandCallback aCallback,
+                                             NetworkResultOptions& aResult)
+{
+  char buf[BUF_SIZE];
+  NS_ConvertUTF16toUTF8 reason(aResult.mResultReason);
+  memcpy(buf, reason.get(), strlen(reason.get()));
+
+  nsTArray<nsCString> result;
+  split(buf, NETD_MESSAGE_DELIMIT, result);
+
+  ASSIGN_FIELD_VALUE(mMacAddr, NS_ConvertUTF8toUTF16(result[0]))
+  ASSIGN_FIELD_VALUE(mIpAddr, NS_ConvertUTF8toUTF16(result[1]))
+  ASSIGN_FIELD_VALUE(mMaskLength, atof(result[2].get()))
+
+  if (result[3].Find("up")) {
+    ASSIGN_FIELD_VALUE(mFlag, NS_ConvertUTF8toUTF16("up"))
+  } else {
+    ASSIGN_FIELD_VALUE(mFlag, NS_ConvertUTF8toUTF16("down"))
+  }
+
+  postMessage(aChain->getParams(), aResult);
+}
+
 #undef ASSIGN_FIELD
 #undef ASSIGN_FIELD_VALUE
 
@@ -1088,6 +1240,14 @@ void NetworkUtils::ExecuteCommand(NetworkParams aOptions)
     enableUsbRndis(aOptions);
   } else if (aOptions.mCmd.EqualsLiteral("updateUpStream")) {
     updateUpStream(aOptions);
+  } else if (aOptions.mCmd.EqualsLiteral("getInterfaces")) {
+    getInterfaces(aOptions);
+  } else if (aOptions.mCmd.EqualsLiteral("stopDhcp")) {
+    stopDhcp(aOptions);
+  } else if (aOptions.mCmd.EqualsLiteral("setInterfaceConfig")) {
+    setInterfaceConfig(aOptions);
+  } else if (aOptions.mCmd.EqualsLiteral("getInterfaceConfig")) {
+    getInterfaceConfig(aOptions);
   } else {
     WARN("unknon message");
     return;
@@ -1126,6 +1286,21 @@ void NetworkUtils::onNetdMessage(NetdCommand* aCommand)
     DEBUG("Receiving broadcast message from netd.");
     DEBUG("          ==> Code: %d  Reason: %s", code, reason);
     sendBroadcastMessage(code, reason);
+
+    if (code == NETD_COMMAND_INTERFACE_CHANGE) {
+      if (gWifiTetheringParms) {
+        char linkdownReason[MAX_COMMAND_SIZE];
+        snprintf(linkdownReason, MAX_COMMAND_SIZE - 1,
+                 "Iface linkstate %s down",
+                 NS_ConvertUTF16toUTF8(gWifiTetheringParms->mIfname).get());
+
+        if (!strcmp(reason, linkdownReason)) {
+          DEBUG("Wifi link down, restarting tethering.");
+          RUN_CHAIN(*gWifiTetheringParms, sWifiRetryChain, wifiTetheringFail)
+        }
+      }
+    }
+
     nextNetdCommand();
     return;
   }
@@ -1502,10 +1677,16 @@ bool NetworkUtils::setWifiTethering(NetworkParams& aOptions)
   getIFProperties(GET_CHAR(mExternalIfname), interfaceProperties);
 
   if (strcmp(interfaceProperties.dns1, "")) {
-    aOptions.mDns1 = NS_ConvertUTF8toUTF16(interfaceProperties.dns1);
+    int type = getIpType(interfaceProperties.dns1);
+    if (type != AF_INET6) {
+      aOptions.mDns1 = NS_ConvertUTF8toUTF16(interfaceProperties.dns1);
+    }
   }
   if (strcmp(interfaceProperties.dns2, "")) {
-    aOptions.mDns2 = NS_ConvertUTF8toUTF16(interfaceProperties.dns2);
+    int type = getIpType(interfaceProperties.dns2);
+    if (type != AF_INET6) {
+      aOptions.mDns2 = NS_ConvertUTF8toUTF16(interfaceProperties.dns2);
+    }
   }
   dumpParams(aOptions, "WIFI");
 
@@ -1528,10 +1709,16 @@ bool NetworkUtils::setUSBTethering(NetworkParams& aOptions)
   getIFProperties(GET_CHAR(mExternalIfname), interfaceProperties);
 
   if (strcmp(interfaceProperties.dns1, "")) {
-    aOptions.mDns1 = NS_ConvertUTF8toUTF16(interfaceProperties.dns1);
+    int type = getIpType(interfaceProperties.dns1);
+    if (type != AF_INET6) {
+      aOptions.mDns1 = NS_ConvertUTF8toUTF16(interfaceProperties.dns1);
+    }
   }
   if (strcmp(interfaceProperties.dns2, "")) {
-    aOptions.mDns2 = NS_ConvertUTF8toUTF16(interfaceProperties.dns2);
+    int type = getIpType(interfaceProperties.dns2);
+    if (type != AF_INET6) {
+      aOptions.mDns2 = NS_ConvertUTF8toUTF16(interfaceProperties.dns2);
+    }
   }
   dumpParams(aOptions, "USB");
 
@@ -1650,11 +1837,47 @@ bool NetworkUtils::enableUsbRndis(NetworkParams& aOptions)
 }
 
 /**
- * handling upstream interface change event.
+ * Handling upstream interface change event.
  */
 bool NetworkUtils::updateUpStream(NetworkParams& aOptions)
 {
   RUN_CHAIN(aOptions, sUpdateUpStreamChain, updateUpStreamFail)
+  return true;
+}
+
+/**
+ * Stop dhcp client deamon.
+ */
+bool NetworkUtils::stopDhcp(NetworkParams& aOptions)
+{
+  mNetUtils->do_dhcp_stop(GET_CHAR(mIfname));
+  return true;
+}
+
+/**
+ * Get existing network interfaces.
+ */
+bool NetworkUtils::getInterfaces(NetworkParams& aOptions)
+{
+  RUN_CHAIN(aOptions, sGetInterfacesChain, getInterfacesFail)
+  return true;
+}
+
+/**
+ * Set network config for a specified interface.
+ */
+bool NetworkUtils::setInterfaceConfig(NetworkParams& aOptions)
+{
+  RUN_CHAIN(aOptions, sSetInterfaceConfigChain, setInterfaceConfigFail)
+  return true;
+}
+
+/**
+ * Get network config of a specified interface.
+ */
+bool NetworkUtils::getInterfaceConfig(NetworkParams& aOptions)
+{
+  RUN_CHAIN(aOptions, sGetInterfaceConfigChain, getInterfaceConfigFail)
   return true;
 }
 

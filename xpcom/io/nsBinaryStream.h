@@ -28,9 +28,9 @@
 class nsBinaryOutputStream : public nsIObjectOutputStream
 {
 public:
-  nsBinaryOutputStream() {}
-  // virtual dtor since subclasses call our Release()
-  virtual ~nsBinaryOutputStream() {}
+  nsBinaryOutputStream()
+  {
+  }
 
 protected:
   // nsISupports methods
@@ -46,10 +46,16 @@ protected:
   NS_DECL_NSIOBJECTOUTPUTSTREAM
 
   // Call Write(), ensuring that all proffered data is written
-  nsresult WriteFully(const char *aBuf, uint32_t aCount);
+  nsresult WriteFully(const char* aBuf, uint32_t aCount);
 
   nsCOMPtr<nsIOutputStream>       mOutputStream;
   nsCOMPtr<nsIStreamBufferAccess> mBufferAccess;
+
+private:
+  // virtual dtor since subclasses call our Release()
+  virtual ~nsBinaryOutputStream()
+  {
+  }
 };
 
 #define NS_BINARYINPUTSTREAM_CID        \
@@ -67,9 +73,9 @@ protected:
 class nsBinaryInputStream : public nsIObjectInputStream
 {
 public:
-  nsBinaryInputStream() {}
-  // virtual dtor since subclasses call our Release()
-  virtual ~nsBinaryInputStream() {}
+  nsBinaryInputStream()
+  {
+  }
 
 protected:
   // nsISupports methods
@@ -86,6 +92,12 @@ protected:
 
   nsCOMPtr<nsIInputStream>        mInputStream;
   nsCOMPtr<nsIStreamBufferAccess> mBufferAccess;
+
+private:
+  // virtual dtor since subclasses call our Release()
+  virtual ~nsBinaryInputStream()
+  {
+  }
 };
 
 #endif // nsBinaryStream_h___

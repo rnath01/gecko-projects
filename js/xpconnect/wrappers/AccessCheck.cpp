@@ -84,12 +84,6 @@ AccessCheck::isChrome(JSObject *obj)
     return isChrome(js::GetObjectCompartment(obj));
 }
 
-bool
-AccessCheck::callerIsChrome()
-{
-    return nsContentUtils::IsCallerChrome();
-}
-
 nsIPrincipal *
 AccessCheck::getPrincipal(JSCompartment *compartment)
 {
@@ -154,7 +148,11 @@ IsFrameId(JSContext *cx, JSObject *objArg, jsid idArg)
     if (JSID_IS_INT(id)) {
         col->Item(JSID_TO_INT(id), getter_AddRefs(domwin));
     } else if (JSID_IS_STRING(id)) {
-        col->NamedItem(nsDependentJSString(id), getter_AddRefs(domwin));
+        nsAutoJSString idAsString;
+        if (!idAsString.init(cx, JSID_TO_STRING(id))) {
+            return false;
+        }
+        col->NamedItem(idAsString, getter_AddRefs(domwin));
     }
 
     return domwin != nullptr;
@@ -335,13 +333,6 @@ ExposedPropertiesOnly::check(JSContext *cx, JSObject *wrapperArg, jsid idArg, Wr
     }
 
     return true;
-}
-
-bool
-ExposedPropertiesOnly::allowNativeCall(JSContext *cx, JS::IsAcceptableThis test,
-                                       JS::NativeImpl impl)
-{
-    return js::IsTypedArrayThisCheck(test);
 }
 
 }

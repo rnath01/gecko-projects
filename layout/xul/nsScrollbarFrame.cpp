@@ -40,9 +40,9 @@ NS_QUERYFRAME_HEAD(nsScrollbarFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsBoxFrame)
 
 void
-nsScrollbarFrame::Init(nsIContent* aContent,
-                       nsIFrame*   aParent,
-                       nsIFrame*   aPrevInFlow)
+nsScrollbarFrame::Init(nsIContent*       aContent,
+                       nsContainerFrame* aParent,
+                       nsIFrame*         aPrevInFlow)
 {
   nsBoxFrame::Init(aContent, aParent, aPrevInFlow);
 
@@ -167,9 +167,7 @@ nsScrollbarFrame::GetMargin(nsMargin& aMargin)
     if (theme) {
       nsIntSize size;
       bool isOverridable;
-      nsRefPtr<nsRenderingContext> rc =
-        presContext->PresShell()->CreateReferenceRenderingContext();
-      theme->GetMinimumWidgetSize(rc, this, NS_THEME_SCROLLBAR, &size,
+      theme->GetMinimumWidgetSize(presContext, this, NS_THEME_SCROLLBAR, &size,
                                   &isOverridable);
       if (IsHorizontal()) {
         aMargin.top = -presContext->DevPixelsToAppUnits(size.height);

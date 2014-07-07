@@ -18,8 +18,12 @@ PARALLEL_DIRS += [
     'shell',
     'sidebar',
     'tabview',
+    'translation',
     'migration',
 ]
+
+if CONFIG['MOZ_LOOP']:
+    PARALLEL_DIRS += ['loop']
 
 DIRS += ['build']
 
@@ -30,10 +34,8 @@ XPIDL_SOURCES += [
 
 XPIDL_MODULE = 'browsercompsbase'
 
-EXTRA_COMPONENTS += [
-    'BrowserComponents.manifest',
-]
 EXTRA_PP_COMPONENTS += [
+    'BrowserComponents.manifest',
     'nsBrowserContentHandler.js',
     'nsBrowserGlue.js',
 ]

@@ -25,7 +25,7 @@ let { FileUtils } = Cu.import("resource://gre/modules/FileUtils.jsm", {});
 let { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
 
 let gCertDB = Cc["@mozilla.org/security/x509certdb;1"]
-                 .getService(Ci.nsIX509CertDB2);
+                .getService(Ci.nsIX509CertDB);
 gCertDB.QueryInterface(Ci.nsIX509CertDB);
 
 const BUILT_IN_NICK_PREFIX = "Builtin Object Token:";
@@ -33,10 +33,8 @@ const SHA1_PREFIX = "sha1/";
 const SHA256_PREFIX = "sha256/";
 const GOOGLE_PIN_PREFIX = "GOOGLE_PIN_";
 
-// Pins expire in 18 weeks
-const PINNING_MINIMUM_REQUIRED_MAX_AGE = 60 * 60 * 24 * 7 * 18;
-const CHROME_JSON_SOURCE = "https://src.chromium.org/chrome/trunk/src/net/http/transport_security_state_static.json";
-const CHROME_CERT_SOURCE = "https://src.chromium.org/chrome/trunk/src/net/http/transport_security_state_static.certs";
+// Pins expire in 14 weeks (6 weeks on Beta + 8 weeks on stable)
+const PINNING_MINIMUM_REQUIRED_MAX_AGE = 60 * 60 * 24 * 7 * 14;
 
 const FILE_HEADER = "/* This Source Code Form is subject to the terms of the Mozilla Public\n" +
 " * License, v. 2.0. If a copy of the MPL was not distributed with this\n" +
@@ -54,6 +52,8 @@ const DOMAINHEADER = "/* Domainlist */\n" +
   "  const char* mHost;\n" +
   "  const bool mIncludeSubdomains;\n" +
   "  const bool mTestMode;\n" +
+  "  const bool mIsMoz;\n" +
+  "  const int32_t mId;\n" +
   "  const StaticPinset *pinset;\n" +
   "};\n\n";
 
@@ -108,8 +108,7 @@ function isBuiltinToken(tokenName) {
 }
 
 function isCertBuiltIn(cert) {
-  let cert3 = cert.QueryInterface(Ci.nsIX509Cert3);
-  let tokenNames = cert3.getAllTokenNames({});
+  let tokenNames = cert.getAllTokenNames({});
   if (!tokenNames) {
     return false;
   }
@@ -310,14 +309,27 @@ function downloadAndParseChromePins(filename,
 
   // Grab the domain entry lists. Chrome's entry format is similar to
   // ours, except theirs includes a HSTS mode.
+  const cData = gStaticPins.chromium_data;
   let entries = chromePreloads.entries;
   entries.forEach(function(entry) {
-    if (entry.pins && chromeImportedPinsets[entry.pins]) {
+    let pinsetName = cData.substitute_pinsets[entry.pins];
+    if (!pinsetName) {
+      pinsetName = entry.pins;
+    }
+    let isProductionDomain =
+      (cData.production_domains.indexOf(entry.name) != -1);
+    let isProductionPinset =
+      (cData.production_pinsets.indexOf(pinsetName) != -1);
+    let excludeDomain =
+      (cData.exclude_domains.indexOf(entry.name) != -1);
+    let isTestMode = !isProductionPinset && !isProductionDomain;
+    if (entry.pins && !excludeDomain && chromeImportedPinsets[entry.pins]) {
       chromeImportedEntries.push({
         name: entry.name,
         include_subdomains: entry.include_subdomains,
-        test_mode: true,
-        pins: entry.pins });
+        test_mode: isTestMode,
+        is_moz: false,
+        pins: pinsetName });
     }
   });
   return [ chromeImportedPinsets, chromeImportedEntries ];
@@ -406,6 +418,9 @@ function writeFingerprints(certNameToSKD, certSKDToName, name, hashes, type) {
   writeString("static const char* " + varPrefix + "_Data[] = {\n");
   let SKDList = [];
   for (let certName of hashes) {
+    if (!(certName in certNameToSKD)) {
+      throw "Can't find " + certName + " in certNameToSKD";
+    }
     SKDList.push(certNameToSKD[certName]);
   }
   for (let skd of SKDList.sort()) {
@@ -437,6 +452,19 @@ function writeEntry(entry) {
   } else {
     printVal += "false, ";
   }
+  if (entry.is_moz || (entry.pins == "mozilla")) {
+    printVal += "true, ";
+  } else {
+    printVal += "false, ";
+  }
+  if (entry.id >= 256) {
+    throw("Not enough buckets in histogram");
+  }
+  if (entry.id >= 0) {
+    printVal += entry.id + ", ";
+  } else {
+    printVal += "-1, ";
+  }
   printVal += "&kPinset_" + entry.pins;
   printVal += " },\n";
   writeString(printVal);
@@ -457,6 +485,7 @@ function writeDomainList(chromeImportedEntries) {
 
   writeString("\nstatic const int kPublicKeyPinningPreloadListLength = " +
           count + ";\n");
+  writeString("\nstatic const int32_t kUnknownId = -1;\n");
 }
 
 function writeFile(certNameToSKD, certSKDToName,
@@ -501,7 +530,7 @@ function writeFile(certNameToSKD, certSKDToName,
 
   // Write the pinsets
   writeString(PINSETDEF);
-  writeString("/* Mozilla static pinsets */\n");
+  writeString("/* PreloadedHPKPins.json pinsets */\n");
   gStaticPins.pinsets.sort(compareByName).forEach(function(pinset) {
     writeFullPinset(certNameToSKD, certSKDToName, pinset);
   });
@@ -519,10 +548,10 @@ function writeFile(certNameToSKD, certSKDToName,
 
 let [ certNameToSKD, certSKDToName ] = loadNSSCertinfo(gTestCertFile);
 let [ chromeNameToHash, chromeNameToMozName ] = downloadAndParseChromeCerts(
-  CHROME_CERT_SOURCE, certSKDToName);
+  gStaticPins.chromium_data.cert_file_url, certSKDToName);
 let [ chromeImportedPinsets, chromeImportedEntries ] =
-  downloadAndParseChromePins(CHROME_JSON_SOURCE, chromeNameToHash,
-    chromeNameToMozName, certNameToSKD, certSKDToName);
+  downloadAndParseChromePins(gStaticPins.chromium_data.json_file_url,
+    chromeNameToHash, chromeNameToMozName, certNameToSKD, certSKDToName);
 
 writeFile(certNameToSKD, certSKDToName, chromeImportedPinsets,
           chromeImportedEntries);

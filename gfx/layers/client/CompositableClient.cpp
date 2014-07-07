@@ -6,7 +6,6 @@
 #include "mozilla/layers/CompositableClient.h"
 #include <stdint.h>                     // for uint64_t, uint32_t
 #include "gfxPlatform.h"                // for gfxPlatform
-#include "mozilla/layers/AsyncTransactionTracker.h" // for AsyncTransactionTracker
 #include "mozilla/layers/CompositableForwarder.h"
 #include "mozilla/layers/TextureClient.h"  // for TextureClient, etc
 #include "mozilla/layers/TextureClientOGL.h"
@@ -18,10 +17,10 @@
 #include "mozilla/layers/TextureD3D9.h"
 #endif
 
-using namespace mozilla::gfx;
-
 namespace mozilla {
 namespace layers {
+
+using namespace mozilla::gfx;
 
 /**
  * IPDL actor used by CompositableClient to match with its corresponding
@@ -56,6 +55,17 @@ public:
   uint64_t mAsyncID;
 };
 
+void
+RemoveTextureFromCompositableTracker::ReleaseTextureClient()
+{
+  if (mTextureClient) {
+    TextureClientReleaseTask* task = new TextureClientReleaseTask(mTextureClient);
+    RefPtr<ISurfaceAllocator> allocator = mTextureClient->GetAllocator();
+    mTextureClient = nullptr;
+    allocator->GetMessageLoop()->PostTask(FROM_HERE, task);
+  }
+}
+
 /* static */ void
 CompositableClient::TransactionCompleteted(PCompositableChild* aActor, uint64_t aTransactionId)
 {
@@ -68,6 +78,13 @@ CompositableClient::HoldUntilComplete(PCompositableChild* aActor, AsyncTransacti
 {
   CompositableChild* child = static_cast<CompositableChild*>(aActor);
   child->HoldUntilComplete(aTracker);
+}
+
+/* static */ uint64_t
+CompositableClient::GetTrackersHolderId(PCompositableChild* aActor)
+{
+  CompositableChild* child = static_cast<CompositableChild*>(aActor);
+  return child->GetId();
 }
 
 /* static */ PCompositableChild*
@@ -188,12 +205,39 @@ CompositableClient::CreateTextureClientForDrawing(SurfaceFormat aFormat,
 bool
 CompositableClient::AddTextureClient(TextureClient* aClient)
 {
+  if(!aClient || !aClient->IsAllocated()) {
+    return false;
+  }
   return aClient->InitIPDLActor(mForwarder);
 }
 
 void
 CompositableClient::OnTransaction()
 {
+}
+
+void
+CompositableClient::UseTexture(TextureClient* aTexture)
+{
+  MOZ_ASSERT(aTexture);
+  if (!aTexture) {
+    return;
+  }
+
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
+  FenceHandle handle = aTexture->GetAcquireFenceHandle();
+  if (handle.IsValid()) {
+    RefPtr<FenceDeliveryTracker> tracker = new FenceDeliveryTracker(handle);
+    mForwarder->SendFenceHandle(tracker, aTexture->GetIPDLActor(), handle);
+  }
+#endif
+  mForwarder->UseTexture(this, aTexture);
+}
+
+void
+CompositableClient::RemoveTexture(TextureClient* aTexture)
+{
+  mForwarder->RemoveTextureFromCompositable(this, aTexture);
 }
 
 } // namespace layers

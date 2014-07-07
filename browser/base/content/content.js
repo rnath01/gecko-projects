@@ -1,19 +1,15 @@
-/* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-let Cc = Components.classes;
-let Ci = Components.interfaces;
-let Cu = Components.utils;
+let {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "ContentLinkHandler",
   "resource:///modules/ContentLinkHandler.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "LanguageDetector",
-  "resource:///modules/translation/LanguageDetector.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "LoginManagerContent",
   "resource://gre/modules/LoginManagerContent.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "InsecurePasswordUtils",
@@ -38,22 +34,22 @@ addMessageListener("Browser:HideSessionRestoreButton", function (message) {
   }
 });
 
+addEventListener("DOMFormHasPassword", function(event) {
+  InsecurePasswordUtils.checkForInsecurePasswords(event.target);
+  LoginManagerContent.onFormPassword(event);
+});
+addEventListener("DOMAutoComplete", function(event) {
+  LoginManagerContent.onUsernameInput(event);
+});
+addEventListener("blur", function(event) {
+  LoginManagerContent.onUsernameInput(event);
+});
+
 if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
   addEventListener("contextmenu", function (event) {
     sendAsyncMessage("contextmenu", {}, { event: event });
   }, false);
 } else {
-  addEventListener("DOMFormHasPassword", function(event) {
-    InsecurePasswordUtils.checkForInsecurePasswords(event.target);
-    LoginManagerContent.onFormPassword(event);
-  });
-  addEventListener("DOMAutoComplete", function(event) {
-    LoginManagerContent.onUsernameInput(event);
-  });
-  addEventListener("blur", function(event) {
-    LoginManagerContent.onUsernameInput(event);
-  });
-
   addEventListener("mozUITour", function(event) {
     if (!Services.prefs.getBoolPref("browser.uitour.enabled"))
       return;
@@ -262,10 +258,23 @@ let ClickEventHandler = {
   },
 
   handleEvent: function(event) {
-    // Bug 903016: Most of this code is an unfortunate duplication from
-    // contentAreaClick in browser.js.
-    if (!event.isTrusted || event.defaultPrevented || event.button == 2)
+    if (!event.isTrusted || event.defaultPrevented || event.button == 2) {
       return;
+    }
+
+    let originalTarget = event.originalTarget;
+    let ownerDoc = originalTarget.ownerDocument;
+
+    // Handle click events from about pages
+    if (ownerDoc.documentURI.startsWith("about:certerror")) {
+      this.onAboutCertError(originalTarget, ownerDoc);
+      return;
+    } else if (ownerDoc.documentURI.startsWith("about:blocked")) {
+      this.onAboutBlocked(originalTarget, ownerDoc);
+      return;
+    } else if (ownerDoc.documentURI.startsWith("about:neterror")) {
+      this.onAboutNetError(originalTarget, ownerDoc);
+    }
 
     let [href, node] = this._hrefAndLinkNodeForClickEvent(event);
 
@@ -278,12 +287,12 @@ let ClickEventHandler = {
       json.href = href;
       if (node) {
         json.title = node.getAttribute("title");
-
         if (event.button == 0 && !event.ctrlKey && !event.shiftKey &&
             !event.altKey && !event.metaKey) {
           json.bookmark = node.getAttribute("rel") == "sidebar";
-          if (json.bookmark)
+          if (json.bookmark) {
             event.preventDefault(); // Need to prevent the pageload.
+          }
         }
       }
 
@@ -292,8 +301,34 @@ let ClickEventHandler = {
     }
 
     // This might be middle mouse navigation.
-    if (event.button == 1)
+    if (event.button == 1) {
       sendAsyncMessage("Content:Click", json);
+    }
+  },
+
+  onAboutCertError: function (targetElement, ownerDoc) {
+    sendAsyncMessage("Browser:CertExceptionError", {
+      location: ownerDoc.location.href,
+      elementId: targetElement.getAttribute("id"),
+      isTopFrame: (ownerDoc.defaultView.parent === ownerDoc.defaultView)
+    });
+  },
+
+  onAboutBlocked: function (targetElement, ownerDoc) {
+    sendAsyncMessage("Browser:SiteBlockedError", {
+      location: ownerDoc.location.href,
+      isMalware: /e=malwareBlocked/.test(ownerDoc.documentURI),
+      elementId: targetElement.getAttribute("id"),
+      isTopFrame: (ownerDoc.defaultView.parent === ownerDoc.defaultView)
+    });
+  },
+
+  onAboutNetError: function (targetElement, ownerDoc) {
+    let elmId = targetElement.getAttribute("id");
+    if (elmId != "errorTryAgain" || !/e=netOffline/.test(ownerDoc.documentURI)) {
+      return;
+    }
+    sendSyncMessage("Browser:NetworkError", {});
   },
 
   /**
@@ -444,48 +479,9 @@ let PageStyleHandler = {
 };
 PageStyleHandler.init();
 
-let TranslationHandler = {
-  init: function() {
-    let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-                              .getInterface(Ci.nsIWebProgress);
-    webProgress.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_STATE_DOCUMENT);
-  },
-
-  /* nsIWebProgressListener implementation */
-  onStateChange: function(aWebProgress, aRequest, aStateFlags, aStatus) {
-    if (!aWebProgress.isTopLevel ||
-        !(aStateFlags & Ci.nsIWebProgressListener.STATE_STOP))
-      return;
-
-    let url = aRequest.name;
-    if (!url.startsWith("http://") && !url.startsWith("https://"))
-      return;
-
-    // Grab a 60k sample of text from the page.
-    let encoder = Cc["@mozilla.org/layout/documentEncoder;1?type=text/plain"]
-                    .createInstance(Ci.nsIDocumentEncoder);
-    encoder.init(content.document, "text/plain", encoder.SkipInvisibleContent);
-    let string = encoder.encodeToStringWithMaxLength(60 * 1024);
-
-    // Language detection isn't reliable on very short strings.
-    if (string.length < 100)
-      return;
-
-    LanguageDetector.detectLanguage(string).then(result => {
-      if (result.confident)
-        sendAsyncMessage("LanguageDetection:Result", result.language);
-    });
-  },
-
-  // Unused methods.
-  onProgressChange: function() {},
-  onLocationChange: function() {},
-  onStatusChange:   function() {},
-  onSecurityChange: function() {},
-
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
-                                         Ci.nsISupportsWeakReference])
-};
-
-if (Services.prefs.getBoolPref("browser.translation.detectLanguage"))
-  TranslationHandler.init();
+// Keep a reference to the translation content handler to avoid it it being GC'ed.
+let trHandler = null;
+if (Services.prefs.getBoolPref("browser.translation.detectLanguage")) {
+  Cu.import("resource:///modules/translation/TranslationContentHandler.jsm");
+  trHandler = new TranslationContentHandler(global, docShell);
+}

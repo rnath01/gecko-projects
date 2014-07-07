@@ -16,18 +16,16 @@ typedef mp4_demuxer::MP4Sample MP4Sample;
 namespace mozilla
 {
 
-FFmpegAACDecoder::FFmpegAACDecoder(
+FFmpegAACDecoder<LIBAV_VER>::FFmpegAACDecoder(
   MediaTaskQueue* aTaskQueue, MediaDataDecoderCallback* aCallback,
-  const mp4_demuxer::AudioDecoderConfig &aConfig)
-  : FFmpegDataDecoder(aTaskQueue, AV_CODEC_ID_AAC)
-  , mCallback(aCallback)
-  , mConfig(aConfig)
+  const mp4_demuxer::AudioDecoderConfig& aConfig)
+  : FFmpegDataDecoder(aTaskQueue, AV_CODEC_ID_AAC), mCallback(aCallback)
 {
   MOZ_COUNT_CTOR(FFmpegAACDecoder);
 }
 
 nsresult
-FFmpegAACDecoder::Init()
+FFmpegAACDecoder<LIBAV_VER>::Init()
 {
   nsresult rv = FFmpegDataDecoder::Init();
   NS_ENSURE_SUCCESS(rv, rv);
@@ -65,7 +63,7 @@ CopyAndPackAudio(AVFrame* aFrame, uint32_t aNumChannels, uint32_t aNumSamples)
 }
 
 void
-FFmpegAACDecoder::DecodePacket(MP4Sample* aSample)
+FFmpegAACDecoder<LIBAV_VER>::DecodePacket(MP4Sample* aSample)
 {
   nsAutoPtr<AVFrame> frame(avcodec_alloc_frame());
   avcodec_get_frame_defaults(frame);
@@ -73,10 +71,9 @@ FFmpegAACDecoder::DecodePacket(MP4Sample* aSample)
   AVPacket packet;
   av_init_packet(&packet);
 
-  packet.data = &(*aSample->data)[0];
-  packet.size = aSample->data->size();
+  packet.data = aSample->data;
+  packet.size = aSample->size;
   packet.pos = aSample->byte_offset;
-  packet.dts = aSample->decode_timestamp;
 
   int decoded;
   int bytesConsumed =
@@ -88,7 +85,7 @@ FFmpegAACDecoder::DecodePacket(MP4Sample* aSample)
     return;
   }
 
-  NS_ASSERTION(bytesConsumed == (int)aSample->data->size(),
+  NS_ASSERTION(bytesConsumed == (int)aSample->size,
                "Only one audio packet should be received at a time.");
 
   uint32_t numChannels = mCodecContext.channels;
@@ -96,9 +93,9 @@ FFmpegAACDecoder::DecodePacket(MP4Sample* aSample)
   nsAutoArrayPtr<AudioDataValue> audio(
     CopyAndPackAudio(frame.get(), numChannels, frame->nb_samples));
 
-  nsAutoPtr<AudioData> data(new AudioData(packet.pos, aSample->decode_timestamp,
-                                          aSample->duration, frame->nb_samples,
-                                          audio.forget(), numChannels));
+  nsAutoPtr<AudioData> data(
+    new AudioData(packet.pos, aSample->composition_timestamp, aSample->duration,
+                  frame->nb_samples, audio.forget(), numChannels));
 
   mCallback->Output(data.forget());
 
@@ -108,7 +105,7 @@ FFmpegAACDecoder::DecodePacket(MP4Sample* aSample)
 }
 
 nsresult
-FFmpegAACDecoder::Input(MP4Sample* aSample)
+FFmpegAACDecoder<LIBAV_VER>::Input(MP4Sample* aSample)
 {
   mTaskQueue->Dispatch(NS_NewRunnableMethodWithArg<nsAutoPtr<MP4Sample> >(
     this, &FFmpegAACDecoder::DecodePacket, nsAutoPtr<MP4Sample>(aSample)));
@@ -117,13 +114,14 @@ FFmpegAACDecoder::Input(MP4Sample* aSample)
 }
 
 nsresult
-FFmpegAACDecoder::Drain()
+FFmpegAACDecoder<LIBAV_VER>::Drain()
 {
   // AAC is never delayed; nothing to do here.
   return NS_OK;
 }
 
-FFmpegAACDecoder::~FFmpegAACDecoder() {
+FFmpegAACDecoder<LIBAV_VER>::~FFmpegAACDecoder()
+{
   MOZ_COUNT_DTOR(FFmpegAACDecoder);
 }
 

@@ -35,23 +35,8 @@ endif
 USE_AUTOTARGETS_MK = 1
 include $(topsrcdir)/config/makefiles/makeutils.mk
 
-# Only build with Pymake (not GNU make) on Windows.
-ifeq ($(HOST_OS_ARCH),WINNT)
-ifndef L10NBASEDIR
-ifndef .PYMAKE
-$(error Pymake is required to build on Windows. Run |./mach build| to \
-automatically use pymake or invoke pymake directly via \
-|python build/pymake/make.py|.)
-endif
-endif
-endif
-
 ifdef REBUILD_CHECK
-ifdef .PYMAKE
-REPORT_BUILD = @%rebuild_check rebuild_check $@ $^
-else
 REPORT_BUILD = $(info $(shell $(PYTHON) $(MOZILLA_DIR)/config/rebuild_check.py $@ $^))
-endif
 else
 REPORT_BUILD = $(info $(notdir $@))
 endif
@@ -66,15 +51,11 @@ endif
 # ELOG prints out failed command when building silently (gmake -s). Pymake
 # prints out failed commands anyway, so ELOG just makes things worse by
 # forcing shell invocations.
-ifndef .PYMAKE
 ifneq (,$(findstring s, $(filter-out --%, $(MAKEFLAGS))))
   ELOG := $(EXEC) sh $(BUILD_TOOLS)/print-failed-commands.sh
 else
   ELOG :=
 endif # -s
-else
-  ELOG :=
-endif # ifndef .PYMAKE
 
 _VPATH_SRCS = $(abspath $<)
 
@@ -238,7 +219,7 @@ endif
 COMPILE_CFLAGS += $(COMPILE_PDB_FLAG)
 COMPILE_CXXFLAGS += $(COMPILE_PDB_FLAG)
 
-LINK_PDBFILE = $(basename $(@F)).pdb
+LINK_PDBFILE ?= $(basename $(@F)).pdb
 ifdef MOZ_DEBUG
 CODFILE=$(basename $(@F)).cod
 endif
@@ -509,6 +490,10 @@ endif # AIX
 ifeq ($(OS_ARCH),Linux)
 ifdef IS_COMPONENT
 EXTRA_DSO_LDOPTS += -Wl,-Bsymbolic
+endif
+ifdef LD_VERSION_SCRIPT
+EXTRA_DSO_LDOPTS += -Wl,--version-script,$(LD_VERSION_SCRIPT)
+EXTRA_DEPS += $(LD_VERSION_SCRIPT)
 endif
 endif
 
@@ -1020,6 +1005,10 @@ $(filter %.s,$(CPPSRCS:%.cc=%.s)): %.s: %.cc $(call mkdir_deps,$(MDDEPDIR))
 	$(REPORT_BUILD)
 	$(CCC) -S $(COMPILE_CXXFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
+$(filter %.s,$(CPPSRCS:%.cxx=%.s)): %.s: %.cpp $(call mkdir_deps,$(MDDEPDIR))
+	$(REPORT_BUILD)
+	$(CCC) -S $(COMPILE_CXXFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+
 $(filter %.s,$(CSRCS:%.c=%.s)): %.s: %.c $(call mkdir_deps,$(MDDEPDIR))
 	$(REPORT_BUILD)
 	$(CC) -S $(COMPILE_CFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
@@ -1035,6 +1024,7 @@ ifneq (,$(filter %.i,$(MAKECMDGOALS)))
 _group_srcs = $(sort $(patsubst %.$1,%.i,$(filter %.$1,$2 $(notdir $2))))
 _PREPROCESSED_CPP_FILES := $(call _group_srcs,cpp,$(CPPSRCS))
 _PREPROCESSED_CC_FILES := $(call _group_srcs,cc,$(CPPSRCS))
+_PREPROCESSED_CXX_FILES := $(call _group_srcs,cxx,$(CPPSRCS))
 _PREPROCESSED_C_FILES := $(call _group_srcs,c,$(CSRCS))
 _PREPROCESSED_CMM_FILES := $(call _group_srcs,mm,$(CMMSRCS))
 
@@ -1044,7 +1034,7 @@ VPATH += $(addprefix $(srcdir)/,$(sort $(dir $(CPPSRCS) $(CSRCS) $(CMMSRCS))))
 
 # Make preprocessed files PHONY so they are always executed, since they are
 # manual targets and we don't necessarily write to $@.
-.PHONY: $(_PREPROCESSED_CPP_FILES) $(_PREPROCESSED_CC_FILES) $(_PREPROCESSED_C_FILES) $(_PREPROCESSED_CMM_FILES)
+.PHONY: $(_PREPROCESSED_CPP_FILES) $(_PREPROCESSED_CC_FILES) $(_PREPROCESSED_CXX_FILES) $(_PREPROCESSED_C_FILES) $(_PREPROCESSED_CMM_FILES)
 
 $(_PREPROCESSED_CPP_FILES): %.i: %.cpp $(call mkdir_deps,$(MDDEPDIR))
 	$(REPORT_BUILD)
@@ -1052,6 +1042,11 @@ $(_PREPROCESSED_CPP_FILES): %.i: %.cpp $(call mkdir_deps,$(MDDEPDIR))
 	$(CCC) -C $(PREPROCESS_OPTION)$@ $(COMPILE_CXXFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 $(_PREPROCESSED_CC_FILES): %.i: %.cc $(call mkdir_deps,$(MDDEPDIR))
+	$(REPORT_BUILD)
+	$(addprefix $(MKDIR) -p ,$(filter-out .,$(@D)))
+	$(CCC) -C $(PREPROCESS_OPTION)$@ $(COMPILE_CXXFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+
+$(_PREPROCESSED_CXX_FILES): %.i: %.cxx $(call mkdir_deps,$(MDDEPDIR))
 	$(REPORT_BUILD)
 	$(addprefix $(MKDIR) -p ,$(filter-out .,$(@D)))
 	$(CCC) -C $(PREPROCESS_OPTION)$@ $(COMPILE_CXXFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
@@ -1074,7 +1069,7 @@ PP_UNIFIED ?= 1
 # infinite loop if the filename doesn't exist in the unified source files.
 ifndef PP_REINVOKE
 
-MATCH_cpp = \(cpp\|cc\)
+MATCH_cpp = \(cpp\|cc|cxx\)
 UPPER_c = C
 UPPER_cpp = CPP
 UPPER_mm = CMM
@@ -1128,9 +1123,7 @@ else
 endif
 
 # Cancel GNU make built-in implicit rules
-ifndef .PYMAKE
 MAKEFLAGS += -r
-endif
 
 ifneq (,$(filter WINNT,$(OS_ARCH)))
 SEP := ;

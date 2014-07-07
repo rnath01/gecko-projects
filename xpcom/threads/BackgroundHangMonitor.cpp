@@ -1,4 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -38,7 +39,7 @@ private:
 
 #ifdef MOZ_NUWA_PROCESS
     if (IsNuwaProcess()) {
-      NS_ASSERTION(NuwaMarkCurrentThread != nullptr,
+      NS_ASSERTION(NuwaMarkCurrentThread,
                    "NuwaMarkCurrentThread is undefined!");
       NuwaMarkCurrentThread(nullptr, nullptr);
     }
@@ -89,6 +90,7 @@ public:
   }
 
   BackgroundHangManager();
+private:
   ~BackgroundHangManager();
 };
 
@@ -117,9 +119,8 @@ public:
 
   static void Startup()
   {
-    /* We can tolerate init() failing.
-       The if block turns off warn_unused_result. */
-    if (!sTlsKey.init()) {}
+    /* We can tolerate init() failing. */
+    (void)!sTlsKey.init();
   }
 
   // Hang timeout in ticks
@@ -137,7 +138,7 @@ public:
   // Platform-specific helper to get hang stacks
   ThreadStackHelper mStackHelper;
   // Stack of current hang
-  Telemetry::HangHistogram::Stack mHangStack;
+  Telemetry::HangStack mHangStack;
   // Statistics for telemetry
   Telemetry::ThreadHangStats mStats;
 
@@ -176,18 +177,14 @@ BackgroundHangManager::BackgroundHangManager()
     PR_USER_THREAD, MonitorThread, this,
     PR_PRIORITY_LOW, PR_GLOBAL_THREAD, PR_JOINABLE_THREAD, 0);
 
-  MOZ_ASSERT(mHangMonitorThread,
-    "Failed to create monitor thread");
+  MOZ_ASSERT(mHangMonitorThread, "Failed to create monitor thread");
 }
 
 BackgroundHangManager::~BackgroundHangManager()
 {
-  MOZ_ASSERT(mShutdown,
-    "Destruction without Shutdown call");
-  MOZ_ASSERT(mHangThreads.isEmpty(),
-    "Destruction with outstanding monitors");
-  MOZ_ASSERT(mHangMonitorThread,
-    "No monitor thread");
+  MOZ_ASSERT(mShutdown, "Destruction without Shutdown call");
+  MOZ_ASSERT(mHangThreads.isEmpty(), "Destruction with outstanding monitors");
+  MOZ_ASSERT(mHangMonitorThread, "No monitor thread");
 
   // PR_CreateThread could have failed above due to resource limitation
   if (mHangMonitorThread) {

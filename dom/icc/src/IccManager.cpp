@@ -4,7 +4,6 @@
 
 #include "IccManager.h"
 #include "mozilla/dom/MozIccManagerBinding.h"
-#include "GeneratedEvents.h"
 #include "Icc.h"
 #include "IccListener.h"
 #include "mozilla/dom/IccChangeEvent.h"
@@ -102,21 +101,21 @@ IccManager::GetIccIds(nsTArray<nsString>& aIccIds)
 {
   nsTArray<nsRefPtr<IccListener>>::size_type i;
   for (i = 0; i < mIccListeners.Length(); ++i) {
-    nsRefPtr<Icc> icc = mIccListeners[i]->GetIcc();
+    Icc* icc = mIccListeners[i]->GetIcc();
     if (icc) {
       aIccIds.AppendElement(icc->GetIccId());
     }
   }
 }
 
-already_AddRefed<nsISupports>
+Icc*
 IccManager::GetIccById(const nsAString& aIccId) const
 {
   nsTArray<nsRefPtr<IccListener>>::size_type i;
   for (i = 0; i < mIccListeners.Length(); ++i) {
-    nsRefPtr<Icc> icc = mIccListeners[i]->GetIcc();
+    Icc* icc = mIccListeners[i]->GetIcc();
     if (icc && aIccId == icc->GetIccId()) {
-      return icc.forget();
+      return icc;
     }
   }
   return nullptr;

@@ -468,6 +468,22 @@ function hasSideBarTab(inspector, id) {
   return !!inspector.sidebar.getWindowForTab(id);
 }
 
+/**
+ * Get the dataURL for the font family tooltip.
+ * @param {String} font The font family value.
+ * @param {object} nodeFront
+ *        The NodeActor that will used to retrieve the dataURL for the
+ *        font family tooltip contents.
+ */
+let getFontFamilyDataURL = Task.async(function*(font, nodeFront) {
+  let fillStyle = (Services.prefs.getCharPref("devtools.theme") === "light") ?
+      "black" : "white";
+
+  let {data} = yield nodeFront.getFontFamilyDataURL(font, fillStyle);
+  let dataURL = yield data.string();
+  return dataURL;
+});
+
 /* *********************************************
  * RULE-VIEW
  * *********************************************
@@ -577,6 +593,16 @@ let simulateColorPickerChange = Task.async(function*(colorPicker, newRgba, expec
 function getRuleViewLinkByIndex(view, index) {
   let links = view.doc.querySelectorAll(".ruleview-rule-source");
   return links[index];
+}
+
+/**
+ * Get the rule editor from the rule-view given its index
+ * @param {CssRuleView} view The instance of the rule-view panel
+ * @param {Number} index The index of the link to get
+ * @return {DOMNode} The rule editor if any at this index
+ */
+function getRuleViewRuleEditor(view, index) {
+  return view.element.children[index]._ruleEditor;
 }
 
 /**

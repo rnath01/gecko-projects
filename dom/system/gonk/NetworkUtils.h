@@ -14,12 +14,13 @@
 class NetworkParams;
 class CommandChain;
 
-using namespace mozilla::dom;
-
-typedef void (*CommandCallback)(CommandChain*, bool, NetworkResultOptions& aResult);
-typedef void (*CommandFunc)(CommandChain*, CommandCallback, NetworkResultOptions& aResult);
-typedef void (*MessageCallback)(NetworkResultOptions& aResult);
-typedef void (*ErrorCallback)(NetworkParams& aOptions, NetworkResultOptions& aResult);
+typedef void (*CommandCallback)(CommandChain*, bool,
+                                mozilla::dom::NetworkResultOptions& aResult);
+typedef void (*CommandFunc)(CommandChain*, CommandCallback,
+                            mozilla::dom::NetworkResultOptions& aResult);
+typedef void (*MessageCallback)(mozilla::dom::NetworkResultOptions& aResult);
+typedef void (*ErrorCallback)(NetworkParams& aOptions,
+                              mozilla::dom::NetworkResultOptions& aResult);
 
 class NetworkParams
 {
@@ -71,9 +72,10 @@ public:
     mCurInternalIfname = aOther.mCurInternalIfname;
     mCurExternalIfname = aOther.mCurExternalIfname;
     mThreshold = aOther.mThreshold;
+    mIsBlocking = aOther.mIsBlocking;
   }
 
-  NetworkParams(const NetworkCommandOptions& aOther) {
+  NetworkParams(const mozilla::dom::NetworkCommandOptions& aOther) {
 
 #define COPY_SEQUENCE_FIELD(prop, type)                                                      \
     if (aOther.prop.WasPassed()) {                                                           \
@@ -147,6 +149,7 @@ public:
     COPY_OPT_STRING_FIELD(mCurInternalIfname, EmptyString())
     COPY_OPT_STRING_FIELD(mCurExternalIfname, EmptyString())
     COPY_OPT_FIELD(mThreshold, -1)
+    COPY_OPT_FIELD(mIsBlocking, false)
 
 #undef COPY_SEQUENCE_FIELD
 #undef COPY_OPT_STRING_FIELD
@@ -197,6 +200,7 @@ public:
   nsString mCurInternalIfname;
   nsString mCurExternalIfname;
   long mThreshold;
+  bool mIsBlocking;
 };
 
 // CommandChain store the necessary information to execute command one by one.
@@ -280,6 +284,10 @@ private:
   bool setUSBTethering(NetworkParams& aOptions);
   bool enableUsbRndis(NetworkParams& aOptions);
   bool updateUpStream(NetworkParams& aOptions);
+  bool getInterfaces(NetworkParams& aOptions);
+  bool stopDhcp(NetworkParams& aOptions);
+  bool setInterfaceConfig(NetworkParams& aOptions);
+  bool getInterfaceConfig(NetworkParams& aOptions);
 
   /**
    * function pointer array holds all netd commands should be executed
@@ -288,6 +296,7 @@ private:
   static CommandFunc sWifiEnableChain[];
   static CommandFunc sWifiDisableChain[];
   static CommandFunc sWifiFailChain[];
+  static CommandFunc sWifiRetryChain[];
   static CommandFunc sWifiOperationModeChain[];
   static CommandFunc sUSBEnableChain[];
   static CommandFunc sUSBDisableChain[];
@@ -300,11 +309,15 @@ private:
   static CommandFunc sNetworkInterfaceDisableAlarmChain[];
   static CommandFunc sNetworkInterfaceSetAlarmChain[];
   static CommandFunc sSetDnsChain[];
+  static CommandFunc sGetInterfacesChain[];
+  static CommandFunc sSetInterfaceConfigChain[];
+  static CommandFunc sGetInterfaceConfigChain[];
 
   /**
    * Individual netd command stored in command chain.
    */
-#define PARAMS CommandChain* aChain, CommandCallback aCallback, NetworkResultOptions& aResult
+#define PARAMS CommandChain* aChain, CommandCallback aCallback, \
+               mozilla::dom::NetworkResultOptions& aResult
   static void wifiFirmwareReload(PARAMS);
   static void startAccessPointDriver(PARAMS);
   static void stopAccessPointDriver(PARAMS);
@@ -313,6 +326,7 @@ private:
   static void createUpStream(PARAMS);
   static void startSoftAP(PARAMS);
   static void stopSoftAP(PARAMS);
+  static void clearWifiTetherParms(PARAMS);
   static void getRxBytes(PARAMS);
   static void getTxBytes(PARAMS);
   static void enableAlarm(PARAMS);
@@ -334,6 +348,9 @@ private:
   static void disableNat(PARAMS);
   static void setDefaultInterface(PARAMS);
   static void setInterfaceDns(PARAMS);
+  static void getInterfaceList(PARAMS);
+  static void setConfig(PARAMS);
+  static void getConfig(PARAMS);
   static void wifiTetheringSuccess(PARAMS);
   static void usbTetheringSuccess(PARAMS);
   static void networkInterfaceStatsSuccess(PARAMS);
@@ -341,12 +358,16 @@ private:
   static void updateUpStreamSuccess(PARAMS);
   static void setDhcpServerSuccess(PARAMS);
   static void wifiOperationModeSuccess(PARAMS);
+  static void getInterfacesSuccess(PARAMS);
+  static void setInterfaceConfigSuccess(PARAMS);
+  static void getInterfaceConfigSuccess(PARAMS);
 #undef PARAMS
 
   /**
    * Error callback function executed when a command is fail.
    */
-#define PARAMS NetworkParams& aOptions, NetworkResultOptions& aResult
+#define PARAMS NetworkParams& aOptions, \
+               mozilla::dom::NetworkResultOptions& aResult
   static void wifiTetheringFail(PARAMS);
   static void wifiOperationModeFail(PARAMS);
   static void usbTetheringFail(PARAMS);
@@ -355,12 +376,16 @@ private:
   static void networkInterfaceStatsFail(PARAMS);
   static void networkInterfaceAlarmFail(PARAMS);
   static void setDnsFail(PARAMS);
+  static void getInterfacesFail(PARAMS);
+  static void setInterfaceConfigFail(PARAMS);
+  static void getInterfaceConfigFail(PARAMS);
 #undef PARAMS
 
   /**
    * Command chain processing functions.
    */
-  static void next(CommandChain* aChain, bool aError, NetworkResultOptions& aResult);
+  static void next(CommandChain* aChain, bool aError,
+                   mozilla::dom::NetworkResultOptions& aResult);
   static void nextNetdCommand();
   static void doCommand(const char* aCommand, CommandChain* aChain, CommandCallback aCallback);
 

@@ -37,9 +37,9 @@ NS_QUERYFRAME_TAIL_INHERITING(nsSVGInnerSVGFrameBase)
 
 #ifdef DEBUG
 void
-nsSVGInnerSVGFrame::Init(nsIContent* aContent,
-                         nsIFrame* aParent,
-                         nsIFrame* aPrevInFlow)
+nsSVGInnerSVGFrame::Init(nsIContent*       aContent,
+                         nsContainerFrame* aParent,
+                         nsIFrame*         aPrevInFlow)
 {
   NS_ASSERTION(aContent->IsSVG(nsGkAtoms::svg),
                "Content is not an SVG 'svg' element!");
@@ -78,7 +78,7 @@ nsSVGInnerSVGFrame::PaintSVG(nsRenderingContext *aContext,
       return NS_OK;
     }
 
-    nsSVGContainerFrame *parent = static_cast<nsSVGContainerFrame*>(mParent);
+    nsSVGContainerFrame *parent = static_cast<nsSVGContainerFrame*>(GetParent());
     gfxMatrix clipTransform = parent->GetCanvasTM(FOR_PAINTING, aTransformRoot);
 
     gfxContext *gfx = aContext->ThebesContext();
@@ -89,6 +89,25 @@ nsSVGInnerSVGFrame::PaintSVG(nsRenderingContext *aContext,
   }
 
   return nsSVGInnerSVGFrameBase::PaintSVG(aContext, aDirtyRect);
+}
+
+nsRect
+nsSVGInnerSVGFrame::GetCoveredRegion()
+{
+  float x, y, w, h;
+  static_cast<SVGSVGElement*>(mContent)->
+    GetAnimatedLengthValues(&x, &y, &w, &h, nullptr);
+  if (w < 0.0f) w = 0.0f;
+  if (h < 0.0f) h = 0.0f;
+  // GetCanvasTM includes the x,y translation
+  nsRect bounds = nsSVGUtils::ToCanvasBounds(gfxRect(0.0, 0.0, w, h),
+                                             GetCanvasTM(FOR_OUTERSVG_TM),
+                                             PresContext());
+
+  if (!StyleDisplay()->IsScrollableOverflow()) {
+    bounds.UnionRect(bounds, nsSVGUtils::GetCoveredRegion(mFrames));
+  }
+  return bounds;
 }
 
 void
@@ -242,7 +261,7 @@ nsSVGInnerSVGFrame::GetFrameForPoint(const nsPoint &aPoint)
 
   if (StyleDisplay()->IsScrollableOverflow()) {
     nsSVGElement *content = static_cast<nsSVGElement*>(mContent);
-    nsSVGContainerFrame *parent = static_cast<nsSVGContainerFrame*>(mParent);
+    nsSVGContainerFrame *parent = static_cast<nsSVGContainerFrame*>(GetParent());
 
     float clipX, clipY, clipWidth, clipHeight;
     content->GetAnimatedLengthValues(&clipX, &clipY, &clipWidth, &clipHeight, nullptr);
@@ -279,15 +298,17 @@ gfxMatrix
 nsSVGInnerSVGFrame::GetCanvasTM(uint32_t aFor, nsIFrame* aTransformRoot)
 {
   if (!(GetStateBits() & NS_FRAME_IS_NONDISPLAY) && !aTransformRoot) {
-    if ((aFor == FOR_PAINTING && NS_SVGDisplayListPaintingEnabled()) ||
-        (aFor == FOR_HIT_TESTING && NS_SVGDisplayListHitTestingEnabled())) {
+    if (aFor == FOR_PAINTING && NS_SVGDisplayListPaintingEnabled()) {
       return nsSVGIntegrationUtils::GetCSSPxToDevPxMatrix(this);
+    }
+    if (aFor == FOR_HIT_TESTING && NS_SVGDisplayListHitTestingEnabled()) {
+      return gfxMatrix();
     }
   }
   if (!mCanvasTM) {
-    NS_ASSERTION(mParent, "null parent");
+    NS_ASSERTION(GetParent(), "null parent");
 
-    nsSVGContainerFrame *parent = static_cast<nsSVGContainerFrame*>(mParent);
+    nsSVGContainerFrame *parent = static_cast<nsSVGContainerFrame*>(GetParent());
     SVGSVGElement *content = static_cast<SVGSVGElement*>(mContent);
 
     gfxMatrix tm = content->PrependLocalTransformsTo(

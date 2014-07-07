@@ -81,10 +81,26 @@ class MIRGenerator
 
     // Whether the main thread is trying to cancel this build.
     bool shouldCancel(const char *why) {
+        maybePause();
         return cancelBuild_;
     }
     void cancel() {
         cancelBuild_ = true;
+    }
+
+    void maybePause() {
+        if (pauseBuild_ && *pauseBuild_)
+            PauseCurrentHelperThread();
+    }
+    void setPauseFlag(mozilla::Atomic<bool, mozilla::Relaxed> *pauseBuild) {
+        pauseBuild_ = pauseBuild;
+    }
+
+    void disable() {
+        abortReason_ = AbortReason_Disable;
+    }
+    AbortReason abortReason() {
+        return abortReason_;
     }
 
     bool compilingAsmJS() const {
@@ -111,14 +127,17 @@ class MIRGenerator
     bool performsCall() const {
         return performsCall_;
     }
+    void setNeedsInitialStackAlignment() {
+        needsInitialStackAlignment_ = true;
+    }
+    bool needsInitialStackAlignment() const {
+        JS_ASSERT(compilingAsmJS());
+        return needsInitialStackAlignment_;
+    }
     void setPerformsAsmJSCall() {
         JS_ASSERT(compilingAsmJS());
         setPerformsCall();
-        performsAsmJSCall_ = true;
-    }
-    bool performsAsmJSCall() const {
-        JS_ASSERT(compilingAsmJS());
-        return performsAsmJSCall_;
+        setNeedsInitialStackAlignment();
     }
     void noteMinAsmJSHeapLength(uint32_t len) {
         minAsmJSHeapLength_ = len;
@@ -141,12 +160,14 @@ class MIRGenerator
     JSFunction *fun_;
     uint32_t nslots_;
     MIRGraph *graph_;
+    AbortReason abortReason_;
     bool error_;
+    mozilla::Atomic<bool, mozilla::Relaxed> *pauseBuild_;
     mozilla::Atomic<bool, mozilla::Relaxed> cancelBuild_;
 
     uint32_t maxAsmJSStackArgBytes_;
     bool performsCall_;
-    bool performsAsmJSCall_;
+    bool needsInitialStackAlignment_;
     uint32_t minAsmJSHeapLength_;
 
     // Keep track of whether frame arguments are modified during execution.

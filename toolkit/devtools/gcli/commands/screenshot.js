@@ -27,6 +27,9 @@ exports.items = [
     description: gcli.lookup("screenshotDesc"),
     manual: gcli.lookup("screenshotManual"),
     returnType: "dom",
+    buttonId: "command-button-screenshot",
+    buttonClass: "command-button command-button-invertable",
+    tooltipText: gcli.lookup("screenshotTooltip"),
     params: [
       {
         name: "filename",
@@ -103,6 +106,8 @@ exports.items = [
         let width;
         let height;
         let div = document.createElementNS("http://www.w3.org/1999/xhtml", "div");
+        let currentX = window.scrollX;
+        let currentY = window.scrollY;
 
         if (!fullpage) {
           if (!node) {
@@ -119,6 +124,7 @@ exports.items = [
             height = rect.height;
           }
         } else {
+          window.scrollTo(0,0);
           width = window.innerWidth + window.scrollMaxX;
           height = window.innerHeight + window.scrollMaxY;
         }
@@ -128,6 +134,10 @@ exports.items = [
         let ctx = canvas.getContext("2d");
         ctx.drawWindow(window, left, top, width, height, "#fff");
         let data = canvas.toDataURL("image/png", "");
+
+        if(fullpage) {
+          window.scrollTo(currentX, currentY);
+        }
 
         let loadContext = document.defaultView
                                   .QueryInterface(Ci.nsIInterfaceRequestor)

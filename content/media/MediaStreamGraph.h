@@ -232,6 +232,7 @@ public:
  */
 struct AudioNodeSizes
 {
+  AudioNodeSizes() : mDomNode(0), mStream(0), mEngine(0), mNodeType() {}
   size_t mDomNode;
   size_t mStream;
   size_t mEngine;
@@ -381,7 +382,8 @@ public:
    * updates that were sent from the graph thread or will be sent before the
    * graph thread receives the next graph update.
    *
-   * If the graph has been shutdown or destroyed, or if it is non-realtime
+   * If the graph has been shut down or destroyed, then the runnable will be
+   * dispatched to the event queue immediately.  If the graph is non-realtime
    * and has not started, then the runnable will be run
    * synchronously/immediately.  (There are no pending updates in these
    * situations.)
@@ -479,6 +481,31 @@ public:
   }
   const StreamBuffer& GetStreamBuffer() { return mBuffer; }
   GraphTime GetStreamBufferStartTime() { return mBufferStartTime; }
+
+  double StreamTimeToSeconds(StreamTime aTime)
+  {
+    return TrackTicksToSeconds(mBuffer.GraphRate(), aTime);
+  }
+  int64_t StreamTimeToMicroseconds(StreamTime aTime)
+  {
+    return TimeToTicksRoundDown(1000000, aTime);
+  }
+  StreamTime SecondsToStreamTimeRoundDown(double aS)
+  {
+    return SecondsToTicksRoundDown(mBuffer.GraphRate(), aS);
+  }
+  TrackTicks TimeToTicksRoundUp(TrackRate aRate, StreamTime aTime)
+  {
+    return RateConvertTicksRoundUp(aRate, mBuffer.GraphRate(), aTime);
+  }
+  TrackTicks TimeToTicksRoundDown(TrackRate aRate, StreamTime aTime)
+  {
+    return RateConvertTicksRoundDown(aRate, mBuffer.GraphRate(), aTime);
+  }
+  StreamTime TicksToTimeRoundDown(TrackRate aRate, TrackTicks aTicks)
+  {
+    return RateConvertTicksRoundDown(mBuffer.GraphRate(), aRate, aTicks);
+  }
   /**
    * Convert graph time to stream time. aTime must be <= mStateComputedTime
    * to ensure we know exactly how much time this stream will be blocked during
@@ -737,8 +764,7 @@ public:
   /**
    * Indicate that this stream should enter the "finished" state. All tracks
    * must have been ended via EndTrack. The finish time of the stream is
-   * when all tracks have ended and when latest time sent to
-   * AdvanceKnownTracksTime() has been reached.
+   * when all tracks have ended.
    */
   void FinishWithLockHeld();
   void Finish()
@@ -801,6 +827,9 @@ public:
     // Resampler if the rate of the input track does not match the
     // MediaStreamGraph's.
     nsAutoRef<SpeexResamplerState> mResampler;
+#ifdef DEBUG
+    int mResamplerChannelCount;
+#endif
     TrackTicks mStart;
     // Each time the track updates are flushed to the media graph thread,
     // this is cleared.

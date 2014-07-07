@@ -27,9 +27,9 @@ public:
   GetAdditionalStyleContext(int32_t aIndex) const MOZ_OVERRIDE;
 
   virtual void
-  Init(nsIContent*      aContent,
-       nsIFrame*        aParent,
-       nsIFrame*        aPrevInFlow) MOZ_OVERRIDE;
+  Init(nsIContent*       aContent,
+       nsContainerFrame* aParent,
+       nsIFrame*         aPrevInFlow) MOZ_OVERRIDE;
 
   NS_IMETHOD
   TransmitAutomaticData() MOZ_OVERRIDE;
@@ -39,6 +39,12 @@ public:
          nsHTMLReflowMetrics&     aDesiredSize,
          const nsHTMLReflowState& aReflowState,
          nsReflowStatus&          aStatus) MOZ_OVERRIDE;
+
+  void
+  GetRadicalXOffsets(nscoord aIndexWidth, nscoord aSqrWidth,
+                     nsFontMetrics* aFontMetrics,
+                     nscoord* aIndexOffset,
+                     nscoord* aSqrOffset);
 
   virtual void
   GetIntrinsicWidthMetrics(nsRenderingContext* aRenderingContext,
