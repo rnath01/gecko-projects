@@ -70,6 +70,7 @@
 #include "mozilla/dom/indexedDB/IndexedDatabaseManager.h"
 #include "mozilla/dom/MutableFile.h"
 #include "mozilla/dom/MutableFileBinding.h"
+#include "mozilla/dom/PermissionMessageUtils.h"
 #include "mozilla/dom/quota/PersistenceType.h"
 #include "mozilla/dom/quota/QuotaManager.h"
 #include "nsDOMBlobBuilder.h"
@@ -88,6 +89,7 @@
 #include "GeckoProfiler.h"
 #include "mozilla/Preferences.h"
 #include "nsIContentIterator.h"
+#include "nsContentPermissionHelper.h"
 
 #ifdef XP_WIN
 #undef GetClassName
@@ -879,12 +881,8 @@ nsDOMWindowUtils::SendWheelEvent(float aX,
   wheelEvent.deltaMode = aDeltaMode;
   wheelEvent.isMomentum =
     (aOptions & WHEEL_EVENT_CAUSED_BY_MOMENTUM) != 0;
-  wheelEvent.isPixelOnlyDevice =
-    (aOptions & WHEEL_EVENT_CAUSED_BY_PIXEL_ONLY_DEVICE) != 0;
-  NS_ENSURE_TRUE(
-    !wheelEvent.isPixelOnlyDevice ||
-      aDeltaMode == nsIDOMWheelEvent::DOM_DELTA_PIXEL,
-    NS_ERROR_INVALID_ARG);
+  wheelEvent.mIsNoLineOrPageDelta =
+    (aOptions & WHEEL_EVENT_CAUSED_BY_NO_LINE_OR_PAGE_DELTA_DEVICE) != 0;
   wheelEvent.customizedByUserPrefs =
     (aOptions & WHEEL_EVENT_CUSTOMIZED_BY_USER_PREFS) != 0;
   wheelEvent.lineOrPageDeltaX = aLineOrPageDeltaX;
@@ -3678,6 +3676,49 @@ NS_IMETHODIMP
 nsDOMWindowUtils::XpconnectArgument(nsIDOMWindowUtils* aThis)
 {
   // Do nothing.
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::AskPermission(nsIContentPermissionRequest* aRequest)
+{
+  nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
+  nsRefPtr<RemotePermissionRequest> req =
+    new RemotePermissionRequest(aRequest, window->GetCurrentInnerWindow());
+
+    // for content process
+  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+    MOZ_ASSERT(NS_IsMainThread()); // IPC can only be execute on main thread.
+
+    dom::TabChild* child = dom::TabChild::GetFrom(window->GetDocShell());
+    NS_ENSURE_TRUE(child, NS_ERROR_FAILURE);
+
+    nsCOMPtr<nsIArray> typeArray;
+    nsresult rv = req->GetTypes(getter_AddRefs(typeArray));
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    nsTArray<PermissionRequest> permArray;
+    RemotePermissionRequest::ConvertArrayToPermissionRequest(typeArray, permArray);
+
+    nsCOMPtr<nsIPrincipal> principal;
+    rv = req->GetPrincipal(getter_AddRefs(principal));
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    req->AddRef();
+    child->SendPContentPermissionRequestConstructor(req,
+                                                    permArray,
+                                                    IPC::Principal(principal));
+
+    req->Sendprompt();
+    return NS_OK;
+  }
+
+  // for chrome process
+  nsCOMPtr<nsIContentPermissionPrompt> prompt =
+    do_GetService(NS_CONTENT_PERMISSION_PROMPT_CONTRACTID);
+  if (prompt) {
+    prompt->Prompt(req);
+  }
   return NS_OK;
 }
 
