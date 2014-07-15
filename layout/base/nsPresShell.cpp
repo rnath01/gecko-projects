@@ -112,7 +112,6 @@
 #include "nsNetUtil.h"
 #include "nsThreadUtils.h"
 #include "nsStyleSheetService.h"
-#include "gfxImageSurface.h"
 #include "gfxContext.h"
 #include "gfxUtils.h"
 #include "nsSMILAnimationController.h"
@@ -7179,6 +7178,9 @@ PresShell::HandleEvent(nsIFrame* aFrame,
 
         if (pointerCapturingContent) {
           if (nsIFrame* capturingFrame = pointerCapturingContent->GetPrimaryFrame()) {
+            // If pointer capture is set, we should suppress pointerover/pointerenter events
+            // for all elements except element which have pointer capture. (Code in EventStateManager)
+            pointerEvent->retargetedByPointerCapture = (frame != capturingFrame);
             frame = capturingFrame;
           }
 
