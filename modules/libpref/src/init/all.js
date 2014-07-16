@@ -357,10 +357,6 @@ pref("media.navigator.enabled", true);
 #endif
 #endif
 
-pref("media.tabstreaming.width", 320);
-pref("media.tabstreaming.height", 240);
-pref("media.tabstreaming.time_per_frame", 40);
-
 // TextTrack support
 pref("media.webvtt.enabled", true);
 pref("media.webvtt.regions.enabled", false);
@@ -432,6 +428,10 @@ pref("gfx.hidpi.enabled", 2);
 // Whether to enable LayerScope tool and default listening port
 pref("gfx.layerscope.enabled", false);
 pref("gfx.layerscope.port", 23456);
+
+// Log severe performance warnings to the error console and profiles.
+// This should be use to quickly find which slow paths are used by test cases.
+pref("gfx.perf-warnings.enabled", false);
 
 // 0 = Off, 1 = Full, 2 = Tagged Images Only.
 // See eCMSMode in gfx/thebes/gfxPlatform.h
@@ -4229,7 +4229,7 @@ pref("urlclassifier.disallow_completions", "test-malware-simple,test-phish-simpl
 // The table and update/gethash URLs for Safebrowsing phishing and malware
 // checks.
 pref("urlclassifier.trackingTable", "mozpub-track-digest256");
-pref("browser.trackingprotection.updateURL", "https://tracking.services.mozilla.com/update?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
+pref("browser.trackingprotection.updateURL", "https://tracking.services.mozilla.com/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
 pref("browser.trackingprotection.gethashURL", "https://tracking.services.mozilla.com/gethash?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
 
 // Turn off Spatial navigation by default.
