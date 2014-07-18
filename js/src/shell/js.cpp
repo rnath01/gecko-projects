@@ -5980,6 +5980,15 @@ SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
                              .setAsmJS(enableAsmJS)
                              .setNativeRegExp(enableNativeRegExp);
 
+    if (const char *str = op.getStringOption("ion-scalar-replacement")) {
+        if (strcmp(str, "on") == 0)
+            jit::js_JitOptions.disableScalarReplacement = false;
+        else if (strcmp(str, "off") == 0)
+            jit::js_JitOptions.disableScalarReplacement = true;
+        else
+            return OptionFailure("ion-scalar-replacement", str);
+    }
+
     if (const char *str = op.getStringOption("ion-gvn")) {
         if (strcmp(str, "off") == 0) {
             jit::js_JitOptions.disableGvn = true;
@@ -6107,6 +6116,10 @@ SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
     int32_t fill = op.getIntOption("arm-asm-nop-fill");
     if (fill >= 0)
         jit::Assembler::NopFill = fill;
+
+    int32_t poolMaxOffset = op.getIntOption("asm-pool-max-offset");
+    if (poolMaxOffset >= 5 && poolMaxOffset <= 1024)
+        jit::Assembler::AsmPoolMaxOffset = poolMaxOffset;
 #endif
 
 #if defined(JS_ARM_SIMULATOR)
@@ -6272,6 +6285,8 @@ main(int argc, char **argv, char **envp)
         || !op.addBoolOption('\0', "no-ion", "Disable IonMonkey")
         || !op.addBoolOption('\0', "no-asmjs", "Disable asm.js compilation")
         || !op.addBoolOption('\0', "no-native-regexp", "Disable native regexp compilation")
+        || !op.addStringOption('\0', "ion-scalar-replacement", "on/off",
+                               "Scalar Replacement (default: off, on to enable)")
         || !op.addStringOption('\0', "ion-gvn", "[mode]",
                                "Specify Ion global value numbering:\n"
                                "  off: disable GVN\n"
@@ -6333,6 +6348,8 @@ main(int argc, char **argv, char **envp)
                                "Specify ARM code generation features, or 'help' to list all features.")
         || !op.addIntOption('\0', "arm-asm-nop-fill", "SIZE",
                             "Insert the given number of NOP instructions at all possible pool locations.", 0)
+        || !op.addIntOption('\0', "asm-pool-max-offset", "OFFSET",
+                            "The maximum pc relative OFFSET permitted in pool reference instructions.", 1024)
 #endif
 #if defined(JS_ARM_SIMULATOR)
         || !op.addBoolOption('\0', "arm-sim-icache-checks", "Enable icache flush checks in the ARM "

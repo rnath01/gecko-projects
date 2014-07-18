@@ -723,7 +723,6 @@ AsyncPanZoomController::AsyncPanZoomController(uint64_t aLayersId,
      mTreeManager(aTreeManager),
      mScrollParentId(FrameMetrics::NULL_SCROLL_ID),
      mAPZCId(sAsyncPanZoomControllerCount++),
-     mSharedFrameMetricsBuffer(nullptr),
      mSharedLock(nullptr)
 {
   MOZ_COUNT_CTOR(AsyncPanZoomController);
@@ -791,7 +790,6 @@ AsyncPanZoomController::Destroy()
 
   { // scope the lock
     ReentrantMonitorAutoEnter lock(mMonitor);
-    delete mSharedFrameMetricsBuffer;
     mSharedFrameMetricsBuffer = nullptr;
     delete mSharedLock;
     mSharedLock = nullptr;
@@ -2609,7 +2607,7 @@ AsyncPanZoomController::StartNewTouchBlock(bool aCopyAllowedTouchBehaviorFromCur
   // See corresponding comment in ProcessPendingInputBlocks.
   while (!mTouchBlockQueue.IsEmpty()) {
     if (mTouchBlockQueue[0]->IsReadyForHandling() && !mTouchBlockQueue[0]->HasEvents()) {
-      APZC_LOG("%p discarding depleted touch block %p\n", this, mTouchBlockQueue[0]);
+      APZC_LOG("%p discarding depleted touch block %p\n", this, mTouchBlockQueue[0].get());
       mTouchBlockQueue.RemoveElementAt(0);
     } else {
       break;
