@@ -2080,14 +2080,11 @@ this.DOMApplicationRegistry = {
         return false;
       }
 
-      // Disallow multiple hosted apps installations from the same origin for now.
-      // We will remove this code after multiple apps per origin are supported (bug 778277).
-      // This will also disallow reinstalls from the same origin for now.
+      // Disallow reinstalls from the same manifest url for now.
       for (let id in this.webapps) {
-        if (this.webapps[id].origin == app.origin &&
-            !this.webapps[id].packageHash &&
+        if (this.webapps[id].manifestURL == app.manifestURL &&
             this._isLaunchable(this.webapps[id])) {
-          sendError("MULTIPLE_APPS_PER_ORIGIN_FORBIDDEN");
+          sendError("REINSTALL_FORBIDDEN");
           return false;
         }
       }
@@ -3246,6 +3243,12 @@ this.DOMApplicationRegistry = {
           root = manifestPath.startsWith("/reviewers/")
                ? Ci.nsIX509CertDB.AppMarketplaceDevReviewersRoot
                : Ci.nsIX509CertDB.AppMarketplaceDevPublicRoot;
+          break;
+
+        // The staging server uses the same certificate for both
+        // public and unreviewed apps.
+        case "https://marketplace.allizom.org":
+          root = Ci.nsIX509CertDB.AppMarketplaceStageRoot;
           break;
       }
     }
