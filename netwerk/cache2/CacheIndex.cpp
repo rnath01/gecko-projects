@@ -1234,6 +1234,9 @@ bool CacheIndex::IsForcedValidEntry(const SHA1Sum::Hash *aHash)
   CacheFileIOManager::gInstance->mHandles.GetHandle(
     aHash, false, getter_AddRefs(handle));
 
+  if (!handle)
+    return false;
+
   nsCString hashKey = handle->Key();
   return CacheStorageService::Self()->IsForcedValidEntry(hashKey);
 }
