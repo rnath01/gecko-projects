@@ -208,11 +208,6 @@ class MessageLogger(object):
         self.buffering = False
         self.logger.suite_end()
 
-# Global logger
-log = StructuredLogger('mochitest')
-stream_handler = StreamHandler(stream=sys.stdout, formatter=MochitestFormatter())
-log.add_handler(stream_handler)
-
 ####################
 # PROCESS HANDLING #
 ####################
@@ -994,8 +989,13 @@ class Mochitest(MochitestUtilsMixin):
   def __init__(self):
     super(Mochitest, self).__init__()
 
+    # Structured logger
+    structured_log = StructuredLogger('mochitest')
+    stream_handler = StreamHandler(stream=sys.stdout, formatter=MochitestFormatter())
+    structured_log.add_handler(stream_handler)
+
     # Structured logs parser
-    self.message_logger = MessageLogger(logger=log)
+    self.message_logger = MessageLogger(logger=structured_log)
 
     # environment function for browserEnv
     self.environment = environment
@@ -1777,8 +1777,6 @@ class Mochitest(MochitestUtilsMixin):
 
     log.info("runtests.py | Running tests: end.")
 
-    self.message_logger.finish()
-
     if self.manifest is not None:
       self.cleanup(options)
 
@@ -2060,7 +2058,10 @@ def main():
   if options.symbolsPath and not isURL(options.symbolsPath):
     options.symbolsPath = mochitest.getFullPath(options.symbolsPath)
 
-  sys.exit(mochitest.runTests(options))
+  return_code = mochitest.runTests(options)
+  mochitest.message_logger.finish()
+
+  sys.exit(return_code)
 
 if __name__ == "__main__":
   main()

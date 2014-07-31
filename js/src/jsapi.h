@@ -803,16 +803,6 @@ JS_NumberValue(double d)
 JS_PUBLIC_API(bool)
 JS_StringHasBeenInterned(JSContext *cx, JSString *str);
 
-/*
- * Only JSStrings that have been interned via the JSAPI can be turned into
- * jsids by API clients.
- *
- * N.B. if a jsid is backed by a string which has not been interned, that
- * string must be appropriately rooted to avoid being collected by the GC.
- */
-JS_PUBLIC_API(jsid)
-INTERNED_STRING_TO_JSID(JSContext *cx, JSString *str);
-
 namespace JS {
 
 // Container class for passing in script source buffers to the JS engine.  This
@@ -1424,6 +1414,7 @@ class JS_PUBLIC_API(RuntimeOptions) {
         nativeRegExp_(false),
         werror_(false),
         strictMode_(false),
+        extraWarnings_(false),
         varObjFix_(false)
     {
     }
@@ -1484,6 +1475,16 @@ class JS_PUBLIC_API(RuntimeOptions) {
         return *this;
     }
 
+    bool extraWarnings() const { return extraWarnings_; }
+    RuntimeOptions &setExtraWarnings(bool flag) {
+        extraWarnings_ = flag;
+        return *this;
+    }
+    RuntimeOptions &toggleExtraWarnings() {
+        extraWarnings_ = !extraWarnings_;
+        return *this;
+    }
+
     bool varObjFix() const { return varObjFix_; }
     RuntimeOptions &setVarObjFix(bool flag) {
         varObjFix_ = flag;
@@ -1501,6 +1502,7 @@ class JS_PUBLIC_API(RuntimeOptions) {
     bool nativeRegExp_ : 1;
     bool werror_ : 1;
     bool strictMode_ : 1;
+    bool extraWarnings_ : 1;
     bool varObjFix_ : 1;
 };
 
@@ -1513,22 +1515,11 @@ RuntimeOptionsRef(JSContext *cx);
 class JS_PUBLIC_API(ContextOptions) {
   public:
     ContextOptions()
-      : extraWarnings_(false),
-        privateIsNSISupports_(false),
+      : privateIsNSISupports_(false),
         dontReportUncaught_(false),
         noDefaultCompartmentObject_(false),
         noScriptRval_(false)
     {
-    }
-
-    bool extraWarnings() const { return extraWarnings_; }
-    ContextOptions &setExtraWarnings(bool flag) {
-        extraWarnings_ = flag;
-        return *this;
-    }
-    ContextOptions &toggleExtraWarnings() {
-        extraWarnings_ = !extraWarnings_;
-        return *this;
     }
 
     bool privateIsNSISupports() const { return privateIsNSISupports_; }
@@ -1572,7 +1563,6 @@ class JS_PUBLIC_API(ContextOptions) {
     }
 
   private:
-    bool extraWarnings_ : 1;
     bool privateIsNSISupports_ : 1;
     bool dontReportUncaught_ : 1;
     bool noDefaultCompartmentObject_ : 1;
@@ -2618,6 +2608,10 @@ class JS_PUBLIC_API(CompartmentOptions)
         return *this;
     }
 
+    bool extraWarnings(JSRuntime *rt) const;
+    bool extraWarnings(JSContext *cx) const;
+    Override &extraWarningsOverride() { return extraWarningsOverride_; }
+
     void *zonePointer() const {
         JS_ASSERT(uintptr_t(zone_.pointer) > uintptr_t(JS::SystemZone));
         return zone_.pointer;
@@ -2655,6 +2649,7 @@ class JS_PUBLIC_API(CompartmentOptions)
     bool mergeable_;
     bool discardSource_;
     bool cloneSingletons_;
+    Override extraWarningsOverride_;
     union {
         ZoneSpecifier spec;
         void *pointer; // js::Zone* is not exposed in the API.

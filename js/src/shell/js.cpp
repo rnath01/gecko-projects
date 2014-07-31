@@ -62,6 +62,7 @@
 #include "shell/jsheaptools.h"
 #include "shell/jsoptparse.h"
 #include "vm/ArgumentsObject.h"
+#include "vm/Debugger.h"
 #include "vm/HelperThreads.h"
 #include "vm/Monitor.h"
 #include "vm/Shape.h"
@@ -70,6 +71,9 @@
 
 #include "jscompartmentinlines.h"
 #include "jsobjinlines.h"
+
+#include "vm/Interpreter-inl.h"
+#include "vm/Stack-inl.h"
 
 #ifdef XP_WIN
 # define PATH_MAX (MAX_PATH > _MAX_DIR ? MAX_PATH : _MAX_DIR)
@@ -764,7 +768,6 @@ Options(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    JS::ContextOptions oldContextOptions = JS::ContextOptionsRef(cx);
     JS::RuntimeOptions oldRuntimeOptions = JS::RuntimeOptionsRef(cx);
     for (unsigned i = 0; i < args.length(); i++) {
         JSString *str = JS::ToString(cx, args[i]);
@@ -777,7 +780,7 @@ Options(JSContext *cx, unsigned argc, jsval *vp)
             return false;
 
         if (strcmp(opt.ptr(), "strict") == 0)
-            JS::ContextOptionsRef(cx).toggleExtraWarnings();
+            JS::RuntimeOptionsRef(cx).toggleExtraWarnings();
         else if (strcmp(opt.ptr(), "werror") == 0)
             JS::RuntimeOptionsRef(cx).toggleWerror();
         else if (strcmp(opt.ptr(), "strict_mode") == 0)
@@ -794,7 +797,7 @@ Options(JSContext *cx, unsigned argc, jsval *vp)
 
     char *names = strdup("");
     bool found = false;
-    if (names && oldContextOptions.extraWarnings()) {
+    if (names && oldRuntimeOptions.extraWarnings()) {
         names = JS_sprintf_append(names, "%s%s", found ? "," : "", "strict");
         found = true;
     }
@@ -2678,14 +2681,29 @@ EvalInFrame(JSContext *cx, unsigned argc, jsval *vp)
     if (!stableChars.initTwoByte(cx, str))
         return JSTRAP_ERROR;
 
-    mozilla::Range<const jschar> chars = stableChars.twoByteRange();
-    JSAbstractFramePtr frame(fi.abstractFramePtr().raw(), fi.pc());
+    AbstractFramePtr frame = fi.abstractFramePtr();
     RootedScript fpscript(cx, frame.script());
-    bool ok = !!frame.evaluateUCInStackFrame(cx, chars.start().get(), chars.length(),
-                                             fpscript->filename(),
-                                             JS_PCToLineNumber(cx, fpscript,
-                                                               fi.pc()),
-                                             MutableHandleValue::fromMarkedLocation(vp));
+
+    RootedObject scope(cx);
+    {
+        RootedObject scopeChain(cx, frame.scopeChain());
+        AutoCompartment ac(cx, scopeChain);
+        scope = GetDebugScopeForFrame(cx, frame, fi.pc());
+    }
+    Rooted<Env*> env(cx, scope);
+    if (!env)
+        return false;
+
+    if (!ComputeThis(cx, frame))
+        return false;
+    RootedValue thisv(cx, frame.thisValue());
+
+    bool ok;
+    {
+        AutoCompartment ac(cx, env);
+        ok = EvaluateInEnv(cx, env, thisv, frame, stableChars.twoByteRange(), fpscript->filename(),
+                           JS_PCToLineNumber(cx, fpscript, fi.pc()), args.rval());
+    }
     return ok;
 }
 
@@ -3854,7 +3872,7 @@ EscapeForShell(AutoCStringVector &argv)
 
 static Vector<const char*, 4, js::SystemAllocPolicy> sPropagatedFlags;
 
-#if defined(DEBUG) && defined(JS_ION) && (defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64))
+#if defined(DEBUG) && (defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64))
 static bool
 PropagateFlagToNestedShells(const char *flag)
 {
@@ -5662,17 +5680,12 @@ BindScriptArgs(JSContext *cx, JSObject *obj_, OptionParser *op)
     return true;
 }
 
-// This function is currently only called from "#if defined(JS_ION)" chunks,
-// so we're guarding the function definition with an #ifdef, too, to avoid
-// build warning for unused function in non-ion-enabled builds:
-#if defined(JS_ION)
 static bool
 OptionFailure(const char *option, const char *str)
 {
     fprintf(stderr, "Unrecognized option for %s: %s\n", option, str);
     return false;
 }
-#endif /* JS_ION */
 
 static int
 ProcessArgs(JSContext *cx, JSObject *obj_, OptionParser *op)
@@ -5680,7 +5693,7 @@ ProcessArgs(JSContext *cx, JSObject *obj_, OptionParser *op)
     RootedObject obj(cx, obj_);
 
     if (op->getBoolOption('s'))
-        JS::ContextOptionsRef(cx).toggleExtraWarnings();
+        JS::RuntimeOptionsRef(cx).toggleExtraWarnings();
 
     if (op->getBoolOption('d')) {
         JS_SetRuntimeDebugMode(JS_GetRuntime(cx), true);
@@ -5733,7 +5746,6 @@ ProcessArgs(JSContext *cx, JSObject *obj_, OptionParser *op)
 static bool
 SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
 {
-#if defined(JS_ION)
     bool enableBaseline = !op.getBoolOption("no-baseline");
     bool enableIon = !op.getBoolOption("no-ion");
     bool enableAsmJS = !op.getBoolOption("no-asmjs");
@@ -5868,8 +5880,6 @@ SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
         fprintf(stderr, "--ion-parallel-compile is deprecated. Please use --ion-offthread-compile instead.\n");
         return false;
     }
-
-#endif // JS_ION
 
 #if defined(JS_CODEGEN_ARM)
     if (const char *str = op.getStringOption("arm-hwcap"))
@@ -6157,12 +6167,12 @@ main(int argc, char **argv, char **envp)
      */
     OOM_printAllocationCount = op.getBoolOption('O');
 
-#if defined(JS_CODEGEN_X86) && defined(JS_ION)
+#ifdef JS_CODEGEN_X86
     if (op.getBoolOption("no-fpu"))
         JSC::MacroAssembler::SetFloatingPointDisabled();
 #endif
 
-#if (defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)) && defined(JS_ION)
+#if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
     if (op.getBoolOption("no-sse3")) {
         JSC::MacroAssembler::SetSSE3Disabled();
         PropagateFlagToNestedShells("--no-sse3");
