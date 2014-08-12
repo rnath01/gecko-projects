@@ -2,7 +2,11 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-let {AddonTestUtils} = Components.utils.import("resource://testing-common/AddonManagerTesting.jsm", {});
+"use strict";
+
+Cu.import("resource://gre/modules/Promise.jsm");
+let {AddonTestUtils} = Cu.import("resource://testing-common/AddonManagerTesting.jsm", {});
+let OpenH264Scope = Cu.import("resource://gre/modules/addons/OpenH264Provider.jsm");
 
 const OPENH264_PLUGIN_ID       = "gmp-gmpopenh264";
 const OPENH264_PREF_BRANCH     = "media." + OPENH264_PLUGIN_ID + ".";
@@ -14,12 +18,37 @@ const OPENH264_PREF_AUTOUPDATE = OPENH264_PREF_BRANCH + "autoupdate";
 const PREF_LOGGING             = OPENH264_PREF_BRANCH + "provider.logging";
 const PREF_LOGGING_LEVEL       = PREF_LOGGING + ".level";
 const PREF_LOGGING_DUMP        = PREF_LOGGING + ".dump";
+const GMP_PREF_LASTCHECK       = "media.gmp-manager.lastCheck";
+const GMP_PREF_LOG             = "media.gmp-manager.log";
 
 const TEST_DATE = new Date(2013, 0, 1, 12);
 
 let gManagerWindow;
 let gCategoryUtilities;
 let gIsEnUsLocale;
+
+let MockGMPAddon = Object.freeze({
+  id: OPENH264_PLUGIN_ID,
+  isOpenH264: true,
+  isInstalled: false,
+});
+
+let gInstalledAddonId = "";
+let gInstallDeferred = null;
+
+function MockGMPInstallManager() {
+}
+
+MockGMPInstallManager.prototype = {
+  checkForAddons: () => Promise.resolve([MockGMPAddon]),
+
+  installAddon: addon => {
+    gInstalledAddonId = addon.id;
+    gInstallDeferred.resolve();
+    return Promise.resolve();
+  },
+};
+
 
 let gOptionsObserver = {
   lastDisplayed: null,
@@ -61,6 +90,7 @@ function openDetailsView(aId) {
 add_task(function* initializeState() {
   Services.prefs.setBoolPref(PREF_LOGGING_DUMP, true);
   Services.prefs.setIntPref(PREF_LOGGING_LEVEL, 0);
+  Services.prefs.setBoolPref(GMP_PREF_LOG, true);
 
   gManagerWindow = yield open_manager();
   gCategoryUtilities = new CategoryUtilities(gManagerWindow);
@@ -75,6 +105,8 @@ add_task(function* initializeState() {
     Services.prefs.clearUserPref(OPENH264_PREF_AUTOUPDATE);
     Services.prefs.clearUserPref(PREF_LOGGING_DUMP);
     Services.prefs.clearUserPref(PREF_LOGGING_LEVEL);
+    Services.prefs.clearUserPref(GMP_PREF_LOG);
+    Services.prefs.clearUserPref(GMP_PREF_LASTCHECK);
   });
 
   let chrome = Cc["@mozilla.org/chrome/chrome-registry;1"].getService(Ci.nsIXULChromeRegistry);
@@ -200,6 +232,36 @@ add_task(function* testPreferencesButton() {
 
     is(gOptionsObserver.lastDisplayed, OPENH264_PLUGIN_ID);
   }
+});
+
+add_task(function* testUpdateButton() {
+  Services.prefs.clearUserPref(GMP_PREF_LASTCHECK);
+
+  yield gCategoryUtilities.openType("plugin");
+  let doc = gManagerWindow.document;
+  let item = get_addon_element(gManagerWindow, OPENH264_PLUGIN_ID);
+
+  Object.defineProperty(OpenH264Scope, "GMPInstallManager", {
+    value: MockGMPInstallManager,
+    writable: true,
+    enumerable: true,
+    configurable: true
+  });
+  gInstalledAddonId = "";
+  gInstallDeferred = Promise.defer();
+
+  let button = doc.getAnonymousElementByAttribute(item, "anonid", "preferences-btn");
+  EventUtils.synthesizeMouseAtCenter(button, { clickCount: 1 }, gManagerWindow);
+  let deferred = Promise.defer();
+  wait_for_view_load(gManagerWindow, deferred.resolve);
+  yield deferred.promise;
+
+  let button = doc.getElementById("detail-findUpdates-btn");
+  Assert.ok(button != null, "Got detail-findUpdates-btn");
+  EventUtils.synthesizeMouseAtCenter(button, { clickCount: 1 }, gManagerWindow);
+  yield gInstallDeferred.promise;
+
+  Assert.equal(gInstalledAddonId, OPENH264_PLUGIN_ID);
 });
 
 add_task(function* test_cleanup() {

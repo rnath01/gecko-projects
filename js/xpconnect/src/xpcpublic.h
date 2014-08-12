@@ -139,6 +139,9 @@ IsXrayWrapper(JSObject *obj);
 JSObject *
 XrayAwareCalleeGlobal(JSObject *fun);
 
+void
+TraceXPCGlobal(JSTracer *trc, JSObject *obj);
+
 } /* namespace xpc */
 
 namespace JS {
@@ -190,7 +193,7 @@ inline JSScript *
 xpc_UnmarkGrayScript(JSScript *script)
 {
     if (script)
-        JS::ExposeGCThingToActiveJS(script, JSTRACE_SCRIPT);
+        JS::ExposeScriptToActiveJS(script);
 
     return script;
 }
@@ -504,6 +507,9 @@ ShouldDiscardSystemSource();
 
 bool
 SetAddonInterposition(const nsACString &addonId, nsIAddonInterposition *interposition);
+
+bool
+ExtraWarningsForSystemJS();
 
 } // namespace xpc
 

@@ -28,11 +28,11 @@
 #include "jsscript.h"
 #include "jstypes.h"
 
+#include "asmjs/AsmJSValidate.h"
 #include "frontend/BytecodeCompiler.h"
 #include "frontend/FoldConstants.h"
 #include "frontend/ParseMaps.h"
 #include "frontend/TokenStream.h"
-#include "jit/AsmJS.h"
 #include "vm/Shape.h"
 
 #include "jsatominlines.h"
@@ -788,16 +788,6 @@ Parser<ParseHandler>::reportBadReturn(Node pn, ParseReportKind kind,
     return report(kind, pc->sc->strict, pn, errnum, name.ptr());
 }
 
-template <typename ParseHandler>
-bool
-Parser<ParseHandler>::checkFinalReturn(Node pn)
-{
-    JS_ASSERT(pc->sc->isFunctionBox());
-    return HasFinalReturn(pn) == ENDS_IN_RETURN ||
-           reportBadReturn(pn, ParseExtraWarning,
-                           JSMSG_NO_RETURN_VALUE, JSMSG_ANON_NO_RETURN_VALUE);
-}
-
 /*
  * Check that assigning to lhs is permitted.  Assigning to 'eval' or
  * 'arguments' is banned in strict mode and in destructuring assignment.
@@ -1111,10 +1101,6 @@ Parser<ParseHandler>::functionBody(FunctionSyntaxKind kind, FunctionBodyType typ
         JS_ASSERT(type == StatementListBody);
         break;
     }
-
-    /* Check for falling off the end of a function that returns a value. */
-    if (options().extraWarningsOption && pc->funHasReturnExpr && !checkFinalReturn(pn))
-        return null();
 
     /* Define the 'arguments' binding if necessary. */
     if (!checkFunctionArguments())
@@ -1963,52 +1949,72 @@ Parser<SyntaxParseHandler>::checkFunctionDefinition(HandlePropertyName funName,
     return true;
 }
 
-#ifdef JS_HAS_TEMPLATE_STRINGS
+template <typename ParseHandler>
+bool
+Parser<ParseHandler>::addExprAndGetNextTemplStrToken(Node nodeList, TokenKind &tt)
+{
+    Node pn = expr();
+    if (!pn)
+        return false;
+    handler.addList(nodeList, pn);
+
+    tt = tokenStream.getToken();
+    if (tt != TOK_RC) {
+        if (tt != TOK_ERROR)
+            report(ParseError, false, null(), JSMSG_TEMPLSTR_UNTERM_EXPR);
+        return false;
+    }
+
+    tt = tokenStream.getToken(TokenStream::TemplateTail);
+    if (tt == TOK_ERROR)
+        return false;
+    return true;
+}
+
+template <typename ParseHandler>
+bool
+Parser<ParseHandler>::taggedTemplate(Node nodeList, TokenKind tt)
+{
+    Node callSiteObjNode = handler.newCallSiteObject(pos().begin, pc->blockidGen);
+    if (!callSiteObjNode)
+        return false;
+    handler.addList(nodeList, callSiteObjNode);
+
+    while (true) {
+        if (!appendToCallSiteObj(callSiteObjNode))
+            return false;
+        if (tt != TOK_TEMPLATE_HEAD)
+            break;
+
+        if (!addExprAndGetNextTemplStrToken(nodeList, tt))
+            return false;
+    }
+    handler.setEndPosition(nodeList, callSiteObjNode);
+    return true;
+}
+
 template <typename ParseHandler>
 typename ParseHandler::Node
 Parser<ParseHandler>::templateLiteral()
 {
     Node pn = noSubstitutionTemplate();
-    if (!pn) {
-        report(ParseError, false, null(),
-                JSMSG_SYNTAX_ERROR);
+    if (!pn)
         return null();
-    }
     Node nodeList = handler.newList(PNK_TEMPLATE_STRING_LIST, pn);
+
     TokenKind tt;
     do {
-        pn = expr();
-        if (!pn) {
-            report(ParseError, false, null(),
-                    JSMSG_SYNTAX_ERROR);
+        if (!addExprAndGetNextTemplStrToken(nodeList, tt))
             return null();
-        }
-        handler.addList(nodeList, pn);
-        tt = tokenStream.getToken();
-        if (tt != TOK_RC) {
-            report(ParseError, false, null(),
-                    JSMSG_SYNTAX_ERROR);
-            return null();
-        }
-        tt = tokenStream.getToken(TokenStream::TemplateTail);
-        if (tt == TOK_ERROR) {
-            report(ParseError, false, null(),
-                    JSMSG_SYNTAX_ERROR);
-            return null();
-        }
 
         pn = noSubstitutionTemplate();
-        if (!pn) {
-            report(ParseError, false, null(),
-                    JSMSG_SYNTAX_ERROR);
+        if (!pn)
             return null();
-        }
 
         handler.addList(nodeList, pn);
     } while (tt == TOK_TEMPLATE_HEAD);
     return nodeList;
 }
-#endif
 
 template <typename ParseHandler>
 typename ParseHandler::Node
@@ -2289,6 +2295,24 @@ Parser<SyntaxParseHandler>::functionArgsAndBody(Node pn, HandleFunction fun,
     return outerpc->innerFunctions.append(fun);
 }
 
+template <typename ParseHandler>
+bool
+Parser<ParseHandler>::appendToCallSiteObj(Node callSiteObj)
+{
+    Node cookedNode = noSubstitutionTemplate();
+    if (!cookedNode)
+        return false;
+
+    JSAtom *atom = tokenStream.getRawTemplateStringAtom();
+    if (!atom)
+        return false;
+    Node rawNode = handler.newTemplateStringLiteral(atom, pos());
+    if (!rawNode)
+        return false;
+
+    return handler.addToCallSiteObject(callSiteObj, rawNode, cookedNode);
+}
+
 template <>
 ParseNode *
 Parser<FullParseHandler>::standaloneLazyFunction(HandleFunction fun, unsigned staticLevel,
@@ -2544,7 +2568,6 @@ Parser<FullParseHandler>::asmJS(Node list)
 
     pc->sc->asFunctionBox()->useAsm = true;
 
-#ifdef JS_ION
     // Attempt to validate and compile this asm.js module. On success, the
     // tokenStream has been advanced to the closing }. On failure, the
     // tokenStream is in an indeterminate state and we must reparse the
@@ -2557,7 +2580,6 @@ Parser<FullParseHandler>::asmJS(Node list)
         pc->newDirectives->setAsmJS();
         return false;
     }
-#endif
 
     return true;
 }
@@ -4842,13 +4864,6 @@ Parser<ParseHandler>::returnStatement()
     if (!pn)
         return null();
 
-    if (options().extraWarningsOption && pc->funHasReturnExpr && pc->funHasReturnVoid &&
-        !reportBadReturn(pn, ParseExtraWarning,
-                         JSMSG_NO_RETURN_VALUE, JSMSG_ANON_NO_RETURN_VALUE))
-    {
-        return null();
-    }
-
     if (pc->isLegacyGenerator() && exprNode) {
         /* Disallow "return v;" in legacy generators. */
         reportBadReturn(pn, ParseError, JSMSG_BAD_GENERATOR_RETURN,
@@ -6924,14 +6939,21 @@ Parser<ParseHandler>::memberExpr(TokenKind tt, bool allowCallSyntax)
             nextMember = handler.newPropertyByValue(lhs, propExpr, pos().end);
             if (!nextMember)
                 return null();
-        } else if (allowCallSyntax && tt == TOK_LP) {
+        } else if ((allowCallSyntax && tt == TOK_LP) ||
+                   tt == TOK_TEMPLATE_HEAD ||
+                   tt == TOK_NO_SUBS_TEMPLATE)
+        {
             JSOp op = JSOP_CALL;
-            nextMember = handler.newList(PNK_CALL, null(), JSOP_CALL);
+            if (tt == TOK_LP)
+                nextMember = handler.newList(PNK_CALL, null(), JSOP_CALL);
+            else
+                nextMember = handler.newList(PNK_TAGGED_TEMPLATE, null(), JSOP_CALL);
+
             if (!nextMember)
                 return null();
 
             if (JSAtom *atom = handler.isName(lhs)) {
-                if (atom == context->names().eval) {
+                if (tt == TOK_LP && atom == context->names().eval) {
                     /* Select JSOP_EVAL and flag pc as heavyweight. */
                     op = JSOP_EVAL;
                     pc->sc->setBindingsAccessedDynamically();
@@ -6957,11 +6979,16 @@ Parser<ParseHandler>::memberExpr(TokenKind tt, bool allowCallSyntax)
             handler.setBeginPosition(nextMember, lhs);
             handler.addList(nextMember, lhs);
 
-            bool isSpread = false;
-            if (!argumentList(nextMember, &isSpread))
-                return null();
-            if (isSpread)
-                op = (op == JSOP_EVAL ? JSOP_SPREADEVAL : JSOP_SPREADCALL);
+            if (tt == TOK_LP) {
+                bool isSpread = false;
+                if (!argumentList(nextMember, &isSpread))
+                    return null();
+                if (isSpread)
+                    op = (op == JSOP_EVAL ? JSOP_SPREADEVAL : JSOP_SPREADCALL);
+            } else {
+                if (!taggedTemplate(nextMember, tt))
+                    return null();
+            }
             handler.setOp(nextMember, op);
         } else {
             tokenStream.ungetToken();
@@ -7004,14 +7031,12 @@ Parser<ParseHandler>::stringLiteral()
     return handler.newStringLiteral(stopStringCompression(), pos());
 }
 
-#ifdef JS_HAS_TEMPLATE_STRINGS
 template <typename ParseHandler>
 typename ParseHandler::Node
 Parser<ParseHandler>::noSubstitutionTemplate()
 {
     return handler.newTemplateStringLiteral(stopStringCompression(), pos());
 }
-#endif
 
 template <typename ParseHandler>
 JSAtom * Parser<ParseHandler>::stopStringCompression() {
@@ -7025,8 +7050,6 @@ JSAtom * Parser<ParseHandler>::stopStringCompression() {
         sct->abort();
     return atom;
 }
-
-
 
 template <typename ParseHandler>
 typename ParseHandler::Node
@@ -7214,6 +7237,20 @@ Parser<ParseHandler>::objectLiteral()
                 return null();
             propname = newNumber(tokenStream.currentToken());
             break;
+
+          case TOK_LB: {
+              // Computed property name.
+              uint32_t begin = pos().begin;
+              Node assignNode = assignExpr();
+              if (!assignNode)
+                  return null();
+              MUST_MATCH_TOKEN(TOK_RB, JSMSG_COMP_PROP_UNTERM_EXPR);
+              propname = handler.newComputedName(assignNode, begin, pos().end);
+              if (!propname)
+                  return null();
+              handler.setListFlag(literal, PNX_NONCONST);
+              break;
+          }
 
           case TOK_NAME: {
             atom = tokenStream.currentName();
@@ -7428,12 +7465,12 @@ Parser<ParseHandler>::primaryExpr(TokenKind tt)
       case TOK_LP:
         return parenExprOrGeneratorComprehension();
 
-#ifdef JS_HAS_TEMPLATE_STRINGS
       case TOK_TEMPLATE_HEAD:
         return templateLiteral();
+
       case TOK_NO_SUBS_TEMPLATE:
         return noSubstitutionTemplate();
-#endif
+
       case TOK_STRING:
         return stringLiteral();
 

@@ -2129,6 +2129,8 @@ JitRuntime::generateForkJoinGetSliceStub(JSContext *cx)
 
     // It's not technically correct to test whether work-stealing is turned on
     // only during stub-generation time, but it's a DEBUG only thing.
+    //
+    // If stealing is off, stealWork falls through to noMoreWork.
     if (cx->runtime()->threadPool.workStealing()) {
         Label stealWorkLoopHead;
         masm.bind(&stealWorkLoopHead);
@@ -2196,6 +2198,8 @@ JitRuntime::generateForkJoinGetSliceStub(JSContext *cx)
 #endif
         // Copies lower 16 bits only.
         masm.movzwl(output, output);
+    } else {
+        masm.jump(&noMoreWork);
     }
 
     // If we successfully got a slice, decrement pool->pendingSlices_ and
@@ -2212,7 +2216,7 @@ JitRuntime::generateForkJoinGetSliceStub(JSContext *cx)
     masm.ret();
 
     Linker linker(masm);
-    JitCode *code = linker.newCode<NoGC>(cx, JSC::OTHER_CODE);
+    JitCode *code = linker.newCode<NoGC>(cx, OTHER_CODE);
 
 #ifdef JS_ION_PERF
     writePerfSpewerJitCodeProfile(code, "ForkJoinGetSliceStub");

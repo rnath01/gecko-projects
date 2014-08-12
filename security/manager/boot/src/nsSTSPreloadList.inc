@@ -8,7 +8,7 @@
 /*****************************************************************************/
 
 #include <stdint.h>
-const PRTime gPreloadListExpirationTime = INT64_C(1417255584916000);
+const PRTime gPreloadListExpirationTime = INT64_C(1418465227002000);
 
 class nsSTSPreload
 {
@@ -61,6 +61,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "code.google.com", true },
   { "codereview.appspot.com", false },
   { "codereview.chromium.org", true },
+  { "config.schokokeks.org", false },
   { "conformal.com", true },
   { "controlcenter.gigahost.dk", true },
   { "crm.onlime.ch", false },
@@ -80,12 +81,13 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "dm.mylookout.com", false },
   { "docs.google.com", true },
   { "docs.python.org", true },
-  { "donmez.ws", false },
+  { "domains.google.com", true },
   { "download.jitsi.org", false },
   { "drive.google.com", true },
   { "ebanking.indovinabank.com.vn", false },
   { "ecosystem.atlassian.net", true },
   { "eff.org", true },
+  { "emailprivacytester.com", true },
   { "encircleapp.com", true },
   { "encrypted.google.com", true },
   { "entropia.de", false },
@@ -165,6 +167,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "mnsure.org", true },
   { "mobile.usaa.com", false },
   { "mudcrab.us", true },
+  { "mwe.st", true },
   { "my.onlime.ch", false },
   { "my.xero.com", false },
   { "mylookout.com", false },
@@ -187,7 +190,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "pastebin.linode.com", false },
   { "pay.gigahost.dk", true },
   { "paymill.com", true },
-  { "paymill.de", false },
+  { "paymill.de", true },
   { "pixi.me", true },
   { "play.google.com", false },
   { "plus.google.com", false },
@@ -205,6 +208,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "roundcube.mayfirst.org", false },
   { "sakaki.anime.my", true },
   { "sandbox.mydigipass.com", false },
+  { "schokokeks.org", false },
   { "script.google.com", true },
   { "security.google.com", true },
   { "securityheaders.com", true },
@@ -234,6 +238,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "torproject.org", false },
   { "translate.googleapis.com", true },
   { "twitter.com", false },
+  { "ub3rk1tten.com", true },
   { "ubertt.org", true },
   { "usaa.com", false },
   { "vmoagents.com", false },
@@ -247,6 +252,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "webfilings.appspot.com", true },
   { "webmail.gigahost.dk", false },
   { "webmail.onlime.ch", false },
+  { "webmail.schokokeks.org", false },
   { "wepay.com", false },
   { "wf-bigsky-master.appspot.com", true },
   { "wf-demo-eu.appspot.com", true },
@@ -272,6 +278,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "www.entropia.de", false },
   { "www.eternalgoth.co.uk", true },
   { "www.evernote.com", false },
+  { "www.gamesdepartment.co.uk", false },
   { "www.getcloak.com", false },
   { "www.gmail.com", false },
   { "www.googlemail.com", false },
@@ -288,7 +295,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "www.noisebridge.net", false },
   { "www.opsmate.com", true },
   { "www.python.org", true },
-  { "www.rme.li", false },
+  { "www.schokokeks.org", false },
   { "www.simbolo.co.uk", false },
   { "www.simple.com", false },
   { "www.therapynotes.com", false },

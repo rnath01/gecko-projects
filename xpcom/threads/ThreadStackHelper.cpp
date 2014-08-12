@@ -10,7 +10,9 @@
 #include "nsScriptSecurityManager.h"
 #include "jsfriendapi.h"
 #include "prprf.h"
+#ifdef MOZ_THREADSTACKHELPER_NATIVE
 #include "shared-libraries.h"
+#endif
 
 #include "js/OldDebugAPI.h"
 
@@ -19,12 +21,16 @@
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Move.h"
 #include "mozilla/Scoped.h"
+#include "mozilla/UniquePtr.h"
+#include "mozilla/MemoryChecking.h"
 
+#ifdef MOZ_THREADSTACKHELPER_NATIVE
 #include "google_breakpad/processor/call_stack.h"
 #include "google_breakpad/processor/basic_source_line_resolver.h"
 #include "google_breakpad/processor/stack_frame_cpu.h"
 #include "processor/basic_code_module.h"
 #include "processor/basic_code_modules.h"
+#endif
 
 #if defined(MOZ_THREADSTACKHELPER_X86)
 #include "processor/stackwalker_x86.h"
@@ -65,6 +71,7 @@
 #endif
 #endif
 
+#ifdef MOZ_THREADSTACKHELPER_NATIVE
 #if defined(MOZ_THREADSTACKHELPER_X86) || \
     defined(MOZ_THREADSTACKHELPER_X64) || \
     defined(MOZ_THREADSTACKHELPER_ARM)
@@ -73,6 +80,7 @@
 #else
 #error "Unsupported architecture"
 #endif
+#endif // MOZ_THREADSTACKHELPER_NATIVE
 
 namespace mozilla {
 
@@ -117,12 +125,12 @@ ThreadStackHelper::ThreadStackHelper()
   : mStackToFill(nullptr)
 #ifdef MOZ_THREADSTACKHELPER_PSEUDO
   , mPseudoStack(mozilla_get_pseudo_stack())
-#endif
 #ifdef MOZ_THREADSTACKHELPER_NATIVE
   , mContextToFill(nullptr)
 #endif
   , mMaxStackSize(Stack::sMaxInlineStorage)
   , mMaxBufferSize(0)
+#endif
 {
 #if defined(XP_LINUX)
   MOZ_ALWAYS_TRUE(!::sem_init(&mSem, 0, 0));
@@ -131,7 +139,11 @@ ThreadStackHelper::ThreadStackHelper()
   mInitialized = !!::DuplicateHandle(
     ::GetCurrentProcess(), ::GetCurrentThread(),
     ::GetCurrentProcess(), &mThreadID,
-    THREAD_SUSPEND_RESUME, FALSE, 0);
+    THREAD_SUSPEND_RESUME
+#ifdef MOZ_THREADSTACKHELPER_NATIVE
+    | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION
+#endif
+    , FALSE, 0);
   MOZ_ASSERT(mInitialized);
 #elif defined(XP_MACOSX)
   mThreadID = mach_thread_self();
@@ -327,7 +339,7 @@ public:
   // Processor context
   Context mContext;
   // Stack area
-  ScopedDeleteArray<uint8_t> mStack;
+  UniquePtr<uint8_t[]> mStack;
   // Start of stack area
   uintptr_t mStackBase;
   // Size of stack area
@@ -378,7 +390,7 @@ ThreadStackHelper::GetNativeStack(Stack& aStack)
 {
 #ifdef MOZ_THREADSTACKHELPER_NATIVE
   ThreadContext context;
-  context.mStack = new uint8_t[ThreadContext::kMaxStackSize];
+  context.mStack = MakeUnique<uint8_t[]>(ThreadContext::kMaxStackSize);
 
   ScopedSetPtr<ThreadContext> contextPtr(mContextToFill, &context);
 
@@ -758,7 +770,12 @@ ThreadStackHelper::FillThreadContext(void* aContext)
 #endif
 
 #ifndef MOZ_ASAN
-  memcpy(mContextToFill->mStack, reinterpret_cast<void*>(sp), stackSize);
+  memcpy(mContextToFill->mStack.get(), reinterpret_cast<void*>(sp), stackSize);
+  // Valgrind doesn't care about the access outside the stack frame, but
+  // the presence of uninitialised values on the stack does cause it to
+  // later report a lot of false errors when Breakpad comes to unwind it.
+  // So mark the extracted data as defined.
+  MOZ_MAKE_MEM_DEFINED(mContextToFill->mStack.get(), stackSize);
 #else
   // ASan will flag memcpy for access outside of stack frames,
   // so roll our own memcpy here.

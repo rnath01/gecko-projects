@@ -31,11 +31,14 @@
 #include "cryptohi.h"
 #include "hasht.h"
 #include "pk11pub.h"
-#include "pkixcheck.h"
+#include "pkix/pkixnss.h"
 #include "pkixder.h"
+#include "pkixutil.h"
+#include "prerror.h"
 #include "prinit.h"
 #include "prprf.h"
 #include "secder.h"
+#include "secerr.h"
 
 using namespace std;
 
@@ -56,10 +59,10 @@ deleteCharArray(char* chars)
 FILE*
 OpenFile(const char* dir, const char* filename, const char* mode)
 {
-  PR_ASSERT(dir);
-  PR_ASSERT(*dir);
-  PR_ASSERT(filename);
-  PR_ASSERT(*filename);
+  assert(dir);
+  assert(*dir);
+  assert(filename);
+  assert(*filename);
 
   ScopedPtr<char, deleteCharArray>
     path(new (nothrow) char[strlen(dir) + 1 + strlen(filename) + 1]);
@@ -146,6 +149,15 @@ TamperOnce(SECItem& item,
   }
 }
 
+Result
+InitInputFromSECItem(const SECItem* secItem, /*out*/ Input& input)
+{
+  if (!secItem) {
+    return Result::FATAL_ERROR_INVALID_ARGS;
+  }
+  return input.Init(secItem->data, secItem->len);
+}
+
 class Output
 {
 public:
@@ -159,14 +171,14 @@ public:
   // lifetime that extends at least to where Squash is called.
   Result Add(const SECItem* item)
   {
-    PR_ASSERT(item);
-    PR_ASSERT(item->data);
+    assert(item);
+    assert(item->data);
 
     if (numItems >= MaxSequenceItems) {
-      return Fail(SEC_ERROR_INVALID_ARGS);
+      return Result::FATAL_ERROR_INVALID_ARGS;
     }
     if (length + item->len > 65535) {
-      return Fail(SEC_ERROR_INVALID_ARGS);
+      return Result::FATAL_ERROR_INVALID_ARGS;
     }
 
     contents[numItems] = item;
@@ -177,7 +189,7 @@ public:
 
   SECItem* Squash(PLArenaPool* arena, uint8_t tag)
   {
-    PR_ASSERT(arena);
+    assert(arena);
 
     size_t lengthLength = length < 128 ? 1
                         : length < 256 ? 2
@@ -355,7 +367,7 @@ BitString(PLArenaPool* arena, const SECItem* rawBytes, bool corrupt)
   prefixed->data[0] = 0;
   memcpy(prefixed->data + 1, rawBytes->data, rawBytes->len);
   if (corrupt) {
-    PR_ASSERT(prefixed->len > 8);
+    assert(prefixed->len > 8);
     prefixed->data[8]++;
   }
   return EncodeNested(arena, der::BIT_STRING, prefixed);
@@ -364,7 +376,7 @@ BitString(PLArenaPool* arena, const SECItem* rawBytes, bool corrupt)
 static SECItem*
 Boolean(PLArenaPool* arena, bool value)
 {
-  PR_ASSERT(arena);
+  assert(arena);
   SECItem* result(SECITEM_AllocItem(arena, nullptr, 3));
   if (!result) {
     return nullptr;
@@ -412,7 +424,7 @@ enum TimeEncoding { UTCTime = 0, GeneralizedTime = 1 };
 static SECItem*
 PRTimeToEncodedTime(PLArenaPool* arena, PRTime time, TimeEncoding encoding)
 {
-  PR_ASSERT(encoding == UTCTime || encoding == GeneralizedTime);
+  assert(encoding == UTCTime || encoding == GeneralizedTime);
 
   PRExplodedTime exploded;
   PR_ExplodeTime(time, PR_GMTParameters, &exploded);
@@ -481,7 +493,7 @@ PRTimeToTimeChoice(PLArenaPool* arena, PRTime time)
                                                           : GeneralizedTime);
 }
 
-PRTime
+Time
 YMDHMS(int16_t year, int16_t month, int16_t day,
        int16_t hour, int16_t minutes, int16_t seconds)
 {
@@ -495,7 +507,10 @@ YMDHMS(int16_t year, int16_t month, int16_t day,
   tm.tm_year = year;
   tm.tm_params.tp_gmt_offset = 0;
   tm.tm_params.tp_dst_offset = 0;
-  return PR_ImplodeTime(&tm);
+  PRTime time = PR_ImplodeTime(&tm);
+  return TimeFromElapsedSecondsAD((time / PR_USEC_PER_SEC) +
+                                  (DaysBeforeYear(1970) *
+                                   Time::ONE_DAY_IN_SECONDS));
 }
 
 static SECItem*
@@ -503,9 +518,9 @@ SignedData(PLArenaPool* arena, const SECItem* tbsData,
            SECKEYPrivateKey* privKey, SECOidTag hashAlg,
            bool corrupt, /*optional*/ SECItem const* const* certs)
 {
-  PR_ASSERT(arena);
-  PR_ASSERT(tbsData);
-  PR_ASSERT(privKey);
+  assert(arena);
+  assert(tbsData);
+  assert(privKey);
   if (!arena || !tbsData || !privKey) {
     PR_SetError(SEC_ERROR_INVALID_ARGS, 0);
     return nullptr;
@@ -586,7 +601,7 @@ static SECItem*
 Extension(PLArenaPool* arena, SECOidTag extnIDTag,
           ExtensionCriticality criticality, Output& value)
 {
-  PR_ASSERT(arena);
+  assert(arena);
   if (!arena) {
     PR_SetError(SEC_ERROR_INVALID_ARGS, 0);
     return nullptr;
@@ -627,7 +642,7 @@ Extension(PLArenaPool* arena, SECOidTag extnIDTag,
 SECItem*
 MaybeLogOutput(SECItem* result, const char* suffix)
 {
-  PR_ASSERT(suffix);
+  assert(suffix);
 
   if (!result) {
     return nullptr;
@@ -678,11 +693,11 @@ GenerateKeyPair(/*out*/ ScopedSECKEYPublicKey& publicKey,
                                       nullptr);
     if (privateKey) {
       publicKey = publicKeyTemp;
-      PR_ASSERT(publicKey);
+      assert(publicKey);
       return SECSuccess;
     }
 
-    PR_ASSERT(!publicKeyTemp);
+    assert(!publicKeyTemp);
 
     if (PR_GetError() != SEC_ERROR_PKCS11_FUNCTION_FAILED) {
       return SECFailure;
@@ -721,9 +736,9 @@ CreateEncodedCertificate(PLArenaPool* arena, long version,
                          SECOidTag signatureHashAlg,
                          /*out*/ ScopedSECKEYPrivateKey& privateKeyResult)
 {
-  PR_ASSERT(arena);
-  PR_ASSERT(issuerNameDER);
-  PR_ASSERT(subjectNameDER);
+  assert(arena);
+  assert(issuerNameDER);
+  assert(subjectNameDER);
   if (!arena || !issuerNameDER || !subjectNameDER) {
     PR_SetError(SEC_ERROR_INVALID_ARGS, 0);
     return nullptr;
@@ -781,10 +796,10 @@ TBSCertificate(PLArenaPool* arena, long versionValue,
                const SECKEYPublicKey* subjectPublicKey,
                /*optional*/ SECItem const* const* extensions)
 {
-  PR_ASSERT(arena);
-  PR_ASSERT(issuer);
-  PR_ASSERT(subject);
-  PR_ASSERT(subjectPublicKey);
+  assert(arena);
+  assert(issuer);
+  assert(subject);
+  assert(subjectPublicKey);
   if (!arena || !issuer || !subject || !subjectPublicKey) {
     PR_SetError(SEC_ERROR_INVALID_ARGS, 0);
     return nullptr;
@@ -920,7 +935,7 @@ CreateEncodedBasicConstraints(PLArenaPool* arena, bool isCA,
                               /*optional*/ long* pathLenConstraintValue,
                               ExtensionCriticality criticality)
 {
-  PR_ASSERT(arena);
+  assert(arena);
   if (!arena) {
     PR_SetError(SEC_ERROR_INVALID_ARGS, 0);
     return nullptr;
@@ -953,8 +968,8 @@ SECItem*
 CreateEncodedEKUExtension(PLArenaPool* arena, SECOidTag const* ekus,
                           size_t ekusCount, ExtensionCriticality criticality)
 {
-  PR_ASSERT(arena);
-  PR_ASSERT(ekus);
+  assert(arena);
+  assert(ekus);
   if (!arena || (!ekus && ekusCount != 0)) {
     PR_SetError(SEC_ERROR_INVALID_ARGS, 0);
     return nullptr;
@@ -1325,16 +1340,18 @@ CertID(OCSPResponseContext& context)
   if (!hashAlgorithm) {
     return nullptr;
   }
-  SECItem* issuerNameHash = HashedOctetString(context.arena,
-                                              context.certID.issuer,
+  SECItem issuerSECItem = UnsafeMapInputToSECItem(context.certID.issuer);
+  SECItem* issuerNameHash = HashedOctetString(context.arena, issuerSECItem,
                                               context.certIDHashAlg);
   if (!issuerNameHash) {
     return nullptr;
   }
 
+  SECItem issuerSubjectPublicKeyInfoSECItem =
+    UnsafeMapInputToSECItem(context.certID.issuerSubjectPublicKeyInfo);
   ScopedPtr<CERTSubjectPublicKeyInfo, SECKEY_DestroySubjectPublicKeyInfo>
     spki(SECKEY_DecodeDERSubjectPublicKeyInfo(
-          &context.certID.issuerSubjectPublicKeyInfo));
+           &issuerSubjectPublicKeyInfoSECItem));
   if (!spki) {
     return nullptr;
   }
@@ -1347,8 +1364,10 @@ CertID(OCSPResponseContext& context)
     { SEC_ASN1_INTEGER, 0 },
     { 0 }
   };
+  SECItem serialNumberSECItem =
+    UnsafeMapInputToSECItem(context.certID.serialNumber);
   SECItem* serialNumber = SEC_ASN1EncodeItem(context.arena, nullptr,
-                                             &context.certID.serialNumber,
+                                             &serialNumberSECItem,
                                              serialTemplate);
   if (!serialNumber) {
     return nullptr;

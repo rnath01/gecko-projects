@@ -29,6 +29,10 @@ class BasicLayerManager;
 class ThebesLayer;
 }
 
+namespace gfx {
+class Matrix4x4;
+}
+
 class FrameLayerBuilder;
 class LayerManagerData;
 class ThebesLayerData;
@@ -229,7 +233,7 @@ public:
                          nsDisplayItem* aContainerItem,
                          nsDisplayList* aChildren,
                          const ContainerLayerParameters& aContainerParameters,
-                         const gfx3DMatrix* aTransform,
+                         const gfx::Matrix4x4* aTransform,
                          uint32_t aFlags = 0);
 
   /**
@@ -591,7 +595,7 @@ protected:
 public:
   class ThebesLayerItemsEntry : public nsPtrHashKey<ThebesLayer> {
   public:
-    ThebesLayerItemsEntry(const ThebesLayer *key)
+    explicit ThebesLayerItemsEntry(const ThebesLayer *key)
       : nsPtrHashKey<ThebesLayer>(key)
       , mContainerLayerFrame(nullptr)
       , mLastCommonClipCount(0)

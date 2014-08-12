@@ -33,11 +33,11 @@
 #endif
 #include "jswrapper.h"
 
+#include "asmjs/AsmJSModule.h"
+#include "asmjs/AsmJSValidate.h"
 #include "gc/Barrier.h"
 #include "gc/Marking.h"
 #include "gc/Memory.h"
-#include "jit/AsmJS.h"
-#include "jit/AsmJSModule.h"
 #include "js/MemoryMetrics.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
@@ -547,7 +547,6 @@ bool
 ArrayBufferObject::canNeuterAsmJSArrayBuffer(JSContext *cx, ArrayBufferObject &buffer)
 {
     JS_ASSERT(!buffer.isSharedArrayBuffer());
-#ifdef JS_ION
     AsmJSActivation *act = cx->mainThread().asmJSActivationStack();
     for (; act; act = act->prevAsmJS()) {
         if (act->module().maybeHeapBufferObject() == &buffer)
@@ -557,9 +556,6 @@ ArrayBufferObject::canNeuterAsmJSArrayBuffer(JSContext *cx, ArrayBufferObject &b
         return true;
 
     return false;
-#else
-    return true;
-#endif
 }
 
 void *
@@ -692,6 +688,8 @@ ArrayBufferObject::create(JSContext *cx, uint32_t nbytes, void *data /* = nullpt
         obj->initialize(nbytes, data, OwnsData);
         if (mapped)
             obj->setIsMappedArrayBuffer();
+        if (mapped)
+            JS_updateMallocCounter(cx, JS_ROUNDUP(nbytes, js::gc::SystemPageSize()));
     } else {
         void *data = obj->fixedData(reservedSlots);
         memset(data, 0, nbytes);

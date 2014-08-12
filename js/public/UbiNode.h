@@ -23,7 +23,7 @@
 // JS::ubi::Node is a pointer-like type designed for internal use by heap
 // analysis tools. A ubi::Node can refer to:
 //
-// - a JS value, like a string or object;
+// - a JS value, like a string, object, or symbol;
 // - an internal SpiderMonkey structure, like a shape or a scope chain object
 // - an instance of some embedding-provided type: in Firefox, an XPCOM
 //   object, or an internal DOM node class instance
@@ -200,6 +200,16 @@ class Base {
     // on |cx| and return nullptr.
     virtual EdgeRange *edges(JSContext *cx) const = 0;
 
+    // Return the Zone to which this node's referent belongs, or nullptr if the
+    // referent is not of a type allocated in SpiderMonkey Zones.
+    virtual JS::Zone *zone() const = 0;
+
+    // Return the compartment for this node. Some ubi::Node referents are not
+    // associated with JSCompartments, such as JSStrings (which are associated
+    // with Zones). When the referent is not associated with a compartment,
+    // nullptr is returned.
+    virtual JSCompartment *compartment() const = 0;
+
   private:
     Base(const Base &rhs) MOZ_DELETE;
     Base &operator=(const Base &rhs) MOZ_DELETE;
@@ -315,15 +325,17 @@ class Node {
         return is<T>() ? static_cast<T *>(base()->ptr) : nullptr;
     }
 
-    // If this node refers to something that can be represented as a
-    // JavaScript value that is safe to expose to JavaScript code, return that
-    // value. Otherwise return UndefinedValue(). JSStrings and some (but not
-    // all!) JSObjects can be exposed.
+    // If this node refers to something that can be represented as a JavaScript
+    // value that is safe to expose to JavaScript code, return that value.
+    // Otherwise return UndefinedValue(). JSStrings, JS::Symbols, and some (but
+    // not all!) JSObjects can be exposed.
     JS::Value exposeToJS() const;
 
     const jschar *typeName()        const { return base()->typeName(); }
     size_t size()                   const { return base()->size(); }
     EdgeRange *edges(JSContext *cx) const { return base()->edges(cx); }
+    JS::Zone *zone()                const { return base()->zone(); }
+    JSCompartment *compartment()    const { return base()->compartment(); }
 
     // A hash policy for ubi::Nodes.
     // This simply uses the stock PointerHasher on the ubi::Node's pointer.
@@ -417,21 +429,42 @@ class TracerConcrete : public Base {
     const jschar *typeName() const MOZ_OVERRIDE { return concreteTypeName; }
     size_t size() const MOZ_OVERRIDE { return 0; } // not implemented yet; bug 1011300
     EdgeRange *edges(JSContext *) const MOZ_OVERRIDE;
+    JS::Zone *zone() const MOZ_OVERRIDE { return get().zone(); }
+    JSCompartment *compartment() const MOZ_OVERRIDE { return nullptr; }
 
+  protected:
     TracerConcrete(Referent *ptr) : Base(ptr) { }
+    Referent &get() const { return *static_cast<Referent *>(ptr); }
 
   public:
     static const jschar concreteTypeName[];
     static void construct(void *storage, Referent *ptr) { new (storage) TracerConcrete(ptr); };
 };
 
-template<> struct Concrete<JSObject> : TracerConcrete<JSObject> { };
+// For JS_TraceChildren-based types that have a 'compartment' method.
+template<typename Referent>
+class TracerConcreteWithCompartment : public TracerConcrete<Referent> {
+    typedef TracerConcrete<Referent> TracerBase;
+    JSCompartment *compartment() const MOZ_OVERRIDE {
+        return TracerBase::get().compartment();
+    }
+
+    TracerConcreteWithCompartment(Referent *ptr) : TracerBase(ptr) { }
+
+  public:
+    static void construct(void *storage, Referent *ptr) {
+        new (storage) TracerConcreteWithCompartment(ptr);
+    };
+};
+
+template<> struct Concrete<JSObject> : TracerConcreteWithCompartment<JSObject> { };
 template<> struct Concrete<JSString> : TracerConcrete<JSString> { };
-template<> struct Concrete<JSScript> : TracerConcrete<JSScript> { };
+template<> struct Concrete<JS::Symbol> : TracerConcrete<JS::Symbol> { };
+template<> struct Concrete<JSScript> : TracerConcreteWithCompartment<JSScript> { };
 template<> struct Concrete<js::LazyScript> : TracerConcrete<js::LazyScript> { };
 template<> struct Concrete<js::jit::JitCode> : TracerConcrete<js::jit::JitCode> { };
-template<> struct Concrete<js::Shape> : TracerConcrete<js::Shape> { };
-template<> struct Concrete<js::BaseShape> : TracerConcrete<js::BaseShape> { };
+template<> struct Concrete<js::Shape> : TracerConcreteWithCompartment<js::Shape> { };
+template<> struct Concrete<js::BaseShape> : TracerConcreteWithCompartment<js::BaseShape> { };
 template<> struct Concrete<js::types::TypeObject> : TracerConcrete<js::types::TypeObject> { };
 
 // The ubi::Node null pointer. Any attempt to operate on a null ubi::Node asserts.
@@ -440,6 +473,8 @@ class Concrete<void> : public Base {
     const jschar *typeName() const MOZ_OVERRIDE;
     size_t size() const MOZ_OVERRIDE;
     EdgeRange *edges(JSContext *cx) const MOZ_OVERRIDE;
+    JS::Zone *zone() const MOZ_OVERRIDE;
+    JSCompartment *compartment() const MOZ_OVERRIDE;
 
     Concrete(void *ptr) : Base(ptr) { }
 

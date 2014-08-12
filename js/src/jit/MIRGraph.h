@@ -61,6 +61,19 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     // as needed.
     void setVariable(uint32_t slot);
 
+    enum ReferencesType {
+        RefType_AssertNoUses = 1 << 0,
+        RefType_DiscardOperands = 1 << 1,
+        RefType_DiscardResumePoint = 1 << 2,
+        RefType_Default = RefType_AssertNoUses | RefType_DiscardOperands | RefType_DiscardResumePoint
+    };
+
+    // Remove all references to an instruction such that it can be removed from
+    // the list of instruction, without keeping any dangling pointer to it. This
+    // includes the operands of the instruction, and the resume point if
+    // present.
+    void prepareForDiscard(MInstruction *ins, ReferencesType refType = RefType_Default);
+
   public:
     ///////////////////////////////////////////////////////
     ////////// BEGIN GRAPH BUILDING INSTRUCTIONS //////////
@@ -154,8 +167,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     MDefinition *pop();
     void popn(uint32_t n);
 
-    // Adds an instruction to this block's instruction list. |ins| may be
-    // nullptr to simplify OOM checking.
+    // Adds an instruction to this block's instruction list.
     void add(MInstruction *ins);
 
     // Marks the last instruction of the block; no further instructions
@@ -224,6 +236,8 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     void insertBefore(MInstruction *at, MInstruction *ins);
     void insertAfter(MInstruction *at, MInstruction *ins);
 
+    void insertAtEnd(MInstruction *ins);
+
     // Add an instruction to this block, from elsewhere in the graph.
     void addFromElsewhere(MInstruction *ins);
 
@@ -241,6 +255,10 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     void discardAllPhiOperands();
     void discardAllPhis();
     void discardAllResumePoints(bool discardEntry = true);
+
+    // Same as |void discard(MInstruction *ins)| but assuming that
+    // all operands are already discarded.
+    void discardIgnoreOperands(MInstruction *ins);
 
     // Discards a phi instruction and updates predecessor successorWithPhis.
     MPhiIterator discardPhiAt(MPhiIterator &at);
@@ -294,12 +312,11 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
         }
         MOZ_CRASH();
     }
-#ifdef DEBUG
     bool hasLastIns() const {
         return !instructions_.empty() && instructions_.rbegin()->isControlInstruction();
     }
-#endif
     MControlInstruction *lastIns() const {
+        JS_ASSERT(hasLastIns());
         return instructions_.rbegin()->toControlInstruction();
     }
     MPhiIterator phisBegin() const {
@@ -450,11 +467,14 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     MResumePoint *entryResumePoint() const {
         return entryResumePoint_;
     }
+    void setEntryResumePoint(MResumePoint *rp) {
+        entryResumePoint_ = rp;
+    }
     void clearEntryResumePoint() {
         entryResumePoint_ = nullptr;
     }
     MResumePoint *callerResumePoint() {
-        return entryResumePoint()->caller();
+        return entryResumePoint() ? entryResumePoint()->caller() : nullptr;
     }
     void setCallerResumePoint(MResumePoint *caller) {
         entryResumePoint()->setCaller(caller);
@@ -599,6 +619,8 @@ class MIRGraph
     void addBlock(MBasicBlock *block);
     void insertBlockAfter(MBasicBlock *at, MBasicBlock *block);
 
+    void renumberBlocksAfter(MBasicBlock *at);
+
     void unmarkBlocks();
 
     void setReturnAccumulator(MIRGraphReturns *accum) {
@@ -713,8 +735,8 @@ class MIRGraph
 
 class MDefinitionIterator
 {
-
   friend class MBasicBlock;
+  friend class MNodeIterator;
 
   private:
     MBasicBlock *block_;
@@ -766,6 +788,94 @@ class MDefinitionIterator
 
     MDefinition *operator ->() {
         return getIns();
+    }
+};
+
+// Iterates on all resume points, phis, and instructions of a MBasicBlock.
+// Resume points are visited as long as the instruction which holds it is not
+// discarded.
+class MNodeIterator
+{
+  private:
+    // Last instruction which holds a resume point. To handle the entry point
+    // resume point, it is set to the last instruction, assuming that the last
+    // instruction is not discarded before we visit it.
+    MInstruction *last_;
+
+    // Definition iterator which is one step ahead when visiting resume points.
+    // This is in order to avoid incrementing the iterator while it is settled
+    // on a discarded instruction.
+    MDefinitionIterator defIter_;
+
+    MBasicBlock *block() const {
+        return defIter_.block_;
+    }
+
+    bool atResumePoint() const {
+        return last_ && !last_->isDiscarded();
+    }
+
+    MNode *getNode() {
+        if (!atResumePoint())
+            return *defIter_;
+
+        // We use the last instruction as a sentinelle to iterate over the entry
+        // resume point of the basic block, before even starting to iterate on
+        // the instruction list.  Otherwise, the last_ corresponds to the
+        // previous instruction.
+        if (last_ != block()->lastIns())
+            return last_->resumePoint();
+        return block()->entryResumePoint();
+    }
+
+    void next() {
+        if (!atResumePoint()) {
+            if (defIter_->isInstruction() && defIter_->toInstruction()->resumePoint()) {
+                // In theory, we could but in practice this does not happen.
+                MOZ_ASSERT(*defIter_ != block()->lastIns());
+                last_ = defIter_->toInstruction();
+            }
+
+            defIter_++;
+        } else {
+            last_ = nullptr;
+        }
+    }
+
+    bool more() const {
+        return defIter_ || atResumePoint();
+    }
+
+  public:
+    explicit MNodeIterator(MBasicBlock *block)
+      : last_(block->entryResumePoint() ? block->lastIns() : nullptr),
+        defIter_(block)
+    {
+        MOZ_ASSERT(bool(block->entryResumePoint()) == atResumePoint());
+
+        // We use the last instruction to check for the entry resume point,
+        // assert that no control instruction has any resume point.  If so, then
+        // we need to handle this case in this iterator.
+        MOZ_ASSERT(!block->lastIns()->resumePoint());
+    }
+
+    MNodeIterator operator ++(int) {
+        MNodeIterator old(*this);
+        if (more())
+            next();
+        return old;
+    }
+
+    operator bool() const {
+        return more();
+    }
+
+    MNode *operator *() {
+        return getNode();
+    }
+
+    MNode *operator ->() {
+        return getNode();
     }
 
 };

@@ -52,6 +52,13 @@ public:
 
 #ifdef DEBUG
 
+  static size_t
+  SizeOfDeadlockDetector(MallocSizeOf aMallocSizeOf)
+  {
+    return sDeadlockDetector ?
+        sDeadlockDetector->SizeOfIncludingThis(aMallocSizeOf) : 0;
+  }
+
 private:
   // forward declaration for the following typedef
   struct DeadlockDetectorEntry;
@@ -74,9 +81,19 @@ private:
                           BlockingResourceType aType)
       : mName(aName)
       , mType(aType)
-      , mAcquisitionContext(CallStack::kNone)
+      , mAcquired(false)
     {
       NS_ABORT_IF_FALSE(mName, "Name must be nonnull");
+    }
+
+    size_t
+    SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
+    {
+      // NB: |mName| is not reported as it's expected to be a static string.
+      //     If we switch to a nsString it should be added to the tally.
+      //     |mAcquisitionContext| has no measurable heap allocations in it.
+      size_t n = aMallocSizeOf(this);
+      return n;
     }
 
     /**
@@ -86,9 +103,7 @@ private:
      * acquisition context is printed and true is returned.
      * Otherwise, we print the context from |aFirstSeen|, the
      * first acquisition from which the code calling |Print()|
-     * became interested in us, and return false.  |Print()| can
-     * be forced to print the context from |aFirstSeen| regardless
-     * by passing |aPrintFirstSeenCx=true|.
+     * became interested in us, and return false.
      *
      * *NOT* thread safe.  Reads |mAcquisitionContext| without
      * synchronization, but this will not cause correctness
@@ -99,8 +114,7 @@ private:
      * only some info is written into |aOut|
      */
     bool Print(const DDT::ResourceAcquisition& aFirstSeen,
-               nsACString& aOut,
-               bool aPrintFirstSeenCx = false) const;
+               nsACString& aOut) const;
 
     /**
      * mName
@@ -115,11 +129,10 @@ private:
      **/
     BlockingResourceType mType;
     /**
-     * mAcquisitionContext
-     * The calling context from which this resource was acquired, or
-     * |CallStack::kNone| if it is currently free (or freed).
+     * mAcquired
+     * Indicates if this resource is currently acquired.
      */
-    CallStack mAcquisitionContext;
+    bool mAcquired;
   };
 
 protected:
@@ -142,21 +155,15 @@ protected:
    * CheckAcquire
    *
    * Thread safe.
-   *
-   * @param aCallContext the client's calling context from which the
-   *        original acquisition request was made.
    **/
-  void CheckAcquire(const CallStack& aCallContext);
+  void CheckAcquire();
 
   /**
    * Acquire
    *
    * *NOT* thread safe.  Requires ownership of underlying resource.
-   *
-   * @param aCallContext the client's calling context from which the
-   *        original acquisition request was made.
    **/
-  void Acquire(const CallStack& aCallContext); //NS_NEEDS_RESOURCE(this)
+  void Acquire(); //NS_NEEDS_RESOURCE(this)
 
   /**
    * Release
@@ -237,26 +244,25 @@ protected:
   } //NS_NEEDS_RESOURCE(this)
 
   /**
-   * GetAcquisitionContext
-   * Return the calling context from which this resource was acquired,
-   * or CallStack::kNone if it's currently free.
+   * GetAcquisitionState
+   * Return whether or not this resource was acquired.
    *
    * *NOT* thread safe.  Requires ownership of underlying resource.
    */
-  CallStack GetAcquisitionContext()
+  bool GetAcquisitionState()
   {
-    return mDDEntry->mAcquisitionContext;
+    return mDDEntry->mAcquired;
   }
 
   /**
-   * SetAcquisitionContext
-   * Set the calling context from which this resource was acquired.
+   * SetAcquisitionState
+   * Set whether or not this resource was acquired.
    *
    * *NOT* thread safe.  Requires ownership of underlying resource.
    */
-  void SetAcquisitionContext(CallStack aAcquisitionContext)
+  void SetAcquisitionState(bool aAcquisitionState)
   {
-    mDDEntry->mAcquisitionContext = aAcquisitionContext;
+    mDDEntry->mAcquired = aAcquisitionState;
   }
 
   /**

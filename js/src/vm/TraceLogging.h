@@ -143,6 +143,7 @@ namespace jit {
     _(UCE)                                            \
     _(LICM)                                           \
     _(RangeAnalysis)                                  \
+    _(LoopUnrolling)                                  \
     _(EffectiveAddressAnalysis)                       \
     _(EliminateDeadCode)                              \
     _(EdgeCaseAnalysis)                               \
@@ -387,8 +388,7 @@ class TraceLogger
     FILE *treeFile;
     FILE *eventFile;
 
-    bool enabled;
-    uint32_t enabledTimes;
+    uint32_t enabled;
     bool failed;
     uint32_t nextTextId;
 
@@ -436,6 +436,7 @@ class TraceLogger
     bool init(uint32_t loggerId);
 
     bool enable();
+    bool enable(JSContext *cx);
     bool disable();
 
     // The createTextId functions map a unique input to a logger ID.
@@ -454,6 +455,10 @@ class TraceLogger
     void startEvent(uint32_t id);
     void stopEvent(uint32_t id);
     void stopEvent();
+
+    static unsigned offsetOfEnabled() {
+        return offsetof(TraceLogger, enabled);
+    }
 
   private:
     void assertNoQuotes(const char *text) {
@@ -528,6 +533,13 @@ inline bool TraceLoggerEnable(TraceLogger *logger) {
 #ifdef JS_TRACE_LOGGING
     if (logger)
         return logger->enable();
+#endif
+    return false;
+}
+inline bool TraceLoggerEnable(TraceLogger *logger, JSContext *cx) {
+#ifdef JS_TRACE_LOGGING
+    if (logger)
+        return logger->enable(cx);
 #endif
     return false;
 }

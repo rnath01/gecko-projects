@@ -33,8 +33,8 @@
 #include "mozilla/Likely.h"
 #include "mozilla/MathAlgorithms.h"
 
+#include "asmjs/AsmJSValidate.h"
 #include "jit/arm/Assembler-arm.h"
-#include "jit/AsmJS.h"
 #include "vm/Runtime.h"
 
 extern "C" {
@@ -1430,6 +1430,8 @@ ReturnType Simulator::getFromVFPRegister(int reg_index)
 // requires these to be instantiated.
 template double Simulator::getFromVFPRegister<double, 2>(int reg_index);
 template float Simulator::getFromVFPRegister<float, 1>(int reg_index);
+template void Simulator::setVFPRegister<double, 2>(int reg_index, const double& value);
+template void Simulator::setVFPRegister<float, 1>(int reg_index, const float& value);
 
 void
 Simulator::getFpArgs(double *x, double *y, int32_t *z)
@@ -3860,7 +3862,9 @@ Simulator::decodeSpecialCondition(SimInstruction *instr)
       case 5:
         if (instr->bits(18, 16) == 0 && instr->bits(11, 6) == 0x28 && instr->bit(4) == 1) {
             // vmovl signed
-            int Vd = (instr->bit(22) << 4) | instr->vdValue();
+            if ((instr->vdValue() & 1) != 0)
+                MOZ_CRASH("Undefined behavior");
+            int Vd = (instr->bit(22) << 3) | (instr->vdValue() >> 1);
             int Vm = (instr->bit(5) << 4) | instr->vmValue();
             int imm3 = instr->bits(21, 19);
             if (imm3 != 1 && imm3 != 2 && imm3 != 4)
@@ -3883,7 +3887,9 @@ Simulator::decodeSpecialCondition(SimInstruction *instr)
       case 7:
         if (instr->bits(18, 16) == 0 && instr->bits(11, 6) == 0x28 && instr->bit(4) == 1) {
             // vmovl unsigned.
-            int Vd = (instr->bit(22) << 4) | instr->vdValue();
+            if ((instr->vdValue() & 1) != 0)
+                MOZ_CRASH("Undefined behavior");
+            int Vd = (instr->bit(22) << 3) | (instr->vdValue() >> 1);
             int Vm = (instr->bit(5) << 4) | instr->vmValue();
             int imm3 = instr->bits(21, 19);
             if (imm3 != 1 && imm3 != 2 && imm3 != 4)

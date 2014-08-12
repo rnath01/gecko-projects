@@ -1138,8 +1138,8 @@ JSScript::initScriptCounts(JSContext *cx)
     for (jsbytecode *pc = code(); pc < codeEnd(); pc += GetBytecodeLength(pc))
         n += PCCounts::numCounts(JSOp(*pc));
 
-    size_t bytes = (length() * sizeof(PCCounts)) + (n * sizeof(double));
-    char *base = (char *) cx->calloc_(bytes);
+    size_t nbytes = (length() * sizeof(PCCounts)) + (n * sizeof(double));
+    uint8_t *base = zone()->pod_calloc<uint8_t>(nbytes);
     if (!base)
         return false;
 
@@ -1155,7 +1155,7 @@ JSScript::initScriptCounts(JSContext *cx)
         compartment()->scriptCountsMap = map;
     }
 
-    char *cursor = base;
+    uint8_t *cursor = base;
 
     ScriptCounts scriptCounts;
     scriptCounts.pcCountsVector = (PCCounts *) cursor;
@@ -1177,7 +1177,7 @@ JSScript::initScriptCounts(JSContext *cx)
     }
     hasScriptCounts_ = true; // safe to set this;  we can't fail after this point
 
-    JS_ASSERT(size_t(cursor - base) == bytes);
+    JS_ASSERT(size_t(cursor - base) == nbytes);
 
     /* Enable interrupts in any interpreter frames running on this script. */
     for (ActivationIterator iter(cx->runtime()); !iter.done(); ++iter) {
@@ -2358,14 +2358,15 @@ JSScript::Create(ExclusiveContext *cx, HandleObject enclosingScope, bool savedCa
 }
 
 static inline uint8_t *
-AllocScriptData(ExclusiveContext *cx, size_t size)
+AllocScriptData(JS::Zone *zone, size_t size)
 {
-    uint8_t *data = static_cast<uint8_t *>(cx->calloc_(JS_ROUNDUP(size, sizeof(Value))));
-    if (!data)
+    if (!size)
         return nullptr;
 
-    // All script data is optional, so size might be 0. In that case, we don't care about alignment.
-    JS_ASSERT(size == 0 || size_t(data) % sizeof(Value) == 0);
+    uint8_t *data = zone->pod_calloc<uint8_t>(JS_ROUNDUP(size, sizeof(Value)));
+    if (!data)
+        return nullptr;
+    JS_ASSERT(size_t(data) % sizeof(Value) == 0);
     return data;
 }
 
@@ -2376,13 +2377,9 @@ JSScript::partiallyInit(ExclusiveContext *cx, HandleScript script, uint32_t ncon
 {
     size_t size = ScriptDataSize(script->bindings.count(), nconsts, nobjects, nregexps, ntrynotes,
                                  nblockscopes);
-    if (size > 0) {
-        script->data = AllocScriptData(cx, size);
-        if (!script->data)
-            return false;
-    } else {
-        script->data = nullptr;
-    }
+    script->data = AllocScriptData(script->zone(), size);
+    if (size && !script->data)
+        return false;
     script->dataSize_ = size;
 
     JS_ASSERT(nTypeSets <= UINT16_MAX);
@@ -2625,9 +2622,7 @@ JSScript::finalize(FreeOp *fop)
     if (types)
         types->destroy();
 
-#ifdef JS_ION
     jit::DestroyIonScripts(fop, this);
-#endif
 
     destroyScriptCounts(fop);
     destroyDebugScript(fop);
@@ -2892,8 +2887,8 @@ js::CloneScript(JSContext *cx, HandleObject enclosingScope, HandleFunction fun, 
     /* Script data */
 
     size_t size = src->dataSize();
-    uint8_t *data = AllocScriptData(cx, size);
-    if (!data)
+    uint8_t *data = AllocScriptData(cx->zone(), size);
+    if (size && !data)
         return nullptr;
 
     /* Bindings */
@@ -3154,7 +3149,7 @@ JSScript::ensureHasDebugScript(JSContext *cx)
         return true;
 
     size_t nbytes = offsetof(DebugScript, breakpoints) + length() * sizeof(BreakpointSite*);
-    DebugScript *debug = (DebugScript *) cx->calloc_(nbytes);
+    DebugScript *debug = (DebugScript *) zone()->pod_calloc<uint8_t>(nbytes);
     if (!debug)
         return false;
 
@@ -3197,10 +3192,8 @@ JSScript::setNewStepMode(FreeOp *fop, uint32_t newValue)
     debug->stepMode = newValue;
 
     if (!prior != !newValue) {
-#ifdef JS_ION
         if (hasBaselineScript())
             baseline->toggleDebugTraps(this, nullptr);
-#endif
 
         if (!stepModeEnabled() && !debug->numSites)
             fop->free_(releaseDebugScript());
@@ -3368,9 +3361,7 @@ JSScript::markChildren(JSTracer *trc)
 
     bindings.trace(trc);
 
-#ifdef JS_ION
     jit::TraceIonScripts(trc, this);
-#endif
 }
 
 void
@@ -3463,12 +3454,7 @@ void
 JSScript::setArgumentsHasVarBinding()
 {
     argsHasVarBinding_ = true;
-#ifdef JS_ION
     needsArgsAnalysis_ = true;
-#else
-    // The arguments analysis is performed by IonBuilder.
-    needsArgsObj_ = true;
-#endif
 }
 
 void
@@ -3534,7 +3520,6 @@ JSScript::argumentsOptimizationFailed(JSContext *cx, HandleScript script)
 
     script->needsArgsObj_ = true;
 
-#ifdef JS_ION
     /*
      * Since we can't invalidate baseline scripts, set a flag that's checked from
      * JIT code to indicate the arguments optimization failed and JSOP_ARGUMENTS
@@ -3542,7 +3527,6 @@ JSScript::argumentsOptimizationFailed(JSContext *cx, HandleScript script)
      */
     if (script->hasBaselineScript())
         script->baselineScript()->setNeedsArgsObj();
-#endif
 
     /*
      * By design, the arguments optimization is only made when there are no
@@ -3782,7 +3766,6 @@ LazyScript::staticLevel(JSContext *cx) const
 void
 JSScript::updateBaselineOrIonRaw()
 {
-#ifdef JS_ION
     if (hasIonScript()) {
         baselineOrIonRaw = ion->method()->raw();
         baselineOrIonSkipArgCheck = ion->method()->raw() + ion->getSkipArgCheckEntryOffset();
@@ -3793,7 +3776,6 @@ JSScript::updateBaselineOrIonRaw()
         baselineOrIonRaw = nullptr;
         baselineOrIonSkipArgCheck = nullptr;
     }
-#endif
 }
 
 bool

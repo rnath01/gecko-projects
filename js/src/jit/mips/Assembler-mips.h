@@ -94,8 +94,11 @@ class ABIArgGenerator
         return usedArgSlots_ * sizeof(intptr_t);
     }
 
-    static const Register NonArgReturnVolatileReg0;
-    static const Register NonArgReturnVolatileReg1;
+    static const Register NonArgReturnReg0;
+    static const Register NonArgReturnReg1;
+    static const Register NonArg_VolatileReg;
+    static const Register NonReturn_VolatileReg0;
+    static const Register NonReturn_VolatileReg1;
 };
 
 static MOZ_CONSTEXPR_VAR Register PreBarrierReg = a1;
@@ -151,6 +154,12 @@ static MOZ_CONSTEXPR_VAR FloatRegister f30 = {FloatRegisters::f30};
 static const uint32_t StackAlignment = 8;
 static const uint32_t CodeAlignment = 4;
 static const bool StackKeptAligned = true;
+
+// This boolean indicates whether we support SIMD instructions flavoured for
+// this architecture or not. Rather than a method in the LIRGenerator, it is
+// here such that it is accessible from the entire codebase. Once full support
+// for SIMD is reached on all tier-1 platforms, this constant can be deleted.
+static const bool SupportsSimd = false;
 
 static const Scale ScalePointer = TimesFour;
 

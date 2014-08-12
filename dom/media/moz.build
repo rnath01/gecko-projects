@@ -4,8 +4,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+DIRS += ['gmp-plugin']
 if CONFIG['MOZ_WEBRTC']:
-    DIRS += ['bridge', 'gmp-plugin']
+    DIRS += ['bridge']
 
     LOCAL_INCLUDES += [
         '/media/webrtc/signaling/src/common',
@@ -46,9 +47,7 @@ EXTRA_COMPONENTS += [
     'PeerConnection.manifest',
 ]
 
-JS_MODULES_PATH = 'modules/media'
-
-EXTRA_JS_MODULES += [
+EXTRA_JS_MODULES.media += [
     'IdpProxy.jsm',
     'PeerConnectionIdp.jsm',
     'RTCStatsReport.jsm',

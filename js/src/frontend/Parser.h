@@ -434,10 +434,12 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
     JSAtom * stopStringCompression();
 
     Node stringLiteral();
-#ifdef JS_HAS_TEMPLATE_STRINGS
     Node noSubstitutionTemplate();
     Node templateLiteral();
-#endif
+    bool taggedTemplate(Node nodeList, TokenKind tt);
+    bool appendToCallSiteObj(Node callSiteObj);
+    bool addExprAndGetNextTemplStrToken(Node nodeList, TokenKind &tt);
+
     inline Node newName(PropertyName *name);
 
     inline bool abortIfSyntaxParser();
@@ -644,7 +646,6 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
 
     bool reportRedeclaration(Node pn, bool isConst, HandlePropertyName name);
     bool reportBadReturn(Node pn, ParseReportKind kind, unsigned errnum, unsigned anonerrnum);
-    bool checkFinalReturn(Node pn);
     DefinitionNode getOrCreateLexicalDependency(ParseContext<ParseHandler> *pc, JSAtom *atom);
 
     bool leaveFunction(Node fn, ParseContext<ParseHandler> *outerpc,

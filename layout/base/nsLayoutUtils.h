@@ -128,6 +128,7 @@ public:
   typedef mozilla::CSSPoint CSSPoint;
   typedef mozilla::CSSSize CSSSize;
   typedef mozilla::LayerMargin LayerMargin;
+  typedef mozilla::LayoutDeviceIntRect LayoutDeviceIntRect;
 
   /**
    * Finds previously assigned ViewID for the given content element, if any.
@@ -497,7 +498,8 @@ public:
    * geometry root.
    */
   static nsIFrame* GetAnimatedGeometryRootFor(nsDisplayItem* aItem,
-                                              nsDisplayListBuilder* aBuilder);
+                                              nsDisplayListBuilder* aBuilder,
+                                              mozilla::layers::LayerManager* aManager);
 
   /**
    * Finds the nearest ancestor frame to aFrame that is considered to have (or
@@ -998,7 +1000,7 @@ public:
   struct RectListBuilder : public RectCallback {
     DOMRectList* mRectList;
 
-    RectListBuilder(DOMRectList* aList);
+    explicit RectListBuilder(DOMRectList* aList);
     virtual void AddRect(const nsRect& aRect);
   };
 
@@ -2152,6 +2154,15 @@ public:
   static void
   UpdateImageVisibilityForFrame(nsIFrame* aImageFrame);
 
+  /**
+   * Populate aOutRect with the bounds of the content viewer corresponding
+   * to the given prescontext. Return true if the bounds were set, false
+   * otherwise.
+   */
+  static bool
+  GetContentViewerBounds(nsPresContext* aPresContext,
+                         LayoutDeviceIntRect& aOutRect);
+
  /**
   * Calculate the compostion size for a frame. See FrameMetrics.h for
   * defintion of composition size (or bounds).
@@ -2335,7 +2346,7 @@ namespace mozilla {
      */
     class AutoMaybeDisableFontInflation {
     public:
-      AutoMaybeDisableFontInflation(nsIFrame *aFrame);
+      explicit AutoMaybeDisableFontInflation(nsIFrame *aFrame);
 
       ~AutoMaybeDisableFontInflation();
     private:

@@ -27,9 +27,9 @@
 #include "jstypes.h"
 #include "jsutil.h"
 
+#include "asmjs/AsmJSLink.h"
 #include "frontend/Parser.h"
 #include "frontend/TokenStream.h"
-#include "jit/AsmJSLink.h"
 #include "vm/Debugger.h"
 
 #include "jsatominlines.h"
@@ -1036,6 +1036,15 @@ static bool
 EmitObjectOp(ExclusiveContext *cx, ObjectBox *objbox, JSOp op, BytecodeEmitter *bce)
 {
     return EmitInternedObjectOp(cx, bce->objectList.add(objbox), op, bce);
+}
+
+static bool
+EmitObjectPairOp(ExclusiveContext *cx, ObjectBox *objbox1, ObjectBox *objbox2, JSOp op,
+                 BytecodeEmitter *bce)
+{
+    uint32_t index = bce->objectList.add(objbox1);
+    bce->objectList.add(objbox2);
+    return EmitInternedObjectOp(cx, index, op, bce);
 }
 
 static bool
@@ -3233,8 +3242,7 @@ EmitDestructuringOpsHelper(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode
             if (key->isKind(PNK_NUMBER)) {
                 if (!EmitNumberOp(cx, key->pn_dval, bce))
                     return false;
-            } else {
-                MOZ_ASSERT(key->isKind(PNK_STRING) || key->isKind(PNK_NAME));
+            } else if (key->isKind(PNK_NAME) || key->isKind(PNK_STRING)) {
                 PropertyName *name = key->pn_atom->asPropertyName();
 
                 // The parser already checked for atoms representing indexes and
@@ -3249,10 +3257,15 @@ EmitDestructuringOpsHelper(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode
                         return false;
                     doElemOp = false;
                 }
+            } else {
+                JS_ASSERT(key->isKind(PNK_COMPUTED_NAME));
+                if (!EmitTree(cx, bce, key->pn_kid))
+                    return false;
             }
 
             pn3 = pn2->pn_right;
         }
+
 
         if (doElemOp) {
             /*
@@ -3439,7 +3452,6 @@ MaybeEmitLetGroupDecl(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn,
     return true;
 }
 
-#ifdef JS_HAS_TEMPLATE_STRINGS
 static bool
 EmitTemplateString(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
 {
@@ -3469,7 +3481,6 @@ EmitTemplateString(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
     }
     return true;
 }
-#endif
 
 static bool
 EmitVariables(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn, VarEmitOption emitOption,
@@ -3845,12 +3856,13 @@ EmitAssignment(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *lhs, JSOp 
 }
 
 bool
-ParseNode::getConstantValue(ExclusiveContext *cx, bool strictChecks, MutableHandleValue vp)
+ParseNode::getConstantValue(ExclusiveContext *cx, MutableHandleValue vp)
 {
     switch (getKind()) {
       case PNK_NUMBER:
         vp.setNumber(pn_dval);
         return true;
+      case PNK_TEMPLATE_STRING:
       case PNK_STRING:
         vp.setString(pn_atom);
         return true;
@@ -3865,25 +3877,35 @@ ParseNode::getConstantValue(ExclusiveContext *cx, bool strictChecks, MutableHand
         return true;
       case PNK_SPREAD:
         return false;
+      case PNK_CALLSITEOBJ:
       case PNK_ARRAY: {
-        JS_ASSERT(isOp(JSOP_NEWINIT) && !(pn_xflags & PNX_NONCONST));
+        RootedValue value(cx);
+        unsigned count;
+        ParseNode *pn;
 
-        RootedObject obj(cx,
-                         NewDenseAllocatedArray(cx, pn_count, nullptr, MaybeSingletonObject));
+        if (getKind() == PNK_CALLSITEOBJ) {
+            count = pn_count - 1;
+            pn = pn_head->pn_next;
+        } else {
+            JS_ASSERT(isOp(JSOP_NEWINIT) && !(pn_xflags & PNX_NONCONST));
+            count = pn_count;
+            pn = pn_head;
+        }
+
+        RootedObject obj(cx, NewDenseAllocatedArray(cx, count, nullptr, MaybeSingletonObject));
         if (!obj)
             return false;
 
         unsigned idx = 0;
         RootedId id(cx);
-        RootedValue value(cx);
-        for (ParseNode *pn = pn_head; pn; idx++, pn = pn->pn_next) {
-            if (!pn->getConstantValue(cx, strictChecks, &value))
+        for (; pn; idx++, pn = pn->pn_next) {
+            if (!pn->getConstantValue(cx, &value))
                 return false;
             id = INT_TO_JSID(idx);
             if (!JSObject::defineGeneric(cx, obj, id, value, nullptr, nullptr, JSPROP_ENUMERATE))
                 return false;
         }
-        JS_ASSERT(idx == pn_count);
+        JS_ASSERT(idx == count);
 
         types::FixArrayType(cx, obj);
         vp.setObject(*obj);
@@ -3900,7 +3922,7 @@ ParseNode::getConstantValue(ExclusiveContext *cx, bool strictChecks, MutableHand
 
         RootedValue value(cx), idvalue(cx);
         for (ParseNode *pn = pn_head; pn; pn = pn->pn_next) {
-            if (!pn->pn_right->getConstantValue(cx, strictChecks, &value))
+            if (!pn->pn_right->getConstantValue(cx, &value))
                 return false;
 
             ParseNode *pnid = pn->pn_left;
@@ -3954,15 +3976,43 @@ static bool
 EmitSingletonInitialiser(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
 {
     RootedValue value(cx);
-    if (!pn->getConstantValue(cx, bce->sc->needStrictChecks(), &value))
+    if (!pn->getConstantValue(cx, &value))
         return false;
 
-    JS_ASSERT(value.isObject());
-    ObjectBox *objbox = bce->parser->newObjectBox(&value.toObject());
+    RootedObject obj(cx, &value.toObject());
+    if (!obj->is<ArrayObject>() && !JSObject::setSingletonType(cx, obj))
+        return false;
+
+    ObjectBox *objbox = bce->parser->newObjectBox(obj);
     if (!objbox)
         return false;
 
     return EmitObjectOp(cx, objbox, JSOP_OBJECT, bce);
+}
+
+static bool
+EmitCallSiteObject(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
+{
+    RootedValue value(cx);
+    if (!pn->getConstantValue(cx, &value))
+        return false;
+
+    JS_ASSERT(value.isObject());
+
+    ObjectBox *objbox1 = bce->parser->newObjectBox(&value.toObject());
+    if (!objbox1)
+        return false;
+
+    if (!pn->as<CallSiteNode>().getRawArrayValue(cx, &value))
+        return false;
+
+    JS_ASSERT(value.isObject());
+
+    ObjectBox *objbox2 = bce->parser->newObjectBox(&value.toObject());
+    if (!objbox2)
+        return false;
+
+    return EmitObjectPairOp(cx, objbox1, objbox2, JSOP_CALLSITEOBJ, bce);
 }
 
 /* See the SRC_FOR source note offsetBias comments later in this file. */
@@ -5506,12 +5556,38 @@ EmitStatement(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
             if (Emit1(cx, bce, op) < 0)
                 return false;
         }
-    } else if (!pn->isDirectivePrologueMember()) {
-        /* Don't complain about directive prologue members; just don't emit their code. */
-        bce->current->currentLine = bce->parser->tokenStream.srcCoords.lineNum(pn2->pn_pos.begin);
-        bce->current->lastColumn = 0;
-        if (!bce->reportStrictWarning(pn2, JSMSG_USELESS_EXPR))
-            return false;
+    } else if (pn->isDirectivePrologueMember()) {
+        // Don't complain about directive prologue members; just don't emit
+        // their code.
+    } else {
+        if (JSAtom *atom = pn->isStringExprStatement()) {
+            // Warn if encountering a non-directive prologue member string
+            // expression statement, that is inconsistent with the current
+            // directive prologue.  That is, a script *not* starting with
+            // "use strict" should warn for any "use strict" statements seen
+            // later in the script, because such statements are misleading.
+            const char *directive = nullptr;
+            if (atom == cx->names().useStrict) {
+                if (!bce->sc->strict)
+                    directive = js_useStrict_str;
+            } else if (atom == cx->names().useAsm) {
+                if (bce->sc->isFunctionBox()) {
+                    JSFunction *fun = bce->sc->asFunctionBox()->function();
+                    if (fun->isNative() && IsAsmJSModuleNative(fun->native()))
+                        directive = js_useAsm_str;
+                }
+            }
+
+            if (directive) {
+                if (!bce->reportStrictWarning(pn2, JSMSG_CONTRARY_NONDIRECTIVE, directive))
+                    return false;
+            }
+        } else {
+            bce->current->currentLine = bce->parser->tokenStream.srcCoords.lineNum(pn2->pn_pos.begin);
+            bce->current->lastColumn = 0;
+            if (!bce->reportStrictWarning(pn2, JSMSG_USELESS_EXPR))
+                return false;
+        }
     }
 
     return true;
@@ -5580,8 +5656,7 @@ EmitArray(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn, uint32_t co
 static bool
 EmitCallOrNew(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
 {
-    bool callop = pn->isKind(PNK_CALL);
-
+    bool callop = pn->isKind(PNK_CALL) || pn->isKind(PNK_TAGGED_TEMPLATE);
     /*
      * Emit callable invocation or operator new (constructor call) code.
      * First, emit code for the left operand to evaluate the callable or
@@ -6011,17 +6086,21 @@ EmitObject(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
             if (!EmitNumberOp(cx, pn3->pn_dval, bce))
                 return false;
             isIndex = true;
-        } else {
+        } else if (pn3->isKind(PNK_NAME) || pn3->isKind(PNK_STRING)) {
             // The parser already checked for atoms representing indexes and
             // used PNK_NUMBER instead, but also watch for ids which TI treats
             // as indexes for simpliciation of downstream analysis.
-            JS_ASSERT(pn3->isKind(PNK_NAME) || pn3->isKind(PNK_STRING));
             jsid id = NameToId(pn3->pn_atom->asPropertyName());
             if (id != types::IdToTypeId(id)) {
                 if (!EmitTree(cx, bce, pn3))
                     return false;
                 isIndex = true;
             }
+        } else {
+            JS_ASSERT(pn3->isKind(PNK_COMPUTED_NAME));
+            if (!EmitTree(cx, bce, pn3->pn_kid))
+                return false;
+            isIndex = true;
         }
 
         /* Emit code for the property initializer. */
@@ -6604,6 +6683,7 @@ frontend::EmitTree(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
         break;
 
       case PNK_NEW:
+      case PNK_TAGGED_TEMPLATE:
       case PNK_CALL:
       case PNK_GENEXP:
         ok = EmitCallOrNew(cx, bce, pn);
@@ -6641,6 +6721,10 @@ frontend::EmitTree(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
         break;
       }
 
+      case PNK_CALLSITEOBJ:
+            ok = EmitCallSiteObject(cx, bce, pn);
+            break;
+
       case PNK_ARRAY:
         if (!(pn->pn_xflags & PNX_NONCONST) && pn->pn_head && bce->checkSingletonContext())
             ok = EmitSingletonInitialiser(cx, bce, pn);
@@ -6661,13 +6745,11 @@ frontend::EmitTree(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
             return false;
         break;
 
-#ifdef JS_HAS_TEMPLATE_STRINGS
       case PNK_TEMPLATE_STRING_LIST:
         ok = EmitTemplateString(cx, bce, pn);
         break;
 
       case PNK_TEMPLATE_STRING:
-#endif
       case PNK_STRING:
         ok = EmitAtomOp(cx, pn, JSOP_STRING, bce);
         break;

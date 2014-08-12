@@ -11,12 +11,6 @@
 #include "mozilla/Maybe.h"
 #include "nsCOMPtr.h"
 
-namespace mozilla {
-namespace dom {
-class EventTarget;
-}
-}
-
 class nsIScriptContext;
 
 namespace mozilla {
@@ -29,7 +23,6 @@ class MOZ_STACK_CLASS AutoCxPusher
 {
 public:
   explicit AutoCxPusher(JSContext *aCx, bool aAllowNull = false);
-  // XPCShell uses an nsCxPusher, which contains an AutoCxPusher.
   ~AutoCxPusher();
 
   nsIScriptContext* GetScriptContext() { return mScx; }
@@ -48,47 +41,6 @@ private:
   unsigned mCompartmentDepthOnEntry;
 #endif
 };
-
-} /* namespace mozilla */
-
-/**
- * Legacy cx pushing class.
- *
- * This class provides a rather wonky interface, with the following quirks:
- *   * The constructor is a no-op, and callers must explicitly call one of
- *     the Push() methods.
- *   * Null must be pushed with PushNull().
- *   * The cx pusher can be reused multiple times with RePush().
- *
- * This class implements this interface in terms of the much simpler
- * AutoCxPusher class below.
- */
-class MOZ_STACK_CLASS nsCxPusher
-{
-public:
-  // Returns false if something erroneous happened.
-  bool Push(mozilla::dom::EventTarget *aCurrentTarget);
-  // If nothing has been pushed to stack, this works like Push.
-  // Otherwise if context will change, Pop and Push will be called.
-  bool RePush(mozilla::dom::EventTarget *aCurrentTarget);
-  // If a null JSContext is passed to Push(), that will cause no
-  // push to happen and false to be returned.
-  void Push(JSContext *cx);
-  // Explicitly push a null JSContext on the the stack
-  void PushNull();
-
-  // Pop() will be a no-op if Push() or PushNull() fail
-  void Pop();
-
-  nsIScriptContext* GetCurrentScriptContext() {
-    return mPusher.empty() ? nullptr : mPusher.ref().GetScriptContext();
-  }
-
-private:
-  mozilla::Maybe<mozilla::AutoCxPusher> mPusher;
-};
-
-namespace mozilla {
 
 /**
  * Use AutoJSContext when you need a JS context on the stack but don't have one
@@ -153,29 +105,6 @@ private:
   Maybe<JSAutoRequest> mRequest; // Used on workers.
   Maybe<AutoSafeJSContext> mAutoSafeJSContext; // Used on main thread.
   MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
-};
-
-/**
- * Use AutoPushJSContext when you want to use a specific JSContext that may or
- * may not be already on the stack. This differs from nsCxPusher in that it only
- * pushes in the case that the given cx is not the active cx on the JSContext
- * stack, which avoids an expensive JS_SaveFrameChain in the common case.
- *
- * Most consumers of this should probably just use AutoJSContext. But the goal
- * here is to preserve the existing behavior while ensure proper cx-stack
- * semantics in edge cases where the context being used doesn't match the active
- * context.
- *
- * NB: This will not push a null cx even if aCx is null. Make sure you know what
- * you're doing.
- */
-class MOZ_STACK_CLASS AutoPushJSContext {
-  Maybe<AutoCxPusher> mPusher;
-  JSContext* mCx;
-
-public:
-  explicit AutoPushJSContext(JSContext* aCx);
-  operator JSContext*() { return mCx; }
 };
 
 } // namespace mozilla

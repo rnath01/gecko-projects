@@ -145,10 +145,10 @@ PropertyTree::getChild(ExclusiveContext *cx, Shape *parentArg, StackShape &unroo
     if (kidp->isShape()) {
         Shape *kid = kidp->toShape();
         if (kid->matches(unrootedChild))
-        existingShape = kid;
+            existingShape = kid;
     } else if (kidp->isHash()) {
         if (KidsHash::Ptr p = kidp->toHash()->lookup(unrootedChild))
-        existingShape = *p;
+            existingShape = *p;
     } else {
         /* If kidp->isNull(), we always insert. */
     }
@@ -156,7 +156,7 @@ PropertyTree::getChild(ExclusiveContext *cx, Shape *parentArg, StackShape &unroo
 #ifdef JSGC_INCREMENTAL
     if (existingShape) {
         JS::Zone *zone = existingShape->zone();
-        if (zone->needsBarrier()) {
+        if (zone->needsIncrementalBarrier()) {
             /*
              * We need a read barrier for the shape tree, since these are weak
              * pointers.
@@ -174,6 +174,8 @@ PropertyTree::getChild(ExclusiveContext *cx, Shape *parentArg, StackShape &unroo
             JS_ASSERT(parent->isMarked());
             parent->removeChild(existingShape);
             existingShape = nullptr;
+        } else if (existingShape->isMarked(gc::GRAY)) {
+            JS::UnmarkGrayGCThingRecursively(existingShape, JSTRACE_SHAPE);
         }
     }
 #endif
@@ -218,7 +220,7 @@ PropertyTree::lookupChild(ThreadSafeContext *cx, Shape *parent, const StackShape
 #if defined(JSGC_INCREMENTAL) && defined(DEBUG)
     if (shape) {
         JS::Zone *zone = shape->arenaHeader()->zone;
-        JS_ASSERT(!zone->needsBarrier());
+        JS_ASSERT(!zone->needsIncrementalBarrier());
         JS_ASSERT(!(zone->isGCSweeping() && !shape->isMarked() &&
                     !shape->arenaHeader()->allocatedDuringIncremental));
     }

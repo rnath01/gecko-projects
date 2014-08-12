@@ -8,6 +8,7 @@
 
 #include "mozilla/gmp/PGMPChild.h"
 #include "GMPSharedMemManager.h"
+#include "GMPTimerChild.h"
 #include "gmp-entrypoints.h"
 #include "prlink.h"
 
@@ -21,12 +22,19 @@ public:
   GMPChild();
   virtual ~GMPChild();
 
+#if defined(XP_MACOSX) && defined(MOZ_GMP_SANDBOX)
+  void OnChannelConnected(int32_t aPid);
+#endif
+
   bool Init(const std::string& aPluginPath,
             base::ProcessHandle aParentProcessHandle,
             MessageLoop* aIOLoop,
             IPC::Channel* aChannel);
   bool LoadPluginLibrary(const std::string& aPluginPath);
   MessageLoop* GMPMessageLoop();
+
+  // Main thread only.
+  GMPTimerChild* GetGMPTimers();
 
   // GMPSharedMem
   virtual void CheckThread() MOZ_OVERRIDE;
@@ -47,12 +55,27 @@ private:
   virtual bool DeallocPGMPDecryptorChild(PGMPDecryptorChild* aActor) MOZ_OVERRIDE;
   virtual bool RecvPGMPDecryptorConstructor(PGMPDecryptorChild* aActor) MOZ_OVERRIDE;
 
+  virtual PGMPAudioDecoderChild* AllocPGMPAudioDecoderChild() MOZ_OVERRIDE;
+  virtual bool DeallocPGMPAudioDecoderChild(PGMPAudioDecoderChild* aActor) MOZ_OVERRIDE;
+  virtual bool RecvPGMPAudioDecoderConstructor(PGMPAudioDecoderChild* aActor) MOZ_OVERRIDE;
+
+  virtual PGMPTimerChild* AllocPGMPTimerChild() MOZ_OVERRIDE;
+  virtual bool DeallocPGMPTimerChild(PGMPTimerChild* aActor) MOZ_OVERRIDE;
+
+  virtual bool RecvCrashPluginNow() MOZ_OVERRIDE;
+
   virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
   virtual void ProcessingError(Result aWhat) MOZ_OVERRIDE;
+
+  nsRefPtr<GMPTimerChild> mTimerChild;
 
   PRLibrary* mLib;
   GMPGetAPIFunc mGetAPIFunc;
   MessageLoop* mGMPMessageLoop;
+#if defined(XP_MACOSX) && defined(MOZ_GMP_SANDBOX)
+  std::string mPluginPath;
+  nsCString mPluginBinaryPath;
+#endif
 };
 
 } // namespace gmp

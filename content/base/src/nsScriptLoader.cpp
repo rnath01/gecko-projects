@@ -327,12 +327,19 @@ nsScriptLoader::StartLoad(nsScriptLoadRequest *aRequest, const nsAString &aType,
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsIScriptElement *script = aRequest->mElement;
-  if (aScriptFromHead &&
-      !(script && (script->GetScriptAsync() || script->GetScriptDeferred()))) {
-    nsCOMPtr<nsIHttpChannelInternal>
-      internalHttpChannel(do_QueryInterface(channel));
-    if (internalHttpChannel)
+  nsCOMPtr<nsIHttpChannelInternal>
+    internalHttpChannel(do_QueryInterface(channel));
+
+  if (internalHttpChannel) {
+    if (aScriptFromHead &&
+        !(script && (script->GetScriptAsync() || script->GetScriptDeferred()))) {
+      // synchronous head scripts block lading of most other non js/css
+      // content such as images
       internalHttpChannel->SetLoadAsBlocking(true);
+    } else if (!(script && script->GetScriptDeferred())) {
+      // other scripts are neither blocked nor prioritized unless marked deferred
+      internalHttpChannel->SetLoadUnblocked(true);
+    }
   }
 
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(channel));
@@ -1404,9 +1411,8 @@ nsScriptLoader::OnStreamComplete(nsIStreamLoader* aLoader,
   if (NS_FAILED(rv)) {
     /*
      * Handle script not loading error because source was a tracking URL.
-     * (Safebrowinsg) We make a note of this script node by including it
-     * in a dedicated array of blocked tracking nodes under its parent
-     * document.
+     * We make a note of this script node by including it in a dedicated
+     * array of blocked tracking nodes under its parent document.
      */
     if (rv == NS_ERROR_TRACKING_URI) {
       nsCOMPtr<nsIContent> cont = do_QueryInterface(request->mElement);

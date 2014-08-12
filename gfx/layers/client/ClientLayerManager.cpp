@@ -21,6 +21,7 @@
 #include "mozilla/layers/LayerTransactionChild.h"
 #include "mozilla/layers/TextureClientPool.h" // for TextureClientPool
 #include "mozilla/layers/SimpleTextureClientPool.h" // for SimpleTextureClientPool
+#include "ClientReadbackLayer.h"        // for ClientReadbackLayer
 #include "nsAString.h"
 #include "nsIWidget.h"                  // for nsIWidget
 #include "nsIWidgetListener.h"
@@ -114,6 +115,13 @@ ClientLayerManager::Mutated(Layer* aLayer)
 
   NS_ASSERTION(InConstruction() || InDrawing(), "wrong phase");
   mForwarder->Mutated(Hold(aLayer));
+}
+
+already_AddRefed<ReadbackLayer>
+ClientLayerManager::CreateReadbackLayer()
+{
+  nsRefPtr<ReadbackLayer> layer = new ClientReadbackLayer(this);
+  return layer.forget();
 }
 
 void
@@ -642,7 +650,7 @@ ClientLayerManager::ProgressiveUpdateCallback(bool aHasPendingNewThebesContent,
 #ifdef MOZ_WIDGET_ANDROID
   Layer* primaryScrollable = GetPrimaryScrollableLayer();
   if (primaryScrollable) {
-    const FrameMetrics& metrics = primaryScrollable->AsContainerLayer()->GetFrameMetrics();
+    const FrameMetrics& metrics = primaryScrollable->GetFrameMetrics();
 
     // This is derived from the code in
     // gfx/layers/ipc/CompositorParent.cpp::TransformShadowTree.

@@ -829,7 +829,7 @@ MacroAssemblerMIPS::ma_sw(Imm32 imm, Address address)
     ma_li(ScratchRegister, imm);
 
     if (Imm16::IsInSignedRange(address.offset)) {
-        as_sw(ScratchRegister, address.base, Imm16(address.offset).encode());
+        as_sw(ScratchRegister, address.base, address.offset);
     } else {
         MOZ_ASSERT(address.base != SecondScratchReg);
 
@@ -939,6 +939,18 @@ MacroAssemblerMIPS::branchWithCode(InstImm code, Label *label, JumpKind jumpKind
     if (label->bound()) {
         int32_t offset = label->offset() - m_buffer.nextOffset().getOffset();
 
+        // Generate the long jump for calls because return address has to be
+        // the address after the reserved block.
+        if (code.encode() == inst_bgezal.encode()) {
+            MOZ_ASSERT(jumpKind != ShortJump);
+            // Handle long call
+            addLongJump(nextOffset());
+            ma_liPatchable(ScratchRegister, Imm32(label->offset()));
+            as_jalr(ScratchRegister);
+            as_nop();
+            return;
+        }
+
         if (BOffImm16::IsInRange(offset))
             jumpKind = ShortJump;
 
@@ -950,15 +962,6 @@ MacroAssemblerMIPS::branchWithCode(InstImm code, Label *label, JumpKind jumpKind
             return;
         }
 
-        // Generate long jump because target is out of range of short jump.
-        if (code.encode() == inst_bgezal.encode()) {
-            // Handle long call
-            addLongJump(nextOffset());
-            ma_liPatchable(ScratchRegister, Imm32(label->offset()));
-            as_jalr(ScratchRegister);
-            as_nop();
-            return;
-        }
         if (code.encode() == inst_beq.encode()) {
             // Handle long jump
             addLongJump(nextOffset());
@@ -1359,7 +1362,7 @@ void
 MacroAssemblerMIPS::ma_ls(FloatRegister ft, Address address)
 {
     if (Imm16::IsInSignedRange(address.offset)) {
-        as_ls(ft, address.base, Imm16(address.offset).encode());
+        as_ls(ft, address.base, address.offset);
     } else {
         MOZ_ASSERT(address.base != ScratchRegister);
         ma_li(ScratchRegister, Imm32(address.offset));
@@ -1376,8 +1379,8 @@ MacroAssemblerMIPS::ma_ld(FloatRegister ft, Address address)
 
     int32_t off2 = address.offset + TAG_OFFSET;
     if (Imm16::IsInSignedRange(address.offset) && Imm16::IsInSignedRange(off2)) {
-        as_ls(ft, address.base, Imm16(address.offset).encode());
-        as_ls(getOddPair(ft), address.base, Imm16(off2).encode());
+        as_ls(ft, address.base, address.offset);
+        as_ls(getOddPair(ft), address.base, off2);
     } else {
         ma_li(ScratchRegister, Imm32(address.offset));
         as_addu(ScratchRegister, address.base, ScratchRegister);
@@ -1391,8 +1394,8 @@ MacroAssemblerMIPS::ma_sd(FloatRegister ft, Address address)
 {
     int32_t off2 = address.offset + TAG_OFFSET;
     if (Imm16::IsInSignedRange(address.offset) && Imm16::IsInSignedRange(off2)) {
-        as_ss(ft, address.base, Imm16(address.offset).encode());
-        as_ss(getOddPair(ft), address.base, Imm16(off2).encode());
+        as_ss(ft, address.base, address.offset);
+        as_ss(getOddPair(ft), address.base, off2);
     } else {
         ma_li(ScratchRegister, Imm32(address.offset));
         as_addu(ScratchRegister, address.base, ScratchRegister);
@@ -1412,7 +1415,7 @@ void
 MacroAssemblerMIPS::ma_ss(FloatRegister ft, Address address)
 {
     if (Imm16::IsInSignedRange(address.offset)) {
-        as_ss(ft, address.base, Imm16(address.offset).encode());
+        as_ss(ft, address.base, address.offset);
     } else {
         ma_li(ScratchRegister, Imm32(address.offset));
         as_addu(ScratchRegister, address.base, ScratchRegister);
@@ -1526,7 +1529,7 @@ MacroAssemblerMIPSCompat::callIon(Register callee)
 void
 MacroAssemblerMIPSCompat::callIonFromAsmJS(Register callee)
 {
-    ma_callIonNoPush(reg);
+    ma_callIonNoPush(callee);
 
     // The Ion ABI has the callee pop the return address off the stack.
     // The asm.js caller assumes that the call leaves sp unchanged, so bump
@@ -3504,7 +3507,7 @@ MacroAssemblerMIPSCompat::toggledCall(JitCode *target, bool enabled)
         as_nop();
         as_nop();
     }
-    MOZ_ASSERT(nextOffset().getOffset() - offset.offset() == ToggledCallSize());
+    MOZ_ASSERT(nextOffset().getOffset() - offset.offset() == ToggledCallSize(nullptr));
     return offset;
 }
 

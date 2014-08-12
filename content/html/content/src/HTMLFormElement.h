@@ -43,12 +43,9 @@ class HTMLFormElement MOZ_FINAL : public nsGenericHTMLElement,
 
 public:
   HTMLFormElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
-  virtual ~HTMLFormElement();
-
-  nsresult Init();
 
   enum {
-    FORM_CONTROL_LIST_HASHTABLE_SIZE = 16
+    FORM_CONTROL_LIST_HASHTABLE_LENGTH = 8
   };
 
   // nsISupports
@@ -630,15 +627,12 @@ protected:
   static bool gFirstFormSubmitted;
   /** Detection of first password input to initialize the password manager */
   static bool gPasswordManagerInitialized;
+
+private:
+  ~HTMLFormElement();
 };
 
 } // namespace dom
-
-template<>
-struct HasDangerousPublicDestructor<dom::HTMLFormElement>
-{
-  static const bool value = true;
-};
 
 } // namespace mozilla
 

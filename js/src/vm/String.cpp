@@ -456,7 +456,7 @@ JSFlatString *
 JSRope::flatten(ExclusiveContext *maybecx)
 {
 #ifdef JSGC_INCREMENTAL
-    if (zone()->needsBarrier())
+    if (zone()->needsIncrementalBarrier())
         return flattenInternal<WithIncrementalBarrier>(maybecx);
 #endif
     return flattenInternal<NoBarrier>(maybecx);
@@ -983,6 +983,16 @@ js::NewStringDontDeflate(ThreadSafeContext *cx, CharT *chars, size_t length)
             js_free(chars);
             return cx->staticStrings().getUnit(c);
         }
+    }
+
+    if (JSFatInlineString::lengthFits<CharT>(length)) {
+        JSInlineString *str =
+            NewFatInlineString<allowGC>(cx, mozilla::Range<const CharT>(chars, length));
+        if (!str)
+            return nullptr;
+
+        js_free(chars);
+        return str;
     }
 
     return JSFlatString::new_<allowGC>(cx, chars, length);

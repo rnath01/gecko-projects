@@ -164,6 +164,9 @@ MOZ_BEGIN_ENUM_CLASS(AttributeType)
   Max
 MOZ_END_ENUM_CLASS(AttributeType)
 
+// Limits
+const float kMaxStdDeviation = 500;
+
 // A class that stores values of different types, keyed by an attribute name.
 // The Get*() methods assert that they're called for the same type that the
 // attribute was Set() with.
@@ -300,6 +303,7 @@ public:
   AttributeMap& Attributes() { return mAttributes; }
 
   IntRect PrimitiveSubregion() const { return mFilterPrimitiveSubregion; }
+  IntRect FilterSpaceBounds() const { return mFilterSpaceBounds; }
   bool IsTainted() const { return mIsTainted; }
 
   size_t NumberOfInputs() const { return mInputPrimitives.Length(); }
@@ -320,6 +324,11 @@ public:
   void SetPrimitiveSubregion(const IntRect& aRect)
   {
     mFilterPrimitiveSubregion = aRect;
+  }
+
+  void SetFilterSpaceBounds(const IntRect& aRect)
+  {
+    mFilterSpaceBounds = aRect;
   }
 
   void SetIsTainted(bool aIsTainted)
@@ -355,6 +364,7 @@ private:
   AttributeMap mAttributes;
   nsTArray<int32_t> mInputPrimitives;
   IntRect mFilterPrimitiveSubregion;
+  IntRect mFilterSpaceBounds;
   nsTArray<ColorSpace> mInputColorSpaces;
   ColorSpace mOutputColorSpace;
   bool mIsTainted;
@@ -367,10 +377,8 @@ private:
  */
 struct FilterDescription MOZ_FINAL {
   FilterDescription() {}
-  FilterDescription(const nsTArray<FilterPrimitiveDescription>& aPrimitives,
-                    const IntRect& aFilterSpaceBounds)
+  FilterDescription(const nsTArray<FilterPrimitiveDescription>& aPrimitives)
    : mPrimitives(aPrimitives)
-   , mFilterSpaceBounds(aFilterSpaceBounds)
   {}
 
   bool operator==(const FilterDescription& aOther) const;
@@ -380,7 +388,6 @@ struct FilterDescription MOZ_FINAL {
   }
 
   nsTArray<FilterPrimitiveDescription> mPrimitives;
-  IntRect mFilterSpaceBounds;
 };
 
 /**
@@ -440,6 +447,13 @@ public:
   ComputePostFilterExtents(const FilterDescription& aFilter,
                            const nsIntRegion& aSourceGraphicExtents);
 
+  /**
+   * Computes the size of a single FilterPrimitiveDescription's output given a
+   * set of input extents.
+   */
+  static nsIntRegion
+  PostFilterExtentsForPrimitive(const FilterPrimitiveDescription& aDescription,
+                                const nsTArray<nsIntRegion>& aInputExtents);
 };
 
 }

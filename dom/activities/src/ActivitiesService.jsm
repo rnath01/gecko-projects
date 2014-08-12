@@ -122,6 +122,20 @@ ActivitiesDb.prototype = {
     }.bind(this), function() {}, function() {});
   },
 
+  // Remove all activities associated with the given |aManifest| URL.
+  removeAll: function actdb_removeAll(aManifest) {
+    this.newTxn("readwrite", STORE_NAME, function (txn, store) {
+      let index = store.index("manifest");
+      let request = index.mozGetAll(aManifest);
+      request.onsuccess = function manifestActivities(aEvent) {
+        aEvent.target.result.forEach(function(result) {
+          debug('Removing activity: ' + JSON.stringify(result));
+          store.delete(result.id);
+        });
+      };
+    });
+  },
+
   find: function actdb_find(aObject, aSuccess, aError, aMatch) {
     debug("Looking for " + aObject.options.name);
 
@@ -166,6 +180,7 @@ let Activities = {
 
     "Activities:Register",
     "Activities:Unregister",
+    "Activities:UnregisterAll",
     "Activities:GetContentTypes",
 
     "child-process-shutdown"
@@ -294,7 +309,10 @@ let Activities = {
           let results = [];
           aManifests.forEach((aManifest, i) => {
             let manifestURL = aResults.options[i].manifest;
-            let helper = new ManifestHelper(aManifest.manifest, manifestURL);
+            // Not passing the origin is fine here since we only need
+            // helper.name which doesn't rely on url resolution.
+            let helper =
+              new ManifestHelper(aManifest.manifest, manifestURL, manifestURL);
             results.push({
               manifestURL: manifestURL,
               iconURL: aResults.options[i].icon,
@@ -390,6 +408,9 @@ let Activities = {
         break;
       case "Activities:Unregister":
         this.db.remove(msg);
+        break;
+      case "Activities:UnregisterAll":
+        this.db.removeAll(msg);
         break;
       case "child-process-shutdown":
         for (let id in this.callers) {

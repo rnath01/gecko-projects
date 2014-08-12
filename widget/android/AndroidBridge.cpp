@@ -46,7 +46,8 @@ using namespace mozilla;
 using namespace mozilla::widget::android;
 using namespace mozilla::gfx;
 
-StaticRefPtr<AndroidBridge> AndroidBridge::sBridge;
+AndroidBridge* AndroidBridge::sBridge;
+pthread_t AndroidBridge::sJavaUiThread = -1;
 static unsigned sJavaEnvThreadIndex = 0;
 static jobject sGlobalContext = nullptr;
 static void JavaThreadDetachFunc(void *arg);
@@ -1001,7 +1002,7 @@ AndroidBridge::InitCamera(const nsCString& contentType, uint32_t camera, uint32_
 
     AutoLocalJNIFrame jniFrame(env, 1);
     jintArray arr = mozilla::widget::android::GeckoAppShell::InitCameraWrapper
-      (NS_ConvertUTF8toUTF16(contentType), (int32_t) camera, (int32_t) width, (int32_t) height);
+      (NS_ConvertUTF8toUTF16(contentType), (int32_t) camera, (int32_t) *width, (int32_t) *height);
 
     if (!arr)
         return false;
@@ -1065,11 +1066,7 @@ AndroidBridge::GetSegmentInfoForText(const nsAString& aText,
 #else
     ALOG_BRIDGE("AndroidBridge::GetSegmentInfoForText");
 
-    dom::mobilemessage::SmsSegmentInfoData data;
-
-    data.segments() = 0;
-    data.charsPerSegment() = 0;
-    data.charsAvailableInLastSegment() = 0;
+    int32_t segments, charsPerSegment, charsAvailableInLastSegment;
 
     JNIEnv *env = GetJNIEnv();
 
@@ -1086,17 +1083,18 @@ AndroidBridge::GetSegmentInfoForText(const nsAString& aText,
 
     jint* info = env->GetIntArrayElements(arr, JNI_FALSE);
 
-    data.segments() = info[0]; // msgCount
-    data.charsPerSegment() = info[2]; // codeUnitsRemaining
+    segments = info[0]; // msgCount
+    charsPerSegment = info[2]; // codeUnitsRemaining
     // segmentChars = (codeUnitCount + codeUnitsRemaining) / msgCount
-    data.charsAvailableInLastSegment() = (info[1] + info[2]) / info[0];
+    charsAvailableInLastSegment = (info[1] + info[2]) / info[0];
 
     env->ReleaseIntArrayElements(arr, info, JNI_ABORT);
 
     // TODO Bug 908598 - Should properly use |QueueSmsRequest(...)| to queue up
     // the nsIMobileMessageCallback just like other functions.
-    nsCOMPtr<nsIDOMMozSmsSegmentInfo> info = new SmsSegmentInfo(data);
-    return aRequest->NotifySegmentInfoForTextGot(info);
+    return aRequest->NotifySegmentInfoForTextGot(segments,
+                                                 charsPerSegment,
+                                                 charsAvailableInLastSegment);
 #endif
 }
 
@@ -1552,8 +1550,7 @@ void AndroidBridge::SyncFrameMetrics(const ScreenPoint& aScrollOffset, float aZo
 }
 
 AndroidBridge::AndroidBridge()
-  : mLayerClient(nullptr),
-    mNativePanZoomController(nullptr)
+  : mLayerClient(nullptr)
 {
 }
 
@@ -1978,77 +1975,8 @@ AndroidBridge::ProgressiveUpdateCallback(bool aHasPendingNewThebesContent, const
     return ret;
 }
 
-mozilla::widget::android::NativePanZoomController*
-AndroidBridge::SetNativePanZoomController(jobject obj)
-{
-    mozilla::widget::android::NativePanZoomController* old = mNativePanZoomController;
-    mNativePanZoomController = mozilla::widget::android::NativePanZoomController::Wrap(obj);
-    return old;
-}
-
 void
-AndroidBridge::RequestContentRepaint(const mozilla::layers::FrameMetrics& aFrameMetrics)
-{
-    ALOG_BRIDGE("AndroidBridge::RequestContentRepaint");
-
-    // FIXME implement this
-}
-
-void
-AndroidBridge::AcknowledgeScrollUpdate(const mozilla::layers::FrameMetrics::ViewID& aScrollId,
-                                       const uint32_t& aScrollGeneration)
-{
-    // FIXME implement this
-}
-
-void
-AndroidBridge::HandleDoubleTap(const CSSPoint& aPoint,
-                               int32_t aModifiers,
-                               const mozilla::layers::ScrollableLayerGuid& aGuid)
-{
-    nsCString data = nsPrintfCString("{ \"x\": %d, \"y\": %d }", aPoint.x, aPoint.y);
-    nsAppShell::gAppShell->PostEvent(AndroidGeckoEvent::MakeBroadcastEvent(
-            NS_LITERAL_CSTRING("Gesture:DoubleTap"), data));
-}
-
-void
-AndroidBridge::HandleSingleTap(const CSSPoint& aPoint,
-                               int32_t aModifiers,
-                               const mozilla::layers::ScrollableLayerGuid& aGuid)
-{
-    // TODO Send the modifier data to Gecko for use in mouse events.
-    nsCString data = nsPrintfCString("{ \"x\": %d, \"y\": %d }", aPoint.x, aPoint.y);
-    nsAppShell::gAppShell->PostEvent(AndroidGeckoEvent::MakeBroadcastEvent(
-            NS_LITERAL_CSTRING("Gesture:SingleTap"), data));
-}
-
-void
-AndroidBridge::HandleLongTap(const CSSPoint& aPoint,
-                             int32_t aModifiers,
-                             const mozilla::layers::ScrollableLayerGuid& aGuid)
-{
-    nsCString data = nsPrintfCString("{ \"x\": %d, \"y\": %d }", aPoint.x, aPoint.y);
-    nsAppShell::gAppShell->PostEvent(AndroidGeckoEvent::MakeBroadcastEvent(
-            NS_LITERAL_CSTRING("Gesture:LongPress"), data));
-}
-
-void
-AndroidBridge::HandleLongTapUp(const CSSPoint& aPoint,
-                               int32_t aModifiers,
-                               const mozilla::layers::ScrollableLayerGuid& aGuid)
-{
-}
-
-void
-AndroidBridge::SendAsyncScrollDOMEvent(bool aIsRoot,
-                                       const CSSRect& aContentRect,
-                                       const CSSSize& aScrollableSize)
-{
-    // FIXME implement this
-}
-
-void
-AndroidBridge::PostDelayedTask(Task* aTask, int aDelayMs)
+AndroidBridge::PostTaskToUiThread(Task* aTask, int aDelayMs)
 {
     // add the new task into the mDelayedTaskQueue, sorted with
     // the earliest task first in the queue
@@ -2069,12 +1997,12 @@ AndroidBridge::PostDelayedTask(Task* aTask, int aDelayMs)
         // if we're inserting it at the head of the queue, notify Java because
         // we need to get a callback at an earlier time than the last scheduled
         // callback
-        mNativePanZoomController->PostDelayedCallbackWrapper((int64_t)aDelayMs);
+        GeckoAppShell::RequestUiThreadCallback((int64_t)aDelayMs);
     }
 }
 
 int64_t
-AndroidBridge::RunDelayedTasks()
+AndroidBridge::RunDelayedUiThreadTasks()
 {
     while (mDelayedTaskQueue.Length() > 0) {
         DelayedTask* nextTask = mDelayedTaskQueue[0];

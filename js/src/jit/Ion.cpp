@@ -12,9 +12,9 @@
 #include "jscompartment.h"
 #include "jsprf.h"
 
+#include "asmjs/AsmJSModule.h"
 #include "gc/Marking.h"
 #include "jit/AliasAnalysis.h"
-#include "jit/AsmJSModule.h"
 #include "jit/BacktrackingAllocator.h"
 #include "jit/BaselineDebugModeOSR.h"
 #include "jit/BaselineFrame.h"
@@ -32,6 +32,7 @@
 #include "jit/LICM.h"
 #include "jit/LinearScan.h"
 #include "jit/LIR.h"
+#include "jit/LoopUnroller.h"
 #include "jit/Lowering.h"
 #include "jit/ParallelSafetyAnalysis.h"
 #include "jit/PerfSpewer.h"
@@ -330,12 +331,12 @@ JitRuntime::freeOsrTempData()
     osrTempData_ = nullptr;
 }
 
-JSC::ExecutableAllocator *
+ExecutableAllocator *
 JitRuntime::createIonAlloc(JSContext *cx)
 {
     JS_ASSERT(cx->runtime()->currentThreadOwnsInterruptLock());
 
-    ionAlloc_ = js_new<JSC::ExecutableAllocator>();
+    ionAlloc_ = js_new<ExecutableAllocator>();
     if (!ionAlloc_)
         js_ReportOutOfMemory(cx);
     return ionAlloc_;
@@ -690,7 +691,7 @@ JitRuntime::getVMWrapper(const VMFunction &f) const
 template <AllowGC allowGC>
 JitCode *
 JitCode::New(JSContext *cx, uint8_t *code, uint32_t bufferSize, uint32_t headerSize,
-             JSC::ExecutablePool *pool, JSC::CodeKind kind)
+             ExecutablePool *pool, CodeKind kind)
 {
     JitCode *codeObj = js::NewJitCode<allowGC>(cx);
     if (!codeObj) {
@@ -705,12 +706,12 @@ JitCode::New(JSContext *cx, uint8_t *code, uint32_t bufferSize, uint32_t headerS
 template
 JitCode *
 JitCode::New<CanGC>(JSContext *cx, uint8_t *code, uint32_t bufferSize, uint32_t headerSize,
-                    JSC::ExecutablePool *pool, JSC::CodeKind kind);
+                    ExecutablePool *pool, CodeKind kind);
 
 template
 JitCode *
 JitCode::New<NoGC>(JSContext *cx, uint8_t *code, uint32_t bufferSize, uint32_t headerSize,
-                   JSC::ExecutablePool *pool, JSC::CodeKind kind);
+                   ExecutablePool *pool, CodeKind kind);
 
 void
 JitCode::copyFrom(MacroAssembler &masm)
@@ -773,7 +774,7 @@ JitCode::finalize(FreeOp *fop)
         // Horrible hack: if we are using perf integration, we don't
         // want to reuse code addresses, so we just leak the memory instead.
         if (!PerfEnabled())
-            pool_->release(headerSize_ + bufferSize_, JSC::CodeKind(kind_));
+            pool_->release(headerSize_ + bufferSize_, CodeKind(kind_));
         pool_ = nullptr;
     }
 }
@@ -968,7 +969,7 @@ IonScript::trace(JSTracer *trc)
 IonScript::writeBarrierPre(Zone *zone, IonScript *ionScript)
 {
 #ifdef JSGC_INCREMENTAL
-    if (zone->needsBarrier())
+    if (zone->needsIncrementalBarrier())
         ionScript->trace(zone->barrierTracer());
 #endif
 }
@@ -1290,6 +1291,16 @@ OptimizeMIR(MIRGenerator *mir)
     if (mir->shouldCancel("Start"))
         return false;
 
+    if (!mir->compilingAsmJS()) {
+        AutoTraceLog log(logger, TraceLogger::FoldTests);
+        FoldTests(graph);
+        IonSpewPass("Fold Tests");
+        AssertBasicGraphCoherency(graph);
+
+        if (mir->shouldCancel("Fold Tests"))
+            return false;
+    }
+
     {
         AutoTraceLog log(logger, TraceLogger::SplitCriticalEdges);
         if (!SplitCriticalEdges(graph))
@@ -1298,16 +1309,6 @@ OptimizeMIR(MIRGenerator *mir)
         AssertGraphCoherency(graph);
 
         if (mir->shouldCancel("Split Critical Edges"))
-            return false;
-    }
-
-    if (!mir->compilingAsmJS()) {
-        AutoTraceLog log(logger, TraceLogger::FoldTests);
-        FoldTests(graph);
-        IonSpewPass("Fold Tests");
-        AssertBasicGraphCoherency(graph);
-
-        if (mir->shouldCancel("Fold Tests"))
             return false;
     }
 
@@ -1512,6 +1513,16 @@ OptimizeMIR(MIRGenerator *mir)
             if (mir->shouldCancel("Truncate Doubles"))
                 return false;
         }
+
+        if (mir->optimizationInfo().loopUnrollingEnabled()) {
+            AutoTraceLog log(logger, TraceLogger::LoopUnrolling);
+
+            if (!UnrollLoops(graph, r.loopIterationBounds))
+                return false;
+
+            IonSpewPass("Unroll Loops");
+            AssertExtendedGraphCoherency(graph);
+        }
     }
 
     if (mir->optimizationInfo().eaaEnabled()) {
@@ -1537,10 +1548,8 @@ OptimizeMIR(MIRGenerator *mir)
             return false;
     }
 
-    // Make loops contiguious. We do this after GVN/UCE and range analysis,
+    // Make loops contiguous. We do this after GVN/UCE and range analysis,
     // which can remove CFG edges, exposing more blocks that can be moved.
-    // We also disable this when profiling, since reordering blocks appears
-    // to make the profiler unhappy.
     {
         AutoTraceLog log(logger, TraceLogger::MakeLoopsContiguous);
         if (!MakeLoopsContiguous(graph))
@@ -1990,7 +1999,10 @@ CheckScript(JSContext *cx, JSScript *script, bool osr)
         return false;
     }
 
-    if (!script->compileAndGo()) {
+    if (!script->compileAndGo() && !script->functionNonDelazifying()) {
+        // Support non-CNG functions but not other scripts. For global scripts,
+        // IonBuilder currently uses the global object as scope chain, this is
+        // not valid for non-CNG code.
         IonSpew(IonSpew_Abort, "not compile-and-go");
         return false;
     }
@@ -2616,7 +2628,7 @@ InvalidateActivation(FreeOp *fop, uint8_t *jitTop, bool invalidateAll)
         JitCode *ionCode = ionScript->method();
 
         JS::Zone *zone = script->zone();
-        if (zone->needsBarrier()) {
+        if (zone->needsIncrementalBarrier()) {
             // We're about to remove edges from the JSScript to gcthings
             // embedded in the JitCode. Perform one final trace of the
             // JitCode for the incremental GC, as it must know about
@@ -2971,7 +2983,7 @@ AutoFlushICache::flush(uintptr_t start, size_t len)
     AutoFlushICache *afc = TlsPerThreadData.get()->PerThreadData::autoFlushICache();
     if (!afc) {
         IonSpewCont(IonSpew_CacheFlush, "#");
-        JSC::ExecutableAllocator::cacheFlush((void*)start, len);
+        ExecutableAllocator::cacheFlush((void*)start, len);
         JS_ASSERT(len <= 16);
         return;
     }
@@ -2984,7 +2996,7 @@ AutoFlushICache::flush(uintptr_t start, size_t len)
     }
 
     IonSpewCont(IonSpew_CacheFlush, afc->inhibit_ ? "x" : "*");
-    JSC::ExecutableAllocator::cacheFlush((void *)start, len);
+    ExecutableAllocator::cacheFlush((void *)start, len);
 #endif
 }
 
@@ -3047,7 +3059,7 @@ AutoFlushICache::~AutoFlushICache()
     JS_ASSERT(pt->PerThreadData::autoFlushICache() == this);
 
     if (!inhibit_ && start_)
-        JSC::ExecutableAllocator::cacheFlush((void *)start_, size_t(stop_ - start_));
+        ExecutableAllocator::cacheFlush((void *)start_, size_t(stop_ - start_));
 
     IonSpewCont(IonSpew_CacheFlush, "%s%s>", name_, start_ ? "" : " U");
     IonSpewFin(IonSpew_CacheFlush);

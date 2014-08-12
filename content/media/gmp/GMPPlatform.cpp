@@ -4,13 +4,23 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "GMPPlatform.h"
+#include "GMPTimerChild.h"
 #include "mozilla/Monitor.h"
 #include "nsAutoPtr.h"
+#include "GMPChild.h"
+#include <ctime>
 
 namespace mozilla {
 namespace gmp {
 
 static MessageLoop* sMainLoop = nullptr;
+static GMPChild* sChild = nullptr;
+
+static bool
+IsOnChildMainThread()
+{
+  return sMainLoop && sMainLoop == MessageLoop::current();
+}
 
 // We just need a refcounted wrapper for GMPTask objects.
 class Runnable MOZ_FINAL
@@ -60,7 +70,7 @@ public:
     // 1) Nobody should be blocking the main thread.
     // 2) This prevents deadlocks when doing sync calls to main which if the
     //    main thread tries to do a sync call back to the calling thread.
-    MOZ_ASSERT(MessageLoop::current() != sMainLoop);
+    MOZ_ASSERT(!IsOnChildMainThread());
 
     mMessageLoop->PostTask(FROM_HERE, NewRunnableMethod(this, &SyncRunnable::Run));
     MonitorAutoLock lock(mMonitor);
@@ -118,7 +128,7 @@ RunOnMainThread(GMPTask* aTask)
 GMPErr
 SyncRunOnMainThread(GMPTask* aTask)
 {
-  if (!aTask || !sMainLoop || sMainLoop == MessageLoop::current()) {
+  if (!aTask || !sMainLoop || IsOnChildMainThread()) {
     return GMPGenericErr;
   }
 
@@ -141,11 +151,32 @@ CreateMutex(GMPMutex** aMutex)
   return GMPNoErr;
 }
 
+GMPErr
+SetTimerOnMainThread(GMPTask* aTask, int64_t aTimeoutMS)
+{
+  if (!aTask || !sMainLoop || !IsOnChildMainThread()) {
+    return GMPGenericErr;
+  }
+  GMPTimerChild* timers = sChild->GetGMPTimers();
+  NS_ENSURE_TRUE(timers, GMPGenericErr);
+  return timers->SetTimer(aTask, aTimeoutMS);
+}
+
+GMPErr
+GetClock(GMPTimestamp* aOutTime)
+{
+  *aOutTime = time(0) * 1000;
+  return GMPNoErr;
+}
+
 void
-InitPlatformAPI(GMPPlatformAPI& aPlatformAPI)
+InitPlatformAPI(GMPPlatformAPI& aPlatformAPI, GMPChild* aChild)
 {
   if (!sMainLoop) {
     sMainLoop = MessageLoop::current();
+  }
+  if (!sChild) {
+    sChild = aChild;
   }
 
   aPlatformAPI.version = 0;
@@ -154,18 +185,20 @@ InitPlatformAPI(GMPPlatformAPI& aPlatformAPI)
   aPlatformAPI.syncrunonmainthread = &SyncRunOnMainThread;
   aPlatformAPI.createmutex = &CreateMutex;
   aPlatformAPI.createrecord = nullptr;
-  aPlatformAPI.settimer = nullptr;
-  aPlatformAPI.getcurrenttime = nullptr;
+  aPlatformAPI.settimer = &SetTimerOnMainThread;
+  aPlatformAPI.getcurrenttime = &GetClock;
 }
 
 GMPThreadImpl::GMPThreadImpl()
 : mMutex("GMPThreadImpl"),
   mThread("GMPThread")
 {
+  MOZ_COUNT_CTOR(GMPThread);
 }
 
 GMPThreadImpl::~GMPThreadImpl()
 {
+  MOZ_COUNT_DTOR(GMPThread);
 }
 
 void
@@ -189,19 +222,30 @@ GMPThreadImpl::Post(GMPTask* aTask)
 void
 GMPThreadImpl::Join()
 {
-  MutexAutoLock lock(mMutex);
-  if (mThread.IsRunning()) {
-    mThread.Stop();
+  {
+    MutexAutoLock lock(mMutex);
+    if (mThread.IsRunning()) {
+      mThread.Stop();
+    }
   }
+  delete this;
 }
 
 GMPMutexImpl::GMPMutexImpl()
 : mMutex("gmp-mutex")
 {
+  MOZ_COUNT_CTOR(GMPMutexImpl);
 }
 
 GMPMutexImpl::~GMPMutexImpl()
 {
+  MOZ_COUNT_DTOR(GMPMutexImpl);
+}
+
+void
+GMPMutexImpl::Destroy()
+{
+  delete this;
 }
 
 void

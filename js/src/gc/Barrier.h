@@ -151,12 +151,40 @@
  */
 
 class JSAtom;
+struct JSCompartment;
 class JSFlatString;
 class JSLinearString;
 
+namespace JS {
+class Symbol;
+}
+
 namespace js {
 
+class ArgumentsObject;
+class ArrayBufferObject;
+class ArrayBufferViewObject;
+class SharedArrayBufferObject;
+class BaseShape;
+class DebugScopeObject;
+class GlobalObject;
+class LazyScript;
+class Nursery;
+class ObjectImpl;
 class PropertyName;
+class SavedFrame;
+class ScopeObject;
+class ScriptSourceObject;
+class Shape;
+class UnownedBaseShape;
+
+namespace types {
+struct TypeObject;
+}
+
+namespace jit {
+class JitCode;
+}
 
 #ifdef DEBUG
 bool
@@ -172,6 +200,32 @@ bool
 StringIsPermanentAtom(JSString *str);
 
 namespace gc {
+
+template <typename T> struct MapTypeToTraceKind {};
+template <> struct MapTypeToTraceKind<ArgumentsObject>  { static const JSGCTraceKind kind = JSTRACE_OBJECT; };
+template <> struct MapTypeToTraceKind<ArrayBufferObject>{ static const JSGCTraceKind kind = JSTRACE_OBJECT; };
+template <> struct MapTypeToTraceKind<ArrayBufferViewObject>{ static const JSGCTraceKind kind = JSTRACE_OBJECT; };
+template <> struct MapTypeToTraceKind<BaseShape>        { static const JSGCTraceKind kind = JSTRACE_BASE_SHAPE; };
+template <> struct MapTypeToTraceKind<DebugScopeObject> { static const JSGCTraceKind kind = JSTRACE_OBJECT; };
+template <> struct MapTypeToTraceKind<GlobalObject>     { static const JSGCTraceKind kind = JSTRACE_OBJECT; };
+template <> struct MapTypeToTraceKind<JS::Symbol>       { static const JSGCTraceKind kind = JSTRACE_SYMBOL; };
+template <> struct MapTypeToTraceKind<JSAtom>           { static const JSGCTraceKind kind = JSTRACE_STRING; };
+template <> struct MapTypeToTraceKind<JSFlatString>     { static const JSGCTraceKind kind = JSTRACE_STRING; };
+template <> struct MapTypeToTraceKind<JSFunction>       { static const JSGCTraceKind kind = JSTRACE_OBJECT; };
+template <> struct MapTypeToTraceKind<JSLinearString>   { static const JSGCTraceKind kind = JSTRACE_STRING; };
+template <> struct MapTypeToTraceKind<JSObject>         { static const JSGCTraceKind kind = JSTRACE_OBJECT; };
+template <> struct MapTypeToTraceKind<JSScript>         { static const JSGCTraceKind kind = JSTRACE_SCRIPT; };
+template <> struct MapTypeToTraceKind<JSString>         { static const JSGCTraceKind kind = JSTRACE_STRING; };
+template <> struct MapTypeToTraceKind<LazyScript>       { static const JSGCTraceKind kind = JSTRACE_LAZY_SCRIPT; };
+template <> struct MapTypeToTraceKind<ObjectImpl>       { static const JSGCTraceKind kind = JSTRACE_OBJECT; };
+template <> struct MapTypeToTraceKind<PropertyName>     { static const JSGCTraceKind kind = JSTRACE_STRING; };
+template <> struct MapTypeToTraceKind<SavedFrame>       { static const JSGCTraceKind kind = JSTRACE_OBJECT; };
+template <> struct MapTypeToTraceKind<ScopeObject>      { static const JSGCTraceKind kind = JSTRACE_OBJECT; };
+template <> struct MapTypeToTraceKind<Shape>            { static const JSGCTraceKind kind = JSTRACE_SHAPE; };
+template <> struct MapTypeToTraceKind<SharedArrayBufferObject>{ static const JSGCTraceKind kind = JSTRACE_OBJECT; };
+template <> struct MapTypeToTraceKind<UnownedBaseShape> { static const JSGCTraceKind kind = JSTRACE_BASE_SHAPE; };
+template <> struct MapTypeToTraceKind<jit::JitCode>     { static const JSGCTraceKind kind = JSTRACE_JITCODE; };
+template <> struct MapTypeToTraceKind<types::TypeObject>{ static const JSGCTraceKind kind = JSTRACE_TYPE_OBJECT; };
 
 template <typename T>
 void
@@ -206,19 +260,22 @@ class BarrieredCell : public gc::Cell
     static MOZ_ALWAYS_INLINE void readBarrier(T *thing) {
 #ifdef JSGC_INCREMENTAL
         JS_ASSERT(!CurrentThreadIsIonCompiling());
+        JS_ASSERT(!T::isNullLike(thing));
         JS::shadow::Zone *shadowZone = thing->shadowZoneFromAnyThread();
-        if (shadowZone->needsBarrier()) {
+        if (shadowZone->needsIncrementalBarrier()) {
             MOZ_ASSERT(!RuntimeFromMainThreadIsHeapMajorCollecting(shadowZone));
             T *tmp = thing;
             js::gc::MarkUnbarriered<T>(shadowZone->barrierTracer(), &tmp, "read barrier");
             JS_ASSERT(tmp == thing);
         }
+        if (JS::GCThingIsMarkedGray(thing))
+            JS::UnmarkGrayGCThingRecursively(thing, MapTypeToTraceKind<T>::kind);
 #endif
     }
 
     static MOZ_ALWAYS_INLINE bool needWriteBarrierPre(JS::Zone *zone) {
 #ifdef JSGC_INCREMENTAL
-        return JS::shadow::Zone::asShadowZone(zone)->needsBarrier();
+        return JS::shadow::Zone::asShadowZone(zone)->needsIncrementalBarrier();
 #else
         return false;
 #endif
@@ -229,11 +286,11 @@ class BarrieredCell : public gc::Cell
     static MOZ_ALWAYS_INLINE void writeBarrierPre(T *thing) {
 #ifdef JSGC_INCREMENTAL
         JS_ASSERT(!CurrentThreadIsIonCompiling());
-        if (isNullLike(thing) || !thing->shadowRuntimeFromAnyThread()->needsBarrier())
+        if (isNullLike(thing) || !thing->shadowRuntimeFromAnyThread()->needsIncrementalBarrier())
             return;
 
         JS::shadow::Zone *shadowZone = thing->shadowZoneFromAnyThread();
-        if (shadowZone->needsBarrier()) {
+        if (shadowZone->needsIncrementalBarrier()) {
             MOZ_ASSERT(!RuntimeFromMainThreadIsHeapMajorCollecting(shadowZone));
             T *tmp = thing;
             js::gc::MarkUnbarriered<T>(shadowZone->barrierTracer(), &tmp, "write barrier");
@@ -334,7 +391,7 @@ struct InternalGCMethods<Value>
     static void preBarrier(Value v) {
 #ifdef JSGC_INCREMENTAL
         JS_ASSERT(!CurrentThreadIsIonCompiling());
-        if (v.isMarkable() && shadowRuntimeFromAnyThread(v)->needsBarrier())
+        if (v.isMarkable() && shadowRuntimeFromAnyThread(v)->needsIncrementalBarrier())
             preBarrier(ZoneOfValueFromAnyThread(v), v);
 #endif
     }
@@ -345,8 +402,8 @@ struct InternalGCMethods<Value>
         if (v.isString() && StringIsPermanentAtom(v.toString()))
             return;
         JS::shadow::Zone *shadowZone = JS::shadow::Zone::asShadowZone(zone);
-        if (shadowZone->needsBarrier()) {
-            JS_ASSERT_IF(v.isMarkable(), shadowRuntimeFromMainThread(v)->needsBarrier());
+        if (shadowZone->needsIncrementalBarrier()) {
+            JS_ASSERT_IF(v.isMarkable(), shadowRuntimeFromMainThread(v)->needsIncrementalBarrier());
             Value tmp(v);
             js::gc::MarkValueUnbarriered(shadowZone->barrierTracer(), &tmp, "write barrier");
             JS_ASSERT(tmp == v);
@@ -400,14 +457,14 @@ struct InternalGCMethods<jsid>
         if (JSID_IS_STRING(id)) {
             JSString *str = JSID_TO_STRING(id);
             JS::shadow::Zone *shadowZone = ShadowZoneOfStringFromAnyThread(str);
-            if (shadowZone->needsBarrier()) {
+            if (shadowZone->needsIncrementalBarrier()) {
                 js::gc::MarkStringUnbarriered(shadowZone->barrierTracer(), &str, "write barrier");
                 JS_ASSERT(str == JSID_TO_STRING(id));
             }
         } else if (JSID_IS_SYMBOL(id)) {
             JS::Symbol *sym = JSID_TO_SYMBOL(id);
             JS::shadow::Zone *shadowZone = ShadowZoneOfSymbolFromAnyThread(sym);
-            if (shadowZone->needsBarrier()) {
+            if (shadowZone->needsIncrementalBarrier()) {
                 js::gc::MarkSymbolUnbarriered(shadowZone->barrierTracer(), &sym, "write barrier");
                 JS_ASSERT(sym == JSID_TO_SYMBOL(id));
             }
@@ -771,6 +828,10 @@ class ReadBarriered
         return value;
     }
 
+    T unbarrieredGet() const {
+        return value;
+    }
+
     operator T() const { return get(); }
 
     T &operator*() const { return *get(); }
@@ -786,6 +847,7 @@ class ArrayBufferObject;
 class NestedScopeObject;
 class DebugScopeObject;
 class GlobalObject;
+class ScriptSourceObject;
 class Shape;
 class BaseShape;
 class UnownedBaseShape;
@@ -794,7 +856,7 @@ class JitCode;
 }
 namespace types {
 struct TypeObject;
-struct TypeObjectAddendum;
+struct TypeNewScript;
 }
 
 typedef PreBarriered<JSObject*> PreBarrieredObject;
@@ -820,7 +882,7 @@ typedef HeapPtr<Shape*> HeapPtrShape;
 typedef HeapPtr<UnownedBaseShape*> HeapPtrUnownedBaseShape;
 typedef HeapPtr<jit::JitCode*> HeapPtrJitCode;
 typedef HeapPtr<types::TypeObject*> HeapPtrTypeObject;
-typedef HeapPtr<types::TypeObjectAddendum*> HeapPtrTypeObjectAddendum;
+typedef HeapPtr<types::TypeNewScript*> HeapPtrTypeNewScript;
 
 typedef PreBarriered<Value> PreBarrieredValue;
 typedef RelocatablePtr<Value> RelocatableValue;

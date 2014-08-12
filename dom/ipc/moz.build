@@ -6,7 +6,6 @@
 
 EXPORTS += [
     'nsICachedFileDescriptorListener.h',
-    'PCOMContentPermissionRequestChild.h',
 ]
 
 EXPORTS.mozilla.dom.ipc += [
@@ -147,3 +146,5 @@ JAR_MANIFESTS += ['jar.mn']
 
 MOCHITEST_CHROME_MANIFESTS += ['tests/chrome.ini']
 MOCHITEST_MANIFESTS += ['tests/mochitest.ini']
+
+CXXFLAGS += CONFIG['TK_CFLAGS']

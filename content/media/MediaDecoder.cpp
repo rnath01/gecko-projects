@@ -560,21 +560,27 @@ nsresult MediaDecoder::InitializeStateMachine(MediaDecoder* aCloneDonor)
     DECODER_LOG(PR_LOG_WARNING, "Failed to init state machine!");
     return NS_ERROR_FAILURE;
   }
-  {
-    ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
-    mDecoderStateMachine->SetDuration(mDuration);
-    mDecoderStateMachine->SetVolume(mInitialVolume);
-    mDecoderStateMachine->SetAudioCaptured(mInitialAudioCaptured);
-    SetPlaybackRate(mInitialPlaybackRate);
-    mDecoderStateMachine->SetPreservesPitch(mInitialPreservesPitch);
-    if (mMinimizePreroll) {
-      mDecoderStateMachine->SetMinimizePrerollUntilPlaybackStarts();
-    }
-  }
+
+  // If some parameters got set before the state machine got created,
+  // set them now
+  SetStateMachineParameters();
 
   ChangeState(PLAY_STATE_LOADING);
 
   return ScheduleStateMachineThread();
+}
+
+void MediaDecoder::SetStateMachineParameters()
+{
+  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
+  mDecoderStateMachine->SetDuration(mDuration);
+  mDecoderStateMachine->SetVolume(mInitialVolume);
+  mDecoderStateMachine->SetAudioCaptured(mInitialAudioCaptured);
+  SetPlaybackRate(mInitialPlaybackRate);
+  mDecoderStateMachine->SetPreservesPitch(mInitialPreservesPitch);
+  if (mMinimizePreroll) {
+    mDecoderStateMachine->SetMinimizePrerollUntilPlaybackStarts();
+  }
 }
 
 void MediaDecoder::SetMinimizePrerollUntilPlaybackStarts()
@@ -1659,6 +1665,27 @@ bool MediaDecoder::CanPlayThrough()
   return stats.mTotalBytes == stats.mDownloadPosition ||
          stats.mDownloadPosition > stats.mPlaybackPosition + readAheadMargin;
 }
+
+#ifdef MOZ_EME
+nsresult
+MediaDecoder::SetCDMProxy(CDMProxy* aProxy)
+{
+  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
+  MOZ_ASSERT(NS_IsMainThread());
+  mProxy = aProxy;
+  // Awaken any readers waiting for the proxy.
+  NotifyWaitingForResourcesStatusChanged();
+  return NS_OK;
+}
+
+CDMProxy*
+MediaDecoder::GetCDMProxy()
+{
+  GetReentrantMonitor().AssertCurrentThreadIn();
+  MOZ_ASSERT(OnDecodeThread() || NS_IsMainThread());
+  return mProxy;
+}
+#endif
 
 #ifdef MOZ_RAW
 bool

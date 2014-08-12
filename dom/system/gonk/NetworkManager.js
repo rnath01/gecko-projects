@@ -10,6 +10,7 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/systemlibs.js");
+Cu.import("resource://gre/modules/Promise.jsm");
 
 const NETWORKMANAGER_CONTRACTID = "@mozilla.org/network/manager;1";
 const NETWORKMANAGER_CID =
@@ -33,7 +34,6 @@ XPCOMUtils.defineLazyServiceGetter(this, "gNetworkService",
                                    "@mozilla.org/network/service;1",
                                    "nsINetworkService");
 
-const TOPIC_INTERFACE_STATE_CHANGED  = "network-interface-state-changed";
 const TOPIC_INTERFACE_REGISTERED     = "network-interface-registered";
 const TOPIC_INTERFACE_UNREGISTERED   = "network-interface-unregistered";
 const TOPIC_ACTIVE_CHANGED           = "network-active-changed";
@@ -136,7 +136,6 @@ function defineLazyRegExp(obj, name, pattern) {
  */
 function NetworkManager() {
   this.networkInterfaces = {};
-  Services.obs.addObserver(this, TOPIC_INTERFACE_STATE_CHANGED, true);
   Services.obs.addObserver(this, TOPIC_XPCOM_SHUTDOWN, false);
   Services.obs.addObserver(this, TOPIC_MOZSETTINGS_CHANGED, false);
 
@@ -216,92 +215,6 @@ NetworkManager.prototype = {
 
   observe: function(subject, topic, data) {
     switch (topic) {
-      case TOPIC_INTERFACE_STATE_CHANGED:
-        let network = subject.QueryInterface(Ci.nsINetworkInterface);
-        debug("Network " + network.type + "/" + network.name +
-              " changed state to " + network.state);
-        switch (network.state) {
-          case Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED:
-#ifdef MOZ_B2G_RIL
-            // Add host route for data calls
-            if (this.isNetworkTypeMobile(network.type)) {
-              gNetworkService.removeHostRoutes(network.name);
-              gNetworkService.addHostRoute(network);
-            }
-            // Dun type is a special case where we add the default route to a
-            // secondary table.
-            if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_DUN) {
-              this.setSecondaryDefaultRoute(network);
-            }
-#endif
-            // Remove pre-created default route and let setAndConfigureActive()
-            // to set default route only on preferred network
-            gNetworkService.removeDefaultRoute(network);
-            this.setAndConfigureActive();
-#ifdef MOZ_B2G_RIL
-            // Resolve and add extra host route. For example, mms proxy or mmsc.
-            // IMPORTANT: The offline state of DNSService will be set implicitly in
-            //            setAndConfigureActive() by modifying Services.io.offline.
-            //            Always setExtraHostRoute() after setAndConfigureActive().
-            this.setExtraHostRoute(network);
-
-            // Update data connection when Wifi connected/disconnected
-            if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_WIFI) {
-              for (let i = 0; i < this.mRil.numRadioInterfaces; i++) {
-                this.mRil.getRadioInterface(i).updateRILNetworkInterface();
-              }
-            }
-#endif
-
-            this.onConnectionChanged(network);
-
-            // Probing the public network accessibility after routing table is ready
-            CaptivePortalDetectionHelper
-              .notify(CaptivePortalDetectionHelper.EVENT_CONNECT, this.active);
-            break;
-          case Ci.nsINetworkInterface.NETWORK_STATE_DISCONNECTED:
-#ifdef MOZ_B2G_RIL
-            // Remove host route for data calls
-            if (this.isNetworkTypeMobile(network.type)) {
-              gNetworkService.removeHostRoute(network);
-            }
-            // Remove extra host route. For example, mms proxy or mmsc.
-            this.removeExtraHostRoute(network);
-            // Remove secondary default route for dun.
-            if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_DUN) {
-              this.removeSecondaryDefaultRoute(network);
-            }
-#endif
-            // Remove routing table in /proc/net/route
-            if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_WIFI) {
-              gNetworkService.resetRoutingTable(network);
-#ifdef MOZ_B2G_RIL
-            } else if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE) {
-              gNetworkService.removeDefaultRoute(network);
-#endif
-            }
-
-            // Abort ongoing captive portal detection on the wifi interface
-            CaptivePortalDetectionHelper
-              .notify(CaptivePortalDetectionHelper.EVENT_DISCONNECT, network);
-            this.setAndConfigureActive();
-#ifdef MOZ_B2G_RIL
-            // Update data connection when Wifi connected/disconnected
-            if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_WIFI) {
-              for (let i = 0; i < this.mRil.numRadioInterfaces; i++) {
-                this.mRil.getRadioInterface(i).updateRILNetworkInterface();
-              }
-            }
-#endif
-            break;
-        }
-#ifdef MOZ_B2G_RIL
-        // Notify outer modules like MmsService to start the transaction after
-        // the configuration of the network interface is done.
-        Services.obs.notifyObservers(network, TOPIC_CONNECTION_STATE_CHANGED,
-                                     this.convertConnectionType(network));
-#endif
-        break;
       case TOPIC_MOZSETTINGS_CHANGED:
         let setting = JSON.parse(data);
         this.handle(setting.key, setting.value);
@@ -314,7 +227,6 @@ NetworkManager.prototype = {
       case TOPIC_XPCOM_SHUTDOWN:
         Services.obs.removeObserver(this, TOPIC_XPCOM_SHUTDOWN);
         Services.obs.removeObserver(this, TOPIC_MOZSETTINGS_CHANGED);
-        Services.obs.removeObserver(this, TOPIC_INTERFACE_STATE_CHANGED);
 #ifdef MOZ_B2G_RIL
         this.dunConnectTimer.cancel();
         this.dunRetryTimer.cancel();
@@ -397,6 +309,101 @@ NetworkManager.prototype = {
     debug("Network '" + networkId + "' registered.");
   },
 
+  updateNetworkInterface: function(network) {
+    if (!(network instanceof Ci.nsINetworkInterface)) {
+      throw Components.Exception("Argument must be nsINetworkInterface.",
+                                 Cr.NS_ERROR_INVALID_ARG);
+    }
+    let networkId = this.getNetworkId(network);
+    if (!(networkId in this.networkInterfaces)) {
+      throw Components.Exception("No network with that type registered.",
+                                 Cr.NS_ERROR_INVALID_ARG);
+    }
+    debug("Network " + network.type + "/" + network.name +
+          " changed state to " + network.state);
+    switch (network.state) {
+      case Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED:
+#ifdef MOZ_B2G_RIL
+        // Add host route for data calls
+        if (this.isNetworkTypeMobile(network.type)) {
+          gNetworkService.removeHostRoutes(network.name);
+          this.setHostRoutes(network);
+        }
+        // Dun type is a special case where we add the default route to a
+        // secondary table.
+        if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_DUN) {
+          this.setSecondaryDefaultRoute(network);
+        }
+#endif
+        // Remove pre-created default route and let setAndConfigureActive()
+        // to set default route only on preferred network
+        gNetworkService.removeDefaultRoute(network);
+        this.setAndConfigureActive();
+#ifdef MOZ_B2G_RIL
+        // Resolve and add extra host route. For example, mms proxy or mmsc.
+        // IMPORTANT: The offline state of DNSService will be set implicitly in
+        //            setAndConfigureActive() by modifying Services.io.offline.
+        //            Always setExtraHostRoute() after setAndConfigureActive().
+        this.setExtraHostRoute(network);
+
+        // Update data connection when Wifi connected/disconnected
+        if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_WIFI) {
+          for (let i = 0; i < this.mRil.numRadioInterfaces; i++) {
+            this.mRil.getRadioInterface(i).updateRILNetworkInterface();
+          }
+        }
+#endif
+
+        this.onConnectionChanged(network);
+
+        // Probing the public network accessibility after routing table is ready
+        CaptivePortalDetectionHelper
+          .notify(CaptivePortalDetectionHelper.EVENT_CONNECT, this.active);
+        break;
+      case Ci.nsINetworkInterface.NETWORK_STATE_DISCONNECTED:
+#ifdef MOZ_B2G_RIL
+        // Remove host route for data calls
+        if (this.isNetworkTypeMobile(network.type)) {
+          this.removeHostRoutes(network);
+        }
+        // Remove extra host route. For example, mms proxy or mmsc.
+        this.removeExtraHostRoute(network);
+        // Remove secondary default route for dun.
+        if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_DUN) {
+          this.removeSecondaryDefaultRoute(network);
+        }
+#endif
+        // Remove routing table in /proc/net/route
+        if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_WIFI) {
+          gNetworkService.resetRoutingTable(network);
+#ifdef MOZ_B2G_RIL
+        } else if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE) {
+          gNetworkService.removeDefaultRoute(network);
+#endif
+        }
+
+        // Abort ongoing captive portal detection on the wifi interface
+        CaptivePortalDetectionHelper
+          .notify(CaptivePortalDetectionHelper.EVENT_DISCONNECT, network);
+        this.setAndConfigureActive();
+#ifdef MOZ_B2G_RIL
+        // Update data connection when Wifi connected/disconnected
+        if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_WIFI) {
+          for (let i = 0; i < this.mRil.numRadioInterfaces; i++) {
+            this.mRil.getRadioInterface(i).updateRILNetworkInterface();
+          }
+        }
+#endif
+        break;
+    }
+#ifdef MOZ_B2G_RIL
+    // Notify outer modules like MmsService to start the transaction after
+    // the configuration of the network interface is done.
+    Services.obs.notifyObservers(network, TOPIC_CONNECTION_STATE_CHANGED,
+                                 this.convertConnectionType(network));
+#endif
+  },
+
   unregisterNetworkInterface: function(network) {
     if (!(network instanceof Ci.nsINetworkInterface)) {
       throw Components.Exception("Argument must be nsINetworkInterface.",
@@ -461,60 +468,129 @@ NetworkManager.prototype = {
             this.isNetworkTypeSecondaryMobile(type));
   },
 
-  setExtraHostRoute: function(network) {
-    if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_MMS) {
-      if (!(network instanceof Ci.nsIRilNetworkInterface)) {
-        debug("Network for MMS must be an instance of nsIRilNetworkInterface");
-        return;
+  setHostRoutes: function(network) {
+    let hosts = network.getDnses().concat(network.httpProxyHost);
+    let gateways = network.getGateways();
+    let promises = [];
+
+    for (let i = 0; i < hosts.length; i++) {
+      let host = hosts[i];
+      let gateway = this.selectGateway(gateways, host);
+      if (gateway && host) {
+        promises.push(gNetworkService.addHostRoute(network.name, gateway, host));
       }
-
-      network = network.QueryInterface(Ci.nsIRilNetworkInterface);
-
-      debug("Adding mmsproxy and/or mmsc route for " + network.name);
-
-      let hostToResolve = network.mmsProxy;
-      // Workaround an xpconnect issue with undefined string objects.
-      // See bug 808220
-      if (!hostToResolve || hostToResolve === "undefined") {
-        hostToResolve = network.mmsc;
-      }
-
-      let mmsHosts = this.resolveHostname([hostToResolve]);
-      if (mmsHosts.length == 0) {
-        debug("No valid hostnames can be added. Stop adding host route.");
-        return;
-      }
-
-      gNetworkService.addHostRouteWithResolve(network, mmsHosts);
     }
+
+    return Promise.all(promises);
+  },
+
+  removeHostRoutes: function(network) {
+    let hosts = network.getDnses().concat(network.httpProxyHost);
+    let gateways = network.getGateways();
+    let promises = [];
+
+    for (let i = 0; i < hosts.length; i++) {
+      let host = hosts[i];
+      let gateway = this.selectGateway(gateways, host);
+      if (gateway && host) {
+        promises.push(gNetworkService.removeHostRoute(network.name, gateway, host));
+      }
+    }
+
+    return Promise.all(promises);
+  },
+
+  selectGateway: function(gateways, host) {
+    for (let i = 0; i < gateways.length; i++) {
+      let gateway = gateways[i];
+      if (gateway.match(this.REGEXP_IPV4) && host.match(this.REGEXP_IPV4) ||
+          gateway.indexOf(":") != -1 && host.indexOf(":") != -1) {
+        return gateway;
+      }
+    }
+    return null;
+  },
+
+  setExtraHostRoute: function(network) {
+    if (network.type != Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_MMS) {
+      return Promise.resolve();
+    }
+    if (!(network instanceof Ci.nsIRilNetworkInterface)) {
+      let errorMsg = "Network for MMS must be an instance of " +
+                     "nsIRilNetworkInterface";
+      debug(errorMsg);
+      return Promise.reject(errorMsg);
+    }
+
+    network = network.QueryInterface(Ci.nsIRilNetworkInterface);
+
+    debug("Adding mmsproxy and/or mmsc route for " + network.name);
+
+    let hostToResolve = network.mmsProxy;
+    // Workaround an xpconnect issue with undefined string objects.
+    // See bug 808220
+    if (!hostToResolve || hostToResolve === "undefined") {
+      hostToResolve = network.mmsc;
+    }
+
+    let mmsHosts = this.resolveHostname([hostToResolve]);
+    if (mmsHosts.length == 0) {
+      let errorMsg = "No valid hostnames can be added. Stop adding host route.";
+      debug(errorMsg);
+      return Promise.reject(errorMsg);
+    }
+
+    let gateways = network.getGateways();
+    let promises = [];
+    for (let i = 0; i < mmsHosts.length; i++) {
+      let gateway = this.selectGateway(gateways, mmsHosts[i]);
+      if (gateway) {
+        promises.push(gNetworkService.addHostRoute(network.name, gateway,
+                                                   mmsHosts[i]));
+      }
+    }
+    return Promise.all(promises);
   },
 
   removeExtraHostRoute: function(network) {
-    if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_MMS) {
-      if (!(network instanceof Ci.nsIRilNetworkInterface)) {
-        debug("Network for MMS must be an instance of nsIRilNetworkInterface");
-        return;
-      }
-
-      network = network.QueryInterface(Ci.nsIRilNetworkInterface);
-
-      debug("Removing mmsproxy and/or mmsc route for " + network.name);
-
-      let hostToResolve = network.mmsProxy;
-      // Workaround an xpconnect issue with undefined string objects.
-      // See bug 808220
-      if (!hostToResolve || hostToResolve === "undefined") {
-        hostToResolve = network.mmsc;
-      }
-
-      let mmsHosts = this.resolveHostname([hostToResolve]);
-      if (mmsHosts.length == 0) {
-        debug("No valid hostnames can be removed. Stop removing host route.");
-        return;
-      }
-
-      gNetworkService.removeHostRouteWithResolve(network, mmsHosts);
+    if (network.type != Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_MMS) {
+      return Promise.resolve();
     }
+    if (!(network instanceof Ci.nsIRilNetworkInterface)) {
+      let errorMsg = "Network for MMS must be an instance of " +
+                     "nsIRilNetworkInterface";
+      debug(errorMsg);
+      return Promise.reject(errorMsg);
+    }
+
+    network = network.QueryInterface(Ci.nsIRilNetworkInterface);
+
+    debug("Removing mmsproxy and/or mmsc route for " + network.name);
+
+    let hostToResolve = network.mmsProxy;
+    // Workaround an xpconnect issue with undefined string objects.
+    // See bug 808220
+    if (!hostToResolve || hostToResolve === "undefined") {
+      hostToResolve = network.mmsc;
+    }
+
+    let mmsHosts = this.resolveHostname([hostToResolve]);
+    if (mmsHosts.length == 0) {
+      let errorMsg = "No valid hostnames can be removed. Stop removing host route.";
+      debug(errorMsg);
+      return Promise.reject(errorMsg);
+    }
+
+    let gateways = network.getGateways();
+    let promises = [];
+    for (let i = 0; i < mmsHosts.length; i++) {
+      let gateway = this.selectGateway(gateways, mmsHosts[i]);
+      if (gateway) {
+        promises.push(gNetworkService.removeHostRoute(network.name, gateway,
+                                                      mmsHosts[i]));
+      }
+    }
+    return Promise.all(promises);
   },
 
   setSecondaryDefaultRoute: function(network) {
