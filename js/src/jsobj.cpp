@@ -1686,7 +1686,7 @@ static inline JSObject *
 CreateThisForFunctionWithType(JSContext *cx, HandleTypeObject type, JSObject *parent,
                               NewObjectKind newKind)
 {
-    if (type->hasNewScript()) {
+    if (type->newScript()) {
         /*
          * Make an object with the type's associated finalize kind and shape,
          * which reflects any properties that will definitely be added to the
@@ -2009,18 +2009,14 @@ js::DeepCloneObjectLiteral(JSContext *cx, HandleObject obj, NewObjectKind newKin
         clone->setSlot(i, v);
     }
 
-    if (obj->getClass() == &ArrayObject::class_)
+    if (obj->hasSingletonType()) {
+        if (!JSObject::setSingletonType(cx, clone))
+            return nullptr;
+    } else if (obj->getClass() == &ArrayObject::class_) {
         FixArrayType(cx, clone);
-    else
+    } else {
         FixObjectType(cx, clone);
-
-#ifdef DEBUG
-    Rooted<TypeObject*> typeObj(cx, obj->getType(cx));
-    Rooted<TypeObject*> cloneTypeObj(cx, clone->getType(cx));
-    if (!typeObj || !cloneTypeObj)
-        return nullptr;
-    JS_ASSERT(typeObj == cloneTypeObj);
-#endif
+    }
 
     return clone;
 }
@@ -2165,7 +2161,7 @@ js::XDRObjectLiteral(XDRState<mode> *xdr, MutableHandleObject obj)
                 else if (JSID_IS_ATOM(id))
                     idType = JSID_TYPE_STRING;
                 else
-                    MOZ_CRASH("Object property is not yet supported by XDR.");
+                    MOZ_CRASH("Symbol property is not yet supported by XDR.");
 
                 tmpValue = obj->getSlot(i);
             }
@@ -2203,11 +2199,22 @@ js::XDRObjectLiteral(XDRState<mode> *xdr, MutableHandleObject obj)
         JS_ASSERT_IF(mode == XDR_DECODE, !obj->inDictionaryMode());
     }
 
+    // Fix up types, distinguishing singleton-typed objects.
+    uint32_t isSingletonTyped;
+    if (mode == XDR_ENCODE)
+        isSingletonTyped = obj->hasSingletonType() ? 1 : 0;
+    if (!xdr->codeUint32(&isSingletonTyped))
+        return false;
+
     if (mode == XDR_DECODE) {
-        if (isArray)
+        if (isSingletonTyped) {
+            if (!JSObject::setSingletonType(cx, obj))
+                return false;
+        } else if (isArray) {
             FixArrayType(cx, obj);
-        else
+        } else {
             FixObjectType(cx, obj);
+        }
     }
 
     {
@@ -2905,7 +2912,7 @@ JSObject::growSlots(ThreadSafeContext *cx, HandleObject obj, uint32_t oldCount, 
      * type to give these objects a larger number of fixed slots when future
      * objects are constructed.
      */
-    if (!obj->hasLazyType() && !oldCount && obj->type()->hasNewScript()) {
+    if (!obj->hasLazyType() && !oldCount && obj->type()->newScript()) {
         JSObject *oldTemplate = obj->type()->newScript()->templateObject;
         gc::AllocKind kind = gc::GetGCObjectFixedSlotsKind(oldTemplate->numFixedSlots());
         uint32_t newScriptSlots = gc::GetGCKindSlots(kind);
@@ -4919,12 +4926,6 @@ js::LookupPropertyPure(JSObject *obj, jsid id, JSObject **objp, Shape **propp)
     return LookupPropertyPureInline(obj, id, objp, propp);
 }
 
-static inline bool
-IdIsLength(ThreadSafeContext *cx, jsid id)
-{
-    return JSID_IS_ATOM(id) && cx->names().length == JSID_TO_ATOM(id);
-}
-
 /*
  * A pure version of GetPropertyHelper that can be called from parallel code
  * without locking. This code path cannot GC. This variant returns false
@@ -4963,7 +4964,7 @@ js::GetPropertyPure(ThreadSafeContext *cx, JSObject *obj, jsid id, Value *vp)
     }
 
     /* Special case 'length' on Array and TypedArray. */
-    if (IdIsLength(cx, id)) {
+    if (JSID_IS_ATOM(id, cx->names().length)) {
         if (obj->is<ArrayObject>()) {
             vp->setNumber(obj->as<ArrayObject>().length());
             return true;
@@ -5636,7 +5637,9 @@ js::DefaultValue(JSContext *cx, HandleObject obj, JSType hint, MutableHandleValu
 
     RootedValue val(cx, ObjectValue(*obj));
     js_ReportValueError2(cx, JSMSG_CANT_CONVERT_TO, JSDVG_SEARCH_STACK, val, str,
-                         (hint == JSTYPE_VOID) ? "primitive type" : TypeStrings[hint]);
+                         hint == JSTYPE_VOID
+                         ? "primitive type"
+                         : hint == JSTYPE_STRING ? "string" : "number");
     return false;
 }
 
@@ -5810,6 +5813,8 @@ js_GetObjectSlotName(JSTracer *trc, char *buf, size_t bufsize)
             JS_snprintf(buf, bufsize, "%ld", (long)JSID_TO_INT(propid));
         } else if (JSID_IS_ATOM(propid)) {
             PutEscapedString(buf, bufsize, JSID_TO_ATOM(propid), 0);
+        } else if (JSID_IS_SYMBOL(propid)) {
+            JS_snprintf(buf, bufsize, "**SYMBOL KEY**");
         } else {
             JS_snprintf(buf, bufsize, "**FINALIZED ATOM KEY**");
         }

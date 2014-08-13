@@ -1323,10 +1323,13 @@ MBinaryBitwiseInstruction::foldUnnecessaryBitop()
 void
 MBinaryBitwiseInstruction::infer(BaselineInspector *, jsbytecode *)
 {
-    if (getOperand(0)->mightBeType(MIRType_Object) || getOperand(1)->mightBeType(MIRType_Object))
+    if (getOperand(0)->mightBeType(MIRType_Object) || getOperand(0)->mightBeType(MIRType_Symbol) ||
+        getOperand(1)->mightBeType(MIRType_Object) || getOperand(1)->mightBeType(MIRType_Symbol))
+    {
         specialization_ = MIRType_None;
-    else
+    } else {
         specializeAsInt32();
+    }
 }
 
 void
@@ -2348,6 +2351,20 @@ MResumePoint::New(TempAllocator &alloc, MBasicBlock *block, jsbytecode *pc, MRes
     if (!resume->init(alloc))
         return nullptr;
     resume->inherit(block);
+    return resume;
+}
+
+MResumePoint *
+MResumePoint::New(TempAllocator &alloc, MBasicBlock *block, jsbytecode *pc, MResumePoint *parent,
+                  Mode mode, const MDefinitionVector &operands)
+{
+    MResumePoint *resume = new(alloc) MResumePoint(block, pc, parent, mode);
+
+    if (!resume->operands_.init(alloc, operands.length()))
+        return nullptr;
+    for (size_t i = 0; i < operands.length(); i++)
+        resume->initOperand(i, operands[i]);
+
     return resume;
 }
 
