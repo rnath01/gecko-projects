@@ -937,13 +937,14 @@ struct JSRuntime : public JS::shadow::Runtime,
     /* Garbage collector state, used by jsgc.c. */
     js::gc::GCRuntime   gc;
 
-    /* Garbase collector state has been sucessfully initialized. */
+    /* Garbage collector state has been sucessfully initialized. */
     bool                gcInitialized;
 
     bool isHeapBusy() { return gc.isHeapBusy(); }
     bool isHeapMajorCollecting() { return gc.isHeapMajorCollecting(); }
     bool isHeapMinorCollecting() { return gc.isHeapMinorCollecting(); }
     bool isHeapCollecting() { return gc.isHeapCollecting(); }
+    bool isHeapCompacting() { return gc.isHeapCompacting(); }
 
     bool isFJMinorCollecting() { return gc.isFJMinorCollecting(); }
 
@@ -1281,7 +1282,7 @@ struct JSRuntime : public JS::shadow::Runtime,
         return liveRuntimesCount > 0;
     }
 
-    JSRuntime(JSRuntime *parentRuntime);
+    explicit JSRuntime(JSRuntime *parentRuntime);
     ~JSRuntime();
 
     bool init(uint32_t maxbytes, uint32_t maxNurseryBytes);
@@ -1648,7 +1649,7 @@ SetValueRangeToNull(Value *vec, size_t len)
 }
 
 /*
- * Allocation policy that uses JSRuntime::malloc_ and friends, so that
+ * Allocation policy that uses JSRuntime::pod_malloc and friends, so that
  * memory pressure is properly accounted for. This is suitable for
  * long-lived objects owned by the JSRuntime.
  *
@@ -1664,7 +1665,11 @@ class RuntimeAllocPolicy
 
   public:
     MOZ_IMPLICIT RuntimeAllocPolicy(JSRuntime *rt) : runtime(rt) {}
-    void *malloc_(size_t bytes) { return runtime->malloc_(bytes); }
+
+    template <typename T>
+    T *pod_malloc(size_t numElems) {
+        return runtime->pod_malloc<T>(numElems);
+    }
 
     template <typename T>
     T *pod_calloc(size_t numElems) {
@@ -1683,7 +1688,7 @@ extern const JSSecurityCallbacks NullSecurityCallbacks;
 class AutoEnterIonCompilation
 {
   public:
-    AutoEnterIonCompilation(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM) {
+    explicit AutoEnterIonCompilation(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM) {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
 
 #ifdef DEBUG

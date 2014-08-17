@@ -33,7 +33,6 @@
 #include "nsIDOMHTMLScriptElement.h"
 #include "nsIDocShell.h"
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
 #include "nsUnicharUtils.h"
 #include "nsAutoPtr.h"
 #include "nsIXPConnect.h"
@@ -1162,8 +1161,8 @@ nsScriptLoader::EvaluateScript(nsScriptLoadRequest* aRequest,
       // execution currentScript of the master should refer to this
       // script. So let's update the mCurrentScript of the ScriptLoader
       // of the master document too.
-      masterScriptUpdater.construct(master->ScriptLoader(),
-                                    aRequest->mElement);
+      masterScriptUpdater.emplace(master->ScriptLoader(),
+                                  aRequest->mElement);
     }
 
     JS::CompileOptions options(entryScript.cx());

@@ -18,6 +18,7 @@
 #include "frontend/BytecodeCompiler.h"
 #include "gc/Marking.h"
 #include "jit/BaselineJIT.h"
+#include "js/DebugAPI.h"
 #include "js/GCAPI.h"
 #include "js/Vector.h"
 #include "vm/ArgumentsObject.h"
@@ -35,6 +36,7 @@
 
 using namespace js;
 
+using JS::dbg::Builder;
 using js::frontend::IsIdentifier;
 using mozilla::ArrayLength;
 using mozilla::Maybe;
@@ -558,7 +560,7 @@ Debugger::slowPathOnLeaveFrame(JSContext *cx, AbstractFramePtr frame, bool frame
             RootedValue handler(cx, frameobj->getReservedSlot(JSSLOT_DEBUGFRAME_ONPOP_HANDLER));
 
             Maybe<AutoCompartment> ac;
-            ac.construct(cx, dbg->object);
+            ac.emplace(cx, dbg->object);
 
             RootedValue completion(cx);
             if (!dbg->newCompletionValue(cx, status, value, &completion)) {
@@ -834,7 +836,7 @@ JSTrapStatus
 Debugger::handleUncaughtExceptionHelper(Maybe<AutoCompartment> &ac,
                                         MutableHandleValue *vp, bool callHook)
 {
-    JSContext *cx = ac.ref().context()->asJSContext();
+    JSContext *cx = ac->context()->asJSContext();
     if (cx->isExceptionPending()) {
         if (callHook && uncaughtExceptionHook) {
             RootedValue exc(cx);
@@ -852,7 +854,7 @@ Debugger::handleUncaughtExceptionHelper(Maybe<AutoCompartment> &ac,
             cx->clearPendingException();
         }
     }
-    ac.destroy();
+    ac.reset();
     return JSTRAP_ERROR;
 }
 
@@ -937,12 +939,12 @@ Debugger::receiveCompletionValue(Maybe<AutoCompartment> &ac, bool ok,
                                  HandleValue val,
                                  MutableHandleValue vp)
 {
-    JSContext *cx = ac.ref().context()->asJSContext();
+    JSContext *cx = ac->context()->asJSContext();
 
     JSTrapStatus status;
     RootedValue value(cx);
     resultToCompletion(cx, ok, val, &status, &value);
-    ac.destroy();
+    ac.reset();
     return newCompletionValue(cx, status, value, vp);
 }
 
@@ -954,16 +956,16 @@ Debugger::parseResumptionValue(Maybe<AutoCompartment> &ac, bool ok, const Value 
     if (!ok)
         return handleUncaughtException(ac, vp, callHook);
     if (rv.isUndefined()) {
-        ac.destroy();
+        ac.reset();
         return JSTRAP_CONTINUE;
     }
     if (rv.isNull()) {
-        ac.destroy();
+        ac.reset();
         return JSTRAP_ERROR;
     }
 
     /* Check that rv is {return: val} or {throw: val}. */
-    JSContext *cx = ac.ref().context()->asJSContext();
+    JSContext *cx = ac->context()->asJSContext();
     Rooted<JSObject*> obj(cx);
     RootedShape shape(cx);
     RootedId returnId(cx, NameToId(cx->names().return_));
@@ -989,7 +991,7 @@ Debugger::parseResumptionValue(Maybe<AutoCompartment> &ac, bool ok, const Value 
     if (!NativeGet(cx, obj, obj, shape, &v) || !unwrapDebuggeeValue(cx, &v))
         return handleUncaughtException(ac, &v, callHook);
 
-    ac.destroy();
+    ac.reset();
     if (!cx->compartment()->wrap(cx, &v)) {
         vp.setUndefined();
         return JSTRAP_ERROR;
@@ -1022,7 +1024,7 @@ Debugger::fireDebuggerStatement(JSContext *cx, MutableHandleValue vp)
     JS_ASSERT(hook->isCallable());
 
     Maybe<AutoCompartment> ac;
-    ac.construct(cx, object);
+    ac.emplace(cx, object);
 
     ScriptFrameIter iter(cx);
 
@@ -1048,7 +1050,7 @@ Debugger::fireExceptionUnwind(JSContext *cx, MutableHandleValue vp)
     cx->clearPendingException();
 
     Maybe<AutoCompartment> ac;
-    ac.construct(cx, object);
+    ac.emplace(cx, object);
 
     JS::AutoValueArray<2> argv(cx);
     argv[0].setUndefined();
@@ -1074,7 +1076,7 @@ Debugger::fireEnterFrame(JSContext *cx, AbstractFramePtr frame, MutableHandleVal
     JS_ASSERT(hook->isCallable());
 
     Maybe<AutoCompartment> ac;
-    ac.construct(cx, object);
+    ac.emplace(cx, object);
 
     RootedValue scriptFrame(cx);
     if (!getScriptFrame(cx, frame, &scriptFrame))
@@ -1093,7 +1095,7 @@ Debugger::fireNewScript(JSContext *cx, HandleScript script)
     JS_ASSERT(hook->isCallable());
 
     Maybe<AutoCompartment> ac;
-    ac.construct(cx, object);
+    ac.emplace(cx, object);
 
     JSObject *dsobj = wrapScript(cx, script);
     if (!dsobj) {
@@ -1248,7 +1250,7 @@ Debugger::onTrap(JSContext *cx, MutableHandleValue vp)
         Debugger *dbg = bp->debugger;
         if (dbg->enabled && dbg->debuggees.lookup(scriptGlobal)) {
             Maybe<AutoCompartment> ac;
-            ac.construct(cx, dbg->object);
+            ac.emplace(cx, dbg->object);
 
             RootedValue scriptFrame(cx);
             if (!dbg->getScriptFrame(cx, iter, &scriptFrame))
@@ -1359,7 +1361,7 @@ Debugger::onSingleStep(JSContext *cx, MutableHandleValue vp)
         Debugger *dbg = Debugger::fromChildJSObject(frame);
 
         Maybe<AutoCompartment> ac;
-        ac.construct(cx, dbg->object);
+        ac.emplace(cx, dbg->object);
 
         const Value &handler = frame->getReservedSlot(JSSLOT_DEBUGFRAME_ONSTEP_HANDLER);
         RootedValue rval(cx);
@@ -1383,7 +1385,7 @@ Debugger::fireNewGlobalObject(JSContext *cx, Handle<GlobalObject *> global, Muta
     JS_ASSERT(hook->isCallable());
 
     Maybe<AutoCompartment> ac;
-    ac.construct(cx, object);
+    ac.emplace(cx, object);
 
     RootedValue wrappedGlobal(cx, ObjectValue(*global));
     if (!wrapDebuggeeValue(cx, &wrappedGlobal))
@@ -1707,7 +1709,7 @@ Debugger::trace(JSTracer *trc)
      */
     for (FrameMap::Range r = frames.all(); !r.empty(); r.popFront()) {
         RelocatablePtrObject &frameobj = r.front().value();
-        JS_ASSERT(frameobj->getPrivate());
+        JS_ASSERT(MaybeForwarded(frameobj.get())->getPrivate());
         MarkObject(trc, &frameobj, "live Debugger.Frame");
     }
 
@@ -1748,20 +1750,6 @@ Debugger::sweepAll(FreeOp *fop)
                 // infallible variant of removeDebuggeeGlobal.
                 dbg->removeDebuggeeGlobalUnderGC(fop, e.front(), nullptr, &e);
             }
-        }
-    }
-
-    for (gc::GCCompartmentGroupIter comp(rt); !comp.done(); comp.next()) {
-        /* For each debuggee being GC'd, detach it from all its debuggers. */
-        GlobalObjectSet &debuggees = comp->getDebuggees();
-        for (GlobalObjectSet::Enum e(debuggees); !e.empty(); e.popFront()) {
-            GlobalObject *global = e.front();
-            if (IsObjectAboutToBeFinalized(&global)) {
-                // See infallibility note above.
-                detachAllDebuggersFromGlobal(fop, global, &e);
-            }
-            else if (global != e.front())
-                e.rekeyFront(global);
         }
     }
 }
@@ -2253,7 +2241,7 @@ Debugger::construct(JSContext *cx, unsigned argc, Value *vp)
             return ReportObjectRequired(cx);
         JSObject *argobj = &arg.toObject();
         if (!argobj->is<CrossCompartmentWrapperObject>()) {
-            JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_CCW_REQUIRED,
+            JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEBUG_CCW_REQUIRED,
                                  "Debugger");
             return false;
         }
@@ -4389,11 +4377,11 @@ CheckThisFrame(JSContext *cx, const CallArgs &args, const char *fnname, bool che
     {                                                                          \
         AbstractFramePtr f = AbstractFramePtr::FromRaw(thisobj->getPrivate()); \
         if (f.isScriptFrameIterData()) {                                       \
-            maybeIter.construct(*(ScriptFrameIter::Data *)(f.raw()));          \
+            maybeIter.emplace(*(ScriptFrameIter::Data *)(f.raw()));            \
         } else {                                                               \
-            maybeIter.construct(cx, ScriptFrameIter::ALL_CONTEXTS,             \
-                                ScriptFrameIter::GO_THROUGH_SAVED);            \
-            ScriptFrameIter &iter = maybeIter.ref();                           \
+            maybeIter.emplace(cx, ScriptFrameIter::ALL_CONTEXTS,               \
+                              ScriptFrameIter::GO_THROUGH_SAVED);              \
+            ScriptFrameIter &iter = *maybeIter;                                \
             while (iter.isIon() || iter.abstractFramePtr() != f)               \
                 ++iter;                                                        \
             AbstractFramePtr data = iter.copyDataAsAbstractFramePtr();         \
@@ -4402,7 +4390,7 @@ CheckThisFrame(JSContext *cx, const CallArgs &args, const char *fnname, bool che
             thisobj->setPrivate(data.raw());                                   \
         }                                                                      \
     }                                                                          \
-    ScriptFrameIter &iter = maybeIter.ref()
+    ScriptFrameIter &iter = *maybeIter
 
 #define THIS_FRAME_OWNER(cx, argc, vp, fnname, args, thisobj, frame, dbg)      \
     THIS_FRAME(cx, argc, vp, fnname, args, thisobj, frame);                    \
@@ -4901,9 +4889,9 @@ DebuggerGenericEval(JSContext *cx, const char *fullMethodName, const Value &code
 
     Maybe<AutoCompartment> ac;
     if (iter)
-        ac.construct(cx, iter->scopeChain());
+        ac.emplace(cx, iter->scopeChain());
     else
-        ac.construct(cx, scope);
+        ac.emplace(cx, scope);
 
     RootedValue thisv(cx);
     Rooted<Env *> env(cx);
@@ -5398,7 +5386,7 @@ DebuggerObject_getOwnPropertyDescriptor(JSContext *cx, unsigned argc, Value *vp)
     Rooted<PropertyDescriptor> desc(cx);
     {
         Maybe<AutoCompartment> ac;
-        ac.construct(cx, obj);
+        ac.emplace(cx, obj);
 
         ErrorCopier ec(ac);
         if (!GetOwnPropertyDescriptor(cx, obj, id, &desc))
@@ -5435,7 +5423,7 @@ DebuggerObject_getOwnPropertyNames(JSContext *cx, unsigned argc, Value *vp)
     AutoIdVector keys(cx);
     {
         Maybe<AutoCompartment> ac;
-        ac.construct(cx, obj);
+        ac.emplace(cx, obj);
         ErrorCopier ec(ac);
         if (!GetPropertyNames(cx, obj, JSITER_OWNONLY | JSITER_HIDDEN, &keys))
             return false;
@@ -5488,7 +5476,7 @@ DebuggerObject_defineProperty(JSContext *cx, unsigned argc, Value *vp)
 
     {
         Maybe<AutoCompartment> ac;
-        ac.construct(cx, obj);
+        ac.emplace(cx, obj);
         if (!cx->compartment()->wrap(cx, &desc))
             return false;
 
@@ -5529,7 +5517,7 @@ DebuggerObject_defineProperties(JSContext *cx, unsigned argc, Value *vp)
 
     {
         Maybe<AutoCompartment> ac;
-        ac.construct(cx, obj);
+        ac.emplace(cx, obj);
         for (size_t i = 0; i < n; i++) {
             if (!cx->compartment()->wrap(cx, descs[i]))
                 return false;
@@ -5560,7 +5548,7 @@ DebuggerObject_deleteProperty(JSContext *cx, unsigned argc, Value *vp)
         return false;
 
     Maybe<AutoCompartment> ac;
-    ac.construct(cx, obj);
+    ac.emplace(cx, obj);
     ErrorCopier ec(ac);
 
     bool succeeded;
@@ -5578,7 +5566,7 @@ DebuggerObject_sealHelper(JSContext *cx, unsigned argc, Value *vp, SealHelperOp 
     THIS_DEBUGOBJECT_REFERENT(cx, argc, vp, name, args, obj);
 
     Maybe<AutoCompartment> ac;
-    ac.construct(cx, obj);
+    ac.emplace(cx, obj);
     ErrorCopier ec(ac);
     bool ok;
     if (op == Seal) {
@@ -5627,7 +5615,7 @@ DebuggerObject_isSealedHelper(JSContext *cx, unsigned argc, Value *vp, SealHelpe
     THIS_DEBUGOBJECT_REFERENT(cx, argc, vp, name, args, obj);
 
     Maybe<AutoCompartment> ac;
-    ac.construct(cx, obj);
+    ac.emplace(cx, obj);
     ErrorCopier ec(ac);
     bool r;
     if (op == Seal) {
@@ -5721,7 +5709,7 @@ ApplyOrCall(JSContext *cx, unsigned argc, Value *vp, ApplyOrCallMode mode)
      * (Rewrapping always takes place in the destination compartment.)
      */
     Maybe<AutoCompartment> ac;
-    ac.construct(cx, obj);
+    ac.emplace(cx, obj);
     if (!cx->compartment()->wrap(cx, &calleev) || !cx->compartment()->wrap(cx, &thisv))
         return false;
 
@@ -6127,7 +6115,7 @@ DebuggerEnv_names(JSContext *cx, unsigned argc, Value *vp)
     AutoIdVector keys(cx);
     {
         Maybe<AutoCompartment> ac;
-        ac.construct(cx, env);
+        ac.emplace(cx, env);
         ErrorCopier ec(ac);
         if (!GetPropertyNames(cx, env, JSITER_HIDDEN, &keys))
             return false;
@@ -6161,7 +6149,7 @@ DebuggerEnv_find(JSContext *cx, unsigned argc, Value *vp)
 
     {
         Maybe<AutoCompartment> ac;
-        ac.construct(cx, env);
+        ac.emplace(cx, env);
 
         /* This can trigger resolve hooks. */
         ErrorCopier ec(ac);
@@ -6192,7 +6180,7 @@ DebuggerEnv_getVariable(JSContext *cx, unsigned argc, Value *vp)
     RootedValue v(cx);
     {
         Maybe<AutoCompartment> ac;
-        ac.construct(cx, env);
+        ac.emplace(cx, env);
 
         /* This can trigger getters. */
         ErrorCopier ec(ac);
@@ -6233,7 +6221,7 @@ DebuggerEnv_setVariable(JSContext *cx, unsigned argc, Value *vp)
 
     {
         Maybe<AutoCompartment> ac;
-        ac.construct(cx, env);
+        ac.emplace(cx, env);
         if (!cx->compartment()->wrap(cx, &v))
             return false;
 
@@ -6275,6 +6263,81 @@ static const JSFunctionSpec DebuggerEnv_methods[] = {
     JS_FS_END
 };
 
+
+
+/*** JS::dbg::Builder ****************************************************************************/
+
+Builder::Builder(JSContext *cx, js::Debugger *debugger)
+  : debuggerObject(cx, debugger->toJSObject().get()),
+    debugger(debugger)
+{ }
+
+
+#if DEBUG
+void
+Builder::assertBuilt(JSObject *obj)
+{
+    // We can't use assertSameCompartment here, because that is always keyed to
+    // some JSContext's current compartment, whereas BuiltThings can be
+    // constructed and assigned to without respect to any particular context;
+    // the only constraint is that they should be in their debugger's compartment.
+    MOZ_ASSERT_IF(obj, debuggerObject->compartment() == obj->compartment());
+}
+#endif
+
+bool
+Builder::Object::definePropertyToTrusted(JSContext *cx, const char *name,
+                                         JS::MutableHandleValue trusted)
+{
+    // We should have checked for false Objects before calling this.
+    MOZ_ASSERT(value);
+
+    JSAtom *atom = Atomize(cx, name, strlen(name));
+    if (!atom)
+        return false;
+    RootedId id(cx, AtomToId(atom));
+
+    return JSObject::defineGeneric(cx, value, id, trusted);
+}
+
+bool
+Builder::Object::defineProperty(JSContext *cx, const char *name, JS::HandleValue propval_)
+{
+    AutoCompartment ac(cx, debuggerObject());
+
+    RootedValue propval(cx, propval_);
+    if (!debugger()->wrapDebuggeeValue(cx, &propval))
+        return false;
+
+    return definePropertyToTrusted(cx, name, &propval);
+}
+
+bool
+Builder::Object::defineProperty(JSContext *cx, const char *name, JS::HandleObject propval_)
+{
+    RootedValue propval(cx, ObjectOrNullValue(propval_));
+    return defineProperty(cx, name, propval);
+}
+
+bool
+Builder::Object::defineProperty(JSContext *cx, const char *name, Builder::Object &propval_)
+{
+    AutoCompartment ac(cx, debuggerObject());
+
+    RootedValue propval(cx, ObjectOrNullValue(propval_.value));
+    return definePropertyToTrusted(cx, name, &propval);
+}
+
+Builder::Object
+Builder::newObject(JSContext *cx)
+{
+    AutoCompartment ac(cx, debuggerObject);
+
+    RootedObject obj(cx, NewBuiltinClassInstance(cx, &JSObject::class_));
+
+    // If the allocation failed, this will return a false Object, as the spec promises.
+    return Object(cx, *this, obj);
+}
 
 
 /*** Glue ****************************************************************************************/

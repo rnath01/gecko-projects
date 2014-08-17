@@ -1559,29 +1559,6 @@ MBinaryArithInstruction::trySpecializeFloat32(TempAllocator &alloc)
     setResultType(MIRType_Float32);
 }
 
-MDefinition *
-MMinMax::foldsTo(TempAllocator &alloc)
-{
-    if (!lhs()->isConstant() && !rhs()->isConstant())
-        return this;
-
-    MDefinition *operand = lhs()->isConstant() ? rhs() : lhs();
-    MConstant *constant = lhs()->isConstant() ? lhs()->toConstant() : rhs()->toConstant();
-
-    if (operand->isToDouble() && operand->getOperand(0)->type() == MIRType_Int32) {
-        const js::Value &val = constant->value();
-
-        // min(int32, d >= INT32_MAX) = int32
-        if (val.isDouble() && val.toDouble() >= INT32_MAX && !isMax())
-            return operand;
-
-        // max(int32, d <= INT32_MIN) = int32
-        if (val.isDouble() && val.toDouble() <= INT32_MIN && isMax())
-            return operand;
-    }
-    return this;
-}
-
 bool
 MAbs::fallible() const
 {
@@ -2674,65 +2651,6 @@ MCompare::evaluateConstantOperands(bool *result)
 
     MDefinition *left = getOperand(0);
     MDefinition *right = getOperand(1);
-
-    if (compareType() == Compare_Double) {
-        // Optimize "MCompare MConstant (MToDouble SomethingInInt32Range).
-        // In most cases the MToDouble was added, because the constant is
-        // a double. e.g. v < 9007199254740991,
-        // where v is an int32 so the result is always true.
-        if (!lhs()->isConstant() && !rhs()->isConstant())
-            return false;
-
-        MDefinition *operand = left->isConstant() ? right : left;
-        MConstant *constant = left->isConstant() ? left->toConstant() : right->toConstant();
-        JS_ASSERT(constant->value().isDouble());
-        double d = constant->value().toDouble();
-
-        if (operand->isToDouble() && operand->getOperand(0)->type() == MIRType_Int32) {
-            switch (jsop_) {
-              case JSOP_LT:
-                if (d > INT32_MAX || d < INT32_MIN) {
-                    *result = !((constant == lhs()) ^ (d < INT32_MIN));
-                    return true;
-                }
-                break;
-              case JSOP_LE:
-                if (d >= INT32_MAX || d <= INT32_MIN) {
-                    *result = !((constant == lhs()) ^ (d <= INT32_MIN));
-                    return true;
-                }
-                break;
-              case JSOP_GT:
-                if (d > INT32_MAX || d < INT32_MIN) {
-                    *result = !((constant == rhs()) ^ (d < INT32_MIN));
-                    return true;
-                }
-                break;
-              case JSOP_GE:
-                if (d >= INT32_MAX || d <= INT32_MIN) {
-                    *result = !((constant == rhs()) ^ (d <= INT32_MIN));
-                    return true;
-                }
-                break;
-              case JSOP_STRICTEQ: // Fall through.
-              case JSOP_EQ:
-                if (d > INT32_MAX || d < INT32_MIN) {
-                    *result = false;
-                    return true;
-                }
-                break;
-              case JSOP_STRICTNE: // Fall through.
-              case JSOP_NE:
-                if (d > INT32_MAX || d < INT32_MIN) {
-                    *result = true;
-                    return true;
-                }
-                break;
-              default:
-                MOZ_ASSUME_UNREACHABLE("Unexpected op.");
-            }
-        }
-    }
 
     if (!left->isConstant() || !right->isConstant())
         return false;
@@ -3844,20 +3762,20 @@ TryAddTypeBarrierForWrite(TempAllocator &alloc, types::CompilerConstraintList *c
         // potentially be removed.
         property.freeze(constraints);
 
-        if (aggregateProperty.empty()) {
-            aggregateProperty.construct(property);
+        if (!aggregateProperty) {
+            aggregateProperty.emplace(property);
         } else {
-            if (!aggregateProperty.ref().maybeTypes()->isSubset(property.maybeTypes()) ||
-                !property.maybeTypes()->isSubset(aggregateProperty.ref().maybeTypes()))
+            if (!aggregateProperty->maybeTypes()->isSubset(property.maybeTypes()) ||
+                !property.maybeTypes()->isSubset(aggregateProperty->maybeTypes()))
             {
                 return false;
             }
         }
     }
 
-    JS_ASSERT(!aggregateProperty.empty());
+    JS_ASSERT(aggregateProperty);
 
-    MIRType propertyType = aggregateProperty.ref().knownMIRType(constraints);
+    MIRType propertyType = aggregateProperty->knownMIRType(constraints);
     switch (propertyType) {
       case MIRType_Boolean:
       case MIRType_Int32:
@@ -3883,7 +3801,7 @@ TryAddTypeBarrierForWrite(TempAllocator &alloc, types::CompilerConstraintList *c
     if ((*pvalue)->type() != MIRType_Value)
         return false;
 
-    types::TemporaryTypeSet *types = aggregateProperty.ref().maybeTypes()->clone(alloc.lifoAlloc());
+    types::TemporaryTypeSet *types = aggregateProperty->maybeTypes()->clone(alloc.lifoAlloc());
     if (!types)
         return false;
 

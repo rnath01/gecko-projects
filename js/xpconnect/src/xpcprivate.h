@@ -85,6 +85,8 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/TimeStamp.h"
 
+#include "mozilla/dom/ScriptSettings.h"
+
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -157,7 +159,6 @@
 
 #include "SandboxPrivate.h"
 #include "BackstagePass.h"
-#include "nsCxPusher.h"
 #include "nsAXPCNativeCallContext.h"
 
 #ifdef XP_WIN
@@ -396,9 +397,9 @@ public:
     StringType* Create()
     {
         for (uint32_t i = 0; i < ArrayLength(mStrings); ++i) {
-            if (mStrings[i].empty()) {
-                mStrings[i].construct();
-                return mStrings[i].addr();
+            if (!mStrings[i]) {
+                mStrings[i].emplace();
+                return mStrings[i].ptr();
             }
         }
 
@@ -409,11 +410,10 @@ public:
     void Destroy(StringType *string)
     {
         for (uint32_t i = 0; i < ArrayLength(mStrings); ++i) {
-            if (!mStrings[i].empty() &&
-                mStrings[i].addr() == string) {
+            if (mStrings[i] && mStrings[i].ptr() == string) {
                 // One of our internal strings is no longer in use, mark
                 // it as such and free its data.
-                mStrings[i].destroy();
+                mStrings[i].reset();
                 return;
             }
         }
@@ -427,7 +427,7 @@ public:
     {
 #ifdef DEBUG
         for (uint32_t i = 0; i < ArrayLength(mStrings); ++i) {
-            MOZ_ASSERT(mStrings[i].empty(), "Short lived string still in use");
+            MOZ_ASSERT(!mStrings[i], "Short lived string still in use");
         }
 #endif
     }
@@ -2834,6 +2834,14 @@ void PopJSContextNoScriptContext();
 
 } /* namespace xpc */
 
+namespace mozilla {
+namespace dom {
+namespace danger {
+class AutoCxPusher;
+}
+}
+}
+
 class XPCJSContextStack
 {
 public:
@@ -2864,7 +2872,7 @@ public:
     { return &mStack; }
 
 private:
-    friend class mozilla::AutoCxPusher;
+    friend class mozilla::dom::danger::AutoCxPusher;
     friend bool xpc::PushJSContextNoScriptContext(JSContext *aCx);;
     friend void xpc::PopJSContextNoScriptContext();
 
