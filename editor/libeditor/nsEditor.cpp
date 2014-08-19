@@ -147,6 +147,7 @@ nsEditor::nsEditor()
 ,  mDidPreDestroy(false)
 ,  mDidPostCreate(false)
 ,  mDispatchInputEvent(true)
+,  mIsInEditAction(false)
 {
 }
 
@@ -1832,6 +1833,7 @@ nsEditor::NotifyEditorObservers(NotificationForEditorObservers aNotification)
 {
   switch (aNotification) {
     case eNotifyEditorObserversOfEnd:
+      mIsInEditAction = false;
       for (int32_t i = 0; i < mEditorObservers.Count(); i++) {
         mEditorObservers[i]->EditAction();
       }
@@ -1843,11 +1845,13 @@ nsEditor::NotifyEditorObservers(NotificationForEditorObservers aNotification)
       FireInputEvent();
       break;
     case eNotifyEditorObserversOfBefore:
+      mIsInEditAction = true;
       for (int32_t i = 0; i < mEditorObservers.Count(); i++) {
         mEditorObservers[i]->BeforeEditAction();
       }
       break;
     case eNotifyEditorObserversOfCancel:
+      mIsInEditAction = false;
       for (int32_t i = 0; i < mEditorObservers.Count(); i++) {
         mEditorObservers[i]->CancelEditAction();
       }
@@ -4755,8 +4759,8 @@ nsresult
 nsEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
 {
   // NOTE: When you change this method, you should also change:
-  //   * editor/libeditor/text/tests/test_texteditor_keyevent_handling.html
-  //   * editor/libeditor/html/tests/test_htmleditor_keyevent_handling.html
+  //   * editor/libeditor/tests/test_texteditor_keyevent_handling.html
+  //   * editor/libeditor/tests/test_htmleditor_keyevent_handling.html
   //
   // And also when you add new key handling, you need to change the subclass's
   // HandleKeyPressEvent()'s switch statement.
@@ -5271,5 +5275,13 @@ NS_IMETHODIMP
 nsEditor::SetSuppressDispatchingInputEvent(bool aSuppress)
 {
   mDispatchInputEvent = !aSuppress;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsEditor::GetIsInEditAction(bool* aIsInEditAction)
+{
+  MOZ_ASSERT(aIsInEditAction, "aIsInEditAction must not be null");
+  *aIsInEditAction = mIsInEditAction;
   return NS_OK;
 }
