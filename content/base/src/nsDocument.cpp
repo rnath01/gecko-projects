@@ -39,7 +39,7 @@
 #include "nsIDocShellTreeItem.h"
 #include "nsCOMArray.h"
 #include "nsDOMClassInfo.h"
-#include "nsCxPusher.h"
+#include "mozilla/Services.h"
 
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/BasicEvents.h"
@@ -198,6 +198,7 @@
 #include "mozilla/dom/HTMLInputElement.h"
 #include "mozilla/dom/NodeFilterBinding.h"
 #include "mozilla/dom/OwningNonNull.h"
+#include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/UndoManager.h"
 #include "mozilla/dom/WebComponentsBinding.h"
 #include "nsFrame.h"
@@ -2143,7 +2144,7 @@ nsDocument::Init()
   // we use the default compartment for this document, instead of creating
   // wrapper in some random compartment when the document is exposed to js
   // via some events.
-  nsCOMPtr<nsIGlobalObject> global = xpc::GetJunkScopeGlobal();
+  nsCOMPtr<nsIGlobalObject> global = xpc::GetNativeForGlobal(xpc::PrivilegedJunkScope());
   NS_ENSURE_TRUE(global, NS_ERROR_FAILURE);
   mScopeObject = do_GetWeakReference(global);
   MOZ_ASSERT(mScopeObject);
@@ -4300,6 +4301,32 @@ nsDocument::SetScopeObject(nsIGlobalObject* aGlobal)
   }
 }
 
+#ifdef MOZ_EME
+static void
+CheckIfContainsEMEContent(nsISupports* aSupports, void* aContainsEME)
+{
+  nsCOMPtr<nsIDOMHTMLMediaElement> domMediaElem(do_QueryInterface(aSupports));
+  if (domMediaElem) {
+    nsCOMPtr<nsIContent> content(do_QueryInterface(domMediaElem));
+    MOZ_ASSERT(content, "aSupports is not a content");
+    HTMLMediaElement* mediaElem = static_cast<HTMLMediaElement*>(content.get());
+    bool* contains = static_cast<bool*>(aContainsEME);
+    if (mediaElem->GetMediaKeys()) {
+      *contains = true;
+    }
+  }
+}
+
+bool
+nsDocument::ContainsEMEContent()
+{
+  bool containsEME = false;
+  EnumerateActivityObservers(CheckIfContainsEMEContent,
+                             static_cast<void*>(&containsEME));
+  return containsEME;
+}
+#endif // MOZ_EME
+
 static void
 NotifyActivityChanged(nsISupports *aSupports, void *aUnused)
 {
@@ -4469,7 +4496,7 @@ nsDocument::SetScriptGlobalObject(nsIScriptGlobalObject *aScriptGlobalObject)
       return;
     }
 
-    nsCOMPtr<nsIServiceWorkerManager> swm = do_GetService(SERVICEWORKERMANAGER_CONTRACTID);
+    nsCOMPtr<nsIServiceWorkerManager> swm = mozilla::services::GetServiceWorkerManager();
     if (swm) {
       swm->MaybeStartControlling(this);
       mMaybeServiceWorkerControlled = true;
@@ -8457,6 +8484,14 @@ nsDocument::CanSavePresentation(nsIRequest *aNewRequest)
   }
 #endif // MOZ_WEBRTC
 
+#ifdef MOZ_EME
+  // Don't save presentations for documents containing EME content, so that
+  // CDMs reliably shutdown upon user navigation.
+  if (ContainsEMEContent()) {
+    return false;
+  }
+#endif
+
   bool canCache = true;
   if (mSubDocuments)
     PL_DHashTableEnumerate(mSubDocuments, CanCacheSubDocument, &canCache);
@@ -8493,7 +8528,7 @@ nsDocument::Destroy()
 
   mRegistry = nullptr;
 
-  nsCOMPtr<nsIServiceWorkerManager> swm = do_GetService(SERVICEWORKERMANAGER_CONTRACTID);
+  nsCOMPtr<nsIServiceWorkerManager> swm = mozilla::services::GetServiceWorkerManager();
   if (swm) {
     swm->MaybeStopControlling(this);
   }
@@ -10509,8 +10544,9 @@ nsIDocument::ExitFullscreen(nsIDocument* aDoc, bool aRunAsync)
 }
 
 // Returns true if the document is a direct child of a cross process parent
-// mozbrowser iframe. This is the case when the document has a null parent,
-// and its DocShell reports that it is a browser frame.
+// mozbrowser iframe or TabParent. This is the case when the document has
+// a null parent and its DocShell reports that it is a browser frame, or
+// we can get a TabChild from it.
 static bool
 HasCrossProcessParent(nsIDocument* aDocument)
 {
@@ -10528,7 +10564,12 @@ HasCrossProcessParent(nsIDocument* aDocument)
   if (!docShell) {
     return false;
   }
-  return docShell->GetIsBrowserOrApp();
+  TabChild* tabChild(TabChild::GetFrom(docShell));
+  if (!tabChild) {
+    return false;
+  }
+
+  return true;
 }
 
 static bool

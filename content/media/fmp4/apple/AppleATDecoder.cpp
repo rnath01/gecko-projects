@@ -25,10 +25,10 @@ PRLogModuleInfo* GetDemuxerLog();
 namespace mozilla {
 
 AppleATDecoder::AppleATDecoder(const mp4_demuxer::AudioDecoderConfig& aConfig,
-                               MediaTaskQueue* anAudioTaskQueue,
+                               MediaTaskQueue* aAudioTaskQueue,
                                MediaDataDecoderCallback* aCallback)
   : mConfig(aConfig)
-  , mTaskQueue(anAudioTaskQueue)
+  , mTaskQueue(aAudioTaskQueue)
   , mCallback(aCallback)
   , mConverter(nullptr)
   , mStream(nullptr)
@@ -37,27 +37,34 @@ AppleATDecoder::AppleATDecoder(const mp4_demuxer::AudioDecoderConfig& aConfig,
   , mHaveOutput(false)
 {
   MOZ_COUNT_CTOR(AppleATDecoder);
-  LOG("Creating Apple AudioToolbox AAC decoder");
+  LOG("Creating Apple AudioToolbox Audio decoder");
   LOG("Audio Decoder configuration: %s %d Hz %d channels %d bits per channel",
       mConfig.mime_type,
       mConfig.samples_per_second,
       mConfig.channel_count,
       mConfig.bits_per_sample);
-  // TODO: Verify aConfig.mime_type.
+
+  if (!strcmp(aConfig.mime_type, "audio/mpeg")) {
+    mFileType = kAudioFileMP3Type;
+  } else if (!strcmp(aConfig.mime_type, "audio/mp4a-latm")) {
+    mFileType = kAudioFileAAC_ADTSType;
+  } else {
+    mFileType = 0;
+  }
 }
 
 AppleATDecoder::~AppleATDecoder()
 {
-  MOZ_COUNT_DTOR(AppleATDecoer);
+  MOZ_COUNT_DTOR(AppleATDecoder);
   MOZ_ASSERT(!mConverter);
   MOZ_ASSERT(!mStream);
 }
 
 static void
-_MetadataCallback(void *aDecoder,
+_MetadataCallback(void* aDecoder,
                   AudioFileStreamID aStream,
                   AudioFileStreamPropertyID aProperty,
-                  UInt32 *aFlags)
+                  UInt32* aFlags)
 {
   LOG("AppleATDecoder metadata callback");
   AppleATDecoder* decoder = static_cast<AppleATDecoder*>(aDecoder);
@@ -65,10 +72,11 @@ _MetadataCallback(void *aDecoder,
 }
 
 static void
-_SampleCallback(void *aDecoder,
-                UInt32 aNumBytes, UInt32 aNumPackets,
-                const void *aData,
-                AudioStreamPacketDescription *aPackets)
+_SampleCallback(void* aDecoder,
+                UInt32 aNumBytes,
+                UInt32 aNumPackets,
+                const void* aData,
+                AudioStreamPacketDescription* aPackets)
 {
   LOG("AppleATDecoder sample callback %u bytes %u packets",
       aNumBytes, aNumPackets);
@@ -79,12 +87,15 @@ _SampleCallback(void *aDecoder,
 nsresult
 AppleATDecoder::Init()
 {
-  LOG("Initializing Apple AudioToolbox AAC decoder");
-  AudioFileTypeID fileType = kAudioFileAAC_ADTSType;
+  if (!mFileType) {
+    NS_ERROR("Non recognised format");
+    return NS_ERROR_FAILURE;
+  }
+  LOG("Initializing Apple AudioToolbox Audio decoder");
   OSStatus rv = AudioFileStreamOpen(this,
                                     _MetadataCallback,
                                     _SampleCallback,
-                                    fileType,
+                                    mFileType,
                                     &mStream);
   if (rv) {
     NS_ERROR("Couldn't open AudioFileStream");
@@ -118,6 +129,7 @@ nsresult
 AppleATDecoder::Flush()
 {
   LOG("Flushing AudioToolbox AAC decoder");
+  mTaskQueue->Flush();
   OSStatus rv = AudioConverterReset(mConverter);
   if (rv) {
     LOG("Error %d resetting AudioConverter", rv);
@@ -170,8 +182,8 @@ struct PassthroughUserData {
   AppleATDecoder* mDecoder;
   UInt32 mNumPackets;
   UInt32 mDataSize;
-  const void *mData;
-  AudioStreamPacketDescription *mPacketDesc;
+  const void* mData;
+  AudioStreamPacketDescription* mPacketDesc;
   bool mDone;
 };
 
@@ -181,12 +193,12 @@ const uint32_t kNeedMoreData = 'MOAR';
 
 static OSStatus
 _PassthroughInputDataCallback(AudioConverterRef aAudioConverter,
-                              UInt32 *aNumDataPackets /* in/out */,
-                              AudioBufferList *aData /* in/out */,
-                              AudioStreamPacketDescription **aPacketDesc,
-                              void *aUserData)
+                              UInt32* aNumDataPackets /* in/out */,
+                              AudioBufferList* aData /* in/out */,
+                              AudioStreamPacketDescription** aPacketDesc,
+                              void* aUserData)
 {
-  PassthroughUserData *userData = (PassthroughUserData *)aUserData;
+  PassthroughUserData* userData = (PassthroughUserData*)aUserData;
   if (userData->mDone) {
     // We make sure this callback is run _once_, with all the data we received
     // from |AudioFileStreamParseBytes|. When we return an error, the decoder
@@ -207,7 +219,7 @@ _PassthroughInputDataCallback(AudioConverterRef aAudioConverter,
 
   aData->mBuffers[0].mNumberChannels = userData->mDecoder->mConfig.channel_count;
   aData->mBuffers[0].mDataByteSize = userData->mDataSize;
-  aData->mBuffers[0].mData = const_cast<void *>(userData->mData);
+  aData->mBuffers[0].mData = const_cast<void*>(userData->mData);
 
   return noErr;
 }
@@ -280,9 +292,9 @@ AppleATDecoder::SampleCallback(uint32_t aNumBytes,
     LOG("pushed audio at time %lfs; duration %lfs\n",
         (double)time / USECS_PER_S, (double)duration / USECS_PER_S);
 
-    AudioData *audio = new AudioData(mSamplePosition,
+    AudioData* audio = new AudioData(mSamplePosition,
                                      time, duration, numFrames,
-                                     reinterpret_cast<AudioDataValue *>(decoded.forget()),
+                                     reinterpret_cast<AudioDataValue*>(decoded.forget()),
                                      channels, rate);
     mCallback->Output(audio);
     mHaveOutput = true;
@@ -302,9 +314,14 @@ void
 AppleATDecoder::SetupDecoder()
 {
   AudioStreamBasicDescription inputFormat;
-  // Fill in the input format description from the stream.
-  AppleUtils::GetProperty(mStream,
-      kAudioFileStreamProperty_DataFormat, &inputFormat);
+
+  mHaveOutput = false;
+
+  nsresult rv = AppleUtils::GetRichestDecodableFormat(mStream, inputFormat);
+  if (NS_FAILED(rv)) {
+    mCallback->Error();
+    return;
+  }
 
   // Fill in the output format manually.
   PodZero(&mOutputFormat);
@@ -324,13 +341,13 @@ AppleATDecoder::SetupDecoder()
   mOutputFormat.mBytesPerPacket = mOutputFormat.mBytesPerFrame
         = mOutputFormat.mChannelsPerFrame * mOutputFormat.mBitsPerChannel / 8;
 
-  OSStatus rv = AudioConverterNew(&inputFormat, &mOutputFormat, &mConverter);
-  if (rv) {
+  OSStatus status =
+    AudioConverterNew(&inputFormat, &mOutputFormat, &mConverter);
+  if (status) {
     LOG("Error %d constructing AudioConverter", rv);
     mConverter = nullptr;
     mCallback->Error();
   }
-  mHaveOutput = false;
 }
 
 void

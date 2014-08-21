@@ -53,7 +53,6 @@
 #include "mozilla/Preferences.h"
 #include "nsAlgorithm.h"
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
 #include "nsError.h"
 #include "nsDOMJSUtils.h"
 #include "nsHostObjectProtocolHandler.h"
@@ -3845,6 +3844,12 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindow* aWindow,
       NS_ENSURE_SUCCESS(rv, rv);
 
       loadInfo.mXHRParamsAllowed = perm == nsIPermissionManager::ALLOW_ACTION;
+
+      uint16_t appStatus = loadInfo.mPrincipal->GetAppStatus();
+      loadInfo.mIsInPrivilegedApp =
+        (appStatus == nsIPrincipal::APP_STATUS_CERTIFIED ||
+         appStatus == nsIPrincipal::APP_STATUS_PRIVILEGED);
+      loadInfo.mIsInCertifiedApp = (appStatus == nsIPrincipal::APP_STATUS_CERTIFIED);
     } else {
       // Not a window
       MOZ_ASSERT(isChrome);

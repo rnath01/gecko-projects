@@ -111,6 +111,7 @@ AppleVTDecoder::Input(mp4_demuxer::MP4Sample* aSample)
 nsresult
 AppleVTDecoder::Flush()
 {
+  mTaskQueue->Flush();
   nsresult rv = WaitForAsynchronousFrames();
   if (NS_FAILED(rv)) {
     LOG("AppleVTDecoder::Drain failed waiting for platform decoder.");
@@ -297,6 +298,12 @@ AppleVTDecoder::OutputFrame(CVPixelBufferRef aImage,
                       visible);
   // Unlock the returned image data.
   CVPixelBufferUnlockBaseAddress(aImage, kCVPixelBufferLock_ReadOnly);
+
+  if (!data) {
+    NS_ERROR("Couldn't create VideoData for frame");
+    mCallback->Error();
+    return NS_ERROR_FAILURE;
+  }
 
   // Frames come out in DTS order but we need to output them
   // in composition order.

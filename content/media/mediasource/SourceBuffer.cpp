@@ -9,6 +9,7 @@
 #include "DecoderTraits.h"
 #include "MediaDecoder.h"
 #include "MediaSourceDecoder.h"
+#include "MediaSourceUtils.h"
 #include "SourceBufferResource.h"
 #include "mozilla/Endian.h"
 #include "mozilla/ErrorResult.h"
@@ -150,7 +151,7 @@ void
 SourceBuffer::SetTimestampOffset(double aTimestampOffset, ErrorResult& aRv)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MSE_API("SourceBuffer(%p)::SetTimestampOffset(aTimestampOffset=%d)", this, aTimestampOffset);
+  MSE_API("SourceBuffer(%p)::SetTimestampOffset(aTimestampOffset=%f)", this, aTimestampOffset);
   if (!IsAttached() || mUpdating) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
@@ -172,6 +173,7 @@ SourceBuffer::GetBuffered(ErrorResult& aRv)
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return nullptr;
   }
+  double highestEndTime = 0;
   nsRefPtr<TimeRanges> ranges = new TimeRanges();
   // TODO: Need to adjust mDecoders so it only tracks active decoders.
   // Once we have an abstraction for track buffers, this needs to report the
@@ -179,11 +181,19 @@ SourceBuffer::GetBuffered(ErrorResult& aRv)
   for (uint32_t i = 0; i < mDecoders.Length(); ++i) {
     nsRefPtr<TimeRanges> r = new TimeRanges();
     mDecoders[i]->GetBuffered(r);
-    ranges->Union(r);
+    if (r->Length() > 0) {
+      highestEndTime = std::max(highestEndTime, r->GetEndTime());
+      ranges->Union(r);
+    }
   }
-  ranges->Normalize();
-  MSE_DEBUGV("SourceBuffer(%p)::GetBuffered startTime=%f endTime=%f length=%u",
-             this, ranges->GetStartTime(), ranges->GetEndTime(), ranges->Length());
+  if (mMediaSource->ReadyState() == MediaSourceReadyState::Ended) {
+    // Set the end time on the last range to highestEndTime by adding a
+    // new range spanning the current end time to highestEndTime, which
+    // Normalize() will then merge with the old last range.
+    ranges->Add(ranges->GetEndTime(), highestEndTime);
+    ranges->Normalize();
+  }
+  MSE_DEBUGV("SourceBuffer(%p)::GetBuffered ranges=%s", this, DumpTimeRanges(ranges).get());
   return ranges.forget();
 }
 
@@ -191,7 +201,7 @@ void
 SourceBuffer::SetAppendWindowStart(double aAppendWindowStart, ErrorResult& aRv)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MSE_API("SourceBuffer(%p)::SetAppendWindowStart(aAppendWindowStart=%d)", this, aAppendWindowStart);
+  MSE_API("SourceBuffer(%p)::SetAppendWindowStart(aAppendWindowStart=%f)", this, aAppendWindowStart);
   if (!IsAttached() || mUpdating) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
@@ -207,7 +217,7 @@ void
 SourceBuffer::SetAppendWindowEnd(double aAppendWindowEnd, ErrorResult& aRv)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MSE_API("SourceBuffer(%p)::SetAppendWindowEnd(aAppendWindowEnd=%d)", this, aAppendWindowEnd);
+  MSE_API("SourceBuffer(%p)::SetAppendWindowEnd(aAppendWindowEnd=%f)", this, aAppendWindowEnd);
   if (!IsAttached() || mUpdating) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
@@ -268,14 +278,15 @@ SourceBuffer::Remove(double aStart, double aEnd, ErrorResult& aRv)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MSE_API("SourceBuffer(%p)::Remove(aStart=%f, aEnd=%f)", this, aStart, aEnd);
+  if (IsNaN(mMediaSource->Duration()) ||
+      aStart < 0 || aStart > mMediaSource->Duration() ||
+      aEnd <= aStart || IsNaN(aEnd)) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_ACCESS_ERR);
+    return;
+  }
   if (!IsAttached() || mUpdating ||
       mMediaSource->ReadyState() != MediaSourceReadyState::Open) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
-    return;
-  }
-  if (aStart < 0 || aStart > mMediaSource->Duration() ||
-      aEnd <= aStart) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_ACCESS_ERR);
     return;
   }
   StartUpdating();

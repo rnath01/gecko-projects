@@ -87,10 +87,10 @@ struct DebugModeOSREntry
     }
 
     bool needsRecompileInfo() const {
-        return (frameKind == ICEntry::Kind_CallVM ||
-                frameKind == ICEntry::Kind_DebugTrap ||
-                frameKind == ICEntry::Kind_DebugPrologue ||
-                frameKind == ICEntry::Kind_DebugEpilogue);
+        return frameKind == ICEntry::Kind_CallVM ||
+               frameKind == ICEntry::Kind_DebugTrap ||
+               frameKind == ICEntry::Kind_DebugPrologue ||
+               frameKind == ICEntry::Kind_DebugEpilogue;
     }
 
     bool recompiled() const {
@@ -658,7 +658,7 @@ jit::RecompileOnStackBaselineScriptsForDebugMode(JSContext *cx, JSCompartment *c
 #ifdef JSGC_GENERATIONAL
     // Scripts can entrain nursery things. See note in js::ReleaseAllJITCode.
     if (!entries.empty())
-        MinorGC(cx->runtime(), JS::gcreason::EVICT_NURSERY);
+        cx->runtime()->gc.evictNursery();
 #endif
 
     // When the profiler is enabled, we need to suppress sampling from here until
@@ -805,9 +805,9 @@ JitRuntime::getBaselineDebugModeOSRHandlerAddress(JSContext *cx, bool popFrameRe
 {
     if (!getBaselineDebugModeOSRHandler(cx))
         return nullptr;
-    return (popFrameReg
-            ? baselineDebugModeOSRHandler_->raw()
-            : baselineDebugModeOSRHandlerNoFrameRegPopAddr_);
+    return popFrameReg
+           ? baselineDebugModeOSRHandler_->raw()
+           : baselineDebugModeOSRHandlerNoFrameRegPopAddr_;
 }
 
 JitCode *

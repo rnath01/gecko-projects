@@ -198,7 +198,10 @@ class Base {
     // edges. The EdgeRange should be freed with 'js_delete'. (You could use
     // ScopedDJSeletePtr<EdgeRange> to manage it.) On OOM, report an exception
     // on |cx| and return nullptr.
-    virtual EdgeRange *edges(JSContext *cx) const = 0;
+    //
+    // If wantNames is true, compute names for edges. Doing so can be expensive
+    // in time and memory.
+    virtual EdgeRange *edges(JSContext *cx, bool wantNames) const = 0;
 
     // Return the Zone to which this node's referent belongs, or nullptr if the
     // referent is not of a type allocated in SpiderMonkey Zones.
@@ -333,9 +336,11 @@ class Node {
 
     const jschar *typeName()        const { return base()->typeName(); }
     size_t size()                   const { return base()->size(); }
-    EdgeRange *edges(JSContext *cx) const { return base()->edges(cx); }
     JS::Zone *zone()                const { return base()->zone(); }
     JSCompartment *compartment()    const { return base()->compartment(); }
+    EdgeRange *edges(JSContext *cx, bool wantNames = true) const {
+        return base()->edges(cx, wantNames);
+    }
 
     // A hash policy for ubi::Nodes.
     // This simply uses the stock PointerHasher on the ubi::Node's pointer.
@@ -365,7 +370,8 @@ class Edge {
     virtual ~Edge() { }
 
   public:
-    // This edge's name.
+    // This edge's name. This may be nullptr, if Node::edges was called with
+    // false as the wantNames parameter.
     //
     // The storage is owned by this Edge, and will be freed when this Edge is
     // destructed.
@@ -400,7 +406,7 @@ class EdgeRange {
     EdgeRange() : front_(nullptr) { }
 
   public:
-    virtual ~EdgeRange() { };
+    virtual ~EdgeRange() { }
 
     // True if there are no more edges in this range.
     bool empty() const { return !front_; }
@@ -428,7 +434,7 @@ template<typename Referent>
 class TracerConcrete : public Base {
     const jschar *typeName() const MOZ_OVERRIDE { return concreteTypeName; }
     size_t size() const MOZ_OVERRIDE { return 0; } // not implemented yet; bug 1011300
-    EdgeRange *edges(JSContext *) const MOZ_OVERRIDE;
+    EdgeRange *edges(JSContext *, bool wantNames) const MOZ_OVERRIDE;
     JS::Zone *zone() const MOZ_OVERRIDE { return get().zone(); }
     JSCompartment *compartment() const MOZ_OVERRIDE { return nullptr; }
 
@@ -438,7 +444,7 @@ class TracerConcrete : public Base {
 
   public:
     static const jschar concreteTypeName[];
-    static void construct(void *storage, Referent *ptr) { new (storage) TracerConcrete(ptr); };
+    static void construct(void *storage, Referent *ptr) { new (storage) TracerConcrete(ptr); }
 };
 
 // For JS_TraceChildren-based types that have a 'compartment' method.
@@ -454,7 +460,7 @@ class TracerConcreteWithCompartment : public TracerConcrete<Referent> {
   public:
     static void construct(void *storage, Referent *ptr) {
         new (storage) TracerConcreteWithCompartment(ptr);
-    };
+    }
 };
 
 template<> struct Concrete<JSObject> : TracerConcreteWithCompartment<JSObject> { };
@@ -472,7 +478,7 @@ template<>
 class Concrete<void> : public Base {
     const jschar *typeName() const MOZ_OVERRIDE;
     size_t size() const MOZ_OVERRIDE;
-    EdgeRange *edges(JSContext *cx) const MOZ_OVERRIDE;
+    EdgeRange *edges(JSContext *cx, bool wantNames) const MOZ_OVERRIDE;
     JS::Zone *zone() const MOZ_OVERRIDE;
     JSCompartment *compartment() const MOZ_OVERRIDE;
 
