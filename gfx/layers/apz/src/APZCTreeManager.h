@@ -7,6 +7,7 @@
 #define mozilla_layers_APZCTreeManager_h
 
 #include <stdint.h>                     // for uint64_t, uint32_t
+#include <map>                          // for std::map
 #include "FrameMetrics.h"               // for FrameMetrics, etc
 #include "Units.h"                      // for CSSPoint, CSSRect, etc
 #include "gfxPoint.h"                   // for gfxPoint
@@ -87,6 +88,12 @@ class APZCTreeManager {
 
   typedef mozilla::layers::AllowedTouchBehavior AllowedTouchBehavior;
   typedef uint32_t TouchBehaviorFlags;
+
+  // Helper struct to hold some state while we build the APZ tree. The
+  // sole purpose of this struct is to shorten the argument list to
+  // UpdatePanZoomControllerTree. All the state that we don't need to
+  // push on the stack during recursion and pop on unwind is stored here.
+  struct TreeBuildingState;
 
 public:
   APZCTreeManager();
@@ -277,8 +284,6 @@ public:
    *   handoff chain that should be scrolled.
    *
    * Returns true iff. some APZC accepted the scroll and scrolled.
-   * This is to allow the sending APZC to go into an overscrolled state if
-   * no APZC further up in the handoff chain accepted the overscroll.
    *
    * The way this method works is best illustrated with an example.
    * Consider three nested APZCs, A, B, and C, with C being the innermost one.
@@ -360,6 +365,15 @@ private:
   void UpdateZoomConstraintsRecursively(AsyncPanZoomController* aApzc,
                                         const ZoomConstraints& aConstraints);
 
+  AsyncPanZoomController* PrepareAPZCForLayer(const Layer* aLayer,
+                                              const FrameMetrics& aMetrics,
+                                              uint64_t aLayersId,
+                                              const gfx::Matrix4x4& aAncestorTransform,
+                                              const nsIntRegion& aObscured,
+                                              AsyncPanZoomController*& aOutParent,
+                                              AsyncPanZoomController*& aOutNextSibling,
+                                              TreeBuildingState& aState);
+
   /**
    * Recursive helper function to build the APZC tree. The tree of APZC instances has
    * the same shape as the layer tree, but excludes all the layers that are not scrollable.
@@ -369,15 +383,11 @@ private:
    * tree also as a last-child-prev-sibling tree because that simplifies the hit detection
    * code.
    */
-  AsyncPanZoomController* UpdatePanZoomControllerTree(CompositorParent* aCompositor,
+  AsyncPanZoomController* UpdatePanZoomControllerTree(TreeBuildingState& aState,
                                                       Layer* aLayer, uint64_t aLayersId,
-                                                      gfx::Matrix4x4 aTransform,
+                                                      const gfx::Matrix4x4& aAncestorTransform,
                                                       AsyncPanZoomController* aParent,
                                                       AsyncPanZoomController* aNextSibling,
-                                                      bool aIsFirstPaint,
-                                                      uint64_t aOriginatingLayersId,
-                                                      const APZPaintLogHelper& aPaintLogger,
-                                                      nsTArray< nsRefPtr<AsyncPanZoomController> >* aApzcsToDestroy,
                                                       const nsIntRegion& aObscured);
 
 private:

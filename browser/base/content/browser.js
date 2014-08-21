@@ -23,6 +23,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "ShortcutUtils",
                                   "resource://gre/modules/ShortcutUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "GMPInstallManager",
                                   "resource://gre/modules/GMPInstallManager.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "NewTabUtils",
+                                  "resource://gre/modules/NewTabUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ContentSearch",
                                   "resource:///modules/ContentSearch.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AboutHome",
@@ -438,6 +440,13 @@ var gPopupBlockerObserver = {
       // Hide the icon in the location bar (if the location bar exists)
       if (gURLBar)
         this._reportButton.hidden = true;
+
+      // Hide the notification box (if it's visible).
+      var notificationBox = gBrowser.getNotificationBox();
+      var notification = notificationBox.getNotificationWithValue("popup-blocked");
+      if (notification) {
+        notificationBox.removeNotification(notification, false);
+      }
       return;
     }
 
@@ -1287,17 +1296,7 @@ var gBrowserInit = {
     if (Win7Features)
       Win7Features.onOpenWindow();
 
-   // called when we go into full screen, even if initiated by a web page script
-    window.addEventListener("fullscreen", onFullScreen, true);
-
-    // Called when we enter DOM full-screen mode. Note we can already be in browser
-    // full-screen mode when we enter DOM full-screen mode.
-    window.addEventListener("MozEnteredDomFullscreen", onMozEnteredDomFullscreen, true);
-
-    if (window.fullScreen)
-      onFullScreen();
-    if (document.mozFullScreen)
-      onMozEnteredDomFullscreen();
+    FullScreen.init();
 
 #ifdef MOZ_SERVICES_SYNC
     // initialize the sync UI
@@ -1428,7 +1427,7 @@ var gBrowserInit = {
 
     gHistorySwipeAnimation.uninit();
 
-    FullScreen.cleanup();
+    FullScreen.uninit();
 
 #ifdef MOZ_SERVICES_SYNC
     gFxAccounts.uninit();
@@ -2755,14 +2754,6 @@ function SwitchToMetro() {
 #endif
 }
 
-function onFullScreen(event) {
-  FullScreen.toggle(event);
-}
-
-function onMozEnteredDomFullscreen(event) {
-  FullScreen.enterDomFullscreen(event);
-}
-
 function getWebNavigation()
 {
   return gBrowser.webNavigation;
@@ -3102,7 +3093,7 @@ const BrowserSearch = {
         let mm = gBrowser.selectedBrowser.messageManager;
         if (url === "about:home") {
           AboutHome.focusInput(mm);
-        } else if (url === "about:newtab") {
+        } else if (url === "about:newtab" && NewTabUtils.allPages.enabled) {
           ContentSearch.focusInput(mm);
         } else {
           openUILinkIn("about:home", "current");
