@@ -5,7 +5,8 @@
 config = {
     "reftest_options": [
         "--appname=%(binary_path)s", "--utility-path=tests/bin",
-        "--extra-profile-file=tests/bin/plugins", "--symbols-path=%(symbols_path)s"
+        "--extra-profile-file=tests/bin/plugins", "--symbols-path=%(symbols_path)s",
+        "--e10s"
     ],
     "mochitest_options": [
         "--appname=%(binary_path)s", "--utility-path=tests/bin",
@@ -13,7 +14,8 @@ config = {
         "--certificate-path=tests/certs", "--autorun", "--close-when-done",
         "--console-level=INFO", "--setpref=webgl.force-enabled=true",
         "--quiet", "--log-raw=%(raw_log_file)s",
-        "--use-test-media-devices"
+        "--use-test-media-devices",
+        "--e10s"
     ],
     "webapprt_options": [
         "--app=%(app_path)s", "--utility-path=tests/bin",

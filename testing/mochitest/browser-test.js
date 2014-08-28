@@ -64,9 +64,7 @@ function testInit() {
 
       // Window is the [ChromeWindow] for messageManager, so we need content.window
       // Currently chrome tests are run in a content window instead of a ChromeWindow
-      var webNav = content.window.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
-                         .getInterface(Components.interfaces.nsIWebNavigation);
-      webNav.loadURI(url, null, null, null, null);
+      gBrowser.loadURI(url);
     };
 
     var listener = 'data:,function doLoad(e) { var data=e.detail&&e.detail.data;removeEventListener("contentEvent", function (e) { doLoad(e); }, false, true);sendAsyncMessage("chromeEvent", {"data":data}); };addEventListener("contentEvent", function (e) { doLoad(e); }, false, true);';
