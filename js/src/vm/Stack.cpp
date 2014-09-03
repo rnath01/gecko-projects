@@ -1398,9 +1398,8 @@ js::CheckLocalUnaliased(MaybeCheckAliasing checkAliasing, JSScript *script, uint
 }
 #endif
 
-jit::JitActivation::JitActivation(JSContext *cx, bool firstFrameIsConstructing, bool active)
+jit::JitActivation::JitActivation(JSContext *cx, bool active)
   : Activation(cx, Jit),
-    firstFrameIsConstructing_(firstFrameIsConstructing),
     active_(active),
     rematerializedFrames_(nullptr)
 {
@@ -1416,7 +1415,6 @@ jit::JitActivation::JitActivation(JSContext *cx, bool firstFrameIsConstructing, 
 
 jit::JitActivation::JitActivation(ForkJoinContext *cx)
   : Activation(cx, Jit),
-    firstFrameIsConstructing_(false),
     active_(true),
     rematerializedFrames_(nullptr)
 {
@@ -1550,7 +1548,7 @@ jit::JitActivation::markRematerializedFrames(JSTracer *trc)
 AsmJSActivation::AsmJSActivation(JSContext *cx, AsmJSModule &module)
   : Activation(cx, AsmJS),
     module_(module),
-    errorRejoinSP_(nullptr),
+    entrySP_(nullptr),
     profiler_(nullptr),
     resumePC_(nullptr),
     fp_(nullptr),
@@ -1573,7 +1571,7 @@ AsmJSActivation::AsmJSActivation(JSContext *cx, AsmJSModule &module)
     JSRuntime::AutoLockForInterrupt lock(cx->runtime());
     cx->mainThread().asmJSActivationStack_ = this;
 
-    (void) errorRejoinSP_;  // squelch GCC warning
+    (void) entrySP_;  // squelch GCC warning
 }
 
 AsmJSActivation::~AsmJSActivation()

@@ -12,6 +12,8 @@
 #include "mozilla/gfx/Rect.h"           // for RoundedIn
 #include "mozilla/gfx/ScaleFactor.h"    // for ScaleFactor
 #include "mozilla/gfx/Logging.h"        // for Log
+#include "gfxColor.h"
+#include "nsString.h"
 
 namespace IPC {
 template <typename T> struct ParamTraits;
@@ -71,6 +73,7 @@ public:
   static const ViewID NULL_SCROLL_ID;   // This container layer does not scroll.
   static const ViewID START_SCROLL_ID = 2;  // This is the ID that scrolling subframes
                                         // will begin at.
+  static const FrameMetrics sNullMetrics;   // We often need an empty metrics
 
   FrameMetrics()
     : mCompositionBounds(0, 0, 0, 0)
@@ -86,6 +89,7 @@ public:
     , mIsRoot(false)
     , mHasScrollgrab(false)
     , mScrollId(NULL_SCROLL_ID)
+    , mScrollParentId(NULL_SCROLL_ID)
     , mScrollOffset(0, 0)
     , mZoom(1)
     , mUpdateScrollOffset(false)
@@ -95,7 +99,10 @@ public:
     , mUseDisplayPortMargins(false)
     , mPresShellId(-1)
     , mViewport(0, 0, 0, 0)
-  {}
+    , mBackgroundColor(0, 0, 0, 0)
+  {
+    mContentDescription[0] = '\0';
+  }
 
   // Default copy ctor and operator= are fine
 
@@ -117,9 +124,12 @@ public:
            mPresShellId == aOther.mPresShellId &&
            mIsRoot == aOther.mIsRoot &&
            mScrollId == aOther.mScrollId &&
+           mScrollParentId == aOther.mScrollParentId &&
            mScrollOffset == aOther.mScrollOffset &&
            mHasScrollgrab == aOther.mHasScrollgrab &&
-           mUpdateScrollOffset == aOther.mUpdateScrollOffset;
+           mUpdateScrollOffset == aOther.mUpdateScrollOffset &&
+           mBackgroundColor == aOther.mBackgroundColor &&
+           !strcmp(mContentDescription, aOther.mContentDescription);
   }
   bool operator!=(const FrameMetrics& aOther) const
   {
@@ -404,6 +414,16 @@ public:
     mScrollId = scrollId;
   }
 
+  ViewID GetScrollParentId() const
+  {
+    return mScrollParentId;
+  }
+
+  void SetScrollParentId(ViewID aParentId)
+  {
+    mScrollParentId = aParentId;
+  }
+
   void SetRootCompositionSize(const CSSSize& aRootCompositionSize)
   {
     mRootCompositionSize = aRootCompositionSize;
@@ -454,6 +474,28 @@ public:
     return mViewport;
   }
 
+  const gfxRGBA& GetBackgroundColor() const
+  {
+    return mBackgroundColor;
+  }
+
+  void SetBackgroundColor(const gfxRGBA& aBackgroundColor)
+  {
+    mBackgroundColor = aBackgroundColor;
+  }
+
+  nsCString GetContentDescription() const
+  {
+    return nsCString(mContentDescription);
+  }
+
+  void SetContentDescription(const nsCString& aContentDescription)
+  {
+    strncpy(mContentDescription, aContentDescription.get(),
+            sizeof(mContentDescription));
+    mContentDescription[sizeof(mContentDescription) - 1] = 0;
+  }
+
 private:
   // New fields from now on should be made private and old fields should
   // be refactored to be private.
@@ -466,6 +508,9 @@ private:
 
   // A unique ID assigned to each scrollable frame.
   ViewID mScrollId;
+
+  // The ViewID of the scrollable frame to which overscroll should be handed off.
+  ViewID mScrollParentId;
 
   // The position of the top-left of the CSS viewport, relative to the document
   // (or the document relative to the viewport, if that helps understand it).
@@ -519,6 +564,14 @@ private:
   // iframe. For layers that don't correspond to a document, this metric is
   // meaningless and invalid.
   CSSRect mViewport;
+
+  // The background color to use when overscrolling.
+  gfxRGBA mBackgroundColor;
+
+  // A description of the content element corresponding to this frame.
+  // This is empty unless this is a scrollable ContainerLayer and the
+  // apz.printtree pref is turned on.
+  char mContentDescription[20];
 };
 
 /**

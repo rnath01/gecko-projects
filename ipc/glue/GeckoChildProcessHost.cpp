@@ -7,7 +7,6 @@
 #include "GeckoChildProcessHost.h"
 
 #include "base/command_line.h"
-#include "base/path_service.h"
 #include "base/string_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/process_watcher.h"
@@ -154,7 +153,7 @@ GeckoChildProcessHost::GetPathToBinary(FilePath& exePath)
 #ifdef MOZ_WIDGET_COCOA
 class AutoCFTypeObject {
 public:
-  AutoCFTypeObject(CFTypeRef object)
+  explicit AutoCFTypeObject(CFTypeRef object)
   {
     mObject = object;
   }
@@ -712,7 +711,7 @@ GeckoChildProcessHost::PerformAsyncLaunchInternal(std::vector<std::string>& aExt
   MachPortSender parent_sender(child_message.GetTranslatedPort(1));
 
   MachSendMessage parent_message(/* id= */0);
-  if (!parent_message.AddDescriptor(bootstrap_port)) {
+  if (!parent_message.AddDescriptor(MachMsgPortDescriptor(bootstrap_port))) {
     CHROMIUM_LOG(ERROR) << "parent AddDescriptor(" << bootstrap_port << ") failed.";
     return false;
   }
@@ -794,7 +793,16 @@ GeckoChildProcessHost::PerformAsyncLaunchInternal(std::vector<std::string>& aExt
       MOZ_CRASH("Bad process type in GeckoChildProcessHost");
       break;
   };
-#endif
+
+  if (shouldSandboxCurrentProcess) {
+    for (auto it = mAllowedFilesRead.begin();
+         it != mAllowedFilesRead.end();
+         ++it) {
+      mSandboxBroker.AllowReadFile(it->c_str());
+    }
+  }
+
+#endif // XP_WIN
 
   // Add the application directory path (-appdir path)
   AddAppDirToCommandLine(cmdLine);

@@ -123,8 +123,12 @@ AppendToString(std::stringstream& aStream, const FrameMetrics& m,
   AppendToString(aStream, m.GetScrollOffset(), " s=");
   AppendToString(aStream, m.mDisplayPort, " dp=");
   AppendToString(aStream, m.mCriticalDisplayPort, " cdp=");
+  AppendToString(aStream, m.GetBackgroundColor(), " color=");
   if (!detailed) {
     AppendToString(aStream, m.GetScrollId(), " scrollId=");
+    if (m.GetScrollParentId() != FrameMetrics::NULL_SCROLL_ID) {
+      AppendToString(aStream, m.GetScrollParentId(), " scrollParent=");
+    }
     aStream << nsPrintfCString(" z=%.3f }", m.GetZoom().scale).get();
   } else {
     AppendToString(aStream, m.GetDisplayPortMargins(), " dpm=");
@@ -137,6 +141,7 @@ AppendToString(std::stringstream& aStream, const FrameMetrics& m,
             m.mTransformScale.scale).get();
     aStream << nsPrintfCString(" u=(%d %lu)",
             m.GetScrollOffsetUpdated(), m.GetScrollGeneration()).get();
+    AppendToString(aStream, m.GetScrollParentId(), " p=");
     aStream << nsPrintfCString(" i=(%ld %lld) }",
             m.GetPresShellId(), m.GetScrollId()).get();
   }

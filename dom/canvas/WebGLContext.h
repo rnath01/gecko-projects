@@ -1036,7 +1036,9 @@ protected:
     // Validation functions (implemented in WebGLContextValidate.cpp)
     GLenum BaseTexFormat(GLenum internalFormat) const;
 
+    bool CreateOffscreenGL(bool forceEnabled);
     bool InitAndValidateGL();
+    bool ResizeBackbuffer(uint32_t width, uint32_t height);
     bool ValidateBlendEquationEnum(GLenum cap, const char *info);
     bool ValidateBlendFuncDstEnum(GLenum mode, const char *info);
     bool ValidateBlendFuncSrcEnum(GLenum mode, const char *info);
@@ -1410,7 +1412,7 @@ public:
     NS_DECL_NSIOBSERVER
     NS_DECL_NSIDOMEVENTLISTENER
 
-    WebGLObserver(WebGLContext* aContext);
+    explicit WebGLObserver(WebGLContext* aContext);
 
     void Destroy();
 
