@@ -388,13 +388,27 @@ VideoDevice::VideoDevice(MediaEngineVideoSource* aSource)
     mFacingMode = dom::VideoFacingModeEnum::User;
   }
 #endif // MOZ_B2G_CAMERA
+#if defined(ANDROID) && !defined(MOZ_WIDGET_GONK)
+  // Names are generated. Example: "Camera 0, Facing back, Orientation 90"
+  //
+  // See media/webrtc/trunk/webrtc/modules/video_capture/android/java/src/org/
+  // webrtc/videoengine/VideoCaptureDeviceInfoAndroid.java
 
+  if (mName.Find(NS_LITERAL_STRING("Facing back")) != kNotFound) {
+    mHasFacingMode = true;
+    mFacingMode = dom::VideoFacingModeEnum::Environment;
+  } else if (mName.Find(NS_LITERAL_STRING("Facing front")) != kNotFound) {
+    mHasFacingMode = true;
+    mFacingMode = dom::VideoFacingModeEnum::User;
+  }
+#endif // ANDROID
+#ifdef XP_MACOSX
   // Kludge to test user-facing cameras on OSX.
   if (mName.Find(NS_LITERAL_STRING("Face")) != -1) {
     mHasFacingMode = true;
     mFacingMode = dom::VideoFacingModeEnum::User;
   }
-
+#endif
   mMediaSource = aSource->GetMediaSource();
 }
 
@@ -2320,6 +2334,7 @@ GetUserMediaCallbackMediaStreamListener::StopScreenWindowSharing()
   NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
   if (mVideoSource && !mStopped &&
       (mVideoSource->GetMediaSource() == MediaSourceType::Screen ||
+       mVideoSource->GetMediaSource() == MediaSourceType::Application ||
        mVideoSource->GetMediaSource() == MediaSourceType::Window)) {
     // Stop the whole stream if there's no audio; just the video track if we have both
     nsRefPtr<MediaOperationRunnable> runnable(
