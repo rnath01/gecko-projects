@@ -80,15 +80,51 @@ IsStatusApplying(LPCWSTR updateDirPath, BOOL &isApplying)
 /**
  * Determines whether we're staging an update.
  *
- * @param argc    The argc value normally sent to updater.exe
- * @param argv    The argv value normally sent to updater.exe
- * @param boolean True if we're staging an update
+ * @param  argc    The argc value normally sent to updater.exe
+ * @param  argv    The argv value normally sent to updater.exe
+ * @return boolean True if we're staging an update
  */
 static bool
 IsUpdateBeingStaged(int argc, LPWSTR *argv)
 {
   // PID will be set to -1 if we're supposed to stage an update.
-  return argc == 4 && !wcscmp(argv[3], L"-1");
+  return argc == 4 && !wcscmp(argv[3], L"-1") ||
+         argc == 5 && !wcscmp(argv[4], L"-1");
+}
+
+/**
+ * Determines whether the param only contains digits.
+ *
+ * @param str     The string to check
+ * @param boolean True if the param only contains digits
+ */
+static bool
+IsDigits(WCHAR *str)
+{
+  while (*str) {
+    if (!iswdigit(*str++)) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+/**
+ * Determines whether the command line contains just the directory to apply the
+ * update to (old command line) or if it contains the installation directory and
+ * the directory to apply the update to.
+ *
+ * @param argc    The argc value normally sent to updater.exe
+ * @param argv    The argv value normally sent to updater.exe
+ * @param boolean True if the command line contains just the directory to apply
+ *                the update to
+ */
+static bool
+IsOldCommandline(int argc, LPWSTR *argv)
+{
+  return argc == 4 && !wcscmp(argv[3], L"-1") ||
+         !wcscmp(argv[3], L"0/replace") ||
+         IsDigits(argv[3]);
 }
 
 /**
@@ -101,19 +137,19 @@ IsUpdateBeingStaged(int argc, LPWSTR *argv)
 static BOOL
 GetInstallationDir(int argcTmp, LPWSTR *argvTmp, WCHAR aResultDir[MAX_PATH + 1])
 {
-  if (argcTmp < 2) {
+  int index = 3;
+  if (IsOldCommandline(argcTmp, argvTmp)) {
+    index = 2;
+  }
+
+  if (argcTmp < index) {
     return FALSE;
   }
-  wcsncpy(aResultDir, argvTmp[2], MAX_PATH);
+  wcsncpy(aResultDir, argvTmp[index], MAX_PATH);
   WCHAR* backSlash = wcsrchr(aResultDir, L'\\');
   // Make sure that the path does not include trailing backslashes
   if (backSlash && (backSlash[1] == L'\0')) {
     *backSlash = L'\0';
-  }
-  bool backgroundUpdate = IsUpdateBeingStaged(argcTmp, argvTmp);
-  bool replaceRequest = (argcTmp >= 4 && wcsstr(argvTmp[3], L"/replace"));
-  if (backgroundUpdate || replaceRequest) {
-    return PathRemoveFileSpecW(aResultDir);
   }
   return TRUE;
 }
@@ -343,7 +379,11 @@ ProcessSoftwareUpdateCommand(DWORD argc, LPWSTR *argv)
   // as the one in the installation directory which we are updating.
   // The installation dir that we are installing to is installDir.
   WCHAR installDirUpdater[MAX_PATH + 1] = { L'\0' };
-  wcsncpy(installDirUpdater, installDir, MAX_PATH);
+  if (IsOldCommandline(argc, argv)) {
+    wcsncpy(installDirUpdater, installDir, MAX_PATH);
+  } else {
+    wcsncpy(installDirUpdater, argv[2], MAX_PATH);
+  }
   if (!PathAppendSafe(installDirUpdater, L"updater.exe")) {
     LOG_WARN(("Install directory updater could not be determined."));
     result = FALSE;
