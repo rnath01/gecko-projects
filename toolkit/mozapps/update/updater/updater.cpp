@@ -196,7 +196,7 @@ private:
 };
 
 struct MARChannelStringTable {
-  MARChannelStringTable() 
+  MARChannelStringTable()
   {
     MARChannelID[0] = '\0';
   }
@@ -1740,9 +1740,9 @@ IsUpdateFromMetro(int argc, NS_tchar **argv)
 #endif
 
 static void
-LaunchCallbackApp(const NS_tchar *workingDir, 
-                  int argc, 
-                  NS_tchar **argv, 
+LaunchCallbackApp(const NS_tchar *workingDir,
+                  int argc,
+                  NS_tchar **argv,
                   bool usingService)
 {
   putenv(const_cast<char*>("NO_EM_RESTART="));
@@ -1820,7 +1820,7 @@ WriteStatusFile(int status)
 }
 
 #ifdef MOZ_MAINTENANCE_SERVICE
-/* 
+/*
  * Read the update.status file and sets isPendingService to true if
  * the status is set to pending-service.
  *
@@ -1846,7 +1846,7 @@ IsUpdateStatusPendingService()
   const char kPendingService[] = "pending-service";
   const char kAppliedService[] = "applied-service";
 
-  return (strncmp(buf, kPendingService, 
+  return (strncmp(buf, kPendingService,
                   sizeof(kPendingService) - 1) == 0) ||
          (strncmp(buf, kAppliedService,
                   sizeof(kAppliedService) - 1) == 0);
@@ -1854,7 +1854,7 @@ IsUpdateStatusPendingService()
 #endif
 
 #ifdef XP_WIN
-/* 
+/*
  * Read the update.status file and sets isSuccess to true if
  * the status is set to succeeded.
  *
@@ -1878,7 +1878,7 @@ IsUpdateStatusSucceeded(bool &isSucceeded)
   fread(buf, sizeof(buf), 1, file);
 
   const char kSucceeded[] = "succeeded";
-  isSucceeded = strncmp(buf, kSucceeded, 
+  isSucceeded = strncmp(buf, kSucceeded,
                         sizeof(kSucceeded) - 1) == 0;
   return true;
 }
@@ -2060,7 +2060,7 @@ ProcessReplaceRequest()
 }
 
 #ifdef XP_WIN
-static void 
+static void
 WaitForServiceFinishThread(void *param)
 {
   // We wait at most 10 minutes, we already waited 5 seconds previously
@@ -2306,7 +2306,7 @@ int NS_main(int argc, NS_tchar **argv)
 #ifdef MOZ_MAINTENANCE_SERVICE
   useService = IsUpdateStatusPendingService();
   // Our tests run with a different apply directory for each test.
-  // We use this registry key on our test slaves to store the 
+  // We use this registry key on our test slaves to store the
   // allowed name/issuers.
   testOnlyFallbackKeyExists = DoesFallbackKeyExist();
 #endif
@@ -2467,9 +2467,9 @@ int NS_main(int argc, NS_tchar **argv)
 #if defined(XP_WIN)
   sUsingService = getenv("MOZ_USING_SERVICE") != nullptr;
   putenv(const_cast<char*>("MOZ_USING_SERVICE="));
-  // lastFallbackError keeps track of the last error for the service not being 
-  // used, in case of an error when fallback is not enabled we write the 
-  // error to the update.status file. 
+  // lastFallbackError keeps track of the last error for the service not being
+  // used, in case of an error when fallback is not enabled we write the
+  // error to the update.status file.
   // When fallback is disabled (MOZ_NO_SERVICE_FALLBACK does not exist) then
   // we will instead fallback to not using the service and display a UAC prompt.
   int lastFallbackError = FALLBACKKEY_UNKNOWN_ERROR;
@@ -2539,11 +2539,11 @@ int NS_main(int argc, NS_tchar **argv)
     // Even if a file has no sharing access, you can still get its attributes
     bool startedFromUnelevatedUpdater =
       GetFileAttributesW(elevatedLockFilePath) != INVALID_FILE_ATTRIBUTES;
-    
+
     // If we're running from the service, then we were started with the same
     // token as the service so the permissions are already dropped.  If we're
-    // running from an elevated updater that was started from an unelevated 
-    // updater, then we drop the permissions here. We do not drop the 
+    // running from an elevated updater that was started from an unelevated
+    // updater, then we drop the permissions here. We do not drop the
     // permissions on the originally called updater because we use its token
     // to start the callback application.
     if(startedFromUnelevatedUpdater) {
@@ -2552,7 +2552,7 @@ int NS_main(int argc, NS_tchar **argv)
       UACHelper::DisablePrivileges(nullptr);
     }
 
-    if (updateLockFileHandle == INVALID_HANDLE_VALUE || 
+    if (updateLockFileHandle == INVALID_HANDLE_VALUE ||
         (useService && testOnlyFallbackKeyExists && noServiceFallback)) {
       if (!_waccess(elevatedLockFilePath, F_OK) &&
           NS_tremove(elevatedLockFilePath) != 0) {
@@ -2607,9 +2607,9 @@ int NS_main(int argc, NS_tchar **argv)
         WCHAR maintenanceServiceKey[MAX_PATH + 1];
         if (CalculateRegistryPathFromFilePath(gInstallDirPath, maintenanceServiceKey)) {
           HKEY baseKey;
-          if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, 
-                            maintenanceServiceKey, 0, 
-                            KEY_READ | KEY_WOW64_64KEY, 
+          if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                            maintenanceServiceKey, 0,
+                            KEY_READ | KEY_WOW64_64KEY,
                             &baseKey) == ERROR_SUCCESS) {
             RegCloseKey(baseKey);
           } else {
@@ -2630,7 +2630,7 @@ int NS_main(int argc, NS_tchar **argv)
       // fails in between, we can fall back to using the normal update process
       // on our own.
 
-      // If we still want to use the service try to launch the service 
+      // If we still want to use the service try to launch the service
       // comamnd for the update.
       if (useService) {
         // If the update couldn't be started, then set useService to false so
@@ -2653,7 +2653,7 @@ int NS_main(int argc, NS_tchar **argv)
           DWORD lastState = WaitForServiceStop(SVC_NAME, 5);
           if (lastState != SERVICE_STOPPED) {
             Thread t1;
-            if (t1.Run(WaitForServiceFinishThread, nullptr) == 0 && 
+            if (t1.Run(WaitForServiceFinishThread, nullptr) == 0 &&
                 showProgressUI) {
               ShowProgressUI(true, false);
             }
@@ -2693,7 +2693,7 @@ int NS_main(int argc, NS_tchar **argv)
       // as the PostUpdate step runs when performing the replacing in that case.
       if (useService && !sStagedUpdate) {
         bool updateStatusSucceeded = false;
-        if (IsUpdateStatusSucceeded(updateStatusSucceeded) && 
+        if (IsUpdateStatusSucceeded(updateStatusSucceeded) &&
             updateStatusSucceeded) {
           if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath, false, nullptr)) {
             fprintf(stderr, "The post update process which runs as the user"
@@ -2857,7 +2857,7 @@ int NS_main(int argc, NS_tchar **argv)
         // update.status file.
         return returnCode;
       } else if(useService) {
-        // The service command was launched.  The service is responsible for 
+        // The service command was launched.  The service is responsible for
         // writing out the update.status file.
         if (updateLockFileHandle != INVALID_HANDLE_VALUE) {
           CloseHandle(updateLockFileHandle);
@@ -3014,9 +3014,9 @@ int NS_main(int argc, NS_tchar **argv)
       WriteStatusFile(WRITE_ERROR);
       EXIT_WHEN_ELEVATED(elevatedLockFilePath, updateLockFileHandle, 1);
       if (argc > callbackIndex) {
-        LaunchCallbackApp(argv[5], 
-                          argc - callbackIndex, 
-                          argv + callbackIndex, 
+        LaunchCallbackApp(argv[5],
+                          argc - callbackIndex,
+                          argv + callbackIndex,
                           sUsingService);
       }
       return 1;
@@ -3172,8 +3172,8 @@ int NS_main(int argc, NS_tchar **argv)
     if (gSucceeded) {
       // The service update will only be executed if it is already installed.
       // For first time installs of the service, the install will happen from
-      // the PostUpdate process. We do the service update process here 
-      // because it's possible we are updating with updater.exe without the 
+      // the PostUpdate process. We do the service update process here
+      // because it's possible we are updating with updater.exe without the
       // service if the service failed to apply the update. We want to update
       // the service to a newer version in that case. If we are not running
       // through the service, then MOZ_USING_SERVICE will not exist.
@@ -3194,9 +3194,9 @@ int NS_main(int argc, NS_tchar **argv)
 #endif /* XP_MACOSX */
 
     if (getenv("MOZ_PROCESS_UPDATES") == nullptr) {
-      LaunchCallbackApp(argv[5], 
-                        argc - callbackIndex, 
-                        argv + callbackIndex, 
+      LaunchCallbackApp(argv[5],
+                        argc - callbackIndex,
+                        argv + callbackIndex,
                         sUsingService);
     }
   }

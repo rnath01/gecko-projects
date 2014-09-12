@@ -1008,7 +1008,7 @@ function getUpdatesDir() {
 
 /**
  * Get the Active Updates directory inside the directory where we apply the
- * background updates.
+ * staged update.
  * @return The active updates directory inside the updated directory, as a
  *         nsIFile object.
  */
