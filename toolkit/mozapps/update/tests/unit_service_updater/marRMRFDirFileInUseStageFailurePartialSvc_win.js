@@ -15,7 +15,7 @@ function run_test() {
   gTestFiles = gTestFilesPartialSuccess;
   gTestDirs = gTestDirsPartialSuccess;
   setTestFilesAndDirsForFailure();
-  setupUpdaterTest(FILE_PARTIAL_MAR);
+  setupUpdaterTest(FILE_PARTIAL_MAR, true, false);
 
   let fileInUseBin = getApplyDirFile(gTestDirs[2].relPathDir +
                                      gTestDirs[2].files[0]);
@@ -59,7 +59,7 @@ function checkUpdateApplied() {
 }
 
 function checkUpdate() {
-  checkFilesAfterUpdateFailure(getApplyDirFile, true, false);
+  checkFilesAfterUpdateFailure(getApplyDirFile);
   checkUpdateLogContains(ERR_RENAME_FILE);
   checkCallbackAppLog();
 }

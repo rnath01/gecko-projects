@@ -8,7 +8,7 @@ function run_test() {
   setupTestCommon();
   gTestFiles = gTestFilesPartialSuccess;
   gTestDirs = gTestDirsPartialSuccess;
-  setupUpdaterTest(FILE_PARTIAL_MAR);
+  setupUpdaterTest(FILE_PARTIAL_MAR, false, true);
 
   // Launch an existing file so it is in use during the update.
   let fileInUseBin = getApplyDirFile(gTestFiles[11].relPathDir +
@@ -32,7 +32,7 @@ function checkUpdateApplied() {
 }
 
 function checkUpdate() {
-  checkFilesAfterUpdateSuccess(getApplyDirFile, false, true);
+  checkFilesAfterUpdateSuccess();
   checkUpdateLogContains(ERR_BACKUP_DISCARD);
   checkCallbackAppLog();
 }

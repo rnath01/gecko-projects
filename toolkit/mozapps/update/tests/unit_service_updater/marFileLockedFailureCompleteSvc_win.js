@@ -13,7 +13,7 @@ function run_test() {
   gTestFiles = gTestFilesCompleteSuccess;
   gTestDirs = gTestDirsCompleteSuccess;
   setTestFilesAndDirsForFailure();
-  setupUpdaterTest(FILE_COMPLETE_MAR);
+  setupUpdaterTest(FILE_COMPLETE_MAR, false, false);
 
   // Exclusively lock an existing file so it is in use during the update.
   let helperBin = getTestDirFile(FILE_HELPER_BIN);
@@ -48,7 +48,7 @@ function checkUpdateFinished() {
 }
 
 function checkUpdate() {
-  checkFilesAfterUpdateFailure(getApplyDirFile, false, false);
+  checkFilesAfterUpdateFailure();
   checkUpdateLogContains(ERR_RENAME_FILE);
   checkCallbackServiceLog();
 }

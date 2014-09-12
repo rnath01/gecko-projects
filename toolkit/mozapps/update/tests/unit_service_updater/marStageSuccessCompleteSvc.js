@@ -5,6 +5,41 @@
 
 /* General Complete MAR File Staged Patch Apply Test */
 
+function runHelperProcess(args) {
+  let helperBin = getTestDirFile(FILE_HELPER_BIN);
+  let process = AUS_Cc["@mozilla.org/process/util;1"].
+                createInstance(AUS_Ci.nsIProcess);
+  process.init(helperBin);
+  logTestInfo("Running " + helperBin.path + " " + args.join(" "));
+  process.run(true, args, args.length);
+  do_check_eq(process.exitValue, 0);
+}
+
+function createSymlink() {
+  let args = ["setup-symlink", "moz-foo", "moz-bar", "target",
+              getApplyDirFile().path + "/a/b/link"];
+  runHelperProcess(args);
+  getApplyDirFile("a/b/link", false).permissions = 0o666;
+  
+  args = ["setup-symlink", "moz-foo2", "moz-bar2", "target2",
+          getApplyDirFile().path + "/a/b/link2", "change-perm"];
+  runHelperProcess(args);
+}
+
+function removeSymlink() {
+  let args = ["remove-symlink", "moz-foo", "moz-bar", "target",
+              getApplyDirFile().path + "/a/b/link"];
+  runHelperProcess(args);
+  args = ["remove-symlink", "moz-foo2", "moz-bar2", "target2",
+          getApplyDirFile().path + "/a/b/link2"];
+  runHelperProcess(args);
+}
+
+function checkSymlink() {
+  let args = ["check-symlink", getApplyDirFile().path + "/a/b/link"];
+  runHelperProcess(args);
+}
+
 function run_test() {
   if (!shouldRunServiceTest()) {
     return;
@@ -17,7 +52,7 @@ function run_test() {
   gTestFiles[gTestFiles.length - 1].compareContents = "FromComplete\n";
   gTestFiles[gTestFiles.length - 1].comparePerms = 0o644;
   gTestDirs = gTestDirsCompleteSuccess;
-  setupUpdaterTest(FILE_COMPLETE_MAR);
+  setupUpdaterTest(FILE_COMPLETE_MAR, false, false);
 
   createUpdaterINI(false);
 
@@ -56,13 +91,22 @@ function setupAppFilesFinished() {
 }
 
 function checkUpdateFinished() {
-  checkFilesAfterUpdateSuccess(getStageDirFile, true, false);
+  if (IS_MACOSX) {
+    logTestInfo("testing last modified time on the apply to directory has " +
+                "changed after a successful update (bug 600098)");
+    let now = Date.now();
+    let applyToDir = getApplyDirFile();
+    let timeDiff = Math.abs(applyToDir.lastModifiedTime - now);
+    do_check_true(timeDiff < MAC_MAX_TIME_DIFFERENCE);
+  }
+
+  checkFilesAfterUpdateSuccess();
   // Sorting on Linux is different so skip this check for now.
   if (!IS_UNIX) {
     checkUpdateLogContents(LOG_COMPLETE_SUCCESS);
   }
 
-  if (IS_WIN || IS_MACOSX) {
+  if (IS_MACOSX || IS_WIN) {
     // Check that the post update process was not launched when staging an
     // update.
     do_check_false(getPostUpdateFile(".running").exists());
@@ -71,9 +115,7 @@ function checkUpdateFinished() {
   // Switch the application to the staged application that was updated.
   gStageUpdate = false;
   gSwitchApp = true;
-  do_timeout(TEST_CHECK_TIMEOUT, function() {
-    runUpdate(0, STATE_SUCCEEDED);
-  });
+  runUpdate(0, STATE_SUCCEEDED);
 }
 
 /**
@@ -81,7 +123,7 @@ function checkUpdateFinished() {
  * support launching post update process.
  */
 function checkUpdateApplied() {
-  if (IS_WIN || IS_MACOSX) {
+  if (IS_MACOSX || IS_WIN) {
     gCheckFunc = finishCheckUpdateApplied;
     checkPostUpdateAppLog();
   } else {
@@ -103,7 +145,7 @@ function finishCheckUpdateApplied() {
     do_check_true(timeDiff < MAC_MAX_TIME_DIFFERENCE);
   }
 
-  checkFilesAfterUpdateSuccess(getApplyDirFile, false, false);
+  checkFilesAfterUpdateSuccess();
   if (IS_UNIX) {
     checkSymlink();
   } else {
@@ -112,39 +154,4 @@ function finishCheckUpdateApplied() {
   }
 
   checkCallbackAppLog();
-}
-
-function runHelperProcess(args) {
-  let helperBin = getTestDirFile(FILE_HELPER_BIN);
-  let process = AUS_Cc["@mozilla.org/process/util;1"].
-                createInstance(AUS_Ci.nsIProcess);
-  process.init(helperBin);
-  logTestInfo("Running " + helperBin.path + " " + args.join(" "));
-  process.run(true, args, args.length);
-  do_check_eq(process.exitValue, 0);
-}
-
-function createSymlink() {
-  let args = ["setup-symlink", "moz-foo", "moz-bar", "target",
-              getApplyDirFile().path + "/a/b/link"];
-  runHelperProcess(args);
-  getApplyDirFile("a/b/link", false).permissions = 0o666;
-  
-  args = ["setup-symlink", "moz-foo2", "moz-bar2", "target2",
-          getApplyDirFile().path + "/a/b/link2", "change-perm"];
-  runHelperProcess(args);
-}
-
-function removeSymlink() {
-  let args = ["remove-symlink", "moz-foo", "moz-bar", "target",
-              getApplyDirFile().path + "/a/b/link"];
-  runHelperProcess(args);
-  args = ["remove-symlink", "moz-foo2", "moz-bar2", "target2",
-          getApplyDirFile().path + "/a/b/link2"];
-  runHelperProcess(args);
-}
-
-function checkSymlink() {
-  let args = ["check-symlink", getApplyDirFile().path + "/a/b/link"];
-  runHelperProcess(args);
 }

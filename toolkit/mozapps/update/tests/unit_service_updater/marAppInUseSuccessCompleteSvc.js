@@ -12,7 +12,7 @@ function run_test() {
   setupTestCommon();
   gTestFiles = gTestFilesCompleteSuccess;
   gTestDirs = gTestDirsCompleteSuccess;
-  setupUpdaterTest(FILE_COMPLETE_MAR);
+  setupUpdaterTest(FILE_COMPLETE_MAR, false, false);
 
   // Launch the callback helper application so it is in use during the update.
   let callbackApp = getApplyDirFile("a/b/" + gCallbackBinFile);
@@ -59,7 +59,7 @@ function checkUpdate() {
     do_check_true(timeDiff < MAC_MAX_TIME_DIFFERENCE);
   }
 
-  checkFilesAfterUpdateSuccess(getApplyDirFile, false, false);
+  checkFilesAfterUpdateSuccess();
   // Sorting on Linux is different so skip this check for now.
   if (!IS_UNIX) {
     checkUpdateLogContents(LOG_COMPLETE_SUCCESS);
