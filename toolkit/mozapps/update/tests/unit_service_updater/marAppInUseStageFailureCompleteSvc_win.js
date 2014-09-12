@@ -14,7 +14,7 @@ function run_test() {
   gTestFiles = gTestFilesCompleteSuccess;
   gTestDirs = gTestDirsCompleteSuccess;
   setTestFilesAndDirsForFailure();
-  setupUpdaterTest(FILE_COMPLETE_MAR, true, false);
+  setupUpdaterTest(FILE_COMPLETE_MAR);
 
   // Launch the callback helper application so it is in use during the update.
   let callbackApp = getApplyDirFile("a/b/" + gCallbackBinFile);
@@ -49,7 +49,7 @@ function checkUpdateApplied() {
 }
 
 function checkUpdate() {
-  checkFilesAfterUpdateFailure(getApplyDirFile);
+  checkFilesAfterUpdateFailure(getApplyDirFile, true, false);
   checkUpdateLogContains(ERR_RENAME_FILE);
   checkCallbackAppLog();
 }

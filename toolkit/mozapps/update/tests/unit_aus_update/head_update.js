@@ -6,7 +6,6 @@ const INSTALL_LOCALE = "@AB_CD@";
 const MOZ_APP_NAME = "@MOZ_APP_NAME@";
 const BIN_SUFFIX = "@BIN_SUFFIX@";
 
-#ifdef XP_WIN
 // MOZ_APP_VENDOR is optional.
 // On Windows, if MOZ_APP_VENDOR is not defined the updates directory will be
 // located under %LOCALAPPDATA%\@MOZ_APP_BASENAME@\updates\TaskBarID
@@ -18,7 +17,6 @@ const MOZ_APP_VENDOR = "";
 
 // MOZ_APP_BASENAME is not optional for tests.
 const MOZ_APP_BASENAME = "@MOZ_APP_BASENAME@";
-#endif // XP_WIN
 
 const APP_INFO_NAME = "XPCShell";
 const APP_INFO_VENDOR = "Mozilla";
@@ -825,17 +823,6 @@ var gTestDirsPartialSuccess = [
 // Concatenate the common files to the beginning of the array.
 gTestDirsPartialSuccess = gTestDirsCommon.concat(gTestDirsPartialSuccess);
 
-// Extra directories to check for existence for both complete and partial
-// updates. Whether they exist or not is set when calling setupUpdaterTest.
-var gTestExtraDirs = [
-{
-  relPathDir   : DIR_UPDATED,
-  dirExists    : false
-}, {
-  relPathDir   : DIR_TOBEDELETED,
-  dirExists    : false
-}];
-
 // This makes it possible to run most tests on xulrunner where the update
 // channel default preference is not set.
 if (MOZ_APP_NAME == "xulrunner") {
@@ -909,7 +896,7 @@ function setupTestCommon() {
   // application directory after the call to adjustGeneralPaths has set it up.
   // Since the test hasn't ran yet and the directory shouldn't exist finished
   // this is non-fatal for the test.
-  if (IS_WIN) {
+  if (IS_WIN || IS_MACOSX) {
     let updatesDir = getMockUpdRootD();
     if (updatesDir.exists())  {
       logTestInfo("attempting to remove directory. Path: " + updatesDir.path);
@@ -992,8 +979,8 @@ function cleanupTestCommon() {
   }
 
   // The updates directory is located outside of the application directory on
-  // Windows so it also needs to be removed.
-  if (IS_WIN) {
+  // Windows and Mac so it also needs to be removed.
+  if (IS_WIN || IS_MACOSX) {
     let updatesDir = getMockUpdRootD();
     // Try to remove the directory used to apply updates. Since the test has
     // already finished this is non-fatal for the test.
@@ -1191,9 +1178,56 @@ function getApplyDirPath() {
  *          exist or the function will throw.
  * @return  The nsIFile for the file in the directory where the update will be
  *          applied.
+ * @throws  If aAllowNonexistent is not specified or is false and the file or
+ *          directory does not exist.
  */
 function getApplyDirFile(aRelPath, aAllowNonexistent) {
   let relpath = getApplyDirPath() + (aRelPath ? aRelPath : "");
+  return do_get_file(relpath, aAllowNonexistent);
+}
+
+/**
+ * Helper function for getting the nsIFile for a file in the directory where the
+ * update will be staged.
+ *
+ * The files for the update are located two directories below the stage
+ * directory since Mac OS X sets the last modified time for the root directory
+ * to the current time and if the update changes any files in the root directory
+ * then it wouldn't be possible to test (bug 600098).
+ *
+ * @param   aRelPath (optional)
+ *          The relative path to the file or directory to get from the root of
+ *          the stage directory. If not specified the stage directory will be
+ *          returned.
+ * @param   aAllowNonexistent (optional)
+ *          Whether the file must exist. If false or not specified the file must
+ *          exist or the function will throw.
+ * @return  The nsIFile for the file in the directory where the update will be
+ *          staged.
+ * @throws  If aAllowNonexistent is not specified or is false and the file or
+ *          directory does not exist.
+ */
+function getStageDirFile(aRelPath, aAllowNonexistent) {
+  if (IS_MACOSX) {
+    let file = getMockUpdRootD();
+    file.append(DIR_UPDATES);
+    file.append(DIR_PATCH);
+    file.append(DIR_UPDATED);
+    if (aRelPath) {
+      let pathParts = aRelPath.split("/");
+      for (let i = 0; i < pathParts.length; i++) {
+        if (pathParts[i]) {
+          file.append(pathParts[i]);
+        }
+      }
+    }
+    if (!aAllowNonexistent && !file.exists()) {
+      do_throw(file.path + " does not exist");
+    }
+    return file;
+  }
+
+  let relpath = getApplyDirPath() + DIR_UPDATED + "/" + (aRelPath ? aRelPath : "");
   return do_get_file(relpath, aAllowNonexistent);
 }
 
@@ -1222,15 +1256,6 @@ function getTestDirPath() {
 function getTestDirFile(aRelPath) {
   let relpath = getTestDirPath() + (aRelPath ? aRelPath : "");
   return do_get_file(relpath, false);
-}
-
-/**
- * Helper function for getting the directory that was updated. This can either
- * be the directory where the application binary is located or the directory
- * that contains the staged update.
- */
-function getUpdatedDirPath() {
-  return getApplyDirPath() + (gStageUpdate ? DIR_UPDATED +  "/" : "");
 }
 
 #ifdef XP_WIN
@@ -1330,7 +1355,7 @@ function getMockUpdRootD() {
   let appDir = Services.dirsvc.get(XRE_EXECUTABLE_FILE, AUS_Ci.nsIFile).parent;
 
   let appDirPath = appDir.path;
-  var relPathUpdates = "";
+  let relPathUpdates = "";
   if (gInstallDirPathHash && (MOZ_APP_VENDOR || MOZ_APP_BASENAME)) {
     relPathUpdates += (MOZ_APP_VENDOR ? MOZ_APP_VENDOR : MOZ_APP_BASENAME) +
                       "\\" + DIR_UPDATES + "\\" + gInstallDirPathHash;
@@ -1358,9 +1383,45 @@ function getMockUpdRootD() {
     relPathUpdates += "\\" + MOZ_APP_NAME;
   }
 
-  var updatesDir = AUS_Cc["@mozilla.org/file/local;1"].
+  let updatesDir = AUS_Cc["@mozilla.org/file/local;1"].
                    createInstance(AUS_Ci.nsILocalFile);
   updatesDir.initWithPath(localAppDataDir.path + "\\" + relPathUpdates);
+  logTestInfo("returning UpdRootD Path: " + updatesDir.path);
+  return updatesDir;
+}
+#elif XP_MACOSX
+/**
+ * Helper function for getting the update root directory used by the tests. This
+ * returns the same directory as returned by nsXREDirProvider::GetUpdateRootDir
+ * in nsXREDirProvider.cpp so an application will be able to find the update
+ * when running a test that launches the application.
+ */
+function getMockUpdRootD() {
+  let userLibDir = Services.dirsvc.get("ULibDir", AUS_Ci.nsILocalFile);
+  let appDir = Services.dirsvc.get(XRE_EXECUTABLE_FILE, AUS_Ci.nsIFile).
+               parent.parent.parent;
+  let appDirPath = appDir.path;
+  appDirPath = appDirPath.substr(0, appDirPath.length - 4);
+
+  let relPathUpdates = "";
+  if (MOZ_APP_VENDOR || MOZ_APP_BASENAME) {
+    relPathUpdates += (MOZ_APP_VENDOR ? MOZ_APP_VENDOR : MOZ_APP_BASENAME) +
+                      "/" + DIR_UPDATES + appDirPath;
+  }
+
+  if (!relPathUpdates) {
+    if (MOZ_APP_VENDOR && MOZ_APP_BASENAME) {
+      relPathUpdates += MOZ_APP_VENDOR + "/" + MOZ_APP_BASENAME;
+    } else {
+      relPathUpdates += MOZ_APP_BASENAME;
+    }
+    relPathUpdates += "/" + MOZ_APP_NAME;
+  }
+
+  let updatesDir = AUS_Cc["@mozilla.org/file/local;1"].
+                   createInstance(AUS_Ci.nsILocalFile);
+
+  updatesDir.initWithPath(userLibDir.path + "/Caches/" + relPathUpdates);
   logTestInfo("returning UpdRootD Path: " + updatesDir.path);
   return updatesDir;
 }
@@ -1375,30 +1436,6 @@ function getMockUpdRootD() {
   return getApplyDirFile(DIR_BIN_REL_PATH, true);
 }
 #endif
-
-/**
- * Helper function for getting the nsIFile for the directory where the update
- * has been applied.
- *
- * This will be the same as getApplyDirFile for foreground updates, but will
- * point to a different file for the case of staged updates.
- *
- * Functions which attempt to access the files in the updated directory should
- * be using this instead of getApplyDirFile.
- *
- * @param   aRelPath (optional)
- *          The relative path to the file or directory to get from the root of
- *          the test's directory. If not specified the test's directory will be
- *          returned.
- * @param   aAllowNonexistent (optional)
- *          Whether the file must exist. If false or not specified the file must
- *          exist or the function will throw.
- * @return  The nsIFile for the directory where the update has been applied.
- */
-function getTargetDirFile(aRelPath, aAllowNonexistent) {
-  let relpath = getUpdatedDirPath() + (aRelPath ? aRelPath : "");
-  return do_get_file(relpath, aAllowNonexistent);
-}
 
 if (IS_WIN) {
   const kLockFileName = "updated.update_in_progress.lock";
@@ -1453,7 +1490,7 @@ if (IS_WIN) {
  */
 function runUpdate(aExpectedExitValue, aExpectedStatus, aCallback) {
   // Copy the updater binary to the updates directory.
-  let binDir = gGREDirOrig.clone();
+  let binDir = gAppDirOrig.clone();
   let updater = binDir.clone();
   updater.append("updater.app");
   if (!updater.exists()) {
@@ -1479,24 +1516,30 @@ function runUpdate(aExpectedExitValue, aExpectedStatus, aCallback) {
 
   let applyToDir = getApplyDirFile(null, true);
   let applyToDirPath = applyToDir.path;
-  if (gStageUpdate || gSwitchApp) {
-    applyToDirPath += "/" + DIR_UPDATED + "/";
-  }
+
+  let stageDir = getStageDirFile(null, true);
+  let stageDirPath = stageDir.path;
 
   if (IS_WIN) {
     // Convert to native path
     applyToDirPath = applyToDirPath.replace(/\//g, "\\");
+    stageDirPath = stageDirPath.replace(/\//g, "\\");
   }
 
   let callbackApp = getApplyDirFile("a/b/" + gCallbackBinFile);
   callbackApp.permissions = PERMS_DIRECTORY;
 
-  let args = [updatesDir.path, applyToDirPath, 0];
+  let args = [updatesDir.path, applyToDirPath];
   if (gStageUpdate) {
-    args[2] = -1;
+    args[2] = stageDirPath;
+    args[3] = -1;
   } else {
     if (gSwitchApp) {
-      args[2] = "0/replace";
+      args[2] = stageDirPath;
+      args[3] = "0/replace";
+    } else {
+      args[2] = applyToDirPath;
+      args[3] = "0";
     }
     args = args.concat([callbackApp.parent.path, callbackApp.path]);
     args = args.concat(gCallbackArgs);
@@ -1695,11 +1738,11 @@ function setupAppFilesAsync() {
 
 /**
  * Helper function for setting up the application files required to launch the
- * application for the updater tests by either copying or creating symlinks for
+ * application for the updater tests by either copying or creating symlinks to
  * the files.
  */
 function setupAppFiles() {
-  logTestInfo("start - copying or creating symlinks for application files " +
+  logTestInfo("start - copying or creating symlinks to application files " +
               "for the test");
 
   let srcDir = getCurrentProcessDir();
@@ -1716,12 +1759,19 @@ function setupAppFiles() {
 
   // Required files for the application or the test that aren't listed in the
   // dependentlibs.list file.
-  let fileRelPaths = [FILE_APP_BIN, FILE_UPDATER_BIN,
-                      "application.ini", "dependentlibs.list"];
+  let fileRelPaths = [ { src: FILE_APP_BIN },
+                       { src: FILE_UPDATER_BIN} ];
+  if (IS_MACOSX) {
+    fileRelPaths.push( { src: "../Resources/application.ini", dst: "../Resources/application.ini" } );
+    fileRelPaths.push( { src: "../Resources/dependentlibs.list", dst: "../Resources/dependentlibs.list" } );
+  } else {
+    fileRelPaths.push( { src: "application.ini" } );
+    fileRelPaths.push( { src: "dependentlibs.list" } );
+  }
 
   // On Linux the updater.png must also be copied
   if (IS_UNIX && !IS_MACOSX) {
-    fileRelPaths.push("icons/updater.png");
+    fileRelPaths.push( { src: "icons/updater.png" } );
   }
 
   // Read the dependent libs file leafnames from the dependentlibs.list file
@@ -1737,16 +1787,17 @@ function setupAppFiles() {
   let line = {};
   do {
     hasMore = istream.readLine(line);
-    fileRelPaths.push(line.value);
+    fileRelPaths.push( { src: line.value } );
   } while(hasMore);
 
   istream.close();
 
   fileRelPaths.forEach(function CMAF_FLN_FE(aFileRelPath) {
-    copyFileToTestAppDir(aFileRelPath);
+    copyFileToTestAppDir(aFileRelPath.src, aFileRelPath.dst ? aFileRelPath.dst
+                                                            : null);
   });
 
-  logTestInfo("finish - copying or creating symlinks for application files " +
+  logTestInfo("finish - copying or creating symlinks to application files " +
               "for the test");
 }
 
@@ -1756,10 +1807,12 @@ function setupAppFiles() {
  *
  * @param  aFileRelPath
  *         The relative path of the file to copy.
+ * @param  aDestFileRelPath (optional)
+ *         The relative path of the destination file.
  */
-function copyFileToTestAppDir(aFileRelPath) {
+function copyFileToTestAppDir(aFileRelPath, aDestFileRelPath) {
   let fileRelPath = aFileRelPath;
-  let srcFile = gGREDirOrig.clone();
+  let srcFile = gAppDirOrig.clone();
   let pathParts = fileRelPath.split("/");
   for (let i = 0; i < pathParts.length; i++) {
     if (pathParts[i]) {
@@ -1771,7 +1824,7 @@ function copyFileToTestAppDir(aFileRelPath) {
     logTestInfo("unable to copy file since it doesn't exist! Checking if " +
                  fileRelPath + ".app exists. Path: " +
                  srcFile.path);
-    srcFile = gGREDirOrig.clone();
+    srcFile = gAppDirOrig.clone();
     for (let i = 0; i < pathParts.length; i++) {
       if (pathParts[i]) {
         srcFile.append(pathParts[i] + (pathParts.length - 1 == i ? ".app" : ""));
@@ -1790,7 +1843,9 @@ function copyFileToTestAppDir(aFileRelPath) {
   let shouldSymlink = (pathParts[pathParts.length - 1] == "XUL" ||
                        fileRelPath.substr(fileRelPath.length - 3) == ".so" ||
                        fileRelPath.substr(fileRelPath.length - 6) == ".dylib");
-  let destFile = getApplyDirFile(DIR_BIN_REL_PATH + fileRelPath, true);
+  let destFile = getApplyDirFile(DIR_BIN_REL_PATH +
+                                 (aDestFileRelPath ? aDestFileRelPath
+                                                   : fileRelPath), true);
   if (!shouldSymlink) {
     if (!destFile.exists()) {
       try {
@@ -1865,8 +1920,8 @@ function attemptServiceInstall() {
  *        The initial value of update.status.
  * @param aExpectedStatus
  *        The expected value of update.status when the test finishes.
- * @param aCheckSvcLog
- *        Whether the service log should be checked (optional).
+ * @param aCheckSvcLog (optional)
+ *        Whether the service log should be checked.
  */
 function runUpdateUsingService(aInitialStatus, aExpectedStatus, aCheckSvcLog) {
   // Check the service logs for a successful update
@@ -1971,6 +2026,7 @@ function runUpdateUsingService(aInitialStatus, aExpectedStatus, aCheckSvcLog) {
   gServiceLaunchedCallbackLog = appArgsLogPath.replace(/^"|"$/g, "");
 
   let updatesDir = getUpdatesPatchDir();
+// XXX Don't think file is used.
   let file = updatesDir.clone();
   writeStatusFile(aInitialStatus);
 
@@ -2179,7 +2235,7 @@ function setupHelperFinish() {
  * @param   aMarFile
  *          The mar file for the update test.
  */
-function setupUpdaterTest(aMarFile, aUpdatedDirExists, aToBeDeletedDirExists) {
+function setupUpdaterTest(aMarFile) {
   let updatesPatchDir = getUpdatesPatchDir();
   if (!updatesPatchDir.exists()) {
     updatesPatchDir.create(AUS_Ci.nsIFile.DIRECTORY_TYPE, PERMS_DIRECTORY);
@@ -2261,9 +2317,6 @@ function setupUpdaterTest(aMarFile, aUpdatedDirExists, aToBeDeletedDirExists) {
       });
     }
   });
-
-  gTestExtraDirs[0].dirExists = aUpdatedDirExists;
-  gTestExtraDirs[1].dirExists = IS_WIN ? aToBeDeletedDirExists : false;
 }
 
 /**
@@ -2274,7 +2327,7 @@ function createUpdateSettingsINI() {
   let updateSettingsIni = getApplyDirFile(null, true);
   if (IS_MACOSX) {
     updateSettingsIni.append("Contents");
-    updateSettingsIni.append("MacOS");
+    updateSettingsIni.append("Resources");
   }
   updateSettingsIni.append(FILE_UPDATE_SETTINGS_INI);
   writeFile(updateSettingsIni, UPDATE_SETTINGS_CONTENTS);
@@ -2311,7 +2364,7 @@ function createUpdaterINI(aIsExeAsync) {
                            "ExeRelPath=a/b/" + gPostUpdateBinFile + "\n" +
                            exeArg +
                            exeAsync;
-  let updaterIni = getApplyDirFile((IS_MACOSX ? "Contents/MacOS/" : "") +
+  let updaterIni = getApplyDirFile((IS_MACOSX ? "Contents/Resources/" : "") +
                                     FILE_UPDATER_INI, true);
   writeFile(updaterIni, updaterIniContents);
 }
@@ -2331,13 +2384,13 @@ function checkUpdateLogContents(aCompareLogFile) {
   // The channel-prefs.js is defined in gTestFilesCommon which will always be
   // located to the end of gTestFiles.
   if (gTestFiles.length > 1 &&
-	  gTestFiles[gTestFiles.length - 1].fileName == "channel-prefs.js" &&
-	  !gTestFiles[gTestFiles.length - 1].originalContents) {
+      gTestFiles[gTestFiles.length - 1].fileName == "channel-prefs.js" &&
+      !gTestFiles[gTestFiles.length - 1].originalContents) {
     updateLogContents = updateLogContents.replace(/.* a\/b\/defaults\/.*/g, "");
   }
   if (gTestFiles.length > 2 &&
-	  gTestFiles[gTestFiles.length - 2].fileName == FILE_UPDATE_SETTINGS_INI &&
-	  !gTestFiles[gTestFiles.length - 2].originalContents) {
+      gTestFiles[gTestFiles.length - 2].fileName == FILE_UPDATE_SETTINGS_INI &&
+      !gTestFiles[gTestFiles.length - 2].originalContents) {
     updateLogContents = updateLogContents.replace(/.* a\/b\/update-settings.ini.*/g, "");
   }
   if (gStageUpdate) {
@@ -2349,8 +2402,9 @@ function checkUpdateLogContents(aCompareLogFile) {
     updateLogContents = updateLogContents.replace(/Performing a replace request/, "");
   }
   // Skip the source/destination lines since they contain absolute paths.
-  updateLogContents = updateLogContents.replace(/SOURCE DIRECTORY.*/g, "");
-  updateLogContents = updateLogContents.replace(/DESTINATION DIRECTORY.*/g, "");
+  updateLogContents = updateLogContents.replace(/PATCH DIRECTORY.*/g, "");
+  updateLogContents = updateLogContents.replace(/INSTALLATION DIRECTORY.*/g, "");
+  updateLogContents = updateLogContents.replace(/WORKING DIRECTORY.*/g, "");
   // Skip lines that log failed attempts to open the callback executable.
   updateLogContents = updateLogContents.replace(/NS_main: callback app file .*/g, "");
   if (gSwitchApp) {
@@ -2390,13 +2444,13 @@ function checkUpdateLogContents(aCompareLogFile) {
   // The channel-prefs.js is defined in gTestFilesCommon which will always be
   // located to the end of gTestFiles.
   if (gTestFiles.length > 1 &&
-	  gTestFiles[gTestFiles.length - 1].fileName == "channel-prefs.js" &&
-	  !gTestFiles[gTestFiles.length - 1].originalContents) {
+      gTestFiles[gTestFiles.length - 1].fileName == "channel-prefs.js" &&
+      !gTestFiles[gTestFiles.length - 1].originalContents) {
     compareLogContents = compareLogContents.replace(/.* a\/b\/defaults\/.*/g, "");
   }
   if (gTestFiles.length > 2 &&
-	  gTestFiles[gTestFiles.length - 2].fileName == FILE_UPDATE_SETTINGS_INI &&
-	  !gTestFiles[gTestFiles.length - 2].originalContents) {
+      gTestFiles[gTestFiles.length - 2].fileName == FILE_UPDATE_SETTINGS_INI &&
+      !gTestFiles[gTestFiles.length - 2].originalContents) {
     compareLogContents = compareLogContents.replace(/.* a\/b\/update-settings.ini.*/g, "");
   }
   // Remove leading and trailing newlines
@@ -2438,12 +2492,23 @@ function checkUpdateLogContains(aCheckString) {
 /**
  * Helper function for updater binary tests for verifying the state of files and
  * directories after a successful update.
+ *
+ * @param  aGetFileFunc
+ *         The function used to get the files in the directory to be checked.
+ * @param  aStageDirExists
+ *         If true the staging directory will be tested for existence and if
+ *         false the staging directory will be tested for non-existence.
+ * @param  aToBeDeletedDirExists
+ *         On Windows, if true the tobedeleted directory will be tested for
+ *         existence and if false the tobedeleted directory will be tested for
+ *         non-existence. On all othere platforms it will be tested for
+ *         non-existence.
  */
-function checkFilesAfterUpdateSuccess() {
+function checkFilesAfterUpdateSuccess(aGetFileFunc, aStageDirExists,
+                                      aToBeDeletedDirExists) {
   logTestInfo("testing contents of files after a successful update");
   gTestFiles.forEach(function CFAUS_TF_FE(aTestFile) {
-    let testFile = getTargetDirFile(aTestFile.relPathDir + aTestFile.fileName,
-                                    true);
+    let testFile = aGetFileFunc(aTestFile.relPathDir + aTestFile.fileName, true);
     logTestInfo("testing file: " + testFile.path);
     if (aTestFile.compareFile || aTestFile.compareContents) {
       do_check_true(testFile.exists());
@@ -2485,7 +2550,7 @@ function checkFilesAfterUpdateSuccess() {
   logTestInfo("testing operations specified in removed-files were performed " +
               "after a successful update");
   gTestDirs.forEach(function CFAUS_TD_FE(aTestDir) {
-    let testDir = getTargetDirFile(aTestDir.relPathDir, true);
+    let testDir = aGetFileFunc(aTestDir.relPathDir, true);
     logTestInfo("testing directory: " + testDir.path);
     if (aTestDir.dirRemoved) {
       do_check_false(testDir.exists());
@@ -2494,7 +2559,7 @@ function checkFilesAfterUpdateSuccess() {
 
       if (aTestDir.files) {
         aTestDir.files.forEach(function CFAUS_TD_F_FE(aTestFile) {
-          let testFile = getTargetDirFile(aTestDir.relPathDir + aTestFile, true);
+          let testFile = aGetFileFunc(aTestDir.relPathDir + aTestFile, true);
           logTestInfo("testing directory file: " + testFile.path);
           if (aTestDir.filesRemoved) {
             do_check_false(testFile.exists());
@@ -2506,12 +2571,13 @@ function checkFilesAfterUpdateSuccess() {
 
       if (aTestDir.subDirs) {
         aTestDir.subDirs.forEach(function CFAUS_TD_SD_FE(aSubDir) {
-          let testSubDir = getTargetDirFile(aTestDir.relPathDir + aSubDir, true);
+          let testSubDir = aGetFileFunc(aTestDir.relPathDir + aSubDir, true);
           logTestInfo("testing sub-directory: " + testSubDir.path);
           do_check_true(testSubDir.exists());
           if (aTestDir.subDirFiles) {
             aTestDir.subDirFiles.forEach(function CFAUS_TD_SDF_FE(aTestFile) {
-              let testFile = getTargetDirFile(aTestDir.relPathDir + aSubDir + aTestFile, true);
+              let testFile = aGetFileFunc(aTestDir.relPathDir +
+                                          aSubDir + aTestFile, true);
               logTestInfo("testing sub-directory file: " + testFile.path);
               do_check_true(testFile.exists());
             });
@@ -2521,21 +2587,30 @@ function checkFilesAfterUpdateSuccess() {
     }
   });
 
-  checkFilesAfterUpdateCommon();
+  checkFilesAfterUpdateCommon(aGetFileFunc, aStageDirExists,
+                              aToBeDeletedDirExists);
 }
 
 /**
  * Helper function for updater binary tests for verifying the state of files and
  * directories after a failed update.
  *
- * @param aGetDirectory: the function used to get the files in the target directory.
- * Pass getApplyDirFile if you want to test the case of a failed switch request.
+ * @param aGetFileFunc
+ *        the function used to get the files in the directory to be checked.
+ * @param  aStageDirExists
+ *         If true the staging directory will be tested for existence and if
+ *         false the staging directory will be tested for non-existence.
+ * @param  aToBeDeletedDirExists
+ *         On Windows, if true the tobedeleted directory will be tested for
+ *         existence and if false the tobedeleted directory will be tested for
+ *         non-existence. On all othere platforms it will be tested for
+ *         non-existence.
  */
-function checkFilesAfterUpdateFailure(aGetDirectory) {
-  let getdir = aGetDirectory || getTargetDirFile;
+function checkFilesAfterUpdateFailure(aGetFileFunc, aStageDirExists,
+                                      aToBeDeletedDirExists) {
   logTestInfo("testing contents of files after a failed update");
   gTestFiles.forEach(function CFAUF_TF_FE(aTestFile) {
-    let testFile = getdir(aTestFile.relPathDir + aTestFile.fileName, true);
+    let testFile = aGetFileFunc(aTestFile.relPathDir + aTestFile.fileName, true);
     logTestInfo("testing file: " + testFile.path);
     if (aTestFile.compareFile || aTestFile.compareContents) {
       do_check_true(testFile.exists());
@@ -2577,13 +2652,13 @@ function checkFilesAfterUpdateFailure(aGetDirectory) {
   logTestInfo("testing operations specified in removed-files were not " +
               "performed after a failed update");
   gTestDirs.forEach(function CFAUF_TD_FE(aTestDir) {
-    let testDir = getdir(aTestDir.relPathDir, true);
+    let testDir = aGetFileFunc(aTestDir.relPathDir, true);
     logTestInfo("testing directory: " + testDir.path);
     do_check_true(testDir.exists());
 
     if (aTestDir.files) {
       aTestDir.files.forEach(function CFAUS_TD_F_FE(aTestFile) {
-        let testFile = getdir(aTestDir.relPathDir + aTestFile, true);
+        let testFile = aGetFileFunc(aTestDir.relPathDir + aTestFile, true);
         logTestInfo("testing directory file: " + testFile.path);
         do_check_true(testFile.exists());
       });
@@ -2591,13 +2666,13 @@ function checkFilesAfterUpdateFailure(aGetDirectory) {
 
     if (aTestDir.subDirs) {
       aTestDir.subDirs.forEach(function CFAUS_TD_SD_FE(aSubDir) {
-        let testSubDir = getdir(aTestDir.relPathDir + aSubDir, true);
+        let testSubDir = aGetFileFunc(aTestDir.relPathDir + aSubDir, true);
         logTestInfo("testing sub-directory: " + testSubDir.path);
         do_check_true(testSubDir.exists());
         if (aTestDir.subDirFiles) {
           aTestDir.subDirFiles.forEach(function CFAUS_TD_SDF_FE(aTestFile) {
-            let testFile = getdir(aTestDir.relPathDir + aSubDir + aTestFile,
-                                  true);
+            let testFile = aGetFileFunc(aTestDir.relPathDir +
+                                        aSubDir + aTestFile, true);
             logTestInfo("testing sub-directory file: " + testFile.path);
             do_check_true(testFile.exists());
           });
@@ -2606,42 +2681,65 @@ function checkFilesAfterUpdateFailure(aGetDirectory) {
     }
   });
 
-  checkFilesAfterUpdateCommon();
+  checkFilesAfterUpdateCommon(aGetFileFunc, aStageDirExists,
+                              aToBeDeletedDirExists);
 }
 
 /**
  * Helper function for updater binary tests for verifying the state of common
  * files and directories after a successful or failed update.
+ *
+ * @param aGetFileFunc
+ *        the function used to get the files in the directory to be checked.
+ * @param  aStageDirExists
+ *         If true the staging directory will be tested for existence and if
+ *         false the staging directory will be tested for non-existence.
+ * @param  aToBeDeletedDirExists
+ *         On Windows, if true the tobedeleted directory will be tested for
+ *         existence and if false the tobedeleted directory will be tested for
+ *         non-existence. On all othere platforms it will be tested for
+ *         non-existence.
  */
-function checkFilesAfterUpdateCommon() {
+function checkFilesAfterUpdateCommon(aGetFileFunc, aStageDirExists,
+                                     aToBeDeletedDirExists) {
   logTestInfo("testing extra directories");
-  gTestExtraDirs.forEach(function CFAUC_TED_FE(aTestExtraDir) {
-    let testDir = getTargetDirFile(aTestExtraDir.relPathDir, true);
-    logTestInfo("testing directory: " + testDir.path);
-    if (aTestExtraDir.dirExists) {
-      do_check_true(testDir.exists());
-    } else {
-      do_check_false(testDir.exists());
-    }
-  });
+
+  let stageDir = getStageDirFile(null, true);
+  logTestInfo("testing directory should " +
+              (aStageDirExists ? "" : "not ") +
+              "exist: " + stageDir.path);
+  do_check_eq(stageDir.exists(), aStageDirExists);
+
+  let toBeDeletedDirExists = IS_WIN ? aToBeDeletedDirExists : false;
+  let toBeDeletedDir = getApplyDirFile(DIR_TOBEDELETED, true);
+  logTestInfo("testing directory should " +
+              (toBeDeletedDirExists ? "" : "not ") +
+              "exist: " + toBeDeletedDir.path);
+  do_check_eq(toBeDeletedDir.exists(), toBeDeletedDirExists);
 
   logTestInfo("testing updating directory doesn't exist in the application " +
-	          "directory");
-  let updatingDir = getTargetDirFile("updating", true);
+              "directory");
+  let updatingDir = getApplyDirFile("updating", true);
   do_check_false(updatingDir.exists());
 
-  if (gStageUpdate) {
-    logTestInfo("testing updating directory doesn't exist in the updated " +
-		        "directory");
-    updatingDir = getApplyDirFile("updating", true);
-    do_check_false(updatingDir.exists());
-
-    // This should never exist since the update was applied to the updated
-	// directory and the files should never be in use.
-    logTestInfo("testing tobedeleted directory doesn't exist in the updated " +
+  if (stageDir.exists()) {
+    logTestInfo("testing updating directory doesn't exist in the staging " +
                 "directory");
-    let toBeDeletedDir = getApplyDirFile(DIR_TOBEDELETED, true);
-    do_check_false(toBeDeletedDir.exists());
+    updatingDir = stageDir.clone();
+    updatingDir.append("updating");
+    do_check_false(updatingDir.exists());
+  }
+
+  logTestInfo("testing backup files should not be left behind in the " +
+              "application directory");
+  let applyToDir = getApplyDirFile(null, true);
+  checkFilesInDirRecursive(applyToDir, checkForBackupFiles);
+
+  if (stageDir.exists()) {
+    logTestInfo("testing backup files should not be left behind in the " +
+                "staging directory");
+    let applyToDir = getApplyDirFile(null, true);
+    checkFilesInDirRecursive(stageDir, checkForBackupFiles);
   }
 
   logTestInfo("testing patch files should not be left behind");
@@ -2651,10 +2749,6 @@ function checkFilesAfterUpdateCommon() {
     let entry = entries.getNext().QueryInterface(AUS_Ci.nsIFile);
     do_check_neq(getFileExtension(entry), "patch");
   }
-
-  logTestInfo("testing backup files should not be left behind");
-  let applyToDir = getTargetDirFile(null, true);
-  checkFilesInDirRecursive(applyToDir, checkForBackupFiles);
 }
 
 /**
@@ -2711,7 +2805,7 @@ function checkPostUpdateAppLog() {
   gTimeoutRuns++;
   let postUpdateLog = getPostUpdateFile(".log");
   if (!postUpdateLog.exists()) {
-    logTestInfo("postUpdateLog does not exist");
+    logTestInfo("postUpdateLog does not exist. Path: " + postUpdateLog.path);
     if (gTimeoutRuns > MAX_TIMEOUT_RUNS) {
       do_throw("Exceeded MAX_TIMEOUT_RUNS while waiting for the post update " +
                "process to create the post update log. Path: " +

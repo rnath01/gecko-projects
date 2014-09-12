@@ -9,7 +9,7 @@ function run_test() {
   gTestFiles = gTestFilesPartialSuccess;
   gTestDirs = gTestDirsPartialSuccess;
   setTestFilesAndDirsForFailure();
-  setupUpdaterTest(FILE_PARTIAL_MAR, false, false);
+  setupUpdaterTest(FILE_PARTIAL_MAR);
 
   // Exclusively lock an existing file so it is in use during the update.
   let helperBin = getTestDirFile(FILE_HELPER_BIN);
@@ -40,7 +40,7 @@ function checkUpdateApplied() {
 }
 
 function checkUpdate() {
-  checkFilesAfterUpdateFailure();
+  checkFilesAfterUpdateFailure(getApplyDirFile, false, false);
   checkUpdateLogContains(ERR_UNABLE_OPEN_DEST);
   checkCallbackAppLog();
 }

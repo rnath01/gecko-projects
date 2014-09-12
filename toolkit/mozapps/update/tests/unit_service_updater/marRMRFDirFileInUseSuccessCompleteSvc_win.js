@@ -12,7 +12,7 @@ function run_test() {
   setupTestCommon();
   gTestFiles = gTestFilesCompleteSuccess;
   gTestDirs = gTestDirsCompleteSuccess;
-  setupUpdaterTest(FILE_COMPLETE_MAR, false, true);
+  setupUpdaterTest(FILE_COMPLETE_MAR);
 
   let fileInUseBin = getApplyDirFile(gTestDirs[4].relPathDir +
                                      gTestDirs[4].subDirs[0] +
@@ -50,7 +50,7 @@ function checkUpdateFinished() {
 }
 
 function checkUpdate() {
-  checkFilesAfterUpdateSuccess();
+  checkFilesAfterUpdateSuccess(getApplyDirFile, false, true);
   checkUpdateLogContains(ERR_BACKUP_DISCARD);
   checkCallbackServiceLog();
 }
