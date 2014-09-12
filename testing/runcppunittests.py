@@ -97,17 +97,19 @@ class CPPUnitTests(object):
         env = dict(os.environ)
         env = self.build_core_environment(env)
         pathvar = ""
+        libpath = self.xre_path
         if mozinfo.os == "linux":
             pathvar = "LD_LIBRARY_PATH"
         elif mozinfo.os == "mac":
+            libpath = os.path.join(os.path.dirname(libpath), 'MacOS')
             pathvar = "DYLD_LIBRARY_PATH"
         elif mozinfo.os == "win":
             pathvar = "PATH"
         if pathvar:
             if pathvar in env:
-                env[pathvar] = "%s%s%s" % (self.xre_path, os.pathsep, env[pathvar])
+                env[pathvar] = "%s%s%s" % (libpath, os.pathsep, env[pathvar])
             else:
-                env[pathvar] = self.xre_path
+                env[pathvar] = libpath
 
         # Use llvm-symbolizer for ASan if available/required
         llvmsym = os.path.join(self.xre_path, "llvm-symbolizer")
@@ -209,6 +211,8 @@ def main():
 
     progs = extract_unittests_from_args(args, options.manifest_file)
     options.xre_path = os.path.abspath(options.xre_path)
+    if sys.platform == 'osx' or sys.platform == "darwin":
+        options.xre_path = os.path.join(os.path.dirname(options.xre_path), 'Resources')
     tester = CPPUnitTests()
 
     try:
