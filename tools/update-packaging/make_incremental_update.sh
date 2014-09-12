@@ -103,6 +103,12 @@ if test $? -ne 0 ; then
   exit 1
 fi
 
+if [ -f "removed-files" ]; then
+  cp "removed-files" "removed-files.tmp"
+elif [ -f "Contents/Resources/removed-files" ]; then
+  cp "Contents/Resources/removed-files" "Contents/Resources/removed-files.tmp"
+fi
+
 list_files oldfiles
 list_dirs olddirs
 
@@ -146,12 +152,6 @@ for ((i=0; $i<$num_oldfiles; i=$i+1)); do
 
   # This file is created by Talkback, so we can ignore it
   if [ "$f" = "readme.txt" ]; then
-    continue 1
-  fi
-
-  # removed-files is excluded by make_incremental_updates.py so it is excluded
-  # here for consistency.
-  if [ `basename $f` = "removed-files" ]; then
     continue 1
   fi
 
@@ -218,12 +218,6 @@ num_newfiles=${#newfiles[*]}
 
 for ((i=0; $i<$num_newfiles; i=$i+1)); do
   f="${newfiles[$i]}"
-
-  # removed-files is excluded by make_incremental_updates.py so it is excluded
-  # here for consistency.
-  if [ `basename $f` = "removed-files" ]; then
-    continue 1
-  fi
 
   # If we've already tested this file, then skip it
   for ((j=0; $j<$num_oldfiles; j=$j+1)); do
@@ -294,6 +288,12 @@ mv -f "$workdir/output.mar" "$archive"
 
 # cleanup
 rm -fr "$workdir"
+
+if [ -f "$newdir/removed-files.tmp" ]; then
+  rm "$newdir/removed-files.tmp"
+elif [ -f "$newdir/Contents/Resources/removed-files.tmp" ]; then
+  rm "$newdir/Contents/Resources/removed-files.tmp"
+fi
 
 notice ""
 notice "Finished"

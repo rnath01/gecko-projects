@@ -62,6 +62,12 @@ if [ ! -f "precomplete" ]; then
   fi
 fi
 
+if [ -f "removed-files" ]; then
+  cp "removed-files" "removed-files.tmp"
+elif [ -f "Contents/Resources/removed-files" ]; then
+  cp "Contents/Resources/removed-files" "Contents/Resources/removed-files.tmp"
+fi
+
 list_files files
 
 popd
@@ -112,6 +118,12 @@ mv -f "$workdir/output.mar" "$archive"
 
 # cleanup
 rm -fr "$workdir"
+
+if [ -f "$targetdir/removed-files.tmp" ]; then
+  rm "$targetdir/removed-files.tmp"
+elif [ -f "$targetdir/Contents/Resources/removed-files.tmp" ]; then
+  rm "$targetdir/Contents/Resources/removed-files.tmp"
+fi
 
 notice ""
 notice "Finished"
