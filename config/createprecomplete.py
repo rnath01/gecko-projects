@@ -44,12 +44,14 @@ def generate_precomplete(root_path):
         application update instructions. The given directory is used
         for the location to enumerate and to create the precomplete file.
     """
+    rel_path_precomplete = "precomplete"
     # If inside a Mac bundle use the root of the bundle for the path.
     if os.path.basename(root_path) == "Resources":
         root_path = os.path.abspath(os.path.join(root_path, '../../'))
+        rel_path_precomplete = "Contents/Resources/precomplete"
 
     rel_file_path_list, rel_dir_path_list = get_build_entries(root_path)
-    precomplete_file_path = os.path.join(root_path,"precomplete")
+    precomplete_file_path = os.path.join(root_path,rel_path_precomplete)
     # open in binary mode to prevent OS specific line endings.
     precomplete_file = open(precomplete_file_path, "wb")
     for rel_file_path in rel_file_path_list:
