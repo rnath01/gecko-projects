@@ -347,7 +347,7 @@ xpcshell-tests-remote: DM_TRANS?=adb
 xpcshell-tests-remote:
 	@if [ '${TEST_DEVICE}' != '' -o '$(DM_TRANS)' = 'adb' ]; \
           then $(PYTHON) -u $(topsrcdir)/testing/xpcshell/remotexpcshelltests.py \
-	    --manifest=$(DEPTH)/_tests/xpcshell/xpcshell_android.ini \
+	    --manifest=$(DEPTH)/_tests/xpcshell/xpcshell.ini \
 	    --build-info-json=$(DEPTH)/mozinfo.json \
 	    --no-logfiles \
 	    --testing-modules-dir=$(abspath _tests/modules) \
