@@ -4357,7 +4357,7 @@ CodeGenerator::visitTypedArrayLength(LTypedArrayLength *lir)
 {
     Register obj = ToRegister(lir->object());
     Register out = ToRegister(lir->output());
-    masm.unboxInt32(Address(obj, TypedArrayObject::lengthOffset()), out);
+    masm.unboxInt32(Address(obj, TypedArrayLayout::lengthOffset()), out);
     return true;
 }
 
@@ -4366,7 +4366,7 @@ CodeGenerator::visitTypedArrayElements(LTypedArrayElements *lir)
 {
     Register obj = ToRegister(lir->object());
     Register out = ToRegister(lir->output());
-    masm.loadPtr(Address(obj, TypedArrayObject::dataOffset()), out);
+    masm.loadPtr(Address(obj, TypedArrayLayout::dataOffset()), out);
     return true;
 }
 
@@ -6370,7 +6370,7 @@ LoadNativeIterator(MacroAssembler &masm, Register obj, Register dest, Label *fai
 }
 
 typedef bool (*IteratorNextFn)(JSContext *, HandleObject, MutableHandleValue);
-static const VMFunction IteratorNextInfo = FunctionInfo<IteratorNextFn>(js_IteratorNext);
+static const VMFunction IteratorNextInfo = FunctionInfo<IteratorNextFn>(IteratorNext);
 
 bool
 CodeGenerator::visitIteratorNext(LIteratorNext *lir)
@@ -6401,7 +6401,7 @@ CodeGenerator::visitIteratorNext(LIteratorNext *lir)
 }
 
 typedef bool (*IteratorMoreFn)(JSContext *, HandleObject, bool *);
-static const VMFunction IteratorMoreInfo = FunctionInfo<IteratorMoreFn>(js_IteratorMore);
+static const VMFunction IteratorMoreInfo = FunctionInfo<IteratorMoreFn>(IteratorMore);
 
 bool
 CodeGenerator::visitIteratorMore(LIteratorMore *lir)
@@ -8200,7 +8200,7 @@ CodeGenerator::visitLoadTypedArrayElementHole(LLoadTypedArrayElementHole *lir)
     // Load the length.
     Register scratch = out.scratchReg();
     Int32Key key = ToInt32Key(lir->index());
-    masm.unboxInt32(Address(object, TypedArrayObject::lengthOffset()), scratch);
+    masm.unboxInt32(Address(object, TypedArrayLayout::lengthOffset()), scratch);
 
     // Load undefined unless length > key.
     Label inbounds, done;
@@ -8210,7 +8210,7 @@ CodeGenerator::visitLoadTypedArrayElementHole(LLoadTypedArrayElementHole *lir)
 
     // Load the elements vector.
     masm.bind(&inbounds);
-    masm.loadPtr(Address(object, TypedArrayObject::dataOffset()), scratch);
+    masm.loadPtr(Address(object, TypedArrayLayout::dataOffset()), scratch);
 
     Scalar::Type arrayType = lir->mir()->arrayType();
     int width = Scalar::byteSize(arrayType);
@@ -8891,70 +8891,6 @@ CodeGenerator::visitHasClass(LHasClass *ins)
 }
 
 bool
-CodeGenerator::visitAsmJSCall(LAsmJSCall *ins)
-{
-    MAsmJSCall *mir = ins->mir();
-
-#if defined(JS_CODEGEN_ARM)
-    if (!UseHardFpABI() && mir->callee().which() == MAsmJSCall::Callee::Builtin) {
-        // The soft ABI passes floating point arguments in GPRs. Since basically
-        // nothing is set up to handle this, the values are placed in the
-        // corresponding VFP registers, then transferred to GPRs immediately
-        // before the call. The mapping is sN <-> rN, where double registers
-        // can be treated as their two component single registers.
-        for (unsigned i = 0, e = ins->numOperands(); i < e; i++) {
-            LAllocation *a = ins->getOperand(i);
-            if (a->isFloatReg()) {
-                FloatRegister fr = ToFloatRegister(a);
-                if (fr.isDouble()) {
-                    uint32_t srcId = fr.singleOverlay().id();
-                    masm.ma_vxfer(fr, Register::FromCode(srcId), Register::FromCode(srcId + 1));
-                } else {
-                    uint32_t srcId = fr.id();
-                    masm.ma_vxfer(fr, Register::FromCode(srcId));
-                }
-            }
-        }
-    }
-#endif
-
-    if (mir->spIncrement())
-        masm.freeStack(mir->spIncrement());
-
-    JS_ASSERT((sizeof(AsmJSFrame) + masm.framePushed()) % AsmJSStackAlignment == 0);
-
-#ifdef DEBUG
-    static_assert(AsmJSStackAlignment >= ABIStackAlignment,
-                  "The asm.js stack alignment should subsume the ABI-required alignment");
-    static_assert(AsmJSStackAlignment % ABIStackAlignment == 0,
-                  "The asm.js stack alignment should subsume the ABI-required alignment");
-    Label ok;
-    masm.branchTestPtr(Assembler::Zero, StackPointer, Imm32(AsmJSStackAlignment - 1), &ok);
-    masm.breakpoint();
-    masm.bind(&ok);
-#endif
-
-    MAsmJSCall::Callee callee = mir->callee();
-    switch (callee.which()) {
-      case MAsmJSCall::Callee::Internal:
-        masm.call(mir->desc(), callee.internal());
-        break;
-      case MAsmJSCall::Callee::Dynamic:
-        masm.call(mir->desc(), ToRegister(ins->getOperand(mir->dynamicCalleeOperandIndex())));
-        break;
-      case MAsmJSCall::Callee::Builtin:
-        masm.call(AsmJSImmPtr(callee.builtin()));
-        break;
-    }
-
-    if (mir->spIncrement())
-        masm.reserveStack(mir->spIncrement());
-
-    postAsmJSCall(ins);
-    return true;
-}
-
-bool
 CodeGenerator::visitAsmJSParameter(LAsmJSParameter *lir)
 {
     return true;
@@ -9205,6 +9141,30 @@ CodeGenerator::visitRecompileCheck(LRecompileCheck *ins)
     masm.bind(&done);
 
     return true;
+}
+
+typedef bool (*ThrowUninitializedLexicalFn)(JSContext *);
+static const VMFunction ThrowUninitializedLexicalInfo =
+    FunctionInfo<ThrowUninitializedLexicalFn>(ThrowUninitializedLexical);
+
+bool
+CodeGenerator::visitLexicalCheck(LLexicalCheck *ins)
+{
+    OutOfLineCode *ool = oolCallVM(ThrowUninitializedLexicalInfo, ins, (ArgList()),
+                                   StoreNothing());
+    if (!ool)
+        return false;
+    ValueOperand inputValue = ToValue(ins, LLexicalCheck::Input);
+    masm.branchTestMagicValue(Assembler::Equal, inputValue, JS_UNINITIALIZED_LEXICAL,
+                              ool->entry());
+    masm.bind(ool->rejoin());
+    return true;
+}
+
+bool
+CodeGenerator::visitThrowUninitializedLexical(LThrowUninitializedLexical *ins)
+{
+    return callVM(ThrowUninitializedLexicalInfo, ins);
 }
 
 } // namespace jit
