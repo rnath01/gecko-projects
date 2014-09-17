@@ -230,8 +230,17 @@ IonBuilder::inlineNativeGetter(CallInfo &callInfo, JSFunction *target)
     // typed array prototype, and make sure we are accessing the right one
     // for the type of the instance object.
     if (thisTypes) {
-        Scalar::Type type = thisTypes->getTypedArrayType();
+        Scalar::Type type;
+
+        type = thisTypes->getTypedArrayType();
         if (type != Scalar::TypeMax && TypedArrayObject::isOriginalLengthGetter(type, native)) {
+            MInstruction *length = addTypedArrayLength(callInfo.thisArg());
+            current->push(length);
+            return InliningStatus_Inlined;
+        }
+
+        type = thisTypes->getSharedTypedArrayType();
+        if (type != Scalar::TypeMax && SharedTypedArrayObject::isOriginalLengthGetter(type, native)) {
             MInstruction *length = addTypedArrayLength(callInfo.thisArg());
             current->push(length);
             return InliningStatus_Inlined;
@@ -283,7 +292,7 @@ IonBuilder::InliningStatus
 IonBuilder::inlineArray(CallInfo &callInfo)
 {
     uint32_t initLength = 0;
-    MNewArray::AllocatingBehaviour allocating = MNewArray::NewArray_Unallocating;
+    AllocatingBehaviour allocating = NewArray_Unallocating;
 
     JSObject *templateObject = inspector->getTemplateObjectForNative(pc, js_Array);
     if (!templateObject)
@@ -293,7 +302,7 @@ IonBuilder::inlineArray(CallInfo &callInfo)
     // Multiple arguments imply array initialization, not just construction.
     if (callInfo.argc() >= 2) {
         initLength = callInfo.argc();
-        allocating = MNewArray::NewArray_Allocating;
+        allocating = NewArray_FullyAllocating;
 
         types::TypeObjectKey *type = types::TypeObjectKey::get(templateObject);
         if (!type->unknownProperties()) {
@@ -328,8 +337,11 @@ IonBuilder::inlineArray(CallInfo &callInfo)
         if (initLength != templateObject->as<ArrayObject>().length())
             return InliningStatus_NotInlined;
 
-        if (initLength <= ArrayObject::EagerAllocationMaxLength)
-            allocating = MNewArray::NewArray_Allocating;
+        // Don't inline large allocations.
+        if (initLength > ArrayObject::EagerAllocationMaxLength)
+            return InliningStatus_NotInlined;
+
+        allocating = NewArray_FullyAllocating;
     }
 
     callInfo.setImplicitlyUsedUnchecked();
@@ -1288,7 +1300,7 @@ IonBuilder::inlineConstantCharCodeAt(CallInfo &callInfo)
     callInfo.setImplicitlyUsedUnchecked();
 
     JSLinearString &linstr = str->asLinear();
-    jschar ch = linstr.latin1OrTwoByteChar(idx);
+    char16_t ch = linstr.latin1OrTwoByteChar(idx);
     MConstant *result = MConstant::New(alloc(), Int32Value(ch));
     current->add(result);
     current->push(result);
@@ -1491,7 +1503,7 @@ IonBuilder::inlineUnsafePutElements(CallInfo &callInfo)
         // barriers and on typed arrays and on typed object arrays.
         Scalar::Type arrayType;
         if ((!isDenseNative || writeNeedsBarrier) &&
-            !ElementAccessIsTypedArray(obj, id, &arrayType) &&
+            !ElementAccessIsAnyTypedArray(obj, id, &arrayType) &&
             !elementAccessIsTypedObjectArrayOfScalarType(obj, id, &arrayType))
         {
             return InliningStatus_NotInlined;
@@ -1520,7 +1532,7 @@ IonBuilder::inlineUnsafePutElements(CallInfo &callInfo)
         }
 
         Scalar::Type arrayType;
-        if (ElementAccessIsTypedArray(obj, id, &arrayType)) {
+        if (ElementAccessIsAnyTypedArray(obj, id, &arrayType)) {
             if (!inlineUnsafeSetTypedArrayElement(callInfo, base, arrayType))
                 return InliningStatus_Error;
             continue;
@@ -1979,9 +1991,9 @@ IonBuilder::inlineIsCallable(CallInfo &callInfo)
     } else {
         types::TemporaryTypeSet *types = callInfo.getArg(0)->resultTypeSet();
         const Class *clasp = types ? types->getKnownClass() : nullptr;
-        if (clasp) {
+        if (clasp && !clasp->isProxy()) {
             isCallableKnown = true;
-            isCallableConstant = clasp->isCallable();
+            isCallableConstant = clasp->nonProxyCallable();
         }
     }
 

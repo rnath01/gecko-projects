@@ -108,7 +108,6 @@
 #include "nsIDOMNode.h"
 #include "nsIDOMNodeList.h"
 #include "nsIDOMScriptObjectFactory.h"
-#include "nsIDOMUserDataHandler.h"
 #include "nsIDOMXULCommandEvent.h"
 #include "nsIDragService.h"
 #include "nsIEditor.h"
@@ -5670,7 +5669,7 @@ nsContentUtils::CheckSameOrigin(nsIChannel *aOldChannel, nsIChannel *aNewChannel
 
   nsCOMPtr<nsIPrincipal> oldPrincipal;
   nsContentUtils::GetSecurityManager()->
-    GetChannelPrincipal(aOldChannel, getter_AddRefs(oldPrincipal));
+    GetChannelResultPrincipal(aOldChannel, getter_AddRefs(oldPrincipal));
 
   nsCOMPtr<nsIURI> newURI;
   aNewChannel->GetURI(getter_AddRefs(newURI));
@@ -6396,10 +6395,11 @@ nsContentUtils::IsPatternMatching(nsAString& aValue, nsAString& aPattern,
   NS_ASSERTION(aDocument, "aDocument should be a valid pointer (not null)");
 
   AutoJSAPI jsapi;
-  if (NS_WARN_IF(!jsapi.Init(aDocument->GetWindow()))) {
-    return true;
-  }
+  jsapi.Init();
   JSContext* cx = jsapi.cx();
+  // We can use the junk scope here, because we're just using it for
+  // regexp evaluation, not actual script execution.
+  JSAutoCompartment ac(cx, xpc::UnprivilegedJunkScope());
 
   // The pattern has to match the entire value.
   aPattern.Insert(NS_LITERAL_STRING("^(?:"), 0);
@@ -6407,7 +6407,7 @@ nsContentUtils::IsPatternMatching(nsAString& aValue, nsAString& aPattern,
 
   JS::Rooted<JSObject*> re(cx,
     JS_NewUCRegExpObjectNoStatics(cx,
-                                  static_cast<jschar*>(aPattern.BeginWriting()),
+                                  static_cast<char16_t*>(aPattern.BeginWriting()),
                                   aPattern.Length(), 0));
   if (!re) {
     JS_ClearPendingException(cx);
@@ -6417,7 +6417,7 @@ nsContentUtils::IsPatternMatching(nsAString& aValue, nsAString& aPattern,
   JS::Rooted<JS::Value> rval(cx, JS::NullValue());
   size_t idx = 0;
   if (!JS_ExecuteRegExpNoStatics(cx, re,
-                                 static_cast<jschar*>(aValue.BeginWriting()),
+                                 static_cast<char16_t*>(aValue.BeginWriting()),
                                  aValue.Length(), &idx, true, &rval)) {
     JS_ClearPendingException(cx);
     return true;

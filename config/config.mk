@@ -255,19 +255,6 @@ endif
 #
 _ENABLE_PIC=1
 
-# Determine if module being compiled is destined
-# to be merged into libxul
-
-ifneq (,$(filter xul xul-%,$(FINAL_LIBRARY) $(LIBRARY_NAME)))
-  LIBXUL_LIBRARY := 1
-endif
-
-ifdef LIBXUL_LIBRARY
-ifdef IS_COMPONENT
-$(error IS_COMPONENT is set, but is not compatible with LIBXUL_LIBRARY)
-endif
-endif
-
 # PGO on MSVC is opt-in
 ifdef _MSC_VER
 ifndef MSVC_ENABLE_PGO
@@ -315,22 +302,6 @@ endif # NO_PROFILE_GUIDED_OPTIMIZE
 ifdef _MSC_VER
 OS_LDFLAGS += $(DELAYLOAD_LDFLAGS)
 endif # _MSC_VER
-
-ifneq (,$(LIBXUL_LIBRARY))
-DEFINES += -DMOZILLA_INTERNAL_API
-endif
-
-# Force XPCOM/widget/gfx methods to be _declspec(dllexport) when we're
-# building libxul libraries
-ifdef LIBXUL_LIBRARY
-DEFINES += \
-	  -DIMPL_LIBXUL \
-		$(NULL)
-
-ifndef JS_SHARED_LIBRARY
-DEFINES += -DSTATIC_EXPORTABLE_JS_API
-endif
-endif
 
 MAKE_JARS_FLAGS = \
 	-t $(topsrcdir) \
@@ -696,7 +667,7 @@ EXPAND_MKSHLIB = $(EXPAND_LIBS_EXEC) $(EXPAND_MKSHLIB_ARGS) -- $(MKSHLIB)
 
 ifneq (,$(MOZ_LIBSTDCXX_TARGET_VERSION)$(MOZ_LIBSTDCXX_HOST_VERSION))
 ifneq ($(OS_ARCH),Darwin)
-CHECK_STDCXX = @$(TOOLCHAIN_PREFIX)objdump -p $(1) | grep -e 'GLIBCXX_3\.4\.\(9\|[1-9][0-9]\)' > /dev/null && echo 'TEST-UNEXPECTED-FAIL | check_stdcxx | We do not want these libstdc++ symbols to be used:' && $(TOOLCHAIN_PREFIX)objdump -T $(1) | grep -e 'GLIBCXX_3\.4\.\(9\|[1-9][0-9]\)' && false || true
+CHECK_STDCXX = @$(TOOLCHAIN_PREFIX)objdump -p $(1) | grep -v -e 'GLIBCXX_3\.4\.\(9\|[1-9][0-9]\)' > /dev/null || ( echo 'TEST-UNEXPECTED-FAIL | check_stdcxx | We do not want these libstdc++ symbols to be used:' && $(TOOLCHAIN_PREFIX)objdump -T $(1) | grep -e 'GLIBCXX_3\.4\.\(9\|[1-9][0-9]\)' && false)
 endif
 endif
 

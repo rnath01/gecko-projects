@@ -5,8 +5,8 @@
 #ifndef mozilla_dom_mobileconnection_MobileConnectionParent_h
 #define mozilla_dom_mobileconnection_MobileConnectionParent_h
 
-#include "mozilla/dom/PMobileConnectionParent.h"
-#include "mozilla/dom/PMobileConnectionRequestParent.h"
+#include "mozilla/dom/mobileconnection/PMobileConnectionParent.h"
+#include "mozilla/dom/mobileconnection/PMobileConnectionRequestParent.h"
 #include "nsIMobileConnectionInfo.h"
 #include "nsIMobileConnectionService.h"
 #include "nsServiceManagerUtils.h"
@@ -26,7 +26,7 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIMOBILECONNECTIONLISTENER
 
-  MobileConnectionParent(uint32_t aClientId);
+  explicit MobileConnectionParent(uint32_t aClientId);
 
 protected:
   virtual
@@ -55,9 +55,8 @@ protected:
            nsString* aRadioState, nsTArray<nsString>* aSupportedNetworkTypes) MOZ_OVERRIDE;
 
 private:
-  uint32_t mClientId;
+  nsCOMPtr<nsIMobileConnection> mMobileConnection;
   bool mLive;
-  nsCOMPtr<nsIMobileConnectionService> mService;
 };
 
 /******************************************************************************
@@ -78,14 +77,11 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIMOBILECONNECTIONCALLBACK
 
-  MobileConnectionRequestParent(uint32_t aClientId)
-    : mClientId(aClientId)
+  explicit MobileConnectionRequestParent(nsIMobileConnection* aMobileConnection)
+    : mMobileConnection(aMobileConnection)
     , mLive(true)
   {
     MOZ_COUNT_CTOR(MobileConnectionRequestParent);
-
-    mService = do_GetService(NS_MOBILE_CONNECTION_SERVICE_CONTRACTID);
-    NS_ASSERTION(mService, "This shouldn't fail!");
   }
 
   bool
@@ -168,9 +164,8 @@ protected:
   SendReply(const MobileConnectionReply& aReply);
 
 private:
-  uint32_t mClientId;
+  nsCOMPtr<nsIMobileConnection> mMobileConnection;
   bool mLive;
-  nsCOMPtr<nsIMobileConnectionService> mService;
 };
 
 } // namespace mobileconnection

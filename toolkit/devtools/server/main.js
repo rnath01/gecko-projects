@@ -17,13 +17,9 @@ let { DebuggerTransport, LocalDebuggerTransport, ChildDebuggerTransport } =
   require("devtools/toolkit/transport/transport");
 let DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
 let { dumpn, dumpv, dbg_assert } = DevToolsUtils;
-let Services = require("Services");
 let EventEmitter = require("devtools/toolkit/event-emitter");
 let Debugger = require("Debugger");
 
-// Until all Debugger server code is converted to SDK modules,
-// imports Components.* alias from chrome module.
-var { Ci, Cc, CC, Cu, Cr } = require("chrome");
 // On B2G, `this` != Global scope, so `Ci` won't be binded on `this`
 // (i.e. this.Ci is undefined) Then later, when using loadSubScript,
 // Ci,... won't be defined for sub scripts.
@@ -405,6 +401,7 @@ var DebuggerServer = {
     this.registerModule("devtools/server/actors/layout");
     this.registerModule("devtools/server/actors/csscoverage");
     this.registerModule("devtools/server/actors/monitor");
+    this.registerModule("devtools/server/actors/timeline");
     if ("nsIProfiler" in Ci) {
       this.registerModule("devtools/server/actors/profiler");
     }

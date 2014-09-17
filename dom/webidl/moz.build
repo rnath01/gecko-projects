@@ -16,6 +16,7 @@ PREPROCESSED_WEBIDL_FILES = [
 ]
 
 WEBIDL_FILES = [
+    'AbortablePromise.webidl',
     'AbstractWorker.webidl',
     'ActivityRequestHandler.webidl',
     'AlarmsManager.webidl',
@@ -225,6 +226,7 @@ WEBIDL_FILES = [
     'IDBRequest.webidl',
     'IDBTransaction.webidl',
     'IDBVersionChangeEvent.webidl',
+    'ImageCapture.webidl',
     'ImageData.webidl',
     'ImageDocument.webidl',
     'InputEvent.webidl',
@@ -308,6 +310,7 @@ WEBIDL_FILES = [
     'Position.webidl',
     'PositionError.webidl',
     'ProcessingInstruction.webidl',
+    'ProfileTimelineMarker.webidl',
     'Promise.webidl',
     'PromiseDebugging.webidl',
     'PushManager.webidl',
@@ -652,6 +655,7 @@ GENERATED_EVENTS_WEBIDL_FILES = [
     'ErrorEvent.webidl',
     'HashChangeEvent.webidl',
     'IccChangeEvent.webidl',
+    'ImageCaptureErrorEvent.webidl',
     'MediaStreamEvent.webidl',
     'MediaStreamTrackEvent.webidl',
     'MozApplicationEvent.webidl',

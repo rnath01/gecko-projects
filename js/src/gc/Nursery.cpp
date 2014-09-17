@@ -109,7 +109,8 @@ js::Nursery::updateDecommittedRegion()
 void
 js::Nursery::enable()
 {
-    JS_ASSERT(isEmpty());
+    MOZ_ASSERT(isEmpty());
+    MOZ_ASSERT(!runtime()->gc.isVerifyPreBarriersEnabled());
     if (isEnabled())
         return;
     numActiveChunks_ = 1;
@@ -812,10 +813,6 @@ js::Nursery::collect(JSRuntime *rt, JS::gcreason::Reason reason, TypeObjectList 
     TIME_START(clearNewObjectCache);
     rt->newObjectCache.clearNurseryObjects(rt);
     TIME_END(clearNewObjectCache);
-
-    TIME_START(clearRegExpTestCache);
-    rt->regExpTestCache.purge();
-    TIME_END(clearRegExpTestCache);
 
     // Most of the work is done here. This loop iterates over objects that have
     // been moved to the major heap. If these objects have any outgoing pointers

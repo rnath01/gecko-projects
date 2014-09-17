@@ -3091,7 +3091,8 @@ RilObject.prototype = {
         // ("Yes/No") command with command qualifier set to "Yes/No", it shall
         // supply the value '01' when the answer is "positive" and the value
         // '00' when the answer is "negative" in the Text string data object.
-        text = response.isYesNo ? 0x01 : 0x00;
+        text = response.isYesNo ? String.fromCharCode(0x01)
+                                : String.fromCharCode(0x00);
       } else {
         text = response.input;
       }
@@ -3470,14 +3471,6 @@ RilObject.prototype = {
       return;
     }
 
-    let ICCRecordHelper = this.context.ICCRecordHelper;
-    // Try to get iccId only when cardState left GECKO_CARDSTATE_UNDETECTED.
-    if (iccStatus.cardState === CARD_STATE_PRESENT &&
-        (this.cardState === GECKO_CARDSTATE_UNINITIALIZED ||
-         this.cardState === GECKO_CARDSTATE_UNDETECTED)) {
-      ICCRecordHelper.readICCID();
-    }
-
     if (RILQUIRKS_SUBSCRIPTION_CONTROL) {
       // All appIndex is -1 means the subscription is not activated yet.
       // Note that we don't support "ims" for now, so we don't take it into
@@ -3536,6 +3529,14 @@ RilObject.prototype = {
     } else {
       // Having incorrect app information, set card state to unknown.
       newCardState = GECKO_CARDSTATE_UNKNOWN;
+    }
+
+    let ICCRecordHelper = this.context.ICCRecordHelper;
+    // Try to get iccId only when cardState left GECKO_CARDSTATE_UNDETECTED.
+    if (iccStatus.cardState === CARD_STATE_PRESENT &&
+        (this.cardState === GECKO_CARDSTATE_UNINITIALIZED ||
+         this.cardState === GECKO_CARDSTATE_UNDETECTED)) {
+      ICCRecordHelper.readICCID();
     }
 
     if (this.cardState == newCardState) {
@@ -5854,7 +5855,11 @@ RilObject.prototype[REQUEST_SIM_IO] = function REQUEST_SIM_IO(length, options) {
   let Buf = this.context.Buf;
   options.sw1 = Buf.readInt32();
   options.sw2 = Buf.readInt32();
-  if (options.sw1 != ICC_STATUS_NORMAL_ENDING) {
+  // See 3GPP TS 11.11, clause 9.4.1 for opetation success results.
+  if (options.sw1 !== ICC_STATUS_NORMAL_ENDING &&
+      options.sw1 !== ICC_STATUS_NORMAL_ENDING_WITH_EXTRA &&
+      options.sw1 !== ICC_STATUS_WITH_SIM_DATA &&
+      options.sw1 !== ICC_STATUS_WITH_RESPONSE_DATA) {
     ICCIOHelper.processICCIOError(options);
     return;
   }
@@ -12673,6 +12678,7 @@ ICCIOHelperObject.prototype = {
     options.callback = function callback(options) {
       options.callback = cb;
       options.command = ICC_COMMAND_READ_BINARY;
+      options.p2 = 0x00;
       options.p3 = options.fileSize;
       this.context.RIL.iccIO(options);
     }.bind(this);
@@ -12693,8 +12699,22 @@ ICCIOHelperObject.prototype = {
       throw new Error("Unknown pathId for " + options.fileId.toString(16));
     }
     options.p1 = 0; // For GET_RESPONSE, p1 = 0
-    options.p2 = 0; // For GET_RESPONSE, p2 = 0
-    options.p3 = GET_RESPONSE_EF_SIZE_BYTES;
+    switch (this.context.RIL.appType) {
+      case CARD_APPTYPE_USIM:
+        options.p2 = GET_RESPONSE_FCP_TEMPLATE;
+        options.p3 = 0x00;
+        break;
+      // For RUIM, CSIM and ISIM, cf bug 955946: keep the old behavior
+      case CARD_APPTYPE_RUIM:
+      case CARD_APPTYPE_CSIM:
+      case CARD_APPTYPE_ISIM:
+      // For SIM, this is what we want
+      case CARD_APPTYPE_SIM:
+      default:
+        options.p2 = 0x00;
+        options.p3 = GET_RESPONSE_EF_SIZE_BYTES;
+        break;
+    }
     this.context.RIL.iccIO(options);
   },
 
@@ -13591,10 +13611,12 @@ SimRecordHelperObject.prototype = {
 
       let numInstances = GsmPDUHelper.readHexOctet();
 
-      // Correct data length should be 9n+1 or 9n+2. See TS 31.102, sub-clause
-      // 4.6.1.1.
-      if (octetLen != (9 * numInstances + 1) ||
-          octetLen != (9 * numInstances + 2)) {
+      // Data length is defined as 9n+1 or 9n+2. See TS 31.102, sub-clause
+      // 4.6.1.1. However, it's likely to have padding appended so we have a
+      // rather loose check.
+      if (octetLen < (9 * numInstances + 1)) {
+        Buf.seekIncoming((octetLen - 1) * Buf.PDU_HEX_OCTET_SIZE);
+        Buf.readStringDelimiter(strLen);
         if (onerror) {
           onerror();
         }
@@ -13615,6 +13637,7 @@ SimRecordHelperObject.prototype = {
                    GsmPDUHelper.readHexOctet()
         };
       }
+      Buf.seekIncoming((octetLen - 9 * numInstances - 1) * Buf.PDU_HEX_OCTET_SIZE);
       Buf.readStringDelimiter(strLen);
 
       let instances = [];
@@ -13674,6 +13697,8 @@ SimRecordHelperObject.prototype = {
       if (octetLen < offset + dataLen) {
         // Data length is not enough. See TS 31.102, clause 4.6.1.1, the
         // paragraph "Bytes 8 and 9: Length of Image Instance Data."
+        Buf.seekIncoming(octetLen * Buf.PDU_HEX_OCTET_SIZE);
+        Buf.readStringDelimiter(strLen);
         if (onerror) {
           onerror();
         }

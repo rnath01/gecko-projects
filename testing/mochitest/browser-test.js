@@ -456,7 +456,6 @@ Tester.prototype = {
     // is invoked to start the tests.
     this.waitForWindowsState((function () {
       if (this.done) {
-        let promise = Promise.resolve();
 
         // Uninitialize a few things explicitly so that they can clean up
         // frames and browser intentionally kept alive until shutdown to
@@ -487,14 +486,7 @@ Tester.prototype = {
           SocialFlyout.unload();
           SocialShare.uninit();
           TabView.uninit();
-
-          // Destroying ContentSearch is asynchronous.
-          promise = ContentSearch.destroy();
         }
-
-        // Simulate memory pressure so that we're forced to free more resources
-        // and thus get rid of more false leaks like already terminated workers.
-        Services.obs.notifyObservers(null, "memory-pressure", "heap-minimize");
 
         // Schedule GC and CC runs before finishing in order to detect
         // DOM windows leaked by our tests or the tested code. Note that we
@@ -525,7 +517,19 @@ Tester.prototype = {
           }
         };
 
-        promise.then(() => {
+        let {AsyncShutdown} =
+          Cu.import("resource://gre/modules/AsyncShutdown.jsm", {});
+
+        let barrier = new AsyncShutdown.Barrier(
+          "ShutdownLeaks: Wait for cleanup to be finished before checking for leaks");
+        Services.obs.notifyObservers({wrappedJSObject: barrier},
+          "shutdown-leaks-before-check", null);
+
+        barrier.wait().then(() => {
+          // Simulate memory pressure so that we're forced to free more resources
+          // and thus get rid of more false leaks like already terminated workers.
+          Services.obs.notifyObservers(null, "memory-pressure", "heap-minimize");
+
           checkForLeakedGlobalWindows(aResults => {
             if (aResults.length == 0) {
               this.finish();

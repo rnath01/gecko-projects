@@ -120,10 +120,6 @@ ForceCOWBehavior(JSObject *obj)
                    "instances modulo this hack");
         return true;
     }
-    // Proxies get OpaqueXrayTraits, but we still need COWs to them for now to
-    // let the SpecialPowers wrapper work.
-    if (key == JSProto_Proxy)
-        return true;
 
     return false;
 }
@@ -598,13 +594,6 @@ WrapperFactory::WaiveXrayAndWrap(JSContext *cx, MutableHandleObject argObj)
         return false;
     argObj.set(obj);
     return true;
-}
-
-bool
-WrapperFactory::XrayWrapperNotShadowing(JSObject *wrapper, jsid id)
-{
-    ResolvingId *rid = ResolvingId::getResolvingIdFromWrapper(wrapper);
-    return rid->isXrayShadowing(id);
 }
 
 /*

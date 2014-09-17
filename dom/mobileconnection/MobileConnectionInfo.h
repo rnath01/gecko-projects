@@ -7,8 +7,8 @@
 #ifndef mozilla_dom_MobileConnectionInfo_h
 #define mozilla_dom_MobileConnectionInfo_h
 
-#include "MobileCellInfo.h"
-#include "MobileNetworkInfo.h"
+#include "mozilla/dom/MobileCellInfo.h"
+#include "mozilla/dom/MobileNetworkInfo.h"
 #include "mozilla/dom/MozMobileConnectionInfoBinding.h"
 #include "nsIMobileConnectionInfo.h"
 #include "nsPIDOMWindow.h"
@@ -25,7 +25,7 @@ public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(MobileConnectionInfo)
 
-  MobileConnectionInfo(nsPIDOMWindow* aWindow);
+  explicit MobileConnectionInfo(nsPIDOMWindow* aWindow);
 
   MobileConnectionInfo(const nsAString& aState, bool aConnected,
                        bool aEmergencyCallsOnly, bool aRoaming,

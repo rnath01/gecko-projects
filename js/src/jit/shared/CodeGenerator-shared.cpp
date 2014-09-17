@@ -345,12 +345,14 @@ CodeGeneratorShared::encodeAllocation(LSnapshot *snapshot, MDefinition *mir,
       }
       case MIRType_MagicOptimizedArguments:
       case MIRType_MagicOptimizedOut:
+      case MIRType_MagicUninitializedLexical:
       {
         uint32_t index;
-        JSWhyMagic why = (type == MIRType_MagicOptimizedArguments
-                          ? JS_OPTIMIZED_ARGUMENTS
-                          : JS_OPTIMIZED_OUT);
-        Value v = MagicValue(why);
+        Value v = MagicValue(type == MIRType_MagicOptimizedArguments
+                             ? JS_OPTIMIZED_ARGUMENTS
+                             : (type == MIRType_MagicOptimizedOut
+                                ? JS_OPTIMIZED_OUT
+                                : JS_UNINITIALIZED_LEXICAL));
         if (!graph.addConstantToPool(v, &index))
             return false;
         alloc = RValueAllocation::ConstantPool(index);
@@ -395,7 +397,7 @@ CodeGeneratorShared::encode(LRecoverInfo *recover)
         return true;
 
     uint32_t numInstructions = recover->numInstructions();
-    JitSpew(JitSpew_Snapshots, "Encoding LRecoverInfo %p (frameCount %u, instructions %u)",
+    JitSpew(JitSpew_IonSnapshots, "Encoding LRecoverInfo %p (frameCount %u, instructions %u)",
             (void *)recover, recover->mir()->frameCount(), numInstructions);
 
     MResumePoint::Mode mode = recover->mir()->mode();
@@ -427,7 +429,7 @@ CodeGeneratorShared::encode(LSnapshot *snapshot)
     RecoverOffset recoverOffset = recoverInfo->recoverOffset();
     MOZ_ASSERT(recoverOffset != INVALID_RECOVER_OFFSET);
 
-    JitSpew(JitSpew_Snapshots, "Encoding LSnapshot %p (LRecover %p)",
+    JitSpew(JitSpew_IonSnapshots, "Encoding LSnapshot %p (LRecover %p)",
             (void *)snapshot, (void*) recoverInfo);
 
     SnapshotOffset offset = snapshots_.startSnapshot(recoverOffset, snapshot->bailoutKind());
@@ -479,7 +481,7 @@ CodeGeneratorShared::assignBailoutId(LSnapshot *snapshot)
     switch (gen->info().executionMode()) {
       case SequentialExecution: break;
       case ParallelExecution: return false;
-      default: MOZ_ASSUME_UNREACHABLE("No such execution mode");
+      default: MOZ_CRASH("No such execution mode");
     }
 
     JS_ASSERT(frameClass_ != FrameSizeClass::None());
@@ -493,7 +495,7 @@ CodeGeneratorShared::assignBailoutId(LSnapshot *snapshot)
 
     unsigned bailoutId = bailouts_.length();
     snapshot->setBailoutId(bailoutId);
-    JitSpew(JitSpew_Snapshots, "Assigned snapshot bailout id %u", bailoutId);
+    JitSpew(JitSpew_IonSnapshots, "Assigned snapshot bailout id %u", bailoutId);
     return bailouts_.append(snapshot->snapshotOffset());
 }
 
@@ -995,7 +997,7 @@ CodeGeneratorShared::callVM(const VMFunction &fun, LInstruction *ins, const Regi
     if (ins->mirRaw()) {
         JS_ASSERT(ins->mirRaw()->isInstruction());
         MInstruction *mir = ins->mirRaw()->toInstruction();
-        JS_ASSERT_IF(mir->isEffectful(), mir->resumePoint());
+        JS_ASSERT_IF(mir->needsResumePoint(), mir->resumePoint());
     }
 #endif
 

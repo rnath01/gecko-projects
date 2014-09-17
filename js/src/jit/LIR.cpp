@@ -201,7 +201,7 @@ LRecoverInfo::New(MIRGenerator *gen, MResumePoint *mir)
     if (!recoverInfo || !recoverInfo->init(mir))
         return nullptr;
 
-    JitSpew(JitSpew_Snapshots, "Generating LIR recover info %p from MIR (%p)",
+    JitSpew(JitSpew_IonSnapshots, "Generating LIR recover info %p from MIR (%p)",
             (void *)recoverInfo, (void *)mir);
 
     return recoverInfo;
@@ -293,7 +293,7 @@ LSnapshot::New(MIRGenerator *gen, LRecoverInfo *recover, BailoutKind kind)
     if (!snapshot || !snapshot->init(gen))
         return nullptr;
 
-    JitSpew(JitSpew_Snapshots, "Generating LIR snapshot %p from recover (%p)",
+    JitSpew(JitSpew_IonSnapshots, "Generating LIR snapshot %p from recover (%p)",
             (void *)snapshot, (void *)recover);
 
     return snapshot;
@@ -408,7 +408,7 @@ PrintUse(char *buf, size_t size, const LUse *use)
         JS_snprintf(buf, size, "v%d:**", use->virtualRegister());
         break;
       default:
-        MOZ_ASSUME_UNREACHABLE("invalid use policy");
+        MOZ_CRASH("invalid use policy");
     }
 }
 
@@ -441,7 +441,7 @@ LAllocation::toString() const
         PrintUse(buf, sizeof(buf), toUse());
         return buf;
       default:
-        MOZ_ASSUME_UNREACHABLE("what?");
+        MOZ_CRASH("what?");
     }
 }
 #endif // DEBUG
@@ -475,8 +475,8 @@ LInstruction::assignSnapshot(LSnapshot *snapshot)
     snapshot_ = snapshot;
 
 #ifdef DEBUG
-    if (JitSpewEnabled(JitSpew_Snapshots)) {
-        JitSpewHeader(JitSpew_Snapshots);
+    if (JitSpewEnabled(JitSpew_IonSnapshots)) {
+        JitSpewHeader(JitSpew_IonSnapshots);
         fprintf(JitSpewFile, "Assigning snapshot %p to instruction %p (",
                 (void *)snapshot, (void *)this);
         printName(JitSpewFile);

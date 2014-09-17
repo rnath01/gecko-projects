@@ -15,6 +15,7 @@
 #include "jit/MIRGenerator.h"
 #include "jit/MIRGraph.h"
 #include "vm/NumericConversions.h"
+#include "vm/TypedArrayCommon.h"
 
 #include "jsopcodeinlines.h"
 
@@ -498,7 +499,7 @@ Range::Range(const MDefinition *def)
             wrapAroundToBoolean();
             break;
           case MIRType_None:
-            MOZ_ASSUME_UNREACHABLE("Asking for the range of an instruction with no value");
+            MOZ_CRASH("Asking for the range of an instruction with no value");
           default:
             break;
         }
@@ -514,7 +515,7 @@ Range::Range(const MDefinition *def)
             setInt32(0, 1);
             break;
           case MIRType_None:
-            MOZ_ASSUME_UNREACHABLE("Asking for the range of an instruction with no value");
+            MOZ_CRASH("Asking for the range of an instruction with no value");
           default:
             setUnknown();
             break;
@@ -1489,9 +1490,9 @@ MLoadTypedArrayElementStatic::computeRange(TempAllocator &alloc)
 {
     // We don't currently use MLoadTypedArrayElementStatic for uint32, so we
     // don't have to worry about it returning a value outside our type.
-    JS_ASSERT(typedArray_->type() != Scalar::Uint32);
+    JS_ASSERT(AnyTypedArrayType(someTypedArray_) != Scalar::Uint32);
 
-    setRange(GetTypedArrayRange(alloc, typedArray_->type()));
+    setRange(GetTypedArrayRange(alloc, AnyTypedArrayType(someTypedArray_)));
 }
 
 void
@@ -2582,7 +2583,7 @@ AdjustTruncatedInputs(TempAllocator &alloc, MDefinition *truncated)
                 op = MTruncateToInt32::New(alloc, truncated->getOperand(i));
 
             if (truncated->isPhi()) {
-                MBasicBlock *pred = op->block()->getPredecessor(i);
+                MBasicBlock *pred = block->getPredecessor(i);
                 pred->insertBefore(pred->lastIns(), op);
             } else {
                 block->insertBefore(truncated->toInstruction(), op);

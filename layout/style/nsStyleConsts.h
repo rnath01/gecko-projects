@@ -691,6 +691,13 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 #define NS_STYLE_IMAGE_ORIENTATION_FLIP         0
 #define NS_STYLE_IMAGE_ORIENTATION_FROM_IMAGE   1
 
+// See nsStylePosition.mObjectFit
+#define NS_STYLE_OBJECT_FIT_FILL                0
+#define NS_STYLE_OBJECT_FIT_CONTAIN             1
+#define NS_STYLE_OBJECT_FIT_COVER               2
+#define NS_STYLE_OBJECT_FIT_NONE                3
+#define NS_STYLE_OBJECT_FIT_SCALE_DOWN          4
+
 // See nsStyleDisplay
 #define NS_STYLE_RESIZE_NONE                    0
 #define NS_STYLE_RESIZE_BOTH                    1
@@ -814,9 +821,11 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 #define NS_STYLE_TEXT_SIZE_ADJUST_AUTO          1
 
 // See nsStyleText
-#define NS_STYLE_TEXT_ORIENTATION_AUTO          0
-#define NS_STYLE_TEXT_ORIENTATION_UPRIGHT       1
-#define NS_STYLE_TEXT_ORIENTATION_SIDEWAYS      2
+#define NS_STYLE_TEXT_ORIENTATION_MIXED          0
+#define NS_STYLE_TEXT_ORIENTATION_UPRIGHT        1
+#define NS_STYLE_TEXT_ORIENTATION_SIDEWAYS_RIGHT 2
+#define NS_STYLE_TEXT_ORIENTATION_SIDEWAYS_LEFT  3 /* placeholder, not yet parsed */
+#define NS_STYLE_TEXT_ORIENTATION_SIDEWAYS       4 /* placeholder, not yet parsed */
 
 // See nsStyleText
 #define NS_STYLE_TEXT_COMBINE_UPRIGHT_NONE        0

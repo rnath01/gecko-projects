@@ -67,7 +67,7 @@ const TITLE_SEARCH_ENGINE_SEPARATOR = " \u00B7\u2013\u00B7 ";
 
 // Telemetry probes.
 const TELEMETRY_1ST_RESULT = "PLACES_AUTOCOMPLETE_1ST_RESULT_TIME_MS";
-
+const TELEMETRY_6_FIRST_RESULTS = "PLACES_AUTOCOMPLETE_6_FIRST_RESULTS_TIME_MS";
 // The default frecency value used when inserting search engine results.
 const FRECENCY_SEARCHENGINES_DEFAULT = 1000;
 
@@ -492,6 +492,23 @@ function stripHttpAndTrim(spec) {
   return spec;
 }
 
+/**
+ * Make a moz-action: URL for a given action and set of parameters.
+ *
+ * @param action
+ *        Name of the action
+ * @param params
+ *        Object, whose keys are parameter names and values are the
+ *        corresponding parameter values.
+ * @return String representation of the built moz-action: URL
+ */
+function makeActionURL(action, params) {
+  let url = "moz-action:" + action + "," + JSON.stringify(params);
+  // Make a nsIURI out of this to ensure it's encoded properly.
+  return NetUtil.newURI(url).spec;
+}
+
+
 ////////////////////////////////////////////////////////////////////////////////
 //// Search Class
 //// Manages a single instance of an autocomplete search.
@@ -642,6 +659,8 @@ Search.prototype = {
       return;
 
     TelemetryStopwatch.start(TELEMETRY_1ST_RESULT);
+    if (this._searchString)
+      TelemetryStopwatch.start(TELEMETRY_6_FIRST_RESULTS);
 
     // Since we call the synchronous parseSubmissionURL function later, we must
     // wait for the initialization of PlacesSearchAutocompleteProvider first.
@@ -728,9 +747,40 @@ Search.prototype = {
     let match = yield PlacesSearchAutocompleteProvider.findMatchByToken(
                                                            this._searchString);
     if (match) {
+      // The match doesn't contain a 'scheme://www.' prefix, but since we have
+      // stripped it from the search string, here we could still be matching
+      // 'https://www.g' to 'google.com'.
+      // There are a couple cases where we don't want to match though:
+      //
+      //  * If the protocol differs we should not match. For example if the user
+      //    searched https we should not return http.
+      try {
+        let prefixURI = NetUtil.newURI(this._strippedPrefix);
+        let finalURI = NetUtil.newURI(match.url);
+        if (prefixURI.scheme != finalURI.scheme)
+          return;
+      } catch (e) {}
+
+      //  * If the user typed "www." but the final url doesn't have it, we
+      //    should not match as well, the two urls may point to different pages.
+      if (this._strippedPrefix.endsWith("www.") &&
+          !stripHttpAndTrim(match.url).startsWith("www."))
+        return;
+
+      let value = this._strippedPrefix + match.token;
+
+      // In any case, we should never arrive here with a value that doesn't
+      // match the search string.  If this happens there is some case we
+      // are not handling properly yet.
+      if (!value.startsWith(this._originalSearchString)) {
+        Components.utils.reportError(`Trying to inline complete in-the-middle
+                                      ${this._originalSearchString} to ${value}`);
+        return;
+      }
+
       this._result.setDefaultIndex(0);
       this._addFrecencyMatch({
-        value: match.token,
+        value: value,
         comment: match.engineName,
         icon: match.iconUrl,
         style: "priority-search",
@@ -845,6 +895,9 @@ Search.prototype = {
       notifyResults = true;
     }
 
+    if (this._result.matchCount == 6)
+      TelemetryStopwatch.finish(TELEMETRY_6_FIRST_RESULTS);
+
     if (this._result.matchCount == Prefs.maxRichResults || !this.pending) {
       // We have enough results, so stop running our search.
       this.cancel();
@@ -929,9 +982,12 @@ Search.prototype = {
 
     // If actions are enabled and the page is open, add only the switch-to-tab
     // result.  Otherwise, add the normal result.
-    let [url, action] = this._enableActions && openPageCount > 0 ?
-                        ["moz-action:switchtab," + escapedURL, "action "] :
-                        [escapedURL, ""];
+    let url = escapedURL;
+    let action = null;
+    if (this._enableActions && openPageCount > 0) {
+      url = makeActionURL("switchtab", {url: escapedURL});
+      action = "switchtab";
+    }
 
     // Always prefer the bookmark title unless it is empty
     let title = bookmarkTitle || historyTitle;
@@ -981,7 +1037,7 @@ Search.prototype = {
     }
 
     if (action)
-      match.style = "action " + match.style;
+      match.style = "action " + action;
 
     match.value = url;
     match.comment = title;
@@ -1311,12 +1367,15 @@ UnifiedComplete.prototype = {
 
     let search = this._currentSearch;
     this.getDatabaseHandle().then(conn => search.execute(conn))
+                            .then(null, ex => {
+                              dump(`Query failed: ${ex}\n`);
+                              Cu.reportError(ex);
+                            })
                             .then(() => {
                               if (search == this._currentSearch) {
                                 this.finishSearch(true);
                               }
-                            }, ex => { dump("Query failed: " + ex + "\n");
-                                       Cu.reportError(ex); });
+                            });
   },
 
   stopSearch: function () {
@@ -1337,6 +1396,7 @@ UnifiedComplete.prototype = {
    */
   finishSearch: function (notify=false) {
     TelemetryStopwatch.cancel(TELEMETRY_1ST_RESULT);
+    TelemetryStopwatch.cancel(TELEMETRY_6_FIRST_RESULTS);
     // Clear state now to avoid race conditions, see below.
     let search = this._currentSearch;
     delete this._currentSearch;

@@ -294,6 +294,7 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
       const LayerAttributes& attrs = osla.attrs();
 
       const CommonLayerAttributes& common = attrs.common();
+      layer->SetLayerBounds(common.layerBounds());
       layer->SetVisibleRegion(common.visibleRegion());
       layer->SetEventRegions(common.eventRegions());
       layer->SetContentFlags(common.contentFlags());
@@ -730,6 +731,20 @@ LayerTransactionParent::RecvGetAPZTestData(APZTestData* aOutData)
   mShadowLayersManager->GetAPZTestData(this, aOutData);
   return true;
 }
+
+bool
+LayerTransactionParent::RecvRequestProperty(const nsString& aProperty, float* aValue)
+{
+  if (aProperty.Equals(NS_LITERAL_STRING("overdraw"))) {
+    *aValue = layer_manager()->GetCompositor()->GetFillRatio();
+  } else if (aProperty.Equals(NS_LITERAL_STRING("missed_hwc"))) {
+    *aValue = layer_manager()->LastFrameMissedHWC() ? 1 : 0;
+  } else {
+    *aValue = -1;
+  }
+  return true;
+}
+
 
 bool
 LayerTransactionParent::Attach(ShadowLayerParent* aLayerParent,

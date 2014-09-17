@@ -21,7 +21,8 @@ nsContextMenu.prototype = {
       return;
 
     this.hasPageMenu = false;
-    if (!aIsShift) {
+    // FIXME (bug 1047751) - The page menu is disabled in e10s.
+    if (!aIsShift && !this.isRemote) {
       this.hasPageMenu = PageMenu.maybeBuildAndAttachMenu(this.target,
                                                           aXulMenu);
     }
@@ -739,7 +740,7 @@ nsContextMenu.prototype = {
 
     // if the document is editable, show context menu like in text inputs
     if (!this.onEditableArea) {
-      var win = this.target.ownerDocument.defaultView;
+      win = this.target.ownerDocument.defaultView;
       if (win) {
         var isEditable = false;
         try {

@@ -23,7 +23,7 @@
 #include "jit/TypedObjectPrediction.h"
 #include "jit/TypePolicy.h"
 #include "vm/ScopeObject.h"
-#include "vm/TypedArrayObject.h"
+#include "vm/TypedArrayCommon.h"
 
 namespace js {
 
@@ -49,6 +49,8 @@ MIRType MIRTypeFromValue(const js::Value &vp)
             return MIRType_MagicHole;
           case JS_IS_CONSTRUCTING:
             return MIRType_MagicIsConstructing;
+          case JS_UNINITIALIZED_LEXICAL:
+            return MIRType_MagicUninitializedLexical;
           default:
             MOZ_ASSERT(!"Unexpected magic constant");
         }
@@ -694,22 +696,22 @@ class MDefinition : public MNode
         return op() == MIRType::classOpcode;
     }
     template<typename MIRType> MIRType *to() {
-        JS_ASSERT(is<MIRType>());
+        JS_ASSERT(this->is<MIRType>());
         return static_cast<MIRType *>(this);
     }
     template<typename MIRType> const MIRType *to() const {
-        JS_ASSERT(is<MIRType>());
+        JS_ASSERT(this->is<MIRType>());
         return static_cast<const MIRType *>(this);
     }
-#   define OPCODE_CASTS(opcode)                                             \
-    bool is##opcode() const {                                               \
-        return is<M##opcode>();                                             \
-    }                                                                       \
-    M##opcode *to##opcode() {                                               \
-        return to<M##opcode>();                                             \
-    }                                                                       \
-    const M##opcode *to##opcode() const {                                   \
-        return to<M##opcode>();                                             \
+#   define OPCODE_CASTS(opcode)           \
+    bool is##opcode() const {             \
+        return this->is<M##opcode>();     \
+    }                                     \
+    M##opcode *to##opcode() {             \
+        return this->to<M##opcode>();     \
+    }                                     \
+    const M##opcode *to##opcode() const { \
+        return this->to<M##opcode>();     \
     }
     MIR_OPCODE_LIST(OPCODE_CASTS)
 #   undef OPCODE_CASTS
@@ -745,6 +747,12 @@ class MDefinition : public MNode
     bool isEffectful() const {
         return getAliasSet().isStore();
     }
+#ifdef DEBUG
+    virtual bool needsResumePoint() const {
+        // Return whether this instruction should have its own resume point.
+        return isEffectful();
+    }
+#endif
     virtual bool mightAlias(const MDefinition *store) const {
         // Return whether this load may depend on the specified store, given
         // that the alias sets intersect. This may be refined to exclude
@@ -824,6 +832,13 @@ class MInstruction
       : MDefinition(other),
         resumePoint_(nullptr)
     { }
+
+    // Convenient function used for replacing a load by the value of the store
+    // if the types are match, and boxing the value if they do not match.
+    //
+    // Note: There is no need for such function in AsmJS functions as they do
+    // not use any MIRType_Value.
+    MDefinition *foldsToStoredValue(TempAllocator &alloc, MDefinition *loaded);
 
     void setResumePoint(MResumePoint *resumePoint);
 
@@ -2115,12 +2130,6 @@ typedef AlwaysTenured<Shape*> AlwaysTenuredShape;
 
 class MNewArray : public MUnaryInstruction
 {
-  public:
-    enum AllocatingBehaviour {
-        NewArray_Allocating,
-        NewArray_Unallocating
-    };
-
   private:
     // Number of space to allocate for the array.
     uint32_t count_;
@@ -2165,8 +2174,8 @@ class MNewArray : public MUnaryInstruction
         return initialHeap_;
     }
 
-    bool isAllocating() const {
-        return allocating_ == NewArray_Allocating;
+    AllocatingBehaviour allocatingBehaviour() const {
+        return allocating_;
     }
 
     // Returns true if the code generator should call through to the
@@ -2495,7 +2504,7 @@ class MArrayState : public MVariadicInstruction
   private:
     uint32_t numElements_;
 
-    MArrayState(MDefinition *arr)
+    explicit MArrayState(MDefinition *arr)
     {
         // This instruction is only used as a summary for bailout paths.
         setRecoveredOnBailout();
@@ -4761,7 +4770,7 @@ class MClz
 {
     bool operandIsNeverZero_;
 
-    MClz(MDefinition *num)
+    explicit MClz(MDefinition *num)
       : MUnaryInstruction(num),
         operandIsNeverZero_(false)
     {
@@ -6200,6 +6209,55 @@ class MAsmJSInterruptCheck : public MNullaryInstruction
     }
 };
 
+// Checks if a value is JS_UNINITIALIZED_LEXICAL, throwing if so.
+class MLexicalCheck
+  : public MUnaryInstruction,
+    public BoxPolicy<0>
+{
+    explicit MLexicalCheck(MDefinition *input)
+      : MUnaryInstruction(input)
+    {
+        setGuard();
+        setResultType(MIRType_Value);
+        setResultTypeSet(input->resultTypeSet());
+    }
+
+  public:
+    INSTRUCTION_HEADER(LexicalCheck)
+
+    static MLexicalCheck *New(TempAllocator &alloc, MDefinition *input) {
+        return new(alloc) MLexicalCheck(input);
+    }
+
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+
+    MDefinition *input() const {
+        return getOperand(0);
+    }
+};
+
+// Unconditionally throw an uninitialized let error.
+class MThrowUninitializedLexical : public MNullaryInstruction
+{
+    MThrowUninitializedLexical() {
+        setGuard();
+        setResultType(MIRType_None);
+    }
+
+  public:
+    INSTRUCTION_HEADER(ThrowUninitializedLexical)
+
+    static MThrowUninitializedLexical *New(TempAllocator &alloc) {
+        return new(alloc) MThrowUninitializedLexical();
+    }
+
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+};
+
 // If not defined, set a global variable to |undefined|.
 class MDefVar : public MUnaryInstruction
 {
@@ -6441,6 +6499,15 @@ class MRegExpReplace
 
     static MRegExpReplace *New(TempAllocator &alloc, MDefinition *string, MDefinition *pattern, MDefinition *replacement) {
         return new(alloc) MRegExpReplace(string, pattern, replacement);
+    }
+
+    bool writeRecoverData(CompactBufferWriter &writer) const;
+    bool canRecoverOnBailout() const {
+        // RegExpReplace will zero the lastIndex field when global flag is set.
+        // So we can only remove this if it's non-global.
+        if (pattern()->isRegExp())
+            return !pattern()->toRegExp()->source()->global();
+        return false;
     }
 };
 
@@ -6826,15 +6893,15 @@ class MMaybeCopyElementsForWrite
         return congruentIfOperandsEqual(ins);
     }
     AliasSet getAliasSet() const {
-        // This instruction can read and write to the elements' contents,
-        // in the same manner as MConvertElementsToDoubles. As with that
-        // instruction, this is safe to consolidate and freely reorder this
-        // instruction, though this must precede any loads of the object's
-        // elements pointer or writes to the object's elements. The latter
-        // property is ensured by chaining this with the object definition
-        // itself, in the same manner as MBoundsCheck.
-        return AliasSet::None();
+        return AliasSet::Store(AliasSet::ObjectFields);
     }
+#ifdef DEBUG
+    bool needsResumePoint() const {
+        // This instruction is idempotent and does not change observable
+        // behavior, so does not need its own resume point.
+        return false;
+    }
+#endif
 
     TypePolicy *typePolicy() {
         return this;
@@ -7883,10 +7950,10 @@ class MLoadTypedArrayElementStatic
   : public MUnaryInstruction,
     public ConvertToInt32Policy<0>
 {
-    MLoadTypedArrayElementStatic(TypedArrayObject *typedArray, MDefinition *ptr)
-      : MUnaryInstruction(ptr), typedArray_(typedArray), fallible_(true)
+    MLoadTypedArrayElementStatic(JSObject *someTypedArray, MDefinition *ptr)
+      : MUnaryInstruction(ptr), someTypedArray_(someTypedArray), fallible_(true)
     {
-        int type = typedArray_->type();
+        int type = viewType();
         if (type == Scalar::Float32)
             setResultType(MIRType_Float32);
         else if (type == Scalar::Float64)
@@ -7895,20 +7962,20 @@ class MLoadTypedArrayElementStatic
             setResultType(MIRType_Int32);
     }
 
-    AlwaysTenured<TypedArrayObject*> typedArray_;
+    AlwaysTenured<JSObject*> someTypedArray_;
     bool fallible_;
 
   public:
     INSTRUCTION_HEADER(LoadTypedArrayElementStatic);
 
-    static MLoadTypedArrayElementStatic *New(TempAllocator &alloc, TypedArrayObject *typedArray,
+    static MLoadTypedArrayElementStatic *New(TempAllocator &alloc, JSObject *someTypedArray,
                                              MDefinition *ptr)
     {
-        return new(alloc) MLoadTypedArrayElementStatic(typedArray, ptr);
+        return new(alloc) MLoadTypedArrayElementStatic(someTypedArray, ptr);
     }
 
     Scalar::Type viewType() const {
-        return typedArray_->type();
+        return AnyTypedArrayType(someTypedArray_);
     }
     void *base() const;
     size_t length() const;
@@ -7932,7 +7999,7 @@ class MLoadTypedArrayElementStatic
 
     void computeRange(TempAllocator &alloc);
     bool truncate(TruncateKind kind);
-    bool canProduceFloat32() const { return typedArray_->type() == Scalar::Float32; }
+    bool canProduceFloat32() const { return viewType() == Scalar::Float32; }
 };
 
 class MStoreTypedArrayElement
@@ -8080,19 +8147,19 @@ class MStoreTypedArrayElementStatic :
     public MBinaryInstruction
   , public StoreTypedArrayElementStaticPolicy
 {
-    MStoreTypedArrayElementStatic(TypedArrayObject *typedArray, MDefinition *ptr, MDefinition *v)
-      : MBinaryInstruction(ptr, v), typedArray_(typedArray)
+    MStoreTypedArrayElementStatic(JSObject *someTypedArray, MDefinition *ptr, MDefinition *v)
+      : MBinaryInstruction(ptr, v), someTypedArray_(someTypedArray)
     {}
 
-    AlwaysTenured<TypedArrayObject*> typedArray_;
+    AlwaysTenured<JSObject*> someTypedArray_;
 
   public:
     INSTRUCTION_HEADER(StoreTypedArrayElementStatic);
 
-    static MStoreTypedArrayElementStatic *New(TempAllocator &alloc, TypedArrayObject *typedArray,
+    static MStoreTypedArrayElementStatic *New(TempAllocator &alloc, JSObject *someTypedArray,
                                               MDefinition *ptr, MDefinition *v)
     {
-        return new(alloc) MStoreTypedArrayElementStatic(typedArray, ptr, v);
+        return new(alloc) MStoreTypedArrayElementStatic(someTypedArray, ptr, v);
     }
 
     TypePolicy *typePolicy() {
@@ -8100,7 +8167,7 @@ class MStoreTypedArrayElementStatic :
     }
 
     Scalar::Type viewType() const {
-        return typedArray_->type();
+        return AnyTypedArrayType(someTypedArray_);
     }
     bool isFloatArray() const {
         return viewType() == Scalar::Float32 ||
@@ -8118,7 +8185,7 @@ class MStoreTypedArrayElementStatic :
     TruncateKind operandTruncateKind(size_t index) const;
 
     bool canConsumeFloat32(MUse *use) const {
-        return use == getUseFor(1) && typedArray_->type() == Scalar::Float32;
+        return use == getUseFor(1) && viewType() == Scalar::Float32;
     }
 };
 
@@ -10629,7 +10696,6 @@ class MFilterTypeSet
       : MUnaryInstruction(def)
     {
         MOZ_ASSERT(!types->unknown());
-        MOZ_ASSERT(def->type() == types->getKnownMIRType());
         setResultType(types->getKnownMIRType());
         setResultTypeSet(types);
     }
@@ -11301,8 +11367,8 @@ class MHasClass
     }
 };
 
-// Increase the usecount of the provided script upon execution and test if
-// the usecount surpasses the threshold. Upon hit it will recompile the
+// Increase the warm-up counter of the provided script upon execution and test if
+// the warm-up counter surpasses the threshold. Upon hit it will recompile the
 // outermost script (i.e. not the inlined script).
 class MRecompileCheck : public MNullaryInstruction
 {
@@ -11319,8 +11385,8 @@ class MRecompileCheck : public MNullaryInstruction
   public:
     INSTRUCTION_HEADER(RecompileCheck);
 
-    static MRecompileCheck *New(TempAllocator &alloc, JSScript *script_, uint32_t useCount) {
-        return new(alloc) MRecompileCheck(script_, useCount);
+    static MRecompileCheck *New(TempAllocator &alloc, JSScript *script_, uint32_t recompileThreshold) {
+        return new(alloc) MRecompileCheck(script_, recompileThreshold);
     }
 
     JSScript *script() const {
@@ -11669,6 +11735,21 @@ class MAsmJSCall MOZ_FINAL : public MVariadicInstruction
     }
 };
 
+class MUnknownValue : public MNullaryInstruction
+{
+  protected:
+    MUnknownValue() {
+        setResultType(MIRType_Value);
+    }
+
+  public:
+    INSTRUCTION_HEADER(UnknownValue)
+
+    static MUnknownValue *New(TempAllocator &alloc) {
+        return new(alloc) MUnknownValue();
+    }
+};
+
 #undef INSTRUCTION_HEADER
 
 void MUse::init(MDefinition *producer, MNode *consumer)
@@ -11742,8 +11823,8 @@ MControlInstruction *MDefinition::toControlInstruction() {
 // Helper functions used to decide how to build MIR.
 
 bool ElementAccessIsDenseNative(MDefinition *obj, MDefinition *id);
-bool ElementAccessIsTypedArray(MDefinition *obj, MDefinition *id,
-                               Scalar::Type *arrayType);
+bool ElementAccessIsAnyTypedArray(MDefinition *obj, MDefinition *id,
+                                  Scalar::Type *arrayType);
 bool ElementAccessIsPacked(types::CompilerConstraintList *constraints, MDefinition *obj);
 bool ElementAccessMightBeCopyOnWrite(types::CompilerConstraintList *constraints, MDefinition *obj);
 bool ElementAccessHasExtraIndexedProperty(types::CompilerConstraintList *constraints,

@@ -26,6 +26,13 @@
 #include "TelephonyCallGroup.h"
 #include "TelephonyCallId.h"
 
+// Service instantiation
+#include "ipc/TelephonyIPCService.h"
+#if defined(MOZ_WIDGET_GONK) && defined(MOZ_B2G_RIL)
+#include "nsIGonkTelephonyService.h"
+#endif
+#include "nsXULAppAPI.h" // For XRE_GetProcessType()
+
 using namespace mozilla::dom;
 using mozilla::ErrorResult;
 
@@ -575,6 +582,21 @@ Telephony::EnumerateCallStateComplete()
 {
   MOZ_ASSERT(!mEnumerated);
 
+  // Set conference state.
+  if (mGroup->CallsArray().Length() >= 2) {
+    const nsTArray<nsRefPtr<TelephonyCall> > &calls = mGroup->CallsArray();
+
+    uint16_t callState = calls[0]->CallState();
+    for (uint32_t i = 1; i < calls.Length(); i++) {
+      if (calls[i]->CallState() != callState) {
+        callState = nsITelephonyService::CALL_STATE_UNKNOWN;
+        break;
+      }
+    }
+
+    mGroup->ChangeState(callState);
+  }
+
   mEnumerated = true;
 
   if (NS_FAILED(NotifyEvent(NS_LITERAL_STRING("ready")))) {
@@ -722,4 +744,20 @@ Telephony::EnqueueEnumerationAck(const nsAString& aType)
   if (NS_FAILED(NS_DispatchToCurrentThread(task))) {
     NS_WARNING("Failed to dispatch to current thread!");
   }
+}
+
+already_AddRefed<nsITelephonyService>
+NS_CreateTelephonyService()
+{
+  nsCOMPtr<nsITelephonyService> service;
+
+  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+    service = new mozilla::dom::telephony::TelephonyIPCService();
+  } else {
+#if defined(MOZ_WIDGET_GONK) && defined(MOZ_B2G_RIL)
+    service = do_CreateInstance(GONK_TELEPHONY_SERVICE_CONTRACTID);
+#endif
+  }
+
+  return service.forget();
 }

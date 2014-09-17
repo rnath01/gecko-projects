@@ -325,6 +325,9 @@ setUpdateTrackingId();
 (function setupAccessibility() {
   let accessibilityScope = {};
   SettingsListener.observe("accessibility.screenreader", false, function(value) {
+    if (!value) {
+      return;
+    }
     if (!('AccessFu' in accessibilityScope)) {
       Cu.import('resource://gre/modules/accessibility/AccessFu.jsm',
                 accessibilityScope);
@@ -512,6 +515,10 @@ let settingsToObserve = {
   'ril.sms.strict7BitEncoding.enabled': {
     prefName: 'dom.sms.strict7BitEncoding',
     defaultValue: false
+  },
+  'ril.sms.maxReadAheadEntries': {
+    prefName: 'dom.sms.maxReadAheadEntries',
+    defaultValue: 7
   },
   'ui.touch.radius.leftmm': {
     resetToPref: true

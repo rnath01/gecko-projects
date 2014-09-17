@@ -9,6 +9,7 @@
 #include <ctime>
 
 #include "mozilla/DebugOnly.h"
+#include "mozilla/gfx/2D.h"
 #include "mozilla/HashFunctions.h"
 #include "mozilla/MathAlgorithms.h"
 
@@ -619,7 +620,7 @@ nsCSSRendering::PaintBorderWithStyleBorder(nsPresContext* aPresContext,
                                            nsStyleContext* aStyleContext,
                                            Sides aSkipSides)
 {
-  SN("++ PaintBorder");
+  PrintAsStringNewline("++ PaintBorder");
 
   // Check to see if we have an appearance defined.  If so, we let the theme
   // renderer draw the border.  DO not get the data from aForFrame, since the passed in style context
@@ -663,7 +664,7 @@ nsCSSRendering::PaintBorderWithStyleBorder(nsPresContext* aPresContext,
   ::GetRadii(aForFrame, aStyleBorder, aBorderArea, joinedBorderArea, &bgRadii);
 
 
-  SF(" joinedBorderArea: %d %d %d %d\n", joinedBorderArea.x, joinedBorderArea.y,
+  PrintAsFormatString(" joinedBorderArea: %d %d %d %d\n", joinedBorderArea.x, joinedBorderArea.y,
      joinedBorderArea.width, joinedBorderArea.height);
 
   // start drawing
@@ -716,8 +717,8 @@ nsCSSRendering::PaintBorderWithStyleBorder(nsPresContext* aPresContext,
       borderColors[i] = ourColor->mColor;
   }
 
-  SF(" borderStyles: %d %d %d %d\n", borderStyles[0], borderStyles[1], borderStyles[2], borderStyles[3]);
-  //SF ("bgRadii: %f %f %f %f\n", bgRadii[0], bgRadii[1], bgRadii[2], bgRadii[3]);
+  PrintAsFormatString(" borderStyles: %d %d %d %d\n", borderStyles[0], borderStyles[1], borderStyles[2], borderStyles[3]);
+  //PrintAsFormatString ("bgRadii: %f %f %f %f\n", bgRadii[0], bgRadii[1], bgRadii[2], bgRadii[3]);
 
 #if 0
   // this will draw a transparent red backround underneath the border area
@@ -741,7 +742,7 @@ nsCSSRendering::PaintBorderWithStyleBorder(nsPresContext* aPresContext,
 
   ctx->Restore();
 
-  SN();
+  PrintAsStringNewline();
 }
 
 static nsRect
@@ -879,7 +880,7 @@ nsCSSRendering::PaintOutline(nsPresContext* aPresContext,
 
   ctx->Restore();
 
-  SN();
+  PrintAsStringNewline();
 }
 
 void
@@ -932,7 +933,7 @@ nsCSSRendering::PaintFocus(nsPresContext* aPresContext,
 
   ctx->Restore();
 
-  SN();
+  PrintAsStringNewline();
 }
 
 // Thebes Border Rendering Code End
@@ -1309,8 +1310,12 @@ nsCSSRendering::PaintBoxShadowOuter(nsPresContext* aPresContext,
       gfxContextMatrixAutoSaveRestore save(shadowContext);
       nsRefPtr<nsRenderingContext> wrapperCtx = new nsRenderingContext();
       wrapperCtx->Init(aPresContext->DeviceContext(), shadowContext);
-      wrapperCtx->Translate(nsPoint(shadowItem->mXOffset,
-                                    shadowItem->mYOffset));
+      gfxPoint devPixelOffset =
+        nsLayoutUtils::PointToGfxPoint(nsPoint(shadowItem->mXOffset,
+                                               shadowItem->mYOffset),
+                                       aPresContext->AppUnitsPerDevPixel());
+      wrapperCtx->ThebesContext()->SetMatrix(
+        wrapperCtx->ThebesContext()->CurrentMatrix().Translate(devPixelOffset));
 
       nsRect nativeRect;
       nativeRect.IntersectRect(frameRect, aDirtyRect);
@@ -2589,7 +2594,8 @@ nsCSSRendering::PaintGradient(nsPresContext* aPresContext,
                                          gradientStart, gradientEnd, &edgeColor)) {
         ctx->SetColor(edgeColor);
       } else {
-        ctx->Translate(tileRect.TopLeft());
+        ctx->SetMatrix(
+          ctx->CurrentMatrix().Copy().Translate(tileRect.TopLeft()));
         ctx->SetPattern(gradientPattern);
       }
       ctx->Fill();
@@ -3593,8 +3599,8 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
   }
 
   gfxContext *ctx = aContext.ThebesContext();
-  gfxContext::AntialiasMode oldMode = ctx->CurrentAntialiasMode();
-  ctx->SetAntialiasMode(gfxContext::MODE_ALIASED);
+  AntialiasMode oldMode = ctx->CurrentAntialiasMode();
+  ctx->SetAntialiasMode(AntialiasMode::NONE);
 
   switch (aBorderStyle) {
   case NS_STYLE_BORDER_STYLE_NONE:
@@ -3927,12 +3933,12 @@ nsCSSRendering::PaintDecorationLine(nsIFrame* aFrame,
       contextIsSaved = true;
       aGfxContext->Clip(rect);
       if (lineHeight > 2.0) {
-        aGfxContext->SetAntialiasMode(gfxContext::MODE_COVERAGE);
+        aGfxContext->SetAntialiasMode(AntialiasMode::SUBPIXEL);
       } else {
         // Don't use anti-aliasing here.  Because looks like lighter color wavy
         // line at this case.  And probably, users don't think the
         // non-anti-aliased wavy line is not pretty.
-        aGfxContext->SetAntialiasMode(gfxContext::MODE_ALIASED);
+        aGfxContext->SetAntialiasMode(AntialiasMode::NONE);
       }
       break;
     default:
@@ -5025,7 +5031,7 @@ nsContextBoxBlur::DoPaint()
   gfxContextMatrixAutoSaveRestore saveMatrix(mDestinationCtx);
 
   if (mPreTransformed) {
-    mDestinationCtx->IdentityMatrix();
+    mDestinationCtx->SetMatrix(gfxMatrix());
   }
 
   blur.Paint(mDestinationCtx);
@@ -5090,7 +5096,7 @@ nsContextBoxBlur::BlurRectangle(gfxContext* aDestinationCtx,
   if (!transform.HasNonAxisAlignedTransform() && transform._11 > 0.0 && transform._22 > 0.0) {
     scaleX = transform._11;
     scaleY = transform._22;
-    aDestinationCtx->IdentityMatrix();
+    aDestinationCtx->SetMatrix(gfxMatrix());
   } else {
     transform = gfxMatrix();
   }
