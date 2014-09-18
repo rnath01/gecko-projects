@@ -868,7 +868,6 @@ ToDisassemblySource(JSContext *cx, HandleValue v, JSAutoByteString *bytes)
             JSString *source = obj.as<RegExpObject>().toString(cx);
             if (!source)
                 return false;
-            JS::Anchor<JSString *> anchor(source);
             return bytes->encodeLatin1(cx, source);
         }
     }
@@ -1636,7 +1635,7 @@ JSAtom *
 ExpressionDecompiler::getLocal(uint32_t local, jsbytecode *pc)
 {
     JS_ASSERT(local < script->nfixed());
-    if (local < script->nfixedvars()) {
+    if (local < script->nbodyfixed()) {
         JS_ASSERT(fun);
         uint32_t slot = local + fun->nargs();
         JS_ASSERT(slot < script->bindings.count());

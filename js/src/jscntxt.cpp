@@ -267,7 +267,7 @@ js::DestroyContext(JSContext *cx, DestroyContextMode mode)
 
 void
 ContextFriendFields::checkNoGCRooters() {
-#if defined(JSGC_USE_EXACT_ROOTING) && defined(DEBUG)
+#ifdef DEBUG
     for (int i = 0; i < THING_ROOT_LIMIT; ++i)
         JS_ASSERT(thingGCRooters[i] == nullptr);
 #endif
@@ -537,8 +537,6 @@ js::ReportUsageError(JSContext *cx, HandleObject callee, const char *msg)
         JS_ReportError(cx, "%s", msg);
     } else {
         JSString *str = usage.toString();
-        JS::Anchor<JSString *> a_str(str);
-
         if (!str->ensureFlat(cx))
             return;
         AutoStableStringChars chars(cx);
@@ -1111,7 +1109,6 @@ JSContext::JSContext(JSRuntime *rt)
     data(nullptr),
     data2(nullptr),
     outstandingRequests(0),
-    iterValue(MagicValue(JS_NO_ITER_VALUE)),
     jitIsBroken(false),
 #ifdef MOZ_TRACE_JSCALLS
     functionCallback(nullptr),
@@ -1306,8 +1303,6 @@ JSContext::mark(JSTracer *trc)
         MarkValueRoot(trc, &unwrappedException_, "unwrapped exception");
 
     TraceCycleDetectionSet(trc, cycleDetectorSet);
-
-    MarkValueRoot(trc, &iterValue, "iterValue");
 }
 
 void *

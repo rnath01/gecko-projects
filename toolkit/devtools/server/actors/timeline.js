@@ -28,23 +28,13 @@ const {method, Arg, RetVal} = protocol;
 const events = require("sdk/event/core");
 const {setTimeout, clearTimeout} = require("sdk/timers");
 
-const TIMELINE_DATA_PULL_TIMEOUT = 300;
-
-exports.register = function(handle) {
-  handle.addGlobalActor(TimelineActor, "timelineActor");
-  handle.addTabActor(TimelineActor, "timelineActor");
-};
-
-exports.unregister = function(handle) {
-  handle.removeGlobalActor(TimelineActor);
-  handle.removeTabActor(TimelineActor);
-};
+const DEFAULT_TIMELINE_DATA_PULL_TIMEOUT = 200; // ms
 
 /**
  * The timeline actor pops and forwards timeline markers registered in
  * a docshell.
  */
-let TimelineActor = protocol.ActorClass({
+let TimelineActor = exports.TimelineActor = protocol.ActorClass({
   typeName: "timeline",
 
   events: {
@@ -90,8 +80,9 @@ let TimelineActor = protocol.ActorClass({
     if (markers.length > 0) {
       events.emit(this, "markers", markers);
     }
-    this._dataPullTimeout = setTimeout(() => this._pullTimelineData(),
-                                       TIMELINE_DATA_PULL_TIMEOUT);
+    this._dataPullTimeout = setTimeout(() => {
+      this._pullTimelineData();
+    }, DEFAULT_TIMELINE_DATA_PULL_TIMEOUT);
   },
 
   /**
@@ -114,14 +105,14 @@ let TimelineActor = protocol.ActorClass({
       this.docshell.recordProfileTimelineMarkers = true;
       this._pullTimelineData();
     }
-  }, {oneway: true}),
+  }, {}),
 
   stop: method(function() {
     if (this.docshell.recordProfileTimelineMarkers) {
       this.docshell.recordProfileTimelineMarkers = false;
       clearTimeout(this._dataPullTimeout);
     }
-  }, {oneway: true}),
+  }, {}),
 });
 
 exports.TimelineFront = protocol.FrontClass(TimelineActor, {

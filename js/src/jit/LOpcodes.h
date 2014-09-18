@@ -16,7 +16,6 @@
     _(Pointer)                      \
     _(Double)                       \
     _(Float32)                      \
-    _(SimdValueX4)                  \
     _(SimdSplatX4)                  \
     _(Int32x4)                      \
     _(Float32x4)                    \
@@ -260,8 +259,8 @@
     _(SetPropertyPolymorphicT)      \
     _(CallIteratorStart)            \
     _(IteratorStart)                \
-    _(IteratorNext)                 \
     _(IteratorMore)                 \
+    _(IsNoIterAndBranch)            \
     _(IteratorEnd)                  \
     _(ArrayLength)                  \
     _(SetArrayLength)               \
@@ -319,7 +318,9 @@
     _(AssertRangeI)                 \
     _(AssertRangeD)                 \
     _(AssertRangeF)                 \
-    _(AssertRangeV)
+    _(AssertRangeV)                 \
+    _(LexicalCheck)                 \
+    _(ThrowUninitializedLexical)
 
 #if defined(JS_CODEGEN_X86)
 # include "jit/x86/LOpcodes-x86.h"

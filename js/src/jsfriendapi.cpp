@@ -47,9 +47,7 @@ PerThreadDataFriendFields::PerThreadDataFriendFields()
     for (int i=0; i<StackKindCount; i++)
         nativeStackLimit[i] = UINTPTR_MAX;
 #endif
-#if defined(JSGC_USE_EXACT_ROOTING)
     PodArrayZero(thingGCRooters);
-#endif
 }
 
 JS_FRIEND_API(void)
@@ -397,6 +395,14 @@ js::GetGlobalForObjectCrossCompartment(JSObject *obj)
     return &obj->global();
 }
 
+JS_FRIEND_API(JSObject *)
+js::GetPrototypeNoProxy(JSObject *obj)
+{
+    JS_ASSERT(!obj->is<js::ProxyObject>());
+    JS_ASSERT(!obj->getTaggedProto().isLazy());
+    return obj->getTaggedProto().toObjectOrNull();
+}
+
 JS_FRIEND_API(void)
 js::SetPendingExceptionCrossContext(JSContext *cx, JS::HandleValue v)
 {
@@ -638,7 +644,7 @@ js::VisitGrayWrapperTargets(Zone *zone, GCThingCallback callback, void *closure)
     for (CompartmentsInZoneIter comp(zone); !comp.done(); comp.next()) {
         for (JSCompartment::WrapperEnum e(comp); !e.empty(); e.popFront()) {
             gc::Cell *thing = e.front().key().wrapped;
-            if (!IsInsideNursery(thing) && thing->isMarked(gc::GRAY))
+            if (thing->isTenured() && thing->asTenured()->isMarked(gc::GRAY))
                 callback(closure, thing);
         }
     }
@@ -717,7 +723,7 @@ struct DumpHeapTracer : public JSTracer
 static char
 MarkDescriptor(void *thing)
 {
-    gc::Cell *cell = static_cast<gc::Cell*>(thing);
+    gc::TenuredCell *cell = gc::TenuredCell::fromPointer(thing);
     if (cell->isMarked(gc::BLACK))
         return cell->isMarked(gc::GRAY) ? 'G' : 'B';
     else
@@ -842,6 +848,18 @@ JS::SetGCSliceCallback(JSRuntime *rt, GCSliceCallback callback)
     return rt->gc.setSliceCallback(callback);
 }
 
+JS_FRIEND_API(int64_t)
+GetMaxGCPauseSinceClear(JSRuntime *rt)
+{
+    return rt->gc.stats.getMaxGCPauseSinceClear();
+}
+
+JS_FRIEND_API(int64_t)
+ClearMaxGCPauseAccumulator(JSRuntime *rt)
+{
+    return rt->gc.stats.clearMaxGCPauseAccumulator();
+}
+
 JS_FRIEND_API(bool)
 JS::WasIncrementalGC(JSRuntime *rt)
 {
@@ -950,7 +968,7 @@ JS::IncrementalReferenceBarrier(void *ptr, JSGCTraceKind kind)
 #ifdef DEBUG
     Zone *zone = kind == JSTRACE_OBJECT
                  ? static_cast<JSObject *>(cell)->zone()
-                 : cell->tenuredZone();
+                 : cell->asTenured()->zone();
     JS_ASSERT(!zone->runtimeFromMainThread()->isHeapMajorCollecting());
 #endif
 
@@ -1220,3 +1238,9 @@ JS_StoreStringPostBarrierCallback(JSContext* cx,
         rt->gc.storeBuffer.putCallback(callback, key, data);
 }
 #endif /* JSGC_GENERATIONAL */
+
+JS_FRIEND_API(bool)
+js::ForwardToNative(JSContext *cx, JSNative native, const CallArgs &args)
+{
+    return native(cx, args.length(), args.base());
+}

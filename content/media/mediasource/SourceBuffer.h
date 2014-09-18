@@ -109,6 +109,10 @@ public:
   double GetBufferedStart();
   double GetBufferedEnd();
 
+#if defined(DEBUG)
+  void Dump(const char* aPath);
+#endif
+
 private:
   ~SourceBuffer();
 
@@ -134,6 +138,8 @@ private:
   nsRefPtr<MediaSource> mMediaSource;
 
   const nsCString mType;
+
+  uint32_t mEvictionThreshold;
 
   nsAutoPtr<ContainerParser> mParser;
 

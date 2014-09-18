@@ -17,7 +17,11 @@
   var IncomingCallView = loop.conversation.IncomingCallView;
 
   // 2. Standalone webapp
+  var HomeView = loop.webapp.HomeView;
+  var UnsupportedBrowserView = loop.webapp.UnsupportedBrowserView;
+  var UnsupportedDeviceView = loop.webapp.UnsupportedDeviceView;
   var CallUrlExpiredView    = loop.webapp.CallUrlExpiredView;
+  var PendingConversationView = loop.webapp.PendingConversationView;
   var StartConversationView = loop.webapp.StartConversationView;
 
   // 3. Shared components
@@ -122,18 +126,39 @@
               PanelView({client: mockClient, notifications: notifications, 
                          callUrl: "http://invalid.example.url/"})
             ), 
+            Example({summary: "Call URL retrieved - authenticated", dashed: "true", style: {width: "332px"}}, 
+              PanelView({client: mockClient, notifications: notifications, 
+                         callUrl: "http://invalid.example.url/",
+                         userProfile: {email: "test@example.com"}})
+            ), 
             Example({summary: "Pending call url retrieval", dashed: "true", style: {width: "332px"}}, 
               PanelView({client: mockClient, notifications: notifications})
             ), 
+            Example({summary: "Pending call url retrieval - authenticated", dashed: "true", style: {width: "332px"}}, 
+              PanelView({client: mockClient, notifications: notifications,
+                         userProfile: {email: "test@example.com"}})
+            ), 
             Example({summary: "Error Notification", dashed: "true", style: {width: "332px"}}, 
               PanelView({client: mockClient, notifications: errNotifications})
+            ),
+            Example({summary: "Error Notification - authenticated", dashed: "true", style: {width: "332px"}}, 
+              PanelView({client: mockClient, notifications: errNotifications,
+                         userProfile: {email: "test@example.com"}})
             )
           ), 
 
           Section({name: "IncomingCallView"}, 
-            Example({summary: "Default", dashed: "true", style: {width: "280px"}}, 
+            Example({summary: "Default / incoming video call", dashed: "true", style: {width: "280px"}}, 
               React.DOM.div({className: "fx-embedded"}, 
-                IncomingCallView({model: mockConversationModel})
+                IncomingCallView({model: mockConversationModel, 
+                                  video: {enabled: true}})
+              )
+            ), 
+
+            Example({summary: "Default / incoming audio only call", dashed: "true", style: {width: "280px"}}, 
+              React.DOM.div({className: "fx-embedded"}, 
+                IncomingCallView({model: mockConversationModel, 
+                                  video: {enabled: false}})
               )
             )
           ), 
@@ -141,7 +166,9 @@
           Section({name: "IncomingCallView-ActiveState"}, 
             Example({summary: "Default", dashed: "true", style: {width: "280px"}}, 
               React.DOM.div({className: "fx-embedded"}, 
-                IncomingCallView({model: mockConversationModel, showDeclineMenu: true})
+                IncomingCallView({model: mockConversationModel, 
+                                   showDeclineMenu: true, 
+                                   video: {enabled: true}})
               )
             )
           ), 
@@ -188,6 +215,19 @@
                                      audio: {enabled: false}, 
                                      hangup: noop, 
                                      publishStream: noop})
+              )
+            )
+          ), 
+
+          Section({name: "PendingConversationView"}, 
+            Example({summary: "Pending conversation view (connecting)", dashed: "true"}, 
+              React.DOM.div({className: "standalone"}, 
+                PendingConversationView(null)
+              )
+            ), 
+            Example({summary: "Pending conversation view (ringing)", dashed: "true"}, 
+              React.DOM.div({className: "standalone"}, 
+                PendingConversationView({callState: "ringing"})
               )
             )
           ), 
@@ -312,6 +352,31 @@
                 React.DOM.p({className: "message"}, 
                   "The person you were calling has ended the conversation."
                 )
+              )
+            )
+          ), 
+
+          Section({name: "HomeView"}, 
+            Example({summary: "Standalone Home View"}, 
+              React.DOM.div({className: "standalone"}, 
+                HomeView(null)
+              )
+            )
+          ), 
+
+
+          Section({name: "UnsupportedBrowserView"}, 
+            Example({summary: "Standalone Unsupported Browser"}, 
+              React.DOM.div({className: "standalone"}, 
+                UnsupportedBrowserView(null)
+              )
+            )
+          ), 
+
+          Section({name: "UnsupportedDeviceView"}, 
+            Example({summary: "Standalone Unsupported Device"}, 
+              React.DOM.div({className: "standalone"}, 
+                UnsupportedDeviceView(null)
               )
             )
           )

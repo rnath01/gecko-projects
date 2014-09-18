@@ -25,6 +25,7 @@ import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.LocaleManager;
+import org.mozilla.gecko.NewTabletUI;
 import org.mozilla.gecko.PrefsHelper;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Telemetry;
@@ -114,6 +115,7 @@ OnSharedPreferenceChangeListener
     private static final String PREFS_HEALTHREPORT_LINK = NON_PREF_PREFIX + "healthreport.link";
     private static final String PREFS_DEVTOOLS_REMOTE_ENABLED = "devtools.debugger.remote-enabled";
     private static final String PREFS_DISPLAY_REFLOW_ON_ZOOM = "browser.zoom.reflowOnZoom";
+    private static final String PREFS_DISPLAY_TITLEBAR_MODE = "browser.chrome.titlebarMode";
     private static final String PREFS_SYNC = NON_PREF_PREFIX + "sync";
     private static final String PREFS_STUMBLER_ENABLED = AppConstants.ANDROID_PACKAGE_NAME + ".STUMBLER_PREF";
 
@@ -122,6 +124,7 @@ OnSharedPreferenceChangeListener
 
     public static final String PREFS_RESTORE_SESSION = NON_PREF_PREFIX + "restoreSession3";
     public static final String PREFS_SUGGESTED_SITES = NON_PREF_PREFIX + "home_suggested_sites";
+    public static final String PREFS_NEW_TABLET_UI = NON_PREF_PREFIX + "new_tablet_ui";
 
     // These values are chosen to be distinct from other Activity constants.
     private static final int REQUEST_CODE_PREF_SCREEN = 5;
@@ -626,7 +629,7 @@ OnSharedPreferenceChangeListener
             // This logic will need to be extended when
             // content language selection (Bug 881510) is implemented.
             if (!localeSwitchingIsEnabled &&
-                "preferences_locale".equals(pref.getExtras().getString("resource", null))) {
+                "preferences_locale".equals(pref.getExtras().getString("resource"))) {
                 preferences.removePreference(pref);
                 i--;
                 continue;
@@ -658,6 +661,12 @@ OnSharedPreferenceChangeListener
                     preferences.removePreference(pref);
                     i--;
                     continue;
+                } else if ((AppConstants.RELEASE_BUILD || !HardwareUtils.isTablet()) &&
+                           PREFS_NEW_TABLET_UI.equals(key)) {
+                    // Remove toggle for new tablet UI on release builds and phones.
+                    preferences.removePreference(pref);
+                    i--;
+                    continue;
                 } else if (!AppConstants.MOZ_TELEMETRY_REPORTING &&
                            PREFS_TELEMETRY_ENABLED.equals(key)) {
                     preferences.removePreference(pref);
@@ -674,7 +683,9 @@ OnSharedPreferenceChangeListener
                     preferences.removePreference(pref);
                     i--;
                     continue;
-                } else if (AppConstants.RELEASE_BUILD && PREFS_GEO_REPORTING.equals(key)) {
+                } else if (AppConstants.RELEASE_BUILD &&
+                            (PREFS_GEO_REPORTING.equals(key) ||
+                             PREFS_GEO_LEARN_MORE.equals(key))) {
                     // We don't build wifi/cell tower collection in release builds, so hide the UI.
                     preferences.removePreference(pref);
                     i--;
@@ -715,6 +726,12 @@ OnSharedPreferenceChangeListener
                             return true;
                         }
                     });
+                } else if (PREFS_DISPLAY_TITLEBAR_MODE.equals(key) &&
+                           NewTabletUI.isEnabled(this)) {
+                    // New tablet always shows URLS, not titles.
+                    preferences.removePreference(pref);
+                    i--;
+                    continue;
                 } else if (handlers.containsKey(key)) {
                     PrefHandler handler = handlers.get(key);
                     handler.setupPref(this, pref);
@@ -874,7 +891,7 @@ OnSharedPreferenceChangeListener
      * <code>PREFS_STUMBLER_ENABLED</code> pref.
      */
     public static void broadcastStumblerPref(final Context context) {
-        final boolean value = getBooleanPref(context, PREFS_GEO_REPORTING, true);
+        final boolean value = getBooleanPref(context, PREFS_GEO_REPORTING, false);
         broadcastStumblerPref(context, value);
     }
 
@@ -993,6 +1010,8 @@ OnSharedPreferenceChangeListener
                              sharedPreferences.getString(key, null));
         } else if (PREFS_SUGGESTED_SITES.equals(key)) {
             refreshSuggestedSites();
+        } else if (PREFS_NEW_TABLET_UI.equals(key)) {
+            Toast.makeText(this, "Restart the browser for the changes to take effect", Toast.LENGTH_SHORT).show();
         }
     }
 

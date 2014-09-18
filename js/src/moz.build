@@ -65,7 +65,6 @@ EXPORTS += [
 # that we ensure we don't over-expose our internal integer typedefs.  Note that
 # LegacyIntTypes.h below is deliberately exempted from this requirement.
 EXPORTS.js += [
-    '../public/Anchor.h',
     '../public/CallArgs.h',
     '../public/CallNonGenericMethod.h',
     '../public/CharacterEncoding.h',
@@ -198,7 +197,6 @@ UNIFIED_SOURCES += [
     'jit/StupidAllocator.cpp',
     'jit/TypedObjectPrediction.cpp',
     'jit/TypePolicy.cpp',
-    'jit/UnreachableCodeElimination.cpp',
     'jit/ValueNumbering.cpp',
     'jit/VMFunctions.cpp',
     'jsalloc.cpp',
@@ -269,6 +267,7 @@ UNIFIED_SOURCES += [
     'vm/SelfHosting.cpp',
     'vm/Shape.cpp',
     'vm/SharedArrayObject.cpp',
+    'vm/SharedTypedArrayObject.cpp',
     'vm/SPSProfiler.cpp',
     'vm/Stack.cpp',
     'vm/String.cpp',

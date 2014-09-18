@@ -851,10 +851,10 @@ class JSObject : public js::ObjectImpl
     /*
      * Back to generic stuff.
      */
-    bool isCallable() {
-        return getClass()->isCallable();
-    }
+    bool isCallable() const;
     bool isConstructor() const;
+    JSNative callHook() const;
+    JSNative constructHook() const;
 
     inline void finish(js::FreeOp *fop);
     MOZ_ALWAYS_INLINE void finalize(js::FreeOp *fop);
@@ -1468,18 +1468,17 @@ LookupNameNoGC(JSContext *cx, PropertyName *name, JSObject *scopeChain,
  */
 extern bool
 LookupNameWithGlobalDefault(JSContext *cx, HandlePropertyName name, HandleObject scopeChain,
-                            MutableHandleObject objp);
+                            MutableHandleObject objp, MutableHandleShape propp);
 
 /*
  * Like LookupName except returns the unqualified var object if 'name' is not found in
  * any preceding scope. Normally the unqualified var object is the global.
  *
- * Additionally, pobjp and propp are not needed by callers so they are not
- * returned.
+ * Additionally, pobjp is not needed by callers so it is not returned.
  */
 extern bool
 LookupNameUnqualified(JSContext *cx, HandlePropertyName name, HandleObject scopeChain,
-                      MutableHandleObject objp);
+                      MutableHandleObject objp, MutableHandleShape propp);
 
 }
 

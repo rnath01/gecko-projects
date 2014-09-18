@@ -76,7 +76,10 @@ public:
 
     HRESULT hr = mDT->mDevice->CreateTexture2D(&desc, nullptr, byRef(tmpTexture));
     if (FAILED(hr)) {
-      gfxWarning() << "Failed to create temporary texture to hold surface data.";
+      gfxCriticalError() << "[D2D] CreateTexture2D failure " << size << " Code: " << hr;
+      // Crash debug builds but try to recover in release builds.
+      MOZ_ASSERT(false);
+      return;
     }
     mDT->mDevice->CopyResource(tmpTexture, mDT->mTexture);
 
@@ -90,7 +93,10 @@ public:
                                       &props, byRef(mOldSurfBitmap));
 
     if (FAILED(hr)) {
-      gfxWarning() << "Failed to create shared bitmap for old surface.";
+      gfxCriticalError() << "[D2D] CreateSharedBitmap failure " << size << " Code: " << hr;
+      // Crash debug builds but try to recover in release builds.
+      MOZ_ASSERT(false);
+      return;
     }
 
     IntRect clipBounds;
@@ -327,13 +333,8 @@ DrawTargetD2D::GetImageForSurface(SourceSurface *aSurface)
 {
   RefPtr<ID2D1Image> image;
 
-  if (aSurface->GetType() == SurfaceType::D2D1_1_IMAGE) {
-    image = static_cast<SourceSurfaceD2D1*>(aSurface)->GetImage();
-    static_cast<SourceSurfaceD2D1*>(aSurface)->EnsureIndependent();
-  } else {
-    Rect r(Point(), Size(aSurface->GetSize()));
-    image = GetBitmapForSurface(aSurface, r);
-  }
+  Rect r(Point(), Size(aSurface->GetSize()));
+  image = GetBitmapForSurface(aSurface, r);
 
   return image;
 }
@@ -531,8 +532,7 @@ DrawTargetD2D::DrawSurfaceWithShadow(SourceSurface *aSurface,
     hr = mDevice->CreateTexture2D(&desc, nullptr, byRef(mipTexture));
 
     if (FAILED(hr)) {
-      gfxWarning() << "Failure to create temporary texture. Size: " <<
-        aSurface->GetSize() << " Code: " << hr;
+      gfxCriticalError() << "[D2D] CreateTexture2D failure " << aSurface->GetSize() << " Code: " << hr;
       return;
     }
 
@@ -559,7 +559,7 @@ DrawTargetD2D::DrawSurfaceWithShadow(SourceSurface *aSurface,
     hr = mDevice->CreateTexture2D(&desc, nullptr, byRef(tmpDSTexture));
 
     if (FAILED(hr)) {
-      gfxWarning() << "Failure to create temporary texture. Size: " << dsSize << " Code: " << hr;
+      gfxCriticalError() << "[D2D] CreateTexture2D failure " << dsSize << " Code: " << hr;
       return;
     }
 
@@ -2360,11 +2360,29 @@ DrawTargetD2D::CreateBrushForPattern(const Pattern &aPattern, Float aAlpha)
     RefPtr<ID2D1Bitmap> bitmap;
 
     Matrix mat = pat->mMatrix;
+
+    RefPtr<SourceSurface> source = pat->mSurface;
+
+    if (!pat->mSamplingRect.IsEmpty()) {
+      IntRect samplingRect = pat->mSamplingRect;
+
+      RefPtr<DrawTargetD2D> dt = new DrawTargetD2D();
+      if (!dt->Init(samplingRect.Size(),
+                    source->GetFormat())) {
+        MOZ_ASSERT("Invalid sampling rect size!");
+        return nullptr;
+      }
+
+      dt->CopySurface(source, samplingRect, IntPoint());
+      source = dt->Snapshot();
+
+      mat.PreTranslate(samplingRect.x, samplingRect.y);
+    }
     
-    switch (pat->mSurface->GetType()) {
+    switch (source->GetType()) {
     case SurfaceType::D2D1_BITMAP:
       {
-        SourceSurfaceD2D *surf = static_cast<SourceSurfaceD2D*>(pat->mSurface.get());
+        SourceSurfaceD2D *surf = static_cast<SourceSurfaceD2D*>(source.get());
 
         bitmap = surf->mBitmap;
 
@@ -2376,14 +2394,14 @@ DrawTargetD2D::CreateBrushForPattern(const Pattern &aPattern, Float aAlpha)
     case SurfaceType::D2D1_DRAWTARGET:
       {
         SourceSurfaceD2DTarget *surf =
-          static_cast<SourceSurfaceD2DTarget*>(pat->mSurface.get());
+          static_cast<SourceSurfaceD2DTarget*>(source.get());
         bitmap = surf->GetBitmap(mRT);
         AddDependencyOnSource(surf);
       }
       break;
     default:
       {
-        RefPtr<DataSourceSurface> dataSurf = pat->mSurface->GetDataSurface();
+        RefPtr<DataSourceSurface> dataSurf = source->GetDataSurface();
         if (!dataSurf) {
           gfxWarning() << "Invalid surface type.";
           return nullptr;
@@ -2668,6 +2686,7 @@ DrawTargetD2D::factory()
 #else
   options.debugLevel = D2D1_DEBUG_LEVEL_NONE;
 #endif
+  //options.debugLevel = D2D1_DEBUG_LEVEL_INFORMATION;
 
   HRESULT hr = createD2DFactory(D2D1_FACTORY_TYPE_MULTI_THREADED,
                                 __uuidof(ID2D1Factory),
