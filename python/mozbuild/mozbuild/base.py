@@ -274,6 +274,8 @@ class MozbuildObject(ProcessExecutionMixin):
 
     @property
     def bindir(self):
+        if sys.platform.startswith('darwin'):
+            return os.path.join(self.topobjdir, 'dist', self.substs['MOZ_MACBUNDLE_NAME'], 'Contents', 'MacOS')
         return os.path.join(self.topobjdir, 'dist', 'bin')
 
     @property
