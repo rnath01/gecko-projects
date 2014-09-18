@@ -272,8 +272,12 @@ class MachCommands(MachCommandBase):
             symbols_path = None
 
         tester = cppunittests.CPPUnitTests()
+        xre_path = self.bindir
+        if sys.platform == 'osx' or sys.platform == "darwin":
+            xre_path = os.path.join(os.path.dirname(xre_path), 'Resources')
+
         try:
-            result = tester.run_tests(progs, self.bindir, symbols_path, interactive=True)
+            result = tester.run_tests(progs, xre_path, symbols_path, interactive=True)
         except Exception as e:
             log.error("Caught exception running cpp unit tests: %s" % str(e))
             result = False
