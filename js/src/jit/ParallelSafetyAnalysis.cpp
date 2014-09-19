@@ -115,6 +115,7 @@ class ParallelSafetyVisitor : public MDefinitionVisitor
     SAFE_OP(SimdSplatX4)
     SAFE_OP(SimdConstant)
     SAFE_OP(SimdExtractElement)
+    SAFE_OP(SimdInsertElement)
     SAFE_OP(SimdSignMask)
     SAFE_OP(SimdBinaryComp)
     SAFE_OP(SimdBinaryArith)
@@ -690,7 +691,7 @@ ParallelSafetyVisitor::insertWriteGuard(MInstruction *writeInstruction,
     MGuardThreadExclusive *writeGuard =
         MGuardThreadExclusive::New(alloc(), ForkJoinContext(), object);
     block->insertBefore(writeInstruction, writeGuard);
-    writeGuard->adjustInputs(alloc(), writeGuard);
+    writeGuard->typePolicy()->adjustInputs(alloc(), writeGuard);
     return true;
 }
 
