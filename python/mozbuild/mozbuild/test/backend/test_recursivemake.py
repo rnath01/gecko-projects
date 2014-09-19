@@ -715,12 +715,12 @@ class TestRecursiveMakeBackend(BackendTester):
             m = InstallManifest(path=full)
 
             # Only installed.js should be in the install manifest.
-            installed_files = ['xpcshell/installed.js']
+            installed_files = ['xpcshell/./installed.js']
             for f in installed_files:
                 self.assertTrue(f in m)
 
             uninstalled_files = [
-                'xpcshell/uninstalled.js',
+                'xpcshell/./uninstalled.js',
                 'testing/mochitest/tests/mochitest.js'
             ]
             for f in uninstalled_files:

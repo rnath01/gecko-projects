@@ -930,8 +930,7 @@ class TreeMetadataEmitter(LoggingMixin):
                 # test package. They function as identifiers rather than files.
                 if not test.get('no-install', False):
                     obj.installs[mozpath.normpath(test['path'])] = \
-                        (mozpath.normpath(mozpath.join(out_dir, test['relpath'])),
-                         True)
+                        (mozpath.join(out_dir, test['relpath']), True)
 
                 process_support_files(test)
 
