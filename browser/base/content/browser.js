@@ -258,12 +258,6 @@ XPCOMUtils.defineLazyGetter(this, "PageMenu", function() {
 */
 function pageShowEventHandlers(persisted) {
   XULBrowserWindow.asyncUpdateUI();
-
-  // The PluginClickToPlay events are not fired when navigating using the
-  // BF cache. |persisted| is true when the page is loaded from the
-  // BF cache, so this code reshows the notification if necessary.
-  if (persisted)
-    gPluginHandler.reshowClickToPlayNotification();
 }
 
 function UpdateBackForwardCommands(aWebNavigation) {
@@ -779,13 +773,6 @@ var gBrowserInit = {
     var mustLoadSidebar = false;
 
     gBrowser.addEventListener("DOMUpdatePageReport", gPopupBlockerObserver, false);
-
-    // Note that the XBL binding is untrusted
-    gBrowser.addEventListener("PluginBindingAttached", gPluginHandler, true, true);
-    gBrowser.addEventListener("PluginCrashed",         gPluginHandler, true);
-    gBrowser.addEventListener("PluginOutdated",        gPluginHandler, true);
-    gBrowser.addEventListener("PluginInstantiated",    gPluginHandler, true);
-    gBrowser.addEventListener("PluginRemoved",         gPluginHandler, true);
 
     gBrowser.addEventListener("NewPluginInstalled", gPluginHandler.newPluginInstalled, true);
 
@@ -2512,14 +2499,14 @@ let BrowserOnClick = {
 
     let button = event.originalTarget;
     if (button.id == "tryAgain") {
+      let browser = gBrowser.getBrowserForDocument(ownerDoc);
 #ifdef MOZ_CRASHREPORTER
       if (ownerDoc.getElementById("checkSendReport").checked) {
-        let browser = gBrowser.getBrowserForDocument(ownerDoc);
         TabCrashReporter.submitCrashReport(browser);
       }
 #endif
 
-      TabCrashReporter.reloadCrashedTabs();
+      TabCrashReporter.reloadCrashedTab(browser);
     }
   },
 
@@ -7277,7 +7264,9 @@ function focusNextFrame(event) {
   let fm = Services.focus;
   let dir = event.shiftKey ? fm.MOVEFOCUS_BACKWARDDOC : fm.MOVEFOCUS_FORWARDDOC;
   let element = fm.moveFocus(window, null, dir, fm.FLAG_BYKEY);
-  if (element.ownerDocument == document)
+  let panelOrNotificationSelector = "popupnotification " + element.localName + ", " +
+                                    "panel " + element.localName;
+  if (element.ownerDocument == document && !element.matches(panelOrNotificationSelector))
     focusAndSelectUrlBar();
 }
 

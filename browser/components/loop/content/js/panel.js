@@ -361,17 +361,11 @@ loop.panel = (function(_, mozL10n) {
       }
     },
 
-    _generateMailTo: function() {
-      return encodeURI([
-        "mailto:?subject=" + __("share_email_subject3") + "&",
-        "body=" + __("share_email_body3", {callUrl: this.state.callUrl})
-      ].join(""));
-    },
-
     handleEmailButtonClick: function(event) {
       this.handleLinkExfiltration(event);
-      // Note: side effect
-      document.location = event.target.dataset.mailto;
+
+      navigator.mozLoop.composeEmail(__("share_email_subject3"),
+        __("share_email_body3", { callUrl: this.state.callUrl }));
     },
 
     handleCopyButtonClick: function(event) {
@@ -409,8 +403,7 @@ loop.panel = (function(_, mozL10n) {
                    className: inputCSSClass}), 
             React.DOM.p({className: "btn-group url-actions"}, 
               React.DOM.button({className: "btn btn-email", disabled: !this.state.callUrl, 
-                onClick: this.handleEmailButtonClick, 
-                'data-mailto': this._generateMailTo()}, 
+                onClick: this.handleEmailButtonClick}, 
                 __("share_button")
               ), 
               React.DOM.button({className: "btn btn-copy", disabled: !this.state.callUrl, 
@@ -453,7 +446,7 @@ loop.panel = (function(_, mozL10n) {
   var UserIdentity = React.createClass({displayName: 'UserIdentity',
     render: function() {
       return (
-        React.DOM.p({className: "user-identity"},
+        React.DOM.p({className: "user-identity"}, 
           this.props.displayName
         )
       );
@@ -510,46 +503,15 @@ loop.panel = (function(_, mozL10n) {
             )
           ), 
           React.DOM.div({className: "footer"}, 
-            React.DOM.div({className: "user-details"},
-              UserIdentity({displayName: displayName}),
+            React.DOM.div({className: "user-details"}, 
+              UserIdentity({displayName: displayName}), 
               AvailabilityDropdown(null)
-            ),
+            ), 
             AuthLink(null), 
             SettingsDropdown(null)
           )
         )
       );
-    }
-  });
-
-  var PanelRouter = loop.desktopRouter.DesktopRouter.extend({
-    /**
-     * DOM document object.
-     * @type {HTMLDocument}
-     */
-    document: undefined,
-
-    routes: {
-      "": "home"
-    },
-
-    initialize: function(options) {
-      options = options || {};
-      if (!options.document) {
-        throw new Error("missing required document");
-      }
-    },
-
-    /**
-     * Default entry point.
-     */
-    home: function() {
-      this._notifications.reset();
-      var client = new loop.Client({
-        baseServerUrl: navigator.mozLoop.serverUrl
-      });
-      this.loadReactComponent(
-          PanelView({client: client, notifications: this._notifications}));
     }
   });
 
@@ -561,11 +523,12 @@ loop.panel = (function(_, mozL10n) {
     // else to ensure the L10n environment is setup correctly.
     mozL10n.initialize(navigator.mozLoop);
 
-    router = new PanelRouter({
-      document: document,
-      notifications: new sharedModels.NotificationCollection()
-    });
-    Backbone.history.start();
+    var client = new loop.Client();
+    var notifications = new sharedModels.NotificationCollection()
+
+    React.renderComponent(PanelView({
+      client: client, 
+      notifications: notifications}), document.querySelector("#main"));
 
     document.body.classList.add(loop.shared.utils.getTargetPlatform());
     document.body.setAttribute("dir", mozL10n.getDirection());
@@ -582,7 +545,6 @@ loop.panel = (function(_, mozL10n) {
     AvailabilityDropdown: AvailabilityDropdown,
     CallUrlResult: CallUrlResult,
     PanelView: PanelView,
-    PanelRouter: PanelRouter,
     SettingsDropdown: SettingsDropdown,
     ToSView: ToSView
   };
