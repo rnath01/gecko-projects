@@ -54,6 +54,4 @@ config = {
         "--binary=%(binary)s",
         "--address=%(address)s",
     ],
-
-    "structured_output": True,
 }
