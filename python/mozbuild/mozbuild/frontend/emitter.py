@@ -925,8 +925,12 @@ class TreeMetadataEmitter(LoggingMixin):
             for test in filtered:
                 obj.tests.append(test)
 
-                obj.installs[mozpath.normpath(test['path'])] = \
-                    (mozpath.join(out_dir, test['relpath']), True)
+                # Some test files are compiled and should not be copied into the
+                # test package. They function as identifiers rather than files.
+                if not test.get('no-install', False):
+                    obj.installs[mozpath.normpath(test['path'])] = \
+                        (mozpath.normpath(mozpath.join(out_dir, test['relpath'])),
+                         True)
 
                 process_support_files(test)
 

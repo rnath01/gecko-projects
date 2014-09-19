@@ -118,6 +118,17 @@ generated-files
    If a generated file is not listed in this key, a clobber build will
    likely fail.
 
+no-install
+   If present, do not install this test path into the test directory and package.
+
+   For some test harnesses, the test files are compiled and serve as identifiers
+   rather than actual files. (Identifier behavior varies by test harness). If
+   this key is present, the build system will not attempt to install the test
+   path listed.
+
+   The value of this key is ignored; by convention, it is usually written
+   ``no-install = True``.
+
 dupe-manifest
    Record that this manifest duplicates another manifest.
 
