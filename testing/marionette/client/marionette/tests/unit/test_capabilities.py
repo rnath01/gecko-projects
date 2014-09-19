@@ -13,7 +13,6 @@ class TestCapabilities(MarionetteTestCase):
             "return Services.appinfo")
 
     def test_mandates_capabilities(self):
-        self.assertTrue(False)
         self.assertIn("browserName", self.caps)
         self.assertIn("browserVersion", self.caps)
         self.assertIn("platformName", self.caps)
