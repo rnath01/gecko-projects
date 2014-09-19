@@ -194,3 +194,35 @@ class TestResolver(MozbuildObject):
                     honor_install_to_subdir=True)
             else:
                 yield test
+
+    @staticmethod
+    def resolve_tests_from_manifest(manifest, info=None, names=None):
+        """Some test suites differ from the standard (xpcshell, Mochitest,
+etc) test suites in that the test sources themselves are compiled and
+not present in the test package.  Such tests cannot be resolved by the
+standard mechanism, but instead are resolved from a particular
+manifest and optionally filtered by name."""
+        import manifestparser
+        mp = manifestparser.TestManifest(strict=False)
+        mp.read(manifest)
+
+        if not info:
+            info = {}
+        active_tests = mp.active_tests(exists=False, **info)
+
+        enabled_tests = []
+        disabled_tests = []
+        for test in active_tests:
+            if names and test['name'] not in names:
+                continue
+            if 'disabled' in test:
+                disabled_tests.append(test)
+            else:
+                enabled_tests.append(test)
+        return enabled_tests, disabled_tests
+
+    @staticmethod
+    def chunk_tests(tests, chunks):
+        import math
+        tests_per_chunk = int(math.ceil(len(tests) / float(chunks)))
+        return [tests[x:x+tests_per_chunk] for x in xrange(0, len(tests), tests_per_chunk)]
