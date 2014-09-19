@@ -31,13 +31,8 @@ GARBAGE += $(strings-xml)
 dir-res-raw := ../res/raw
 suggestedsites := $(dir-res-raw)/suggestedsites.json
 
-GARBAGE += \
-  $(suggestedsites) \
-  $(NULL)
-
 libs realchrome:: \
   $(strings-xml) \
-  $(suggestedsites) \
   $(NULL)
 
 chrome-%:: AB_CD=$*
@@ -94,15 +89,25 @@ $(dir-strings-xml)/strings.xml: $(strings-xml-preqs)
       $< \
 	  -o $@)
 
-suggestedsites-srcdir := $(if $(filter en-US,$(AB_CD)),,$(or $(realpath $(L10NBASEDIR)),$(abspath $(L10NBASEDIR)))/$(AB_CD)/mobile/chrome)
+# Arg 1: Valid Make identifier, like suggestedsites.
+# Arg 2: File name, like suggestedsites.json.
+define generated_file_template
+$(1)-srcdir := $$(if $$(filter en-US,$$(AB_CD)),,$$(or $$(realpath $$(L10NBASEDIR)),$$(abspath $$(L10NBASEDIR)))/$$(AB_CD)/mobile/chrome)
 
 # Determine the ../res/raw[-*] path.  This can be ../res/raw when no
 # locale is explicitly specified.
-suggestedsites-bypath = $(filter %/suggestedsites.json,$(MAKECMDGOALS))
-ifeq (,$(strip $(suggestedsites-bypath)))
-  suggestedsites-bypath = $(suggestedsites)
+$(1)-bypath = $$(filter %/$(2),$$(MAKECMDGOALS))
+ifeq (,$$(strip $$($(1)-bypath)))
+  $(1)-bypath = $$($(1))
 endif
-suggestedsites-dstdir-raw = $(patsubst %/,%,$(dir $(suggestedsites-bypath)))
+$(1)-dstdir-raw = $$(patsubst %/,%,$$(dir $$($(1)-bypath)))
+
+GARBAGE += $$($(1))
+
+libs realchrome:: $$($(1))
+endef
+
+$(eval $(call generated_file_template,suggestedsites,suggestedsites.json))
 
 $(suggestedsites-dstdir-raw)/suggestedsites.json: FORCE
 	$(call py_action,generate_suggestedsites, \
