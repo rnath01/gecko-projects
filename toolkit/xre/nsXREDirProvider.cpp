@@ -231,7 +231,7 @@ nsXREDirProvider::GetUserProfilesLocalDir(nsIFile** aResult,
 
 NS_IMETHODIMP
 nsXREDirProvider::GetFile(const char* aProperty, bool* aPersistent,
-                          nsIFile** aFile)
+			  nsIFile** aFile)
 {
   nsresult rv;
 
@@ -1031,36 +1031,8 @@ nsXREDirProvider::GetUpdateRootDir(nsIFile* *aResult)
   rv = appFile->GetParent(getter_AddRefs(updRoot));
   NS_ENSURE_SUCCESS(rv, rv);
 
-#ifdef XP_MACOSX
-  bool hasVendor = gAppData->vendor && strlen(gAppData->vendor) != 0;
+#ifdef XP_WIN
 
-  if (hasVendor || gAppData->name) {
-    nsCOMPtr<nsIFile> appRootDirFile;
-    nsCOMPtr<nsIFile> localDir;
-    nsAutoString appDirPath;
-
-    if (NS_SUCCEEDED(appFile->GetParent(getter_AddRefs(appRootDirFile))) &&
-        NS_SUCCEEDED(appRootDirFile->GetPath(appDirPath))) {
-      int32_t dotIndex = appDirPath.RFind(".app");
-      if (dotIndex == kNotFound) {
-        dotIndex = appDirPath.Length();
-      }
-      appDirPath = Substring(appDirPath, 1, dotIndex - 1);
-
-      if (NS_SUCCEEDED(GetUserDataDirectoryHome(getter_AddRefs(localDir),
-                                                true)) &&
-          NS_SUCCEEDED(localDir->AppendNative(nsDependentCString(hasVendor ?
-                                                gAppData->vendor :
-                                                gAppData->name))) &&
-          NS_SUCCEEDED(localDir->Append(NS_LITERAL_STRING("updates"))) &&
-          NS_SUCCEEDED(localDir->AppendRelativePath(appDirPath))) {
-        NS_ADDREF(*aResult = localDir);
-        return NS_OK;
-      }
-    }
-  }
-
-#elif XP_WIN
   nsAutoString pathHash;
   bool pathHashResult = false;
   bool hasVendor = gAppData->vendor && strlen(gAppData->vendor) != 0;
@@ -1149,7 +1121,7 @@ nsXREDirProvider::GetUpdateRootDir(nsIFile* *aResult)
   rv = updRoot->AppendRelativePath(programName);
   NS_ENSURE_SUCCESS(rv, rv);
 
-#endif // XP_WIN
+#endif
 #endif
   NS_ADDREF(*aResult = updRoot);
   return NS_OK;

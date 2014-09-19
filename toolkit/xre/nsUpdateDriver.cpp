@@ -379,7 +379,7 @@ CopyUpdaterIntoUpdateDir(nsIFile *greDir, nsIFile *appDir, nsIFile *updateDir,
 {
   // Copy the updater application from the GRE and the updater ini from the app
 #if defined(XP_MACOSX)
-  if (!CopyFileIntoUpdateDir(appDir, kUpdaterApp, updateDir))
+  if (!CopyFileIntoUpdateDir(greDir, kUpdaterApp, updateDir))
     return false;
   CopyFileIntoUpdateDir(greDir, kUpdaterINI, updateDir);
 #else
