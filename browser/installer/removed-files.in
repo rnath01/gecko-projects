@@ -64,7 +64,7 @@
 # Equals Contents/Resources/ on Mac OX X and is an empty string on other
 # platforms.
 
-# Common File Removals
+# File Removals
 # This is located under the "distribution/" directory and it was added before
 # Firefox 27
 @DIR_MACOS@distribution/extensions/testpilot@labs.mozilla.com.xpi
@@ -74,19 +74,12 @@
 # chrome.manifest causes us to use the updated omni.ja.
 #ifndef MOZ_GTK
 @DIR_MACOS@chrome.manifest
-  #ifdef XP_MACOSX
+  #ifdef MACOSX
     @DIR_RESOUCRES@chrome.manifest
   #endif
 #endif
 
-# Mac OS X v2 signing removals
-#ifdef XP_MACOSX
-  precomplete
-  @MACOSX@/update-settings.ini
-  @MACOSX@/default/*
-#endif
-
-# Common Directory removals
+# Directory removals
 @DIR_MACOS@chrome/
 #ifdef XP_UNIX
   #ifndef XP_MACOSX
