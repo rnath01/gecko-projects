@@ -60,11 +60,11 @@
 # @DIR_MACOS@
 # Equals Contents/MacOS/ on Mac OX X and is an empty string on other platforms.
 #
-# @DIR_RESOURCES@
+# @DIR_Resources@
 # Equals Contents/Resources/ on Mac OX X and is an empty string on other
 # platforms.
 
-# Common File Removals
+# File Removals
 # This is located under the "distribution/" directory and it was added before
 # Firefox 27
 @DIR_MACOS@distribution/extensions/testpilot@labs.mozilla.com.xpi
@@ -73,20 +73,13 @@
 # causes updates to break badly, see bug 1063052. Removing the toplevel
 # chrome.manifest causes us to use the updated omni.ja.
 #ifndef MOZ_GTK
-  @DIR_MACOS@chrome.manifest
-  #ifdef XP_MACOSX
-    @DIR_RESOURCES@chrome.manifest
+@DIR_MACOS@chrome.manifest
+  #ifdef MACOSX
+    @DIR_RESOUCRES@chrome.manifest
   #endif
 #endif
 
-# Mac OS X v2 signing removals
-#ifdef XP_MACOSX
-  precomplete
-  @DIR_MACOS@/update-settings.ini
-  @DIR_MACOS@/default/*
-#endif
-
-# Common Directory removals
+# Directory removals
 @DIR_MACOS@chrome/
 #ifdef XP_UNIX
   #ifndef XP_MACOSX
