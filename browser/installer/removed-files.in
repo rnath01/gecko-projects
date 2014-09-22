@@ -64,7 +64,7 @@
 # Equals Contents/Resources/ on Mac OX X and is an empty string on other
 # platforms.
 
-# Common File Removals
+# File Removals
 # This is located under the "distribution/" directory and it was added before
 # Firefox 27
 @DIR_MACOS@distribution/extensions/testpilot@labs.mozilla.com.xpi
@@ -79,14 +79,7 @@
   #endif
 #endif
 
-# Mac OS X v2 signing removals
-#ifdef MACOSX
-  precomplete
-  @MACOSX@/update-settings.ini
-  @MACOSX@/default/*
-#endif
-
-# COmmon Directory removals
+# Directory removals
 @DIR_MACOS@chrome/
 #ifdef XP_UNIX
   #ifndef XP_MACOSX
