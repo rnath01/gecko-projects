@@ -1042,7 +1042,10 @@ nsWindow::OnContextmenuEvent(AndroidGeckoEvent *ae)
     WidgetMouseEvent contextMenuEvent(true, NS_CONTEXTMENU, this,
                                       WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
     contextMenuEvent.refPoint =
-        LayoutDeviceIntPoint(RoundedToInt(pt * GetDefaultScale()));
+        LayoutDeviceIntPoint(RoundedToInt(pt * GetDefaultScale())) -
+        LayoutDeviceIntPoint::FromUntyped(WidgetToScreenOffset());
+    contextMenuEvent.ignoreRootScrollFrame = true;
+    contextMenuEvent.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
 
     nsEventStatus contextMenuStatus;
     DispatchEvent(&contextMenuEvent, contextMenuStatus);
@@ -1168,22 +1171,6 @@ nsWindow::DispatchGestureEvent(uint32_t msg, uint32_t direction, double delta,
     DispatchEvent(&event);
 }
 
-
-void
-nsWindow::DispatchMotionEvent(WidgetInputEvent &event, AndroidGeckoEvent *ae,
-                              const nsIntPoint &refPoint)
-{
-    nsIntPoint offset = WidgetToScreenOffset();
-
-    event.modifiers = ae->DOMModifiers();
-    event.time = ae->Time();
-
-    // XXX possibly bound the range of event.refPoint here.
-    //     some code may get confused.
-    event.refPoint = LayoutDeviceIntPoint::FromUntyped(refPoint - offset);
-
-    DispatchEvent(&event);
-}
 
 static unsigned int ConvertAndroidKeyCodeToDOMKeyCode(int androidKeyCode)
 {

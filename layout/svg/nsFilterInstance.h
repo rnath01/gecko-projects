@@ -25,6 +25,12 @@ class gfxASurface;
 class nsIFrame;
 class nsSVGFilterPaintCallback;
 
+namespace mozilla {
+namespace dom {
+class UserSpaceMetrics;
+}
+}
+
 /**
  * This class performs all filter processing.
  *
@@ -47,19 +53,34 @@ class nsFilterInstance
   typedef mozilla::gfx::SourceSurface SourceSurface;
   typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef mozilla::gfx::FilterPrimitiveDescription FilterPrimitiveDescription;
+  typedef mozilla::gfx::FilterDescription FilterDescription;
+  typedef mozilla::dom::UserSpaceMetrics UserSpaceMetrics;
 
 public:
+  /**
+   * Create a FilterDescription for the supplied filter. All coordinates in
+   * the description are in filter space.
+   * @param aOutAdditionalImages Will contain additional images needed to
+   *   render the filter (from feImage primitives).
+   * @return A FilterDescription describing the filter.
+   */
+  static FilterDescription GetFilterDescription(nsIContent* aFilteredElement,
+                                                const nsTArray<nsStyleFilter>& aFilterChain,
+                                                const UserSpaceMetrics& aMetrics,
+                                                const gfxRect& aBBox,
+                                                nsTArray<mozilla::RefPtr<SourceSurface>>& aOutAdditionalImages);
+
   /**
    * Paint the given filtered frame.
    * @param aDirtyArea The area than needs to be painted, in aFilteredFrame's
    *   frame space (i.e. relative to its origin, the top-left corner of its
    *   border box).
    */
-  static nsresult PaintFilteredFrame(nsRenderingContext *aContext,
-                                     nsIFrame *aFilteredFrame,
+  static nsresult PaintFilteredFrame(nsIFrame *aFilteredFrame,
+                                     nsRenderingContext *aContext,
+                                     const gfxMatrix& aTransform,
                                      nsSVGFilterPaintCallback *aPaintCallback,
-                                     const nsRegion* aDirtyArea,
-                                     nsIFrame* aTransformRoot = nullptr);
+                                     const nsRegion* aDirtyArea);
 
   /**
    * Returns the post-filter area that could be dirtied when the given
@@ -92,9 +113,15 @@ public:
                                     const nsRect *aPreFilterBounds = nullptr);
 
   /**
-   * @param aTargetFrame The frame of the filtered element under consideration.
+   * @param aTargetFrame The frame of the filtered element under consideration,
+   *   may be null.
+   * @param aTargetContent The filtered element itself.
+   * @param aMetrics The metrics to resolve SVG lengths against.
+   * @param aFilterChain The list of filters to apply.
    * @param aPaintCallback [optional] The callback that Render() should use to
    *   paint. Only required if you will call Render().
+   * @param aPaintTransform The transform to apply to convert to
+   *   aTargetFrame's SVG user space. Only used when painting.
    * @param aPostFilterDirtyRegion [optional] The post-filter area
    *   that has to be repainted, in app units. Only required if you will
    *   call ComputeSourceNeededRect() or Render().
@@ -104,16 +131,18 @@ public:
    * @param aOverridePreFilterVisualOverflowRect [optional] Use a different
    *   visual overflow rect for the target element.
    * @param aOverrideBBox [optional] Use a different SVG bbox for the target
-   *   element.
-   * @param aTransformRoot [optional] The transform root frame for painting.
+   *   element. Must be non-null if aTargetFrame is null.
    */
   nsFilterInstance(nsIFrame *aTargetFrame,
+                   nsIContent* aTargetContent,
+                   const UserSpaceMetrics& aMetrics,
+                   const nsTArray<nsStyleFilter>& aFilterChain,
                    nsSVGFilterPaintCallback *aPaintCallback,
+                   const gfxMatrix& aPaintTransform,
                    const nsRegion *aPostFilterDirtyRegion = nullptr,
                    const nsRegion *aPreFilterDirtyRegion = nullptr,
                    const nsRect *aOverridePreFilterVisualOverflowRect = nullptr,
-                   const gfxRect *aOverrideBBox = nullptr,
-                   nsIFrame* aTransformRoot = nullptr);
+                   const gfxRect *aOverrideBBox = nullptr);
 
   /**
    * Returns true if the filter instance was created successfully.
@@ -127,6 +156,12 @@ public:
    * nsFilterInstance constructor.
    */
   nsresult Render(gfxContext* aContext);
+
+  const FilterDescription& ExtractDescriptionAndAdditionalImages(nsTArray<mozilla::RefPtr<SourceSurface>>& aOutAdditionalImages)
+  {
+    mInputImages.SwapElements(aOutAdditionalImages);
+    return mFilterDescription;
+  }
 
   /**
    * Sets the aPostFilterDirtyRegion outparam to the post-filter area in frame
@@ -203,7 +238,7 @@ private:
    * filter primitives and their connections. This populates
    * mPrimitiveDescriptions and mInputImages.
    */
-  nsresult BuildPrimitives();
+  nsresult BuildPrimitives(const nsTArray<nsStyleFilter>& aFilterChain);
 
   /**
    * Add to the list of FilterPrimitiveDescriptions for a particular SVG
@@ -265,6 +300,16 @@ private:
    */
   nsIFrame* mTargetFrame;
 
+  /**
+   * The filtered element.
+   */
+  nsIContent* mTargetContent;
+
+  /**
+   * The user space metrics of the filtered frame.
+   */
+  const UserSpaceMetrics& mMetrics;
+
   nsSVGFilterPaintCallback* mPaintCallback;
 
   /**
@@ -313,10 +358,15 @@ private:
   SourceInfo mSourceGraphic;
   SourceInfo mFillPaint;
   SourceInfo mStrokePaint;
-  nsIFrame* mTransformRoot;
+
+  /**
+   * The transform to the SVG user space of mTargetFrame.
+   */
+  gfxMatrix               mPaintTransform;
+
   nsTArray<mozilla::RefPtr<SourceSurface>> mInputImages;
   nsTArray<FilterPrimitiveDescription> mPrimitiveDescriptions;
-  int32_t mAppUnitsPerCSSPx;
+  FilterDescription mFilterDescription;
   bool mInitialized;
 };
 

@@ -144,6 +144,7 @@ pref("browser.download.manager.openDelay", 0);
 pref("browser.download.manager.focusWhenStarting", false);
 pref("browser.download.manager.flashCount", 2);
 pref("browser.download.manager.displayedHistoryDays", 7);
+pref("browser.download.manager.addToRecentDocs", true);
 
 /* download helper */
 pref("browser.helperApps.deleteTempFileOnExit", false);
@@ -281,10 +282,13 @@ pref("browser.search.official", true);
 #endif
 
 // Control media casting feature
-#ifdef RELEASE_BUILD
-pref("browser.casting.enabled", false);
-#else
 pref("browser.casting.enabled", true);
+#ifdef RELEASE_BUILD
+pref("browser.mirroring.enabled", false);
+pref("browser.mirroring.enabled.roku", false);
+#else
+pref("browser.mirroring.enabled", true);
+pref("browser.mirroring.enabled.roku", true);
 #endif
 
 // Enable sparse localization by setting a few package locale overrides
@@ -406,7 +410,6 @@ pref("privacy.item.syncAccount", true);
 
 // enable geo
 pref("geo.enabled", true);
-pref("app.geo.reportdata", 0);
 
 // content sink control -- controls responsiveness during page load
 // see https://bugzilla.mozilla.org/show_bug.cgi?id=481566#c9
@@ -556,7 +559,7 @@ pref("app.update.enabled", false);
 pref("app.update.channel", "@MOZ_UPDATE_CHANNEL@");
 
 // If you are looking for app.update.url, we no longer use it.
-// See mobile/android/base/UpdateServiceHelper.java.in
+// See mobile/android/base/updater/UpdateServiceHelper.java
 #endif
 
 // replace newlines with spaces on paste into single-line text boxes
@@ -639,6 +642,9 @@ pref("urlclassifier.alternate_error_page", "blocked");
 
 // The number of random entries to send with a gethash request.
 pref("urlclassifier.gethashnoise", 4);
+
+// Gethash timeout for Safebrowsing.
+pref("urlclassifier.gethash.timeout_ms", 5000);
 
 // If an urlclassifier table has not been updated in this number of seconds,
 // a gethash request will be forced to check that the result is still in
