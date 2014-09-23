@@ -15,23 +15,25 @@ set -e
 
 pkg_config_version=0.28
 fontconfig_version=2.8.0
-glib_version=2.28.8
-gdk_pixbuf_version=2.22.1
+libffi_version=3.0.13
+glib_version=2.34.3
+gdk_pixbuf_version=2.26.5
 pixman_version=0.20.2
 cairo_version=1.10.2
-pango_version=1.28.4
-atk_version=1.30.0
-gtk__version=3.0.12
+pango_version=1.30.1
+atk_version=2.2.0
+gtk__version=3.4.4
 
 pkg_config_url=http://pkgconfig.freedesktop.org/releases/pkg-config-${pkg_config_version}.tar.gz
 fontconfig_url=http://www.freedesktop.org/software/fontconfig/release/fontconfig-${fontconfig_version}.tar.gz
-glib_url=http://ftp.gnome.org/pub/gnome/sources/glib/${glib_version%.*}/glib-${glib_version}.tar.bz2
-gdk_pixbuf_url=http://ftp.gnome.org/pub/gnome/sources/gdk-pixbuf/${gdk_pixbuf_version%.*}/gdk-pixbuf-${gdk_pixbuf_version}.tar.bz2
+libffi_url=ftp://sourceware.org/pub/libffi/libffi-${libffi_version}.tar.gz
+glib_url=http://ftp.gnome.org/pub/gnome/sources/glib/${glib_version%.*}/glib-${glib_version}.tar.xz
+gdk_pixbuf_url=http://ftp.gnome.org/pub/gnome/sources/gdk-pixbuf/${gdk_pixbuf_version%.*}/gdk-pixbuf-${gdk_pixbuf_version}.tar.xz
 pixman_url=http://cairographics.org/releases/pixman-${pixman_version}.tar.gz
 cairo_url=http://cairographics.org/releases/cairo-${cairo_version}.tar.gz
-pango_url=http://ftp.gnome.org/pub/GNOME/sources/pango/${pango_version%.*}/pango-${pango_version}.tar.bz2
-atk_url=http://ftp.gnome.org/pub/GNOME/sources/atk/${atk_version%.*}/atk-${atk_version}.tar.bz2
-gtk__url=http://ftp.gnome.org/pub/gnome/sources/gtk+/${gtk__version%.*}/gtk+-${gtk__version}.tar.bz2
+pango_url=http://ftp.gnome.org/pub/GNOME/sources/pango/${pango_version%.*}/pango-${pango_version}.tar.xz
+atk_url=http://ftp.gnome.org/pub/GNOME/sources/atk/${atk_version%.*}/atk-${atk_version}.tar.xz
+gtk__url=http://ftp.gnome.org/pub/gnome/sources/gtk+/${gtk__version%.*}/gtk+-${gtk__version}.tar.xz
 
 cwd=$(pwd)
 root_dir=$(mktemp -d)
@@ -79,12 +81,16 @@ build pkg-config
 
 ln -sf /usr/include $root_dir/gtk3/usr/
 ln -sf /usr/$lib $root_dir/gtk3/usr/
+if [ "$lib" = lib64 ]; then
+	ln -s lib $root_dir/gtk3/usr/local/lib64
+fi
 export PKG_CONFIG_PATH=$root_dir/gtk3/usr/local/lib/pkgconfig
 export PKG_CONFIG_SYSROOT_DIR=$root_dir/gtk3
 export LD_LIBRARY_PATH=$root_dir/gtk3/usr/local/lib
 export PATH=$root_dir/gtk3/usr/local/bin:${PATH}
 
 build fontconfig
+build libffi
 build glib
 build gdk-pixbuf --without-libtiff
 build pixman --disable-gtk
