@@ -87,9 +87,10 @@ class SharedTypedArrayObjectTemplate : public SharedTypedArrayObject
     // A value that signifies that we should use the buffer up to the end.
     static const uint32_t LENGTH_NOT_PROVIDED = (uint32_t)-1;
 
-    // This is the max implementation value of 'length': 2^32-2.
-    // The value 2^32-1 is reserved for LENGTH_NOT_PROVIDED.
-    static const uint32_t MAX_LENGTH = 0xFFFFFFFEU;
+    // This is the max implementation value of 'length': 2^31-1.
+    // The reason it is not 2^32-2 is due to Bug 1068458: most of the
+    // TypedArray code limits the length to INT32_MAX.
+    static const uint32_t MAX_LENGTH = INT32_MAX;
 
     // This is the max value of 'byteOffset': one below the length.
     static const uint32_t MAX_BYTEOFFSET = MAX_LENGTH - 1;
@@ -202,7 +203,6 @@ class SharedTypedArrayObjectTemplate : public SharedTypedArrayObject
         if (!obj)
             return nullptr;
 
-        obj->setSlot(TYPE_SLOT, Int32Value(ArrayTypeID()));
         obj->setSlot(BUFFER_SLOT, ObjectOrNullValue(buffer));
 
 	InitSharedArrayBufferViewDataPointer(obj, buffer, byteOffset);
@@ -276,7 +276,8 @@ class SharedTypedArrayObjectTemplate : public SharedTypedArrayObject
             uint32_t length;
             bool overflow;
             if (!ToLengthClamped(cx, args[0], &length, &overflow)) {
-                if (overflow)
+                // Bug 1068458: Limit length to 2^31-1.
+                if (overflow || length > INT32_MAX)
                     JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_BAD_ARRAY_LENGTH);
                 return nullptr;
             }
@@ -308,7 +309,8 @@ class SharedTypedArrayObjectTemplate : public SharedTypedArrayObject
             if (args.length() > 2) {
                 bool overflow;
                 if (!ToLengthClamped(cx, args[2], &length, &overflow)) {
-                    if (overflow)
+                    // Bug 1068458: Limit length to 2^31-1.
+                    if (overflow || length > INT32_MAX)
                         JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr,
                                              JSMSG_SHARED_TYPED_ARRAY_ARG_RANGE, "'length'");
                     return nullptr;
@@ -324,7 +326,7 @@ class SharedTypedArrayObjectTemplate : public SharedTypedArrayObject
     {
         if (nelements > MAX_LENGTH / sizeof(NativeType)) {
             JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr,
-                                 JSMSG_NEED_DIET, "size and count");
+                                 JSMSG_NEED_DIET, "shared typed array");
             return false;
         }
         buffer.set(SharedArrayBufferObject::New(cx, nelements * sizeof(NativeType)));
@@ -526,63 +528,54 @@ class SharedTypedArrayObjectTemplate : public SharedTypedArrayObject
 class SharedInt8ArrayObject : public SharedTypedArrayObjectTemplate<int8_t> {
   public:
     enum { ACTUAL_TYPE = Scalar::Int8 };
-    static const JSProtoKey key = JSProto_SharedInt8Array;
     static const JSFunctionSpec jsfuncs[];
     static const JSPropertySpec jsprops[];
 };
 class SharedUint8ArrayObject : public SharedTypedArrayObjectTemplate<uint8_t> {
   public:
     enum { ACTUAL_TYPE = Scalar::Uint8 };
-    static const JSProtoKey key = JSProto_SharedUint8Array;
     static const JSFunctionSpec jsfuncs[];
     static const JSPropertySpec jsprops[];
 };
 class SharedInt16ArrayObject : public SharedTypedArrayObjectTemplate<int16_t> {
   public:
     enum { ACTUAL_TYPE = Scalar::Int16 };
-    static const JSProtoKey key = JSProto_SharedInt16Array;
     static const JSFunctionSpec jsfuncs[];
     static const JSPropertySpec jsprops[];
 };
 class SharedUint16ArrayObject : public SharedTypedArrayObjectTemplate<uint16_t> {
   public:
     enum { ACTUAL_TYPE = Scalar::Uint16 };
-    static const JSProtoKey key = JSProto_SharedUint16Array;
     static const JSFunctionSpec jsfuncs[];
     static const JSPropertySpec jsprops[];
 };
 class SharedInt32ArrayObject : public SharedTypedArrayObjectTemplate<int32_t> {
   public:
     enum { ACTUAL_TYPE = Scalar::Int32 };
-    static const JSProtoKey key = JSProto_SharedInt32Array;
     static const JSFunctionSpec jsfuncs[];
     static const JSPropertySpec jsprops[];
 };
 class SharedUint32ArrayObject : public SharedTypedArrayObjectTemplate<uint32_t> {
   public:
     enum { ACTUAL_TYPE = Scalar::Uint32 };
-    static const JSProtoKey key = JSProto_SharedUint32Array;
     static const JSFunctionSpec jsfuncs[];
     static const JSPropertySpec jsprops[];
 };
 class SharedFloat32ArrayObject : public SharedTypedArrayObjectTemplate<float> {
   public:
     enum { ACTUAL_TYPE = Scalar::Float32 };
-    static const JSProtoKey key = JSProto_SharedFloat32Array;
     static const JSFunctionSpec jsfuncs[];
     static const JSPropertySpec jsprops[];
 };
 class SharedFloat64ArrayObject : public SharedTypedArrayObjectTemplate<double> {
   public:
     enum { ACTUAL_TYPE = Scalar::Float64 };
-    static const JSProtoKey key = JSProto_SharedFloat64Array;
     static const JSFunctionSpec jsfuncs[];
     static const JSPropertySpec jsprops[];
 };
 class SharedUint8ClampedArrayObject : public SharedTypedArrayObjectTemplate<uint8_clamped> {
   public:
     enum { ACTUAL_TYPE = Scalar::Uint8Clamped };
-    static const JSProtoKey key = JSProto_SharedUint8ClampedArray;
     static const JSFunctionSpec jsfuncs[];
     static const JSPropertySpec jsprops[];
 };

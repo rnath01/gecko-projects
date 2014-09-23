@@ -2229,6 +2229,10 @@ ReportCompartmentStats(const JS::CompartmentStats &cStats,
         cStats.compartmentTables,
         "Compartment-wide tables storing shape and type object information.");
 
+    ZCREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("inner-views"),
+        cStats.innerViewsTable,
+        "The table for array buffer inner views.");
+
     ZCREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("cross-compartment-wrapper-table"),
         cStats.crossCompartmentWrappersTable,
         "The cross-compartment wrapper table.");
@@ -3013,7 +3017,11 @@ ReadSourceFromFilename(JSContext *cx, const char *filename, char16_t **src, size
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIChannel> scriptChannel;
-    rv = NS_NewChannel(getter_AddRefs(scriptChannel), uri);
+    rv = NS_NewChannel(getter_AddRefs(scriptChannel),
+                       uri,
+                       nsContentUtils::GetSystemPrincipal(),
+                       nsILoadInfo::SEC_NORMAL,
+                       nsIContentPolicy::TYPE_OTHER);
     NS_ENSURE_SUCCESS(rv, rv);
 
     // Only allow local reading.

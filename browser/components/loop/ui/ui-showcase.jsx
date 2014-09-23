@@ -23,6 +23,7 @@
   var CallUrlExpiredView    = loop.webapp.CallUrlExpiredView;
   var PendingConversationView = loop.webapp.PendingConversationView;
   var StartConversationView = loop.webapp.StartConversationView;
+  var EndedConversationView = loop.webapp.EndedConversationView;
 
   // 3. Shared components
   var ConversationToolbar = loop.shared.views.ConversationToolbar;
@@ -126,11 +127,24 @@
               <PanelView client={mockClient} notifications={notifications}
                          callUrl="http://invalid.example.url/" />
             </Example>
+            <Example summary="Call URL retrieved - authenticated" dashed="true" style={{width: "332px"}}>
+              <PanelView client={mockClient} notifications={notifications}
+                         callUrl="http://invalid.example.url/"
+                         userProfile={{email: "test@example.com"}} />
+            </Example>
             <Example summary="Pending call url retrieval" dashed="true" style={{width: "332px"}}>
               <PanelView client={mockClient} notifications={notifications} />
             </Example>
+            <Example summary="Pending call url retrieval - authenticated" dashed="true" style={{width: "332px"}}>
+              <PanelView client={mockClient} notifications={notifications}
+                         userProfile={{email: "test@example.com"}} />
+            </Example>
             <Example summary="Error Notification" dashed="true" style={{width: "332px"}}>
               <PanelView client={mockClient} notifications={errNotifications}/>
+            </Example>
+            <Example summary="Error Notification - authenticated" dashed="true" style={{width: "332px"}}>
+              <PanelView client={mockClient} notifications={errNotifications}
+                         userProfile={{email: "test@example.com"}} />
             </Example>
           </Section>
 
@@ -322,6 +336,19 @@
             </Example>
             <Example summary="Non-Firefox User">
               <CallUrlExpiredView helper={{isFirefox: returnFalse}} />
+            </Example>
+          </Section>
+
+          <Section name="EndedConversationView">
+            <Example summary="Displays the feedback form">
+              <div className="standalone">
+                <EndedConversationView sdk={mockSDK}
+                                       video={{enabled: true}}
+                                       audio={{enabled: true}}
+                                       conversation={mockConversationModel}
+                                       feedbackApiClient={stageFeedbackApiClient}
+                                       onAfterFeedbackReceived={noop} />
+              </div>
             </Example>
           </Section>
 

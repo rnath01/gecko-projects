@@ -4,6 +4,7 @@
 
 from __future__ import unicode_literals
 
+import itertools
 import json
 import logging
 import os
@@ -11,7 +12,7 @@ import traceback
 import sys
 import time
 
-from collections import OrderedDict
+from collections import defaultdict, OrderedDict
 from mach.mixin.logging import LoggingMixin
 from mozbuild.util import (
     memoize,
@@ -56,6 +57,7 @@ from .data import (
     SharedLibrary,
     SimpleProgram,
     StaticLibrary,
+    TestHarnessFiles,
     TestWebIDLFile,
     TestManifest,
     VariablePassthru,
@@ -486,6 +488,36 @@ class TreeMetadataEmitter(LoggingMixin):
             yield Exports(context, exports,
                 dist_install=not context.get('NO_DIST_INSTALL', False))
 
+        test_harness_files = context.get('TEST_HARNESS_FILES')
+        if test_harness_files:
+            srcdir_files = defaultdict(list)
+            srcdir_pattern_files = defaultdict(list)
+            objdir_files = defaultdict(list)
+
+            for path, strings in test_harness_files.walk():
+                if not path and strings:
+                    raise SandboxValidationError(
+                        'Cannot install files to the root of TEST_HARNESS_FILES', context)
+
+                for s in strings:
+                    if context.is_objdir_path(s):
+                        if s.startswith('!/'):
+                            raise SandboxValidationError(
+                                'Topobjdir-relative file not allowed in TEST_HARNESS_FILES: %s' % s, context)
+                        objdir_files[path].append(s[1:])
+                    else:
+                        resolved = context.resolve_path(s)
+                        if '*' in s:
+                            srcdir_pattern_files[path].append(s);
+                        elif not os.path.exists(resolved):
+                            raise SandboxValidationError(
+                                'File listed in TEST_HARNESS_FILES does not exist: %s' % s, context)
+                        else:
+                            srcdir_files[path].append(resolved)
+
+            yield TestHarnessFiles(context, srcdir_files,
+                                   srcdir_pattern_files, objdir_files)
+
         defines = context.get('DEFINES')
         if defines:
             yield Defines(context, defines)
@@ -732,6 +764,8 @@ class TreeMetadataEmitter(LoggingMixin):
         test_manifests = dict(
             A11Y=('a11y', 'testing/mochitest', 'a11y', True),
             BROWSER_CHROME=('browser-chrome', 'testing/mochitest', 'browser', True),
+            JETPACK_PACKAGE=('jetpack-package', 'testing/mochitest', 'jetpack-package', True),
+            JETPACK_ADDON=('jetpack-addon', 'testing/mochitest', 'jetpack-addon', True),
             METRO_CHROME=('metro-chrome', 'testing/mochitest', 'metro', True),
             MOCHITEST=('mochitest', 'testing/mochitest', 'tests', True),
             MOCHITEST_CHROME=('chrome', 'testing/mochitest', 'chrome', True),
@@ -818,6 +852,9 @@ class TreeMetadataEmitter(LoggingMixin):
                 filtered = m.active_tests(exists=False, disabled=True,
                     **self.info)
 
+            # Jetpack add-on tests are expected to be generated during the
+            # build process so they won't exist here.
+            if flavor != 'jetpack-addon':
                 missing = [t['name'] for t in filtered if not os.path.exists(t['path'])]
                 if missing:
                     raise SandboxValidationError('Test manifest (%s) lists '
@@ -893,8 +930,11 @@ class TreeMetadataEmitter(LoggingMixin):
             for test in filtered:
                 obj.tests.append(test)
 
-                obj.installs[mozpath.normpath(test['path'])] = \
-                    (mozpath.join(out_dir, test['relpath']), True)
+                # Jetpack add-on tests are generated directly in the test
+                # directory
+                if flavor != 'jetpack-addon':
+                    obj.installs[mozpath.normpath(test['path'])] = \
+                        (mozpath.join(out_dir, test['relpath']), True)
 
                 process_support_files(test)
 

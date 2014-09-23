@@ -7,6 +7,7 @@ let {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource:///modules/ContentWebRTC.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
   "resource://gre/modules/BrowserUtils.jsm");
@@ -16,6 +17,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "LoginManagerContent",
   "resource://gre/modules/LoginManagerContent.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "InsecurePasswordUtils",
   "resource://gre/modules/InsecurePasswordUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PluginContent",
+  "resource:///modules/PluginContent.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "UITour",
@@ -493,6 +496,9 @@ ClickEventHandler.init();
 
 ContentLinkHandler.init(this);
 
+// TODO: Load this lazily so the JSM is run only if a relevant event/message fires.
+let pluginContent = new PluginContent(global);
+
 addEventListener("DOMWebNotificationClicked", function(event) {
   sendAsyncMessage("DOMWebNotificationClicked", {});
 }, false);
@@ -636,6 +642,11 @@ let DOMFullscreenHandler = {
   }
 };
 DOMFullscreenHandler.init();
+
+ContentWebRTC.init();
+addMessageListener("webrtc:Allow", ContentWebRTC);
+addMessageListener("webrtc:Deny", ContentWebRTC);
+addMessageListener("webrtc:StopSharing", ContentWebRTC);
 
 function gKeywordURIFixup(fixupInfo) {
   fixupInfo.QueryInterface(Ci.nsIURIFixupInfo);

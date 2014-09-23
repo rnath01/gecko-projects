@@ -34,8 +34,8 @@
 #include "mozilla/dom/PermissionMessageUtils.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/StructuredCloneUtils.h"
-#include "mozilla/dom/ipc/BlobChild.h"
-#include "mozilla/dom/ipc/BlobParent.h"
+#include "mozilla/dom/PBlobChild.h"
+#include "mozilla/dom/PBlobParent.h"
 #include "JavaScriptChild.h"
 #include "JavaScriptParent.h"
 #include "mozilla/dom/DOMStringList.h"
@@ -968,7 +968,7 @@ nsFrameMessageManager::ReceiveMessage(nsISupports* aTarget,
       // }
       // JSContext* cx = aes.cx();
       nsIGlobalObject* nativeGlobal =
-        xpc::GetNativeForGlobal(js::GetGlobalForObjectCrossCompartment(wrappedJS->GetJSObject()));
+        xpc::NativeGlobal(js::GetGlobalForObjectCrossCompartment(wrappedJS->GetJSObject()));
       AutoEntryScript aes(nativeGlobal);
       JSContext* cx = aes.cx();
       JS::Rooted<JSObject*> object(cx, wrappedJS->GetJSObject());
@@ -1492,7 +1492,12 @@ nsFrameScriptExecutor::TryCacheLoadAndCompileScript(const nsAString& aURL,
   }
 
   nsCOMPtr<nsIChannel> channel;
-  NS_NewChannel(getter_AddRefs(channel), uri);
+  NS_NewChannel(getter_AddRefs(channel),
+                uri,
+                nsContentUtils::GetSystemPrincipal(),
+                nsILoadInfo::SEC_NORMAL,
+                nsIContentPolicy::TYPE_OTHER);
+
   if (!channel) {
     return;
   }
