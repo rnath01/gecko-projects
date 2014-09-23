@@ -619,7 +619,9 @@ exports.AppManager = AppManager = {
         project.validationStatus = "error warning";
       }
 
-      if (AppProjects.get(project.location)) {
+      if (project.type === "hosted" && project.location !== validation.manifestURL) {
+        yield AppProjects.updateLocation(project, validation.manifestURL);
+      } else if (AppProjects.get(project.location)) {
         yield AppProjects.update(project);
       }
 
@@ -649,7 +651,15 @@ exports.AppManager = AppManager = {
       let r = new USBRuntime(id);
       this.runtimeList.usb.push(r);
       r.updateNameFromADB().then(
-        () => this.update("runtimelist"), () => {});
+        () => {
+          this.update("runtimelist");
+          // Also update the runtime button label, if the currently selected
+          // runtime name changes
+          if (r == this.selectedRuntime) {
+            this.update("runtime");
+          }
+        },
+        () => {});
     }
     this.update("runtimelist");
   },

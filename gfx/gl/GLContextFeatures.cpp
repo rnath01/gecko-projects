@@ -72,6 +72,24 @@ static const FeatureInfo sFeatureInfoArr[] = {
         }
     },
     {
+        "clear_buffers",
+        300, // OpenGL version
+        300, // OpenGL ES version
+        GLContext::Extension_None,
+        {
+            GLContext::Extensions_End
+        }
+    },
+    {
+        "copy_buffer",
+        310, // OpenGL version
+        300, // OpenGL ES version
+        GLContext::ARB_copy_buffer,
+        {
+            GLContext::Extensions_End
+        }
+    },
+    {
         "depth_texture",
         200, // OpenGL version
         300, // OpenGL ES version
@@ -240,6 +258,15 @@ static const FeatureInfo sFeatureInfoArr[] = {
          * ANGLE_instanced_arrays and NV_instanced_arrays forbid this, but GLES3
          * has no such restriction.
          */
+    },
+    {
+        "map_buffer_range",
+        300, // OpenGL version
+        300, // OpenGL ES version
+        GLContext::ARB_map_buffer_range,
+        {
+            GLContext::Extensions_End
+        }
     },
     {
         "occlusion_query",
@@ -437,6 +464,15 @@ static const FeatureInfo sFeatureInfoArr[] = {
         {
             GLContext::EXT_transform_feedback,
             GLContext::NV_transform_feedback,
+            GLContext::Extensions_End
+        }
+    },
+    {
+        "uniform_buffer_object",
+        310, // OpenGL version
+        300, // OpenGL ES version
+        GLContext::ARB_uniform_buffer_object,
+        {
             GLContext::Extensions_End
         }
     },

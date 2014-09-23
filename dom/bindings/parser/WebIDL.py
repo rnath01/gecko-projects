@@ -3362,7 +3362,8 @@ class IDLAttribute(IDLInterfaceMember):
               identifier == "AvailableIn" or
               identifier == "NewObject" or
               identifier == "UnsafeInPrerendering" or
-              identifier == "CheckPermissions"):
+              identifier == "CheckPermissions" or
+              identifier == "BinaryName"):
             # Known attributes that we don't need to do anything with here
             pass
         else:
@@ -3405,6 +3406,7 @@ class IDLArgument(IDLObjectWithIdentifier):
         self._allowTreatNonCallableAsNull = False
 
         assert not variadic or optional
+        assert not variadic or not defaultValue
 
     def addExtendedAttributes(self, attrs):
         attrs = self.checkForStringHandlingExtendedAttributes(
@@ -3453,9 +3455,9 @@ class IDLArgument(IDLObjectWithIdentifier):
 
         if ((self.type.isDictionary() or
              self.type.isUnion() and self.type.unroll().hasDictionaryType) and
-            self.optional and not self.defaultValue):
-            # Default optional dictionaries to null, for simplicity,
-            # so the codegen doesn't have to special-case this.
+            self.optional and not self.defaultValue and not self.variadic):
+            # Default optional non-variadic dictionaries to null,
+            # for simplicity, so the codegen doesn't have to special-case this.
             self.defaultValue = IDLNullValue(self.location)
         elif self.type.isAny():
             assert (self.defaultValue is None or
@@ -3962,7 +3964,8 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
               identifier == "Pref" or
               identifier == "Func" or
               identifier == "AvailableIn" or
-              identifier == "CheckPermissions"):
+              identifier == "CheckPermissions" or
+              identifier == "BinaryName"):
             # Known attributes that we don't need to do anything with here
             pass
         else:

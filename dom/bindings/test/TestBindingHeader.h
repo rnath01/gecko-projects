@@ -689,10 +689,13 @@ public:
 
   // binaryNames tests
   void MethodRenamedTo();
+  void OtherMethodRenamedTo();
   void MethodRenamedTo(int8_t);
   int8_t AttributeGetterRenamedTo();
   int8_t AttributeRenamedTo();
   void SetAttributeRenamedTo(int8_t);
+  int8_t OtherAttributeRenamedTo();
+  void SetOtherAttributeRenamedTo(int8_t);
 
   // Dictionary tests
   void PassDictionary(JSContext*, const Dict&);
@@ -714,6 +717,7 @@ public:
   void PassDictContainingDict(JSContext*, const DictContainingDict&);
   void PassDictContainingSequence(JSContext*, const DictContainingSequence&);
   void ReceiveDictContainingSequence(JSContext*, DictContainingSequence&);
+  void PassVariadicDictionary(JSContext*, const Sequence<Dict>&);
 
   // Typedefs
   void ExerciseTypedefInterfaces1(TestInterface&);
@@ -829,6 +833,10 @@ public:
   void PassArgsWithDefaults(JSContext*, const Optional<int32_t>&,
                             TestInterface*, const Dict&, double,
                             const Optional<float>&);
+
+  void SetDashed_attribute(int8_t);
+  int8_t Dashed_attribute();
+  void Dashed_method();
 
   // Methods and properties imported via "implements"
   bool ImplementedProperty();
