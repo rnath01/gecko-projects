@@ -9,8 +9,6 @@ import shutil
 import tempfile
 import unittest
 
-from StringIO import StringIO
-
 import mozpack.path as mozpath
 
 from mozfile import NamedTemporaryFile
@@ -215,40 +213,6 @@ class TestTestResolver(Base):
         actual = list(r.resolve_tests(paths=['services'], cwd=r.topobjdir))
         self.assertEqual(actual, expected)
 
-    def test_chunk_tests(self):
-        def f(tests, chunks):
-            return TestResolver.chunk_tests(tests, chunks)
-
-        self.assertEquals(f([1, 2, 3, 4, 5], 1), [[1, 2, 3, 4, 5]])
-        self.assertEquals(f([1, 2, 3, 4, 5], 2), [[1, 2, 3], [4, 5]])
-        self.assertEquals(f([1, 2, 3, 4, 5], 3), [[1, 2], [3, 4], [5]])
-        self.assertEquals(f([1, 2, 3, 4, 5], 4), [[1, 2], [3, 4], [5]])
-        self.assertEquals(f([1, 2, 3, 4, 5], 5), [[1], [2], [3], [4], [5]])
-        self.assertEquals(f([1, 2, 3, 4, 5], 6), [[1], [2], [3], [4], [5]])
-
-    def test_resolve_tests_from_manifest(self):
-        manifest = StringIO('''
-[test1]
-# [test2]
-
-# test3: disabled under condition 1.
-[test3]
-skip-if = cond1 == "1"
-
-# test4: disabled under condition 2.
-[test4]
-skip-if = cond2 == "2"
-''')
-
-        def f(info=None, names=None):
-            manifest.seek(0)
-            enabled, disabled = TestResolver.resolve_tests_from_manifest(manifest, info=info, names=names)
-            return ([test['name'] for test in enabled], [test['name'] for test in disabled])
-
-        self.assertEquals(f(), (['test1', 'test3', 'test4'], []))
-        self.assertEquals(f(names=['test3', 'test4']), (['test3', 'test4'], []))
-        self.assertEquals(f(info={'cond1': '1'}), (['test1', 'test4'], ['test3']))
-        self.assertEquals(f(info={'cond2': '2'}, names=['test3', 'test4']), (['test3'], ['test4']))
 
 if __name__ == '__main__':
     main()

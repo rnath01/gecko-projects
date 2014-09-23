@@ -687,44 +687,6 @@ class TestRecursiveMakeBackend(BackendTester):
             stem = '%s/android_eclipse/%s' % (env.topobjdir, project_name)
             self.assertIn(command_template % (stem, stem), lines)
 
-    def test_install_manifests_no_install(self):
-        """Ensure test manifests honor per-file no-install."""
-        env = self._consume('test-manifests-no-install', RecursiveMakeBackend)
-
-        tests_dir = mozpath.join(env.topobjdir, '_tests')
-
-        all_tests_path = mozpath.join(env.topobjdir, 'all-tests.json')
-        self.assertTrue(os.path.exists(all_tests_path))
-
-        # These are all good test identifiers.
-        with open(all_tests_path, 'rt') as fh:
-            o = json.load(fh)
-
-            self.assertIn('installed.js', o)
-            self.assertIn('uninstalled.js', o)
-            self.assertIn('mochitest.js', o)
-
-        man_dir = mozpath.join(env.topobjdir, '_build_manifests', 'install')
-        self.assertTrue(os.path.isdir(man_dir))
-
-        expected = ['tests']
-        for e in expected:
-            full = mozpath.join(man_dir, e)
-            self.assertTrue(os.path.exists(full))
-
-            m = InstallManifest(path=full)
-
-            # Only installed.js should be in the install manifest.
-            installed_files = ['xpcshell/./installed.js']
-            for f in installed_files:
-                self.assertTrue(f in m)
-
-            uninstalled_files = [
-                'xpcshell/./uninstalled.js',
-                'testing/mochitest/tests/mochitest.js'
-            ]
-            for f in uninstalled_files:
-                self.assertFalse(f in m)
 
 if __name__ == '__main__':
     main()

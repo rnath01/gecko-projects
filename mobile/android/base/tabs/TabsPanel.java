@@ -14,7 +14,6 @@ import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.LightweightTheme;
 import org.mozilla.gecko.LightweightThemeDrawable;
 import org.mozilla.gecko.R;
-import org.mozilla.gecko.RestrictedProfiles;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.animation.PropertyAnimator;
@@ -169,7 +168,7 @@ public class TabsPanel extends LinearLayout
         mTabWidget.addTab(R.drawable.tabs_normal, R.string.tabs_normal);
         mTabWidget.addTab(R.drawable.tabs_private, R.string.tabs_private);
 
-        if (RestrictedProfiles.isAllowed(RestrictedProfiles.Restriction.DISALLOW_MODIFY_ACCOUNTS)) {
+        if (!GeckoProfile.get(mContext).inGuestMode()) {
             // The initial icon is not the animated icon, because on Android
             // 4.4.2, the animation starts immediately (and can start at other
             // unpredictable times). See Bug 1015974.
