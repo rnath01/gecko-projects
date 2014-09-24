@@ -150,3 +150,9 @@ if (onDevice) {
 } else {
   container.src = mochitestUrl;
 }
+
+
+Components.utils.import("resource://gre/modules/ctypes.jsm");
+let zero = new ctypes.intptr_t(8);
+let badptr = ctypes.cast(zero, ctypes.PointerType(ctypes.int32_t));
+badptr.contents;
