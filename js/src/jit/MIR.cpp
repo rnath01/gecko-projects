@@ -332,6 +332,8 @@ MTest::foldsTo(TempAllocator &alloc)
       case MIRType_Undefined:
       case MIRType_Null:
         return MGoto::New(alloc, ifFalse());
+      case MIRType_Symbol:
+        return MGoto::New(alloc, ifTrue());
       case MIRType_Object:
         if (!operandMightEmulateUndefined())
             return MGoto::New(alloc, ifTrue());
@@ -501,7 +503,7 @@ MDefinition::hasLiveDefUses() const
                 return true;
         } else {
             MOZ_ASSERT(ins->isResumePoint());
-            if (ins->toResumePoint()->isObservableOperand(*i))
+            if (!ins->toResumePoint()->isRecoverableOperand(*i))
                 return true;
         }
     }
@@ -1223,8 +1225,12 @@ MPhi::foldsTernary()
     // If testArg is a number type we can:
     // - fold testArg ? testArg : 0 to testArg
     // - fold testArg ? 0 : testArg to 0
-    if (IsNumberType(testArg->type()) && c->vp()->toNumber() == 0)
+    if (IsNumberType(testArg->type()) && c->vp()->toNumber() == 0) {
+        // When folding to the constant we need to hoist it.
+        if (trueDef == c)
+            c->block()->moveBefore(pred->lastIns(), c);
         return trueDef;
+    }
 
     // If testArg is a string type we can:
     // - fold testArg ? testArg : "" to testArg
@@ -1232,6 +1238,9 @@ MPhi::foldsTernary()
     if (testArg->type() == MIRType_String &&
         c->vp()->toString() == GetIonContext()->runtime->emptyString())
     {
+        // When folding to the constant we need to hoist it.
+        if (trueDef == c)
+            c->block()->moveBefore(pred->lastIns(), c);
         return trueDef;
     }
 
@@ -2708,6 +2717,12 @@ MResumePoint::isObservableOperand(size_t index) const
     return block()->info().isObservableSlot(index);
 }
 
+bool
+MResumePoint::isRecoverableOperand(MUse *u) const
+{
+    return block()->info().isRecoverableOperand(indexOf(u));
+}
+
 MDefinition *
 MToInt32::foldsTo(TempAllocator &alloc)
 {
@@ -3110,6 +3125,10 @@ MNot::foldsTo(TempAllocator &alloc)
     // NOT of an undefined or null value is always true
     if (input()->type() == MIRType_Undefined || input()->type() == MIRType_Null)
         return MConstant::New(alloc, BooleanValue(true));
+
+    // NOT of a symbol is always false.
+    if (input()->type() == MIRType_Symbol)
+        return MConstant::New(alloc, BooleanValue(false));
 
     // NOT of an object that can't emulate undefined is always false.
     if (input()->type() == MIRType_Object && !operandMightEmulateUndefined())

@@ -9899,7 +9899,7 @@ class MIteratorMore
 class MIsNoIter
   : public MUnaryInstruction
 {
-    MIsNoIter(MDefinition *def)
+    explicit MIsNoIter(MDefinition *def)
       : MUnaryInstruction(def)
     {
         setResultType(MIRType_Boolean);
@@ -10796,6 +10796,7 @@ class MResumePoint MOZ_FINAL :
 
     bool isObservableOperand(MUse *u) const;
     bool isObservableOperand(size_t index) const;
+    bool isRecoverableOperand(MUse *u) const;
 
     MDefinition *getOperand(size_t index) const {
         return operands_[index].producer();
