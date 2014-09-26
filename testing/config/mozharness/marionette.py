@@ -54,4 +54,6 @@ config = {
         "--binary=%(binary)s",
         "--address=%(address)s",
     ],
+
+    "structured_suites": ("marionette_desktop",),
 }
