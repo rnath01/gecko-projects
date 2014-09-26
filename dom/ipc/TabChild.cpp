@@ -80,7 +80,6 @@
 #include "UnitTransforms.h"
 #include "ClientLayerManager.h"
 #include "LayersLogging.h"
-#include "nsIWebBrowserChrome3.h"
 
 #include "nsColorPickerProxy.h"
 
@@ -1550,6 +1549,8 @@ TabChild::DestroyWindow()
 void
 TabChild::ActorDestroy(ActorDestroyReason why)
 {
+  DestroyWindow();
+
   if (mTabChildGlobal) {
     // The messageManager relays messages via the TabChild which
     // no longer exists.
