@@ -3056,14 +3056,14 @@ nsDocShell::RemoveWeakScrollObserver(nsIScrollObserver* aObserver)
 }
 
 void
-nsDocShell::NotifyAsyncPanZoomStarted()
+nsDocShell::NotifyAsyncPanZoomStarted(const mozilla::CSSIntPoint aScrollPos)
 {
     nsTObserverArray<nsWeakPtr>::ForwardIterator iter(mScrollObservers);
     while (iter.HasMore()) {
         nsWeakPtr ref = iter.GetNext();
         nsCOMPtr<nsIScrollObserver> obs = do_QueryReferent(ref);
         if (obs) {
-            obs->AsyncPanZoomStarted();
+            obs->AsyncPanZoomStarted(aScrollPos);
         } else {
             mScrollObservers.RemoveElement(ref);
         }
@@ -3071,14 +3071,14 @@ nsDocShell::NotifyAsyncPanZoomStarted()
 }
 
 void
-nsDocShell::NotifyAsyncPanZoomStopped()
+nsDocShell::NotifyAsyncPanZoomStopped(const mozilla::CSSIntPoint aScrollPos)
 {
     nsTObserverArray<nsWeakPtr>::ForwardIterator iter(mScrollObservers);
     while (iter.HasMore()) {
         nsWeakPtr ref = iter.GetNext();
         nsCOMPtr<nsIScrollObserver> obs = do_QueryReferent(ref);
         if (obs) {
-            obs->AsyncPanZoomStopped();
+            obs->AsyncPanZoomStopped(aScrollPos);
         } else {
             mScrollObservers.RemoveElement(ref);
         }
@@ -9838,7 +9838,18 @@ nsDocShell::InternalLoad(nsIURI * aURI,
             return NS_OK;
         }
     }
-    
+
+    // Check if the webbrowser chrome wants the load to proceed; this can be
+    // used to cancel attempts to load URIs in the wrong process.
+    nsCOMPtr<nsIWebBrowserChrome3> browserChrome3 = do_GetInterface(mTreeOwner);
+    if (browserChrome3) {
+        bool shouldLoad;
+        rv = browserChrome3->ShouldLoadURI(this, aURI, aReferrer, &shouldLoad);
+        if (NS_SUCCEEDED(rv) && !shouldLoad) {
+            return NS_OK;
+        }
+    }
+
     // mContentViewer->PermitUnload can destroy |this| docShell, which
     // causes the next call of CanSavePresentation to crash. 
     // Hold onto |this| until we return, to prevent a crash from happening. 

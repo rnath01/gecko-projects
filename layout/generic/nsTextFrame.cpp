@@ -1795,7 +1795,7 @@ GetFirstFontMetrics(gfxFontGroup* aFontGroup)
 {
   if (!aFontGroup)
     return gfxFont::Metrics();
-  gfxFont* font = aFontGroup->GetFontAt(0);
+  gfxFont* font = aFontGroup->GetFirstValidFont();
   if (!font)
     return gfxFont::Metrics();
   return font->GetMetrics();
@@ -1936,6 +1936,15 @@ BuildTextRunsScanner::BuildTextRunForFrames(void* aTextBuffer)
       if (!(parent && parent->GetContent() &&
           parent->GetContent()->Tag() == nsGkAtoms::mtext_)) {
         textFlags |= gfxTextRunFactory::TEXT_USE_MATH_SCRIPT;
+      }
+      nsIMathMLFrame* mathFrame = do_QueryFrame(parent);
+      if (mathFrame) {
+        nsPresentationData presData;
+        mathFrame->GetPresentationData(presData);
+        if (NS_MATHML_IS_DTLS_SET(presData.flags)) {
+          mathFlags |= MathMLTextRunFactory::MATH_FONT_FEATURE_DTLS;
+          anyMathMLStyling = true;
+        }
       }
     }
     nsIFrame* child = mLineContainer;
@@ -5660,7 +5669,7 @@ nsTextFrame::PaintTextSelectionDecorations(gfxContext* aCtx,
     sdptr = sdptr->mNext;
   }
 
-  gfxFont* firstFont = aProvider.GetFontGroup()->GetFontAt(0);
+  gfxFont* firstFont = aProvider.GetFontGroup()->GetFirstValidFont();
   if (!firstFont)
     return; // OOM
   gfxFont::Metrics decorationMetrics(firstFont->GetMetrics());
@@ -6341,7 +6350,7 @@ nsTextFrame::CombineSelectionUnderlineRect(nsPresContext* aPresContext,
   nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
                                         GetFontSizeInflation());
   gfxFontGroup* fontGroup = fm->GetThebesFontGroup();
-  gfxFont* firstFont = fontGroup->GetFontAt(0);
+  gfxFont* firstFont = fontGroup->GetFirstValidFont();
   if (!firstFont)
     return false; // OOM
   const gfxFont::Metrics& metrics = firstFont->GetMetrics();
