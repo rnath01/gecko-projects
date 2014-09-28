@@ -307,7 +307,6 @@ class MochitestServer(object):
     # get testing environment
     env = environment(xrePath=self._xrePath)
     env["XPCOM_DEBUG_BREAK"] = "warn"
-    env["DYLD_LIBRARY_PATH"] = os.path.join(os.path.dirname(self._xrePath), 'MacOS')
     env["LD_LIBRARY_PATH"] = self._xrePath
 
     # When running with an ASan build, our xpcshell server will also be ASan-enabled,
@@ -704,8 +703,6 @@ class MochitestUtilsMixin(object):
     # specified, try to select the one from hostutils.zip, as required in bug 882932.
     if not options.httpdPath:
       options.httpdPath = os.path.join(options.utilityPath, "components")
-      if not os.path.exists(options.httpdPath) and (sys.platform == 'osx' or sys.platform == "darwin"):
-        options.httpdPath = os.path.join(os.path.dirname(options.utilityPath), "Resources", "components")
 
     self.startWebServer(options)
     self.startWebSocketServer(options, debuggerInfo)
@@ -914,7 +911,6 @@ class SSLTunnel:
       exit(1)
 
     env = environment(xrePath=self.xrePath)
-    env["DYLD_LIBRARY_PATH"] = os.path.join(os.path.dirname(self.xrePath), 'MacOS')
     env["LD_LIBRARY_PATH"] = self.xrePath
     self.process = mozprocess.ProcessHandler([ssltunnel, self.configFile],
                                                env=env)
@@ -1093,7 +1089,6 @@ class Mochitest(MochitestUtilsMixin):
 
     # Pre-create the certification database for the profile
     env = self.environment(xrePath=options.xrePath)
-    env["DYLD_LIBRARY_PATH"] = os.path.join(os.path.dirname(options.xrePath), 'MacOS')
     env["LD_LIBRARY_PATH"] = options.xrePath
     bin_suffix = mozinfo.info.get('bin_suffix', '')
     certutil = os.path.join(options.utilityPath, "certutil" + bin_suffix)
