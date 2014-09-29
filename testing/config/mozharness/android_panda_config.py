@@ -84,4 +84,5 @@ config = {
         "--apk=%(apk_path)s",
         "--skip-manifest=../tests/cppunittests/android_cppunittest_manifest.txt"
      ],
+    "structured_suites": ("mochitest",),
 }

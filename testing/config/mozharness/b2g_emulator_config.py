@@ -58,4 +58,6 @@ config = {
         "--skip-manifest=b2g_cppunittest_manifest.txt",
         "."
     ],
+
+    "structured_suites": ("mochitest",),
 }
