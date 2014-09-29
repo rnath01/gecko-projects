@@ -3,11 +3,9 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 from __future__ import print_function, unicode_literals
 
-import json
 import os
 import signal
 import sys
-import threading
 
 here = os.path.abspath(os.path.dirname(__file__))
 
@@ -33,10 +31,18 @@ class B2GDesktopReftest(RefTest):
         self.test_script = os.path.join(here, 'b2g_start_script.js')
         self.timeout = None
 
+    def _unlockScreen(self):
+        self.marionette.set_context(self.marionette.CONTEXT_CONTENT)
+        self.marionette.import_script(os.path.abspath(
+            os.path.join(__file__, os.path.pardir, "gaia_lock_screen.js")))
+        self.marionette.switch_to_frame()
+        self.marionette.execute_async_script('GaiaLockScreen.unlock()')
+
     def run_marionette_script(self):
         self.marionette = Marionette(**self.marionette_args)
         assert(self.marionette.wait_for_port())
         self.marionette.start_session()
+        self._unlockScreen()
         self.marionette.set_context(self.marionette.CONTEXT_CHROME)
 
         if os.path.isfile(self.test_script):
@@ -53,6 +59,7 @@ class B2GDesktopReftest(RefTest):
         self.profile = self.create_profile(options, reftestlist,
                                            profile_to_clone=options.profile)
         env = self.buildBrowserEnv(options, self.profile.profile)
+
         kp_kwargs = { 'processOutputLine': [self._on_output],
                       'onTimeout': [self._on_timeout],
                       'kill_on_timeout': False }
@@ -108,8 +115,9 @@ class B2GDesktopReftest(RefTest):
         prefs = {}
         # Turn off the locale picker screen
         prefs["browser.firstrun.show.localepicker"] = False
-        prefs["b2g.system_startup_url"] = "app://test-container.gaiamobile.org/index.html"
-        prefs["b2g.system_manifest_url"] = "app://test-container.gaiamobile.org/manifest.webapp"
+        # FIXME: these cause Gaia not to launch
+        #prefs["b2g.system_startup_url"] = "app://test-container.gaiamobile.org/index.html"
+        #prefs["b2g.system_manifest_url"] = "app://test-container.gaiamobile.org/manifest.webapp"
         prefs["browser.tabs.remote"] = False
         prefs["dom.ipc.tabs.disabled"] = False
         prefs["dom.mozBrowserFramesEnabled"] = True
@@ -137,6 +145,8 @@ class B2GDesktopReftest(RefTest):
 
         if not ignore_window_size:
             args.extend(['--screen', '800x1000'])
+
+        args += ['-chrome', 'chrome://b2g/content/shell.html']
         return cmd, args
 
     def _on_output(self, line):
