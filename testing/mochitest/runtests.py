@@ -1939,8 +1939,8 @@ class Mochitest(MochitestUtilsMixin):
 
       stackFixerFunction = None
 
-      def import_stackFixerModule(module_name, module_path):
-        sys.path.insert(0, module_path)
+      def import_stackFixerModule(module_name):
+        sys.path.insert(0, self.utilityPath)
         module = __import__(module_name, globals(), locals(), [])
         sys.path.pop(0)
         return module
@@ -1948,19 +1948,19 @@ class Mochitest(MochitestUtilsMixin):
       if self.symbolsPath and os.path.exists(self.symbolsPath):
         # Run each line through a function in fix_stack_using_bpsyms.py (uses breakpad symbol files).
         # This method is preferred for Tinderbox builds, since native symbols may have been stripped.
-        stackFixerModule = import_stackFixerModule('fix_stack_using_bpsyms', self.utilityPath)
+        stackFixerModule = import_stackFixerModule('fix_stack_using_bpsyms')
         stackFixerFunction = lambda line: stackFixerModule.fixSymbols(line, self.symbolsPath)
 
       elif mozinfo.isMac:
         # Run each line through fix_macosx_stack.py (uses atos).
         # This method is preferred for developer machines, so we don't have to run "make buildsymbols".
-        stackFixerModule = import_stackFixerModule('fix_macosx_stack', os.path.join(os.path.dirname(self.utilityPath), 'Resources'))
+        stackFixerModule = import_stackFixerModule('fix_macosx_stack')
         stackFixerFunction = lambda line: stackFixerModule.fixSymbols(line)
 
       elif mozinfo.isLinux:
         # Run each line through fix_linux_stack.py (uses addr2line).
         # This method is preferred for developer machines, so we don't have to run "make buildsymbols".
-        stackFixerModule = import_stackFixerModule('fix_linux_stack', self.utilityPath)
+        stackFixerModule = import_stackFixerModule('fix_linux_stack')
         stackFixerFunction = lambda line: stackFixerModule.fixSymbols(line)
 
       return stackFixerFunction
