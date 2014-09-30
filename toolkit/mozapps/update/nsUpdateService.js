@@ -750,7 +750,19 @@ function getCanStageUpdates() {
       LOG("canStageUpdatesSession - testing write access " +
           updateTestFile.path);
       testWriteAccess(updateTestFile, true);
-#ifndef XP_MACOSX
+#ifdef XP_MACOSX
+      var rootParent;
+      var tmpParent = updateTestFile.parent;
+      while (tmpParent && tmpParent.parent) {
+        rootParent = tmpParent;
+        tmpParent = tmpParent.parent;
+      }
+      let volumesPath = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+      volumesPath.initWithPath("/Volumes");
+      if (rootParent.equals(volumesPath)) {
+        return false;
+      }
+#else
       // On all platforms except Mac, we need to test the parent directory as
       // well, as we need to be able to move files in that directory during the
       // replacing step.
@@ -916,7 +928,6 @@ function getAppBaseDir() {
 function getInstallDirRoot() {
   var dir = getAppBaseDir();
 #ifdef XP_MACOSX
-  // On Mac, we store the Updated.app directory inside the bundle directory.
   dir = dir.parent.parent;
 #endif
   return dir;
