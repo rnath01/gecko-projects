@@ -36,5 +36,4 @@ config = {
             ],
         },
     }, # end suite_definitions
-    "structured_suites": ("mochitest",),
 }
