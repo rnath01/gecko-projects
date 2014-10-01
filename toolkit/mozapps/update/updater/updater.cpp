@@ -2177,7 +2177,8 @@ UpdateThreadFunc(void *param)
     // staged directory as it won't be useful any more.
     ensure_remove_recursive(gWorkingDirPath);
     WriteStatusFile(sUsingService ? "pending-service" : "pending");
-    putenv(const_cast<char*>("MOZ_PROCESS_UPDATES=")); // We need to use -process-updates again in the tests
+    char processUpdates[] = "MOZ_PROCESS_UPDATES=";
+    putenv(processUpdates); // We need to use -process-updates again in the tests
     reportRealResults = false; // pretend success
   }
 
