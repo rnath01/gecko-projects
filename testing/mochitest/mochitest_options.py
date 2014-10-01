@@ -223,12 +223,12 @@ class MochitestOptions(optparse.OptionParser):
         [["--leak-threshold"],
         { "action": "store",
           "type": "int",
-          "dest": "leakThreshold",
+          "dest": "defaultLeakThreshold",
           "metavar": "THRESHOLD",
-          "help": "fail if the number of bytes leaked through "
-                 "refcounted objects (or bytes in classes with "
-                 "MOZ_COUNT_CTOR and MOZ_COUNT_DTOR) is greater "
-                 "than the given number",
+          "help": "fail if the number of bytes leaked in default "
+                 "processes through refcounted objects (or bytes "
+                 "in classes with MOZ_COUNT_CTOR and MOZ_COUNT_DTOR) "
+                 "is greater than the given number",
           "default": 0,
         }],
         [["--fatal-assertions"],
@@ -475,6 +475,8 @@ class MochitestOptions(optparse.OptionParser):
             # but only if an app path was explicitly provided
             if options.app != self.defaults['app']:
                 options.xrePath = os.path.dirname(options.app)
+                if mozinfo.isMac:
+                    options.xrePath = os.path.join(os.path.dirname(options.xrePath), "Resources")
             elif build_obj is not None:
                 # otherwise default to dist/bin
                 options.xrePath = build_obj.bindir
@@ -607,6 +609,11 @@ class MochitestOptions(optparse.OptionParser):
             for f in ['/usr/bin/gst-launch-0.10', '/usr/bin/pactl']:
                 if not os.path.isfile(f):
                     self.error('Missing binary %s required for --use-test-media-devices')
+
+        options.leakThresholds = {
+            "default": options.defaultLeakThreshold,
+            "tab": 10000, # See dependencies of bug 1051230.
+        }
 
         return options
 
@@ -765,7 +772,7 @@ class B2GOptions(MochitestOptions):
         defaults["testPath"] = ""
         defaults["extensionsToExclude"] = ["specialpowers"]
         # See dependencies of bug 1038943.
-        defaults["leakThreshold"] = 5180
+        defaults["defaultLeakThreshold"] = 5180
         self.set_defaults(**defaults)
 
     def verifyRemoteOptions(self, options):
