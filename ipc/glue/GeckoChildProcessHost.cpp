@@ -553,7 +553,8 @@ GeckoChildProcessHost::PerformAsyncLaunchInternal(std::vector<std::string>& aExt
 #ifdef MOZ_WIDGET_COCOA
     nsCOMPtr<nsIFile> grePath;
     nsCOMPtr<nsIFile> tempPath;
-    NS_NewLocalFile(nsDependentString(gGREPath), true, getter_AddRefs(grePath));
+    NS_NewLocalFile(nsDependentString(gGREPath), false,
+                    getter_AddRefs(grePath));
     grePath->GetParent(getter_AddRefs(tempPath));
     tempPath->AppendNative(NS_LITERAL_CSTRING("MacOS"));
     tempPath->GetNativePath(path);

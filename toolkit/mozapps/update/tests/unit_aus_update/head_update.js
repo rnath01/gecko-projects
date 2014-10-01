@@ -7,8 +7,6 @@ const MOZ_APP_NAME = "@MOZ_APP_NAME@";
 const BIN_SUFFIX = "@BIN_SUFFIX@";
 
 // MOZ_APP_VENDOR is optional.
-// On Windows, if MOZ_APP_VENDOR is not defined the updates directory will be
-// located under %LOCALAPPDATA%\@MOZ_APP_BASENAME@\updates\TaskBarID
 #ifdef MOZ_APP_VENDOR
 const MOZ_APP_VENDOR = "@MOZ_APP_VENDOR@";
 #else
@@ -857,10 +855,10 @@ function setupTestCommon() {
   // it is defined as a function.
   adjustGeneralPaths();
 
-  // Remove the updates directory on Windows which is located outside of the
-  // application directory after the call to adjustGeneralPaths has set it up.
-  // Since the test hasn't ran yet and the directory shouldn't exist finished
-  // this is non-fatal for the test.
+  // Remove the updates directory on Windows and Mac OS X which is located
+  // outside of the application directory after the call to adjustGeneralPaths
+  // has set it up. Since the test hasn't ran yet and the directory shouldn't
+  // exist this is non-fatal for the test.
   if (IS_WIN || IS_MACOSX) {
     let updatesDir = getMockUpdRootD();
     if (updatesDir.exists())  {
@@ -944,7 +942,7 @@ function cleanupTestCommon() {
   }
 
   // The updates directory is located outside of the application directory on
-  // Windows and Mac so it also needs to be removed.
+  // Windows and Mac OS X so it also needs to be removed.
   if (IS_WIN || IS_MACOSX) {
     let updatesDir = getMockUpdRootD();
     // Try to remove the directory used to apply updates. Since the test has
@@ -976,7 +974,7 @@ function cleanupTestCommon() {
           }
           updatesDir = updatesDir.parent;
         }
-      }      
+      }
     }
   }
 
