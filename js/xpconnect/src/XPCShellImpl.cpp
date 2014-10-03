@@ -71,8 +71,9 @@ public:
     ~XPCShellDirProvider() { }
 
     // The platform resource folder
-    void SetGREDir(nsIFile *greDir);
-    void ClearGREDir() { mGREDir = nullptr; }
+    void SetGREDirs(nsIFile *greDir);
+    void ClearGREDirs() { mGREDir = nullptr;
+                          mGREBinDir = nullptr; }
     // The application resource folder
     void SetAppDir(nsIFile *appFile);
     void ClearAppDir() { mAppDir = nullptr; }
@@ -85,6 +86,7 @@ public:
 
 private:
     nsCOMPtr<nsIFile> mGREDir;
+    nsCOMPtr<nsIFile> mGREBinDir;
     nsCOMPtr<nsIFile> mAppDir;
     nsCOMPtr<nsIFile> mPluginDir;
     nsCOMPtr<nsIFile> mAppFile;
@@ -1346,7 +1348,7 @@ XRE_XPCShellMain(int argc, char **argv, char **envp)
             return 1;
         }
 
-        dirprovider.SetGREDir(greDir);
+        dirprovider.SetGREDirs(greDir);
 
         argc -= 2;
         argv += 2;
@@ -1366,7 +1368,7 @@ XRE_XPCShellMain(int argc, char **argv, char **envp)
             printf("Setting GreD failed.\n");
             return 1;
         }
-        dirprovider.SetGREDir(greDir);
+        dirprovider.SetGREDirs(greDir);
 #else
         nsAutoString workingDir;
         if (!GetCurrentWorkingDirectory(workingDir)) {
@@ -1611,7 +1613,7 @@ XRE_XPCShellMain(int argc, char **argv, char **envp)
 
     appDir = nullptr;
     appFile = nullptr;
-    dirprovider.ClearGREDir();
+    dirprovider.ClearGREDirs();
     dirprovider.ClearAppDir();
     dirprovider.ClearPluginDir();
     dirprovider.ClearAppFile();
@@ -1628,9 +1630,12 @@ XRE_XPCShellMain(int argc, char **argv, char **envp)
 }
 
 void
-XPCShellDirProvider::SetGREDir(nsIFile* greDir)
+XPCShellDirProvider::SetGREDirs(nsIFile* greDir)
 {
-    mGREDir = greDir;
+    mGREDir = mGREBinDir = greDir;
+#ifdef XP_MACOSX
+    mGREBinDir->SetNativeLeafName(NS_LITERAL_CSTRING("MacOS"));
+#endif
 }
 
 void
