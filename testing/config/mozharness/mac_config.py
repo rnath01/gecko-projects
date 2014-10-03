@@ -39,4 +39,5 @@ config = {
     "mozbase_options": [
         "-b", "%(binary_path)s"
     ],
+    "structured_suites": ("mochitest",),
 }
