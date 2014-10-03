@@ -141,7 +141,10 @@ GeckoChildProcessHost::GetPathToBinary(FilePath& exePath)
                     getter_AddRefs(childProcPath));
     // We need to use an App Bundle on OS X so that we can hide
     // the dock icon. See Bug 557225.
-    childProcPath->SetNativeLeafName(NS_LITERAL_CSTRING("MacOS"));
+    nsCOMPtr<nsIFile> tempPath;
+    childProcPath->GetParent(getter_AddRefs(tempPath));
+    childProcPath = tempPath.forget();
+    childProcPath->AppendNative(NS_LITERAL_CSTRING("MacOS"));
     childProcPath->AppendNative(NS_LITERAL_CSTRING("plugin-container.app"));
     childProcPath->AppendNative(NS_LITERAL_CSTRING("Contents"));
     childProcPath->AppendNative(NS_LITERAL_CSTRING("MacOS"));
@@ -548,11 +551,13 @@ GeckoChildProcessHost::PerformAsyncLaunchInternal(std::vector<std::string>& aExt
     MOZ_ASSERT(gGREPath);
     nsCString path;
 #ifdef MOZ_WIDGET_COCOA
-    nsCOMPtr<nsIFile> greDir;
+    nsCOMPtr<nsIFile> grePath;
+    nsCOMPtr<nsIFile> tempPath;
     NS_NewLocalFile(nsDependentString(gGREPath), false,
-                    getter_AddRefs(greDir));
-    greDir->SetNativeLeafName(NS_LITERAL_CSTRING("MacOS"));
-    greDir->GetNativePath(path);
+                    getter_AddRefs(grePath));
+    grePath->GetParent(getter_AddRefs(tempPath));
+    tempPath->AppendNative(NS_LITERAL_CSTRING("MacOS"));
+    tempPath->GetNativePath(path);
 #else
     NS_CopyUnicodeToNative(nsDependentString(gGREPath), path);
 #endif

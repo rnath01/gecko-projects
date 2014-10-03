@@ -416,7 +416,10 @@ int main(int argc, char** argv)
                                 getter_AddRefs(manifest));
 #ifdef XP_MACOSX
   if (NS_SUCCEEDED(scrv)) {
-    manifest->SetNativeLeafName(NS_LITERAL_CSTRING("MacOS"));
+    nsCOMPtr<nsIFile> parent;
+    manifest->GetParent(getter_AddRefs(parent));
+    parent->AppendNative(NS_LITERAL_CSTRING("MacOS"));
+    manifest = parent.forget();
   }
 #endif
   if (NS_FAILED(scrv)) {

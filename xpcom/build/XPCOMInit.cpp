@@ -601,7 +601,7 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   bool pathExists = false;
   parent->Exists(&pathExists);
   if (pathExists) {
-    xpcomLib = parent.forget();
+      xpcomLib = parent.forget();
   }
 #endif
 
