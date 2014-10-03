@@ -95,6 +95,7 @@ class DocAccessible;
 #endif
 class nsIWidget;
 struct nsArenaMemoryStats;
+class nsITimer;
 
 typedef short SelectionType;
 
@@ -1380,8 +1381,8 @@ public:
   virtual void SynthesizeMouseMove(bool aFromScroll) = 0;
 
   enum PaintFlags {
-    /* Update the layer tree and paint ThebesLayers. If this is not specified,
-     * we may still have to do it if the layer tree lost ThebesLayer contents
+    /* Update the layer tree and paint PaintedLayers. If this is not specified,
+     * we may still have to do it if the layer tree lost PaintedLayer contents
      * we need for compositing. */
     PAINT_LAYERS = 0x01,
     /* Composite layers to the window. */
@@ -1611,6 +1612,9 @@ public:
     mIsNeverPainting = aNeverPainting;
   }
 
+  bool HasPendingReflow() const
+    { return mReflowScheduled || mReflowContinueTimer; }
+
 protected:
   friend class nsRefreshDriver;
 
@@ -1635,6 +1639,12 @@ protected:
 #ifdef ACCESSIBILITY
   mozilla::a11y::DocAccessible* mDocAccessible;
 #endif
+
+  // At least on Win32 and Mac after interupting a reflow we need to post
+  // the resume reflow event off a timer to avoid event starvation because
+  // posted messages are processed before other messages when the modal
+  // moving/sizing loop is running, see bug 491700 for details.
+  nsCOMPtr<nsITimer>        mReflowContinueTimer;
 
 #ifdef DEBUG
   nsIFrame*                 mDrawEventTargetFrame;

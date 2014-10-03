@@ -151,7 +151,8 @@
 
           if (action) {
             switch (action.type) {
-              case "switchtab": {
+              case "switchtab": // Fall through.
+              case "visiturl": {
                 returnValue = action.params.url;
                 break;
               }
@@ -184,22 +185,10 @@
       </method>
 
       <field name="_formattingEnabled">true</field>
-      <field name="_searchServiceInitialized">false</field>
       <method name="formatValue">
         <body><![CDATA[
           if (!this._formattingEnabled || this.focused)
             return;
-
-          // Initialize the search service asynchronously if that hasn't
-          // happened yet. We will need it to highlight search terms later.
-          if (!this._searchServiceInitialized) {
-            Services.search.init(() => {
-              this._searchServiceInitialized = true;
-              this.formatValue();
-            });
-
-            return;
-          }
 
           let controller = this.editor.selectionController;
           let selection = controller.getSelection(controller.SELECTION_URLSECONDARY);
@@ -210,7 +199,7 @@
 
           let protocol = value.match(/^[a-z\d.+\-]+:(?=[^\d])/);
           if (protocol &&
-              ["http:", "https:", "ftp:"].indexOf(protocol[0]) == -1)
+              !["http:", "https:", "ftp:"].contains(protocol[0]))
             return;
           let matchedURL = value.match(/^((?:[a-z]+:\/\/)?(?:[^\/]+@)?)(.+?)(?::\d+)?(?:\/|$)/);
           if (!matchedURL)
@@ -235,29 +224,20 @@
             subDomain = domain.slice(0, -baseDomain.length);
           }
 
-          function addSelectionRange(start, end) {
+          let rangeLength = preDomain.length + subDomain.length;
+          if (rangeLength) {
             let range = document.createRange();
-            range.setStart(textNode, start);
-            range.setEnd(textNode, end);
+            range.setStart(textNode, 0);
+            range.setEnd(textNode, rangeLength);
             selection.addRange(range);
           }
 
-          let rangeLength = preDomain.length + subDomain.length;
-          if (rangeLength) {
-            addSelectionRange(0, rangeLength);
-          }
-
-          let result = Services.search.parseSubmissionURL(value);
           let startRest = preDomain.length + domain.length;
-
-          // Format search terms in the URL, if any.
-          if (result.termsOffset > -1 && result.termsLength) {
-            addSelectionRange(startRest, result.termsOffset);
-            startRest = result.termsOffset + result.termsLength;
-          }
-
           if (startRest < value.length) {
-            addSelectionRange(startRest, value.length);
+            let range = document.createRange();
+            range.setStart(textNode, startRest);
+            range.setEnd(textNode, value.length);
+            selection.addRange(range);
           }
         ]]></body>
       </method>
@@ -327,6 +307,8 @@
 
                 url = submission.uri.spec;
                 postData = submission.postData;
+              } else if (action.type == "visiturl") {
+                url = action.params.url;
               }
             }
             continueOperation.call(this);
@@ -645,7 +627,6 @@
                 this.timeout = this._prefs.getIntPref(aData);
                 break;
               case "formatting.enabled":
-                this._clearFormatting();
                 this._formattingEnabled = this._prefs.getBoolPref(aData);
                 break;
               case "trimURLs":
@@ -1022,8 +1003,9 @@
               // TODO (bug 1054816): Centralise the implementation of actions
               // into a JS module.
               switch (action.type) {
-                case "switchtab": //Fall through.
-                case "keyword": {
+                case "switchtab": // Fall through.
+                case "keyword": // Fall through.
+                case "visiturl": {
                   url = action.params.url;
                   break;
                 }

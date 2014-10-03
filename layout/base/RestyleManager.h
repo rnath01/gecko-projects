@@ -240,6 +240,9 @@ public:
   // itself.
   void ProcessPendingRestyles();
 
+  // Returns whether there are any pending restyles.
+  bool HasPendingRestyles() { return mPendingRestyles.Count() != 0; }
+
   // ProcessPendingRestyles calls into one of our RestyleTracker
   // objects.  It then calls back to these functions at the beginning
   // and end of its work.
@@ -385,6 +388,13 @@ public:
     static bool animations = getenv("MOZ_DEBUG_RESTYLE_ANIMATIONS") != 0;
     return animations;
   }
+
+  // Set MOZ_DEBUG_RESTYLE_STRUCTS to a comma-separated string of
+  // style struct names -- such as "Font,SVGReset" -- to log the style context
+  // tree and those cached struct pointers before each restyle.  This
+  // function returns a bitfield of the structs named in the
+  // environment variable.
+  static uint32_t StructsToLog();
 
   static nsCString StructNamesToString(uint32_t aSIDs);
   int32_t& LoggingDepth() { return mLoggingDepth; }

@@ -154,7 +154,6 @@
 #include "mozAutoDocUpdate.h"
 #include "nsGlobalWindow.h"
 #include "mozilla/dom/EncodingUtils.h"
-#include "mozilla/dom/quota/QuotaManager.h"
 #include "nsDOMNavigationTiming.h"
 
 #include "nsSMILAnimationController.h"
@@ -224,6 +223,7 @@
 #include "mozilla/dom/DOMStringList.h"
 #include "nsWindowMemoryReporter.h"
 #include "nsLocation.h"
+#include "mozilla/dom/FontFaceSet.h"
 
 #ifdef MOZ_MEDIA_NAVIGATOR
 #include "mozilla/MediaManager.h"
@@ -1998,6 +1998,8 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsDocument)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOnDemandBuiltInUASheets)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPreloadingImages)
 
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSubImportLinks)
+
   for (uint32_t i = 0; i < tmp->mFrameRequestCallbacks.Length(); ++i) {
     NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mFrameRequestCallbacks[i]");
     cb.NoteXPCOMChild(tmp->mFrameRequestCallbacks[i].mCallback.GetISupports());
@@ -2062,6 +2064,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mRegistry)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mMasterDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mImportManager)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mSubImportLinks)
 
   tmp->mParentDocument = nullptr;
 
@@ -5898,7 +5901,7 @@ nsDocument::RegisterElement(JSContext* aCx, const nsAString& aType,
   JSAutoCompartment ac(aCx, global);
 
   JS::Handle<JSObject*> htmlProto(
-    HTMLElementBinding::GetProtoObject(aCx, global));
+    HTMLElementBinding::GetProtoObjectHandle(aCx, global));
   if (!htmlProto) {
     rv.Throw(NS_ERROR_OUT_OF_MEMORY);
     return;
@@ -5944,7 +5947,7 @@ nsDocument::RegisterElement(JSContext* aCx, const nsAString& aType,
     }
 
     JS::Handle<JSObject*> svgProto(
-      SVGElementBinding::GetProtoObject(aCx, global));
+      SVGElementBinding::GetProtoObjectHandle(aCx, global));
     if (!svgProto) {
       rv.Throw(NS_ERROR_OUT_OF_MEMORY);
       return;
@@ -8539,13 +8542,6 @@ nsDocument::CanSavePresentation(nsIRequest *aNewRequest)
     }
   }
 
-  // Check if we have running offline storage transactions
-  quota::QuotaManager* quotaManager =
-    win ? quota::QuotaManager::Get() : nullptr;
-  if (quotaManager && quotaManager->HasOpenTransactions(win)) {
-   return false;
-  }
-
 #ifdef MOZ_MEDIA_NAVIGATOR
   // Check if we have active GetUserMedia use
   if (MediaManager::Exists() && win &&
@@ -9186,14 +9182,6 @@ nsDocument::CloneDocHelper(nsDocument* clone) const
   nsresult rv = clone->Init();
   NS_ENSURE_SUCCESS(rv, rv);
 
-  // Set URI/principal
-  clone->nsDocument::SetDocumentURI(nsIDocument::GetDocumentURI());
-  clone->SetChromeXHRDocURI(mChromeXHRDocURI);
-  // Must set the principal first, since SetBaseURI checks it.
-  clone->SetPrincipal(NodePrincipal());
-  clone->mDocumentBaseURI = mDocumentBaseURI;
-  clone->SetChromeXHRDocBaseURI(mChromeXHRDocBaseURI);
-
   if (mCreatingStaticClone) {
     nsCOMPtr<nsILoadGroup> loadGroup;
 
@@ -9217,6 +9205,18 @@ nsDocument::CloneDocHelper(nsDocument* clone) const
 
     clone->SetContainer(mDocumentContainer);
   }
+
+  // Now ensure that our clone has the same URI, base URI, and principal as us.
+  // We do this after the mCreatingStaticClone block above, because that block
+  // can set the base URI to an incorrect value in cases when base URI
+  // information came from the channel.  So we override explicitly, and do it
+  // for all these properties, in case ResetToURI messes with any of the rest of
+  // them.
+  clone->nsDocument::SetDocumentURI(nsIDocument::GetDocumentURI());
+  clone->SetChromeXHRDocURI(mChromeXHRDocURI);
+  clone->SetPrincipal(NodePrincipal());
+  clone->mDocumentBaseURI = mDocumentBaseURI;
+  clone->SetChromeXHRDocBaseURI(mChromeXHRDocBaseURI);
 
   // Set scripting object
   bool hasHadScriptObject = true;
@@ -12416,3 +12416,20 @@ nsAutoSyncOperation::~nsAutoSyncOperation()
   nsContentUtils::SetMicroTaskLevel(mMicroTaskLevel);
 }
 
+FontFaceSet*
+nsIDocument::GetFonts(ErrorResult& aRv)
+{
+  nsIPresShell* shell = GetShell();
+  if (!shell) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  nsPresContext* presContext = shell->GetPresContext();
+  if (!presContext) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  return presContext->Fonts();
+}

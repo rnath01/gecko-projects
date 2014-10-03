@@ -3846,6 +3846,7 @@ MOZ_WEBSMS_BACKEND=
 MOZ_ANDROID_BEAM=
 MOZ_LOCALE_SWITCHER=
 MOZ_ANDROID_SEARCH_ACTIVITY=
+MOZ_ANDROID_DOWNLOADS_INTEGRATION=
 MOZ_ANDROID_MLS_STUMBLER=
 MOZ_ANDROID_SHARE_OVERLAY=
 ACCESSIBILITY=1
@@ -3966,6 +3967,19 @@ if test -z "$MOZ_GOOGLE_API_KEY"; then
     MOZ_GOOGLE_API_KEY=no-google-api-key
 fi
 AC_SUBST(MOZ_GOOGLE_API_KEY)
+
+# Allow to specify a Google OAuth API key file that contains the client ID and
+# the secret key to be used for various Google OAuth API requests.
+MOZ_ARG_WITH_STRING(google-oauth-api-keyfile,
+[ --with-google-oauth-api-keyfile=file  Use the client id and secret key contained in the given keyfile for Google OAuth API requests],
+ [MOZ_GOOGLE_OAUTH_API_CLIENTID=`cat $withval | cut -f 1 -d " "`
+  MOZ_GOOGLE_OAUTH_API_KEY=`cat $withval | cut -f 2 -d " "`])
+if test -z "$MOZ_GOOGLE_OAUTH_API_CLIENTID"; then
+    MOZ_GOOGLE_OAUTH_API_CLIENTID=no-google-oauth-api-clientid
+    MOZ_GOOGLE_OAUTH_API_KEY=no-google-oauth-api-key
+fi
+AC_SUBST(MOZ_GOOGLE_OAUTH_API_CLIENTID)
+AC_SUBST(MOZ_GOOGLE_OAUTH_API_KEY)
 
 # Allow specifying a Bing API key file that contains the client ID and the
 # secret key to be used for the Bing Translation API requests.
@@ -4857,6 +4871,13 @@ dnl = Enable runtime locale switching on Android
 dnl ========================================================
 if test -n "$MOZ_LOCALE_SWITCHER"; then
     AC_DEFINE(MOZ_LOCALE_SWITCHER)
+fi
+
+dnl ========================================================
+dnl = Enable system download manager on Android
+dnl ========================================================
+if test -n "$MOZ_ANDROID_DOWNLOADS_INTEGRATION"; then
+    AC_DEFINE(MOZ_ANDROID_DOWNLOADS_INTEGRATION)
 fi
 
 dnl ========================================================
@@ -8497,6 +8518,7 @@ AC_SUBST(MOZ_DISABLE_GECKOVIEW)
 AC_SUBST(MOZ_ANDROID_SEARCH_ACTIVITY)
 AC_SUBST(MOZ_ANDROID_SHARE_OVERLAY)
 AC_SUBST(MOZ_ANDROID_MLS_STUMBLER)
+AC_SUBST(MOZ_ANDROID_DOWNLOADS_INTEGRATION)
 AC_SUBST(ENABLE_STRIP)
 AC_SUBST(PKG_SKIP_STRIP)
 AC_SUBST(STRIP_FLAGS)

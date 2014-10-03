@@ -526,6 +526,7 @@ pref("privacy.clearOnShutdown.cache",       true);
 pref("privacy.clearOnShutdown.sessions",    true);
 pref("privacy.clearOnShutdown.offlineApps", false);
 pref("privacy.clearOnShutdown.siteSettings", false);
+pref("privacy.clearOnShutdown.openWindows", false);
 
 pref("privacy.cpd.history",                 true);
 pref("privacy.cpd.formdata",                true);
@@ -536,6 +537,7 @@ pref("privacy.cpd.cache",                   true);
 pref("privacy.cpd.sessions",                true);
 pref("privacy.cpd.offlineApps",             false);
 pref("privacy.cpd.siteSettings",            false);
+pref("privacy.cpd.openWindows",             false);
 
 // What default should we use for the time span in the sanitizer:
 // 0 - Clear everything
@@ -543,10 +545,14 @@ pref("privacy.cpd.siteSettings",            false);
 // 2 - Last 2 Hours
 // 3 - Last 4 Hours
 // 4 - Today
+// 5 - Last 5 minutes
+// 6 - Last 24 hours
 pref("privacy.sanitize.timeSpan", 1);
 pref("privacy.sanitize.sanitizeOnShutdown", false);
 
 pref("privacy.sanitize.migrateFx3Prefs",    false);
+
+pref("privacy.panicButton.enabled",         true);
 
 pref("network.proxy.share_proxy_settings",  false); // use the same proxy settings for all protocols
 
@@ -1171,16 +1177,9 @@ pref("dom.ipc.plugins.enabled.x86_64", true);
 pref("dom.ipc.plugins.enabled", true);
 #endif
 
-#if defined(NIGHTLY_BUILD)
-// browser.tabs.remote is enabled on nightly. However, users won't
-// actually get remote tabs unless they enable
-// browser.tabs.remote.autostart or they use the "New OOP Window" menu
-// option.
-pref("browser.tabs.remote", true);
-#else
-pref("browser.tabs.remote", false);
-#endif
+// Start the browser in e10s mode
 pref("browser.tabs.remote.autostart", false);
+pref("browser.tabs.remote.desktopbehavior", true);
 
 #if defined(MOZ_CONTENT_SANDBOX) && defined(XP_WIN)
 // This controls whether the content process on Windows is sandboxed.
@@ -1614,8 +1613,11 @@ pref("loop.retry_delay.limit", 300000);
 pref("loop.feedback.baseUrl", "https://input.mozilla.org/api/v1/feedback");
 pref("loop.feedback.product", "Loop");
 pref("loop.debug.loglevel", "Error");
+pref("loop.debug.dispatcher", false);
 pref("loop.debug.websocket", false);
 pref("loop.debug.sdk", false);
+pref("loop.oauth.google.redirect_uri", "urn:ietf:wg:oauth:2.0:oob:auto");
+pref("loop.oauth.google.scope", "https://www.google.com/m8/feeds");
 
 // serverURL to be assigned by services team
 pref("services.push.serverURL", "wss://push.services.mozilla.com/");
@@ -1731,3 +1733,5 @@ pref("experiments.supported", true);
 
 // Enable the OpenH264 plugin support in the addon manager.
 pref("media.gmp-gmpopenh264.provider.enabled", true);
+
+pref("browser.apps.URL", "https://marketplace.firefox.com/discovery/");

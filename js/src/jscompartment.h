@@ -93,7 +93,7 @@ struct CrossCompartmentKey
 struct WrapperHasher : public DefaultHasher<CrossCompartmentKey>
 {
     static HashNumber hash(const CrossCompartmentKey &key) {
-        JS_ASSERT(!IsPoisonedPtr(key.wrapped));
+        MOZ_ASSERT(!IsPoisonedPtr(key.wrapped));
         return uint32_t(uintptr_t(key.wrapped)) | uint32_t(key.kind);
     }
 
@@ -160,7 +160,7 @@ struct JSCompartment
     const JS::CompartmentOptions &options() const { return options_; }
 
     JSRuntime *runtimeFromMainThread() {
-        JS_ASSERT(CurrentThreadCanAccessRuntime(runtime_));
+        MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime_));
         return runtime_;
     }
 
@@ -348,8 +348,19 @@ struct JSCompartment
     void trace(JSTracer *trc);
     void markRoots(JSTracer *trc);
     bool preserveJitCode() { return gcPreserveJitCode; }
-    void sweep(js::FreeOp *fop, bool releaseTypes);
+
+    void sweepInnerViews();
     void sweepCrossCompartmentWrappers();
+    void sweepTypeObjectTables();
+    void sweepSavedStacks();
+    void sweepGlobalObject(js::FreeOp *fop);
+    void sweepSelfHostingScriptSource();
+    void sweepJitCompartment(js::FreeOp *fop);
+    void sweepRegExps();
+    void sweepDebugScopes();
+    void sweepWeakMaps();
+    void sweepNativeIterators();
+
     void purge();
     void clearTables();
 
@@ -540,7 +551,7 @@ class AssertCompartmentUnchanged
     }
 
     ~AssertCompartmentUnchanged() {
-        JS_ASSERT(cx->compartment() == oldCompartment);
+        MOZ_ASSERT(cx->compartment() == oldCompartment);
     }
 
   protected:

@@ -491,7 +491,7 @@ public:
    * scrollframes which are actively being scrolled fall into this category.
    * Frames with certain CSS properties that are being animated (e.g.
    * 'left'/'top' etc) are also placed in this category.
-   * Frames with different active geometry roots are in different ThebesLayers,
+   * Frames with different active geometry roots are in different PaintedLayers,
    * so that we can animate the geometry root by changing its transform (either
    * on the main thread or in the compositor).
    * The animated geometry root is required to be a descendant (or equal to)
@@ -1879,13 +1879,20 @@ public:
   static bool HasAnimations(nsIContent* aContent, nsCSSProperty aProperty);
 
   /**
-   * Returns true if the content node has any current animations or transitions.
+   * Returns true if the content node has any current animations or transitions
+   * (depending on the value of |aAnimationProperty|).
    * A current animation is any animation that has not yet finished playing
    * including paused animations.
    */
   static bool HasCurrentAnimations(nsIContent* aContent,
-                                   nsIAtom* aAnimationProperty,
-                                   nsPresContext* aPresContext);
+                                   nsIAtom* aAnimationProperty);
+
+  /**
+   * Returns true if the content node has any current animations or transitions
+   * for the specified property.
+   */
+  static bool HasCurrentAnimationsForProperty(nsIContent* aContent,
+                                              nsCSSProperty aProperty);
 
   /**
    * Checks if off-main-thread animations are enabled.
@@ -1928,6 +1935,11 @@ public:
    * Checks if we should enable parsing for CSS Filters.
    */
   static bool CSSFiltersEnabled();
+
+  /**
+   * Checks if we should enable parsing for CSS clip-path basic shapes.
+   */
+  static bool CSSClipPathShapesEnabled();
 
   /**
    * Checks whether support for the CSS-wide "unset" value is enabled.
