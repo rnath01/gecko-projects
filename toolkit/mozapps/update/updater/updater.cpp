@@ -111,6 +111,7 @@ static bool sUseHardLinks = true;
 
 #ifdef XP_WIN
 #include "updatehelper.h"
+#include <aclapi.h>
 
 // Closes the handle if valid and if the updater is elevated returns with the
 // return code specified. This prevents multiple launches of the callback
@@ -2269,7 +2270,9 @@ int NS_main(int argc, NS_tchar **argv)
   bool useService = false;
   bool testOnlyFallbackKeyExists = false;
   bool noServiceFallback = getenv("MOZ_NO_SERVICE_FALLBACK") != nullptr;
+  bool emulateElevation = getenv("MOZ_EMULATE_ELEVATION_PATH") != nullptr;
   putenv(const_cast<char*>("MOZ_NO_SERVICE_FALLBACK="));
+  putenv(const_cast<char*>("MOZ_EMULATE_ELEVATION_PATH="));
 
   // We never want the service to be used unless we build with
   // the maintenance service.
@@ -2363,12 +2366,6 @@ int NS_main(int argc, NS_tchar **argv)
   if (!WriteStatusFile("applying")) {
     LOG(("failed setting status to 'applying'"));
     return 1;
-  }
-
-  if (sStagedUpdate) {
-    LOG(("Performing a staged update"));
-  } else if (sReplaceRequest) {
-    LOG(("Performing a replace request"));
   }
 
   LOG(("PATCH DIRECTORY " LOG_S, gPatchDirPath));
@@ -2501,13 +2498,15 @@ int NS_main(int argc, NS_tchar **argv)
       return 1;
     }
 
-    updateLockFileHandle = CreateFileW(updateLockFilePath,
-                                       GENERIC_READ | GENERIC_WRITE,
-                                       0,
-                                       nullptr,
-                                       OPEN_ALWAYS,
-                                       FILE_FLAG_DELETE_ON_CLOSE,
-                                       nullptr);
+    if (!emulateElevation) {
+      updateLockFileHandle = CreateFileW(updateLockFilePath,
+                                         GENERIC_READ | GENERIC_WRITE,
+                                         0,
+                                         nullptr,
+                                         OPEN_ALWAYS,
+                                         FILE_FLAG_DELETE_ON_CLOSE,
+                                         nullptr);
+    }
 
     NS_tsnprintf(elevatedLockFilePath,
                  sizeof(elevatedLockFilePath)/sizeof(elevatedLockFilePath[0]),
@@ -2652,7 +2651,8 @@ int NS_main(int argc, NS_tchar **argv)
       // If the service can't be used when staging and update, make sure that
       // the UAC prompt is not shown! In this case, just set the status to
       // pending and the update will be applied during the next startup.
-      if (!useService && sStagedUpdate) {
+      // When emulateElevation is true fall through to the elevation code path.
+      if (!useService && sStagedUpdate && !emulateElevation) {
         if (updateLockFileHandle != INVALID_HANDLE_VALUE) {
           CloseHandle(updateLockFileHandle);
         }
@@ -2678,6 +2678,8 @@ int NS_main(int argc, NS_tchar **argv)
         }
       }
 
+      DWORD returnCode = 0;
+
       // If we didn't want to use the service at all, or if an update was
       // already happening, or launching the service command failed, then
       // launch the elevated updater.exe as we do without the service.
@@ -2686,27 +2688,156 @@ int NS_main(int argc, NS_tchar **argv)
       // using the service is because we are testing.
       if (!useService && !noServiceFallback &&
           updateLockFileHandle == INVALID_HANDLE_VALUE) {
-        SHELLEXECUTEINFO sinfo;
-        memset(&sinfo, 0, sizeof(SHELLEXECUTEINFO));
-        sinfo.cbSize       = sizeof(SHELLEXECUTEINFO);
-        sinfo.fMask        = SEE_MASK_FLAG_NO_UI |
-                             SEE_MASK_FLAG_DDEWAIT |
-                             SEE_MASK_NOCLOSEPROCESS;
-        sinfo.hwnd         = nullptr;
-        sinfo.lpFile       = argv[0];
-        sinfo.lpParameters = cmdLine;
-        sinfo.lpVerb       = L"runas";
-        sinfo.nShow        = SW_SHOWNORMAL;
 
-        bool result = ShellExecuteEx(&sinfo);
-        free(cmdLine);
+        // Get a unique directory name to secure
+        RPC_WSTR guidString = RPC_WSTR(L"");
+        GUID guid;
+        HRESULT hr = CoCreateGuid(&guid);
+        BOOL result = TRUE;
+        bool safeToUpdate = true;
+        int safeToUpdateResult = 0;
+        WCHAR secureUpdaterPath[MAX_PATH + 1] = { L'\0' };
+        WCHAR secureDirPath[MAX_PATH + 1] = { L'\0' };
+        if (SUCCEEDED(hr)) {
+          UuidToString(&guid, &guidString);
+          result = PathGetSiblingFilePath(secureDirPath, argv[0],
+                                          reinterpret_cast<LPCWSTR>(guidString));
+          RpcStringFree(&guidString);
 
-        if (result) {
-          WaitForSingleObject(sinfo.hProcess, INFINITE);
-          CloseHandle(sinfo.hProcess);
         } else {
-          WriteStatusFile(ELEVATION_CANCELED);
+          // This should never happen, but just in case
+          result = PathGetSiblingFilePath(secureDirPath, argv[0], L"tmp_update");
         }
+
+        if (!result) {
+          fprintf(stderr, "Could not obtain secure update directory path");
+          safeToUpdate = false;
+          safeToUpdateResult = SECURE_LOCATION_UPDATE_ERROR_2;
+        }
+
+        // If it's still safe to update, create the directory
+        if (safeToUpdate) {
+          result = CreateDirectoryW(secureDirPath, nullptr);
+          if (!result) {
+            fprintf(stderr, "Could not create secure update directory");
+            safeToUpdate = false;
+            safeToUpdateResult = SECURE_LOCATION_UPDATE_ERROR_3;
+          }
+        }
+
+        // If it's still safe to update, get the new updater path
+        if (safeToUpdate) {
+          wcsncpy(secureUpdaterPath, secureDirPath, MAX_PATH);
+          result = PathAppendSafe(secureUpdaterPath, L"updater.exe");
+          if (!result) {
+            fprintf(stderr, "Could not obtain secure updater file name");
+            safeToUpdate = false;
+            safeToUpdateResult = SECURE_LOCATION_UPDATE_ERROR_4;
+          }
+        }
+
+        // If it's still safe to update, copy the file in
+        if (safeToUpdate) {
+          result = CopyFileW(argv[0], secureUpdaterPath, TRUE);
+          if (!result) {
+            fprintf(stderr, "Could not copy updater to secure location");
+            safeToUpdate = false;
+            safeToUpdateResult = SECURE_LOCATION_UPDATE_ERROR_5;
+          }
+        }
+
+        // If it's still safe to update, restrict access to the directory item
+        // itself so that the directory cannot be deleted and re-created,
+        // nor have its properties modified.  Note that this does not disallow
+        // adding items inside the directory.
+        HANDLE handle = INVALID_HANDLE_VALUE;
+        if (safeToUpdate) {
+          handle = CreateFileW(secureDirPath, GENERIC_READ, FILE_SHARE_READ,
+                               nullptr, OPEN_EXISTING,
+                               FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+          safeToUpdate = handle != INVALID_HANDLE_VALUE;
+          if (!safeToUpdate) {
+            safeToUpdateResult = SECURE_LOCATION_UPDATE_ERROR_6;
+          }
+        }
+
+        // If it's still safe to update, deny write access completely to the
+        // directory.
+        PACL originalACL = nullptr;
+        PSECURITY_DESCRIPTOR sd = nullptr;
+        if (safeToUpdate) {
+          safeToUpdate = UACHelper::DenyWriteACLOnPath(secureDirPath,
+                                                       &originalACL, &sd);
+          if (!safeToUpdate) {
+            safeToUpdateResult = SECURE_LOCATION_UPDATE_ERROR_7;
+          }
+        }
+
+        // If it's still safe to update, verify that there is only updater.exe
+        // in the directory and nothing else.
+        if (safeToUpdate) {
+          if (!UACHelper::IsDirectorySafe(secureDirPath)) {
+            safeToUpdate = false;
+            safeToUpdateResult = SECURE_LOCATION_UPDATE_ERROR_8;
+          }
+        }
+
+        // TODO: Re-enable this after we gather telemetry data
+        // This will try to update in the most secure way, but if that's
+        // not possilbe, then it falls back.  Ideally we'd fail the update
+        // here but it's failing for some users currently.
+        /*
+        if (!safeToUpdate) {
+          fprintf(stderr, "Will not proceed to copy secure updater because it "
+                          "is not safe to do so.");
+          WriteStatusFile(SECURE_LOCATION_UPDATE_ERROR);
+        } else*/ {
+          SHELLEXECUTEINFO sinfo;
+          memset(&sinfo, 0, sizeof(SHELLEXECUTEINFO));
+          sinfo.cbSize       = sizeof(SHELLEXECUTEINFO);
+          sinfo.fMask        = SEE_MASK_FLAG_NO_UI |
+                              SEE_MASK_FLAG_DDEWAIT |
+                              SEE_MASK_NOCLOSEPROCESS;
+          sinfo.hwnd         = nullptr;
+          sinfo.lpFile       = secureUpdaterPath;
+          sinfo.lpParameters = cmdLine;
+          sinfo.lpVerb       = emulateElevation ? L"open" : L"runas";
+          sinfo.nShow        = SW_SHOWNORMAL;
+
+          bool result = ShellExecuteEx(&sinfo);
+          free(cmdLine);
+
+          if (result) {
+            WaitForSingleObject(sinfo.hProcess, INFINITE);
+            // Bubble the elevated updater return code to this updater
+            GetExitCodeProcess(sinfo.hProcess, &returnCode);
+            CloseHandle(sinfo.hProcess);
+            if (returnCode == 0 && !safeToUpdate && safeToUpdateResult != 0) {
+              WriteStatusFile(safeToUpdateResult);
+            }
+          } else {
+            WriteStatusFile(ELEVATION_CANCELED);
+          }
+        }
+
+        // All done, revert back the permissions.
+        if (originalACL) {
+          SetNamedSecurityInfoW(const_cast<LPWSTR>(secureDirPath), SE_FILE_OBJECT,
+                                DACL_SECURITY_INFORMATION, nullptr, nullptr,
+                                originalACL, nullptr);
+        }
+        if (sd) {
+          LocalFree(sd);
+        }
+
+        // Done with the directory, no need to lock it.
+        if (INVALID_HANDLE_VALUE != handle) {
+          CloseHandle(handle);
+        }
+
+        // We no longer need the secure updater and directory
+        DeleteFileW(secureUpdaterPath);
+        RemoveDirectoryW(secureDirPath);
       }
 
       if (argc > callbackIndex) {
@@ -2721,7 +2852,7 @@ int NS_main(int argc, NS_tchar **argv)
         // We didn't use the service and we did run the elevated updater.exe.
         // The elevated updater.exe is responsible for writing out the
         // update.status file.
-        return 0;
+        return returnCode;
       } else if(useService) {
         // The service command was launched. The service is responsible for
         // writing out the update.status file.
@@ -2742,6 +2873,13 @@ int NS_main(int argc, NS_tchar **argv)
     }
   }
 #endif
+
+  if (sStagedUpdate) {
+    LOG(("Performing a staged update"));
+  }
+  else if (sReplaceRequest) {
+    LOG(("Performing a replace request"));
+  }
 
 #if defined(MOZ_WIDGET_GONK)
   // In gonk, the master b2g process sets its umask to 0027 because
@@ -3080,7 +3218,8 @@ int NS_main(int argc, NS_tchar **argv)
         StartServiceUpdate(gInstallDirPath);
       }
     }
-    EXIT_WHEN_ELEVATED(elevatedLockFilePath, updateLockFileHandle, 0);
+    EXIT_WHEN_ELEVATED(elevatedLockFilePath, updateLockFileHandle,
+        gSucceeded ? 0 : 1);
 #endif /* XP_WIN */
 #ifdef XP_MACOSX
     if (gSucceeded) {
