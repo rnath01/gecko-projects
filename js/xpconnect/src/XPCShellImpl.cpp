@@ -1360,8 +1360,8 @@ XRE_XPCShellMain(int argc, char **argv, char **envp)
         XRE_GetFileFromPath(argv[0], getter_AddRefs(greDir));
         nsCOMPtr<nsIFile> parentDir;
         greDir->GetParent(getter_AddRefs(parentDir));
-        parentDir->GetParent(getter_AddRefs(greDir));
-        greDir->AppendNative(NS_LITERAL_CSTRING("Resources"));
+        greDir = parentDir.forget();
+        greDir->SetNativeLeafName(NS_LITERAL_CSTRING("Resources"));
         bool dirExists = false;
         greDir->Exists(&dirExists);
         if (!dirExists) {
