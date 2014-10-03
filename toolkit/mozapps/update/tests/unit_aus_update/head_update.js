@@ -175,7 +175,6 @@ var gAppTimer;
 var gHandle;
 
 var gGREDirOrig;
-var gGREBinDirOrig;
 var gAppDirOrig;
 
 var gServiceLaunchedCallbackLog = null;
@@ -835,7 +834,6 @@ function setupTestCommon() {
   Services.prefs.setBoolPref(PREF_APP_UPDATE_SILENT, true);
 
   gGREDirOrig = getGREDir();
-  gGREBinDirOrig = getGREBinDir();
   gAppDirOrig = getAppBaseDir();
 
   let applyDir = getApplyDirFile(null, true).parent;
@@ -1130,10 +1128,10 @@ function pathHandler(aMetadata, aResponse) {
 function getAppVersion() {
   // Read the application.ini and use its application version.
   let iniFile = gGREDirOrig.clone();
-  iniFile.append(FILE_APPLICATION_INI);
+  iniFile.append("application.ini");
   if (!iniFile.exists()) {
-    iniFile = gGREBinDirOrig.clone();
-    iniFile.append(FILE_APPLICATION_INI);
+    iniFile = gAppDirOrig.clone();
+    iniFile.append("application.ini");
   }
   if (!iniFile.exists()) {
     do_throw("Unable to find application.ini!");
@@ -1475,7 +1473,7 @@ if (IS_WIN) {
  */
 function runUpdate(aExpectedExitValue, aExpectedStatus, aCallback) {
   // Copy the updater binary to the updates directory.
-  let binDir = gGREBinDirOrig.clone();
+  let binDir = gAppDirOrig.clone();
   let updater = binDir.clone();
   updater.append("updater.app");
   if (!updater.exists()) {
@@ -1746,19 +1744,19 @@ function setupAppFiles() {
 
   // Required files for the application or the test that aren't listed in the
   // dependentlibs.list file.
-  let fileRelPaths = [ { file     : FILE_APP_BIN,
-                         inGreDir : false },
-                       { file     : FILE_UPDATER_BIN,
-                         inGreDir : false },
-                       { file     : FILE_APPLICATION_INI,
-                         inGreDir : true },
-                       { file      : "dependentlibs.list",
-                         inGreDir : true } ];
+  let fileRelPaths = [ { src: FILE_APP_BIN },
+                       { src: FILE_UPDATER_BIN} ];
+  if (IS_MACOSX) {
+    fileRelPaths.push( { src: "../Resources/application.ini", dst: "../Resources/application.ini" } );
+    fileRelPaths.push( { src: "../Resources/dependentlibs.list", dst: "../Resources/dependentlibs.list" } );
+  } else {
+    fileRelPaths.push( { src: "application.ini" } );
+    fileRelPaths.push( { src: "dependentlibs.list" } );
+  }
 
   // On Linux the updater.png must also be copied
   if (IS_UNIX && !IS_MACOSX) {
-    fileRelPaths.push( { file     : "icons/updater.png",
-                         inGreDir : true } );
+    fileRelPaths.push( { src: "icons/updater.png" } );
   }
 
   // Read the dependent libs file leafnames from the dependentlibs.list file
@@ -1774,14 +1772,14 @@ function setupAppFiles() {
   let line = {};
   do {
     hasMore = istream.readLine(line);
-    fileRelPaths.push( { file     : line.value,
-                         inGreDir : false } );
+    fileRelPaths.push( { src: line.value } );
   } while(hasMore);
 
   istream.close();
 
   fileRelPaths.forEach(function CMAF_FLN_FE(aFileRelPath) {
-    copyFileToTestAppDir(aFileRelPath.file, aFileRelPath.inGreDir);
+    copyFileToTestAppDir(aFileRelPath.src, aFileRelPath.dst ? aFileRelPath.dst
+                                                            : null);
   });
 
   logTestInfo("finish - copying or creating symlinks to application files " +
@@ -1794,24 +1792,16 @@ function setupAppFiles() {
  *
  * @param  aFileRelPath
  *         The relative path of the file to copy.
- * @param  aInGreDir
- *         Whether the file is located in the GRE directory which is
- *         <bundle>/Contents/Resources on Mac OS X and is the installation
- *         directory on all other platforms. If false the file must be in the
- *         GRE Binary directory which is <bundle>/Contents/MacOS on Mac OS X and
- *         is the installation directory on on all other platforms.
+ * @param  aDestFileRelPath (optional)
+ *         The relative path of the destination file.
  */
-function copyFileToTestAppDir(aFileRelPath, aInGreDir) {
-  // gGREDirOrig and gGREBinDirOrig must always be cloned when changing its
-  // properties
-  let srcFile = aInGreDir ? gGREDirOrig.clone() : gGREBinDirOrig.clone();
-  let destFile = aInGreDir ? getGREDir() : getGREBinDir();
+function copyFileToTestAppDir(aFileRelPath, aDestFileRelPath) {
   let fileRelPath = aFileRelPath;
+  let srcFile = gAppDirOrig.clone();
   let pathParts = fileRelPath.split("/");
   for (let i = 0; i < pathParts.length; i++) {
     if (pathParts[i]) {
       srcFile.append(pathParts[i]);
-      destFile.append(pathParts[i]);
     }
   }
 
@@ -1819,14 +1809,10 @@ function copyFileToTestAppDir(aFileRelPath, aInGreDir) {
     logTestInfo("unable to copy file since it doesn't exist! Checking if " +
                  fileRelPath + ".app exists. Path: " +
                  srcFile.path);
-    // gGREDirOrig and gGREBinDirOrig must always be cloned when changing its
-    // properties
-    srcFile = aInGreDir ? gGREDirOrig.clone() : gGREBinDirOrig.clone();
-    destFile = aInGreDir ? getGREDir() : getGREBinDir();
+    srcFile = gAppDirOrig.clone();
     for (let i = 0; i < pathParts.length; i++) {
       if (pathParts[i]) {
         srcFile.append(pathParts[i] + (pathParts.length - 1 == i ? ".app" : ""));
-        destFile.append(pathParts[i] + (pathParts.length - 1 == i ? ".app" : ""));
       }
     }
     fileRelPath = fileRelPath + ".app";
@@ -1838,10 +1824,13 @@ function copyFileToTestAppDir(aFileRelPath, aInGreDir) {
   }
 
   // Symlink libraries. Note that the XUL library on Mac OS X doesn't have a
-  // file extension and shouldSymlink will always be false on Windows.
+  // file extension and this will always be false on Windows.
   let shouldSymlink = (pathParts[pathParts.length - 1] == "XUL" ||
                        fileRelPath.substr(fileRelPath.length - 3) == ".so" ||
                        fileRelPath.substr(fileRelPath.length - 6) == ".dylib");
+  let destFile = getApplyDirFile(DIR_BIN_REL_PATH +
+                                 (aDestFileRelPath ? aDestFileRelPath
+                                                   : fileRelPath), true);
   if (!shouldSymlink) {
     if (!destFile.exists()) {
       try {
@@ -3405,11 +3394,6 @@ function adjustGeneralPaths() {
             return getApplyDirFile(DIR_BIN_REL_PATH, true);
           }
           break;
-        case NS_GRE_BIN_DIR:
-          if (gUseTestAppDir) {
-            return getApplyDirFile(DIR_GRE_BIN_REL_PATH, true);
-          }
-          break;
         case XRE_EXECUTABLE_FILE:
           if (gUseTestAppDir) {
             return getApplyDirFile(DIR_BIN_REL_PATH + FILE_APP_BIN, true);
@@ -3429,7 +3413,6 @@ function adjustGeneralPaths() {
   };
   let ds = Services.dirsvc.QueryInterface(AUS_Ci.nsIDirectoryService);
   ds.QueryInterface(AUS_Ci.nsIProperties).undefine(NS_GRE_DIR);
-  ds.QueryInterface(AUS_Ci.nsIProperties).undefine(NS_GRE_BIN_DIR);
   ds.QueryInterface(AUS_Ci.nsIProperties).undefine(XRE_EXECUTABLE_FILE);
   ds.registerProvider(dirProvider);
   do_register_cleanup(function AGP_cleanup() {
