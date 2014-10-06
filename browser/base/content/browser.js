@@ -2233,7 +2233,7 @@ function URLBarSetURI(aURI) {
     // Replace initial page URIs with an empty string
     // only if there's no opener (bug 370555).
     // Bug 863515 - Make content.opener checks work in electrolysis.
-    if (gInitialPages.contains(uri.spec))
+    if (gInitialPages.indexOf(uri.spec) != -1)
       value = !gMultiProcessBrowser && content.opener ? uri.spec : "";
     else
       value = losslessDecodeURI(uri);
@@ -2951,7 +2951,7 @@ const DOMLinkHandler = {
     if (gBrowser.isFailedIcon(aURL))
       return false;
 
-    let tab = gBrowser._getTabForBrowser(aBrowser);
+    let tab = gBrowser.getTabForBrowser(aBrowser);
     if (!tab)
       return false;
 
@@ -2960,7 +2960,7 @@ const DOMLinkHandler = {
   },
 
   addSearch: function(aBrowser, aEngine, aURL) {
-    let tab = gBrowser._getTabForBrowser(aBrowser);
+    let tab = gBrowser.getTabForBrowser(aBrowser);
     if (!tab)
       return false;
 

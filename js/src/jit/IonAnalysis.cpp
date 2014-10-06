@@ -1512,6 +1512,12 @@ jit::RemoveUnmarkedBlocks(MIRGenerator *mir, MIRGraph &graph, uint32_t numMarked
                 continue;
             }
 
+            // The block is unreachable. Clear out the loop header flag, as
+            // we're doing the sweep of a mark-and-sweep here, so we no longer
+            // need to worry about whether an unmarked block is a loop or not.
+            if (block->isLoopHeader())
+                block->clearLoopHeader();
+
             for (size_t i = 0, e = block->numSuccessors(); i != e; ++i)
                 block->getSuccessor(i)->removePredecessor(block);
             graph.removeBlockIncludingPhis(block);
@@ -2689,7 +2695,7 @@ jit::ConvertLinearInequality(TempAllocator &alloc, MBasicBlock *block, const Lin
 static bool
 AnalyzePoppedThis(JSContext *cx, types::TypeObject *type,
                   MDefinition *thisValue, MInstruction *ins, bool definitelyExecuted,
-                  HandleObject baseobj,
+                  HandleNativeObject baseobj,
                   Vector<types::TypeNewScript::Initializer> *initializerList,
                   Vector<PropertyName *> *accessedProperties,
                   bool *phandled)
@@ -2714,7 +2720,7 @@ AnalyzePoppedThis(JSContext *cx, types::TypeObject *type,
         }
 
         // Ignore assignments to properties that were already written to.
-        if (baseobj->nativeLookup(cx, NameToId(setprop->name()))) {
+        if (baseobj->lookup(cx, NameToId(setprop->name()))) {
             *phandled = true;
             return true;
         }
@@ -2744,7 +2750,7 @@ AnalyzePoppedThis(JSContext *cx, types::TypeObject *type,
 
         // Add the property to the object, being careful not to update type information.
         DebugOnly<unsigned> slotSpan = baseobj->slotSpan();
-        MOZ_ASSERT(!baseobj->nativeContainsPure(id));
+        MOZ_ASSERT(!baseobj->containsPure(id));
         if (!baseobj->addDataProperty(cx, id, baseobj->slotSpan(), JSPROP_ENUMERATE))
             return false;
         MOZ_ASSERT(baseobj->slotSpan() != slotSpan);
@@ -2793,7 +2799,7 @@ AnalyzePoppedThis(JSContext *cx, types::TypeObject *type,
          *   definite property before it is assigned could incorrectly hit.
          */
         RootedId id(cx, NameToId(get->name()));
-        if (!baseobj->nativeLookup(cx, id) && !accessedProperties->append(get->name()))
+        if (!baseobj->lookup(cx, id) && !accessedProperties->append(get->name()))
             return false;
 
         if (!types::AddClearDefiniteGetterSetterForPrototypeChain(cx, type, id)) {
@@ -2823,7 +2829,7 @@ CmpInstructions(const void *a, const void *b)
 
 bool
 jit::AnalyzeNewScriptDefiniteProperties(JSContext *cx, JSFunction *fun,
-                                        types::TypeObject *type, HandleObject baseobj,
+                                        types::TypeObject *type, HandleNativeObject baseobj,
                                         Vector<types::TypeNewScript::Initializer> *initializerList)
 {
     MOZ_ASSERT(cx->compartment()->activeAnalysis);

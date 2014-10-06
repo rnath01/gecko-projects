@@ -90,7 +90,7 @@ class MacroAssemblerX86Shared : public Assembler
         j(ConditionFromDoubleCondition(cond), label);
     }
 
-    void branchNegativeZero(FloatRegister reg, Register scratch, Label *label);
+    void branchNegativeZero(FloatRegister reg, Register scratch, Label *label, bool  maybeNonZero = true);
     void branchNegativeZeroFloat32(FloatRegister reg, Register scratch, Label *label);
 
     void move32(Imm32 imm, Register dest) {
@@ -216,6 +216,14 @@ class MacroAssemblerX86Shared : public Assembler
         j(cond, label);
     }
     void branch32(Condition cond, const Address &lhs, Imm32 imm, Label *label) {
+        cmpl(Operand(lhs), imm);
+        j(cond, label);
+    }
+    void branch32(Condition cond, const BaseIndex &lhs, Register rhs, Label *label) {
+        cmpl(Operand(lhs), rhs);
+        j(cond, label);
+    }
+    void branch32(Condition cond, const BaseIndex &lhs, Imm32 imm, Label *label) {
         cmpl(Operand(lhs), imm);
         j(cond, label);
     }

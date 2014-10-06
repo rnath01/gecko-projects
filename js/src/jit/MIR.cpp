@@ -2839,9 +2839,48 @@ MClampToUint8::foldsTo(TempAllocator &alloc)
 }
 
 bool
+MCompare::tryFoldEqualOperands(bool *result)
+{
+    if (lhs() != rhs())
+        return false;
+
+    // Intuitively somebody would think that if lhs == rhs,
+    // then we can just return true. (Or false for !==)
+    // However NaN !== NaN is true! So we spend some time trying
+    // to eliminate this case.
+
+    if (jsop() != JSOP_STRICTEQ && jsop() != JSOP_STRICTNE)
+        return false;
+
+    if (compareType_ == Compare_Unknown)
+        return false;
+
+    MOZ_ASSERT(compareType_ == Compare_Undefined || compareType_ == Compare_Null ||
+               compareType_ == Compare_Boolean || compareType_ == Compare_Int32 ||
+               compareType_ == Compare_Int32MaybeCoerceBoth ||
+               compareType_ == Compare_Int32MaybeCoerceLHS ||
+               compareType_ == Compare_Int32MaybeCoerceRHS || compareType_ == Compare_UInt32 ||
+               compareType_ == Compare_Double || compareType_ == Compare_DoubleMaybeCoerceLHS ||
+               compareType_ == Compare_DoubleMaybeCoerceRHS || compareType_ == Compare_Float32 ||
+               compareType_ == Compare_String || compareType_ == Compare_StrictString ||
+               compareType_ == Compare_Object || compareType_ == Compare_Value);
+
+    if (isDoubleComparison() || isFloat32Comparison()) {
+        if (!operandsAreNeverNaN())
+            return false;
+    }
+
+    *result = (jsop() == JSOP_STRICTEQ);
+    return true;
+}
+
+bool
 MCompare::tryFold(bool *result)
 {
     JSOp op = jsop();
+
+    if (tryFoldEqualOperands(result))
+        return true;
 
     if (compareType_ == Compare_Null || compareType_ == Compare_Undefined) {
         MOZ_ASSERT(op == JSOP_EQ || op == JSOP_STRICTEQ ||
@@ -3180,7 +3219,7 @@ MBeta::printOpcode(FILE *fp) const
 bool
 MNewObject::shouldUseVM() const
 {
-    JSObject *obj = templateObject();
+    NativeObject *obj = templateObject();
     return obj->hasSingletonType() || obj->hasDynamicSlots();
 }
 
@@ -3197,7 +3236,7 @@ MObjectState::MObjectState(MDefinition *obj)
     // This instruction is only used as a summary for bailout paths.
     setResultType(MIRType_Object);
     setRecoveredOnBailout();
-    JSObject *templateObject = nullptr;
+    NativeObject *templateObject = nullptr;
     if (obj->isNewObject())
         templateObject = obj->toNewObject()->templateObject();
     else
@@ -3241,7 +3280,7 @@ MObjectState::Copy(TempAllocator &alloc, MObjectState *state)
 bool
 MNewArray::shouldUseVM() const
 {
-    MOZ_ASSERT(count() < JSObject::NELEMENTS_LIMIT);
+    MOZ_ASSERT(count() < NativeObject::NELEMENTS_LIMIT);
 
     size_t arraySlots =
         gc::GetGCKindSlots(templateObject()->asTenured().getAllocKind()) - ObjectElements::VALUES_PER_HEADER;
