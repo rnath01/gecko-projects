@@ -25,6 +25,7 @@ describe("loop.panel", function() {
 
     navigator.mozLoop = {
       doNotDisturb: true,
+      fxAEnabled: true,
       getStrings: function() {
         return JSON.stringify({textContent: "fakeText"});
       },
@@ -140,7 +141,8 @@ describe("loop.panel", function() {
 
       view = TestUtils.renderIntoDocument(loop.panel.PanelView({
         notifications: notifications,
-        client: fakeClient
+        client: fakeClient,
+        showTabButtons: true,
       }));
 
       [callTab, contactsTab] =
@@ -176,7 +178,18 @@ describe("loop.panel", function() {
 
           sinon.assert.calledOnce(navigator.mozLoop.logInToFxA);
         });
+
+      it("should be hidden if FxA is not enabled",
+        function() {
+          navigator.mozLoop.fxAEnabled = false;
+          var view = TestUtils.renderIntoDocument(loop.panel.AuthLink());
+          expect(view.getDOMNode()).to.be.null;
       });
+
+      afterEach(function() {
+        navigator.mozLoop.fxAEnabled = true;
+      });
+    });
 
     describe("SettingsDropdown", function() {
       var view;
@@ -185,6 +198,17 @@ describe("loop.panel", function() {
         navigator.mozLoop.logInToFxA = sandbox.stub();
         navigator.mozLoop.logOutFromFxA = sandbox.stub();
         navigator.mozLoop.openFxASettings = sandbox.stub();
+      });
+
+      afterEach(function() {
+        navigator.mozLoop.fxAEnabled = true;
+      });
+
+      it("should be hidden if FxA is not enabled",
+        function() {
+          navigator.mozLoop.fxAEnabled = false;
+          var view = TestUtils.renderIntoDocument(loop.panel.SettingsDropdown());
+          expect(view.getDOMNode()).to.be.null;
       });
 
       it("should show a signin entry when user is not authenticated",
