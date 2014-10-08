@@ -1728,14 +1728,14 @@ public:
       return false;
     }
     InfallibleTArray<mozilla::jsipc::CpowEntry> cpows;
-    if (!cc->GetCPOWManager()->Wrap(aCx, aCpows, &cpows)) {
+    if (aCpows && !cc->GetCPOWManager()->Wrap(aCx, aCpows, &cpows)) {
       return false;
     }
     if (aIsSync) {
       return cc->SendSyncMessage(PromiseFlatString(aMessage), data, cpows,
                                  IPC::Principal(aPrincipal), aJSONRetVal);
     }
-    return cc->CallRpcMessage(PromiseFlatString(aMessage), data, cpows,
+    return cc->SendRpcMessage(PromiseFlatString(aMessage), data, cpows,
                               IPC::Principal(aPrincipal), aJSONRetVal);
   }
 
@@ -1755,7 +1755,7 @@ public:
       return false;
     }
     InfallibleTArray<mozilla::jsipc::CpowEntry> cpows;
-    if (!cc->GetCPOWManager()->Wrap(aCx, aCpows, &cpows)) {
+    if (aCpows && !cc->GetCPOWManager()->Wrap(aCx, aCpows, &cpows)) {
       return false;
     }
     return cc->SendAsyncMessage(PromiseFlatString(aMessage), data, cpows,
