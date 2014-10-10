@@ -5,16 +5,17 @@
 /* global loop:true */
 
 var loop = loop || {};
-loop.store = (function() {
+loop.store = loop.store || {};
 
+loop.store.ConversationStore = (function() {
   var sharedActions = loop.shared.actions;
-  var sharedUtils = loop.shared.utils;
+  var CALL_TYPES = loop.shared.utils.CALL_TYPES;
 
   /**
    * Websocket states taken from:
    * https://docs.services.mozilla.com/loop/apis.html#call-progress-state-change-progress
    */
-  var WS_STATES = {
+  var WS_STATES = loop.store.WS_STATES = {
     // The call is starting, and the remote party is not yet being alerted.
     INIT: "init",
     // The called party is being alerted.
@@ -31,7 +32,7 @@ loop.store = (function() {
     CONNECTED: "connected"
   };
 
-  var CALL_STATES = {
+  var CALL_STATES = loop.store.CALL_STATES = {
     // The initial state of the view.
     INIT: "cs-init",
     // The store is gathering the call data from the server.
@@ -52,7 +53,6 @@ loop.store = (function() {
     TERMINATED: "cs-terminated"
   };
 
-
   var ConversationStore = Backbone.Model.extend({
     defaults: {
       // The current state of the call
@@ -63,11 +63,11 @@ loop.store = (function() {
       error: undefined,
       // True if the call is outgoing, false if not, undefined if unknown
       outgoing: undefined,
-      // The id of the person being called for outgoing calls
-      calleeId: undefined,
+      // The contact being called for outgoing calls
+      contact: undefined,
       // The call type for the call.
       // XXX Don't hard-code, this comes from the data in bug 1072323
-      callType: sharedUtils.CALL_TYPES.AUDIO_VIDEO,
+      callType: CALL_TYPES.AUDIO_VIDEO,
 
       // Call Connection information
       // The call id from the loop-server
@@ -81,7 +81,11 @@ loop.store = (function() {
       // SDK session ID
       sessionId: undefined,
       // SDK session token
-      sessionToken: undefined
+      sessionToken: undefined,
+      // If the audio is muted
+      audioMuted: false,
+      // If the video is muted
+      videoMuted: false
     },
 
     /**
@@ -104,9 +108,13 @@ loop.store = (function() {
       if (!options.client) {
         throw new Error("Missing option client");
       }
+      if (!options.sdkDriver) {
+        throw new Error("Missing option sdkDriver");
+      }
 
       this.client = options.client;
       this.dispatcher = options.dispatcher;
+      this.sdkDriver = options.sdkDriver;
 
       this.dispatcher.register(this, [
         "connectionFailure",
@@ -114,8 +122,11 @@ loop.store = (function() {
         "gatherCallData",
         "connectCall",
         "hangupCall",
+        "peerHungupCall",
         "cancelCall",
-        "retryCall"
+        "retryCall",
+        "mediaConnected",
+        "setMute"
       ]);
     },
 
@@ -126,6 +137,7 @@ loop.store = (function() {
      * @param {sharedActions.ConnectionFailure} actionData The action data.
      */
     connectionFailure: function(actionData) {
+      this._endSession();
       this.set({
         callState: CALL_STATES.TERMINATED,
         callStateReason: actionData.reason
@@ -152,7 +164,15 @@ loop.store = (function() {
           this.set({callState: CALL_STATES.ALERTING});
           break;
         }
-        case WS_STATES.CONNECTING:
+        case WS_STATES.CONNECTING: {
+          this.sdkDriver.connectSession({
+            apiKey: this.get("apiKey"),
+            sessionId: this.get("sessionId"),
+            sessionToken: this.get("sessionToken")
+          });
+          this.set({callState: CALL_STATES.ONGOING});
+          break;
+        }
         case WS_STATES.HALF_CONNECTED:
         case WS_STATES.CONNECTED: {
           this.set({callState: CALL_STATES.ONGOING});
@@ -172,12 +192,29 @@ loop.store = (function() {
      * @param {sharedActions.GatherCallData} actionData The action data.
      */
     gatherCallData: function(actionData) {
+      if (!actionData.outgoing) {
+        // XXX Other types aren't supported yet, but set the state for the
+        // view selection.
+        this.set({outgoing: false});
+        return;
+      }
+
+      var callData = navigator.mozLoop.getCallData(actionData.callId);
+      if (!callData) {
+        console.error("Failed to get the call data");
+        this.set({callState: CALL_STATES.TERMINATED});
+        return;
+      }
+
       this.set({
-        calleeId: actionData.calleeId,
-        outgoing: !!actionData.calleeId,
+        contact: callData.contact,
+        outgoing: actionData.outgoing,
         callId: actionData.callId,
+        callType: callData.callType,
         callState: CALL_STATES.GATHER
       });
+
+      this.set({videoMuted: this.get("callType") === CALL_TYPES.AUDIO_ONLY});
 
       if (this.get("outgoing")) {
         this._setupOutgoingCall();
@@ -200,15 +237,20 @@ loop.store = (function() {
      * Hangs up an ongoing call.
      */
     hangupCall: function() {
-      // XXX Stop the SDK once we add it.
-
-      // Ensure the websocket has been disconnected.
       if (this._websocket) {
         // Let the server know the user has hung up.
         this._websocket.mediaFail();
-        this._ensureWebSocketDisconnected();
       }
 
+      this._endSession();
+      this.set({callState: CALL_STATES.FINISHED});
+    },
+
+    /**
+     * The peer hungup the call.
+     */
+    peerHungupCall: function() {
+      this._endSession();
       this.set({callState: CALL_STATES.FINISHED});
     },
 
@@ -217,24 +259,15 @@ loop.store = (function() {
      */
     cancelCall: function() {
       var callState = this.get("callState");
-      if (callState === CALL_STATES.TERMINATED) {
-        // All we need to do is close the window.
-        this.set({callState: CALL_STATES.CLOSE});
-        return;
+      if (this._websocket &&
+          (callState === CALL_STATES.CONNECTING ||
+           callState === CALL_STATES.ALERTING)) {
+         // Let the server know the user has hung up.
+        this._websocket.cancel();
       }
 
-      if (callState === CALL_STATES.CONNECTING ||
-          callState === CALL_STATES.ALERTING) {
-        if (this._websocket) {
-          // Let the server know the user has hung up.
-          this._websocket.cancel();
-          this._ensureWebSocketDisconnected();
-        }
-        this.set({callState: CALL_STATES.CLOSE});
-        return;
-      }
-
-      console.log("Unsupported cancel in state", callState);
+      this._endSession();
+      this.set({callState: CALL_STATES.CLOSE});
     },
 
     /**
@@ -254,12 +287,34 @@ loop.store = (function() {
     },
 
     /**
+     * Notifies that all media is now connected
+     */
+    mediaConnected: function() {
+      this._websocket.mediaUp();
+    },
+
+    /**
+     * Records the mute state for the stream.
+     *
+     * @param {sharedActions.setMute} actionData The mute state for the stream type.
+     */
+    setMute: function(actionData) {
+      var muteType = actionData.type + "Muted";
+      this.set(muteType, !actionData.enabled);
+    },
+
+    /**
      * Obtains the outgoing call data from the server and handles the
      * result.
      */
     _setupOutgoingCall: function() {
-      // XXX For now, we only have one calleeId, so just wrap that in an array.
-      this.client.setupOutgoingCall([this.get("calleeId")],
+      var contactAddresses = [];
+
+      this.get("contact").email.forEach(function(address) {
+        contactAddresses.push(address.value);
+      });
+
+      this.client.setupOutgoingCall(contactAddresses,
         this.get("callType"),
         function(err, result) {
           if (err) {
@@ -308,14 +363,17 @@ loop.store = (function() {
     },
 
     /**
-     * Ensures the websocket gets disconnected.
+     * Ensures the session is ended and the websocket is disconnected.
      */
-    _ensureWebSocketDisconnected: function() {
-     this.stopListening(this._websocket);
+    _endSession: function(nextState) {
+      this.sdkDriver.disconnectSession();
+      if (this._websocket) {
+        this.stopListening(this._websocket);
 
-      // Now close the websocket.
-      this._websocket.close();
-      delete this._websocket;
+        // Now close the websocket.
+        this._websocket.close();
+        delete this._websocket;
+      }
     },
 
     /**
@@ -344,9 +402,5 @@ loop.store = (function() {
     }
   });
 
-  return {
-    CALL_STATES: CALL_STATES,
-    ConversationStore: ConversationStore,
-    WS_STATES: WS_STATES
-  };
+  return ConversationStore;
 })();

@@ -127,7 +127,6 @@ DOMMediaStream::DOMMediaStream()
     mStream(nullptr), mHintContents(0), mTrackTypesAvailable(0),
     mNotifiedOfMediaStreamGraphShutdown(false)
 {
-  SetIsDOMBinding();
 }
 
 DOMMediaStream::~DOMMediaStream()
@@ -449,6 +448,19 @@ DOMMediaStream::ConstructMediaTracks(AudioTrackList* aAudioTrackList,
     // must be selected.
     int index = firstEnabledVideo >= 0 ? firstEnabledVideo : 0;
     (*aVideoTrackList)[index]->SetEnabledInternal(true, MediaTrack::FIRE_NO_EVENTS);
+  }
+}
+
+void
+DOMMediaStream::DisconnectTrackListListeners(const AudioTrackList* aAudioTrackList,
+                                             const VideoTrackList* aVideoTrackList)
+{
+  for (auto i = mMediaTrackListListeners.Length(); i > 0; ) { // unsigned!
+    --i; // 0 ... Length()-1 range
+    if (mMediaTrackListListeners[i].mMediaTrackList == aAudioTrackList ||
+        mMediaTrackListListeners[i].mMediaTrackList == aVideoTrackList) {
+      mMediaTrackListListeners.RemoveElementAt(i);
+    }
   }
 }
 

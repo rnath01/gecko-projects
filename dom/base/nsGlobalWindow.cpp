@@ -122,7 +122,6 @@
 #include "nsAutoPtr.h"
 #include "nsContentUtils.h"
 #include "nsCSSProps.h"
-#include "nsIDOMFile.h"
 #include "nsIDOMFileList.h"
 #include "nsIURIFixup.h"
 #ifndef DEBUG
@@ -175,10 +174,6 @@
 #include "nsISupportsPrimitives.h"
 #include "nsXPCOMCID.h"
 #include "mozIThirdPartyUtil.h"
-#ifdef MOZ_LOGGING
-// so we can get logging even in release builds
-#define FORCE_PR_LOG 1
-#endif
 #include "prlog.h"
 #include "prenv.h"
 #include "prprf.h"
@@ -187,6 +182,7 @@
 #include "mozilla/dom/MessagePort.h"
 #include "mozilla/dom/MessagePortBinding.h"
 #include "mozilla/dom/indexedDB/IDBFactory.h"
+#include "mozilla/dom/Promise.h"
 
 #include "mozilla/dom/StructuredCloneTags.h"
 
@@ -628,9 +624,9 @@ public:
                               JS::Handle<jsid> id,
                               JS::MutableHandle<JSPropertyDescriptor> desc)
                               const MOZ_OVERRIDE;
-  virtual bool getOwnPropertyNames(JSContext *cx,
-                                   JS::Handle<JSObject*> proxy,
-                                   JS::AutoIdVector &props) const MOZ_OVERRIDE;
+  virtual bool ownPropertyKeys(JSContext *cx,
+                               JS::Handle<JSObject*> proxy,
+                               JS::AutoIdVector &props) const MOZ_OVERRIDE;
   virtual bool delete_(JSContext *cx, JS::Handle<JSObject*> proxy,
                        JS::Handle<jsid> id,
                        bool *bp) const MOZ_OVERRIDE;
@@ -814,9 +810,9 @@ nsOuterWindowProxy::defineProperty(JSContext* cx,
 }
 
 bool
-nsOuterWindowProxy::getOwnPropertyNames(JSContext *cx,
-                                        JS::Handle<JSObject*> proxy,
-                                        JS::AutoIdVector &props) const
+nsOuterWindowProxy::ownPropertyKeys(JSContext *cx,
+                                    JS::Handle<JSObject*> proxy,
+                                    JS::AutoIdVector &props) const
 {
   // Just our indexed stuff followed by our "normal" own property names.
   if (!AppendIndexedPropertyNames(cx, proxy, props)) {
@@ -824,7 +820,7 @@ nsOuterWindowProxy::getOwnPropertyNames(JSContext *cx,
   }
 
   JS::AutoIdVector innerProps(cx);
-  if (!js::Wrapper::getOwnPropertyNames(cx, proxy, innerProps)) {
+  if (!js::Wrapper::ownPropertyKeys(cx, proxy, innerProps)) {
     return false;
   }
   return js::AppendUnique(cx, props, innerProps);
@@ -939,7 +935,7 @@ nsOuterWindowProxy::keys(JSContext *cx, JS::Handle<JSObject*> proxy,
                          JS::AutoIdVector &props) const
 {
   // BaseProxyHandler::keys seems to do what we want here: call
-  // getOwnPropertyNames and then filter out the non-enumerable properties.
+  // ownPropertyKeys and then filter out the non-enumerable properties.
   return js::BaseProxyHandler::keys(cx, proxy, props);
 }
 
@@ -1094,7 +1090,7 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
     mHadOriginalOpener(false),
     mIsPopupSpam(false),
     mBlockScriptedClosingFlag(false),
-    mFireOfflineStatusChangeEventOnThaw(false),
+    mWasOffline(false),
     mNotifyIdleObserversIdleOnThaw(false),
     mNotifyIdleObserversActiveOnThaw(false),
     mCreatingInnerWindow(false),
@@ -1139,8 +1135,6 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
 
   // Initialize the PRCList (this).
   PR_INIT_CLIST(this);
-
-  SetIsDOMBinding();
 
   if (aOuterWindow) {
     // |this| is an inner window, add this inner window to the outer
@@ -2460,11 +2454,11 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
       newInnerGlobal = newInnerWindow->GetWrapperPreserveColor();
     } else {
       if (thisChrome) {
-        newInnerWindow = new nsGlobalChromeWindow(this);
+        newInnerWindow = nsGlobalChromeWindow::Create(this);
       } else if (mIsModalContentWindow) {
-        newInnerWindow = new nsGlobalModalWindow(this);
+        newInnerWindow = nsGlobalModalWindow::Create(this);
       } else {
-        newInnerWindow = new nsGlobalWindow(this);
+        newInnerWindow = nsGlobalWindow::Create(this);
       }
 
       // Freeze the outer window and null out the inner window so
@@ -6370,6 +6364,14 @@ nsGlobalWindow::Confirm(const nsAString& aString, bool* aReturn)
   return rv.ErrorCode();
 }
 
+already_AddRefed<Promise>
+nsGlobalWindow::Fetch(const RequestOrScalarValueString& aInput,
+                      const RequestInit& aInit, ErrorResult& aRv)
+{
+  aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
+  return nullptr;
+}
+
 void
 nsGlobalWindow::Prompt(const nsAString& aMessage, const nsAString& aInitial,
                        nsAString& aReturn, ErrorResult& aError)
@@ -7871,18 +7873,32 @@ PostMessageReadStructuredClone(JSContext* cx,
                                uint32_t data,
                                void* closure)
 {
+  StructuredCloneInfo* scInfo = static_cast<StructuredCloneInfo*>(closure);
+  NS_ASSERTION(scInfo, "Must have scInfo!");
+
   if (tag == SCTAG_DOM_BLOB) {
     NS_ASSERTION(!data, "Data should be empty");
 
-    // What we get back from the reader is a DOMFileImpl.
-    // From that we create a new DOMFile.
-    nsISupports* supports;
-    if (JS_ReadBytes(reader, &supports, sizeof(supports))) {
-      nsCOMPtr<nsIDOMBlob> file = new DOMFile(static_cast<DOMFileImpl*>(supports));
+    // What we get back from the reader is a FileImpl.
+    // From that we create a new File.
+    FileImpl* blobImpl;
+    if (JS_ReadBytes(reader, &blobImpl, sizeof(blobImpl))) {
+      MOZ_ASSERT(blobImpl);
+
+      // nsRefPtr<File> needs to go out of scope before toObjectOrNull() is
+      // called because the static analysis thinks dereferencing XPCOM objects
+      // can GC (because in some cases it can!), and a return statement with a
+      // JSObject* type means that JSObject* is on the stack as a raw pointer
+      // while destructors are running.
       JS::Rooted<JS::Value> val(cx);
-      if (NS_SUCCEEDED(nsContentUtils::WrapNative(cx, file, &val))) {
-        return val.toObjectOrNull();
+      {
+        nsRefPtr<File> blob = new File(scInfo->window, blobImpl);
+        if (!WrapNewBindingObject(cx, blob, &val)) {
+          return nullptr;
+        }
       }
+
+      return &val.toObject();
     }
   }
 
@@ -7917,19 +7933,25 @@ PostMessageWriteStructuredClone(JSContext* cx,
   StructuredCloneInfo* scInfo = static_cast<StructuredCloneInfo*>(closure);
   NS_ASSERTION(scInfo, "Must have scInfo!");
 
+  // See if this is a File/Blob object.
+  {
+    File* blob = nullptr;
+    if (scInfo->subsumes && NS_SUCCEEDED(UNWRAP_OBJECT(Blob, obj, blob))) {
+      FileImpl* blobImpl = blob->Impl();
+      if (JS_WriteUint32Pair(writer, SCTAG_DOM_BLOB, 0) &&
+          JS_WriteBytes(writer, &blobImpl, sizeof(blobImpl))) {
+        scInfo->event->StoreISupports(blobImpl);
+        return true;
+      }
+    }
+  }
+
   nsCOMPtr<nsIXPConnectWrappedNative> wrappedNative;
   nsContentUtils::XPConnect()->
     GetWrappedNativeOfJSObject(cx, obj, getter_AddRefs(wrappedNative));
   if (wrappedNative) {
     uint32_t scTag = 0;
     nsISupports* supports = wrappedNative->Native();
-
-    nsCOMPtr<nsIDOMBlob> blob = do_QueryInterface(supports);
-    if (blob && scInfo->subsumes) {
-      scTag = SCTAG_DOM_BLOB;
-      DOMFile* file = static_cast<DOMFile*>(blob.get());
-      supports = file->Impl();
-    }
 
     nsCOMPtr<nsIDOMFileList> list = do_QueryInterface(supports);
     if (list && scInfo->subsumes)
@@ -10731,12 +10753,22 @@ nsGlobalWindow::GetInterface(JSContext* aCx, nsIJSID* aIID,
 }
 
 void
-nsGlobalWindow::FireOfflineStatusEvent()
+nsGlobalWindow::FireOfflineStatusEventIfChanged()
 {
   if (!IsCurrentInnerWindow())
     return;
+
+  bool isOffline = NS_IsOffline() || NS_IsAppOffline(GetPrincipal());
+
+  // Don't fire an event if the status hasn't changed
+  if (mWasOffline == isOffline) {
+    return;
+  }
+
+  mWasOffline = isOffline;
+
   nsAutoString name;
-  if (NS_IsOffline()) {
+  if (isOffline) {
     name.AssignLiteral("offline");
   } else {
     name.AssignLiteral("online");
@@ -11292,13 +11324,11 @@ nsresult
 nsGlobalWindow::Observe(nsISupports* aSubject, const char* aTopic,
                         const char16_t* aData)
 {
-  if (!nsCRT::strcmp(aTopic, NS_IOSERVICE_OFFLINE_STATUS_TOPIC)) {
-    if (IsFrozen()) {
-      // if an even number of notifications arrive while we're frozen,
-      // we don't need to fire.
-      mFireOfflineStatusChangeEventOnThaw = !mFireOfflineStatusChangeEventOnThaw;
-    } else {
-      FireOfflineStatusEvent();
+  if (!nsCRT::strcmp(aTopic, NS_IOSERVICE_OFFLINE_STATUS_TOPIC) ||
+      !nsCRT::strcmp(aTopic, NS_IOSERVICE_APP_OFFLINE_STATUS_TOPIC)) {
+    if (!IsFrozen()) {
+        // Fires an offline status event if the offline status has changed
+        FireOfflineStatusEventIfChanged();
     }
     return NS_OK;
   }
@@ -11573,10 +11603,8 @@ nsGlobalWindow::FireDelayedDOMEvents()
     static_cast<nsDOMOfflineResourceList*>(mApplicationCache.get())->FirePendingEvents();
   }
 
-  if (mFireOfflineStatusChangeEventOnThaw) {
-    mFireOfflineStatusChangeEventOnThaw = false;
-    FireOfflineStatusEvent();
-  }
+  // Fires an offline status event if the offline status has changed
+  FireOfflineStatusEventIfChanged();
 
   if (mNotifyIdleObserversIdleOnThaw) {
     mNotifyIdleObserversIdleOnThaw = false;
@@ -13354,6 +13382,14 @@ NS_INTERFACE_MAP_END_INHERITING(nsGlobalWindow)
 NS_IMPL_ADDREF_INHERITED(nsGlobalChromeWindow, nsGlobalWindow)
 NS_IMPL_RELEASE_INHERITED(nsGlobalChromeWindow, nsGlobalWindow)
 
+/* static */ already_AddRefed<nsGlobalChromeWindow>
+nsGlobalChromeWindow::Create(nsGlobalWindow *aOuterWindow)
+{
+  nsRefPtr<nsGlobalChromeWindow> window = new nsGlobalChromeWindow(aOuterWindow);
+  window->InitWasOffline();
+  return window.forget();
+}
+
 NS_IMETHODIMP
 nsGlobalChromeWindow::GetWindowState(uint16_t* aWindowState)
 {
@@ -13778,6 +13814,14 @@ nsGlobalWindow::GetDialogArguments(JSContext* aCx,
                         aRetval, aError);
 }
 
+/* static */ already_AddRefed<nsGlobalModalWindow>
+nsGlobalModalWindow::Create(nsGlobalWindow *aOuterWindow)
+{
+  nsRefPtr<nsGlobalModalWindow> window = new nsGlobalModalWindow(aOuterWindow);
+  window->InitWasOffline();
+  return window.forget();
+}
+
 NS_IMETHODIMP
 nsGlobalModalWindow::GetDialogArguments(nsIVariant **aArguments)
 {
@@ -13787,6 +13831,20 @@ nsGlobalModalWindow::GetDialogArguments(nsIVariant **aArguments)
   // This does an internal origin check, and returns undefined if the subject
   // does not subsumes the origin of the arguments.
   return mDialogArguments->Get(nsContentUtils::SubjectPrincipal(), aArguments);
+}
+
+/* static */ already_AddRefed<nsGlobalWindow>
+nsGlobalWindow::Create(nsGlobalWindow *aOuterWindow)
+{
+  nsRefPtr<nsGlobalWindow> window = new nsGlobalWindow(aOuterWindow);
+  window->InitWasOffline();
+  return window.forget();
+}
+
+void
+nsGlobalWindow::InitWasOffline()
+{
+  mWasOffline = NS_IsOffline() || NS_IsAppOffline(GetPrincipal());
 }
 
 void
@@ -13961,7 +14019,6 @@ void
 nsGlobalWindow::ClearDocumentDependentSlots(JSContext* aCx)
 {
   MOZ_ASSERT(IsInnerWindow());
-  MOZ_ASSERT(IsDOMBinding());
   WindowBinding::ClearCachedDocumentValue(aCx, this);
   WindowBinding::ClearCachedPerformanceValue(aCx, this);
 }

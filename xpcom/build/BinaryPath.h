@@ -56,7 +56,6 @@ private:
       return NS_ERROR_FAILURE;
     }
 
-    UInt8 tempBuffer[MAXPATHLEN];
     nsresult rv;
     if (CFURLGetFileSystemRepresentation(executableURL, false, tempBuffer,
                                          MAXPATHLEN)) {

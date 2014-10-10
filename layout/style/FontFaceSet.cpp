@@ -6,9 +6,6 @@
 
 #include "FontFaceSet.h"
 
-#ifdef MOZ_LOGGING
-#define FORCE_PR_LOG /* Allow logging in the release build */
-#endif /* MOZ_LOGGING */
 #include "prlog.h"
 
 #include "mozilla/css/Loader.h"
@@ -17,6 +14,7 @@
 #include "mozilla/dom/FontFaceSetBinding.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/AsyncEventDispatcher.h"
+#include "mozilla/Preferences.h"
 #include "nsCrossSiteListenerProxy.h"
 #include "nsFontFaceLoader.h"
 #include "nsIChannelPolicy.h"
@@ -279,7 +277,7 @@ FontFaceSet::Delete(FontFace& aFontFace, ErrorResult& aRv)
 
   if (aFontFace.HasRule()) {
     aRv.Throw(NS_ERROR_DOM_INVALID_MODIFICATION_ERR);
-    return nullptr;
+    return false;
   }
 
   if (!mNonRuleFaces.RemoveElement(&aFontFace)) {
@@ -441,8 +439,22 @@ FontFaceSet::StartLoad(gfxUserFontEntry* aUserFontEntry,
 #endif
 
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(channel));
-  if (httpChannel)
+  if (httpChannel) {
     httpChannel->SetReferrer(aFontFaceSrc->mReferrer);
+    nsAutoCString accept("application/font-woff;q=0.9,*/*;q=0.8");
+    if (Preferences::GetBool(GFX_PREF_WOFF2_ENABLED)) {
+      accept.Insert(NS_LITERAL_CSTRING("application/font-woff2;q=1.0,"), 0);
+    }
+    httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Accept"),
+                                  accept, false);
+    // For WOFF and WOFF2, we should tell servers/proxies/etc NOT to try
+    // and apply additional compression at the content-encoding layer
+    if (aFontFaceSrc->mFormatFlags & (gfxUserFontSet::FLAG_FORMAT_WOFF |
+                                      gfxUserFontSet::FLAG_FORMAT_WOFF2)) {
+      httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Accept-Encoding"),
+                                    NS_LITERAL_CSTRING("identity"), false);
+    }
+  }
   nsCOMPtr<nsISupportsPriority> priorityChannel(do_QueryInterface(channel));
   if (priorityChannel) {
     priorityChannel->AdjustPriority(nsISupportsPriority::PRIORITY_HIGH);
@@ -510,6 +522,16 @@ FontFaceSet::UpdateRules(const nsTArray<nsFontFaceRuleContainer>& aRules)
   bool modified = mNonRuleFacesDirty;
   mNonRuleFacesDirty = false;
 
+  // reuse existing FontFace objects mapped to rules already
+  nsDataHashtable<nsPtrHashKey<nsCSSFontFaceRule>, FontFace*> ruleFaceMap;
+  for (size_t i = 0, i_end = mRuleFaces.Length(); i < i_end; ++i) {
+    FontFace* f = mRuleFaces[i].mFontFace;
+    if (!f) {
+      continue;
+    }
+    ruleFaceMap.Put(f->GetRule(), f);
+  }
+
   // The @font-face rules that make up the user font set have changed,
   // so we need to update the set. However, we want to preserve existing
   // font entries wherever possible, so that we don't discard and then
@@ -540,9 +562,12 @@ FontFaceSet::UpdateRules(const nsTArray<nsFontFaceRuleContainer>& aRules)
     if (handledRules.Contains(aRules[i].mRule)) {
       continue;
     }
-    InsertRuleFontFace(FontFaceForRule(aRules[i].mRule),
-                       aRules[i].mSheetType, oldRecords,
-                       modified);
+    nsCSSFontFaceRule* rule = aRules[i].mRule;
+    nsRefPtr<FontFace> f = ruleFaceMap.Get(rule);
+    if (!f.get()) {
+      f = FontFace::CreateForRule(GetParentObject(), mPresContext, rule);
+    }
+    InsertRuleFontFace(f, aRules[i].mSheetType, oldRecords, modified);
     handledRules.PutEntry(aRules[i].mRule);
   }
 
@@ -902,6 +927,9 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(const nsAString& aFamilyName,
             nsDependentString valueString(val.GetStringBufferValue());
             if (valueString.LowerCaseEqualsASCII("woff")) {
               face->mFormatFlags |= gfxUserFontSet::FLAG_FORMAT_WOFF;
+            } else if (Preferences::GetBool(GFX_PREF_WOFF2_ENABLED) &&
+                       valueString.LowerCaseEqualsASCII("woff2")) {
+              face->mFormatFlags |= gfxUserFontSet::FLAG_FORMAT_WOFF2;
             } else if (valueString.LowerCaseEqualsASCII("opentype")) {
               face->mFormatFlags |= gfxUserFontSet::FLAG_FORMAT_OPENTYPE;
             } else if (valueString.LowerCaseEqualsASCII("truetype")) {
@@ -972,16 +1000,6 @@ FontFaceSet::FindRuleForUserFontEntry(gfxUserFontEntry* aUserFontEntry)
     if (f->GetUserFontEntry() == aUserFontEntry) {
       return f->GetRule();
     }
-  }
-  return nullptr;
-}
-
-gfxUserFontEntry*
-FontFaceSet::FindUserFontEntryForRule(nsCSSFontFaceRule* aRule)
-{
-  FontFace* f = aRule->GetFontFace();
-  if (f) {
-    return f->GetUserFontEntry();
   }
   return nullptr;
 }
@@ -1259,23 +1277,6 @@ FontFaceSet::DoRebuildUserFontSet()
   }
 
   mPresContext->RebuildUserFontSet();
-}
-
-FontFace*
-FontFaceSet::FontFaceForRule(nsCSSFontFaceRule* aRule)
-{
-  FontFace* f = aRule->GetFontFace();
-  if (f) {
-    return f;
-  }
-
-  // We might be creating a FontFace object for an @font-face rule that we are
-  // just about to create a user font entry for, so entry might be null.
-  gfxUserFontEntry* entry = FindUserFontEntryForRule(aRule);
-  nsRefPtr<FontFace> newFontFace =
-    FontFace::CreateForRule(GetParentObject(), mPresContext, aRule, entry);
-  aRule->SetFontFace(newFontFace);
-  return newFontFace;
 }
 
 void

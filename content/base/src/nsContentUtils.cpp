@@ -90,6 +90,7 @@
 #include "nsICategoryManager.h"
 #include "nsIChannelEventSink.h"
 #include "nsIChannelPolicy.h"
+#include "nsICharsetDetectionObserver.h"
 #include "nsIChromeRegistry.h"
 #include "nsIConsoleService.h"
 #include "nsIContent.h"
@@ -2453,7 +2454,8 @@ nsContentUtils::GenerateStateKey(nsIContent* aContent,
     return NS_OK;
   }
 
-  nsCOMPtr<nsIHTMLDocument> htmlDocument(do_QueryInterface(aContent->GetCurrentDoc()));
+  nsCOMPtr<nsIHTMLDocument> htmlDocument =
+    do_QueryInterface(aContent->GetUncomposedDoc());
 
   KeyAppendInt(partID, aKey);  // first append a partID
   bool generatedUniqueKey = false;
@@ -2463,7 +2465,7 @@ nsContentUtils::GenerateStateKey(nsIContent* aContent,
     // If this becomes unnecessary and the following line is removed,
     // please also remove the corresponding flush operation from
     // nsHtml5TreeBuilderCppSupplement.h. (Look for "See bug 497861." there.)
-    aContent->GetCurrentDoc()->FlushPendingNotifications(Flush_Content);
+    aContent->GetUncomposedDoc()->FlushPendingNotifications(Flush_Content);
 
     nsContentList *htmlForms = htmlDocument->GetForms();
     nsContentList *htmlFormControls = htmlDocument->GetFormControls();
@@ -2847,7 +2849,7 @@ nsContentUtils::SplitExpatName(const char16_t *aExpatName, nsIAtom **aPrefix,
 nsPresContext*
 nsContentUtils::GetContextForContent(const nsIContent* aContent)
 {
-  nsIDocument* doc = aContent->GetCurrentDoc();
+  nsIDocument* doc = aContent->GetComposedDoc();
   if (doc) {
     nsIPresShell *presShell = doc->GetShell();
     if (presShell) {
@@ -4404,7 +4406,7 @@ nsContentUtils::SetNodeTextContent(nsIContent* aContent,
 
   // Might as well stick a batch around this since we're performing several
   // mutations.
-  mozAutoDocUpdate updateBatch(aContent->GetCurrentDoc(),
+  mozAutoDocUpdate updateBatch(aContent->GetComposedDoc(),
     UPDATE_CONTENT_MODEL, true);
   nsAutoMutationBatch mb;
 
@@ -5981,7 +5983,8 @@ nsContentUtils::CreateArrayBuffer(JSContext *aCx, const nsACString& aData,
 
   if (dataLen > 0) {
     NS_ASSERTION(JS_IsArrayBufferObject(*aResult), "What happened?");
-    memcpy(JS_GetArrayBufferData(*aResult), aData.BeginReading(), dataLen);
+    JS::AutoCheckCannotGC nogc;
+    memcpy(JS_GetArrayBufferData(*aResult, nogc), aData.BeginReading(), dataLen);
   }
 
   return NS_OK;
@@ -5991,20 +5994,26 @@ nsContentUtils::CreateArrayBuffer(JSContext *aCx, const nsACString& aData,
 // TODO: bug 704447: large file support
 nsresult
 nsContentUtils::CreateBlobBuffer(JSContext* aCx,
+                                 nsISupports* aParent,
                                  const nsACString& aData,
                                  JS::MutableHandle<JS::Value> aBlob)
 {
   uint32_t blobLen = aData.Length();
   void* blobData = moz_malloc(blobLen);
-  nsCOMPtr<nsIDOMBlob> blob;
+  nsRefPtr<File> blob;
   if (blobData) {
     memcpy(blobData, aData.BeginReading(), blobLen);
-    blob = mozilla::dom::DOMFile::CreateMemoryFile(blobData, blobLen,
-                                                   EmptyString());
+    blob = mozilla::dom::File::CreateMemoryFile(aParent, blobData, blobLen,
+                                                EmptyString());
   } else {
     return NS_ERROR_OUT_OF_MEMORY;
   }
-  return nsContentUtils::WrapNative(aCx, blob, aBlob);
+
+  if (!WrapNewBindingObject(aCx, blob, aBlob)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return NS_OK;
 }
 
 void
@@ -6104,7 +6113,9 @@ nsContentUtils::IsFocusedContent(const nsIContent* aContent)
 bool
 nsContentUtils::IsSubDocumentTabbable(nsIContent* aContent)
 {
-  nsIDocument* doc = aContent->GetCurrentDoc();
+  //XXXsmaug Shadow DOM spec issue!
+  //         We may need to change this to GetComposedDoc().
+  nsIDocument* doc = aContent->GetUncomposedDoc();
   if (!doc) {
     return false;
   }

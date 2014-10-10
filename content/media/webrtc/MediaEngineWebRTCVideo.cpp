@@ -943,11 +943,11 @@ MediaEngineWebRTCVideoSource::OnTakePictureComplete(uint8_t* aData, uint32_t aLe
 
     NS_IMETHOD Run()
     {
-      nsRefPtr<dom::DOMFile> blob =
-        dom::DOMFile::CreateMemoryFile(mPhoto.Elements(), mPhoto.Length(), mMimeType);
+      nsRefPtr<dom::File> blob =
+        dom::File::CreateMemoryFile(nullptr, mPhoto.Elements(), mPhoto.Length(), mMimeType);
       uint32_t callbackCounts = mCallbacks.Length();
       for (uint8_t i = 0; i < callbackCounts; i++) {
-        nsRefPtr<dom::DOMFile> tempBlob = blob;
+        nsRefPtr<dom::File> tempBlob = blob;
         mCallbacks[i]->PhotoComplete(tempBlob.forget());
       }
       // PhotoCallback needs to dereference on main thread.
@@ -974,6 +974,8 @@ uint32_t
 MediaEngineWebRTCVideoSource::ConvertPixelFormatToFOURCC(int aFormat)
 {
   switch (aFormat) {
+  case HAL_PIXEL_FORMAT_RGBA_8888:
+    return libyuv::FOURCC_BGRA;
   case HAL_PIXEL_FORMAT_YCrCb_420_SP:
     return libyuv::FOURCC_NV21;
   case HAL_PIXEL_FORMAT_YV12:

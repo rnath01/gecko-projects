@@ -23,7 +23,7 @@
 #include "jsobjinlines.h"
 
 #include "gc/ForkJoinNursery-inl.h"
-#include "vm/ObjectImpl-inl.h"
+#include "vm/NativeObject-inl.h"
 #include "vm/Runtime-inl.h"
 
 using namespace js;
@@ -1344,7 +1344,7 @@ JSObject::preventExtensions(JSContext *cx, HandleObject obj)
      * properties.
      */
     AutoIdVector props(cx);
-    if (!js::GetPropertyNames(cx, obj, JSITER_HIDDEN | JSITER_OWNONLY, &props))
+    if (!js::GetPropertyKeys(cx, obj, JSITER_HIDDEN | JSITER_OWNONLY, &props))
         return false;
 
     /*
@@ -1530,9 +1530,9 @@ JSCompartment::sweepBaseShapeTable()
     if (baseShapes.initialized()) {
         for (BaseShapeSet::Enum e(baseShapes); !e.empty(); e.popFront()) {
             UnownedBaseShape *base = e.front().unbarrieredGet();
-            if (IsBaseShapeAboutToBeFinalized(&base)) {
+            if (IsBaseShapeAboutToBeFinalizedFromAnyThread(&base)) {
                 e.removeFront();
-            } else if (base != e.front()) {
+            } else if (base != e.front().unbarrieredGet()) {
                 StackBaseShape sbase(base);
                 ReadBarriered<UnownedBaseShape *> b(base);
                 e.rekeyFront(&sbase, b);
@@ -1826,14 +1826,14 @@ JSCompartment::sweepInitialShapeTable()
             const InitialShapeEntry &entry = e.front();
             Shape *shape = entry.shape.unbarrieredGet();
             JSObject *proto = entry.proto.raw();
-            if (IsShapeAboutToBeFinalized(&shape) ||
-                (entry.proto.isObject() && IsObjectAboutToBeFinalized(&proto)))
+            if (IsShapeAboutToBeFinalizedFromAnyThread(&shape) ||
+                (entry.proto.isObject() && IsObjectAboutToBeFinalizedFromAnyThread(&proto)))
             {
                 e.removeFront();
             } else {
 #ifdef DEBUG
                 DebugOnly<JSObject *> parent = shape->getObjectParent();
-                MOZ_ASSERT(!parent || !IsObjectAboutToBeFinalized(&parent));
+                MOZ_ASSERT(!parent || !IsObjectAboutToBeFinalizedFromAnyThread(&parent));
                 MOZ_ASSERT(parent == shape->getObjectParent());
 #endif
                 if (shape != entry.shape.unbarrieredGet() || proto != entry.proto.raw()) {
