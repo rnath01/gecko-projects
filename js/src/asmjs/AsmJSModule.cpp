@@ -81,6 +81,7 @@ AsmJSModule::AsmJSModule(ScriptSource *scriptSource, uint32_t srcStart, uint32_t
     dynamicallyLinked_(false),
     loadedFromCache_(false),
     profilingEnabled_(false),
+    interrupted_(false),
     codeIsProtected_(false)
 {
     mozilla::PodZero(&pod);
@@ -95,6 +96,8 @@ AsmJSModule::AsmJSModule(ScriptSource *scriptSource, uint32_t srcStart, uint32_t
 
 AsmJSModule::~AsmJSModule()
 {
+    MOZ_ASSERT(!interrupted_);
+
     scriptSource_->decref();
 
     if (code_) {
@@ -446,8 +449,11 @@ AsmJSReportOverRecursed()
 static bool
 AsmJSHandleExecutionInterrupt()
 {
-    JSContext *cx = PerThreadData::innermostAsmJSActivation()->cx();
-    return HandleExecutionInterrupt(cx);
+    AsmJSActivation *act = PerThreadData::innermostAsmJSActivation();
+    act->module().setInterrupted(true);
+    bool ret = HandleExecutionInterrupt(act->cx());
+    act->module().setInterrupted(false);
+    return ret;
 }
 
 static int32_t
@@ -725,6 +731,8 @@ AsmJSModule::staticallyLink(ExclusiveContext *cx)
 void
 AsmJSModule::initHeap(Handle<ArrayBufferObjectMaybeShared *> heap, JSContext *cx)
 {
+    MOZ_ASSERT_IF(heap->is<ArrayBufferObject>(),
+                  heap->as<ArrayBufferObject>().isAsmJSArrayBuffer());
     MOZ_ASSERT(IsValidAsmJSHeapLength(heap->byteLength()));
     MOZ_ASSERT(dynamicallyLinked_);
     MOZ_ASSERT(!maybeHeap_);
@@ -766,6 +774,7 @@ AsmJSModule::initHeap(Handle<ArrayBufferObjectMaybeShared *> heap, JSContext *cx
 #endif
 }
 
+// This method assumes the caller has a live AutoUnprotectCode.
 void
 AsmJSModule::restoreHeapToInitialState(ArrayBufferObjectMaybeShared *maybePrevBuffer)
 {
@@ -787,6 +796,7 @@ AsmJSModule::restoreHeapToInitialState(ArrayBufferObjectMaybeShared *maybePrevBu
     heapDatum() = nullptr;
 }
 
+// This method assumes the caller has a live AutoUnprotectCode.
 void
 AsmJSModule::restoreToInitialState(ArrayBufferObjectMaybeShared *maybePrevBuffer,
                                    uint8_t *prevCode,
@@ -1544,17 +1554,18 @@ AsmJSModule::clone(JSContext *cx, ScopedJSDeletePtr<AsmJSModule> *moduleOut) con
 }
 
 bool
-AsmJSModule::changeHeap(Handle<ArrayBufferObject*> newBuffer, JSContext *cx)
+AsmJSModule::changeHeap(Handle<ArrayBufferObject*> newHeap, JSContext *cx)
 {
-    uint32_t heapLength = newBuffer->byteLength();
-    if (heapLength & pod.heapLengthMask_ || heapLength < pod.minHeapLength_)
+    // Content JS should not be able to run (and change heap) from within an
+    // interrupt callback, but in case it does, fail to change heap. Otherwise,
+    // the heap can change at every single instruction which would prevent
+    // future optimizations like heap-base hoisting.
+    if (interrupted_)
         return false;
 
-    MOZ_ASSERT(IsValidAsmJSHeapLength(heapLength));
-    MOZ_ASSERT(!IsDeprecatedAsmJSHeapLength(heapLength));
-
+    AutoUnprotectCode auc(cx, *this);
     restoreHeapToInitialState(maybeHeap_);
-    initHeap(newBuffer, cx);
+    initHeap(newHeap, cx);
     return true;
 }
 
