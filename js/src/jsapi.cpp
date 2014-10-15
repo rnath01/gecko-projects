@@ -91,7 +91,7 @@
 #include "jsscriptinlines.h"
 
 #include "vm/Interpreter-inl.h"
-#include "vm/ObjectImpl-inl.h"
+#include "vm/NativeObject-inl.h"
 #include "vm/String-inl.h"
 
 using namespace js;
@@ -3616,7 +3616,7 @@ JS_Enumerate(JSContext *cx, HandleObject obj)
 
     AutoIdVector props(cx);
     JSIdArray *ida;
-    if (!GetPropertyNames(cx, obj, JSITER_OWNONLY, &props) || !VectorToIdArray(cx, props, &ida))
+    if (!GetPropertyKeys(cx, obj, JSITER_OWNONLY, &props) || !VectorToIdArray(cx, props, &ida))
         return nullptr;
     return ida;
 }
@@ -3691,7 +3691,8 @@ JS_NewPropertyIterator(JSContext *cx, HandleObject obj)
     CHECK_REQUEST(cx);
     assertSameCompartment(cx, obj);
 
-    NativeObject *iterobj = NewNativeObjectWithClassProto(cx, &prop_iter_class, nullptr, obj);
+    RootedNativeObject iterobj(cx, NewNativeObjectWithClassProto(cx, &prop_iter_class,
+                                                                 nullptr, obj));
     if (!iterobj)
         return nullptr;
 
@@ -4590,6 +4591,36 @@ JS_GetGlobalFromScript(JSScript *script)
 {
     MOZ_ASSERT(!script->isCachedEval());
     return &script->global();
+}
+
+JS_PUBLIC_API(const char *)
+JS_GetScriptFilename(JSScript *script)
+{
+    // This is called from ThreadStackHelper which can be called from another
+    // thread or inside a signal hander, so we need to be careful in case a
+    // copmacting GC is currently moving things around.
+    return script->maybeForwardedFilename();
+}
+
+JS_PUBLIC_API(unsigned)
+JS_GetScriptBaseLineNumber(JSContext *cx, JSScript *script)
+{
+    return script->lineno();
+}
+
+JS_PUBLIC_API(JSScript *)
+JS_GetFunctionScript(JSContext *cx, HandleFunction fun)
+{
+    if (fun->isNative())
+        return nullptr;
+    if (fun->isInterpretedLazy()) {
+        AutoCompartment funCompartment(cx, fun);
+        JSScript *script = fun->getOrCreateScript(cx);
+        if (!script)
+            MOZ_CRASH();
+        return script;
+    }
+    return fun->nonLazyScript();
 }
 
 JS_PUBLIC_API(bool)

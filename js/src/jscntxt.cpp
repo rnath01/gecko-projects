@@ -41,7 +41,6 @@
 #include "gc/Marking.h"
 #include "jit/Ion.h"
 #include "js/CharacterEncoding.h"
-#include "js/OldDebugAPI.h"
 #include "vm/Debugger.h"
 #include "vm/HelperThreads.h"
 #include "vm/Shape.h"
@@ -101,8 +100,9 @@ JSCompartment::sweepCallsiteClones()
     if (callsiteClones.initialized()) {
         for (CallsiteCloneTable::Enum e(callsiteClones); !e.empty(); e.popFront()) {
             CallsiteCloneKey key = e.front().key();
-            if (IsObjectAboutToBeFinalized(&key.original) || IsScriptAboutToBeFinalized(&key.script) ||
-                IsObjectAboutToBeFinalized(e.front().value().unsafeGet()))
+            if (IsObjectAboutToBeFinalizedFromAnyThread(&key.original) ||
+                IsScriptAboutToBeFinalizedFromAnyThread(&key.script) ||
+                IsObjectAboutToBeFinalizedFromAnyThread(e.front().value().unsafeGet()))
             {
                 e.removeFront();
             } else if (key != e.front().key()) {

@@ -77,6 +77,11 @@ private:
   void SetVisibility(bool aVisible);
 
   /**
+   * Helper function to get caret's focus frame and caret's bounding rect.
+   */
+  nsIFrame* GetCaretFocusFrame(nsRect* aOutRect = nullptr);
+
+  /**
    * Find the nsCanvasFrame which holds the touch caret.
    */
   nsIFrame* GetCanvasFrame();
@@ -205,6 +210,11 @@ private:
   void SetState(TouchCaretState aState);
 
   /**
+   * Dispatch touch caret tap event to chrome.
+   */
+  void DispatchTapEvent();
+
+  /**
    * Current state we're dealing with.
    */
   TouchCaretState mState;
@@ -244,6 +254,8 @@ private:
 
   // Touch caret visibility
   bool mVisible;
+  // Use for detecting single tap on touch caret.
+  bool mIsValidTap;
   // Touch caret timer
   nsCOMPtr<nsITimer> mTouchCaretExpirationTimer;
 

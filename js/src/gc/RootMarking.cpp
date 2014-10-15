@@ -12,7 +12,6 @@
 
 #include "jscntxt.h"
 #include "jsgc.h"
-#include "jsonparser.h"
 #include "jsprf.h"
 #include "jstypes.h"
 #include "jswatchpoint.h"
@@ -25,6 +24,7 @@
 #include "jit/IonMacroAssembler.h"
 #include "js/HashTable.h"
 #include "vm/Debugger.h"
+#include "vm/JSONParser.h"
 #include "vm/PropDesc.h"
 
 #include "jsgcinlines.h"
@@ -357,7 +357,14 @@ StackShape::trace(JSTracer *trc)
 {
     if (base)
         MarkBaseShapeRoot(trc, (BaseShape**) &base, "StackShape base");
+
     MarkIdRoot(trc, (jsid*) &propid, "StackShape id");
+
+    if ((attrs & JSPROP_GETTER) && rawGetter)
+        MarkObjectRoot(trc, (JSObject**)&rawGetter, "StackShape getter");
+
+    if ((attrs & JSPROP_SETTER) && rawSetter)
+        MarkObjectRoot(trc, (JSObject**)&rawSetter, "StackShape setter");
 }
 
 void

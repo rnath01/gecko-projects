@@ -13,9 +13,33 @@ loop.contacts = (function(_, mozL10n) {
 
   const Button = loop.shared.views.Button;
   const ButtonGroup = loop.shared.views.ButtonGroup;
+  const CALL_TYPES = loop.shared.utils.CALL_TYPES;
 
   // Number of contacts to add to the list at the same time.
   const CONTACTS_CHUNK_SIZE = 100;
+
+  // At least this number of contacts should be present for the filter to appear.
+  const MIN_CONTACTS_FOR_FILTERING = 7;
+
+  let getContactNames = function(contact) {
+    // The model currently does not enforce a name to be present, but we're
+    // going to assume it is awaiting more advanced validation of required fields
+    // by the model. (See bug 1069918)
+    // NOTE: this method of finding a firstname and lastname is not i18n-proof.
+    let names = contact.name[0].split(" ");
+    return {
+      firstName: names.shift(),
+      lastName: names.join(" ")
+    };
+  };
+
+  let getPreferredEmail = function(contact) {
+    // A contact may not contain email addresses, but only a phone number.
+    if (!contact.email || contact.email.length == 0) {
+      return { value: "" };
+    }
+    return contact.email.find(e => e.pref) || contact.email[0];
+  };
 
   const ContactDropdown = React.createClass({
     propTypes: {
@@ -62,14 +86,12 @@ loop.contacts = (function(_, mozL10n) {
       return (
         <ul className={cx({ "dropdown-menu": true,
                             "dropdown-menu-up": this.state.openDirUp })}>
-          <li className={cx({ "dropdown-menu-item": true,
-                              "disabled": true })}
+          <li className={cx({ "dropdown-menu-item": true })}
               onClick={this.onItemClick} data-action="video-call">
             <i className="icon icon-video-call" />
             {mozL10n.get("video_call_menu_button")}
           </li>
-          <li className={cx({ "dropdown-menu-item": true,
-                              "disabled": true })}
+          <li className={cx({ "dropdown-menu-item": true })}
               onClick={this.onItemClick} data-action="audio-call">
             <i className="icon icon-audio-call" />
             {mozL10n.get("audio_call_menu_button")}
@@ -131,13 +153,14 @@ loop.contacts = (function(_, mozL10n) {
       document.body.removeEventListener("click", this._onBodyClick);
     },
 
-    componentShouldUpdate: function(nextProps, nextState) {
+    shouldComponentUpdate: function(nextProps, nextState) {
       let currContact = this.props.contact;
       let nextContact = nextProps.contact;
       return (
         currContact.name[0] !== nextContact.name[0] ||
         currContact.blocked !== nextContact.blocked ||
-        this.getPreferredEmail(currContact).value !== this.getPreferredEmail(nextContact).value
+        getPreferredEmail(currContact).value !== getPreferredEmail(nextContact).value ||
+        nextState.showMenu !== this.state.showMenu
       );
     },
 
@@ -147,34 +170,6 @@ loop.contacts = (function(_, mozL10n) {
       }
     },
 
-    getContactNames: function() {
-      // The model currently does not enforce a name to be present, but we're
-      // going to assume it is awaiting more advanced validation of required fields
-      // by the model. (See bug 1069918)
-      // NOTE: this method of finding a firstname and lastname is not i18n-proof.
-      let names = this.props.contact.name[0].split(" ");
-      return {
-        firstName: names.shift(),
-        lastName: names.join(" ")
-      };
-    },
-
-    getPreferredEmail: function(contact = this.props.contact) {
-      let email;
-      // A contact may not contain email addresses, but only a phone number instead.
-      if (contact.email) {
-        email = contact.email[0];
-        contact.email.some(function(address) {
-          if (address.pref) {
-            email = address;
-            return true;
-          }
-          return false;
-        });
-      }
-      return email || { value: "" };
-    },
-
     canEdit: function() {
       // We cannot modify imported contacts.  For the moment, the check for
       // determining whether the contact is imported is based on its category.
@@ -182,8 +177,8 @@ loop.contacts = (function(_, mozL10n) {
     },
 
     render: function() {
-      let names = this.getContactNames();
-      let email = this.getPreferredEmail();
+      let names = getContactNames(this.props.contact);
+      let email = getPreferredEmail(this.props.contact);
       let cx = React.addons.classSet;
       let contactCSSClass = cx({
         contact: true,
@@ -218,19 +213,34 @@ loop.contacts = (function(_, mozL10n) {
   });
 
   const ContactsList = React.createClass({
+    mixins: [React.addons.LinkedStateMixin],
+
+    /**
+     * Contacts collection object
+     */
+    contacts: null,
+
+    /**
+     * User profile
+     */
+    _userProfile: null,
+
     getInitialState: function() {
       return {
-        contacts: {},
-        importBusy: false
+        importBusy: false,
+        filter: "",
       };
     },
 
-    componentDidMount: function() {
+    refresh: function(callback = function() {}) {
       let contactsAPI = navigator.mozLoop.contacts;
+
+      this.handleContactRemoveAll();
 
       contactsAPI.getAll((err, contacts) => {
         if (err) {
-          throw err;
+          callback(err);
+          return;
         }
 
         // Add contacts already present in the DB. We do this in timed chunks to
@@ -241,11 +251,32 @@ loop.contacts = (function(_, mozL10n) {
           });
           if (contacts.length) {
             setTimeout(addContactsInChunks, 0);
+          } else {
+            callback();
           }
           this.forceUpdate();
         };
 
         addContactsInChunks(contacts);
+      });
+    },
+
+    componentWillMount: function() {
+      // Take the time to initialize class variables that are used outside
+      // `this.state`.
+      this.contacts = {};
+      this._userProfile = navigator.mozLoop.userProfile;
+    },
+
+    componentDidMount: function() {
+      window.addEventListener("LoopStatusChanged", this._onStatusChanged);
+
+      this.refresh(err => {
+        if (err) {
+          throw err;
+        }
+
+        let contactsAPI = navigator.mozLoop.contacts;
 
         // Listen for contact changes/ updates.
         contactsAPI.on("add", (eventName, contact) => {
@@ -263,8 +294,24 @@ loop.contacts = (function(_, mozL10n) {
       });
     },
 
+    componentWillUnmount: function() {
+      window.removeEventListener("LoopStatusChanged", this._onStatusChanged);
+    },
+
+    _onStatusChanged: function() {
+      let profile = navigator.mozLoop.userProfile;
+      let currUid = this._userProfile ? this._userProfile.uid : null;
+      let newUid = profile ? profile.uid : null;
+      if (currUid != newUid) {
+        // On profile change (login, logout), reload all contacts.
+        this._userProfile = profile;
+        // The following will do a forceUpdate() for us.
+        this.refresh();
+      }
+    },
+
     handleContactAddOrUpdate: function(contact, render = true) {
-      let contacts = this.state.contacts;
+      let contacts = this.contacts;
       let guid = String(contact._guid);
       contacts[guid] = contact;
       if (render) {
@@ -273,7 +320,7 @@ loop.contacts = (function(_, mozL10n) {
     },
 
     handleContactRemove: function(contact) {
-      let contacts = this.state.contacts;
+      let contacts = this.contacts;
       let guid = String(contact._guid);
       if (!contacts[guid]) {
         return;
@@ -283,7 +330,9 @@ loop.contacts = (function(_, mozL10n) {
     },
 
     handleContactRemoveAll: function() {
-      this.setState({contacts: {}});
+      // Do not allow any race conditions when removing all contacts.
+      this.contacts = {};
+      this.forceUpdate();
     },
 
     handleImportButtonClick: function() {
@@ -309,6 +358,26 @@ loop.contacts = (function(_, mozL10n) {
           this.props.startForm("contacts_edit", contact);
           break;
         case "remove":
+          navigator.mozLoop.confirm(
+            mozL10n.get("confirm_delete_contact_alert"),
+            mozL10n.get("confirm_delete_contact_remove_button"),
+            mozL10n.get("confirm_delete_contact_cancel_button"),
+            (err, result) => {
+              if (err) {
+                throw err;
+              }
+
+              if (!result) {
+                return;
+              }
+
+              navigator.mozLoop.contacts.remove(contact._guid, err => {
+                if (err) {
+                  throw err;
+                }
+              });
+            });
+          break;
         case "block":
         case "unblock":
           // Invoke the API named like the action.
@@ -317,6 +386,12 @@ loop.contacts = (function(_, mozL10n) {
               throw err;
             }
           });
+          break;
+        case "video-call":
+          navigator.mozLoop.startDirectCall(contact, CALL_TYPES.AUDIO_VIDEO);
+          break;
+        case "audio-call":
+          navigator.mozLoop.startDirectCall(contact, CALL_TYPES.AUDIO_ONLY);
           break;
         default:
           console.error("Unrecognized action: " + actionName);
@@ -340,9 +415,27 @@ loop.contacts = (function(_, mozL10n) {
                               handleContactAction={this.handleContactAction} />
       };
 
-      let shownContacts = _.groupBy(this.state.contacts, function(contact) {
+      let shownContacts = _.groupBy(this.contacts, function(contact) {
         return contact.blocked ? "blocked" : "available";
       });
+
+      let showFilter = Object.getOwnPropertyNames(this.contacts).length >=
+                       MIN_CONTACTS_FOR_FILTERING;
+      if (showFilter) {
+        let filter = this.state.filter.trim().toLocaleLowerCase();
+        if (filter) {
+          let filterFn = contact => {
+            return contact.name[0].toLocaleLowerCase().contains(filter) ||
+                   getPreferredEmail(contact).value.toLocaleLowerCase().contains(filter);
+          };
+          if (shownContacts.available) {
+            shownContacts.available = shownContacts.available.filter(filterFn);
+          }
+          if (shownContacts.blocked) {
+            shownContacts.blocked = shownContacts.blocked.filter(filterFn);
+          }
+        }
+      }
 
       // TODO: bug 1076767 - add a spinner whilst importing contacts.
       return (
@@ -357,12 +450,17 @@ loop.contacts = (function(_, mozL10n) {
               <Button caption={mozL10n.get("new_contact_button")}
                       onClick={this.handleAddContactButtonClick} />
             </ButtonGroup>
+            {showFilter ?
+            <input className="contact-filter"
+                   placeholder={mozL10n.get("contacts_search_placesholder")}
+                   valueLink={this.linkState("filter")} />
+            : null }
           </div>
           <ul className="contact-list">
             {shownContacts.available ?
               shownContacts.available.sort(this.sortContacts).map(viewForItem) :
               null}
-            {shownContacts.blocked ?
+            {shownContacts.blocked && shownContacts.blocked.length > 0 ?
               <div className="contact-separator">{mozL10n.get("contacts_blocked_contacts")}</div> :
               null}
             {shownContacts.blocked ?

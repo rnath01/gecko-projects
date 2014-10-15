@@ -89,13 +89,13 @@ this.MockFilePicker = {
   useAnyFile: function() {
     var file = FileUtils.getDir("TmpD", [], false);
     file.append("testfile");
-    file.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, 0644);
+    file.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, 0o644);
     this.returnFiles = [file];
   },
 
   useBlobFile: function() {
     var blob = new this.window.Blob([]);
-    var file = new this.window.File(blob, { name: 'helloworld.txt', type: 'plain/text' });
+    var file = new this.window.File([blob], 'helloworld.txt', { type: 'plain/text' });
     this.returnFiles = [file];
   },
 

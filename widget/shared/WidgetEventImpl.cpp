@@ -122,6 +122,10 @@ WidgetEvent::HasKeyEventMessage() const
     case NS_KEY_DOWN:
     case NS_KEY_PRESS:
     case NS_KEY_UP:
+    case NS_KEY_BEFORE_DOWN:
+    case NS_KEY_BEFORE_UP:
+    case NS_KEY_AFTER_DOWN:
+    case NS_KEY_AFTER_UP:
       return true;
     default:
       return false;
@@ -132,10 +136,10 @@ bool
 WidgetEvent::HasIMEEventMessage() const
 {
   switch (message) {
-    case NS_TEXT_TEXT:
     case NS_COMPOSITION_START:
     case NS_COMPOSITION_END:
     case NS_COMPOSITION_UPDATE:
+    case NS_COMPOSITION_CHANGE:
       return true;
     default:
       return false;

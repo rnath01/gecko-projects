@@ -15,6 +15,7 @@ loop.conversation = (function(mozL10n) {
   var sharedMixins = loop.shared.mixins;
   var sharedModels = loop.shared.models;
   var OutgoingConversationView = loop.conversationViews.OutgoingConversationView;
+  var CallIdentifierView = loop.conversationViews.CallIdentifierView;
 
   var IncomingCallView = React.createClass({displayName: 'IncomingCallView',
     mixins: [sharedMixins.DropdownMenuMixin],
@@ -94,9 +95,14 @@ loop.conversation = (function(mozL10n) {
         "conversation-window-dropdown": true,
         "visually-hidden": !this.state.showMenu
       });
+
       return (
         React.DOM.div({className: "call-window"}, 
-          React.DOM.h2(null, mozL10n.get("incoming_call_title2")), 
+          CallIdentifierView({video: this.props.video, 
+            peerIdentifier: this.props.model.getCallIdentifier(), 
+            urlCreationDate: this.props.model.get("urlCreationDate"), 
+            showIcons: true}), 
+
           React.DOM.div({className: "btn-group call-action-group"}, 
 
             React.DOM.div({className: "fx-embedded-call-button-spacer"}), 
@@ -229,8 +235,7 @@ loop.conversation = (function(mozL10n) {
           );
         }
         case "connected": {
-          // XXX This should be the caller id (bug 1020449)
-          document.title = mozL10n.get("incoming_call_title2");
+          document.title = this.props.conversation.getCallIdentifier();
 
           var callType = this.props.conversation.get("selectedCallType");
 
@@ -386,7 +391,8 @@ loop.conversation = (function(mozL10n) {
       if (progressData.state !== "terminated")
         return;
 
-      if (progressData.reason === "cancel") {
+      if (progressData.reason === "cancel" ||
+          progressData.reason === "closed") {
         this._abortIncomingCall();
         return;
       }
@@ -540,14 +546,16 @@ loop.conversation = (function(mozL10n) {
 
     var dispatcher = new loop.Dispatcher();
     var client = new loop.Client();
-    var conversationStore = new loop.store.ConversationStore({}, {
-      client: client,
-      dispatcher: dispatcher
+    var sdkDriver = new loop.OTSdkDriver({
+      dispatcher: dispatcher,
+      sdk: OT
     });
 
-    // XXX For now key this on the pref, but this should really be
-    // set by the information from the mozLoop API when we can get it (bug 1072323).
-    var outgoingEmail = navigator.mozLoop.getLoopCharPref("outgoingemail");
+    var conversationStore = new loop.store.ConversationStore({}, {
+      client: client,
+      dispatcher: dispatcher,
+      sdkDriver: sdkDriver
+    });
 
     // XXX Old class creation for the incoming conversation view, whilst
     // we transition across (bug 1072323).
@@ -560,14 +568,25 @@ loop.conversation = (function(mozL10n) {
     var helper = new loop.shared.utils.Helper();
     var locationHash = helper.locationHash();
     var callId;
-    if (locationHash) {
-      callId = locationHash.match(/\#incoming\/(.*)/)[1]
-      conversation.set("callId", callId);
+    var outgoing;
+
+    var hash = locationHash.match(/\#incoming\/(.*)/);
+    if (hash) {
+      callId = hash[1];
+      outgoing = false;
+    } else {
+      hash = locationHash.match(/\#outgoing\/(.*)/);
+      if (hash) {
+        callId = hash[1];
+        outgoing = true;
+      }
     }
+
+    conversation.set({callId: callId});
 
     window.addEventListener("unload", function(event) {
       // Handle direct close of dialog box via [x] control.
-      navigator.mozLoop.releaseCallData(conversation.get("callId"));
+      navigator.mozLoop.releaseCallData(callId);
     });
 
     document.body.classList.add(loop.shared.utils.getTargetPlatform());
@@ -582,7 +601,7 @@ loop.conversation = (function(mozL10n) {
 
     dispatcher.dispatch(new loop.shared.actions.GatherCallData({
       callId: callId,
-      calleeId: outgoingEmail
+      outgoing: outgoing
     }));
   }
 

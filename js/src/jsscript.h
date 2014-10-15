@@ -22,7 +22,7 @@
 #include "gc/Rooting.h"
 #include "jit/IonCode.h"
 #include "js/UbiNode.h"
-#include "vm/ObjectImpl.h"
+#include "vm/NativeObject.h"
 #include "vm/Shape.h"
 
 namespace JS {
@@ -1230,12 +1230,12 @@ class JSScript : public js::gc::TenuredCell
     /*
      * As an optimization, even when argsHasLocalBinding, the function prologue
      * may not need to create an arguments object. This is determined by
-     * needsArgsObj which is set by AnalyzeArgumentsUsage before running
-     * the script the first time. When !needsArgsObj, the prologue may simply
-     * write MagicValue(JS_OPTIMIZED_ARGUMENTS) to 'arguments's slot and any
-     * uses of 'arguments' will be guaranteed to handle this magic value.
-     * So avoid spurious arguments object creation, we maintain the invariant
-     * that needsArgsObj is only called after the script has been analyzed.
+     * needsArgsObj which is set by AnalyzeArgumentsUsage. When !needsArgsObj,
+     * the prologue may simply write MagicValue(JS_OPTIMIZED_ARGUMENTS) to
+     * 'arguments's slot and any uses of 'arguments' will be guaranteed to
+     * handle this magic value. To avoid spurious arguments object creation, we
+     * maintain the invariant that needsArgsObj is only called after the script
+     * has been analyzed.
      */
     bool analyzedArgsUsage() const { return !needsArgsAnalysis_; }
     inline bool ensureHasAnalyzedArgsUsage(JSContext *cx);

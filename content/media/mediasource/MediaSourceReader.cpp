@@ -329,6 +329,9 @@ MediaSourceReader::CreateSubDecoder(const nsACString& aType)
   MSE_DEBUG("MediaSourceReader(%p)::CreateSubDecoder subdecoder %p subreader %p",
             this, decoder.get(), reader.get());
   decoder->SetReader(reader);
+#ifdef MOZ_EME
+  decoder->SetCDMProxy(mCDMProxy);
+#endif
   return decoder.forget();
 }
 
@@ -370,25 +373,6 @@ MediaSourceReader::OnTrackBufferConfigured(TrackBuffer* aTrackBuffer, const Medi
   }
   mDecoder->NotifyWaitingForResourcesStatusChanged();
 }
-
-class ChangeToHaveMetadata : public nsRunnable {
-public:
-  explicit ChangeToHaveMetadata(AbstractMediaDecoder* aDecoder) :
-    mDecoder(aDecoder)
-  {
-  }
-
-  NS_IMETHOD Run() MOZ_OVERRIDE MOZ_FINAL {
-    auto owner = mDecoder->GetOwner();
-    if (owner) {
-      owner->UpdateReadyStateForData(MediaDecoderOwner::NEXT_FRAME_WAIT_FOR_MSE_DATA);
-    }
-    return NS_OK;
-  }
-
-private:
-  nsRefPtr<AbstractMediaDecoder> mDecoder;
-};
 
 void
 MediaSourceReader::WaitForTimeRange(int64_t aTime)
@@ -433,11 +417,6 @@ MediaSourceReader::Seek(int64_t aTime, int64_t aStartTime, int64_t aEndTime,
   // Decoding discontinuity upon seek, reset last times to seek target.
   mLastAudioTime = aTime;
   mLastVideoTime = aTime;
-
-  if (!TrackBuffersContainTime(aTime)) {
-    MSE_DEBUG("MediaSourceReader(%p)::Seek no active buffer contains target=%lld", this, aTime);
-    NS_DispatchToMainThread(new ChangeToHaveMetadata(mDecoder));
-  }
 
   WaitForTimeRange(aTime);
 
@@ -538,5 +517,21 @@ MediaSourceReader::IsEnded()
   ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
   return mEnded;
 }
+
+#ifdef MOZ_EME
+nsresult
+MediaSourceReader::SetCDMProxy(CDMProxy* aProxy)
+{
+  ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+
+  mCDMProxy = aProxy;
+  for (size_t i = 0; i < mTrackBuffers.Length(); i++) {
+    nsresult rv = mTrackBuffers[i]->SetCDMProxy(aProxy);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  return NS_OK;
+}
+#endif
 
 } // namespace mozilla

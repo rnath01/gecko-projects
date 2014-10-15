@@ -190,6 +190,12 @@ using namespace mozilla::gfx;
 using namespace mozilla::layers;
 using namespace mozilla::widget;
 
+namespace mozilla {
+namespace widget {
+  extern int32_t IsTouchDeviceSupportPresent();
+}
+}
+
 /**************************************************************
  **************************************************************
  **
@@ -3611,7 +3617,7 @@ nsWindow::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries)
 uint32_t
 nsWindow::GetMaxTouchPoints() const
 {
-  if (IsWin7OrLater()) {
+  if (IsWin7OrLater() && IsTouchDeviceSupportPresent()) {
     return GetSystemMetrics(SM_MAXIMUMTOUCHES);
   }
   return 0;
@@ -4333,7 +4339,7 @@ inline static mozilla::HangMonitor::ActivityType ActivityTypeForMessage(UINT msg
 // and http://msdn.microsoft.com/en-us/library/ms633573%28VS.85%29.aspx
 LRESULT CALLBACK nsWindow::WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-  MOZ_RELEASE_ASSERT(!ipc::ProcessingUrgentMessages());
+  MOZ_RELEASE_ASSERT(!ipc::ParentProcessIsBlocked());
 
   HangMonitor::NotifyActivity(ActivityTypeForMessage(msg));
 

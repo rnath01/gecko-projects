@@ -2725,6 +2725,13 @@ RilObject.prototype = {
   queryCallBarringStatus: function(options) {
     options.facility = CALL_BARRING_PROGRAM_TO_FACILITY[options.program];
     options.password = ""; // For query no need to provide it.
+
+    // For some operators, querying specific serviceClass doesn't work. We use
+    // serviceClass 0 instead, and then process the response to extract the
+    // answer for queryServiceClass.
+    options.queryServiceClass = options.serviceClass;
+    options.serviceClass = 0;
+
     this.queryICCFacilityLock(options);
   },
 
@@ -4121,10 +4128,8 @@ RilObject.prototype = {
     // can be removed if is the same as the current one.
     for each (let newDataCall in datacalls) {
       if (newDataCall.status != DATACALL_FAIL_NONE) {
-        if (newDataCallOptions) {
-          newDataCall.apn = newDataCallOptions.apn;
-        }
-        this._sendDataCallError(newDataCall, newDataCall.status);
+        this._sendDataCallError(newDataCallOptions || newDataCall,
+                                newDataCall.status);
       }
     }
 
@@ -5930,20 +5935,23 @@ RilObject.prototype[REQUEST_QUERY_FACILITY_LOCK] = function REQUEST_QUERY_FACILI
     return;
   }
 
-  let services;
-  if (length) {
-    // Buf.readInt32List()[0] for Call Barring is a bit vector of services.
-    services = this.context.Buf.readInt32List()[0];
-  } else {
+  if (!length) {
     options.success = false;
     options.errorMsg = GECKO_ERROR_GENERIC_FAILURE;
     this.sendChromeMessage(options);
     return;
   }
 
-  options.enabled = services === 0 ? false : true;
+  // Buf.readInt32List()[0] for Call Barring is a bit vector of services.
+  let services = this.context.Buf.readInt32List()[0];
 
-  if (options.success && (options.rilMessageType === "sendMMI")) {
+  if (options.queryServiceClass) {
+    options.enabled = (services & options.queryServiceClass) ? true : false;
+  } else {
+    options.enabled = services ? true : false;
+  }
+
+  if (options.rilMessageType === "sendMMI") {
     if (!options.enabled) {
       options.statusMessage = MMI_SM_KS_SERVICE_DISABLED;
     } else {
@@ -6738,7 +6746,14 @@ RilObject.prototype[UNSOLICITED_ON_USSD] = function UNSOLICITED_ON_USSD() {
     this.context.debug("On USSD. Type Code: " + typeCode + " Message: " + message);
   }
 
-  this._ussdSession = (typeCode != "0" && typeCode != "2");
+  let oldSession = this._ussdSession;
+
+  // Per ril.h the USSD session is assumed to persist if the type code is "1".
+  this._ussdSession = typeCode == "1";
+
+  if (!oldSession && !this._ussdSession && !message) {
+    return;
+  }
 
   this.sendChromeMessage({rilMessageType: "ussdreceived",
                           message: message,
@@ -6905,9 +6920,10 @@ RilObject.prototype[UNSOLICITED_CDMA_OTA_PROVISION_STATUS] = function UNSOLICITE
                           status: status});
 };
 RilObject.prototype[UNSOLICITED_CDMA_INFO_REC] = function UNSOLICITED_CDMA_INFO_REC(length) {
-  let record = this.context.CdmaPDUHelper.decodeInformationRecord();
-  record.rilMessageType = "cdma-info-rec-received";
-  this.sendChromeMessage(record);
+  this.sendChromeMessage({
+    rilMessageType: "cdma-info-rec-received",
+    records: this.context.CdmaPDUHelper.decodeInformationRecord()
+  });
 };
 RilObject.prototype[UNSOLICITED_OEM_HOOK_RAW] = null;
 RilObject.prototype[UNSOLICITED_RINGBACK_TONE] = null;
@@ -9972,11 +9988,13 @@ CdmaPDUHelperObject.prototype = {
    */
   decodeInformationRecord: function() {
     let Buf = this.context.Buf;
-    let record = {};
+    let records = [];
     let numOfRecords = Buf.readInt32();
 
     let type;
+    let record;
     for (let i = 0; i < numOfRecords; i++) {
+      record = {};
       type = Buf.readInt32();
 
       switch (type) {
@@ -9984,6 +10002,7 @@ CdmaPDUHelperObject.prototype = {
          * Every type is encaped by ril, except extended display
          */
         case PDU_CDMA_INFO_REC_TYPE_DISPLAY:
+        case PDU_CDMA_INFO_REC_TYPE_EXTENDED_DISPLAY:
           record.display = Buf.readString();
           break;
         case PDU_CDMA_INFO_REC_TYPE_CALLED_PARTY_NUMBER:
@@ -10012,7 +10031,10 @@ CdmaPDUHelperObject.prototype = {
           break;
         case PDU_CDMA_INFO_REC_TYPE_SIGNAL:
           record.signal = {};
-          record.signal.present = Buf.readInt32();
+          if (!Buf.readInt32()) { // Non-zero if signal is present.
+            Buf.seekIncoming(3 * Buf.UINT32_SIZE);
+            continue;
+          }
           record.signal.type = Buf.readInt32();
           record.signal.alertPitch = Buf.readInt32();
           record.signal.signal = Buf.readInt32();
@@ -10030,40 +10052,11 @@ CdmaPDUHelperObject.prototype = {
           record.lineControl = {};
           record.lineControl.polarityIncluded = Buf.readInt32();
           record.lineControl.toggle = Buf.readInt32();
-          record.lineControl.recerse = Buf.readInt32();
+          record.lineControl.reverse = Buf.readInt32();
           record.lineControl.powerDenial = Buf.readInt32();
           break;
-        case PDU_CDMA_INFO_REC_TYPE_EXTENDED_DISPLAY:
-          let length = Buf.readInt32();
-          /*
-           * Extended display is still in format defined in
-           * C.S0005-F v1.0, 3.7.5.16
-           */
-          record.extendedDisplay = {};
-
-          let headerByte = Buf.readInt32();
-          length--;
-          // Based on spec, headerByte must be 0x80 now
-          record.extendedDisplay.indicator = (headerByte >> 7);
-          record.extendedDisplay.type = (headerByte & 0x7F);
-          record.extendedDisplay.records = [];
-
-          while (length > 0) {
-            let display = {};
-
-            display.tag = Buf.readInt32();
-            length--;
-            if (display.tag !== INFO_REC_EXTENDED_DISPLAY_BLANK &&
-                display.tag !== INFO_REC_EXTENDED_DISPLAY_SKIP) {
-              display.content = Buf.readString();
-              length -= (display.content.length + 1);
-            }
-
-            record.extendedDisplay.records.push(display);
-          }
-          break;
         case PDU_CDMA_INFO_REC_TYPE_T53_CLIR:
-          record.cause = Buf.readInt32();
+          record.clirCause = Buf.readInt32();
           break;
         case PDU_CDMA_INFO_REC_TYPE_T53_AUDIO_CONTROL:
           record.audioControl = {};
@@ -10073,11 +10066,13 @@ CdmaPDUHelperObject.prototype = {
         case PDU_CDMA_INFO_REC_TYPE_T53_RELEASE:
           // Fall through
         default:
-          throw new Error("UNSOLICITED_CDMA_INFO_REC(), Unsupported information record type " + record.type + "\n");
+          throw new Error("UNSOLICITED_CDMA_INFO_REC(), Unsupported information record type " + type + "\n");
       }
+
+      records.push(record);
     }
 
-    return record;
+    return records;
   }
 };
 

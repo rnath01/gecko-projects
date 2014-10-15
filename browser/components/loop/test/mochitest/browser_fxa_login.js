@@ -7,11 +7,6 @@
 
 "use strict";
 
-const {
-  gFxAOAuthTokenData,
-  gFxAOAuthProfile,
-} = Cu.import("resource:///modules/loop/MozLoopService.jsm", {});
-
 const BASE_URL = "http://mochi.test:8888/browser/browser/components/loop/test/mochitest/loop_fxa.sjs?";
 
 function* checkFxA401() {
@@ -211,6 +206,8 @@ add_task(function* registrationWithInvalidState() {
   },
   error => {
     is(error.code, 400, "Check error code");
+    checkFxAOAuthTokenData(null);
+    is(MozLoopService.userProfile, null, "Profile should be empty after invalid login");
   });
 });
 
@@ -232,6 +229,8 @@ add_task(function* registrationWith401() {
   },
   error => {
     is(error.code, 401, "Check error code");
+    checkFxAOAuthTokenData(null);
+    is(MozLoopService.userProfile, null, "Profile should be empty after invalid login");
   });
 
   yield checkFxA401();
@@ -321,7 +320,7 @@ add_task(function* loginWithParams401() {
   },
   error => {
     ise(error.code, 401, "Check error code");
-    ise(gFxAOAuthTokenData, null, "Check there is no saved token data");
+    checkFxAOAuthTokenData(null);
   });
 
   yield checkFxA401();
@@ -387,8 +386,46 @@ add_task(function* loginWithRegistration401() {
   },
   error => {
     ise(error.code, 401, "Check error code");
-    ise(gFxAOAuthTokenData, null, "Check there is no saved token data");
+    checkFxAOAuthTokenData(null);
   });
 
   yield checkFxA401();
+});
+
+add_task(function* openFxASettings() {
+  yield resetFxA();
+
+  // Since the default b-c window has a blank tab, open a new non-blank tab to
+  // force switchToTabHavingURI to open a new tab instead of reusing the current
+  // blank tab.
+  gBrowser.selectedTab = gBrowser.addTab(BASE_URL);
+
+  let params = {
+    client_id: "client_id",
+    content_uri: BASE_URL + "/content",
+    oauth_uri: BASE_URL + "/oauth",
+    profile_uri: BASE_URL + "/profile",
+    state: "state",
+    test_error: "token_401",
+  };
+  yield promiseOAuthParamsSetup(BASE_URL, params);
+
+  let deferredTab = Promise.defer();
+  let progressListener = {
+    onLocationChange: function onLocationChange(aBrowser) {
+      gBrowser.removeTabsProgressListener(progressListener);
+      let contentURI = Services.io.newURI(params.content_uri, null, null);
+      is(aBrowser.currentURI.spec, Services.io.newURI("/settings", null, contentURI).spec,
+         "Check settings tab URL");
+      deferredTab.resolve();
+    },
+  };
+  gBrowser.addTabsProgressListener(progressListener);
+
+  MozLoopService.openFxASettings();
+
+  yield deferredTab.promise;
+  while (gBrowser.tabs.length > 1) {
+    gBrowser.removeTab(gBrowser.tabs[1]);
+  }
 });

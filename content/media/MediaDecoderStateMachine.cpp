@@ -1421,11 +1421,21 @@ void MediaDecoderStateMachine::StartWaitForResources()
 void MediaDecoderStateMachine::NotifyWaitingForResourcesStatusChanged()
 {
   AssertCurrentThreadInMonitor();
-  if (mState != DECODER_STATE_WAIT_FOR_RESOURCES ||
-      mReader->IsWaitingMediaResources()) {
+  DECODER_LOG("NotifyWaitingForResourcesStatusChanged");
+  RefPtr<nsIRunnable> task(
+    NS_NewRunnableMethod(this,
+      &MediaDecoderStateMachine::DoNotifyWaitingForResourcesStatusChanged));
+  mDecodeTaskQueue->Dispatch(task);
+}
+
+void MediaDecoderStateMachine::DoNotifyWaitingForResourcesStatusChanged()
+{
+  NS_ASSERTION(OnDecodeThread(), "Should be on decode thread.");
+  ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+  if (mState != DECODER_STATE_WAIT_FOR_RESOURCES) {
     return;
   }
-  DECODER_LOG("NotifyWaitingForResourcesStatusChanged");
+  DECODER_LOG("DoNotifyWaitingForResourcesStatusChanged");
   // The reader is no longer waiting for resources (say a hardware decoder),
   // we can now proceed to decode metadata.
   SetState(DECODER_STATE_DECODING_NONE);
@@ -1909,6 +1919,8 @@ nsresult MediaDecoderStateMachine::DecodeMetadata()
   NS_ASSERTION(OnDecodeThread(), "Should be on decode thread.");
   MOZ_ASSERT(mState == DECODER_STATE_DECODING_METADATA);
   DECODER_LOG("Decoding Media Headers");
+
+  mReader->PreReadMetadata();
 
   if (mReader->IsWaitingMediaResources()) {
     StartWaitForResources();
@@ -2466,8 +2478,8 @@ nsresult MediaDecoderStateMachine::RunStateMachine()
       // will take care of calling MediaDecoder::PlaybackEnded.
       if (mDecoder->GetState() == MediaDecoder::PLAY_STATE_PLAYING &&
           !mDecoder->GetDecodedStream()) {
-        int64_t videoTime = HasVideo() ? mVideoFrameEndTime : 0;
-        int64_t clockTime = std::max(mEndTime, videoTime);
+        int64_t clockTime = std::max(mAudioEndTime, mVideoFrameEndTime);
+        clockTime = std::max(int64_t(0), std::max(clockTime, mEndTime));
         UpdatePlaybackPosition(clockTime);
 
         {
@@ -3131,7 +3143,13 @@ void MediaDecoderStateMachine::OnAudioSinkError()
 
   mAudioCompleted = true;
 
-  // Notify media decoder/element about this error.
+  // Make the best effort to continue playback when there is video.
+  if (HasVideo()) {
+    return;
+  }
+
+  // Otherwise notify media decoder/element about this error for it makes
+  // no sense to play an audio-only file without sound output.
   RefPtr<nsIRunnable> task(
     NS_NewRunnableMethod(this, &MediaDecoderStateMachine::OnDecodeError));
   nsresult rv = mDecodeTaskQueue->Dispatch(task);
