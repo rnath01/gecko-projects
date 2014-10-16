@@ -174,7 +174,6 @@ else
   LIBXUL_DIST="$MOZ_BUILD_ROOT/dist"
   AC_DEFINE(JS_STANDALONE)
 fi
-
 AC_SUBST(JS_STANDALONE)
 BUILDING_JS=1
 AC_SUBST(autoconfmk)
@@ -3441,8 +3440,6 @@ MOZ_ARG_ENABLE_BOOL(oom-breakpoint,
 if test -n "$JS_OOM_BREAKPOINT"; then
     AC_DEFINE(JS_OOM_BREAKPOINT)
 fi
-
-MOZ_CHECK_CCACHE
 
 dnl ========================================================
 dnl = Enable static checking using gcc-dehydra

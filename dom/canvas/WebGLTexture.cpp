@@ -33,6 +33,8 @@ WebGLTexture::WebGLTexture(WebGLContext *context)
     , mMaxLevelWithCustomImages(0)
     , mHaveGeneratedMipmap(false)
     , mImmutable(false)
+    , mBaseMipmapLevel(0)
+    , mMaxMipmapLevel(1000)
     , mFakeBlackStatus(WebGLTextureFakeBlackStatus::IncompleteTexture)
 {
     mContext->MakeContextCurrent();
@@ -62,22 +64,8 @@ WebGLTexture::MemoryUsage() const {
         return 0;
     size_t result = 0;
     for(size_t face = 0; face < mFacesCount; face++) {
-        if (mHaveGeneratedMipmap) {
-            size_t level0MemoryUsage = ImageInfoAtFace(face, 0).MemoryUsage();
-            // Each mipmap level is 1/(2^d) the size of the previous level,
-            // where d is 2 or 3 depending on whether the images are 2D or 3D
-            // 1 + x + x^2 + ... = 1/(1-x)
-            // for x = 1/(2^2), we get 1/(1-1/4) = 4/3
-            // for x = 1/(2^3), we get 1/(1-1/8) = 8/7
-            size_t allLevelsMemoryUsage =
-                mTarget == LOCAL_GL_TEXTURE_3D
-                ? level0MemoryUsage * 8 / 7
-                : level0MemoryUsage * 4 / 3;
-            result += allLevelsMemoryUsage;
-        } else {
-            for(size_t level = 0; level <= mMaxLevelWithCustomImages; level++)
-                result += ImageInfoAtFace(face, level).MemoryUsage();
-        }
+      for(size_t level = 0; level <= mMaxLevelWithCustomImages; level++)
+        result += ImageInfoAtFace(face, level).MemoryUsage();
     }
     return result;
 }
@@ -88,15 +76,24 @@ WebGLTexture::DoesMipmapHaveAllLevelsConsistentlyDefined(TexImageTarget texImage
     if (mHaveGeneratedMipmap)
         return true;
 
+    if (GetMaxMipmapLevel() < GetBaseMipmapLevel())
+        return false;
+
     // We want a copy here so we can modify it temporarily.
-    ImageInfo expected = ImageInfoAt(texImageTarget, 0);
+    ImageInfo expected = ImageInfoAt(texImageTarget, GetBaseMipmapLevel());
 
     // checks if custom level>0 images are all defined up to the highest level defined
     // and have the expected dimensions
-    for (size_t level = 0; level <= mMaxLevelWithCustomImages; ++level) {
+    for (size_t level = GetBaseMipmapLevel(); level <= GetMaxMipmapLevel(); ++level) {
         const ImageInfo& actual = ImageInfoAt(texImageTarget, level);
         if (actual != expected)
             return false;
+
+        // Check the raw value here, not the clamped one, since we don't want
+        // to terminate early if there aren't enough levels defined.
+        if (level == mMaxMipmapLevel)
+            return true;
+
         expected.mWidth = std::max(1, expected.mWidth / 2);
         expected.mHeight = std::max(1, expected.mHeight / 2);
         expected.mDepth = std::max(1, expected.mDepth / 2);
@@ -185,20 +182,20 @@ WebGLTexture::SetCustomMipmap() {
 
         // since we were in GeneratedMipmap mode, we know that the level 0 images all have the same info,
         // and are power-of-two.
-        ImageInfo imageInfo = ImageInfoAtFace(0, 0);
-        NS_ASSERTION(imageInfo.IsPowerOfTwo(), "this texture is NPOT, so how could GenerateMipmap() ever accept it?");
+        ImageInfo imageInfo = ImageInfoAtFace(0, GetBaseMipmapLevel());
+        NS_ASSERTION(mContext->IsWebGL2() || imageInfo.IsPowerOfTwo(),
+                     "this texture is NPOT, so how could GenerateMipmap() ever accept it?");
 
         GLsizei size = std::max(std::max(imageInfo.mWidth, imageInfo.mHeight), imageInfo.mDepth);
 
-        // so, the size is a power of two, let's find its log in base 2.
+        // Find floor(log2(size)). (ES 3.0.4, 3.8 - Mipmapping).
         size_t maxLevel = 0;
         for (GLsizei n = size; n > 1; n >>= 1)
             ++maxLevel;
 
         EnsureMaxLevelWithCustomImagesAtLeast(maxLevel);
 
-        for (size_t level = 1; level <= maxLevel; ++level) {
-            // again, since the sizes are powers of two, no need for any max(1,x) computation
+        for (size_t level = GetBaseMipmapLevel() + 1; level <= GetMaxMipmapLevel(); ++level) {
             imageInfo.mWidth = std::max(imageInfo.mWidth / 2, 1);
             imageInfo.mHeight = std::max(imageInfo.mHeight / 2, 1);
             imageInfo.mDepth = std::max(imageInfo.mDepth / 2, 1);
@@ -223,7 +220,7 @@ WebGLTexture::IsMipmapComplete() const {
     MOZ_ASSERT(mTarget == LOCAL_GL_TEXTURE_2D ||
                mTarget == LOCAL_GL_TEXTURE_3D);
 
-    if (!ImageInfoAtFace(0, 0).IsPositive())
+    if (!ImageInfoAtFace(0, GetBaseMipmapLevel()).IsPositive())
         return false;
     if (mHaveGeneratedMipmap)
         return true;
@@ -262,7 +259,7 @@ WebGLTexture::ResolvedFakeBlackStatus() {
     // See 3.8.2 Shader Execution in the OpenGL ES 2.0.24 spec.
 
     for (size_t face = 0; face < mFacesCount; ++face) {
-        if (ImageInfoAtFace(face, 0).mImageDataStatus == WebGLImageDataStatus::NoImageData) {
+        if (ImageInfoAtFace(face, GetBaseMipmapLevel()).mImageDataStatus == WebGLImageDataStatus::NoImageData) {
             // In case of undefined texture image, we don't print any message because this is a very common
             // and often legitimate case (asynchronous texture loading).
             mFakeBlackStatus = WebGLTextureFakeBlackStatus::IncompleteTexture;
@@ -285,7 +282,7 @@ WebGLTexture::ResolvedFakeBlackStatus() {
                     ("%s is a %dD texture, with a minification filter requiring a mipmap, "
                       "and is not mipmap complete (as defined in section 3.7.10).", msg_rendering_as_black, dim);
                 mFakeBlackStatus = WebGLTextureFakeBlackStatus::IncompleteTexture;
-            } else if (!ImageInfoBase().IsPowerOfTwo()) {
+            } else if (!mContext->IsWebGL2() && !ImageInfoBase().IsPowerOfTwo()) {
                 mContext->GenerateWarning
                     ("%s is a %dD texture, with a minification filter requiring a mipmap, "
                       "and either its width or height is not a power of two.", msg_rendering_as_black);
@@ -299,7 +296,7 @@ WebGLTexture::ResolvedFakeBlackStatus() {
                     ("%s is a %dD texture and its width or height is equal to zero.",
                       msg_rendering_as_black, dim);
                 mFakeBlackStatus = WebGLTextureFakeBlackStatus::IncompleteTexture;
-            } else if (!AreBothWrapModesClampToEdge() && !ImageInfoBase().IsPowerOfTwo()) {
+            } else if (!AreBothWrapModesClampToEdge() && !mContext->IsWebGL2() && !ImageInfoBase().IsPowerOfTwo()) {
                 mContext->GenerateWarning
                     ("%s is a %dD texture, with a minification filter not requiring a mipmap, "
                       "with its width or height not a power of two, and with a wrap mode "
@@ -310,9 +307,11 @@ WebGLTexture::ResolvedFakeBlackStatus() {
     }
     else // cube map
     {
-        bool areAllLevel0ImagesPOT = true;
-        for (size_t face = 0; face < mFacesCount; ++face)
-            areAllLevel0ImagesPOT &= ImageInfoAtFace(face, 0).IsPowerOfTwo();
+        bool legalImageSize = true;
+        if (!mContext->IsWebGL2()) {
+            for (size_t face = 0; face < mFacesCount; ++face)
+                legalImageSize &= ImageInfoAtFace(face, 0).IsPowerOfTwo();
+        }
 
         if (DoesMinFilterRequireMipmap())
         {
@@ -321,7 +320,7 @@ WebGLTexture::ResolvedFakeBlackStatus() {
                             "and is not mipmap cube complete (as defined in section 3.7.10).",
                             msg_rendering_as_black);
                 mFakeBlackStatus = WebGLTextureFakeBlackStatus::IncompleteTexture;
-            } else if (!areAllLevel0ImagesPOT) {
+            } else if (!legalImageSize) {
                 mContext->GenerateWarning("%s is a cube map texture, with a minification filter requiring a mipmap, "
                             "and either the width or the height of some level 0 image is not a power of two.",
                             msg_rendering_as_black);
@@ -335,7 +334,7 @@ WebGLTexture::ResolvedFakeBlackStatus() {
                             "and is not cube complete (as defined in section 3.7.10).",
                             msg_rendering_as_black);
                 mFakeBlackStatus = WebGLTextureFakeBlackStatus::IncompleteTexture;
-            } else if (!AreBothWrapModesClampToEdge() && !areAllLevel0ImagesPOT) {
+            } else if (!AreBothWrapModesClampToEdge() && !legalImageSize) {
                 mContext->GenerateWarning("%s is a cube map texture, with a minification filter not requiring a mipmap, "
                             "with some level 0 image having width or height not a power of two, and with a wrap mode "
                             "different from CLAMP_TO_EDGE.", msg_rendering_as_black);
@@ -422,7 +421,7 @@ WebGLTexture::ResolvedFakeBlackStatus() {
                     TexImageTarget imageTarget = TexImageTargetForTargetAndFace(mTarget, face);
                     const ImageInfo& imageInfo = ImageInfoAt(imageTarget, level);
                     if (imageInfo.mImageDataStatus == WebGLImageDataStatus::UninitializedImageData) {
-                        DoDeferredImageInitialization(imageTarget, level);
+                        EnsureNoUninitializedImageData(imageTarget, level);
                     }
                 }
             }
@@ -542,10 +541,11 @@ ClearWithTempFB(WebGLContext* context, GLuint tex,
 
 
 void
-WebGLTexture::DoDeferredImageInitialization(TexImageTarget imageTarget, GLint level)
+WebGLTexture::EnsureNoUninitializedImageData(TexImageTarget imageTarget, GLint level)
 {
     const ImageInfo& imageInfo = ImageInfoAt(imageTarget, level);
-    MOZ_ASSERT(imageInfo.mImageDataStatus == WebGLImageDataStatus::UninitializedImageData);
+    if (!imageInfo.HasUninitializedImageData())
+        return;
 
     mContext->MakeContextCurrent();
 
