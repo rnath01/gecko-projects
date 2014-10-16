@@ -19,7 +19,6 @@ DOMCI_CLASS(CSSNameSpaceRule)
 DOMCI_CLASS(XULCommandDispatcher)
 #endif
 DOMCI_CLASS(XULControllers)
-DOMCI_CLASS(BoxObject)
 #ifdef MOZ_XUL
 DOMCI_CLASS(TreeSelection)
 DOMCI_CLASS(TreeContentView)
@@ -37,14 +36,8 @@ DOMCI_CLASS(TreeColumn)
 DOMCI_CLASS(CSSMozDocumentRule)
 DOMCI_CLASS(CSSSupportsRule)
 
-// XSLTProcessor
-DOMCI_CLASS(XSLTProcessor)
-
 // DOM Level 3 XPath objects
 DOMCI_CLASS(XPathNSResolver)
-
-DOMCI_CLASS(Blob)
-DOMCI_CLASS(File)
 
 DOMCI_CLASS(MozSmsMessage)
 DOMCI_CLASS(MozMmsMessage)

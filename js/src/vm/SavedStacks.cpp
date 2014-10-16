@@ -16,6 +16,7 @@
 #include "jshashutil.h"
 #include "jsmath.h"
 #include "jsnum.h"
+#include "prmjtime.h"
 
 #include "gc/Marking.h"
 #include "js/Vector.h"
@@ -675,10 +676,12 @@ SavedStacks::getLocation(JSContext *cx, const FrameIter &iter, MutableHandleLoca
     // that doesn't employ memoization, and update |locationp|'s slots directly.
 
     if (!iter.hasScript()) {
-        const char *filename = iter.scriptFilename();
-        if (!filename)
-            filename = "";
-        locationp->source = Atomize(cx, filename, strlen(filename));
+        if (const char16_t *displayURL = iter.scriptDisplayURL()) {
+            locationp->source = AtomizeChars(cx, displayURL, js_strlen(displayURL));
+        } else {
+            const char *filename = iter.scriptFilename() ? iter.scriptFilename() : "";
+            locationp->source = Atomize(cx, filename, strlen(filename));
+        }
         if (!locationp->source)
             return false;
 
@@ -693,8 +696,13 @@ SavedStacks::getLocation(JSContext *cx, const FrameIter &iter, MutableHandleLoca
     PCLocationMap::AddPtr p = pcLocationMap.lookupForAdd(key);
 
     if (!p) {
-        const char *filename = script->filename() ? script->filename() : "";
-        RootedAtom source(cx, Atomize(cx, filename, strlen(filename)));
+        RootedAtom source(cx);
+        if (const char16_t *displayURL = iter.scriptDisplayURL()) {
+            source = AtomizeChars(cx, displayURL, js_strlen(displayURL));
+        } else {
+            const char *filename = script->filename() ? script->filename() : "";
+            source = Atomize(cx, filename, strlen(filename));
+        }
         if (!source)
             return false;
 
@@ -808,7 +816,7 @@ SavedStacksMetadataCallback(JSContext *cx, JSObject **pmetadata)
         return false;
     *pmetadata = frame;
 
-    return Debugger::onLogAllocationSite(cx, frame);
+    return Debugger::onLogAllocationSite(cx, frame, PRMJ_Now());
 }
 
 #ifdef JS_CRASH_DIAGNOSTICS

@@ -64,7 +64,6 @@
 #include "jit/arm/Simulator-arm.h"
 #include "jit/Ion.h"
 #include "js/Debug.h"
-#include "js/OldDebugAPI.h"
 #include "js/StructuredClone.h"
 #include "perf/jsperf.h"
 #include "shell/jsheaptools.h"
@@ -1066,11 +1065,11 @@ static bool
 CacheEntry_setBytecode(JSContext *cx, HandleObject cache, uint8_t *buffer, uint32_t length)
 {
     MOZ_ASSERT(CacheEntry_isCacheEntry(cache));
+
     ArrayBufferObject::BufferContents contents =
         ArrayBufferObject::BufferContents::create<ArrayBufferObject::PLAIN_BUFFER>(buffer);
     Rooted<ArrayBufferObject*> arrayBuffer(cx, ArrayBufferObject::create(cx, length, contents));
-
-    if (!arrayBuffer || !ArrayBufferObject::ensureNonInline(cx, arrayBuffer))
+    if (!arrayBuffer)
         return false;
 
     SetReservedSlot(cache, CacheEntry_BYTECODE, OBJECT_TO_JSVAL(arrayBuffer));
@@ -5941,7 +5940,7 @@ main(int argc, char **argv, char **envp)
         || !op.addBoolOption('\0', "no-asmjs", "Disable asm.js compilation")
         || !op.addBoolOption('\0', "no-native-regexp", "Disable native regexp compilation")
         || !op.addStringOption('\0', "ion-scalar-replacement", "on/off",
-                               "Scalar Replacement (default: off, on to enable)")
+                               "Scalar Replacement (default: on, off to disable)")
         || !op.addStringOption('\0', "ion-gvn", "[mode]",
                                "Specify Ion global value numbering:\n"
                                "  off: disable GVN\n"

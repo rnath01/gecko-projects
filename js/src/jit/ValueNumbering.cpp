@@ -56,7 +56,13 @@ ValueNumberer::VisibleValues::ValueHasher::match(Key k, Lookup l)
         return false;
 
     bool congruent = k->congruentTo(l); // Ask the values themselves what they think.
-    MOZ_ASSERT(congruent == l->congruentTo(k), "congruentTo relation is not symmetric");
+#ifdef DEBUG
+    if (congruent != l->congruentTo(k)) {
+       JitSpew(JitSpew_GVN, "      congruentTo relation is not symmetric between %s%u and %s%u!!",
+               k->opName(), k->id(),
+               l->opName(), l->id());
+    }
+#endif
     return congruent;
 }
 
@@ -298,10 +304,6 @@ ValueNumberer::releaseResumePointOperands(MResumePoint *resume)
         if (!resume->hasOperand(i))
             continue;
         MDefinition *op = resume->getOperand(i);
-        // TODO: We shouldn't leave discarded operands sitting around
-        // (bug 1055690).
-        if (op->isDiscarded())
-            continue;
         resume->releaseOperand(i);
 
         // We set the UseRemoved flag when removing resume point operands,
@@ -365,8 +367,7 @@ ValueNumberer::discardDef(MDefinition *def)
         MPhi *phi = def->toPhi();
         if (!releaseAndRemovePhiOperands(phi))
              return false;
-        MPhiIterator at(block->phisBegin(phi));
-        block->discardPhiAt(at);
+        block->discardPhi(phi);
     } else {
         MInstruction *ins = def->toInstruction();
         if (MResumePoint *resume = ins->resumePoint()) {
@@ -698,7 +699,7 @@ ValueNumberer::visitDefinition(MDefinition *def)
 {
     // If this instruction has a dependency() into an unreachable block, we'll
     // need to update AliasAnalysis.
-    MDefinition *dep = def->dependency();
+    MInstruction *dep = def->dependency();
     if (dep != nullptr && (dep->isDiscarded() || dep->block()->isDead())) {
         JitSpew(JitSpew_GVN, "      AliasAnalysis invalidated");
         if (updateAliasAnalysis_ && !dependenciesBroken_) {

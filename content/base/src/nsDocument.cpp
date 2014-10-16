@@ -18,10 +18,6 @@
 #include "mozilla/Likely.h"
 #include <algorithm>
 
-#ifdef MOZ_LOGGING
-// so we can get logging even in release builds
-#define FORCE_PR_LOG 1
-#endif
 #include "prlog.h"
 #include "plstr.h"
 #include "prprf.h"
@@ -224,6 +220,7 @@
 #include "nsWindowMemoryReporter.h"
 #include "nsLocation.h"
 #include "mozilla/dom/FontFaceSet.h"
+#include "mozilla/dom/BoxObject.h"
 
 #ifdef MOZ_MEDIA_NAVIGATOR
 #include "mozilla/MediaManager.h"
@@ -1333,7 +1330,6 @@ nsExternalResourceMap::PendingLoad::StartLoad(nsIURI* aURI,
                      aRequestingNode,
                      nsILoadInfo::SEC_NORMAL,
                      nsIContentPolicy::TYPE_OTHER,
-                     nullptr, // aChannelPolicy
                      loadGroup,
                      req); // aCallbacks
 
@@ -4707,10 +4703,6 @@ nsDocument::GetWindowInternal() const
     if (win) {
       // mScriptGlobalObject is always the inner window, let's get the outer.
       win = win->GetOuterWindow();
-    } else if (mMasterDocument) {
-      // For script execution in the imported document we need the window of
-      // the master document.
-      win = mMasterDocument->GetWindow();
     }
   }
 
@@ -5852,6 +5844,11 @@ nsDocument::ProcessTopElementQueue(bool aIsBaseQueue)
 {
   MOZ_ASSERT(nsContentUtils::IsSafeToRunScript());
 
+  if (sProcessingStack.isNothing()) {
+    // If XPCOM shutdown has reset the processing stack, don't do anything.
+    return;
+  }
+
   nsTArray<CustomElementData*>& stack = *sProcessingStack;
   uint32_t firstQueue = stack.LastIndexOf((CustomElementData*) nullptr);
 
@@ -6950,7 +6947,7 @@ nsDocument::DoNotifyPossibleTitleChange()
                                       true, true);
 }
 
-already_AddRefed<nsIBoxObject>
+already_AddRefed<BoxObject>
 nsDocument::GetBoxObjectFor(Element* aElement, ErrorResult& aRv)
 {
   if (!aElement) {
@@ -6977,7 +6974,7 @@ nsDocument::GetBoxObjectFor(Element* aElement, ErrorResult& aRv)
   } else {
     nsCOMPtr<nsPIBoxObject> boxObject = mBoxObjectTable->Get(aElement);
     if (boxObject) {
-      return boxObject.forget();
+      return boxObject.forget().downcast<BoxObject>();
     }
   }
 
@@ -7018,7 +7015,7 @@ nsDocument::GetBoxObjectFor(Element* aElement, ErrorResult& aRv)
     mBoxObjectTable->Put(aElement, boxObject.get());
   }
 
-  return boxObject.forget();
+  return boxObject.forget().downcast<BoxObject>();
 }
 
 void

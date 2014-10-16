@@ -112,6 +112,7 @@ class MInstruction;
 class MBasicBlock;
 class MNode;
 class MUse;
+class MPhi;
 class MIRGraph;
 class MResumePoint;
 class MControlInstruction;
@@ -119,18 +120,16 @@ class MControlInstruction;
 // Represents a use of a node.
 class MUse : public TempObject, public InlineListNode<MUse>
 {
+    // Grant access to setProducerUnchecked.
     friend class MDefinition;
+    friend class MPhi;
 
     MDefinition *producer_; // MDefinition that is being used.
     MNode *consumer_;       // The node that is using this operand.
 
-    MUse(MDefinition *producer, MNode *consumer)
-      : producer_(producer),
-        consumer_(consumer)
-    { }
-
-    // Low-level unchecked edit method for replaceAllUsesWith. This doesn't
-    // update use lists! replaceAllUsesWith does that manually.
+    // Low-level unchecked edit method for replaceAllUsesWith and
+    // MPhi::removeOperand. This doesn't update use lists!
+    // replaceAllUsesWith and MPhi::removeOperand do that manually.
     void setProducerUnchecked(MDefinition *producer) {
         MOZ_ASSERT(consumer_);
         MOZ_ASSERT(producer_);
@@ -144,11 +143,17 @@ class MUse : public TempObject, public InlineListNode<MUse>
       : producer_(nullptr), consumer_(nullptr)
     { }
 
-    // MUses can only be copied when they are not in a use list.
-    explicit MUse(const MUse &other)
-      : producer_(other.producer_), consumer_(other.consumer_)
+    // Move constructor for use in vectors. When an MUse is moved, it stays
+    // in its containing use list.
+    MUse(MUse &&other)
+      : InlineListNode<MUse>(mozilla::Move(other)),
+        producer_(other.producer_), consumer_(other.consumer_)
+    { }
+
+    // Construct an MUse initialized with |producer| and |consumer|.
+    MUse(MDefinition *producer, MNode *consumer)
     {
-        MOZ_ASSERT(!other.next && !other.prev);
+        initUnchecked(producer, consumer);
     }
 
     // Set this use, which was previously clear.
@@ -342,9 +347,9 @@ class MDefinition : public MNode
     MIRType resultType_;           // Representation of result type.
     types::TemporaryTypeSet *resultTypeSet_; // Optional refinement of the result type.
     union {
-        MDefinition *dependency_;  // Implicit dependency (store, call, etc.) of this instruction.
+        MInstruction *dependency_; // Implicit dependency (store, call, etc.) of this instruction.
                                    // Used by alias analysis, GVN and LICM.
-        uint32_t virtualRegister_;   // Used by lowering to map definitions to virtual registers.
+        uint32_t virtualRegister_; // Used by lowering to map definitions to virtual registers.
     };
 
     // Track bailouts by storing the current pc in MIR instruction. Also used
@@ -596,15 +601,7 @@ class MDefinition : public MNode
         return !resultTypeSet() || resultTypeSet()->mightBeMIRType(type);
     }
 
-    bool mightBeMagicType() const {
-        if (IsMagicType(type()))
-            return true;
-
-        if (MIRType_Value != type())
-            return false;
-
-        return !resultTypeSet() || resultTypeSet()->hasType(types::Type::MagicArgType());
-    }
+    bool mightBeMagicType() const;
 
     // Float32 specialization operations (see big comment in IonAnalysis before the Float32
     // specialization algorithm).
@@ -671,15 +668,29 @@ class MDefinition : public MNode
     }
 
     void addUse(MUse *use) {
+        MOZ_ASSERT(use->producer() == this);
         uses_.pushFront(use);
     }
     void addUseUnchecked(MUse *use) {
+        MOZ_ASSERT(use->producer() == this);
         uses_.pushFrontUnchecked(use);
     }
+    void replaceUse(MUse *old, MUse *now) {
+        MOZ_ASSERT(now->producer() == this);
+        uses_.replace(old, now);
+    }
+
+    // Replace the current instruction by a dominating instruction |dom| in all
+    // uses of the current instruction.
     void replaceAllUsesWith(MDefinition *dom);
 
     // Like replaceAllUsesWith, but doesn't set UseRemoved on |this|'s operands.
     void justReplaceAllUsesWith(MDefinition *dom);
+
+    // Replace the current instruction by an optimized-out constant in all uses
+    // of the current instruction. Note, that optimized-out constant should not
+    // be observed, and thus they should not flow in any computation.
+    void optimizeOutAllUses(TempAllocator &alloc);
 
     // Mark this instruction as having replaced all uses of ins, as during GVN,
     // returning false if the replacement should not be performed. For use when
@@ -743,10 +754,10 @@ class MDefinition : public MNode
         resultTypeSet_ = types;
     }
 
-    MDefinition *dependency() const {
+    MInstruction *dependency() const {
         return dependency_;
     }
-    void setDependency(MDefinition *dependency) {
+    void setDependency(MInstruction *dependency) {
         dependency_ = dependency;
     }
     virtual AliasSet getAliasSet() const {
@@ -822,6 +833,7 @@ class MUseDefIterator
 };
 
 typedef Vector<MDefinition *, 8, IonAllocPolicy> MDefinitionVector;
+typedef Vector<MInstruction *, 6, IonAllocPolicy> MInstructionVector;
 
 // An instruction is an SSA name that is inserted into a basic block's IR
 // stream.
@@ -1561,6 +1573,52 @@ class MSimdSignMask : public MUnaryInstruction
     }
 
     ALLOW_CLONE(MSimdSignMask)
+};
+
+class MSimdUnaryArith : public MUnaryInstruction
+{
+  public:
+    enum Operation {
+        abs,
+        neg,
+        not_,
+        reciprocal,
+        reciprocalSqrt,
+        sqrt
+    };
+
+  private:
+    Operation operation_;
+
+    MSimdUnaryArith(MDefinition *def, Operation op, MIRType type)
+      : MUnaryInstruction(def), operation_(op)
+    {
+        MOZ_ASSERT(IsSimdType(type));
+        MOZ_ASSERT(def->type() == type);
+        MOZ_ASSERT_IF(type == MIRType_Int32x4, op == neg || op == not_);
+        setResultType(type);
+        setMovable();
+    }
+
+  public:
+    INSTRUCTION_HEADER(SimdUnaryArith);
+    static MSimdUnaryArith *NewAsmJS(TempAllocator &alloc, MDefinition *def,
+                                     Operation op, MIRType t)
+    {
+        return new(alloc) MSimdUnaryArith(def, op, t);
+    }
+
+    Operation operation() const { return operation_; }
+
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+
+    bool congruentTo(const MDefinition *ins) const {
+        return congruentIfOperandsEqual(ins) && ins->toSimdUnaryArith()->operation() == operation();
+    }
+
+    ALLOW_CLONE(MSimdUnaryArith);
 };
 
 // Compares each value of a SIMD vector to each corresponding lane's value of
@@ -2610,7 +2668,9 @@ class MNewDerivedTypedObject
 
 // Represent the content of all slots of an object.  This instruction is not
 // lowered and is not used to generate code.
-class MObjectState : public MVariadicInstruction
+class MObjectState
+  : public MVariadicInstruction,
+    public NoFloatPolicyAfter<1>::Data
 {
   private:
     uint32_t numSlots_;
@@ -2672,7 +2732,9 @@ class MObjectState : public MVariadicInstruction
 
 // Represent the contents of all elements of an array.  This instruction is not
 // lowered and is not used to generate code.
-class MArrayState : public MVariadicInstruction
+class MArrayState
+  : public MVariadicInstruction,
+    public NoFloatPolicyAfter<2>::Data
 {
   private:
     uint32_t numElements_;
@@ -5856,7 +5918,6 @@ class MPhi MOZ_FINAL : public MDefinition, public InlineListNode<MPhi>
 
 #if DEBUG
     bool specialized_;
-    uint32_t capacity_;
 #endif
 
   protected:
@@ -5885,7 +5946,6 @@ class MPhi MOZ_FINAL : public MDefinition, public InlineListNode<MPhi>
         canConsumeFloat32_(false)
 #if DEBUG
         , specialized_(false)
-        , capacity_(0)
 #endif
     {
         setResultType(resultType);
@@ -5955,14 +6015,36 @@ class MPhi MOZ_FINAL : public MDefinition, public InlineListNode<MPhi>
 
     // Initializes the operands vector to the given capacity,
     // permitting use of addInput() instead of addInputSlow().
-    bool reserveLength(size_t length);
+    bool reserveLength(size_t length) {
+        return inputs_.reserve(length);
+    }
 
     // Use only if capacity has been reserved by reserveLength
-    void addInput(MDefinition *ins);
+    void addInput(MDefinition *ins) {
+        // Use infallibleGrowByUninitialized and placement-new instead of just
+        // infallibleAppend to avoid creating a temporary MUse which will get
+        // linked into |ins|'s use list and then unlinked in favor of the
+        // MUse in the Vector. We'd ideally like to use an emplace method here,
+        // once Vector supports that.
+        inputs_.infallibleGrowByUninitialized(1);
+        new (&inputs_.back()) MUse(ins, this);
+    }
 
-    // Appends a new input to the input vector. May call pod_realloc().
+    // Appends a new input to the input vector. May perform reallocation.
     // Prefer reserveLength() and addInput() instead, where possible.
-    bool addInputSlow(MDefinition *ins, bool *ptypeChange = nullptr);
+    bool addInputSlow(MDefinition *ins) {
+        // Use growByUninitialized and placement-new instead of just append,
+        // similar to what addInput does.
+        if (!inputs_.growByUninitialized(1))
+            return false;
+
+        new (&inputs_.back()) MUse(ins, this);
+        return true;
+    }
+
+    // Update the type of this phi after adding |ins| as an input. Set
+    // |*ptypeChange| to true if the type changed.
+    bool checkForTypeChange(MDefinition *ins, bool *ptypeChange);
 
     MDefinition *foldsTo(TempAllocator &alloc);
     MDefinition *foldsTernary();
@@ -11135,21 +11217,45 @@ class MHasClass
 // outermost script (i.e. not the inlined script).
 class MRecompileCheck : public MNullaryInstruction
 {
+  public:
+    enum RecompileCheckType {
+        RecompileCheck_OptimizationLevel,
+        RecompileCheck_Inlining
+    };
+
+  private:
     JSScript *script_;
     uint32_t recompileThreshold_;
+    bool forceRecompilation_;
+    bool increaseWarmUpCounter_;
 
-    MRecompileCheck(JSScript *script, uint32_t recompileThreshold)
+    MRecompileCheck(JSScript *script, uint32_t recompileThreshold, RecompileCheckType type)
       : script_(script),
         recompileThreshold_(recompileThreshold)
     {
+        switch (type) {
+          case RecompileCheck_OptimizationLevel:
+            forceRecompilation_ = false;
+            increaseWarmUpCounter_ = true;
+            break;
+          case RecompileCheck_Inlining:
+            forceRecompilation_ = true;
+            increaseWarmUpCounter_ = false;
+            break;
+          default:
+            MOZ_CRASH("Unexpected recompile check type");
+        }
+
         setGuard();
     }
 
   public:
     INSTRUCTION_HEADER(RecompileCheck);
 
-    static MRecompileCheck *New(TempAllocator &alloc, JSScript *script_, uint32_t recompileThreshold) {
-        return new(alloc) MRecompileCheck(script_, recompileThreshold);
+    static MRecompileCheck *New(TempAllocator &alloc, JSScript *script_, uint32_t recompileThreshold,
+                                RecompileCheckType type)
+    {
+        return new(alloc) MRecompileCheck(script_, recompileThreshold, type);
     }
 
     JSScript *script() const {
@@ -11158,6 +11264,14 @@ class MRecompileCheck : public MNullaryInstruction
 
     uint32_t recompileThreshold() const {
         return recompileThreshold_;
+    }
+
+    bool forceRecompilation() const {
+        return forceRecompilation_;
+    }
+
+    bool increaseWarmUpCounter() const {
+        return increaseWarmUpCounter_;
     }
 
     AliasSet getAliasSet() const {

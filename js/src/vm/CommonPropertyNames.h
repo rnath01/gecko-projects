@@ -32,6 +32,7 @@
     macro(caller, caller, "caller") \
     macro(callFunction, callFunction, "callFunction") \
     macro(caseFirst, caseFirst, "caseFirst") \
+    macro(class_, class_, "class") \
     macro(Collator, Collator, "Collator") \
     macro(CollatorCompareGet, CollatorCompareGet, "Intl_Collator_compare_get") \
     macro(columnNumber, columnNumber, "columnNumber") \
@@ -75,6 +76,7 @@
     macro(float32x4, float32x4, "float32x4") \
     macro(float64, float64, "float64") \
     macro(format, format, "format") \
+    macro(frame, frame, "frame") \
     macro(from, from, "from") \
     macro(get, get, "get") \
     macro(getInternals, getInternals, "getInternals") \
@@ -175,6 +177,7 @@
     macro(style, style, "style") \
     macro(test, test, "test") \
     macro(throw, throw_, "throw") \
+    macro(timestamp, timestamp, "timestamp") \
     macro(timeZone, timeZone, "timeZone") \
     macro(toGMTString, toGMTString, "toGMTString") \
     macro(toISOString, toISOString, "toISOString") \

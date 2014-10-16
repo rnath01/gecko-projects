@@ -21,6 +21,9 @@
 #include "mozilla/WeakPtr.h"
 #include "mozilla/TimeStamp.h"
 #include "GeckoProfiler.h"
+#ifdef MOZ_ENABLE_PROFILER_SPS
+#include "ProfilerMarkers.h"
+#endif
 
 // Helper Classes
 #include "nsCOMPtr.h"
@@ -915,6 +918,7 @@ protected:
 #endif
     bool                       mAffectPrivateSessionLifetime;
     bool                       mInvisible;
+    bool                       mHasLoadedNonBlankURI;
     uint64_t                   mHistoryID;
     uint32_t                   mDefaultLoadFlags;
 
@@ -949,6 +953,8 @@ private:
 
     // Storing profile timeline markers and if/when recording started
     mozilla::TimeStamp mProfileTimelineStartTime;
+
+#ifdef MOZ_ENABLE_PROFILER_SPS
     struct InternalProfileTimelineMarker
     {
       InternalProfileTimelineMarker(const char* aName,
@@ -958,11 +964,18 @@ private:
         , mPayload(aPayload)
         , mTime(aTime)
       {}
+
+      ~InternalProfileTimelineMarker()
+      {
+        delete mPayload;
+      }
+
       const char* mName;
       ProfilerMarkerTracing* mPayload;
       float mTime;
     };
-    nsTArray<nsAutoPtr<InternalProfileTimelineMarker>> mProfileTimelineMarkers;
+    nsTArray<InternalProfileTimelineMarker*> mProfileTimelineMarkers;
+#endif
 
     // Get the elapsed time (in millis) since the profile timeline recording
     // started

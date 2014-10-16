@@ -174,9 +174,9 @@ TranslateShadowLayer2D(Layer* aLayer,
   // transform, we must apply the inverse resolution scale here.
   Matrix4x4 layerTransform3D = Matrix4x4::From2D(layerTransform);
   if (ContainerLayer* c = aLayer->AsContainerLayer()) {
-    layerTransform3D.Scale(1.0f/c->GetPreXScale(),
-                           1.0f/c->GetPreYScale(),
-                           1);
+    layerTransform3D.PreScale(1.0f/c->GetPreXScale(),
+                              1.0f/c->GetPreYScale(),
+                              1);
   }
   layerTransform3D.PostScale(1.0f/aLayer->GetPostXScale(),
                              1.0f/aLayer->GetPostYScale(),
@@ -620,9 +620,9 @@ AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer)
     // will apply the pre- and post-scale again when computing the effective
     // transform, we must apply the inverses here.
     if (ContainerLayer* container = aLayer->AsContainerLayer()) {
-      transform.Scale(1.0f/container->GetPreXScale(),
-                      1.0f/container->GetPreYScale(),
-                      1);
+      transform.PreScale(1.0f/container->GetPreXScale(),
+                         1.0f/container->GetPreYScale(),
+                         1);
     }
     transform.PostScale(1.0f/aLayer->GetPostXScale(),
                         1.0f/aLayer->GetPostYScale(),
@@ -639,7 +639,7 @@ AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer)
     // bottom-most scrollable metrics because that should have the most accurate
     // cumulative resolution for aLayer.
     LayoutDeviceToLayerScale resolution = bottom.mCumulativeResolution;
-    oldTransform.Scale(resolution.scale, resolution.scale, 1);
+    oldTransform.PreScale(resolution.scale, resolution.scale, 1);
 
     // For the purpose of aligning fixed and sticky layers, we disregard
     // the overscroll transform when computing the 'aCurrentTransformForRoot'
@@ -694,7 +694,7 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
 
   Matrix4x4 asyncTransform = apzc->GetCurrentAsyncTransform();
   Matrix4x4 nontransientTransform = apzc->GetNontransientAsyncTransform();
-  Matrix4x4 transientTransform = asyncTransform * nontransientTransform.Inverse();
+  Matrix4x4 transientTransform = nontransientTransform.Inverse() * asyncTransform;
 
   // |transientTransform| represents the amount by which we have scrolled and
   // zoomed since the last paint. Because the scrollbar was sized and positioned based
@@ -712,11 +712,24 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
   Matrix4x4 scrollbarTransform;
   if (aScrollbar->GetScrollbarDirection() == Layer::VERTICAL) {
     float scale = metrics.CalculateCompositedSizeInCssPixels().height / metrics.mScrollableRect.height;
+    if (aScrollbarIsDescendant) {
+      // In cases where the scrollbar is a descendant of the content, the
+      // scrollbar gets painted at the same resolution as the content. Since the
+      // coordinate space we apply this transform in includes the resolution, we
+      // need to adjust for it as well here. Note that in another
+      // aScrollbarIsDescendant hunk below we unapply the entire async
+      // transform, which includes the nontransientasync transform and would
+      // normally account for the resolution.
+      scale *= metrics.mResolution.scale;
+    }
     scrollbarTransform.PostScale(1.f, 1.f / transientTransform._22, 1.f);
     scrollbarTransform.PostTranslate(0, -transientTransform._42 * scale, 0);
   }
   if (aScrollbar->GetScrollbarDirection() == Layer::HORIZONTAL) {
     float scale = metrics.CalculateCompositedSizeInCssPixels().width / metrics.mScrollableRect.width;
+    if (aScrollbarIsDescendant) {
+      scale *= metrics.mResolution.scale;
+    }
     scrollbarTransform.PostScale(1.f / transientTransform._11, 1.f, 1.f);
     scrollbarTransform.PostTranslate(-transientTransform._41 * scale, 0, 0);
   }
@@ -725,10 +738,11 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
 
   if (aScrollbarIsDescendant) {
     // If the scrollbar layer is a child of the content it is a scrollbar for, then we
-    // need to do an extra untransform to cancel out the transient async transform on
-    // the content. This is needed because otherwise that transient async transform is
-    // part of the effective transform of this scrollbar, and the scrollbar will jitter
-    // as the content scrolls.
+    // need to do an extra untransform to cancel out the async transform on
+    // the content. This is needed because layout positions and sizes the
+    // scrollbar on the assumption that there is no async transform, and without
+    // this code the scrollbar will end up in the wrong place.
+    //
     // Since the async transform is applied on top of the content's regular
     // transform, we need to make sure to unapply the async transform in the
     // same coordinate space. This requires applying the content transform and
@@ -753,9 +767,9 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
   // will apply the pre- and post-scale again when computing the effective
   // transform, we must apply the inverses here.
   if (ContainerLayer* container = aScrollbar->AsContainerLayer()) {
-    transform.Scale(1.0f/container->GetPreXScale(),
-                    1.0f/container->GetPreYScale(),
-                    1);
+    transform.PreScale(1.0f/container->GetPreXScale(),
+                       1.0f/container->GetPreYScale(),
+                        1);
   }
   transform.PostScale(1.0f/aScrollbar->GetPostXScale(),
                       1.0f/aScrollbar->GetPostYScale(),
@@ -900,11 +914,11 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
   // transform, we must apply the inverse resolution scale here.
   Matrix4x4 computedTransform = oldTransform * treeTransform;
   if (ContainerLayer* container = aLayer->AsContainerLayer()) {
-    computedTransform.Scale(1.0f/container->GetPreXScale(),
-                            1.0f/container->GetPreYScale(),
-                            1);
+    computedTransform.PreScale(1.0f/container->GetPreXScale(),
+                               1.0f/container->GetPreYScale(),
+                               1);
   }
-  computedTransform.ScalePost(1.0f/aLayer->GetPostXScale(),
+  computedTransform.PostScale(1.0f/aLayer->GetPostXScale(),
                               1.0f/aLayer->GetPostYScale(),
                               1);
   layerComposite->SetShadowTransform(computedTransform);
@@ -913,7 +927,7 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
 
   // Apply resolution scaling to the old transform - the layer tree as it is
   // doesn't have the necessary transform to display correctly.
-  oldTransform.Scale(metrics.mResolution.scale, metrics.mResolution.scale, 1);
+  oldTransform.PreScale(metrics.mResolution.scale, metrics.mResolution.scale, 1);
 
   // Make sure that overscroll and under-zoom are represented in the old
   // transform so that fixed position content moves and scales accordingly.
@@ -934,9 +948,9 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
     overscrollTranslation.y = contentScreenRect.YMost() -
       (userScroll.y + metrics.mCompositionBounds.height);
   }
-  oldTransform.Translate(overscrollTranslation.x,
-                         overscrollTranslation.y,
-                         overscrollTranslation.z);
+  oldTransform.PreTranslate(overscrollTranslation.x,
+                            overscrollTranslation.y,
+                            overscrollTranslation.z);
 
   gfx::Size underZoomScale(1.0f, 1.0f);
   if (mContentRect.width * userZoom.scale < metrics.mCompositionBounds.width) {
@@ -947,7 +961,7 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
     underZoomScale.height = (mContentRect.height * userZoom.scale) /
       metrics.mCompositionBounds.height;
   }
-  oldTransform.Scale(underZoomScale.width, underZoomScale.height, 1);
+  oldTransform.PreScale(underZoomScale.width, underZoomScale.height, 1);
 
   // Make sure fixed position layers don't move away from their anchor points
   // when we're asynchronously panning or zooming

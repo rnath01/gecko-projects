@@ -504,6 +504,18 @@ template bool NoFloatPolicy<1>::staticAdjustInputs(TempAllocator &alloc, MInstru
 template bool NoFloatPolicy<2>::staticAdjustInputs(TempAllocator &alloc, MInstruction *def);
 template bool NoFloatPolicy<3>::staticAdjustInputs(TempAllocator &alloc, MInstruction *def);
 
+template <unsigned FirstOp>
+bool
+NoFloatPolicyAfter<FirstOp>::adjustInputs(TempAllocator &alloc, MInstruction *def)
+{
+    for (size_t op = FirstOp, e = def->numOperands(); op < e; op++)
+        EnsureOperandNotFloat32(alloc, def, op);
+    return true;
+}
+
+template bool NoFloatPolicyAfter<1>::adjustInputs(TempAllocator &alloc, MInstruction *def);
+template bool NoFloatPolicyAfter<2>::adjustInputs(TempAllocator &alloc, MInstruction *def);
+
 template <unsigned Op>
 bool
 BoxPolicy<Op>::staticAdjustInputs(TempAllocator &alloc, MInstruction *ins)
@@ -866,10 +878,16 @@ FilterTypeSetPolicy::adjustInputs(TempAllocator &alloc, MInstruction *ins)
         return true;
     }
 
-    // The outputType should always be a subset of the inputType.
-    // So if types don't equal, the input type is definitely a MIRType_Value.
-    if (inputType != MIRType_Value)
-        MOZ_CRASH("Types should be in accordance.");
+    // The outputType should be a subset of the inputType else we are in code
+    // that has never executed yet. Bail to see the new type (if that hasn't
+    // happened yet).
+    if (inputType != MIRType_Value) {
+        MBail *bail = MBail::New(alloc);
+        ins->block()->insertBefore(ins, bail);
+        bail->setDependency(ins->dependency());
+        ins->setDependency(bail);
+        ins->replaceOperand(0, boxAt(alloc, ins, ins->getOperand(0)));
+    }
 
     // We can't unbox a value to null/undefined/lazyargs. So keep output
     // also a value.
@@ -950,6 +968,8 @@ FilterTypeSetPolicy::adjustInputs(TempAllocator &alloc, MInstruction *ins)
     _(MixPolicy<StringPolicy<0>, IntPolicy<1> >)                        \
     _(MixPolicy<StringPolicy<0>, StringPolicy<1> >)                     \
     _(NoFloatPolicy<0>)                                                 \
+    _(NoFloatPolicyAfter<1>)                                            \
+    _(NoFloatPolicyAfter<2>)                                            \
     _(ObjectPolicy<0>)                                                  \
     _(ObjectPolicy<1>)                                                  \
     _(ObjectPolicy<3>)                                                  \

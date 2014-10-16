@@ -118,6 +118,23 @@ loop.shared.actions = (function() {
       type: String,
       // Whether or not to enable the stream.
       enabled: Boolean
-    })
+    }),
+
+    /**
+     * Retrieves room list.
+     * XXX: should move to some roomActions module - refs bug 1079284
+     */
+    GetAllRooms: Action.define("getAllRooms", {
+    }),
+
+    /**
+     * Primes localRoomStore with roomLocalId, which triggers the EmptyRoomView
+     * to do any necessary setup.
+     *
+     * XXX should move to localRoomActions module
+     */
+    SetupEmptyRoom: Action.define("setupEmptyRoom", {
+      localRoomId: String
+    }),
   };
 })();

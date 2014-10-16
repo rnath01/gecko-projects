@@ -83,6 +83,7 @@ let SSL_ERROR_BAD_CERT_DOMAIN = (SSL_ERROR_BASE + 12);
 
 let MOZILLA_PKIX_ERROR_BASE = Ci.nsINSSErrorsService.MOZILLA_PKIX_ERROR_BASE;
 let MOZILLA_PKIX_ERROR_CA_CERT_USED_AS_END_ENTITY = (MOZILLA_PKIX_ERROR_BASE + 1);
+let MOZILLA_PKIX_ERROR_V1_CERT_USED_AS_CA = (MOZILLA_PKIX_ERROR_BASE + 3);
 
 function getErrorClass(errorCode) {
   let NSPRCode = -1 * NS_ERROR_GET_CODE(errorCode);
@@ -96,6 +97,7 @@ function getErrorClass(errorCode) {
     case SEC_ERROR_EXPIRED_CERTIFICATE:
     case SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED:
     case MOZILLA_PKIX_ERROR_CA_CERT_USED_AS_END_ENTITY:
+    case MOZILLA_PKIX_ERROR_V1_CERT_USED_AS_CA:
       return Ci.nsINSSErrorsService.ERROR_CLASS_BAD_CERT;
     default:
       return Ci.nsINSSErrorsService.ERROR_CLASS_SSL_PROTOCOL;
@@ -225,6 +227,12 @@ BrowserElementChild.prototype = {
                      this._ScrollViewChangeHandler.bind(this),
                      /* useCapture = */ false,
                      /* wantsUntrusted = */ false);
+
+    addEventListener('touchcarettap',
+                     this._touchCaretTapHandler.bind(this),
+                     /* useCapture = */ false,
+                     /* wantsUntrusted = */ false);
+
 
     // This listens to unload events from our message manager, but /not/ from
     // the |content| window.  That's because the window's unload event doesn't
@@ -629,6 +637,11 @@ BrowserElementChild.prototype = {
     }
 
     sendAsyncMsg('metachange', meta);
+  },
+
+  _touchCaretTapHandler: function(e) {
+    e.stopPropagation();
+    sendAsyncMsg('touchcarettap');
   },
 
   _ScrollViewChangeHandler: function(e) {
