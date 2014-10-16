@@ -679,10 +679,18 @@ class MDefinition : public MNode
         MOZ_ASSERT(now->producer() == this);
         uses_.replace(old, now);
     }
+
+    // Replace the current instruction by a dominating instruction |dom| in all
+    // uses of the current instruction.
     void replaceAllUsesWith(MDefinition *dom);
 
     // Like replaceAllUsesWith, but doesn't set UseRemoved on |this|'s operands.
     void justReplaceAllUsesWith(MDefinition *dom);
+
+    // Replace the current instruction by an optimized-out constant in all uses
+    // of the current instruction. Note, that optimized-out constant should not
+    // be observed, and thus they should not flow in any computation.
+    void optimizeOutAllUses(TempAllocator &alloc);
 
     // Mark this instruction as having replaced all uses of ins, as during GVN,
     // returning false if the replacement should not be performed. For use when
@@ -2660,7 +2668,9 @@ class MNewDerivedTypedObject
 
 // Represent the content of all slots of an object.  This instruction is not
 // lowered and is not used to generate code.
-class MObjectState : public MVariadicInstruction
+class MObjectState
+  : public MVariadicInstruction,
+    public NoFloatPolicyAfter<1>::Data
 {
   private:
     uint32_t numSlots_;
@@ -2722,7 +2732,9 @@ class MObjectState : public MVariadicInstruction
 
 // Represent the contents of all elements of an array.  This instruction is not
 // lowered and is not used to generate code.
-class MArrayState : public MVariadicInstruction
+class MArrayState
+  : public MVariadicInstruction,
+    public NoFloatPolicyAfter<2>::Data
 {
   private:
     uint32_t numElements_;
@@ -11205,21 +11217,45 @@ class MHasClass
 // outermost script (i.e. not the inlined script).
 class MRecompileCheck : public MNullaryInstruction
 {
+  public:
+    enum RecompileCheckType {
+        RecompileCheck_OptimizationLevel,
+        RecompileCheck_Inlining
+    };
+
+  private:
     JSScript *script_;
     uint32_t recompileThreshold_;
+    bool forceRecompilation_;
+    bool increaseWarmUpCounter_;
 
-    MRecompileCheck(JSScript *script, uint32_t recompileThreshold)
+    MRecompileCheck(JSScript *script, uint32_t recompileThreshold, RecompileCheckType type)
       : script_(script),
         recompileThreshold_(recompileThreshold)
     {
+        switch (type) {
+          case RecompileCheck_OptimizationLevel:
+            forceRecompilation_ = false;
+            increaseWarmUpCounter_ = true;
+            break;
+          case RecompileCheck_Inlining:
+            forceRecompilation_ = true;
+            increaseWarmUpCounter_ = false;
+            break;
+          default:
+            MOZ_CRASH("Unexpected recompile check type");
+        }
+
         setGuard();
     }
 
   public:
     INSTRUCTION_HEADER(RecompileCheck);
 
-    static MRecompileCheck *New(TempAllocator &alloc, JSScript *script_, uint32_t recompileThreshold) {
-        return new(alloc) MRecompileCheck(script_, recompileThreshold);
+    static MRecompileCheck *New(TempAllocator &alloc, JSScript *script_, uint32_t recompileThreshold,
+                                RecompileCheckType type)
+    {
+        return new(alloc) MRecompileCheck(script_, recompileThreshold, type);
     }
 
     JSScript *script() const {
@@ -11228,6 +11264,14 @@ class MRecompileCheck : public MNullaryInstruction
 
     uint32_t recompileThreshold() const {
         return recompileThreshold_;
+    }
+
+    bool forceRecompilation() const {
+        return forceRecompilation_;
+    }
+
+    bool increaseWarmUpCounter() const {
+        return increaseWarmUpCounter_;
     }
 
     AliasSet getAliasSet() const {

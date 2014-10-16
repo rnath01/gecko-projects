@@ -651,8 +651,12 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
       }
     }
     // then fall through...
+  case NS_KEY_BEFORE_DOWN:
   case NS_KEY_DOWN:
+  case NS_KEY_AFTER_DOWN:
+  case NS_KEY_BEFORE_UP:
   case NS_KEY_UP:
+  case NS_KEY_AFTER_UP:
     {
       nsIContent* content = GetFocusedContent();
       if (content)
@@ -940,15 +944,20 @@ EventStateManager::ExecuteAccessKey(nsTArray<uint32_t>& aAccessCharCodes,
   return false;
 }
 
-bool
-EventStateManager::GetAccessKeyLabelPrefix(nsAString& aPrefix)
+// static
+void
+EventStateManager::GetAccessKeyLabelPrefix(Element* aElement, nsAString& aPrefix)
 {
   aPrefix.Truncate();
   nsAutoString separator, modifierText;
   nsContentUtils::GetModifierSeparatorText(separator);
 
-  nsCOMPtr<nsISupports> container = mPresContext->GetContainerWeak();
+  nsCOMPtr<nsISupports> container = aElement->OwnerDoc()->GetDocShell();
   int32_t modifierMask = GetAccessModifierMaskFor(container);
+
+  if (modifierMask == -1) {
+    return;
+  }
 
   if (modifierMask & NS_MODIFIER_CONTROL) {
     nsContentUtils::GetControlText(modifierText);
@@ -970,7 +979,6 @@ EventStateManager::GetAccessKeyLabelPrefix(nsAString& aPrefix)
     nsContentUtils::GetShiftText(modifierText);
     aPrefix.Append(modifierText + separator);
   }
-  return !aPrefix.IsEmpty();
 }
 
 void
@@ -3159,7 +3167,9 @@ EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
     GenerateDragDropEnterExit(presContext, aEvent->AsDragEvent());
     break;
 
+  case NS_KEY_BEFORE_UP:
   case NS_KEY_UP:
+  case NS_KEY_AFTER_UP:
     break;
 
   case NS_KEY_PRESS:

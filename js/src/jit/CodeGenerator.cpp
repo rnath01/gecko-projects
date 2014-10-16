@@ -1215,16 +1215,18 @@ CreateDependentString(MacroAssembler &masm, const JSAtomState &names,
 
     Label notInline;
 
-    int32_t maxInlineLength =
-        latin1 ? JSFatInlineString::MAX_LENGTH_LATIN1 : JSFatInlineString::MAX_LENGTH_TWO_BYTE;
+    int32_t maxInlineLength = latin1
+                              ? (int32_t) JSFatInlineString::MAX_LENGTH_LATIN1
+                              : (int32_t) JSFatInlineString::MAX_LENGTH_TWO_BYTE;
     masm.branch32(Assembler::Above, temp1, Imm32(maxInlineLength), &notInline);
 
     {
         // Make a normal or fat inline string.
         Label stringAllocated, fatInline;
 
-        int32_t maxNormalInlineLength =
-            latin1 ? JSInlineString::MAX_LENGTH_LATIN1 : JSInlineString::MAX_LENGTH_TWO_BYTE;
+        int32_t maxNormalInlineLength = latin1
+                                        ? (int32_t) JSInlineString::MAX_LENGTH_LATIN1
+                                        : (int32_t) JSInlineString::MAX_LENGTH_TWO_BYTE;
         masm.branch32(Assembler::Above, temp1, Imm32(maxNormalInlineLength), &fatInline);
 
         int32_t normalFlags = (latin1 ? JSString::LATIN1_CHARS_BIT : 0) | JSString::INIT_INLINE_FLAGS;
@@ -1298,7 +1300,7 @@ CreateDependentString(MacroAssembler &masm, const JSAtomState &names,
         Label noBase;
         masm.branchTest32(Assembler::Zero, Address(base, JSString::offsetOfFlags()),
                           Imm32(JSString::HAS_BASE_BIT), &noBase);
-        masm.branchTest32(Assembler::Zero, Address(base, JSString::offsetOfFlags()),
+        masm.branchTest32(Assembler::NonZero, Address(base, JSString::offsetOfFlags()),
                           Imm32(JSString::FLAT_BIT), &noBase);
         masm.loadPtr(Address(base, JSDependentString::offsetOfBase()), temp1);
         masm.storePtr(temp1, Address(string, JSDependentString::offsetOfBase()));
@@ -4008,6 +4010,7 @@ CodeGenerator::emitDebugResultChecks(LInstruction *ins)
       default:
         return true;
     }
+    return true;
 }
 #endif
 
@@ -7459,9 +7462,17 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
 
     // Check to make sure we didn't have a mid-build invalidation. If so, we
     // will trickle to jit::Compile() and return Method_Skipped.
+    uint32_t warmUpCount = script->getWarmUpCount();
     types::RecompileInfo recompileInfo;
     if (!types::FinishCompilation(cx, script, executionMode, constraints, &recompileInfo))
         return true;
+
+    // IonMonkey could have inferred better type information during
+    // compilation. Since adding the new information to the actual type
+    // information can reset the usecount, increase it back to what it was
+    // before.
+    if (warmUpCount > script->getWarmUpCount())
+        script->incWarmUpCounter(warmUpCount - script->getWarmUpCount());
 
     uint32_t scriptFrameSize = frameClass_ == FrameSizeClass::None()
                            ? frameDepth_
@@ -9720,18 +9731,31 @@ CodeGenerator::visitAsmJSInterruptCheck(LAsmJSInterruptCheck *lir)
 typedef bool (*RecompileFn)(JSContext *);
 static const VMFunction RecompileFnInfo = FunctionInfo<RecompileFn>(Recompile);
 
+typedef bool (*ForcedRecompileFn)(JSContext *);
+static const VMFunction ForcedRecompileFnInfo = FunctionInfo<ForcedRecompileFn>(ForcedRecompile);
+
 bool
 CodeGenerator::visitRecompileCheck(LRecompileCheck *ins)
 {
     Label done;
     Register tmp = ToRegister(ins->scratch());
-    OutOfLineCode *ool = oolCallVM(RecompileFnInfo, ins, (ArgList()), StoreRegisterTo(tmp));
+    OutOfLineCode *ool;
+    if (ins->mir()->forceRecompilation())
+        ool = oolCallVM(ForcedRecompileFnInfo, ins, (ArgList()), StoreRegisterTo(tmp));
+    else
+        ool = oolCallVM(RecompileFnInfo, ins, (ArgList()), StoreRegisterTo(tmp));
 
     // Check if warm-up counter is high enough.
-    masm.movePtr(ImmPtr(ins->mir()->script()->addressOfWarmUpCounter()), tmp);
-    Address ptr(tmp, 0);
-    masm.add32(Imm32(1), tmp);
-    masm.branch32(Assembler::BelowOrEqual, ptr, Imm32(ins->mir()->recompileThreshold()), &done);
+    AbsoluteAddress warmUpCount = AbsoluteAddress(ins->mir()->script()->addressOfWarmUpCounter());
+    if (ins->mir()->increaseWarmUpCounter()) {
+        masm.load32(warmUpCount, tmp);
+        masm.add32(Imm32(1), tmp);
+        masm.store32(tmp, warmUpCount);
+        masm.branch32(Assembler::BelowOrEqual, tmp, Imm32(ins->mir()->recompileThreshold()), &done);
+    } else {
+        masm.branch32(Assembler::BelowOrEqual, warmUpCount, Imm32(ins->mir()->recompileThreshold()),
+                      &done);
+    }
 
     // Check if not yet recompiling.
     CodeOffsetLabel label = masm.movWithPatch(ImmWord(uintptr_t(-1)), tmp);

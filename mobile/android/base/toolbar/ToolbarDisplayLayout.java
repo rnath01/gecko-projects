@@ -97,29 +97,29 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
 
     private boolean mIsAttached;
 
-    private ThemedTextView mTitle;
-    private int mTitlePadding;
+    private final ThemedTextView mTitle;
+    private final int mTitlePadding;
     private ToolbarPrefs mPrefs;
     private OnTitleChangeListener mTitleChangeListener;
 
-    private ImageButton mSiteSecurity;
+    private final ImageButton mSiteSecurity;
     private boolean mSiteSecurityVisible;
 
     // To de-bounce sets.
     private Bitmap mLastFavicon;
-    private ImageButton mFavicon;
+    private final ImageButton mFavicon;
     private int mFaviconSize;
 
-    private ImageButton mStop;
+    private final ImageButton mStop;
     private OnStopListener mStopListener;
 
-    private PageActionLayout mPageActionLayout;
+    private final PageActionLayout mPageActionLayout;
 
     private AlphaAnimation mLockFadeIn;
     private TranslateAnimation mTitleSlideLeft;
     private TranslateAnimation mTitleSlideRight;
 
-    private SiteIdentityPopup mSiteIdentityPopup;
+    private final SiteIdentityPopup mSiteIdentityPopup;
     private SecurityMode mSecurityMode;
 
     private PropertyAnimator mForwardAnim;
@@ -580,7 +580,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
 
     void prepareStopEditingAnimation(PropertyAnimator anim) {
         // Fade toolbar buttons (page actions, stop) after the entry
-        // is schrunk back to its original size.
+        // is shrunk back to its original size.
         anim.attach(mPageActionLayout,
                     PropertyAnimator.Property.ALPHA,
                     1);

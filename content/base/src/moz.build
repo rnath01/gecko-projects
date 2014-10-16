@@ -81,6 +81,7 @@ EXPORTS.mozilla.dom += [
     'StyleSheetList.h',
     'Text.h',
     'TreeWalker.h',
+    'WebSocket.h',
 ]
 
 UNIFIED_SOURCES += [
@@ -111,7 +112,6 @@ UNIFIED_SOURCES += [
     'nsAttrValue.cpp',
     'nsAttrValueOrString.cpp',
     'nsCCUncollectableMarker.cpp',
-    'nsChannelPolicy.cpp',
     'nsContentAreaDragDrop.cpp',
     'nsContentIterator.cpp',
     'nsContentList.cpp',

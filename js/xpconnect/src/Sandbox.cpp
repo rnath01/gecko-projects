@@ -11,7 +11,6 @@
 #include "AccessCheck.h"
 #include "jsfriendapi.h"
 #include "jsproxy.h"
-#include "js/OldDebugAPI.h"
 #include "js/StructuredClone.h"
 #include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
@@ -1242,7 +1241,8 @@ OptionsBase::ParseString(const char *name, nsCString &prop)
 
     char *tmp = JS_EncodeString(mCx, value.toString());
     NS_ENSURE_TRUE(tmp, false);
-    prop.Adopt(tmp, strlen(tmp));
+    prop.Assign(tmp, strlen(tmp));
+    js_free(tmp);
     return true;
 }
 

@@ -35,7 +35,7 @@ dictionary FilePropertyBag {
 dictionary ChromeFilePropertyBag : FilePropertyBag {
 
       DOMString name = "";
-
+      boolean temporary = false;
 };
 
 // Mozilla extensions
@@ -44,7 +44,7 @@ partial interface File {
   [GetterThrows]
   readonly attribute Date lastModifiedDate;
 
-  [GetterThrows]
+  [GetterThrows, ChromeOnly]
   readonly attribute DOMString mozFullPath;
 
 };

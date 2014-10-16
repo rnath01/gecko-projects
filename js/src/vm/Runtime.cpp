@@ -197,6 +197,7 @@ JSRuntime::JSRuntime(JSRuntime *parentRuntime)
     structuredCloneCallbacks(nullptr),
     telemetryCallback(nullptr),
     errorReporter(nullptr),
+    linkedAsmJSModules(nullptr),
     propertyRemovals(0),
 #if !EXPOSE_INTL_API
     thousandsSeparator(0),
@@ -399,7 +400,7 @@ JSRuntime::~JSRuntime()
     FreeScriptData(this);
 
 #ifdef DEBUG
-    /* Don't hurt everyone in leaky ol' Mozilla with a fatal JS_ASSERT! */
+    /* Don't hurt everyone in leaky ol' Mozilla with a fatal MOZ_ASSERT! */
     if (hasContexts()) {
         unsigned cxcount = 0;
         for (ContextIter acx(this); !acx.done(); acx.next()) {

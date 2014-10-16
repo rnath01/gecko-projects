@@ -11,6 +11,7 @@
 #include "mozilla/MouseEvents.h"
 #include "mozilla/Likely.h"
 
+#include "nsAlgorithm.h"
 #include "nsCOMPtr.h"
 #include "nsPresContext.h"
 #include "nsNameSpaceManager.h"
@@ -41,7 +42,6 @@
 #include "nsViewManager.h"
 #include "nsWidgetsCID.h"
 #include "nsBoxFrame.h"
-#include "nsBoxObject.h"
 #include "nsIURL.h"
 #include "nsNetUtil.h"
 #include "nsBoxLayoutState.h"
@@ -56,7 +56,7 @@
 #include "nsLayoutUtils.h"
 #include "nsIScrollableFrame.h"
 #include "nsDisplayList.h"
-#include "nsTreeBoxObject.h"
+#include "mozilla/dom/TreeBoxObject.h"
 #include "nsRenderingContext.h"
 #include "nsIScriptableRegion.h"
 #include <algorithm>
@@ -331,8 +331,8 @@ nsTreeBodyFrame::EnsureBoxObject()
         nsCOMPtr<nsITreeBoxObject> realTreeBoxObject = do_QueryInterface(pBox);
         if (realTreeBoxObject) {
           nsTreeBodyFrame* innerTreeBoxObject =
-            static_cast<nsTreeBoxObject*>(realTreeBoxObject.get())
-              ->GetCachedTreeBody();
+            static_cast<dom::TreeBoxObject*>(realTreeBoxObject.get())
+              ->GetCachedTreeBodyFrame();
           ENSURE_TRUE(!innerTreeBoxObject || innerTreeBoxObject == this);
           mTreeBoxObject = realTreeBoxObject;
         }
@@ -538,13 +538,6 @@ nsTreeBodyFrame::SetView(nsITreeView * aView)
 }
 
 nsresult
-nsTreeBodyFrame::GetFocused(bool* aFocused)
-{
-  *aFocused = mFocused;
-  return NS_OK;
-}
-
-nsresult
 nsTreeBodyFrame::SetFocused(bool aFocused)
 {
   if (mFocused != aFocused) {
@@ -569,25 +562,22 @@ nsTreeBodyFrame::GetTreeBody(nsIDOMElement** aElement)
   return mContent->QueryInterface(NS_GET_IID(nsIDOMElement), (void**)aElement);
 }
 
-nsresult
-nsTreeBodyFrame::GetRowHeight(int32_t* _retval)
+int32_t
+nsTreeBodyFrame::RowHeight() const
 {
-  *_retval = nsPresContext::AppUnitsToIntCSSPixels(mRowHeight);
-  return NS_OK;
+  return nsPresContext::AppUnitsToIntCSSPixels(mRowHeight);
 }
 
-nsresult
-nsTreeBodyFrame::GetRowWidth(int32_t *aRowWidth)
+int32_t
+nsTreeBodyFrame::RowWidth()
 {
-  *aRowWidth = nsPresContext::AppUnitsToIntCSSPixels(CalcHorzWidth(GetScrollParts()));
-  return NS_OK;
+  return nsPresContext::AppUnitsToIntCSSPixels(CalcHorzWidth(GetScrollParts()));
 }
 
-nsresult
-nsTreeBodyFrame::GetHorizontalPosition(int32_t *aHorizontalPosition)
+int32_t
+nsTreeBodyFrame::GetHorizontalPosition() const
 {
-  *aHorizontalPosition = nsPresContext::AppUnitsToIntCSSPixels(mHorzPosition); 
-  return NS_OK;
+  return nsPresContext::AppUnitsToIntCSSPixels(mHorzPosition);
 }
 
 nsresult
@@ -4046,10 +4036,9 @@ nsresult
 nsTreeBodyFrame::ScrollToRow(int32_t aRow)
 {
   ScrollParts parts = GetScrollParts();
-  nsresult rv = ScrollToRowInternal(parts, aRow);
-  NS_ENSURE_SUCCESS(rv, rv);
+  ScrollToRowInternal(parts, aRow);
   UpdateScrollbars(parts);
-  return rv;
+  return NS_OK;
 }
 
 nsresult nsTreeBodyFrame::ScrollToRowInternal(const ScrollParts& aParts, int32_t aRow)
@@ -4062,62 +4051,40 @@ nsresult nsTreeBodyFrame::ScrollToRowInternal(const ScrollParts& aParts, int32_t
 nsresult
 nsTreeBodyFrame::ScrollByLines(int32_t aNumLines)
 {
-  if (!mView)
+  if (!mView) {
     return NS_OK;
-
-  int32_t newIndex = mTopRowIndex + aNumLines;
-  if (newIndex < 0)
-    newIndex = 0;
-  else {
-    int32_t lastPageTopRow = mRowCount - mPageLength;
-    if (newIndex > lastPageTopRow)
-      newIndex = lastPageTopRow;
   }
+  int32_t newIndex = mTopRowIndex + aNumLines;
   ScrollToRow(newIndex);
-  
   return NS_OK;
 }
 
 nsresult
 nsTreeBodyFrame::ScrollByPages(int32_t aNumPages)
 {
-  if (!mView)
+  if (!mView) {
     return NS_OK;
-
-  int32_t newIndex = mTopRowIndex + aNumPages * mPageLength;
-  if (newIndex < 0)
-    newIndex = 0;
-  else {
-    int32_t lastPageTopRow = mRowCount - mPageLength;
-    if (newIndex > lastPageTopRow)
-      newIndex = lastPageTopRow;
   }
+  int32_t newIndex = mTopRowIndex + aNumPages * mPageLength;
   ScrollToRow(newIndex);
-    
   return NS_OK;
 }
 
 nsresult
 nsTreeBodyFrame::ScrollInternal(const ScrollParts& aParts, int32_t aRow)
 {
-  if (!mView)
+  if (!mView) {
     return NS_OK;
-
-  int32_t delta = aRow - mTopRowIndex;
-
-  if (delta > 0) {
-    if (mTopRowIndex == (mRowCount - mPageLength + 1))
-      return NS_OK;
   }
-  else {
-    if (mTopRowIndex == 0)
-      return NS_OK;
+  int32_t maxTopRowIndex = std::max(0, mRowCount - mPageLength);
+  MOZ_ASSERT(mTopRowIndex == mozilla::clamped(mTopRowIndex, 0, maxTopRowIndex));
+
+  aRow = mozilla::clamped(aRow, 0, maxTopRowIndex);
+  if (aRow == mTopRowIndex) {
+    return NS_OK;
   }
-
-  mTopRowIndex += delta;
-
+  mTopRowIndex = aRow;
   Invalidate();
-
   PostScrollEvent();
   return NS_OK;
 }

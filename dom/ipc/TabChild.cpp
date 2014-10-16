@@ -81,8 +81,8 @@
 #include "ClientLayerManager.h"
 #include "LayersLogging.h"
 #include "nsIOService.h"
-
 #include "nsColorPickerProxy.h"
+#include "nsPresShell.h"
 
 #define BROWSER_ELEMENT_CHILD_SCRIPT \
     NS_LITERAL_STRING("chrome://global/content/BrowserElementChild.js")
@@ -2362,6 +2362,10 @@ TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& event,
     SendReplyKeyEvent(localEvent);
   }
 
+  if (PresShell::BeforeAfterKeyboardEventEnabled()) {
+    SendDispatchAfterKeyboardEvent(localEvent);
+  }
+
   return true;
 }
 
@@ -3018,6 +3022,7 @@ TabChild::RecvUIResolutionChanged()
 TabChildGlobal::TabChildGlobal(TabChildBase* aTabChild)
 : mTabChild(aTabChild)
 {
+  SetIsNotDOMBinding();
 }
 
 TabChildGlobal::~TabChildGlobal()

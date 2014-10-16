@@ -24,7 +24,6 @@
 #include "prlink.h"
 #include "ScopedGLHelpers.h"
 #include "SharedSurfaceGL.h"
-#include "SurfaceStream.h"
 #include "GfxTexturesReporter.h"
 #include "TextureGarbageBin.h"
 #include "gfx2DGlue.h"
@@ -85,6 +84,7 @@ static const char *sExtensionNames[] = {
     "GL_ARB_framebuffer_sRGB",
     "GL_ARB_half_float_pixel",
     "GL_ARB_instanced_arrays",
+    "GL_ARB_invalidate_subdata",
     "GL_ARB_map_buffer_range",
     "GL_ARB_occlusion_query2",
     "GL_ARB_pixel_buffer_object",
@@ -191,6 +191,8 @@ ParseGLVersion(GLContext* gl, unsigned int* version)
 
         // If it's not an OpenGL (ES) 3.0 context, we will have an error
         error = gl->fGetError();
+        while (gl->fGetError() != LOCAL_GL_NO_ERROR);
+
         if (error == LOCAL_GL_NO_ERROR &&
             majorVersion > 0 &&
             minorVersion >= 0)
@@ -1355,6 +1357,21 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
             }
         }
 
+        if (IsSupported(GLFeature::invalidate_framebuffer)) {
+            SymLoadStruct invSymbols[] = {
+                { (PRFuncPtr *) &mSymbols.fInvalidateFramebuffer,    { "InvalidateFramebuffer", nullptr } },
+                { (PRFuncPtr *) &mSymbols.fInvalidateSubFramebuffer, { "InvalidateSubFramebuffer", nullptr } },
+                END_SYMBOLS
+            };
+
+            if (!LoadSymbols(&invSymbols[0], trygl, prefix)) {
+                NS_ERROR("GL supports framebuffer invalidation without supplying its functions.");
+
+                MarkUnsupported(GLFeature::invalidate_framebuffer);
+                ClearSymbols(invSymbols);
+            }
+        }
+
         if (IsExtensionSupported(KHR_debug)) {
             SymLoadStruct extSymbols[] = {
                 { (PRFuncPtr*) &mSymbols.fDebugMessageControl,  { "DebugMessageControl",  "DebugMessageControlKHR",  nullptr } },
@@ -1988,25 +2005,6 @@ GLContext::AssembleOffscreenFBs(const GLuint colorMSRB,
 
     return isComplete;
 }
-
-
-
-bool
-GLContext::PublishFrame()
-{
-    MOZ_ASSERT(mScreen);
-
-    return mScreen->PublishFrame(OffscreenSize());
-}
-
-SharedSurface*
-GLContext::RequestFrame()
-{
-    MOZ_ASSERT(mScreen);
-
-    return mScreen->Stream()->SwapConsumer();
-}
-
 
 
 void
