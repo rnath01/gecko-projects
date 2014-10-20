@@ -7,10 +7,13 @@
 #include "mozilla/ContentEvents.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/EventDispatcher.h"
+#include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/Likely.h"
 
+#include "gfxUtils.h"
 #include "nsAlgorithm.h"
 #include "nsCOMPtr.h"
 #include "nsPresContext.h"
@@ -69,6 +72,7 @@
 #include "nsBidiUtils.h"
 
 using namespace mozilla;
+using namespace mozilla::gfx;
 using namespace mozilla::layout;
 
 // Enumeration function that cancels all the image requests in our cache
@@ -2757,19 +2761,6 @@ nsTreeBodyFrame::HandleEvent(nsPresContext* aPresContext,
   return NS_OK;
 }
 
-static nsLineStyle
-ConvertBorderStyleToLineStyle(uint8_t aBorderStyle)
-{
-  switch (aBorderStyle) {
-    case NS_STYLE_BORDER_STYLE_DOTTED:
-      return nsLineStyle_kDotted;
-    case NS_STYLE_BORDER_STYLE_DASHED:
-      return nsLineStyle_kDashed;
-    default:
-      return nsLineStyle_kSolid;
-  }
-}
-
 static void
 PaintTreeBody(nsIFrame* aFrame, nsRenderingContext* aCtx,
               const nsRect& aDirtyRect, nsPoint aPt)
@@ -3189,19 +3180,24 @@ nsTreeBodyFrame::PaintCell(int32_t              aRowIndex,
 
       const nsStyleBorder* borderStyle = lineContext->StyleBorder();
       nscolor color;
-      bool foreground;
-      borderStyle->GetBorderColor(NS_SIDE_LEFT, color, foreground);
-      if (foreground) {
+      bool useForegroundColor;
+      borderStyle->GetBorderColor(NS_SIDE_LEFT, color, useForegroundColor);
+      if (useForegroundColor) {
         // GetBorderColor didn't touch color, thus grab it from the treeline context
         color = lineContext->StyleColor()->mColor;
       }
-      aRenderingContext.SetColor(color);
+      ColorPattern colorPatt(ToDeviceColor(color));
+
       uint8_t style;
       style = borderStyle->GetBorderStyle(NS_SIDE_LEFT);
-      aRenderingContext.SetLineStyle(ConvertBorderStyleToLineStyle(style));
+      StrokeOptions strokeOptions;
+      nsLayoutUtils::InitDashPattern(strokeOptions, style);
 
       nscoord srcX = currX + twistyRect.width - mIndentation / 2;
       nscoord lineY = (aRowIndex - mTopRowIndex) * mRowHeight + aPt.y;
+
+      DrawTarget* drawTarget = aRenderingContext.GetDrawTarget();
+      nsPresContext* pc = PresContext();
 
       // Don't paint off our cell.
       if (srcX <= cellRect.x + cellRect.width) {
@@ -3212,7 +3208,12 @@ nsTreeBodyFrame::PaintCell(int32_t              aRowIndex,
           srcX = currX + remainingWidth - (srcX - cellRect.x);
           destX = currX + remainingWidth - (destX - cellRect.x);
         }
-        aRenderingContext.DrawLine(srcX, lineY + mRowHeight / 2, destX, lineY + mRowHeight / 2);
+        Point p1(pc->CSSPixelsToDevPixels(srcX),
+                 pc->CSSPixelsToDevPixels(lineY + mRowHeight / 2));
+        Point p2(pc->CSSPixelsToDevPixels(destX),
+                 pc->CSSPixelsToDevPixels(lineY + mRowHeight / 2));
+        SnapLineToDevicePixelsForStroking(p1, p2, *drawTarget);
+        drawTarget->StrokeLine(p1, p2, colorPatt, strokeOptions);
       }
 
       int32_t currentParent = aRowIndex;
@@ -3221,10 +3222,18 @@ nsTreeBodyFrame::PaintCell(int32_t              aRowIndex,
           // Paint full vertical line only if we have next sibling.
           bool hasNextSibling;
           mView->HasNextSibling(currentParent, aRowIndex, &hasNextSibling);
+          Point p1(pc->CSSPixelsToDevPixels(srcX),
+                   pc->CSSPixelsToDevPixels(lineY));
+          Point p2;
+          p2.x = pc->CSSPixelsToDevPixels(srcX);
+
           if (hasNextSibling)
-            aRenderingContext.DrawLine(srcX, lineY, srcX, lineY + mRowHeight);
+            p2.y = pc->CSSPixelsToDevPixels(lineY + mRowHeight);
           else if (i == level)
-            aRenderingContext.DrawLine(srcX, lineY, srcX, lineY + mRowHeight / 2);
+            p2.y = pc->CSSPixelsToDevPixels(lineY + mRowHeight / 2);
+
+          SnapLineToDevicePixelsForStroking(p1, p2, *drawTarget);
+          drawTarget->StrokeLine(p1, p2, colorPatt, strokeOptions);
         }
 
         int32_t parent;
@@ -3551,6 +3560,9 @@ nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
   if (text.Length() == 0)
     return; // Don't paint an empty string. XXX What about background/borders? Still paint?
 
+  int32_t appUnitsPerDevPixel = PresContext()->AppUnitsPerDevPixel();
+  DrawTarget* drawTarget = aRenderingContext.GetDrawTarget();
+
   // Resolve style for the text.  It contains all the info we need to lay ourselves
   // out and to paint.
   nsStyleContext* textContext = GetPseudoStyleContext(nsCSSAnonBoxes::moztreecelltext);
@@ -3600,6 +3612,7 @@ nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
   textRect.Deflate(bp);
 
   // Set our color.
+  ColorPattern color(ToDeviceColor(textContext->StyleColor()->mColor));
   aRenderingContext.SetColor(textContext->StyleColor()->mColor);
 
   // Draw decorations.
@@ -3609,14 +3622,23 @@ nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
   nscoord size;
   if (decorations & (NS_FONT_DECORATION_OVERLINE | NS_FONT_DECORATION_UNDERLINE)) {
     fontMet->GetUnderline(offset, size);
-    if (decorations & NS_FONT_DECORATION_OVERLINE)
-      aRenderingContext.FillRect(textRect.x, textRect.y, textRect.width, size);
-    if (decorations & NS_FONT_DECORATION_UNDERLINE)
-      aRenderingContext.FillRect(textRect.x, textRect.y + baseline - offset, textRect.width, size);
+    if (decorations & NS_FONT_DECORATION_OVERLINE) {
+      nsRect r(textRect.x, textRect.y, textRect.width, size);
+      Rect devPxRect = NSRectToRect(r, appUnitsPerDevPixel, *drawTarget);
+      drawTarget->FillRect(devPxRect, color);
+    }
+    if (decorations & NS_FONT_DECORATION_UNDERLINE) {
+      nsRect r(textRect.x, textRect.y + baseline - offset,
+               textRect.width, size);
+      Rect devPxRect = NSRectToRect(r, appUnitsPerDevPixel, *drawTarget);
+      drawTarget->FillRect(devPxRect, color);
+    }
   }
   if (decorations & NS_FONT_DECORATION_LINE_THROUGH) {
     fontMet->GetStrikeout(offset, size);
-    aRenderingContext.FillRect(textRect.x, textRect.y + baseline - offset, textRect.width, size);
+    nsRect r(textRect.x, textRect.y + baseline - offset, textRect.width, size);
+    Rect devPxRect = NSRectToRect(r, appUnitsPerDevPixel, *drawTarget);
+    drawTarget->FillRect(devPxRect, color);
   }
   nsStyleContext* cellContext = GetPseudoStyleContext(nsCSSAnonBoxes::moztreecell);
 
@@ -3762,7 +3784,12 @@ nsTreeBodyFrame::PaintProgressMeter(int32_t              aRowIndex,
           nsRect(meterRect.TopLeft(), size), meterRect, meterRect.TopLeft(),
           aDirtyRect, imgIContainer::FLAG_NONE);
     } else {
-      aRenderingContext.FillRect(meterRect);
+      DrawTarget* drawTarget = aRenderingContext.GetDrawTarget();
+      int32_t appUnitsPerDevPixel = PresContext()->AppUnitsPerDevPixel();
+      Rect rect = NSRectToRect(meterRect, appUnitsPerDevPixel, *drawTarget);
+      ColorPattern color(ToDeviceColor(
+                           GetVisitedDependentColor(eCSSProperty_color)));
+      drawTarget->FillRect(rect, color);
     }
   }
   else if (state == nsITreeView::PROGRESS_UNDETERMINED) {
