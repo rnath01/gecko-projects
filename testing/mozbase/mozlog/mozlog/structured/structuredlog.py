@@ -4,6 +4,7 @@
 
 from __future__ import unicode_literals
 
+from collections import defaultdict
 from multiprocessing import current_process
 from threading import current_thread, Lock
 import json
@@ -95,6 +96,7 @@ def log_actions():
 class LoggerState(object):
     def __init__(self):
         self.handlers = []
+        self.callables = defaultdict(list)
         self.running_tests = set()
         self.suite_started = False
 
@@ -124,12 +126,48 @@ class StructuredLogger(object):
         """Add a handler to the current logger"""
         self._state.handlers.append(handler)
 
+    def _remove_from_list(self, lst, item):
+        for i, candidate_item in enumerate(lst[:]):
+            if candidate_item == item:
+                del lst[i]
+                break
+
     def remove_handler(self, handler):
         """Remove a handler from the current logger"""
-        for i, candidate_handler in enumerate(self._state.handlers[:]):
+        self._remove_from_list(self._state.callables[handler.mozlog_identifier], handler)
+        self._remove_from_list(self.handlers, handler)
+
+    def add_callable(self, handler):
+        """Register a callable (handler or formatter wrapper) with the logger to receive
+        messages from users."""
+        if handler.mozlog_identifier is not None:
+            self._state.callables[handler.mozlog_identifier].append(handler)
+
+    def _remove_callable(self, handler):
+        """Remove a handler from known callables in response to a call to remove_handler."""
+        for i, candidate_handler in enumerate(self._callables[handler.mozlog_identifier][:]):
             if candidate_handler == handler:
-                del self._state.handlers[i]
+                del callables[i]
                 break
+
+    @property
+    def _callables(self):
+        """Used as a view of each handler registered on the logger that may
+        respond to a message from the messaging api.
+        """
+        return self._state.callables
+
+    def send_message(self, target, command, *args):
+        """Send a message to each handler or formatter (and any handler wrappers) configured
+        for this logger.
+        :param target: The name used by mozlog to identify the handler to message.
+        :param command: The command to issue.
+        :param args: Any arguments known to the target for specialized behavior.
+        """
+        for handler in self._callables[target]:
+            callback = handler.message_handlers.get(command)
+            if callback is not None:
+                callback(*args)
 
     @property
     def handlers(self):
