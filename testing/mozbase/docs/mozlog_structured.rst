@@ -223,9 +223,6 @@ and writes it to a file.
 .. autoclass:: LogLevelFilter
   :members:
 
-.. autoclass:: BufferingLogFilter
-  :members:
-
 Formatters
 ----------
 

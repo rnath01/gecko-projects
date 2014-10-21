@@ -7,12 +7,9 @@ import codecs
 
 from ..structuredlog import log_levels
 from statushandler import StatusHandler
-from bufferhandler import BufferingLogFilter
 
 
 class BaseHandler(object):
-    mozlog_identifier = None
-
     def __init__(self, formatter=str):
         self.formatter = formatter
         self.filters = []
@@ -34,8 +31,6 @@ class LogLevelFilter(object):
     :param inner: Handler to use for messages that pass this filter
     :param level: Minimum log level to process
     """
-    mozlog_identifier = None
-
     def __init__(self, inner, level):
         self.inner = inner
         self.level = log_levels[level.upper()]
