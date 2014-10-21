@@ -103,22 +103,15 @@ class MochitestFormatter(TbplFormatter):
 ### output processing
 class MessageLogger(object):
     """File-like object for logging messages (structured logs)"""
-    BUFFERING_THRESHOLD = 100
     # This is a delimiter used by the JS side to avoid logs interleaving
     DELIMITER = u'\ue175\uee31\u2c32\uacbf'
-    BUFFERED_ACTIONS = set(['test_status', 'log'])
     VALID_ACTIONS = set(['suite_start', 'suite_end', 'test_start', 'test_end',
                          'test_status', 'log',
                          'buffering_on', 'buffering_off'])
 
-    def __init__(self, logger, buffering=True):
+    def __init__(self, logger):
         self.logger = logger
-        self.buffering = buffering
         self.tests_started = False
-
-        # Message buffering
-        self.buffered_messages = []
-
         # Failures reporting, after the end of the tests execution
         self.errors = []
 
@@ -137,67 +130,53 @@ class MessageLogger(object):
             try:
                 message = json.loads(fragment)
                 if not self.valid_message(message):
-                    message = dict(action='log', level='info', message=fragment, unstructured=True)
+                    message = dict(action='log', level='info', message=fragment, bypass_mozlog_buffer=True)
             except ValueError:
-                message = dict(action='log', level='info', message=fragment, unstructured=True)
+                message = dict(action='log', level='info', message=fragment, bypass_mozlog_buffer=True)
             messages.append(message)
 
         return messages
 
     def process_message(self, message):
         """Processes a structured message. Takes into account buffering, errors, ..."""
-        if not self.tests_started and message['action'] == 'test_start':
+        action = message['action']
+        print "Incoming mochitest log message: %s" % message
+        if not self.tests_started and action == 'test_start':
             self.tests_started = True
 
         # Activation/deactivating message buffering from the JS side
-        if message['action'] == 'buffering_on':
-            self.buffering = True
+        if action == 'buffering_on':
+            self.logger.send_message("buffer", "on")
             return
-        if message['action'] == 'buffering_off':
-            self.buffering = False
+        if action == 'buffering_off':
+            self.logger.send_message("buffer", "off")
             return
-
-        unstructured = False
-        if 'unstructured' in message:
-            unstructured = True
-            message.pop('unstructured')
 
         # Saving errors/failures to be shown at the end of the test run
-        is_error = 'expected' in message or (message['action'] == 'log' and message['message'].startswith('TEST-UNEXPECTED'))
+        is_error = 'expected' in message or (action == 'log' and message['message'].startswith('TEST-UNEXPECTED'))
         if is_error:
             self.errors.append(message)
 
         # If we don't do any buffering, or the tests haven't started, or the message was unstructured, it is directly logged
-        if not self.buffering or unstructured or not self.tests_started:
+        if not self.tests_started:
+            self.logger.send_message("buffer", "off")
             self.logger.log_raw(message)
+            self.logger.send_message("buffer", "on")
             return
 
-        # If a test ended, we clean the buffer
-        if message['action'] == 'test_end':
-            self.buffered_messages = []
+        self.logger.log_raw(message)
 
-        # Buffering logic; Also supports "raw" errors (in log messages) because some tests manually dump 'TEST-UNEXPECTED-FAIL'
-        if not is_error and message['action'] not in self.BUFFERED_ACTIONS:
-            self.logger.log_raw(message)
-            return
-
-        # test_status messages buffering
         if is_error:
-            if self.buffered_messages:
-                snipped = len(self.buffered_messages) - self.BUFFERING_THRESHOLD
-                if snipped > 0:
-                  self.logger.info("<snipped {0} output lines - "
-                                   "if you need more context, please use "
-                                   "SimpleTest.requestCompleteLog() in your test>"
-                                   .format(snipped))
-                # Dumping previously buffered messages
-                self.dump_buffered(limit=True)
+            self.logger.send_message("buffer", "off")
+            self.logger.info("Flushing buffered messages on test failure")
+            self.logger.send_message("buffer", "flush")
+            self.logger.send_message("buffer", "on")
 
-            # Logging the error message
-            self.logger.log_raw(message)
-        else:
-            # Buffering the message
-            self.buffered_messages.append(message)
+        if action == 'test_end':
+            self.logger.send_message("buffer", "clear")
+            self.logger.send_message("buffer", "off")
+        if action == 'test_start':
+            self.logger.send_message("buffer", "on")
 
     def write(self, line):
         messages = self.parse_line(line)
@@ -206,22 +185,11 @@ class MessageLogger(object):
         return messages
 
     def flush(self):
-        sys.stdout.flush()
-
-    def dump_buffered(self, limit=False):
-        if limit:
-            dumped_messages = self.buffered_messages[-self.BUFFERING_THRESHOLD:]
-        else:
-            dumped_messages = self.buffered_messages
-
-        for buf_msg in dumped_messages:
-            self.logger.log_raw(buf_msg)
-        # Cleaning the list of buffered messages
-        self.buffered_messages = []
+        for h in self.logger.handlers:
+            h.stream.flush()
 
     def finish(self):
-        self.dump_buffered()
-        self.buffering = False
+        self.logger.send_message("buffer", "flush")
         self.logger.suite_end()
 
 ####################
@@ -435,8 +403,8 @@ class MochitestUtilsMixin(object):
     self._locations = None
 
     if self.log is None:
-      commandline.log_formatters["tbpl"]  = (MochitestFormatter,
-                                             "Mochitest specific tbpl formatter")
+      commandline.log_formatters["tbpl"] = (MochitestFormatter,
+                                            "Mochitest specific tbpl formatter")
       self.log = commandline.setup_logging("mochitest",
                                            logger_options,
                                            {
@@ -1404,15 +1372,11 @@ class Mochitest(MochitestUtilsMixin):
              detectShutdownLeaks=False,
              screenshotOnFail=False,
              testPath=None,
-             bisectChunk=None,
-             quiet=False):
+             bisectChunk=None):
     """
     Run the app, log the duration it took to execute, return the status code.
     Kills the app if it runs for longer than |maxTime| seconds, or outputs nothing for |timeout| seconds.
     """
-
-    # configure the message logger buffering
-    self.message_logger.buffering = quiet
 
     # debugger information
     interactive = False
@@ -1842,8 +1806,7 @@ class Mochitest(MochitestUtilsMixin):
                              detectShutdownLeaks=detectShutdownLeaks,
                              screenshotOnFail=options.screenshotOnFail,
                              testPath=options.testPath,
-                             bisectChunk=options.bisectChunk,
-                             quiet=options.quiet
+                             bisectChunk=options.bisectChunk
         )
       except KeyboardInterrupt:
         self.log.info("runtests.py | Received keyboard interrupt.\n");
@@ -1881,8 +1844,8 @@ class Mochitest(MochitestUtilsMixin):
     else:
       error_message = "TEST-UNEXPECTED-TIMEOUT | %s | application timed out after %d seconds with no output" % (self.lastTestSeen, int(timeout))
 
-    self.message_logger.dump_buffered()
-    self.message_logger.buffering = False
+    self.message_logger.logger.dump_buffered()
+    self.message_logger.logger.disable_buffering()
     self.log.error(error_message)
 
     browserProcessId = browserProcessId or proc.pid
@@ -2120,6 +2083,11 @@ def main():
     # parsing error
     sys.exit(1)
   logger_options = {key: value for key, value in vars(options).iteritems() if key.startswith('log')}
+  # This translates --quiet into the intended meaning by buffering all
+  # formatters.
+  if options.quiet:
+      commandline.formatter_option_defaults['buffer'] = 100
+
   mochitest = Mochitest(logger_options)
   options = parser.verifyOptions(options, mochitest)
 

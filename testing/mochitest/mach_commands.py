@@ -378,6 +378,11 @@ class MochitestRunner(MozbuildObject):
 
 
         logger_options = {key: value for key, value in vars(options).iteritems() if key.startswith('log')}
+        # This is a hack to translate --quiet into the intended meaning by buffering all
+        # formatters.
+        if options.quiet:
+            structured.commandline.formatter_option_defaults['buffer'] = 100
+
         runner = mochitest.Mochitest(logger_options)
         options = opts.verifyOptions(options, runner)
 
