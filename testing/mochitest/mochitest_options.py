@@ -413,9 +413,7 @@ class MochitestOptions(optparse.OptionParser):
          { "action": "store_true",
            "default": False,
            "dest": "quiet",
-           "help": ("Do not print test log lines unless a failure occurs. [DEPRECATED -"
-                    "Buffering for individual formatters may be set with"
-                    "--log-<formatter>-buffer=<size>]")
+           "help": "Do not print test log lines unless a failure occurs."
          }],
         [["--pidfile"],
         { "action": "store",

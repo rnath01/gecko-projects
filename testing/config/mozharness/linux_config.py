@@ -12,8 +12,7 @@ config = {
         "--extra-profile-file=tests/bin/plugins", "--symbols-path=%(symbols_path)s",
         "--certificate-path=tests/certs", "--autorun", "--close-when-done",
         "--console-level=INFO", "--setpref=webgl.force-enabled=true",
-        "--log-raw=%(raw_log_file)s",
-        "--log-tbpl-buffer=100",
+        "--quiet", "--log-raw=%(raw_log_file)s",
         "--use-test-media-devices"
     ],
     "webapprt_options": [

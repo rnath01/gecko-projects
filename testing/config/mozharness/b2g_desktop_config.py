@@ -9,8 +9,7 @@ config = {
         "--profile=%(gaia_profile)s", "--app=%(application)s", "--desktop",
         "--utility-path=%(utility_path)s", "--certificate-path=%(cert_path)s",
         "--symbols-path=%(symbols_path)s", "--browser-arg=%(browser_arg)s",
-        "--log-raw=%(raw_log_file)s",
-        "--log-tbpl-buffer=100",
+        "--quiet", "--log-raw=%(raw_log_file)s"
     ],
 
     "reftest_options": [
