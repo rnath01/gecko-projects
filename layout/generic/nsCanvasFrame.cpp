@@ -246,7 +246,8 @@ nsDisplayCanvasBackgroundColor::Paint(nsDisplayListBuilder* aBuilder,
   if (NS_GET_A(mColor) > 0) {
     DrawTarget* drawTarget = aCtx->GetDrawTarget();
     int32_t appUnitsPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
-    Rect devPxRect = NSRectToRect(bgClipRect, appUnitsPerDevPixel, *drawTarget);
+    Rect devPxRect =
+      NSRectToSnappedRect(bgClipRect, appUnitsPerDevPixel, *drawTarget);
     drawTarget->FillRect(devPxRect, ColorPattern(ToDeviceColor(mColor)));
   }
 }
@@ -300,7 +301,7 @@ nsDisplayCanvasBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
       ctx->SetMatrix(
         ctx->CurrentMatrix().Translate(-destRect.x, -destRect.y));
       context = new nsRenderingContext();
-      context->Init(aCtx->DeviceContext(), ctx);
+      context->Init(ctx);
     }
   }
 #endif

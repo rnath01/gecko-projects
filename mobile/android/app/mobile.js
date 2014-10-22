@@ -560,6 +560,12 @@ pref("media.preload.auto", 2);    // preload metadata if preload=auto
 // of at least 4.
 pref("media.video-queue.default-size", 3);
 
+// Enable the MediaCodec PlatformDecoderModule by default.
+pref("media.fragmented-mp4.exposed", true);
+pref("media.fragmented-mp4.enabled", true);
+pref("media.fragmented-mp4.android-media-codec.enabled", true);
+pref("media.fragmented-mp4.android-media-codec.preferred", true);
+
 // optimize images memory usage
 pref("image.mem.decodeondraw", true);
 pref("image.mem.min_discard_timeout_ms", 10000);
@@ -718,7 +724,6 @@ pref("app.orientation.default", "");
 // back to the system.
 pref("memory.free_dirty_pages", true);
 
-pref("layout.imagevisibility.enabled", true);
 pref("layout.imagevisibility.numscrollportwidths", 1);
 pref("layout.imagevisibility.numscrollportheights", 1);
 

@@ -1549,6 +1549,8 @@ var gBrowserInit = {
     // initialize the sync UI
     gSyncUI.init();
 #endif
+
+    gRemoteTabsUI.init();
   },
 
   nonBrowserWindowShutdown: function() {
@@ -2576,8 +2578,8 @@ let BrowserOnClick = {
         TabCrashReporter.submitCrashReport(browser);
       }
 #endif
-
-      TabCrashReporter.reloadCrashedTab(browser);
+      let tab = gBrowser.getTabForBrowser(browser);
+      SessionStore.reviveCrashedTab(tab);
     }
   },
 
@@ -6974,7 +6976,9 @@ let gPrivateBrowsingUI = {
 
 let gRemoteTabsUI = {
   init: function() {
-    if (window.location.href != getBrowserURL()) {
+    if (window.location.href != getBrowserURL() &&
+        // Also check hidden window for the Mac no-window case
+        window.location.href != "chrome://browser/content/hiddenWindow.xul") {
       return;
     }
 

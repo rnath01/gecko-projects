@@ -2797,8 +2797,14 @@ nsTreeBodyFrame::PaintTreeBody(nsRenderingContext& aRenderingContext,
 {
   // Update our available height and our page count.
   CalcInnerBox();
-  aRenderingContext.ThebesContext()->Save();
-  aRenderingContext.IntersectClip(mInnerBox + aPt);
+
+  DrawTarget* drawTarget = aRenderingContext.GetDrawTarget();
+  gfxContext* gfx = aRenderingContext.ThebesContext();
+
+  gfx->Save();
+  gfx->Clip(NSRectToSnappedRect(mInnerBox + aPt,
+                                PresContext()->AppUnitsPerDevPixel(),
+                                *drawTarget));
   int32_t oldPageCount = mPageLength;
   if (!mHasFixedRowCount)
     mPageLength = mInnerBox.height/mRowHeight;
@@ -2856,7 +2862,7 @@ nsTreeBodyFrame::PaintTreeBody(nsRenderingContext& aRenderingContext,
       PaintDropFeedback(feedbackRect, PresContext(), aRenderingContext, aDirtyRect, aPt);
     }
   }
-  aRenderingContext.ThebesContext()->Restore();
+  gfx->Restore();
 }
 
 
@@ -3613,7 +3619,6 @@ nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
 
   // Set our color.
   ColorPattern color(ToDeviceColor(textContext->StyleColor()->mColor));
-  aRenderingContext.SetColor(textContext->StyleColor()->mColor);
 
   // Draw decorations.
   uint8_t decorations = textContext->StyleTextReset()->mTextDecorationLine;
@@ -3624,20 +3629,23 @@ nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
     fontMet->GetUnderline(offset, size);
     if (decorations & NS_FONT_DECORATION_OVERLINE) {
       nsRect r(textRect.x, textRect.y, textRect.width, size);
-      Rect devPxRect = NSRectToRect(r, appUnitsPerDevPixel, *drawTarget);
+      Rect devPxRect =
+        NSRectToSnappedRect(r, appUnitsPerDevPixel, *drawTarget);
       drawTarget->FillRect(devPxRect, color);
     }
     if (decorations & NS_FONT_DECORATION_UNDERLINE) {
       nsRect r(textRect.x, textRect.y + baseline - offset,
                textRect.width, size);
-      Rect devPxRect = NSRectToRect(r, appUnitsPerDevPixel, *drawTarget);
+      Rect devPxRect =
+        NSRectToSnappedRect(r, appUnitsPerDevPixel, *drawTarget);
       drawTarget->FillRect(devPxRect, color);
     }
   }
   if (decorations & NS_FONT_DECORATION_LINE_THROUGH) {
     fontMet->GetStrikeout(offset, size);
     nsRect r(textRect.x, textRect.y + baseline - offset, textRect.width, size);
-    Rect devPxRect = NSRectToRect(r, appUnitsPerDevPixel, *drawTarget);
+    Rect devPxRect =
+      NSRectToSnappedRect(r, appUnitsPerDevPixel, *drawTarget);
     drawTarget->FillRect(devPxRect, color);
   }
   nsStyleContext* cellContext = GetPseudoStyleContext(nsCSSAnonBoxes::moztreecell);
@@ -3647,6 +3655,7 @@ nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
     ctx->PushGroup(gfxContentType::COLOR_ALPHA);
   }
 
+  ctx->SetColor(textContext->StyleColor()->mColor);
   nsLayoutUtils::DrawString(this, &aRenderingContext, text.get(), text.Length(),
                             textRect.TopLeft() + nsPoint(0, baseline), cellContext);
 
@@ -3752,9 +3761,6 @@ nsTreeBodyFrame::PaintProgressMeter(int32_t              aRowIndex,
     // Adjust the rect for its border and padding.
     AdjustForBorderPadding(meterContext, meterRect);
 
-    // Set our color.
-    aRenderingContext.SetColor(meterContext->StyleColor()->mColor);
-
     // Now obtain the value for our cell.
     nsAutoString value;
     mView->GetCellValue(aRowIndex, aColumn, value);
@@ -3786,9 +3792,9 @@ nsTreeBodyFrame::PaintProgressMeter(int32_t              aRowIndex,
     } else {
       DrawTarget* drawTarget = aRenderingContext.GetDrawTarget();
       int32_t appUnitsPerDevPixel = PresContext()->AppUnitsPerDevPixel();
-      Rect rect = NSRectToRect(meterRect, appUnitsPerDevPixel, *drawTarget);
-      ColorPattern color(ToDeviceColor(
-                           GetVisitedDependentColor(eCSSProperty_color)));
+      Rect rect =
+        NSRectToSnappedRect(meterRect, appUnitsPerDevPixel, *drawTarget);
+      ColorPattern color(ToDeviceColor(meterContext->StyleColor()->mColor));
       drawTarget->FillRect(rect, color);
     }
   }
@@ -4103,9 +4109,12 @@ nsTreeBodyFrame::ScrollInternal(const ScrollParts& aParts, int32_t aRow)
   if (!mView) {
     return NS_OK;
   }
-  int32_t maxTopRowIndex = std::max(0, mRowCount - mPageLength);
-  MOZ_ASSERT(mTopRowIndex == mozilla::clamped(mTopRowIndex, 0, maxTopRowIndex));
 
+  // Note that we may be "over scrolled" at this point; that is the
+  // current mTopRowIndex may be larger than mRowCount - mPageLength.
+  // This can happen when items are removed for example. (bug 1085050)
+
+  int32_t maxTopRowIndex = std::max(0, mRowCount - mPageLength);
   aRow = mozilla::clamped(aRow, 0, maxTopRowIndex);
   if (aRow == mTopRowIndex) {
     return NS_OK;

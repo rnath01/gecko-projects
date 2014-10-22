@@ -173,6 +173,7 @@ static uint32_t sPendingLoadCount;
 static bool sLoadingInProgress;
 
 static uint32_t sCCollectedWaitingForGC;
+static uint32_t sCCollectedZonesWaitingForGC;
 static uint32_t sLikelyShortLivingObjectsNeedingGC;
 static bool sPostGCEventsToConsole;
 static bool sPostGCEventsToObserver;
@@ -246,6 +247,7 @@ static bool
 NeedsGCAfterCC()
 {
   return sCCollectedWaitingForGC > 250 ||
+    sCCollectedZonesWaitingForGC > 0 ||
     sLikelyShortLivingObjectsNeedingGC > 2500 ||
     sNeedsGCAfterCC;
 }
@@ -280,7 +282,8 @@ nsJSEnvironmentObserver::Observe(nsISupports* aSubject, const char* aTopic,
                                      nsJSContext::NonIncrementalGC,
                                      nsJSContext::ShrinkingGC);
     }
-  } else if (!nsCRT::strcmp(aTopic, "quit-application")) {
+  } else if (!nsCRT::strcmp(aTopic, "quit-application") ||
+             !nsCRT::strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID)) {
     sShuttingDown = true;
     KillTimers();
   }
@@ -1806,7 +1809,8 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
   // CCs, this won't happen.
   gCCStats.FinishCycleCollectionSlice();
 
-  sCCollectedWaitingForGC += aResults.mFreedRefCounted + aResults.mFreedGCed;
+  sCCollectedWaitingForGC += aResults.mFreedGCed;
+  sCCollectedZonesWaitingForGC += aResults.mFreedJSZones;
 
   TimeStamp endCCTimeStamp = TimeStamp::Now();
   uint32_t ccNowDuration = TimeBetween(gCCStats.mBeginTime, endCCTimeStamp);
@@ -1855,7 +1859,7 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
     }
 
     NS_NAMED_MULTILINE_LITERAL_STRING(kFmt,
-      MOZ_UTF16("CC(T+%.1f) max pause: %lums, total time: %lums, slices: %lu, suspected: %lu, visited: %lu RCed and %lu%s GCed, collected: %lu RCed and %lu GCed (%lu|%lu waiting for GC)%s\n")
+      MOZ_UTF16("CC(T+%.1f) max pause: %lums, total time: %lums, slices: %lu, suspected: %lu, visited: %lu RCed and %lu%s GCed, collected: %lu RCed and %lu GCed (%lu|%lu|%lu waiting for GC)%s\n")
       MOZ_UTF16("ForgetSkippable %lu times before CC, min: %lu ms, max: %lu ms, avg: %lu ms, total: %lu ms, max sync: %lu ms, removed: %lu"));
     nsString msg;
     msg.Adopt(nsTextFormatter::smprintf(kFmt.get(), double(delta) / PR_USEC_PER_SEC,
@@ -1863,7 +1867,7 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
                                         aResults.mNumSlices, gCCStats.mSuspected,
                                         aResults.mVisitedRefCounted, aResults.mVisitedGCed, mergeMsg.get(),
                                         aResults.mFreedRefCounted, aResults.mFreedGCed,
-                                        sCCollectedWaitingForGC, sLikelyShortLivingObjectsNeedingGC,
+                                        sCCollectedWaitingForGC, sCCollectedZonesWaitingForGC, sLikelyShortLivingObjectsNeedingGC,
                                         gcMsg.get(),
                                         sForgetSkippableBeforeCC,
                                         minForgetSkippableTime / PR_USEC_PER_MSEC,
@@ -1895,6 +1899,7 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
              MOZ_UTF16("\"RCed\": %lu, ")
              MOZ_UTF16("\"GCed\": %lu }, ")
          MOZ_UTF16("\"waiting_for_gc\": %lu, ")
+         MOZ_UTF16("\"zones_waiting_for_gc\": %lu, ")
          MOZ_UTF16("\"short_living_objects_waiting_for_gc\": %lu, ")
          MOZ_UTF16("\"forced_gc\": %d, ")
          MOZ_UTF16("\"forget_skippable\": { ")
@@ -1915,6 +1920,7 @@ nsJSContext::EndCycleCollectionCallback(CycleCollectorResults &aResults)
                                          aResults.mVisitedRefCounted, aResults.mVisitedGCed,
                                          aResults.mFreedRefCounted, aResults.mFreedGCed,
                                          sCCollectedWaitingForGC,
+                                         sCCollectedZonesWaitingForGC,
                                          sLikelyShortLivingObjectsNeedingGC,
                                          aResults.mForcedGC,
                                          sForgetSkippableBeforeCC,
@@ -2370,6 +2376,7 @@ DOMGCSliceCallback(JSRuntime *aRt, JS::GCProgress aProgress, const JS::GCDescrip
     nsJSContext::KillInterSliceGCTimer();
 
     sCCollectedWaitingForGC = 0;
+    sCCollectedZonesWaitingForGC = 0;
     sLikelyShortLivingObjectsNeedingGC = 0;
     sCleanupsSinceLastGC = 0;
     sNeedsFullCC = true;
@@ -2452,6 +2459,7 @@ mozilla::dom::StartupJSEnvironment()
   sPendingLoadCount = 0;
   sLoadingInProgress = false;
   sCCollectedWaitingForGC = 0;
+  sCCollectedZonesWaitingForGC = 0;
   sLikelyShortLivingObjectsNeedingGC = 0;
   sPostGCEventsToConsole = false;
   sNeedsFullCC = false;
@@ -2841,6 +2849,7 @@ nsJSContext::EnsureStatics()
   nsIObserver* observer = new nsJSEnvironmentObserver();
   obs->AddObserver(observer, "memory-pressure", false);
   obs->AddObserver(observer, "quit-application", false);
+  obs->AddObserver(observer, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
 
   // Bug 907848 - We need to explicitly get the nsIDOMScriptObjectFactory
   // service in order to force its constructor to run, which registers a

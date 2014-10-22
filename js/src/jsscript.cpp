@@ -958,8 +958,13 @@ js::XDRScript(XDRState<mode> *xdr, HandleObject enclosingScope, HandleScript enc
 
                 if (function->isInterpretedLazy())
                     funEnclosingScope = function->lazyScript()->enclosingScope();
-                else
+                else if (function->isInterpreted())
                     funEnclosingScope = function->nonLazyScript()->enclosingStaticScope();
+                else {
+                    MOZ_ASSERT(function->isAsmJSNative());
+                    JS_ReportError(cx, "AsmJS modules are not yet supported in XDR serialization.");
+                    return false;
+                }
 
                 StaticScopeIter<NoGC> ssi(funEnclosingScope);
                 if (ssi.done() || ssi.type() == StaticScopeIter<NoGC>::FUNCTION) {
@@ -2637,7 +2642,7 @@ JSScript::sizeOfData(mozilla::MallocSizeOf mallocSizeOf) const
 size_t
 JSScript::sizeOfTypeScript(mozilla::MallocSizeOf mallocSizeOf) const
 {
-    return types->sizeOfIncludingThis(mallocSizeOf);
+    return types_->sizeOfIncludingThis(mallocSizeOf);
 }
 
 /*
@@ -2670,8 +2675,8 @@ JSScript::finalize(FreeOp *fop)
 
     fop->runtime()->spsProfiler.onScriptFinalized(this);
 
-    if (types)
-        types->destroy();
+    if (types_)
+        types_->destroy();
 
     jit::DestroyIonScripts(fop, this);
 

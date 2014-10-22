@@ -507,7 +507,7 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
 
     nscolor c = aOverrideColor ? *aOverrideColor : StyleColor()->mColor;
     ColorPattern color(ToDeviceColor(c));
-    aRenderingContext.SetColor(c);
+    aRenderingContext.ThebesContext()->SetColor(c);
 
     nsresult rv = NS_ERROR_FAILURE;
 
@@ -561,7 +561,8 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
                aTextRect.y + mAccessKeyInfo->mAccessOffset,
                mAccessKeyInfo->mAccessWidth,
                mAccessKeyInfo->mAccessUnderlineSize);
-      Rect devPxRect = NSRectToRect(r, appUnitsPerDevPixel, *drawTarget);
+      Rect devPxRect =
+        NSRectToSnappedRect(r, appUnitsPerDevPixel, *drawTarget);
       drawTarget->FillRect(devPxRect, color);
     }
 

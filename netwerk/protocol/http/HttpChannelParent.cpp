@@ -250,6 +250,7 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
     return SendFailedAsyncOpen(rv);
 
   mChannel = static_cast<nsHttpChannel *>(channel.get());
+  mChannel->SetTimingEnabled(true);
   if (mPBOverride != kPBOverride_Unset) {
     mChannel->SetPrivate(mPBOverride == kPBOverride_Private ? true : false);
   }
@@ -556,7 +557,14 @@ HttpChannelParent::RecvDivertOnDataAvailable(const nsCString& data,
     return true;
   }
 
-  rv = mParentListener->OnDataAvailable(mChannel, nullptr, stringStream,
+  nsCOMPtr<nsIStreamListener> listener;
+  if (mConverterListener) {
+    listener = mConverterListener;
+  } else {
+    listener = mParentListener;
+    MOZ_ASSERT(listener);
+  }
+  rv = listener->OnDataAvailable(mChannel, nullptr, stringStream,
                                         offset, count);
   stringStream->Close();
   if (NS_FAILED(rv)) {
@@ -588,7 +596,14 @@ HttpChannelParent::RecvDivertOnStopRequest(const nsresult& statusCode)
     mChannel->ForcePending(false);
   }
 
-  mParentListener->OnStopRequest(mChannel, nullptr, status);
+  nsCOMPtr<nsIStreamListener> listener;
+  if (mConverterListener) {
+    listener = mConverterListener;
+  } else {
+    listener = mParentListener;
+    MOZ_ASSERT(listener);
+  }
+  listener->OnStopRequest(mChannel, nullptr, status);
   return true;
 }
 
@@ -597,6 +612,7 @@ HttpChannelParent::RecvDivertComplete()
 {
   MOZ_ASSERT(mParentListener);
   mParentListener = nullptr;
+  mConverterListener = nullptr;
   if (NS_WARN_IF(!mDivertingFromChild)) {
     MOZ_ASSERT(mDivertingFromChild,
                "Cannot RecvDivertComplete if diverting is not set!");
@@ -703,8 +719,19 @@ HttpChannelParent::OnStopRequest(nsIRequest *aRequest,
 
   MOZ_RELEASE_ASSERT(!mDivertingFromChild,
     "Cannot call OnStopRequest if diverting is set!");
+  ResourceTimingStruct timing;
+  mChannel->GetDomainLookupStart(&timing.domainLookupStart);
+  mChannel->GetDomainLookupEnd(&timing.domainLookupEnd);
+  mChannel->GetConnectStart(&timing.connectStart);
+  mChannel->GetConnectEnd(&timing.connectEnd);
+  mChannel->GetRequestStart(&timing.requestStart);
+  mChannel->GetResponseStart(&timing.responseStart);
+  mChannel->GetResponseEnd(&timing.responseEnd);
+  mChannel->GetAsyncOpen(&timing.fetchStart);
+  mChannel->GetRedirectStart(&timing.redirectStart);
+  mChannel->GetRedirectEnd(&timing.redirectEnd);
 
-  if (mIPCClosed || !SendOnStopRequest(aStatusCode))
+  if (mIPCClosed || !SendOnStopRequest(aStatusCode, timing))
     return NS_ERROR_UNEXPECTED;
   return NS_OK;
 }
@@ -973,8 +1000,30 @@ HttpChannelParent::StartDiversion()
   }
   mDivertedOnStartRequest = true;
 
-  // After OnStartRequest has been called, tell HttpChannelChild to divert the
-  // OnDataAvailables and OnStopRequest to this HttpChannelParent.
+  // After OnStartRequest has been called, setup content decoders if needed.
+  //
+  // We want to use the same decoders that the nsHttpChannel might use. There
+  // are two possible scenarios depending on whether OnStopRequest has been
+  // called or not.
+  //
+  // 1. nsHttpChannel has not called OnStopRequest yet.
+  // Create content conversion chain based on nsHttpChannel::mListener
+  // Get ptr to final listener and set that in mContentConverter, as well as
+  // nsHttpChannel::mListener.
+  //
+  // 2. nsHttpChannel has called OnStopRequest.
+  // Create a content conversion chain based on mParentListener.
+  // Get ptr to final listener and set that in mContentConverter.
+
+  nsCOMPtr<nsIStreamListener> converterListener;
+  mChannel->DoApplyContentConversions(mParentListener,
+                                      getter_AddRefs(converterListener));
+  if (converterListener) {
+    mConverterListener = converterListener.forget();
+  }
+
+  // The listener chain should now be setup; tell HttpChannelChild to divert
+  // the OnDataAvailables and OnStopRequest to this HttpChannelParent.
   if (NS_WARN_IF(mIPCClosed || !SendDivertMessages())) {
     FailDiversion(NS_ERROR_UNEXPECTED);
     return;
@@ -1052,6 +1101,7 @@ HttpChannelParent::NotifyDiversionFailed(nsresult aErrorCode,
     mParentListener->OnStopRequest(mChannel, nullptr, aErrorCode);
   }
   mParentListener = nullptr;
+  mConverterListener = nullptr;
   mChannel = nullptr;
 
   if (!mIPCClosed) {
