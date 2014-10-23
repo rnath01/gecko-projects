@@ -49,7 +49,7 @@ if CONFIG['OS_ARCH'] == 'WINNT':
     ]
 elif CONFIG['OS_ARCH'] == 'Linux':
     USE_LIBS += [
-        '/modules/libmar/tool/signmar',
+        '/modules/libmar/sign/signmar',
         '/security/nss/lib/nss/nss3',
         '/security/nss/lib/util/nssutil3',
         'updatecommon',
