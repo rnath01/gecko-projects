@@ -36,7 +36,6 @@ endif
 export::
 	$(PYTHON) $(srcdir)/gen_cert_header.py primaryCertData $(srcdir)/$(PRIMARY_CERT) > primaryCert.h
 	$(PYTHON) $(srcdir)/gen_cert_header.py secondaryCertData $(srcdir)/$(SECONDARY_CERT) > secondaryCert.h
-	$(PYTHON) $(srcdir)/gen_cert_header.py xpcshellCertData $(srcdir)/xpcshellCertificate.der > xpcshellCert.h
 
 ifdef MOZ_WIDGET_GTK
 libs:: updater.png
