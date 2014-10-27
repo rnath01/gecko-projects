@@ -2878,7 +2878,7 @@ nsDocShell::PopProfileTimelineMarkers(JSContext* aCx,
   for (uint32_t i = 0; i < mProfileTimelineMarkers.Length(); ++i) {
     ProfilerMarkerTracing* startPayload = static_cast<ProfilerMarkerTracing*>(
       mProfileTimelineMarkers[i]->mPayload);
-    const char* startMarkerName = mProfileTimelineMarkers[i]->mName;
+    const char* startMarkerName = mProfileTimelineMarkers[i]->mName.get();
 
     bool hasSeenPaintedLayer = false;
 
@@ -2891,7 +2891,7 @@ nsDocShell::PopProfileTimelineMarkers(JSContext* aCx,
       for (uint32_t j = i + 1; j < mProfileTimelineMarkers.Length(); ++j) {
         ProfilerMarkerTracing* endPayload = static_cast<ProfilerMarkerTracing*>(
           mProfileTimelineMarkers[j]->mPayload);
-        const char* endMarkerName = mProfileTimelineMarkers[j]->mName;
+        const char* endMarkerName = mProfileTimelineMarkers[j]->mName.get();
 
         // Look for Layer markers to stream out paint markers.
         if (strcmp(endMarkerName, "Layer") == 0) {
@@ -9642,7 +9642,7 @@ nsDocShell::InternalLoad(nsIURI * aURI,
         // Disallow external chrome: loads targetted at content windows
         bool isChrome = false;
         if (NS_SUCCEEDED(aURI->SchemeIs("chrome", &isChrome)) && isChrome) {
-            NS_WARNING("blocked external chrome: url -- use '-chrome' option");
+            NS_WARNING("blocked external chrome: url -- use '--chrome' option");
             return NS_ERROR_FAILURE;
         }
 
@@ -10730,7 +10730,8 @@ nsDocShell::ScrollToAnchor(nsACString & aCurHash, nsACString & aNewHash,
         nsresult rv = NS_ERROR_FAILURE;
         NS_ConvertUTF8toUTF16 uStr(str);
         if (!uStr.IsEmpty()) {
-            rv = shell->GoToAnchor(NS_ConvertUTF8toUTF16(str), scroll);
+            rv = shell->GoToAnchor(NS_ConvertUTF8toUTF16(str), scroll,
+                                   nsIPresShell::SCROLL_SMOOTH_AUTO);
         }
         nsMemory::Free(str);
 
@@ -10764,7 +10765,8 @@ nsDocShell::ScrollToAnchor(nsACString & aCurHash, nsACString & aNewHash,
             //
             // When newHashName contains "%00", unescaped string may be empty.
             // And GoToAnchor asserts if we ask it to scroll to an empty ref.
-            shell->GoToAnchor(uStr, scroll && !uStr.IsEmpty());
+            shell->GoToAnchor(uStr, scroll && !uStr.IsEmpty(),
+                              nsIPresShell::SCROLL_SMOOTH_AUTO);
         }
     }
     else {

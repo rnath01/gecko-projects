@@ -138,6 +138,11 @@ public:
 struct nsStyleGradientStop {
   nsStyleCoord mLocation; // percent, coord, calc, none
   nscolor mColor;
+  bool mIsInterpolationHint;
+
+  // Use ==/!= on nsStyleGradient instead of on the gradient stop.
+  bool operator==(const nsStyleGradientStop&) const MOZ_DELETE;
+  bool operator!=(const nsStyleGradientStop&) const MOZ_DELETE;
 };
 
 class nsStyleGradient MOZ_FINAL {
@@ -2033,6 +2038,7 @@ struct nsStyleDisplay {
   nsAutoTArray<nsString, 1> mWillChange;
 
   uint8_t mTouchAction;         // [reset] see nsStyleConsts.h
+  uint8_t mScrollBehavior;      // [reset] see nsStyleConsts.h NS_STYLE_SCROLL_BEHAVIOR_*
 
   // mSpecifiedTransform is the list of transform functions as
   // specified, or null to indicate there is no transform.  (inherit or
@@ -3032,6 +3038,10 @@ struct nsStyleSVGReset {
 
   bool HasFilters() const {
     return mFilters.Length() > 0;
+  }
+
+  bool HasNonScalingStroke() const {
+    return mVectorEffect == NS_STYLE_VECTOR_EFFECT_NON_SCALING_STROKE;
   }
 
   nsStyleClipPath mClipPath;          // [reset]

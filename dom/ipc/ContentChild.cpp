@@ -19,6 +19,9 @@
 #include "TabChild.h"
 
 #include "mozilla/Attributes.h"
+#ifdef ACCESSIBILITY
+#include "mozilla/a11y/DocAccessibleChild.h"
+#endif
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/ContentBridgeChild.h"
 #include "mozilla/dom/ContentBridgeParent.h"
@@ -79,6 +82,7 @@
 #include "nsThreadManager.h"
 #include "nsAnonymousTemporaryFile.h"
 #include "nsISpellChecker.h"
+#include "nsClipboardProxy.h"
 
 #include "IHistory.h"
 #include "nsNetUtil.h"
@@ -717,8 +721,14 @@ ContentChild::InitXPCOM()
         NS_WARNING("Couldn't register console listener for child process");
 
     bool isOffline;
-    SendGetXPCOMProcessAttributes(&isOffline, &mAvailableDictionaries);
+    ClipboardCapabilities clipboardCaps;
+    SendGetXPCOMProcessAttributes(&isOffline, &mAvailableDictionaries, &clipboardCaps);
     RecvSetOffline(isOffline);
+
+    nsCOMPtr<nsIClipboard> clipboard(do_GetService("@mozilla.org/widget/clipboard;1"));
+    if (nsCOMPtr<nsIClipboardProxy> clipboardProxy = do_QueryInterface(clipboard)) {
+        clipboardProxy->SetCapabilities(clipboardCaps);
+    }
 
     DebugOnly<FileUpdateDispatcher*> observer = FileUpdateDispatcher::GetSingleton();
     NS_ASSERTION(observer, "FileUpdateDispatcher is null");
@@ -729,6 +739,22 @@ ContentChild::InitXPCOM()
     sysMsgObserver->Init();
 
     InitOnContentProcessCreated();
+}
+
+a11y::PDocAccessibleChild*
+ContentChild::AllocPDocAccessibleChild(PDocAccessibleChild*, const uint64_t&)
+{
+  MOZ_ASSERT(false, "should never call this!");
+  return nullptr;
+}
+
+bool
+ContentChild::DeallocPDocAccessibleChild(a11y::PDocAccessibleChild* aChild)
+{
+#ifdef ACCESSIBILITY
+  delete static_cast<mozilla::a11y::DocAccessibleChild*>(aChild);
+#endif
+  return true;
 }
 
 PMemoryReportRequestChild*
@@ -1083,40 +1109,45 @@ ContentChild::DeallocPJavaScriptChild(PJavaScriptChild *aChild)
 }
 
 PBrowserChild*
-ContentChild::AllocPBrowserChild(const IPCTabContext& aContext,
+ContentChild::AllocPBrowserChild(const TabId& aTabId,
+                                 const IPCTabContext& aContext,
                                  const uint32_t& aChromeFlags,
-                                 const uint64_t& aID,
+                                 const ContentParentId& aCpID,
                                  const bool& aIsForApp,
                                  const bool& aIsForBrowser)
 {
-    return nsIContentChild::AllocPBrowserChild(aContext,
+    return nsIContentChild::AllocPBrowserChild(aTabId,
+                                               aContext,
                                                aChromeFlags,
-                                               aID,
+                                               aCpID,
                                                aIsForApp,
                                                aIsForBrowser);
 }
 
 bool
 ContentChild::SendPBrowserConstructor(PBrowserChild* aActor,
+                                      const TabId& aTabId,
                                       const IPCTabContext& aContext,
                                       const uint32_t& aChromeFlags,
-                                      const uint64_t& aID,
+                                      const ContentParentId& aCpID,
                                       const bool& aIsForApp,
                                       const bool& aIsForBrowser)
 {
     return PContentChild::SendPBrowserConstructor(aActor,
+                                                  aTabId,
                                                   aContext,
                                                   aChromeFlags,
-                                                  aID,
+                                                  aCpID,
                                                   aIsForApp,
                                                   aIsForBrowser);
 }
 
 bool
 ContentChild::RecvPBrowserConstructor(PBrowserChild* aActor,
+                                      const TabId& aTabId,
                                       const IPCTabContext& aContext,
                                       const uint32_t& aChromeFlags,
-                                      const uint64_t& aID,
+                                      const ContentParentId& aCpID,
                                       const bool& aIsForApp,
                                       const bool& aIsForBrowser)
 {
@@ -1140,7 +1171,7 @@ ContentChild::RecvPBrowserConstructor(PBrowserChild* aActor,
 
         // Redo InitProcessAttributes() when the app or browser is really
         // launching so the attributes will be correct.
-        mID = aID;
+        mID = aCpID;
         mIsForApp = aIsForApp;
         mIsForBrowser = aIsForBrowser;
         InitProcessAttributes();

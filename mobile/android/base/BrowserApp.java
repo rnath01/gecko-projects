@@ -513,6 +513,7 @@ public class BrowserApp extends GeckoApp
         mMediaCastingBar = (MediaCastingBar) findViewById(R.id.media_casting);
 
         EventDispatcher.getInstance().registerGeckoThreadListener((GeckoEventListener)this,
+            "Menu:Open",
             "Menu:Update",
             "Search:Keyword",
             "Prompt:ShowTop",
@@ -1059,6 +1060,7 @@ public class BrowserApp extends GeckoApp
         }
 
         EventDispatcher.getInstance().unregisterGeckoThreadListener((GeckoEventListener)this,
+            "Menu:Open",
             "Menu:Update",
             "Search:Keyword",
             "Prompt:ShowTop",
@@ -1210,12 +1212,13 @@ public class BrowserApp extends GeckoApp
 
         // Make sure the toolbar is fully hidden or fully shown when the user
         // lifts their finger. If the page is shorter than the viewport or if
-        // the user has reached the end of the page, the toolbar is always
-        // shown.
+        // the user has reached the end of a long (longer than twice the viewport height) page,
+        // the toolbar is always shown.
         ImmutableViewportMetrics metrics = mLayerView.getViewportMetrics();
+        final float height = metrics.viewportRectBottom - metrics.viewportRectTop;
         if (metrics.getPageHeight() < metrics.getHeight()
               || metrics.marginTop >= mToolbarHeight / 2
-              || metrics.pageRectBottom == metrics.viewportRectBottom) {
+              || (metrics.pageRectBottom == metrics.viewportRectBottom && metrics.pageRectBottom > 2*height)) {
             mDynamicToolbar.setVisible(true, VisibilityTransition.ANIMATE);
         } else {
             mDynamicToolbar.setVisible(false, VisibilityTransition.ANIMATE);
@@ -1493,7 +1496,13 @@ public class BrowserApp extends GeckoApp
     @Override
     public void handleMessage(String event, JSONObject message) {
         try {
-            if (event.equals("Menu:Update")) {
+            if (event.equals("Menu:Open")) {
+                if (mBrowserToolbar.isEditing()) {
+                    mBrowserToolbar.cancelEdit();
+                }
+
+                openOptionsMenu();
+            } else if (event.equals("Menu:Update")) {
                 final int id = message.getInt("id") + ADDON_MENU_OFFSET;
                 final JSONObject options = message.getJSONObject("options");
                 ThreadUtils.postToUiThread(new Runnable() {

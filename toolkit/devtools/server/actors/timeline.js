@@ -138,25 +138,50 @@ let TimelineActor = exports.TimelineActor = protocol.ActorClass({
     if (!this._isRecording) {
       return;
     }
+    if (!this.docShells.length) {
+      return;
+    }
 
+    let endTime = this.docShells[0].now();
     let markers = [];
+
     for (let docShell of this.docShells) {
       markers = [...markers, ...docShell.popProfileTimelineMarkers()];
     }
+
     if (markers.length > 0) {
-      let endTime = this.docShells[0].now();
+      this._postProcessMarkers(markers);
       events.emit(this, "markers", markers, endTime);
     }
     if (this._memoryActor) {
-      events.emit(this, "memory", Date.now(), this._memoryActor.measure());
+      events.emit(this, "memory", endTime, this._memoryActor.measure());
     }
     if (this._framerateActor) {
-      events.emit(this, "ticks", Date.now(), this._framerateActor.getPendingTicks());
+      events.emit(this, "ticks", endTime, this._framerateActor.getPendingTicks());
     }
 
     this._dataPullTimeout = setTimeout(() => {
       this._pullTimelineData();
     }, DEFAULT_TIMELINE_DATA_PULL_TIMEOUT);
+  },
+
+  /**
+   * Some markers need post processing.
+   * We will eventually do that platform side: bug 1069661
+   */
+  _postProcessMarkers: function(m) {
+    m.forEach(m => {
+      // A marker named "ConsoleTime:foobar" needs
+      // to be renamed "ConsoleTime".
+      let split = m.name.match(/ConsoleTime:(.*)/);
+      if (split && split.length > 0) {
+        if (!m.detail) {
+          m.detail = {}
+        }
+        m.detail.causeName = split[1];
+        m.name = "ConsoleTime";
+      }
+    });
   },
 
   /**

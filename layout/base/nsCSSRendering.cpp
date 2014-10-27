@@ -350,9 +350,11 @@ protected:
 // A resolved color stop --- with a specific position along the gradient line,
 // and a Thebes color
 struct ColorStop {
-  ColorStop(double aPosition, gfxRGBA aColor) :
-    mPosition(aPosition), mColor(aColor) {}
+  ColorStop(): mPosition(0), mIsMidpoint(false) {}
+  ColorStop(double aPosition, bool aIsMidPoint, gfxRGBA aColor) :
+    mPosition(aPosition), mIsMidpoint(aIsMidPoint), mColor(aColor) {}
   double mPosition; // along the gradient line; 0=start, 1=end
+  bool mIsMidpoint;
   gfxRGBA mColor;
 };
 
@@ -683,7 +685,10 @@ nsCSSRendering::PaintBorderWithStyleBorder(nsPresContext* aPresContext,
     } else {
       // We're drawing borders around the joined continuation boxes so we need
       // to clip that to the slice that we want for this frame.
-      aRenderingContext.IntersectClip(aBorderArea);
+      aRenderingContext.ThebesContext()->
+        Clip(NSRectToSnappedRect(aBorderArea,
+                                 aForFrame->PresContext()->AppUnitsPerDevPixel(),
+                                 *aRenderingContext.GetDrawTarget()));
     }
   } else {
     MOZ_ASSERT(joinedBorderArea.IsEqualEdges(aBorderArea),
@@ -944,40 +949,47 @@ nsCSSRendering::PaintFocus(nsPresContext* aPresContext,
 //----------------------------------------------------------------------
 
 /**
- * Computes the placement of a background image.
- *
- * @param aOriginBounds is the box to which the tiling position should be
- * relative
- * This should correspond to 'background-origin' for the frame,
- * except when painting on the canvas, in which case the origin bounds
- * should be the bounds of the root element's frame.
- * @param aTopLeft the top-left corner where an image tile should be drawn
- * @param aAnchorPoint a point which should be pixel-aligned by
- * nsLayoutUtils::DrawImage. This is the same as aTopLeft, unless CSS
- * specifies a percentage (including 'right' or 'bottom'), in which case
- * it's that percentage within of aOriginBounds. So 'right' would set
- * aAnchorPoint.x to aOriginBounds.XMost().
- *
- * Points are returned relative to aOriginBounds.
+ * Helper for ComputeObjectAnchorPoint; parameters are the same as for
+ * that function, except they're for a single coordinate / a single size
+ * dimension. (so, x/width vs. y/height)
  */
+typedef nsStyleBackground::Position::PositionCoord PositionCoord;
 static void
-ComputeBackgroundAnchorPoint(const nsStyleBackground::Layer& aLayer,
-                             const nsSize& aOriginBounds,
-                             const nsSize& aImageSize,
-                             nsPoint* aTopLeft,
-                             nsPoint* aAnchorPoint)
+ComputeObjectAnchorCoord(const PositionCoord& aCoord,
+                         const nscoord aOriginBounds,
+                         const nscoord aImageSize,
+                         nscoord* aTopLeftCoord,
+                         nscoord* aAnchorPointCoord)
 {
-  double percentX = aLayer.mPosition.mXPosition.mPercent;
-  nscoord lengthX = aLayer.mPosition.mXPosition.mLength;
-  aAnchorPoint->x = lengthX + NSToCoordRound(percentX*aOriginBounds.width);
-  aTopLeft->x = lengthX +
-    NSToCoordRound(percentX*(aOriginBounds.width - aImageSize.width));
+  *aAnchorPointCoord = aCoord.mLength;
+  *aTopLeftCoord = aCoord.mLength;
 
-  double percentY = aLayer.mPosition.mYPosition.mPercent;
-  nscoord lengthY = aLayer.mPosition.mYPosition.mLength;
-  aAnchorPoint->y = lengthY + NSToCoordRound(percentY*aOriginBounds.height);
-  aTopLeft->y = lengthY +
-    NSToCoordRound(percentY*(aOriginBounds.height - aImageSize.height));
+  if (aCoord.mHasPercent) {
+    // Adjust aTopLeftCoord by the specified % of the extra space.
+    nscoord extraSpace = aOriginBounds - aImageSize;
+    *aTopLeftCoord += NSToCoordRound(aCoord.mPercent * extraSpace);
+
+    // The anchor-point doesn't care about our image's size; just the size
+    // of the region we're rendering into.
+    *aAnchorPointCoord += NSToCoordRound(aCoord.mPercent * aOriginBounds);
+  }
+}
+
+void
+nsImageRenderer::ComputeObjectAnchorPoint(
+  const nsStyleBackground::Position& aPos,
+  const nsSize& aOriginBounds,
+  const nsSize& aImageSize,
+  nsPoint* aTopLeft,
+  nsPoint* aAnchorPoint)
+{
+  ComputeObjectAnchorCoord(aPos.mXPosition,
+                           aOriginBounds.width, aImageSize.width,
+                           &aTopLeft->x, &aAnchorPoint->x);
+
+  ComputeObjectAnchorCoord(aPos.mYPosition,
+                           aOriginBounds.height, aImageSize.height,
+                           &aTopLeft->y, &aAnchorPoint->y);
 }
 
 nsIFrame*
@@ -1310,7 +1322,7 @@ nsCSSRendering::PaintBoxShadowOuter(nsPresContext* aPresContext,
       // Draw the widget shape
       gfxContextMatrixAutoSaveRestore save(shadowContext);
       nsRefPtr<nsRenderingContext> wrapperCtx = new nsRenderingContext();
-      wrapperCtx->Init(aPresContext->DeviceContext(), shadowContext);
+      wrapperCtx->Init(shadowContext);
       gfxPoint devPixelOffset =
         nsLayoutUtils::PointToGfxPoint(nsPoint(shadowItem->mXOffset,
                                                shadowItem->mYOffset),
@@ -1368,7 +1380,10 @@ nsCSSRendering::PaintBoxShadowOuter(nsPresContext* aPresContext,
           }
         }
       }
-      aRenderingContext.IntersectClip(fragmentClip);
+      aRenderingContext.ThebesContext()->
+        Clip(NSRectToSnappedRect(fragmentClip,
+                                 aForFrame->PresContext()->AppUnitsPerDevPixel(),
+                                 *aRenderingContext.GetDrawTarget()));
 
       gfxCornerSizes clipRectRadii;
       if (hasBorderRadius) {
@@ -2131,6 +2146,12 @@ ComputeRadialGradientLine(nsPresContext* aPresContext,
   *aLineEnd = *aLineStart + gfxPoint(radiusX*cos(-angle), radiusY*sin(-angle));
 }
 
+
+static float Interpolate(float aF1, float aF2, float aFrac)
+{
+  return aF1 + aFrac * (aF2 - aF1);
+}
+
 // Returns aFrac*aC2 + (1 - aFrac)*C1. The interpolation is done
 // in unpremultiplied space, which is what SVG gradients and cairo
 // gradients expect.
@@ -2214,6 +2235,155 @@ RectIsBeyondLinearGradientEdge(const gfxRect& aRect,
   return false;
 }
 
+static void ResolveMidpoints(nsTArray<ColorStop>& stops)
+{
+  for (size_t x = 1; x < stops.Length() - 1;) {
+    if (!stops[x].mIsMidpoint) {
+      x++;
+      continue;
+    }
+
+    gfxRGBA color1 = stops[x-1].mColor;
+    gfxRGBA color2 = stops[x+1].mColor;
+    float offset1 = stops[x-1].mPosition;
+    float offset2 = stops[x+1].mPosition;
+    float offset = stops[x].mPosition;
+    // check if everything coincides. If so, ignore the midpoint.
+    if (offset - offset1 == offset2 - offset) {
+      stops.RemoveElementAt(x);
+      continue;
+    }
+
+    // Check if we coincide with the left colorstop.
+    if (offset1 == offset) {
+      // Morph the midpoint to a regular stop with the color of the next
+      // color stop.
+      stops[x].mColor = color2;
+      stops[x].mIsMidpoint = false;
+      continue;
+    }
+
+    // Check if we coincide with the right colorstop.
+    if (offset2 == offset) {
+      // Morph the midpoint to a regular stop with the color of the previous
+      // color stop.
+      stops[x].mColor = color1;
+      stops[x].mIsMidpoint = false;
+      continue;
+    }
+
+    float midpoint = (offset - offset1) / (offset2 - offset1);
+    ColorStop newStops[9];
+    if (midpoint > .5f) {
+      for (size_t y = 0; y < 7; y++) {
+        newStops[y].mPosition = offset1 + (offset - offset1) * (7 + y) / 13;
+      }
+
+      newStops[7].mPosition = offset + (offset2 - offset) / 3;
+      newStops[8].mPosition = offset + (offset2 - offset) * 2 / 3;
+    } else {
+      newStops[0].mPosition = offset1 + (offset - offset1) / 3;
+      newStops[1].mPosition = offset1 + (offset - offset1) * 2 / 3;
+
+      for (size_t y = 0; y < 7; y++) {
+        newStops[y+2].mPosition = offset + (offset2 - offset) * y / 13;
+      }
+    }
+    // calculate colors
+
+    for (size_t y = 0; y < 9; y++) {
+      // Calculate the intermediate color stops per the formula of the CSS images
+      // spec. http://dev.w3.org/csswg/css-images/#color-stop-syntax
+      // 9 points were chosen since it is the minimum number of stops that always
+      // give the smoothest appearace regardless of midpoint position and difference
+      // in luminance of the end points.
+      float relativeOffset = (newStops[y].mPosition - offset1) / (offset2 - offset1);
+      float multiplier = powf(relativeOffset, logf(.5f) / logf(midpoint));
+      
+      gfxFloat red = color1.r + multiplier * (color2.r - color1.r);
+      gfxFloat green = color1.g + multiplier * (color2.g - color1.g);
+      gfxFloat blue = color1.b + multiplier * (color2.b - color1.b);
+      gfxFloat alpha = color1.a + multiplier * (color2.a - color1.a);
+
+      newStops[y].mColor = gfxRGBA(red, green, blue, alpha);
+    }
+
+    stops.ReplaceElementsAt(x, 1, newStops, 9);
+    x += 9;
+  }
+}
+
+static gfxRGBA
+Premultiply(const gfxRGBA& aColor)
+{
+  gfxFloat a = aColor.a;
+  return gfxRGBA(aColor.r * a, aColor.g * a, aColor.b * a, a);
+}
+
+static gfxRGBA
+Unpremultiply(const gfxRGBA& aColor)
+{
+  gfxFloat a = aColor.a;
+  return (a > 0.0) ? gfxRGBA(aColor.r / a, aColor.g / a, aColor.b / a, a) : aColor;
+}
+
+static gfxRGBA
+TransparentColor(gfxRGBA aColor) {
+  aColor.a = 0;
+  return aColor;
+}
+
+// Adjusts and adds color stops in such a way that drawing the gradient with
+// unpremultiplied interpolation looks nearly the same as if it were drawn with
+// premultiplied interpolation.
+static const float kAlphaIncrementPerGradientStep = 0.1f;
+static void
+ResolvePremultipliedAlpha(nsTArray<ColorStop>& aStops)
+{
+  for (size_t x = 1; x < aStops.Length(); x++) {
+    const ColorStop leftStop = aStops[x - 1];
+    const ColorStop rightStop = aStops[x];
+
+    // if the left and right stop have the same alpha value, we don't need
+    // to do anything
+    if (leftStop.mColor.a == rightStop.mColor.a) {
+      continue;
+    }
+
+    // Is the stop on the left 100% transparent? If so, have it adopt the color
+    // of the right stop
+    if (leftStop.mColor.a == 0) {
+      aStops[x - 1].mColor = TransparentColor(rightStop.mColor);
+      continue;
+    }
+
+    // Is the stop on the right completely transparent?
+    // If so, duplicate it and assign it the color on the left.
+    if (rightStop.mColor.a == 0) {
+      ColorStop newStop = rightStop;
+      newStop.mColor = TransparentColor(leftStop.mColor);
+      aStops.InsertElementAt(x, newStop);
+      x++;
+      continue;
+    }
+
+    // Now handle cases where one or both of the stops are partially transparent.
+    if (leftStop.mColor.a != 1.0f || rightStop.mColor.a != 1.0f) {
+      gfxRGBA premulLeftColor = Premultiply(leftStop.mColor);
+      gfxRGBA premulRightColor = Premultiply(rightStop.mColor);
+      // Calculate how many extra steps. We do a step per 10% transparency.
+      size_t stepCount = NSToIntFloor(fabs(leftStop.mColor.a - rightStop.mColor.a) / kAlphaIncrementPerGradientStep);
+      for (size_t y = 1; y < stepCount; y++) {
+        float frac = static_cast<float>(y) / stepCount;
+        ColorStop newStop(Interpolate(leftStop.mPosition, rightStop.mPosition, frac), false,
+                          Unpremultiply(InterpolateColor(premulLeftColor, premulRightColor, frac)));
+        aStops.InsertElementAt(x, newStop);
+        x++;
+      }
+    }
+  }
+}
+
 void
 nsCSSRendering::PaintGradient(nsPresContext* aPresContext,
                               nsRenderingContext& aRenderingContext,
@@ -2281,7 +2451,7 @@ nsCSSRendering::PaintGradient(nsPresContext* aPresContext,
         if (firstUnsetPosition < 0) {
           firstUnsetPosition = i;
         }
-        stops.AppendElement(ColorStop(0, stop.mColor));
+        stops.AppendElement(ColorStop(0, stop.mIsInterpolationHint, stop.mColor));
         continue;
       }
       break;
@@ -2308,7 +2478,7 @@ nsCSSRendering::PaintGradient(nsPresContext* aPresContext,
       // to the previous stop position, if necessary
       position = std::max(position, stops[i - 1].mPosition);
     }
-    stops.AppendElement(ColorStop(position, stop.mColor));
+    stops.AppendElement(ColorStop(position, stop.mIsInterpolationHint, stop.mColor));
     if (firstUnsetPosition > 0) {
       // Interpolate positions for all stops that didn't have a specified position
       double p = stops[firstUnsetPosition - 1].mPosition;
@@ -2503,10 +2673,13 @@ nsCSSRendering::PaintGradient(nsPresContext* aPresContext,
     stops.Clear();
 
     if (!aGradient->mRepeating && !zeroRadius) {
-      stops.AppendElement(ColorStop(firstStop, firstColor));
+      stops.AppendElement(ColorStop(firstStop, false, firstColor));
     }
-    stops.AppendElement(ColorStop(firstStop, lastColor));
+    stops.AppendElement(ColorStop(firstStop, false, lastColor));
   }
+
+  ResolveMidpoints(stops);
+  ResolvePremultipliedAlpha(stops);
 
   bool isRepeat = aGradient->mRepeating || forceRepeatToCoverTiles;
 
@@ -3082,8 +3255,9 @@ nsCSSRendering::PrepareBackgroundLayer(nsPresContext* aPresContext,
 
   // Compute the position of the background now that the background's size is
   // determined.
-  ComputeBackgroundAnchorPoint(aLayer, bgPositionSize, imageSize,
-                               &imageTopLeft, &state.mAnchor);
+  nsImageRenderer::ComputeObjectAnchorPoint(aLayer.mPosition,
+                                            bgPositionSize, imageSize,
+                                            &imageTopLeft, &state.mAnchor);
   imageTopLeft += bgPositioningArea.TopLeft();
   state.mAnchor += bgPositioningArea.TopLeft();
 
@@ -3207,7 +3381,10 @@ DrawBorderImage(nsPresContext*       aPresContext,
       nsRect clip = aBorderArea;
       clip.Inflate(imageOutset);
       autoSR.EnsureSaved(aRenderingContext.ThebesContext());
-      aRenderingContext.IntersectClip(clip);
+      aRenderingContext.ThebesContext()->
+        Clip(NSRectToSnappedRect(clip,
+                                 aForFrame->PresContext()->AppUnitsPerDevPixel(),
+                                 *aRenderingContext.GetDrawTarget()));
     }
   } else {
     borderImgArea = aBorderArea;
@@ -3490,6 +3667,7 @@ static void
 DrawSolidBorderSegment(nsRenderingContext& aContext,
                        nsRect               aRect,
                        nscolor              aColor,
+                       int32_t              aAppUnitsPerDevPixel,
                        nscoord              aTwipsPerPixel,
                        uint8_t              aStartBevelSide = 0,
                        nscoord              aStartBevelOffset = 0,
@@ -3497,7 +3675,6 @@ DrawSolidBorderSegment(nsRenderingContext& aContext,
                        nscoord              aEndBevelOffset = 0)
 {
   DrawTarget* drawTarget = aContext.GetDrawTarget();
-  int32_t appUnitsPerDevPixel = aContext.AppUnitsPerDevPixel();
 
   ColorPattern color(ToDeviceColor(aColor));
   DrawOptions drawOptions(1.f, CompositionOp::OP_OVER, AntialiasMode::NONE);
@@ -3507,26 +3684,33 @@ DrawSolidBorderSegment(nsRenderingContext& aContext,
     // simple line or rectangle
     if ((NS_SIDE_TOP == aStartBevelSide) || (NS_SIDE_BOTTOM == aStartBevelSide)) {
       if (1 == aRect.height)
-        aContext.DrawLine(aRect.TopLeft(), aRect.BottomLeft());
+        StrokeLineWithSnapping(aRect.TopLeft(), aRect.BottomLeft(),
+                               aAppUnitsPerDevPixel, *drawTarget,
+                               color, StrokeOptions(), drawOptions);
       else
-        drawTarget->FillRect(NSRectToRect(aRect, appUnitsPerDevPixel, *drawTarget),
+        drawTarget->FillRect(NSRectToSnappedRect(aRect, aAppUnitsPerDevPixel,
+                                                 *drawTarget),
                              color, drawOptions);
     }
     else {
       if (1 == aRect.width)
-        aContext.DrawLine(aRect.TopLeft(), aRect.TopRight());
+        StrokeLineWithSnapping(aRect.TopLeft(), aRect.TopRight(),
+                               aAppUnitsPerDevPixel, *drawTarget,
+                               color, StrokeOptions(), drawOptions);
       else
-        drawTarget->FillRect(NSRectToRect(aRect, appUnitsPerDevPixel, *drawTarget),
+        drawTarget->FillRect(NSRectToSnappedRect(aRect, aAppUnitsPerDevPixel,
+                                                 *drawTarget),
                              color, drawOptions);
     }
   }
   else {
     // polygon with beveling
     Point poly[4];
-    SetPoly(NSRectToRect(aRect, appUnitsPerDevPixel), poly);
+    SetPoly(NSRectToSnappedRect(aRect, aAppUnitsPerDevPixel, *drawTarget),
+            poly);
 
     Float startBevelOffset =
-      NSAppUnitsToFloatPixels(aStartBevelOffset, appUnitsPerDevPixel);
+      NSAppUnitsToFloatPixels(aStartBevelOffset, aAppUnitsPerDevPixel);
     switch(aStartBevelSide) {
     case NS_SIDE_TOP:
       poly[0].x += startBevelOffset;
@@ -3542,7 +3726,7 @@ DrawSolidBorderSegment(nsRenderingContext& aContext,
     }
 
     Float endBevelOffset =
-      NSAppUnitsToFloatPixels(aEndBevelOffset, appUnitsPerDevPixel);
+      NSAppUnitsToFloatPixels(aEndBevelOffset, aAppUnitsPerDevPixel);
     switch(aEndBevelSide) {
     case NS_SIDE_TOP:
       poly[1].x -= endBevelOffset;
@@ -3598,14 +3782,13 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
                                        nscolor                  aBorderColor,
                                        const nsStyleBackground* aBGColor,
                                        const nsRect&            aBorder,
+                                       int32_t                  aAppUnitsPerDevPixel,
                                        int32_t                  aAppUnitsPerCSSPixel,
                                        uint8_t                  aStartBevelSide,
                                        nscoord                  aStartBevelOffset,
                                        uint8_t                  aEndBevelSide,
                                        nscoord                  aEndBevelOffset)
 {
-  aContext.SetColor (aBorderColor);
-
   bool horizontal = ((NS_SIDE_TOP == aStartBevelSide) || (NS_SIDE_BOTTOM == aStartBevelSide));
   nscoord twipsPerPixel = NSIntPixelsToAppUnits(1, aAppUnitsPerCSSPixel);
   uint8_t ridgeGroove = NS_STYLE_BORDER_STYLE_RIDGE;
@@ -3620,6 +3803,8 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
   gfxContext *ctx = aContext.ThebesContext();
   AntialiasMode oldMode = ctx->CurrentAntialiasMode();
   ctx->SetAntialiasMode(AntialiasMode::NONE);
+
+  ctx->SetColor(aBorderColor);
 
   switch (aBorderStyle) {
   case NS_STYLE_BORDER_STYLE_NONE:
@@ -3642,21 +3827,21 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
       if (horizontal) {
         GetDashInfo(aBorder.width, dashLength, twipsPerPixel, numDashSpaces, startDashLength, endDashLength);
         nsRect rect(aBorder.x, aBorder.y, startDashLength, aBorder.height);
-        DrawSolidBorderSegment(aContext, rect, aBorderColor, twipsPerPixel);
+        DrawSolidBorderSegment(aContext, rect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel);
         for (int32_t spaceX = 0; spaceX < numDashSpaces; spaceX++) {
           rect.x += rect.width + dashLength;
           rect.width = (spaceX == (numDashSpaces - 1)) ? endDashLength : dashLength;
-          DrawSolidBorderSegment(aContext, rect, aBorderColor, twipsPerPixel);
+          DrawSolidBorderSegment(aContext, rect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel);
         }
       }
       else {
         GetDashInfo(aBorder.height, dashLength, twipsPerPixel, numDashSpaces, startDashLength, endDashLength);
         nsRect rect(aBorder.x, aBorder.y, aBorder.width, startDashLength);
-        DrawSolidBorderSegment(aContext, rect, aBorderColor, twipsPerPixel);
+        DrawSolidBorderSegment(aContext, rect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel);
         for (int32_t spaceY = 0; spaceY < numDashSpaces; spaceY++) {
           rect.y += rect.height + dashLength;
           rect.height = (spaceY == (numDashSpaces - 1)) ? endDashLength : dashLength;
-          DrawSolidBorderSegment(aContext, rect, aBorderColor, twipsPerPixel);
+          DrawSolidBorderSegment(aContext, rect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel);
         }
       }
     }
@@ -3667,7 +3852,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
     if ((horizontal && (twipsPerPixel >= aBorder.height)) ||
         (!horizontal && (twipsPerPixel >= aBorder.width))) {
       // a one pixel border
-      DrawSolidBorderSegment(aContext, aBorder, aBorderColor, twipsPerPixel,
+      DrawSolidBorderSegment(aContext, aBorder, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel,
                              aStartBevelSide, aStartBevelOffset,
                              aEndBevelSide, aEndBevelOffset);
     }
@@ -3679,7 +3864,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
       mozilla::css::Side ridgeGrooveSide = (horizontal) ? NS_SIDE_TOP : NS_SIDE_LEFT;
       // FIXME: In theory, this should use the visited-dependent
       // background color, but I don't care.
-      aContext.SetColor (
+      ctx->SetColor(
         MakeBevelColor(ridgeGrooveSide, ridgeGroove, aBGColor->mBackgroundColor, aBorderColor));
       nsRect rect(aBorder);
       nscoord half;
@@ -3693,7 +3878,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
         if (NS_SIDE_TOP == aEndBevelSide) {
           rect.width -= endBevel;
         }
-        DrawSolidBorderSegment(aContext, rect, aBorderColor, twipsPerPixel, aStartBevelSide,
+        DrawSolidBorderSegment(aContext, rect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel, aStartBevelSide,
                                startBevel, aEndBevelSide, endBevel);
       }
       else { // left, right
@@ -3706,7 +3891,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
         if (NS_SIDE_LEFT == aEndBevelSide) {
           rect.height -= endBevel;
         }
-        DrawSolidBorderSegment(aContext, rect, aBorderColor, twipsPerPixel, aStartBevelSide,
+        DrawSolidBorderSegment(aContext, rect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel, aStartBevelSide,
                                startBevel, aEndBevelSide, endBevel);
       }
 
@@ -3714,7 +3899,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
       ridgeGrooveSide = (NS_SIDE_TOP == ridgeGrooveSide) ? NS_SIDE_BOTTOM : NS_SIDE_RIGHT;
       // FIXME: In theory, this should use the visited-dependent
       // background color, but I don't care.
-      aContext.SetColor (
+      ctx->SetColor(
         MakeBevelColor(ridgeGrooveSide, ridgeGroove, aBGColor->mBackgroundColor, aBorderColor));
       if (horizontal) {
         rect.y = rect.y + half;
@@ -3726,7 +3911,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
         if (NS_SIDE_BOTTOM == aEndBevelSide) {
           rect.width -= endBevel;
         }
-        DrawSolidBorderSegment(aContext, rect, aBorderColor, twipsPerPixel, aStartBevelSide,
+        DrawSolidBorderSegment(aContext, rect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel, aStartBevelSide,
                                startBevel, aEndBevelSide, endBevel);
       }
       else {
@@ -3739,7 +3924,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
         if (NS_SIDE_RIGHT == aEndBevelSide) {
           rect.height -= endBevel;
         }
-        DrawSolidBorderSegment(aContext, rect, aBorderColor, twipsPerPixel, aStartBevelSide,
+        DrawSolidBorderSegment(aContext, rect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel, aStartBevelSide,
                                startBevel, aEndBevelSide, endBevel);
       }
     }
@@ -3766,7 +3951,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
         if (NS_SIDE_TOP == aEndBevelSide) {
           topRect.width -= aEndBevelOffset - endBevel;
         }
-        DrawSolidBorderSegment(aContext, topRect, aBorderColor, twipsPerPixel, aStartBevelSide,
+        DrawSolidBorderSegment(aContext, topRect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel, aStartBevelSide,
                                startBevel, aEndBevelSide, endBevel);
 
         // draw the botom line or rect
@@ -3779,7 +3964,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
         if (NS_SIDE_BOTTOM == aEndBevelSide) {
           bottomRect.width -= aEndBevelOffset - endBevel;
         }
-        DrawSolidBorderSegment(aContext, bottomRect, aBorderColor, twipsPerPixel, aStartBevelSide,
+        DrawSolidBorderSegment(aContext, bottomRect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel, aStartBevelSide,
                                startBevel, aEndBevelSide, endBevel);
       }
       else { // left, right
@@ -3793,7 +3978,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
         if (NS_SIDE_LEFT == aEndBevelSide) {
           leftRect.height -= aEndBevelOffset - endBevel;
         }
-        DrawSolidBorderSegment(aContext, leftRect, aBorderColor, twipsPerPixel, aStartBevelSide,
+        DrawSolidBorderSegment(aContext, leftRect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel, aStartBevelSide,
                                startBevel, aEndBevelSide, endBevel);
 
         nscoord widthOffset = aBorder.width - thirdWidth;
@@ -3805,14 +3990,14 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
         if (NS_SIDE_RIGHT == aEndBevelSide) {
           rightRect.height -= aEndBevelOffset - endBevel;
         }
-        DrawSolidBorderSegment(aContext, rightRect, aBorderColor, twipsPerPixel, aStartBevelSide,
+        DrawSolidBorderSegment(aContext, rightRect, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel, aStartBevelSide,
                                startBevel, aEndBevelSide, endBevel);
       }
       break;
     }
     // else fall through to solid
   case NS_STYLE_BORDER_STYLE_SOLID:
-    DrawSolidBorderSegment(aContext, aBorder, aBorderColor, twipsPerPixel, aStartBevelSide,
+    DrawSolidBorderSegment(aContext, aBorder, aBorderColor, aAppUnitsPerDevPixel, twipsPerPixel, aStartBevelSide,
                            aStartBevelOffset, aEndBevelSide, aEndBevelOffset);
     break;
   case NS_STYLE_BORDER_STYLE_OUTSET:

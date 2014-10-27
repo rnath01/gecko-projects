@@ -771,9 +771,10 @@ nsCSSValue::BufferFromString(const nsString& aValue)
 
   // NOTE: Alloc prouduces a new, already-addref'd (refcnt = 1) buffer.
   // NOTE: String buffer allocation is currently fallible.
-  buffer = nsStringBuffer::Alloc((length + 1) * sizeof(char16_t));
+  size_t sz = (length + 1) * sizeof(char16_t);
+  buffer = nsStringBuffer::Alloc(sz);
   if (MOZ_UNLIKELY(!buffer)) {
-    NS_RUNTIMEABORT("out of memory");
+    NS_ABORT_OOM(sz);
   }
 
   char16_t* data = static_cast<char16_t*>(buffer->Data());
@@ -1413,10 +1414,15 @@ nsCSSValue::AppendToString(nsCSSProperty aProperty, nsAString& aResult,
     }
 
     for (uint32_t i = 0 ;;) {
-      gradient->mStops[i].mColor.AppendToString(aProperty, aResult,
-                                                aSerialization);
+      bool isInterpolationHint = gradient->mStops[i].mIsInterpolationHint;
+      if (!isInterpolationHint) {
+        gradient->mStops[i].mColor.AppendToString(aProperty, aResult,
+                                                  aSerialization);
+      }
       if (gradient->mStops[i].mLocation.GetUnit() != eCSSUnit_None) {
-        aResult.Append(' ');
+        if (!isInterpolationHint) {
+          aResult.Append(' ');
+        }
         gradient->mStops[i].mLocation.AppendToString(aProperty, aResult,
                                                      aSerialization);
       }
@@ -2350,14 +2356,16 @@ css::ImageValue::~ImageValue()
 
 nsCSSValueGradientStop::nsCSSValueGradientStop()
   : mLocation(eCSSUnit_None),
-    mColor(eCSSUnit_Null)
+    mColor(eCSSUnit_Null),
+    mIsInterpolationHint(false)
 {
   MOZ_COUNT_CTOR(nsCSSValueGradientStop);
 }
 
 nsCSSValueGradientStop::nsCSSValueGradientStop(const nsCSSValueGradientStop& aOther)
   : mLocation(aOther.mLocation),
-    mColor(aOther.mColor)
+    mColor(aOther.mColor),
+    mIsInterpolationHint(aOther.mIsInterpolationHint)
 {
   MOZ_COUNT_CTOR(nsCSSValueGradientStop);
 }

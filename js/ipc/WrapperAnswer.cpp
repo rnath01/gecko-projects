@@ -58,17 +58,20 @@ WrapperAnswer::ok(ReturnStatus *rs)
 }
 
 bool
-WrapperAnswer::RecvPreventExtensions(const ObjectId &objId, ReturnStatus *rs)
+WrapperAnswer::RecvPreventExtensions(const ObjectId &objId, ReturnStatus *rs,
+                                     bool *succeeded)
 {
     AutoSafeJSContext cx;
     JSAutoRequest request(cx);
+
+    *succeeded = false;
 
     RootedObject obj(cx, findObjectById(cx, objId));
     if (!obj)
         return fail(cx, rs);
 
     JSAutoCompartment comp(cx, obj);
-    if (!JS_PreventExtensions(cx, obj))
+    if (!JS_PreventExtensions(cx, obj, succeeded))
         return fail(cx, rs);
 
     LOG("%s.preventExtensions()", ReceiverObj(objId));
@@ -111,9 +114,6 @@ WrapperAnswer::RecvGetPropertyDescriptor(const ObjectId &objId, const JSIDVarian
     if (!JS_GetPropertyDescriptorById(cx, obj, id, &desc))
         return fail(cx, rs);
 
-    if (!desc.object())
-        return ok(rs);
-
     if (!fromDescriptor(cx, desc, out))
         return fail(cx, rs);
 
@@ -142,11 +142,8 @@ WrapperAnswer::RecvGetOwnPropertyDescriptor(const ObjectId &objId, const JSIDVar
         return fail(cx, rs);
 
     Rooted<JSPropertyDescriptor> desc(cx);
-    if (!JS_GetPropertyDescriptorById(cx, obj, id, &desc))
+    if (!JS_GetOwnPropertyDescriptorById(cx, obj, id, &desc))
         return fail(cx, rs);
-
-    if (desc.object() != obj)
-        return ok(rs);
 
     if (!fromDescriptor(cx, desc, out))
         return fail(cx, rs);

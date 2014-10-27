@@ -15,6 +15,7 @@
 #include "mozilla/Array.h"
 #include "mozilla/DebugOnly.h"
 
+#include "jit/AtomicOp.h"
 #include "jit/FixedList.h"
 #include "jit/InlineList.h"
 #include "jit/IonAllocPolicy.h"
@@ -1573,6 +1574,143 @@ class MSimdSignMask : public MUnaryInstruction
     }
 
     ALLOW_CLONE(MSimdSignMask)
+};
+
+// Base for the MSimdSwizzle and MSimdShuffle classes.
+class MSimdShuffleBase
+{
+  protected:
+    // As of now, there are at most 4 lanes. For each lane, we need to know
+    // which input we choose and which of the 4 lanes we choose; that can be
+    // packed in 3 bits for each lane, so 12 bits in total.
+    uint32_t laneMask_;
+    uint32_t arity_;
+
+    MSimdShuffleBase(uint32_t laneX, uint32_t laneY, uint32_t laneZ, uint32_t laneW, MIRType type)
+    {
+        MOZ_ASSERT(SimdTypeToLength(type) == 4);
+        MOZ_ASSERT(IsSimdType(type));
+        laneMask_ = (laneX << 0) | (laneY << 3) | (laneZ << 6) | (laneW << 9);
+        arity_ = 4;
+    }
+
+    bool sameLanes(const MSimdShuffleBase *other) const {
+        return laneMask_ == other->laneMask_;
+    }
+
+  public:
+    // For now, these formulas are fine for x4 types. They'll need to be
+    // generalized for other SIMD type lengths.
+    uint32_t laneX() const { MOZ_ASSERT(arity_ == 4); return laneMask_ & 7; }
+    uint32_t laneY() const { MOZ_ASSERT(arity_ == 4); return (laneMask_ >> 3) & 7; }
+    uint32_t laneZ() const { MOZ_ASSERT(arity_ == 4); return (laneMask_ >> 6) & 7; }
+    uint32_t laneW() const { MOZ_ASSERT(arity_ == 4); return (laneMask_ >> 9) & 7; }
+
+    bool lanesMatch(uint32_t x, uint32_t y, uint32_t z, uint32_t w) const {
+        return ((x << 0) | (y << 3) | (z << 6) | (w << 9)) == laneMask_;
+    }
+};
+
+// Applies a shuffle operation to the input, putting the input lanes as
+// indicated in the output register's lanes. This implements the SIMD.js
+// "shuffle" function, that takes one vector and one mask.
+class MSimdSwizzle : public MUnaryInstruction, public MSimdShuffleBase
+{
+  protected:
+    MSimdSwizzle(MDefinition *obj, MIRType type,
+                 uint32_t laneX, uint32_t laneY, uint32_t laneZ, uint32_t laneW)
+      : MUnaryInstruction(obj), MSimdShuffleBase(laneX, laneY, laneZ, laneW, type)
+    {
+        MOZ_ASSERT(laneX < 4 && laneY < 4 && laneZ < 4 && laneW < 4);
+        MOZ_ASSERT(IsSimdType(obj->type()));
+        MOZ_ASSERT(IsSimdType(type));
+        MOZ_ASSERT(obj->type() == type);
+        setResultType(type);
+        setMovable();
+    }
+
+  public:
+    INSTRUCTION_HEADER(SimdSwizzle);
+
+    static MSimdSwizzle *NewAsmJS(TempAllocator &alloc, MDefinition *obj, MIRType type,
+                                  uint32_t laneX, uint32_t laneY, uint32_t laneZ, uint32_t laneW)
+    {
+        return new(alloc) MSimdSwizzle(obj, type, laneX, laneY, laneZ, laneW);
+    }
+
+    bool congruentTo(const MDefinition *ins) const {
+        if (!ins->isSimdSwizzle())
+            return false;
+        const MSimdSwizzle *other = ins->toSimdSwizzle();
+        return sameLanes(other) && congruentIfOperandsEqual(other);
+    }
+
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+
+    MDefinition *foldsTo(TempAllocator &alloc);
+
+    ALLOW_CLONE(MSimdSwizzle)
+};
+
+// Applies a shuffle operation to the inputs, selecting the 2 first lanes of the
+// output from lanes of the first input, and the 2 last lanes of the output from
+// lanes of the second input.
+class MSimdShuffle : public MBinaryInstruction, public MSimdShuffleBase
+{
+    MSimdShuffle(MDefinition *lhs, MDefinition *rhs, MIRType type,
+                 uint32_t laneX, uint32_t laneY, uint32_t laneZ, uint32_t laneW)
+      : MBinaryInstruction(lhs, rhs), MSimdShuffleBase(laneX, laneY, laneZ, laneW, lhs->type())
+    {
+        MOZ_ASSERT(laneX < 8 && laneY < 8 && laneZ < 8 && laneW < 8);
+        MOZ_ASSERT(IsSimdType(lhs->type()));
+        MOZ_ASSERT(IsSimdType(rhs->type()));
+        MOZ_ASSERT(lhs->type() == rhs->type());
+        MOZ_ASSERT(IsSimdType(type));
+        MOZ_ASSERT(lhs->type() == type);
+        setResultType(type);
+        setMovable();
+    }
+
+  public:
+    INSTRUCTION_HEADER(SimdShuffle);
+
+    static MInstruction *NewAsmJS(TempAllocator &alloc, MDefinition *lhs, MDefinition *rhs,
+                                  MIRType type, uint32_t laneX, uint32_t laneY, uint32_t laneZ,
+                                  uint32_t laneW)
+    {
+        // Swap operands so that new lanes come from LHS in majority.
+        // In the balanced case, swap operands if needs be, in order to be able
+        // to do only one shufps on x86.
+        unsigned lanesFromLHS = (laneX < 4) + (laneY < 4) + (laneZ < 4) + (laneW < 4);
+        if (lanesFromLHS < 2 || (lanesFromLHS == 2 && laneX >= 4 && laneY >=4)) {
+            laneX = (laneX + 4) % 8;
+            laneY = (laneY + 4) % 8;
+            laneZ = (laneZ + 4) % 8;
+            laneW = (laneW + 4) % 8;
+            mozilla::Swap(lhs, rhs);
+        }
+
+        // If all lanes come from the same vector, just use swizzle instead.
+        if (laneX < 4 && laneY < 4 && laneZ < 4 && laneW < 4)
+            return MSimdSwizzle::NewAsmJS(alloc, lhs, type, laneX, laneY, laneZ, laneW);
+
+        return new(alloc) MSimdShuffle(lhs, rhs, type, laneX, laneY, laneZ, laneW);
+    }
+
+    bool congruentTo(const MDefinition *ins) const {
+        if (!ins->isSimdShuffle())
+            return false;
+        const MSimdShuffle *other = ins->toSimdShuffle();
+        return sameLanes(other) && binaryCongruentTo(other);
+    }
+
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+
+    ALLOW_CLONE(MSimdShuffle)
 };
 
 class MSimdUnaryArith : public MUnaryInstruction
@@ -3506,7 +3644,7 @@ class MCompare
                               CompareType compareType);
 
     bool tryFold(bool *result);
-    bool evaluateConstantOperands(bool *result);
+    bool evaluateConstantOperands(TempAllocator &alloc, bool *result);
     MDefinition *foldsTo(TempAllocator &alloc);
     void filtersUndefinedOrNull(bool trueBranch, MDefinition **subject, bool *filtersUndefined,
                                 bool *filtersNull);
@@ -4215,6 +4353,11 @@ class MToFloat32
     bool canConsumeFloat32(MUse *use) const { return true; }
     bool canProduceFloat32() const { return true; }
 
+    bool writeRecoverData(CompactBufferWriter &writer) const;
+    bool canRecoverOnBailout() const {
+        return true;
+    }
+
     ALLOW_CLONE(MToFloat32)
 };
 
@@ -4866,6 +5009,7 @@ class MMinMax
     AliasSet getAliasSet() const {
         return AliasSet::None();
     }
+    MDefinition *foldsTo(TempAllocator &alloc);
     void computeRange(TempAllocator &alloc);
     bool writeRecoverData(CompactBufferWriter &writer) const;
     bool canRecoverOnBailout() const {
@@ -7894,17 +8038,33 @@ class MArrayJoin
     MDefinition *foldsTo(TempAllocator &alloc);
 };
 
+// See comments above MMemoryBarrier, below.
+
+enum MemoryBarrierRequirement
+{
+    DoesNotRequireMemoryBarrier,
+    DoesRequireMemoryBarrier
+};
+
+// Also see comments above MMemoryBarrier, below.
+
 class MLoadTypedArrayElement
   : public MBinaryInstruction
 {
     Scalar::Type arrayType_;
+    bool requiresBarrier_;
 
     MLoadTypedArrayElement(MDefinition *elements, MDefinition *index,
-                           Scalar::Type arrayType)
-      : MBinaryInstruction(elements, index), arrayType_(arrayType)
+                           Scalar::Type arrayType, MemoryBarrierRequirement requiresBarrier)
+      : MBinaryInstruction(elements, index),
+        arrayType_(arrayType),
+        requiresBarrier_(requiresBarrier == DoesRequireMemoryBarrier)
     {
         setResultType(MIRType_Value);
-        setMovable();
+        if (requiresBarrier_)
+            setGuard();         // Not removable or movable
+        else
+            setMovable();
         MOZ_ASSERT(elements->type() == MIRType_Elements);
         MOZ_ASSERT(index->type() == MIRType_Int32);
         MOZ_ASSERT(arrayType >= 0 && arrayType < Scalar::TypeMax);
@@ -7914,9 +8074,10 @@ class MLoadTypedArrayElement
     INSTRUCTION_HEADER(LoadTypedArrayElement)
 
     static MLoadTypedArrayElement *New(TempAllocator &alloc, MDefinition *elements, MDefinition *index,
-                                       Scalar::Type arrayType)
+                                       Scalar::Type arrayType,
+                                       MemoryBarrierRequirement requiresBarrier=DoesNotRequireMemoryBarrier)
     {
-        return new(alloc) MLoadTypedArrayElement(elements, index, arrayType);
+        return new(alloc) MLoadTypedArrayElement(elements, index, arrayType, requiresBarrier);
     }
 
     Scalar::Type arrayType() const {
@@ -7926,6 +8087,9 @@ class MLoadTypedArrayElement
         // Bailout if the result does not fit in an int32.
         return arrayType_ == Scalar::Uint32 && type() == MIRType_Int32;
     }
+    bool requiresMemoryBarrier() const {
+        return requiresBarrier_;
+    }
     MDefinition *elements() const {
         return getOperand(0);
     }
@@ -7933,10 +8097,16 @@ class MLoadTypedArrayElement
         return getOperand(1);
     }
     AliasSet getAliasSet() const {
+        // When a barrier is needed make the instruction effectful by
+        // giving it a "store" effect.
+        if (requiresBarrier_)
+            return AliasSet::Store(AliasSet::TypedArrayElement);
         return AliasSet::Load(AliasSet::TypedArrayElement);
     }
 
     bool congruentTo(const MDefinition *ins) const {
+        if (requiresBarrier_)
+            return false;
         if (!ins->isLoadTypedArrayElement())
             return false;
         const MLoadTypedArrayElement *other = ins->toLoadTypedArrayElement();
@@ -8071,15 +8241,22 @@ class MStoreTypedArrayElement
     public StoreTypedArrayPolicy::Data
 {
     Scalar::Type arrayType_;
+    bool requiresBarrier_;
 
     // See note in MStoreElementCommon.
     bool racy_;
 
     MStoreTypedArrayElement(MDefinition *elements, MDefinition *index, MDefinition *value,
-                            Scalar::Type arrayType)
-      : MTernaryInstruction(elements, index, value), arrayType_(arrayType), racy_(false)
+                            Scalar::Type arrayType, MemoryBarrierRequirement requiresBarrier)
+      : MTernaryInstruction(elements, index, value),
+        arrayType_(arrayType),
+        requiresBarrier_(requiresBarrier == DoesRequireMemoryBarrier),
+        racy_(false)
     {
-        setMovable();
+        if (requiresBarrier_)
+            setGuard();         // Not removable or movable
+        else
+            setMovable();
         MOZ_ASSERT(elements->type() == MIRType_Elements);
         MOZ_ASSERT(index->type() == MIRType_Int32);
         MOZ_ASSERT(arrayType >= 0 && arrayType < Scalar::TypeMax);
@@ -8089,9 +8266,11 @@ class MStoreTypedArrayElement
     INSTRUCTION_HEADER(StoreTypedArrayElement)
 
     static MStoreTypedArrayElement *New(TempAllocator &alloc, MDefinition *elements, MDefinition *index,
-                                        MDefinition *value, Scalar::Type arrayType)
+                                        MDefinition *value, Scalar::Type arrayType,
+                                        MemoryBarrierRequirement requiresBarrier = DoesNotRequireMemoryBarrier)
     {
-        return new(alloc) MStoreTypedArrayElement(elements, index, value, arrayType);
+        return new(alloc) MStoreTypedArrayElement(elements, index, value, arrayType,
+                                                  requiresBarrier);
     }
 
     Scalar::Type arrayType() const {
@@ -8117,6 +8296,9 @@ class MStoreTypedArrayElement
     }
     AliasSet getAliasSet() const {
         return AliasSet::Store(AliasSet::TypedArrayElement);
+    }
+    bool requiresMemoryBarrier() const {
+        return requiresBarrier_;
     }
     bool racy() const {
         return racy_;
@@ -11306,6 +11488,159 @@ class MRecompileCheck : public MNullaryInstruction
 
     AliasSet getAliasSet() const {
         return AliasSet::None();
+    }
+};
+
+// All barriered operations - MMemoryBarrier, MCompareExchangeTypedArrayElement,
+// and MAtomicTypedArrayElementBinop, as well as MLoadTypedArrayElement and
+// MStoreTypedArrayElement when they are marked as requiring a memory barrer - have
+// the following attributes:
+//
+// - Not movable
+// - Not removable
+// - Not congruent with any other instruction
+// - Effectful (they alias every TypedArray store)
+//
+// The intended effect of those constraints is to prevent all loads
+// and stores preceding the barriered operation from being moved to
+// after the barriered operation, and vice versa, and to prevent the
+// barriered operation from being removed or hoisted.
+
+class MMemoryBarrier
+  : public MNullaryInstruction
+{
+    // The type is a combination of the memory barrier types in AtomicOp.h.
+    const int type_;
+
+    explicit MMemoryBarrier(int type)
+      : type_(type)
+    {
+        MOZ_ASSERT((type_ & ~MembarAllbits) == 0);
+        setGuard();             // Not removable
+    }
+
+  public:
+    INSTRUCTION_HEADER(MemoryBarrier);
+
+    static MMemoryBarrier *New(TempAllocator &alloc, int type=MembarFull) {
+        return new(alloc) MMemoryBarrier(type);
+    }
+    int type() const {
+        return type_;
+    }
+
+    AliasSet getAliasSet() const {
+        return AliasSet::Store(AliasSet::TypedArrayElement);
+    }
+};
+
+class MCompareExchangeTypedArrayElement
+  : public MAryInstruction<4>,
+    public MixPolicy< MixPolicy<ObjectPolicy<0>, IntPolicy<1> >, MixPolicy<IntPolicy<2>, IntPolicy<3> > >
+{
+    Scalar::Type arrayType_;
+
+    explicit MCompareExchangeTypedArrayElement(MDefinition *elements, MDefinition *index,
+                                               Scalar::Type arrayType, MDefinition *oldval,
+                                               MDefinition *newval)
+      : arrayType_(arrayType)
+    {
+        initOperand(0, elements);
+        initOperand(1, index);
+        initOperand(2, oldval);
+        initOperand(3, newval);
+        setGuard();             // Not removable
+    }
+
+  public:
+    INSTRUCTION_HEADER(CompareExchangeTypedArrayElement);
+
+    static MCompareExchangeTypedArrayElement *New(TempAllocator &alloc, MDefinition *elements,
+                                                  MDefinition *index, Scalar::Type arrayType,
+                                                  MDefinition *oldval, MDefinition *newval)
+    {
+        return new(alloc) MCompareExchangeTypedArrayElement(elements, index, arrayType, oldval, newval);
+    }
+    bool isByteArray() const {
+        return (arrayType_ == Scalar::Int8 ||
+                arrayType_ == Scalar::Uint8 ||
+                arrayType_ == Scalar::Uint8Clamped);
+    }
+    MDefinition *elements() {
+        return getOperand(0);
+    }
+    MDefinition *index() {
+        return getOperand(1);
+    }
+    MDefinition *oldval() {
+        return getOperand(2);
+    }
+    int oldvalOperand() {
+        return 2;
+    }
+    MDefinition *newval() {
+        return getOperand(3);
+    }
+    Scalar::Type arrayType() const {
+        return arrayType_;
+    }
+    AliasSet getAliasSet() const {
+        return AliasSet::Store(AliasSet::TypedArrayElement);
+    }
+};
+
+class MAtomicTypedArrayElementBinop
+    : public MAryInstruction<3>,
+      public Mix3Policy< ObjectPolicy<0>, IntPolicy<1>, IntPolicy<2> >
+{
+  private:
+    AtomicOp op_;
+    Scalar::Type arrayType_;
+
+  protected:
+    explicit MAtomicTypedArrayElementBinop(AtomicOp op, MDefinition *elements, MDefinition *index,
+                                           Scalar::Type arrayType, MDefinition *value)
+      : op_(op),
+        arrayType_(arrayType)
+    {
+        initOperand(0, elements);
+        initOperand(1, index);
+        initOperand(2, value);
+        setGuard();             // Not removable
+    }
+
+  public:
+    INSTRUCTION_HEADER(AtomicTypedArrayElementBinop);
+
+    static MAtomicTypedArrayElementBinop *New(TempAllocator &alloc, AtomicOp op,
+                                              MDefinition *elements, MDefinition *index,
+                                              Scalar::Type arrayType, MDefinition *value)
+    {
+        return new(alloc) MAtomicTypedArrayElementBinop(op, elements, index, arrayType, value);
+    }
+
+    bool isByteArray() const {
+        return (arrayType_ == Scalar::Int8 ||
+                arrayType_ == Scalar::Uint8 ||
+                arrayType_ == Scalar::Uint8Clamped);
+    }
+    AtomicOp operation() const {
+        return op_;
+    }
+    Scalar::Type arrayType() const {
+        return arrayType_;
+    }
+    MDefinition *elements() {
+        return getOperand(0);
+    }
+    MDefinition *index() {
+        return getOperand(1);
+    }
+    MDefinition *value() {
+        return getOperand(2);
+    }
+    AliasSet getAliasSet() const {
+        return AliasSet::Store(AliasSet::TypedArrayElement);
     }
 };
 

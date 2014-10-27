@@ -216,7 +216,6 @@ nsMathMLmfracFrame::PlaceInternal(nsRenderingContext& aRenderingContext,
 
   nsRefPtr<nsFontMetrics> fm;
   nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm));
-  aRenderingContext.SetFont(fm);
 
   nscoord defaultRuleThickness, axisHeight;
   nscoord oneDevPixel = fm->AppUnitsPerDevPixel();
@@ -604,7 +603,7 @@ void nsDisplayMathMLSlash::Paint(nsDisplayListBuilder* aBuilder,
   gfxRect rect = presContext->AppUnitsToGfxUnits(mRect + ToReferenceFrame());
   
   // paint with the current text color
-  aCtx->SetColor(mFrame->GetVisitedDependentColor(eCSSProperty_color));
+  aCtx->ThebesContext()->SetColor(mFrame->GetVisitedDependentColor(eCSSProperty_color));
  
   // draw the slash as a parallelogram 
   gfxContext *gfxCtx = aCtx->ThebesContext();

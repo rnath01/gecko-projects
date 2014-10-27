@@ -40,6 +40,7 @@ class gfxContext MOZ_FINAL {
     typedef mozilla::gfx::FillRule FillRule;
     typedef mozilla::gfx::Path Path;
     typedef mozilla::gfx::Pattern Pattern;
+    typedef mozilla::gfx::Rect Rect;
 
     NS_INLINE_DECL_REFCOUNTING(gfxContext)
 
@@ -134,7 +135,7 @@ public:
     mozilla::TemporaryRef<Path> GetPath();
 
     /**
-     * Appends the given path to the current path.
+     * Sets the given path as the current path.
      */
     void SetPath(Path* path);
 
@@ -170,27 +171,6 @@ public:
      * Draws a quadratic Bézier curve with control points pt1, pt2 and pt3.
      */
     void QuadraticCurveTo(const gfxPoint& pt1, const gfxPoint& pt2);
-
-    /**
-     * Draws a clockwise arc (i.e. a circle segment).
-     * @param center The center of the circle
-     * @param radius The radius of the circle
-     * @param angle1 Starting angle for the segment
-     * @param angle2 Ending angle
-     */
-    void Arc(const gfxPoint& center, gfxFloat radius,
-             gfxFloat angle1, gfxFloat angle2);
-
-    /**
-     * Draws a counter-clockwise arc (i.e. a circle segment).
-     * @param center The center of the circle
-     * @param radius The radius of the circle
-     * @param angle1 Starting angle for the segment
-     * @param angle2 Ending angle
-     */
-
-    void NegativeArc(const gfxPoint& center, gfxFloat radius,
-                     gfxFloat angle1, gfxFloat angle2);
 
     // path helpers
     /**
@@ -308,15 +288,6 @@ public:
     bool UserToDevicePixelSnapped(gfxPoint& pt, bool ignoreScale = false) const;
 
     /**
-     * Attempts to pixel snap the rectangle, add it to the current
-     * path, and to set pattern as the current painting source.  This
-     * should be used for drawing filled pixel-snapped rectangles (like
-     * images), because the CTM at the time of the SetPattern call needs
-     * to have a snapped translation, or you get smeared images.
-     */
-    void PixelSnappedRectangleAndSetPattern(const gfxRect& rect, gfxPattern *pattern);
-
-    /**
      ** Painting sources
      **/
 
@@ -353,6 +324,13 @@ public:
      * Uses a pattern for drawing.
      */
     void SetPattern(gfxPattern *pattern);
+
+    /**
+     * Set the color that text drawn on top of transparent pixels should be
+     * anti-aliased into.
+     */
+    void SetFontSmoothingBackgroundColor(const mozilla::gfx::Color& aColor);
+    mozilla::gfx::Color GetFontSmoothingBackgroundColor();
 
     /**
      * Get the source pattern (solid color, normal pattern, surface, etc)
@@ -531,6 +509,7 @@ public:
      * Helper functions that will create a rect path and call Clip().
      * Any current path will be destroyed by these functions!
      */
+    void Clip(const Rect& rect);
     void Clip(const gfxRect& rect); // will clip to a rect
 
     /**
@@ -613,7 +592,6 @@ private:
   typedef mozilla::gfx::Color Color;
   typedef mozilla::gfx::StrokeOptions StrokeOptions;
   typedef mozilla::gfx::Float Float;
-  typedef mozilla::gfx::Rect Rect;
   typedef mozilla::gfx::CompositionOp CompositionOp;
   typedef mozilla::gfx::PathBuilder PathBuilder;
   typedef mozilla::gfx::SourceSurface SourceSurface;
@@ -653,6 +631,7 @@ private:
     mozilla::gfx::AntialiasMode aaMode;
     bool patternTransformChanged;
     Matrix patternTransform;
+    Color fontSmoothingBackgroundColor;
     // This is used solely for using minimal intermediate surface size.
     mozilla::gfx::Point deviceOffset;
   };

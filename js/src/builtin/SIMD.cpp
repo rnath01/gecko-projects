@@ -159,7 +159,7 @@ static bool SignMask(JSContext *cx, unsigned argc, Value *vp)
 
 #define SIGN_MASK(type) \
 static bool type##SignMask(JSContext *cx, unsigned argc, Value *vp) { \
-    return SignMask<Int32x4>(cx, argc, vp); \
+    return SignMask<type>(cx, argc, vp); \
 }
     SIGN_MASK(Float32x4);
     SIGN_MASK(Int32x4);
@@ -466,7 +466,7 @@ namespace js {
 // Unary SIMD operators
 template<typename T>
 struct Abs {
-    static inline T apply(T x) { return x < 0 ? -1 * x : x; }
+    static inline T apply(T x) { return mozilla::Abs(x); }
 };
 template<typename T>
 struct Neg {
@@ -712,14 +712,14 @@ Swizzle(JSContext *cx, unsigned argc, Value *vp)
     if (args.length() != (V::lanes + 1) || !IsVectorObject<V>(args[0]))
         return ErrorBadArgs(cx);
 
-    int32_t lanes[V::lanes];
+    uint32_t lanes[V::lanes];
     for (unsigned i = 0; i < V::lanes; i++) {
         int32_t lane = -1;
         if (!ToInt32(cx, args[i + 1], &lane))
             return false;
-        if (lane < 0 || lane >= V::lanes)
+        if (lane < 0 || uint32_t(lane) >= V::lanes)
             return ErrorBadArgs(cx);
-        lanes[i] = lane;
+        lanes[i] = uint32_t(lane);
     }
 
     Elem *val = TypedObjectMemory<Elem *>(args[0]);
@@ -741,14 +741,14 @@ Shuffle(JSContext *cx, unsigned argc, Value *vp)
     if (args.length() != (V::lanes + 2) || !IsVectorObject<V>(args[0]) || !IsVectorObject<V>(args[1]))
         return ErrorBadArgs(cx);
 
-    int32_t lanes[V::lanes];
+    uint32_t lanes[V::lanes];
     for (unsigned i = 0; i < V::lanes; i++) {
         int32_t lane = -1;
         if (!ToInt32(cx, args[i + 2], &lane))
             return false;
-        if (lane < 0 || lane >= (2 * V::lanes))
+        if (lane < 0 || uint32_t(lane) >= (2 * V::lanes))
             return ErrorBadArgs(cx);
-        lanes[i] = lane;
+        lanes[i] = uint32_t(lane);
     }
 
     Elem *lhs = TypedObjectMemory<Elem *>(args[0]);
@@ -782,6 +782,25 @@ Int32x4BinaryScalar(JSContext *cx, unsigned argc, Value *vp)
 
     for (unsigned i = 0; i < 4; i++)
         result[i] = Op::apply(val[i], bits);
+    return StoreResult<Int32x4>(cx, args, result);
+}
+
+template<typename In, template<typename C> class Op>
+static bool
+CompareFunc(JSContext *cx, unsigned argc, Value *vp)
+{
+    typedef typename In::Elem InElem;
+
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() != 2 || !IsVectorObject<In>(args[0]) || !IsVectorObject<In>(args[1]))
+        return ErrorBadArgs(cx);
+
+    int32_t result[Int32x4::lanes];
+    InElem *left = TypedObjectMemory<InElem *>(args[0]);
+    InElem *right = TypedObjectMemory<InElem *>(args[1]);
+    for (unsigned i = 0; i < Int32x4::lanes; i++)
+        result[i] = Op<InElem>::apply(left[i], right[i]);
+
     return StoreResult<Int32x4>(cx, args, result);
 }
 

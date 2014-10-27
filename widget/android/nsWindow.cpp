@@ -1096,7 +1096,7 @@ bool nsWindow::OnMultitouchEvent(AndroidGeckoEvent *ae)
         // previous block should not be default-prevented
         bool defaultPrevented = isDownEvent ? false : preventDefaultActions;
         if (ae->Type() == AndroidGeckoEvent::APZ_INPUT_EVENT) {
-            mozilla::widget::android::APZCCallbackHandler::GetInstance()->NotifyDefaultPrevented(ae->ApzGuid(), defaultPrevented);
+            mozilla::widget::android::APZCCallbackHandler::GetInstance()->NotifyDefaultPrevented(ae->ApzInputBlockId(), defaultPrevented);
         } else {
             mozilla::widget::android::GeckoAppShell::NotifyDefaultPrevented(defaultPrevented);
         }
@@ -1109,7 +1109,7 @@ bool nsWindow::OnMultitouchEvent(AndroidGeckoEvent *ae)
     if (isDownEvent) {
         if (preventDefaultActions) {
             if (ae->Type() == AndroidGeckoEvent::APZ_INPUT_EVENT) {
-                mozilla::widget::android::APZCCallbackHandler::GetInstance()->NotifyDefaultPrevented(ae->ApzGuid(), true);
+                mozilla::widget::android::APZCCallbackHandler::GetInstance()->NotifyDefaultPrevented(ae->ApzInputBlockId(), true);
             } else {
                 mozilla::widget::android::GeckoAppShell::NotifyDefaultPrevented(true);
             }
@@ -1911,13 +1911,6 @@ nsWindow::OnIMEEvent(AndroidGeckoEvent *ae)
             selEvent.mExpandToClusterBoundary = false;
 
             DispatchEvent(&selEvent);
-
-            // Notify SelectionHandler of final caret position
-            // Required after IME hide via 'Back' button
-            AndroidGeckoEvent* broadcastEvent = AndroidGeckoEvent::MakeBroadcastEvent(
-                NS_LITERAL_CSTRING("TextSelection:UpdateCaretPos"),
-                NS_LITERAL_CSTRING(""));
-            nsAppShell::gAppShell->PostEvent(broadcastEvent);
         }
         break;
     case AndroidGeckoEvent::IME_ADD_COMPOSITION_RANGE:
@@ -2011,14 +2004,6 @@ nsWindow::OnIMEEvent(AndroidGeckoEvent *ae)
 #endif // DEBUG_ANDROID_IME
 
             DispatchEvent(&event);
-
-            // Notify SelectionHandler of final caret position
-            // Required in cases of keyboards providing autoCorrections
-            AndroidGeckoEvent* broadcastEvent =
-                AndroidGeckoEvent::MakeBroadcastEvent(
-                    NS_LITERAL_CSTRING("TextSelection:UpdateCaretPos"),
-                    NS_LITERAL_CSTRING(""));
-            nsAppShell::gAppShell->PostEvent(broadcastEvent);
         }
         break;
 

@@ -15,6 +15,7 @@ EXPORTS += [
     'AndroidJavaWrappers.h',
     'AndroidJNIWrapper.h',
     'GeneratedJNIWrappers.h',
+    'GeneratedSDKWrappers.h',
 ]
 
 SOURCES += [
@@ -26,6 +27,7 @@ SOURCES += [
     'AndroidJNIWrapper.cpp',
     'APZCCallbackHandler.cpp',
     'GeneratedJNIWrappers.cpp',
+    'GeneratedSDKWrappers.cpp',
     'GfxInfo.cpp',
     'NativeJSContainer.cpp',
     'nsAndroidProtocolHandler.cpp',
@@ -53,9 +55,8 @@ LOCAL_INCLUDES += [
     '/dom/system/android',
     '/netwerk/base/src',
     '/netwerk/cache',
+    '/widget',
     '/widget/android/android',
-    '/widget/shared',
-    '/widget/xpwidgets',
 ]
 
 #DEFINES['DEBUG_WIDGETS'] = True

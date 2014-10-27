@@ -30,6 +30,7 @@ namespace gc {
 
 typedef Vector<JS::Zone *, 4, SystemAllocPolicy> ZoneVector;
 
+struct FinalizePhase;
 class MarkingValidator;
 struct AutoPrepareForTracing;
 class AutoTraceSession;
@@ -511,6 +512,7 @@ class GCRuntime
     void assertBackgroundSweepingFinished();
     bool shouldCompact();
 #ifdef JSGC_COMPACTING
+    void sweepTypesAfterCompacting(Zone *zone);
     void sweepZoneAfterCompacting(Zone *zone);
     void compactPhase();
     ArenaHeader *relocateArenas();
@@ -671,9 +673,10 @@ class GCRuntime
      */
     JS::Zone              *zoneGroups;
     JS::Zone              *currentZoneGroup;
-    int                   finalizePhase;
+    bool                  sweepingTypes;
+    unsigned              finalizePhase;
     JS::Zone              *sweepZone;
-    int                   sweepKindIndex;
+    unsigned              sweepKindIndex;
     bool                  abortSweepAfterCurrentGroup;
 
     /*

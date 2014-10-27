@@ -11,6 +11,7 @@
 #include "mozilla/BasicEvents.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/TouchEvents.h"
+#include "GeneratedSDKWrappers.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -687,6 +688,13 @@ AndroidGeckoEvent::ApzGuid()
 {
     MOZ_ASSERT(Type() == APZ_INPUT_EVENT);
     return mApzGuid;
+}
+
+uint64_t
+AndroidGeckoEvent::ApzInputBlockId()
+{
+    MOZ_ASSERT(Type() == APZ_INPUT_EVENT);
+    return mApzInputBlockId;
 }
 
 WidgetTouchEvent
