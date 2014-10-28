@@ -74,6 +74,7 @@ MSG_DEF(JSMSG_BAD_SURROGATE_CHAR,      1, JSEXN_TYPEERR, "bad surrogate characte
 MSG_DEF(JSMSG_UTF8_CHAR_TOO_LARGE,     1, JSEXN_TYPEERR, "UTF-8 character {0} too large")
 MSG_DEF(JSMSG_MALFORMED_UTF8_CHAR,     1, JSEXN_TYPEERR, "malformed UTF-8 character sequence at offset {0}")
 MSG_DEF(JSMSG_WRONG_CONSTRUCTOR,       1, JSEXN_TYPEERR, "wrong constructor called for {0}")
+MSG_DEF(JSMSG_BUILTIN_CTOR_NO_NEW,     1, JSEXN_NONE, "calling a builtin {0} constructor without new is deprecated and will be forbidden in ES6")
 MSG_DEF(JSMSG_PROTO_SETTING_SLOW,      0, JSEXN_NONE, "mutating the [[Prototype]] of an object will cause your code to run very slowly; instead create the object with the correct initial [[Prototype]] value using Object.create")
 MSG_DEF(JSMSG_BAD_GENERATOR_YIELD,     1, JSEXN_TYPEERR, "yield from closing generator {0}")
 MSG_DEF(JSMSG_EMPTY_ARRAY_REDUCE,      0, JSEXN_TYPEERR, "reduce of empty array with no initial value")
@@ -450,3 +451,8 @@ MSG_DEF(JSMSG_BAD_PARSE_NODE,          0, JSEXN_INTERNALERR, "bad parse node")
 MSG_DEF(JSMSG_BAD_SYMBOL,              1, JSEXN_TYPEERR, "{0} is not a well-known @@-symbol")
 MSG_DEF(JSMSG_SYMBOL_TO_STRING,        0, JSEXN_TYPEERR, "can't convert symbol to string")
 MSG_DEF(JSMSG_SYMBOL_TO_NUMBER,        0, JSEXN_TYPEERR, "can't convert symbol to number")
+
+// Atomics and futexes
+MSG_DEF(JSMSG_ATOMICS_NOT_INSTALLED,     0, JSEXN_ERR, "futex support is not installed")
+MSG_DEF(JSMSG_ATOMICS_BAD_ARRAY,         0, JSEXN_TYPEERR, "invalid array type for the operation")
+MSG_DEF(JSMSG_ATOMICS_TOO_LONG,          0, JSEXN_RANGEERR, "timeout value too large")

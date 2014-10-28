@@ -59,7 +59,7 @@
   var dispatcher = new loop.Dispatcher();
   var roomListStore = new loop.store.RoomListStore({
     dispatcher: dispatcher,
-    mozLoop: {}
+    mozLoop: navigator.mozLoop
   });
 
   // Local mocks
@@ -537,10 +537,7 @@
   }
 
   window.addEventListener("DOMContentLoaded", function() {
-    var body = document.body;
-    body.className = loop.shared.utils.getTargetPlatform();
-
-    React.renderComponent(<App />, body);
+    React.renderComponent(<App />, document.body);
 
     _renderComponentsInIframes();
 

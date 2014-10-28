@@ -5139,6 +5139,20 @@
     "n_buckets": "1000",
     "description": "The time (in milliseconds) that it took a 'listTabs' request to go round trip."
   },
+  "DEVTOOLS_DEBUGGER_RDP_LOCAL_PROTOCOLDESCRIPTION_MS": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "10000",
+    "n_buckets": "1000",
+    "description": "The time (in milliseconds) that it took a 'protocolDescription' request to go round trip."
+  },
+  "DEVTOOLS_DEBUGGER_RDP_REMOTE_PROTOCOLDESCRIPTION_MS": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "10000",
+    "n_buckets": "1000",
+    "description": "The time (in milliseconds) that it took a 'protocolDescription' request to go round trip."
+  },
   "DEVTOOLS_DEBUGGER_RDP_LOCAL_LISTADDONS_MS": {
     "expires_in_version": "never",
     "kind": "exponential",
@@ -6148,6 +6162,11 @@
     "kind": "boolean",
     "description": "Did WebIDE local runtime connection succeed?"
   },
+  "DEVTOOLS_WEBIDE_OTHER_CONNECTION_RESULT": {
+    "expires_in_version": "never",
+    "kind": "boolean",
+    "description": "Did WebIDE other runtime connection succeed?"
+  },
   "DEVTOOLS_WEBIDE_CONNECTION_TIME_SECONDS": {
     "expires_in_version": "never",
     "kind": "exponential",
@@ -6458,6 +6477,13 @@
     "kind": "enumerated",
     "n_values": 24,
     "description": "Was a certificate error overridden on this handshake? What was it? (0=unknown error (indicating bug), 1=no, >1=a specific error)"
+  },
+  "SSL_PERMANENT_CERT_ERROR_OVERRIDES": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 1024,
+    "n_buckets": 10,
+    "description": "How many permanent certificate overrides a user has stored."
   },
   "TELEMETRY_TEST_EXPIRED": {
     "expires_in_version": "4.0a1",

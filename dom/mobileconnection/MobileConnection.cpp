@@ -368,9 +368,12 @@ MobileConnection::GetRadioState() const
     return retVal;
   }
 
-  nsAutoString state;
-  mMobileConnection->GetRadioState(state);
-  CONVERT_STRING_TO_NULLABLE_ENUM(state, MobileRadioState, retVal);
+  int32_t state = nsIMobileConnection::MOBILE_RADIO_STATE_UNKNOWN;
+  if (NS_SUCCEEDED(mMobileConnection->GetRadioState(&state)) &&
+      state != nsIMobileConnection::MOBILE_RADIO_STATE_UNKNOWN) {
+    MOZ_ASSERT(state < static_cast<int32_t>(MobileRadioState::EndGuard_));
+    retVal.SetValue(static_cast<MobileRadioState>(state));
+  }
 
   return retVal;
 }
@@ -1038,8 +1041,7 @@ MobileConnection::NotifyDataError(const nsAString& aMessage)
 }
 
 NS_IMETHODIMP
-MobileConnection::NotifyCFStateChanged(bool aSuccess,
-                                       unsigned short aAction,
+MobileConnection::NotifyCFStateChanged(unsigned short aAction,
                                        unsigned short aReason,
                                        const nsAString& aNumber,
                                        unsigned short aSeconds,
@@ -1052,7 +1054,6 @@ MobileConnection::NotifyCFStateChanged(bool aSuccess,
   CFStateChangeEventInit init;
   init.mBubbles = false;
   init.mCancelable = false;
-  init.mSuccess = aSuccess;
   init.mAction = aAction;
   init.mReason = aReason;
   init.mNumber = aNumber;

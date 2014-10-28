@@ -3132,12 +3132,20 @@ NS_METHOD nsWindow::EnableDragDrop(bool aEnable)
 
 NS_METHOD nsWindow::CaptureMouse(bool aCapture)
 {
+  TRACKMOUSEEVENT mTrack;
+  mTrack.cbSize = sizeof(TRACKMOUSEEVENT);
+  mTrack.dwFlags = TME_LEAVE;
+  mTrack.dwHoverTime = 0;
   if (aCapture) {
+    mTrack.hwndTrack = mWnd;
     ::SetCapture(mWnd);
   } else {
+    mTrack.hwndTrack = nullptr;
     ::ReleaseCapture();
   }
   sIsInMouseCapture = aCapture;
+  // Requests WM_MOUSELEAVE events for this window.
+  TrackMouseEvent(&mTrack);
   return NS_OK;
 }
 
@@ -4857,15 +4865,6 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
     case WM_MOUSEMOVE:
     {
-      if (!mMousePresent) {
-        TRACKMOUSEEVENT tme;
-        tme.cbSize = sizeof(TRACKMOUSEEVENT);
-        tme.dwFlags =  TME_LEAVE;
-        tme.hwndTrack = mWnd;
-        // Request WM_MOUSELEAVE events for this window.
-        TrackMouseEvent(&tme);
-      }
-
       mMousePresent = true;
 
       // Suppress dispatch of pending events
@@ -4931,12 +4930,6 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
       DispatchMouseEvent(NS_MOUSE_EXIT, mouseState, pos, false,
                          WidgetMouseEvent::eLeftButton, MOUSE_INPUT_SOURCE());
     }
-    break;
-
-    case WM_NCMOUSELEAVE:
-      // If upon mouse leave event, only WM_NCMOUSELEAVE message is sent, sending WM_MOUSELEAVE message
-      // makes the event being properly handled.
-      SendMessage(mWnd, WM_MOUSELEAVE, 0, 0);
     break;
 
     case WM_CONTEXTMENU:
@@ -6740,10 +6733,21 @@ nsWindow::GetPreferredCompositorBackends(nsTArray<LayersBackend>& aHints)
     if (prefs.mPreferOpenGL) {
       aHints.AppendElement(LayersBackend::LAYERS_OPENGL);
     }
-    if (!prefs.mPreferD3D9) {
-      aHints.AppendElement(LayersBackend::LAYERS_D3D11);
+
+    ID3D11Device* device = gfxWindowsPlatform::GetPlatform()->GetD3D11Device();
+    if (device && !DoesD3D11DeviceSupportResourceSharing(device)) {
+      // bug 1083071 - bad things - fall back to basic layers
+      // This should not happen aside from driver bugs, and in particular
+      // should not happen on our test machines, so let's NS_ERROR to ensure
+      // that we would catch it as a test failure.
+      NS_ERROR("Can't use Direct3D 11 because of a driver bug "
+        "causing resource sharing to fail");
+    } else {
+      if (!prefs.mPreferD3D9) {
+        aHints.AppendElement(LayersBackend::LAYERS_D3D11);
+      }
+      aHints.AppendElement(LayersBackend::LAYERS_D3D9);
     }
-    aHints.AppendElement(LayersBackend::LAYERS_D3D9);
   }
   aHints.AppendElement(LayersBackend::LAYERS_BASIC);
 }

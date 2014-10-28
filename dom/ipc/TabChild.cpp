@@ -81,6 +81,7 @@
 #include "ClientLayerManager.h"
 #include "LayersLogging.h"
 #include "nsIOService.h"
+#include "nsDOMClassInfoID.h"
 
 #include "nsColorPickerProxy.h"
 
@@ -821,6 +822,7 @@ TabChild::TabChild(nsIContentChild* aManager,
   , mOrientation(eScreenOrientation_PortraitPrimary)
   , mUpdateHitRegion(false)
   , mPendingTouchPreventedResponse(false)
+  , mPendingTouchPreventedBlockId(0)
   , mTouchEndCancelled(false)
   , mEndTouchIsClick(false)
   , mIgnoreKeyPressEvent(false)
@@ -1490,7 +1492,7 @@ TabChild::SendPendingTouchPreventedResponse(bool aPreventDefault,
 {
   if (mPendingTouchPreventedResponse) {
     MOZ_ASSERT(aGuid == mPendingTouchPreventedGuid);
-    SendContentReceivedTouch(mPendingTouchPreventedGuid, aPreventDefault);
+    SendContentReceivedTouch(mPendingTouchPreventedGuid, mPendingTouchPreventedBlockId, aPreventDefault);
     mPendingTouchPreventedResponse = false;
   }
 }
@@ -1940,7 +1942,7 @@ TabChild::FireSingleTapEvent(LayoutDevicePoint aPoint)
 }
 
 bool
-TabChild::RecvHandleLongTap(const CSSPoint& aPoint, const ScrollableLayerGuid& aGuid)
+TabChild::RecvHandleLongTap(const CSSPoint& aPoint, const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId)
 {
   TABC_LOG("Handling long tap at %s with %p %p\n",
     Stringify(aPoint).c_str(), mGlobal.get(), mTabChildGlobal.get());
@@ -1970,7 +1972,7 @@ TabChild::RecvHandleLongTap(const CSSPoint& aPoint, const ScrollableLayerGuid& a
     TABC_LOG("MOZLONGTAP event handled: %d\n", eventHandled);
   }
 
-  SendContentReceivedTouch(aGuid, eventHandled);
+  SendContentReceivedTouch(aGuid, aInputBlockId, eventHandled);
 
   return true;
 }
@@ -2239,7 +2241,8 @@ TabChild::CancelTapTracking()
 
 bool
 TabChild::RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
-                             const ScrollableLayerGuid& aGuid)
+                             const ScrollableLayerGuid& aGuid,
+                             const uint64_t& aInputBlockId)
 {
   TABC_LOG("Receiving touch event of type %d\n", aEvent.message);
 
@@ -2268,14 +2271,15 @@ TabChild::RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
     if (mPendingTouchPreventedResponse) {
       // We can enter here if we get two TOUCH_STARTs in a row and didn't
       // respond to the first one. Respond to it now.
-      SendContentReceivedTouch(mPendingTouchPreventedGuid, false);
+      SendContentReceivedTouch(mPendingTouchPreventedGuid, mPendingTouchPreventedBlockId, false);
       mPendingTouchPreventedResponse = false;
     }
     if (isTouchPrevented) {
-      SendContentReceivedTouch(aGuid, isTouchPrevented);
+      SendContentReceivedTouch(aGuid, aInputBlockId, isTouchPrevented);
     } else {
       mPendingTouchPreventedResponse = true;
       mPendingTouchPreventedGuid = aGuid;
+      mPendingTouchPreventedBlockId = aInputBlockId;
     }
     break;
   }
@@ -2303,9 +2307,10 @@ TabChild::RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
 
 bool
 TabChild::RecvRealTouchMoveEvent(const WidgetTouchEvent& aEvent,
-                                 const ScrollableLayerGuid& aGuid)
+                                 const ScrollableLayerGuid& aGuid,
+                                 const uint64_t& aInputBlockId)
 {
-  return RecvRealTouchEvent(aEvent, aGuid);
+  return RecvRealTouchEvent(aEvent, aGuid, aInputBlockId);
 }
 
 void
