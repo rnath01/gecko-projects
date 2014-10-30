@@ -1639,9 +1639,6 @@ IonBuilder::inspectOpcode(JSOp op)
       case JSOP_INITELEM_SETTER:
         return jsop_initelem_getter_setter();
 
-      case JSOP_ENDINIT:
-        return true;
-
       case JSOP_FUNCALL:
         return jsop_funcall(GET_ARGC(pc));
 
@@ -7716,7 +7713,7 @@ IonBuilder::getElemTryCache(bool *emitted, MDefinition *obj, MDefinition *index)
     if (needsToMonitorMissingProperties(types))
         barrier = BarrierKind::TypeSet;
 
-    MInstruction *ins = MGetElementCache::New(alloc(), obj, index, barrier != BarrierKind::NoBarrier);
+    MInstruction *ins = MGetElementCache::New(alloc(), obj, index, barrier == BarrierKind::TypeSet);
 
     current->add(ins);
     current->push(ins);
@@ -9647,11 +9644,17 @@ IonBuilder::getPropTryCache(bool *emitted, MDefinition *obj, PropertyName *name,
 
     // Caches can read values from prototypes, so update the barrier to
     // reflect such possible values.
-    if (barrier == BarrierKind::NoBarrier)
-        barrier = PropertyReadOnPrototypeNeedsTypeBarrier(constraints(), obj, name, types);
+    if (barrier != BarrierKind::TypeSet) {
+        BarrierKind protoBarrier =
+            PropertyReadOnPrototypeNeedsTypeBarrier(constraints(), obj, name, types);
+        if (protoBarrier != BarrierKind::NoBarrier) {
+            MOZ_ASSERT(barrier <= protoBarrier);
+            barrier = protoBarrier;
+        }
+    }
 
     MGetPropertyCache *load = MGetPropertyCache::New(alloc(), obj, name,
-                                                     barrier != BarrierKind::NoBarrier);
+                                                     barrier == BarrierKind::TypeSet);
 
     // Try to mark the cache as idempotent.
     //

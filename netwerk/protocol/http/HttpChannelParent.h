@@ -19,7 +19,6 @@
 #include "nsIProgressEventSink.h"
 #include "nsHttpChannel.h"
 #include "nsIAuthPromptProvider.h"
-#include "mozilla/dom/ipc/IdType.h"
 
 class nsICacheEntry;
 class nsIAssociatedContentSecurity;
@@ -28,12 +27,12 @@ namespace mozilla {
 
 namespace dom{
 class TabParent;
-class PBrowserOrId;
 }
 
 namespace net {
 
 class HttpChannelParentListener;
+class PBrowserOrId;
 
 class HttpChannelParent : public PHttpChannelParent
                         , public nsIParentRedirectingChannel
@@ -55,7 +54,7 @@ public:
   NS_DECL_NSIINTERFACEREQUESTOR
   NS_DECL_NSIAUTHPROMPTPROVIDER
 
-  HttpChannelParent(const dom::PBrowserOrId& iframeEmbedding,
+  HttpChannelParent(const PBrowserOrId& iframeEmbedding,
                     nsILoadContext* aLoadContext,
                     PBOverrideStatus aStatus);
 
@@ -100,7 +99,7 @@ protected:
                    const uint8_t&             redirectionLimit,
                    const bool&                allowPipelining,
                    const bool&                allowSTS,
-                   const bool&                forceAllowThirdPartyCookie,
+                   const uint32_t&            thirdPartyFlags,
                    const bool&                doResumeAt,
                    const uint64_t&            startPos,
                    const nsCString&           entityID,
@@ -186,7 +185,7 @@ private:
 
   bool mSuspendedForDiversion;
 
-  dom::TabId mNestedFrameId;
+  uint64_t mNestedFrameId;
 };
 
 } // namespace net

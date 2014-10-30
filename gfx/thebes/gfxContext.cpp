@@ -36,53 +36,38 @@ using namespace mozilla::gfx;
 
 UserDataKey gfxContext::sDontUseAsSourceKey;
 
-/* This class lives on the stack and allows gfxContext users to easily, and
- * performantly get a gfx::Pattern to use for drawing in their current context.
- */
-class PatternFromState
+
+PatternFromState::operator mozilla::gfx::Pattern&()
 {
-public:    
-  explicit PatternFromState(gfxContext *aContext) : mContext(aContext), mPattern(nullptr) {}
-  ~PatternFromState() { if (mPattern) { mPattern->~Pattern(); } }
+  gfxContext::AzureState &state = mContext->CurrentState();
 
-  operator mozilla::gfx::Pattern&()
-  {
-    gfxContext::AzureState &state = mContext->CurrentState();
-
-    if (state.pattern) {
-      return *state.pattern->GetPattern(mContext->mDT, state.patternTransformChanged ? &state.patternTransform : nullptr);
-    } else if (state.sourceSurface) {
-      Matrix transform = state.surfTransform;
-
-      if (state.patternTransformChanged) {
-        Matrix mat = mContext->GetDTTransform();
-        if (!mat.Invert()) {
-          mPattern = new (mColorPattern.addr())
-          ColorPattern(Color()); // transparent black to paint nothing
-          return *mPattern;
-        }
-        transform = transform * state.patternTransform * mat;
-      }
-
-      mPattern = new (mSurfacePattern.addr())
-        SurfacePattern(state.sourceSurface, ExtendMode::CLAMP, transform);
-      return *mPattern;
-    } else {
-      mPattern = new (mColorPattern.addr())
-        ColorPattern(state.color);
-      return *mPattern;
-    }
+  if (state.pattern) {
+    return *state.pattern->GetPattern(mContext->mDT, state.patternTransformChanged ? &state.patternTransform : nullptr);
   }
 
-private:
-  union {
-    mozilla::AlignedStorage2<mozilla::gfx::ColorPattern> mColorPattern;
-    mozilla::AlignedStorage2<mozilla::gfx::SurfacePattern> mSurfacePattern;
-  };
+  if (state.sourceSurface) {
+    Matrix transform = state.surfTransform;
 
-  gfxContext *mContext;
-  Pattern *mPattern;
-};
+    if (state.patternTransformChanged) {
+      Matrix mat = mContext->GetDTTransform();
+      if (!mat.Invert()) {
+        mPattern = new (mColorPattern.addr())
+        ColorPattern(Color()); // transparent black to paint nothing
+        return *mPattern;
+      }
+      transform = transform * state.patternTransform * mat;
+    }
+
+    mPattern = new (mSurfacePattern.addr())
+    SurfacePattern(state.sourceSurface, ExtendMode::CLAMP, transform);
+    return *mPattern;
+  }
+
+  mPattern = new (mColorPattern.addr())
+  ColorPattern(state.color);
+  return *mPattern;
+}
+
 
 gfxContext::gfxContext(DrawTarget *aTarget, const Point& aDeviceOffset)
   : mPathIsRect(false)
@@ -294,13 +279,6 @@ gfxContext::MoveTo(const gfxPoint& pt)
 {
   EnsurePathBuilder();
   mPathBuilder->MoveTo(ToPoint(pt));
-}
-
-void
-gfxContext::NewSubPath()
-{
-    // XXX - This has no users, we should kill it, it should be equivelant to a
-    // MoveTo to the path's current point.
 }
 
 void

@@ -514,7 +514,8 @@ describe("loop.webapp", function() {
         notifications: notifications,
         sdk: sdk,
         conversation: conversationModel,
-        feedbackApiClient: feedbackApiClient
+        feedbackApiClient: feedbackApiClient,
+        onUrlHashChange: sandbox.stub()
       }));
     }
 
@@ -575,7 +576,7 @@ describe("loop.webapp", function() {
   });
 
   describe("PendingConversationView", function() {
-    var view, websocket;
+    var view, websocket, fakeAudio;
 
     beforeEach(function() {
       websocket = new loop.CallConnectionWebSocket({
@@ -585,12 +586,28 @@ describe("loop.webapp", function() {
       });
 
       sinon.stub(websocket, "cancel");
+      fakeAudio = {
+        play: sinon.spy(),
+        pause: sinon.spy(),
+        removeAttribute: sinon.spy()
+      };
+      sandbox.stub(window, "Audio").returns(fakeAudio);
 
       view = React.addons.TestUtils.renderIntoDocument(
         loop.webapp.PendingConversationView({
           websocket: websocket
         })
       );
+    });
+
+    describe("#componentDidMount", function() {
+
+      it("should play a looped connecting sound", function() {
+        sinon.assert.calledOnce(window.Audio);
+        sinon.assert.calledWithExactly(window.Audio, "shared/sounds/connecting.ogg");
+        expect(fakeAudio.loop).to.equal(true);
+      });
+
     });
 
     describe("#_cancelOutgoingCall", function() {
@@ -608,6 +625,13 @@ describe("loop.webapp", function() {
           websocket.trigger("progress:alerting");
 
           expect(view.state.callState).to.be.equal("ringing");
+        });
+
+        it("should play a looped ringing sound", function() {
+          websocket.trigger("progress:alerting");
+
+          sinon.assert.calledWithExactly(window.Audio, "shared/sounds/ringing.ogg");
+          expect(fakeAudio.loop).to.equal(true);
         });
       });
     });
@@ -843,9 +867,16 @@ describe("loop.webapp", function() {
   });
 
   describe("EndedConversationView", function() {
-    var view, conversation;
+    var view, conversation, fakeAudio;
 
     beforeEach(function() {
+      fakeAudio = {
+        play: sinon.spy(),
+        pause: sinon.spy(),
+        removeAttribute: sinon.spy()
+      };
+      sandbox.stub(window, "Audio").returns(fakeAudio);
+
       conversation = new sharedModels.ConversationModel({}, {
         sdk: {}
       });
@@ -866,6 +897,17 @@ describe("loop.webapp", function() {
     it("should render a FeedbackView", function() {
       TestUtils.findRenderedComponentWithType(view, sharedViews.FeedbackView);
     });
+
+    describe("#componentDidMount", function() {
+
+      it("should play a terminating sound, once", function() {
+        sinon.assert.calledOnce(window.Audio);
+        sinon.assert.calledWithExactly(window.Audio, "shared/sounds/terminated.ogg");
+        expect(fakeAudio.loop).to.not.equal(true);
+      });
+
+    });
+
   });
 
   describe("PromoteFirefoxView", function() {
