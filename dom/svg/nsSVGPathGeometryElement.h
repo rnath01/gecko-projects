@@ -34,6 +34,7 @@ protected:
   typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef mozilla::gfx::FillRule FillRule;
   typedef mozilla::gfx::Float Float;
+  typedef mozilla::gfx::Matrix Matrix;
   typedef mozilla::gfx::Path Path;
   typedef mozilla::gfx::Point Point;
   typedef mozilla::gfx::PathBuilder PathBuilder;
@@ -68,6 +69,17 @@ public:
 
   virtual bool IsMarkable();
   virtual void GetMarkPoints(nsTArray<nsSVGMark> *aMarks);
+
+  /**
+   * A method that can be faster than using a Moz2D Path and calling GetBounds/
+   * GetStrokedBounds on it.  It also helps us avoid rounding error for simple
+   * shapes and simple transforms where the Moz2D Path backends can fail to
+   * produce the clean integer bounds that content authors expect in some cases.
+   */
+  virtual bool GetGeometryBounds(Rect* aBounds, Float aStrokeWidth,
+                                 const Matrix& aTransform) {
+    return false;
+  }
 
   /**
    * For use with GetAsSimplePath.

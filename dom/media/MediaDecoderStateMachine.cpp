@@ -165,7 +165,7 @@ static_assert(QUICK_BUFFERING_LOW_DATA_USECS <= AMPLE_AUDIO_USECS,
 static const int64_t ESTIMATED_DURATION_FUZZ_FACTOR_USECS = USECS_PER_S / 2;
 
 static TimeDuration UsecsToDuration(int64_t aUsecs) {
-  return TimeDuration::FromMilliseconds(static_cast<double>(aUsecs) / USECS_PER_MS);
+  return TimeDuration::FromMicroseconds(aUsecs);
 }
 
 static int64_t DurationToUsecs(TimeDuration aDuration) {
@@ -213,7 +213,9 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
   mDropVideoUntilNextDiscontinuity(false),
   mDecodeToSeekTarget(false),
   mCurrentTimeBeforeSeek(0),
-  mLastFrameStatus(MediaDecoderOwner::NEXT_FRAME_UNINITIALIZED)
+  mLastFrameStatus(MediaDecoderOwner::NEXT_FRAME_UNINITIALIZED),
+  mDecodingFrozenAtStateMetadata(false),
+  mDecodingFrozenAtStateDecoding(false)
 {
   MOZ_COUNT_CTOR(MediaDecoderStateMachine);
   NS_ASSERTION(NS_IsMainThread(), "Should be on main thread.");
@@ -1356,8 +1358,9 @@ void MediaDecoderStateMachine::SetDormant(bool aDormant)
     SetState(DECODER_STATE_DORMANT);
     mDecoder->GetReentrantMonitor().NotifyAll();
   } else if ((aDormant != true) && (mState == DECODER_STATE_DORMANT)) {
+    mDecodingFrozenAtStateMetadata = true;
+    mDecodingFrozenAtStateDecoding = true;
     ScheduleStateMachine();
-    mStartTime = 0;
     mCurrentFrameTime = 0;
     SetState(DECODER_STATE_DECODING_NONE);
     mDecoder->GetReentrantMonitor().NotifyAll();
@@ -1454,6 +1457,10 @@ void MediaDecoderStateMachine::Play()
     SetState(DECODER_STATE_DECODING);
     mDecodeStartTime = TimeStamp::Now();
   }
+  if (mDecodingFrozenAtStateDecoding) {
+    mDecodingFrozenAtStateDecoding = false;
+    DispatchDecodeTasksIfNeeded();
+  }
   // Once we start playing, we don't want to minimize our prerolling, as we
   // assume the user is likely to want to keep playing in future.
   mMinimizePreroll = false;
@@ -1514,6 +1521,8 @@ void MediaDecoderStateMachine::Seek(const SeekTarget& aTarget)
 {
   NS_ASSERTION(NS_IsMainThread(), "Should be on main thread.");
   ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+
+  mDecodingFrozenAtStateDecoding = false;
 
   if (mState == DECODER_STATE_SHUTDOWN) {
     return;
@@ -1622,6 +1631,11 @@ MediaDecoderStateMachine::DispatchDecodeTasksIfNeeded()
     return;
   }
 
+  if (mState == DECODER_STATE_DECODING && mDecodingFrozenAtStateDecoding) {
+    DECODER_LOG("DispatchDecodeTasksIfNeeded return due to "
+                "mFreezeDecodingAtStateDecoding");
+    return;
+  }
   // NeedToDecodeAudio() can go from false to true while we hold the
   // monitor, but it can't go from true to false. This can happen because
   // NeedToDecodeAudio() takes into account the amount of decoded audio
@@ -1972,6 +1986,10 @@ nsresult MediaDecoderStateMachine::DecodeMetadata()
     SetStartTime(0);
     res = FinishDecodeMetadata();
     NS_ENSURE_SUCCESS(res, res);
+  } else if (mDecodingFrozenAtStateMetadata) {
+    SetStartTime(mStartTime);
+    res = FinishDecodeMetadata();
+    NS_ENSURE_SUCCESS(res, res);
   } else {
     if (HasAudio()) {
       ReentrantMonitorAutoExit unlock(mDecoder->GetReentrantMonitor());
@@ -1997,19 +2015,10 @@ MediaDecoderStateMachine::FinishDecodeMetadata()
     return NS_ERROR_FAILURE;
   }
 
-  if (!mScheduler->IsRealTime()) {
-
+  if (!mScheduler->IsRealTime() && !mDecodingFrozenAtStateMetadata) {
     const VideoData* v = VideoQueue().PeekFront();
     const AudioData* a = AudioQueue().PeekFront();
-
-    int64_t startTime = std::min<int64_t>(a ? a->mTime : INT64_MAX,
-                                          v ? v->mTime : INT64_MAX);
-    if (startTime == INT64_MAX) {
-      startTime = 0;
-    }
-    DECODER_LOG("DecodeMetadata first video frame start %lld", v ? v->mTime : -1);
-    DECODER_LOG("DecodeMetadata first audio frame start %lld", a ? a->mTime : -1);
-    SetStartTime(startTime);
+    SetStartTime(mReader->ComputeStartTime(v, a));
     if (VideoQueue().GetSize()) {
       ReentrantMonitorAutoExit exitMon(mDecoder->GetReentrantMonitor());
       RenderVideoFrame(VideoQueue().PeekFront(), TimeStamp::Now());
@@ -2028,6 +2037,8 @@ MediaDecoderStateMachine::FinishDecodeMetadata()
               "transportSeekable=%d, mediaSeekable=%d",
               mStartTime, mEndTime, GetDuration(),
               mDecoder->IsTransportSeekable(), mDecoder->IsMediaSeekable());
+
+  mDecodingFrozenAtStateMetadata = false;
 
   if (HasAudio() && !HasVideo()) {
     // We're playing audio only. We don't need to worry about slow video
@@ -2549,6 +2560,7 @@ void MediaDecoderStateMachine::RenderVideoFrame(VideoData* aData,
   if (container) {
     container->SetCurrentFrame(ThebesIntSize(aData->mDisplay), aData->mImage,
                                aTarget);
+    MOZ_ASSERT(container->GetFrameDelay() >= 0 || mScheduler->IsRealTime());
   }
 }
 
@@ -2635,6 +2647,7 @@ void MediaDecoderStateMachine::AdvanceFrame()
   }
 
   int64_t clock_time = GetClock();
+  TimeStamp nowTime = TimeStamp::Now();
   // Skip frames up to the frame at the playback position, and figure out
   // the time remaining until it's time to display the next frame.
   int64_t remainingTime = AUDIO_DURATION_USECS;
@@ -2701,8 +2714,8 @@ void MediaDecoderStateMachine::AdvanceFrame()
 
   if (currentFrame) {
     // Decode one frame and display it.
-    TimeStamp presTime = mPlayStartTime - UsecsToDuration(mPlayDuration) +
-                          UsecsToDuration(currentFrame->mTime - mStartTime);
+    int64_t delta = currentFrame->mTime - clock_time;
+    TimeStamp presTime = nowTime + TimeDuration::FromMicroseconds(delta / mPlaybackRate);
     NS_ASSERTION(currentFrame->mTime >= mStartTime, "Should have positive frame time");
     // Filter out invalid frames by checking the frame time. FrameTime could be
     // zero if it's a initial frame.
@@ -2748,7 +2761,7 @@ void MediaDecoderStateMachine::AdvanceFrame()
   // ready state. Post an update to do so.
   UpdateReadyState();
 
-  ScheduleStateMachine(remainingTime);
+  ScheduleStateMachine(remainingTime / mPlaybackRate);
 }
 
 nsresult
@@ -2962,8 +2975,8 @@ void MediaDecoderStateMachine::StartBuffering()
   // we just trigger UpdateReadyStateForData; when it runs, it
   // will check the current state and decide whether to tell
   // the element we're buffering or not.
-  UpdateReadyState();
   SetState(DECODER_STATE_BUFFERING);
+  UpdateReadyState();
   DECODER_LOG("Changed state from DECODING to BUFFERING, decoded for %.3lfs",
               decodeDuration.ToSeconds());
 #ifdef PR_LOGGING

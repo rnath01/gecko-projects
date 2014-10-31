@@ -7,6 +7,8 @@
 #include "nsGkAtoms.h"
 #include "mozilla/dom/SVGRectElementBinding.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/Matrix.h"
+#include "mozilla/gfx/Rect.h"
 #include "mozilla/gfx/PathHelpers.h"
 #include <algorithm>
 
@@ -108,6 +110,40 @@ SVGRectElement::GetLengthInfo()
 //----------------------------------------------------------------------
 // nsSVGPathGeometryElement methods
 
+bool
+SVGRectElement::GetGeometryBounds(Rect* aBounds, Float aStrokeWidth,
+                                  const Matrix& aTransform)
+{
+  Rect rect;
+  Float rx, ry;
+  GetAnimatedLengthValues(&rect.x, &rect.y, &rect.width,
+                          &rect.height, &rx, &ry, nullptr);
+
+  if (rect.IsEmpty()) {
+    // Rendering of the element disabled
+    rect.SetEmpty(); // Make sure width/height are zero and not negative
+    *aBounds = rect; // We still want the x/y position from 'rect'
+    return true;
+  }
+
+  if (!aTransform.IsRectilinear()) {
+    // We can't ignore the radii in this case if we want tight bounds
+    rx = std::max(rx, 0.0f);
+    ry = std::max(ry, 0.0f);
+
+    if (rx != 0 || ry != 0) {
+      return false;
+    }
+  }
+
+  if (aStrokeWidth > 0.f) {
+    rect.Inflate(aStrokeWidth / 2.f);
+  }
+
+  *aBounds = aTransform.TransformBounds(rect);
+  return true;
+}
+
 void
 SVGRectElement::GetAsSimplePath(SimplePath* aSimplePath)
 {
@@ -168,8 +204,7 @@ SVGRectElement::BuildPath(PathBuilder* aBuilder)
     rx = std::min(rx, width / 2);
     ry = std::min(ry, height / 2);
 
-    Size cornerRadii(rx, ry);
-    Size radii[] = { cornerRadii, cornerRadii, cornerRadii, cornerRadii };
+    RectCornerRadii radii(rx, ry);
     AppendRoundedRectToPath(aBuilder, Rect(x, y, width, height), radii);
   }
 
