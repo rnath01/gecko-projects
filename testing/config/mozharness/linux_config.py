@@ -13,8 +13,7 @@ config = {
         "--certificate-path=tests/certs", "--autorun", "--close-when-done",
         "--console-level=INFO", "--setpref=webgl.force-enabled=true",
         "--quiet", "--log-raw=%(raw_log_file)s",
-        "--use-test-media-devices",
-        "--log-raw=-",
+        "--use-test-media-devices"
     ],
     "webapprt_options": [
         "--app=%(app_path)s", "--utility-path=tests/bin",
@@ -41,5 +40,4 @@ config = {
     "mozbase_options": [
         "-b", "%(binary_path)s"
     ],
-    "structured_suites": ("mochitest",),
 }

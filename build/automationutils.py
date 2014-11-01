@@ -210,7 +210,7 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold, ignoreMis
   processString = "%s process:" % processType
   crashedOnPurpose = False
   totalBytesLeaked = None
-  logError = False
+  logAsWarning = False
   leakAnalysis = []
   leakedObjectAnalysis = []
   leakedObjectNames = []
@@ -253,7 +253,7 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold, ignoreMis
       if size < 0 or bytesLeaked < 0 or numLeaked < 0:
         leakAnalysis.append("TEST-UNEXPECTED-FAIL | leakcheck | %s negative leaks caught!"
                             % processString)
-        logError = True
+        logAsWarning = True
         continue
       if name != "TOTAL" and numLeaked != 0 and recordLeakedObjects:
         leakedObjectNames.append(name)
@@ -261,12 +261,12 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold, ignoreMis
                                     % (processString, numLeaked, name, bytesLeaked))
 
   leakAnalysis.extend(leakedObjectAnalysis)
-  if logError:
+  if logAsWarning:
     log.warning('\n'.join(leakAnalysis))
   else:
     log.info('\n'.join(leakAnalysis))
 
-  logError = False
+  logAsWarning = False
 
   if totalBytesLeaked is None:
     # We didn't see a line with name 'TOTAL'
@@ -289,7 +289,7 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold, ignoreMis
 
   # totalBytesLeaked was seen and is non-zero.
   if totalBytesLeaked > leakThreshold:
-    logError = True
+    logAsWarning = True
     # Fail the run if we're over the threshold (which defaults to 0)
     prefix = "TEST-UNEXPECTED-FAIL"
   else:
@@ -302,7 +302,7 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold, ignoreMis
   if len(leakedObjectNames) > maxSummaryObjects:
     leakedObjectSummary += ', ...'
 
-  if logError:
+  if logAsWarning:
     log.warning("%s | leakcheck | %s %d bytes leaked (%s)"
                 % (prefix, processString, totalBytesLeaked, leakedObjectSummary))
   else:
@@ -592,14 +592,14 @@ class ShutdownLeaks(object):
 
   def process(self):
     if not self.seenShutdown:
-      self.logger.error("ShutdownLeaks | process() called before end of test suite")
+      self.logger.warning("TEST-UNEXPECTED-FAIL | ShutdownLeaks | process() called before end of test suite")
 
     for test in self._parseLeakingTests():
       for url, count in self._zipLeakedWindows(test["leakedWindows"]):
-        self.logger.error("%s | leaked %d window(s) until shutdown [url = %s]" % (test["fileName"], count, url))
+        self.logger.warning("TEST-UNEXPECTED-FAIL | %s | leaked %d window(s) until shutdown [url = %s]" % (test["fileName"], count, url))
 
       if test["leakedDocShells"]:
-        self.logger.error("%s | leaked %d docShell(s) until shutdown" % (test["fileName"], len(test["leakedDocShells"])))
+        self.logger.warning("TEST-UNEXPECTED-FAIL | %s | leaked %d docShell(s) until shutdown" % (test["fileName"], len(test["leakedDocShells"])))
 
   def _logWindow(self, line):
     created = line[:2] == "++"
@@ -608,7 +608,7 @@ class ShutdownLeaks(object):
 
     # log line has invalid format
     if not pid or not serial:
-      self.logger.error("ShutdownLeaks | failed to parse line <%s>" % line)
+      self.logger.warning("TEST-UNEXPECTED-FAIL | ShutdownLeaks | failed to parse line <%s>" % line)
       return
 
     key = pid + "." + serial
@@ -629,7 +629,7 @@ class ShutdownLeaks(object):
 
     # log line has invalid format
     if not pid or not id:
-      self.logger.error("ShutdownLeaks | failed to parse line <%s>" % line)
+      self.logger.warning("TEST-UNEXPECTED-FAIL | ShutdownLeaks | failed to parse line <%s>" % line)
       return
 
     key = pid + "." + id
@@ -751,7 +751,7 @@ class LSANLeaks(object):
 
   def process(self):
     for f in self.foundFrames:
-      self.logger.error("LeakSanitizer | leak at " + f)
+      self.logger.warning("TEST-UNEXPECTED-FAIL | LeakSanitizer | leak at " + f)
 
   def _finishStack(self):
     if self.recordMoreFrames and len(self.currStack) == 0:

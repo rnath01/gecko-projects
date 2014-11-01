@@ -88,14 +88,6 @@ class RemoteAutomation(Automation):
             If maxTime seconds elapse or no output is detected for timeout
             seconds, kill the process and fail the test.
         """
-        logger = get_default_logger()
-
-        def logError(msg):
-            if logger is not None:
-                logger.error(msg)
-            else:
-                print "TEST-UNEXPECTED-FAIL | %s" % msg
-
         # maxTime is used to override the default timeout, we should honor that
         status = proc.wait(timeout = maxTime, noOutputTimeout = timeout)
         self.lastTestSeen = proc.getLastTestSeen
@@ -105,14 +97,14 @@ class RemoteAutomation(Automation):
             proc.kill(True)
         if status == 1:
             if maxTime:
-                logError("%s | application ran for longer than " \
-                         "allowed maximum time of %s seconds" % (self.lastTestSeen, maxTime))
+                print "TEST-UNEXPECTED-FAIL | %s | application ran for longer than " \
+                      "allowed maximum time of %s seconds" % (self.lastTestSeen, maxTime)
             else:
-                logError("%s | application ran for longer than " \
-                         "allowed maximum time" % (self.lastTestSeen))
+                print "TEST-UNEXPECTED-FAIL | %s | application ran for longer than " \
+                      "allowed maximum time" % (self.lastTestSeen)
         if status == 2:
-            logError("%s | application timed out after %d seconds with no output" \
-                     % (self.lastTestSeen, int(timeout)))
+            print "TEST-UNEXPECTED-FAIL | %s | application timed out after %d seconds with no output" \
+                % (self.lastTestSeen, int(timeout))
 
         return status
 
