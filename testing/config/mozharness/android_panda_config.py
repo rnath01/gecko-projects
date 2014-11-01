@@ -62,8 +62,7 @@ config = {
         "--local-lib-dir=../fennec",
         "--apk=../%(apk_name)s",
         "--no-logfiles",
-        "--symbols-path=%(symbols_path)s",
-        "--log-raw=-",
+        "--symbols-path=%(symbols_path)s"
     ],
     "jittest_options": [
         "bin/js",
@@ -86,5 +85,5 @@ config = {
         "--apk=%(apk_path)s",
         "--skip-manifest=../tests/cppunittests/android_cppunittest_manifest.txt"
      ],
-    "structured_suites": ("mochitest", "robocop", "xpcshell"),
+    "structured_suites": ("mochitest", "robocop"),
 }
