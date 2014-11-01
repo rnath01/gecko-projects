@@ -52,10 +52,6 @@ config = {
         "--symbols-path=%(symbols_path)s",
         "--robocop=mochitest/robocop.ini"
     ],
-    "instrumentation_options": [
-        "--device-ip=%(device_ip)s",
-        "instrumentation/instrumentation.ini",
-    ],
     "xpcshell_options": [
         "--deviceIP=%(device_ip)s",
         "--xre-path=../hostutils/xre",
