@@ -24,7 +24,8 @@ config = {
     ],
     "xpcshell_options": [
         "--symbols-path=%(symbols_path)s",
-        "--test-plugin-path=%(test_plugin_path)s"
+        "--test-plugin-path=%(test_plugin_path)s",
+        "--log-raw=-",
     ],
     "cppunittest_options": [
         "--symbols-path=%(symbols_path)s",
@@ -40,5 +41,5 @@ config = {
     "mozbase_options": [
         "-b", "%(binary_path)s"
     ],
-    "structured_suites": ("mochitest",),
+    "structured_suites": ("mochitest","xpcshell"),
 }

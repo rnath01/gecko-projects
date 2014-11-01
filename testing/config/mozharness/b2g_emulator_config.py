@@ -48,6 +48,7 @@ config = {
         "--logdir=%(logcat_dir)s", "--manifest=tests/xpcshell.ini", "--use-device-libs",
         "--testing-modules-dir=%(modules_dir)s", "--symbols-path=%(symbols_path)s",
         "--busybox=%(busybox)s", "--total-chunks=%(total_chunks)s", "--this-chunk=%(this_chunk)s",
+        "--log-raw=-",
     ],
 
     "cppunittest_options": [
@@ -60,5 +61,5 @@ config = {
         "."
     ],
 
-    "structured_suites": ("mochitest",),
+    "structured_suites": ("mochitest","xpcshell"),
 }

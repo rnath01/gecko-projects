@@ -34,8 +34,9 @@ config = {
                 "--apk=%(installer_path)s", "--no-logfiles",
                 "--symbols-path=%(symbols_path)s",
                 "--manifest=tests/xpcshell.ini",
+                "--log-raw=-",
             ],
         },
     }, # end suite_definitions
-    "structured_suites": ("mochitest",),
+    "structured_suites": ("mochitest","xpcshell"),
 }
