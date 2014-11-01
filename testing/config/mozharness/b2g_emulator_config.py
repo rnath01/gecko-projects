@@ -22,6 +22,7 @@ config = {
         "--quiet", "--log-raw=%(raw_log_file)s",
         "--certificate-path=%(certificate_path)s",
         "--test-path=%(test_path)s",
+        "--log-raw=-",
     ],
 
     "reftest_options": [
@@ -58,4 +59,6 @@ config = {
         "--skip-manifest=b2g_cppunittest_manifest.txt",
         "."
     ],
+
+    "structured_suites": ("mochitest",),
 }

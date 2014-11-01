@@ -52,7 +52,7 @@ function getTestManifest(url, params, callback) {
           throw e;
         }
       } else {
-        dump("TEST-UNEXPECTED-FAIL: setup.js | error loading " + url + "\n");
+        throw "TEST-UNEXPECTED-FAIL: setup.js | error loading " + url + "\n";
         callback({});
       }
     }

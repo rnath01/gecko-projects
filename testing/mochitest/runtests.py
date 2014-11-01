@@ -52,7 +52,6 @@ from mochitest_options import MochitestOptions
 from mozprofile import Profile, Preferences
 from mozprofile.permissions import ServerLocations
 from urllib import quote_plus as encodeURIComponent
-from mozlog.structured.formatters import TbplFormatter
 from mozlog.structured import commandline
 
 # This should use the `which` module already in tree, but it is
@@ -72,33 +71,6 @@ NSPR_LOG_MODULES = ""
 ####################
 # LOG HANDLING     #
 ####################
-
-### output processing
-class MochitestFormatter(TbplFormatter):
-    """
-    The purpose of this class is to maintain compatibility with legacy users.
-    Mozharness' summary parser expects the count prefix, and others expect python
-    logging to contain a line prefix picked up by TBPL (bug 1043420).
-    Those directly logging "TEST-UNEXPECTED" require no prefix to log output
-    in order to turn a build orange (bug 1044206).
-
-    Once updates are propagated to Mozharness, this class may be removed.
-    """
-    log_num = 0
-
-    def __init__(self):
-        super(MochitestFormatter, self).__init__()
-
-    def __call__(self, data):
-        output = super(MochitestFormatter, self).__call__(data)
-        log_level = data.get('level', 'info').upper()
-
-        if 'js_source' in data or log_level == 'ERROR':
-            data.pop('js_source', None)
-            output = '%d %s %s' % (MochitestFormatter.log_num, log_level, output)
-            MochitestFormatter.log_num += 1
-
-        return output
 
 ### output processing
 class MessageLogger(object):
@@ -163,7 +135,7 @@ class MessageLogger(object):
             message.pop('unstructured')
 
         # Saving errors/failures to be shown at the end of the test run
-        is_error = 'expected' in message or (message['action'] == 'log' and message['message'].startswith('TEST-UNEXPECTED'))
+        is_error = 'expected' in message or (message['action'] == 'log' and message['level'] == "ERROR");
         if is_error:
             self.errors.append(message)
 
@@ -349,7 +321,7 @@ class MochitestServer(object):
       time.sleep(1)
       i += 1
     else:
-      self._log.error("TEST-UNEXPECTED-FAIL | runtests.py | Timed out while waiting for server startup.")
+      self._log.error("runtests.py | Timed out while waiting for server startup.")
       self.stop()
       sys.exit(1)
 
@@ -435,8 +407,6 @@ class MochitestUtilsMixin(object):
     self._locations = None
 
     if self.log is None:
-      commandline.log_formatters["tbpl"]  = (MochitestFormatter,
-                                             "Mochitest specific tbpl formatter")
       self.log = commandline.setup_logging("mochitest",
                                            logger_options,
                                            {
@@ -796,7 +766,7 @@ toolbar#nav-bar {
 
     # Call installChromeJar().
     if not os.path.isdir(os.path.join(SCRIPT_DIR, self.jarDir)):
-      self.log.error("TEST-UNEXPECTED-FAIL | invalid setup: missing mochikit extension")
+      self.log.error("invalid setup: missing mochikit extension")
       return None
 
     # Support Firefox (browser), B2G (shell), SeaMonkey (navigator), and Webapp
@@ -1190,7 +1160,7 @@ class Mochitest(MochitestUtilsMixin):
     # TODO: this should really be upstreamed somewhere, maybe mozprofile
     certificateStatus = self.fillCertificateDB(options)
     if certificateStatus:
-      self.log.error("TEST-UNEXPECTED-FAIL | runtests.py | Certificate integration failed")
+      self.log.error("runtests.py | Certificate integration failed")
       return None
 
     return manifest
@@ -1354,7 +1324,7 @@ class Mochitest(MochitestUtilsMixin):
       self.log.info("zombiecheck | Checking for orphan process with PID: %d" % processPID)
       if isPidAlive(processPID):
         foundZombie = True
-        self.log.error("TEST-UNEXPECTED-FAIL | zombiecheck | child process %d still alive after shutdown" % processPID)
+        self.log.error("zombiecheck | child process %d still alive after shutdown" % processPID)
         self.killAndGetStack(processPID, utilityPath, debuggerInfo, dump_screen=not debuggerInfo)
 
     return foundZombie
@@ -1527,7 +1497,7 @@ class Mochitest(MochitestUtilsMixin):
       # record post-test information
       if status:
         self.message_logger.dump_buffered()
-        self.log.error("TEST-UNEXPECTED-FAIL | %s | application terminated with exit code %s" % (self.lastTestSeen, status))
+        self.log.error("%s | application terminated with exit code %s" % (self.lastTestSeen, status))
       else:
         self.lastTestSeen = 'Main app process exited normally'
 
@@ -1662,7 +1632,7 @@ class Mochitest(MochitestUtilsMixin):
         testsToRun = bisect.pre_test(options, testsToRun, status)
         # To inform that we are in the process of bisection, and to look for bleedthrough
         if options.bisectChunk != "default" and not bisection_log:
-            log.info("TEST-UNEXPECTED-FAIL | Bisection | Please ignore repeats and look for 'Bleedthrough' (if any) at the end of the failure list")
+            log.info("Bisection | Please ignore repeats and look for 'Bleedthrough' (if any) at the end of the failure list")
             bisection_log = 1
 
       result = self.doTests(options, onLaunch, testsToRun)
@@ -1877,9 +1847,9 @@ class Mochitest(MochitestUtilsMixin):
     """handle process output timeout"""
     # TODO: bug 913975 : _processOutput should call self.processOutputLine one more time one timeout (I think)
     if testPath:
-      error_message = "TEST-UNEXPECTED-TIMEOUT | %s | application timed out after %d seconds with no output on %s" % (self.lastTestSeen, int(timeout), testPath)
+      error_message = "%s | application timed out after %d seconds with no output on %s" % (self.lastTestSeen, int(timeout), testPath)
     else:
-      error_message = "TEST-UNEXPECTED-TIMEOUT | %s | application timed out after %d seconds with no output" % (self.lastTestSeen, int(timeout))
+      error_message = "%s | application timed out after %d seconds with no output" % (self.lastTestSeen, int(timeout))
 
     self.message_logger.dump_buffered()
     self.message_logger.buffering = False

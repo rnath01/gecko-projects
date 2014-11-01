@@ -10,7 +10,8 @@ config = {
         "--app=%(app_name)s", "--console-level=INFO",
         "--http-port=%(http_port)s", "--ssl-port=%(ssl_port)s",
         "--run-only-tests=android.json", "--symbols-path=%(symbols_path)s",
-        "--quiet", "--log-raw=%(raw_log_file)s"
+        "--quiet", "--log-raw=%(raw_log_file)s",
+        "--log-raw=-",
     ],
     "reftest_options": [
         "--deviceIP=%(device_ip)s",
@@ -84,4 +85,5 @@ config = {
         "--apk=%(apk_path)s",
         "--skip-manifest=../tests/cppunittests/android_cppunittest_manifest.txt"
      ],
+    "structured_suites": ("mochitest", "robocop"),
 }

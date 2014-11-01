@@ -12,7 +12,8 @@ config = {
                 "--deviceIP=%(device_ip)s", "--devicePort=%(device_port)s",
                 "--http-port=%(http_port)s", "--ssl-port=%(ssl_port)s",
                 "--certificate-path=%(certs_path)s", "--symbols-path=%(symbols_path)s",
-                "--quiet", "--log-raw=%(raw_log_file)s"
+                "--quiet", "--log-raw=%(raw_log_file)s",
+                "--log-raw=-",
             ],
         },
         "reftest": {
@@ -36,4 +37,5 @@ config = {
             ],
         },
     }, # end suite_definitions
+    "structured_suites": ("mochitest",),
 }

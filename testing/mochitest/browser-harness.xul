@@ -76,8 +76,8 @@
           try {
             logger = new MozillaFileLogger(gConfig.logFile)
           } catch (ex) {
-            dump("TEST-UNEXPECTED-FAIL | (browser-harness.xul) | " +
-                 "Error trying to log to " + gConfig.logFile + ": " + ex + "\n");
+            this.structuredLogger.error("TEST-UNEXPECTED-FAIL | (browser-harness.xul) | " +
+                                        "Error trying to log to " + gConfig.logFile + ": " + ex + "\n");
           }
         }
         delete this.fileLogger;
