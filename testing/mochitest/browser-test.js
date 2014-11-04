@@ -142,7 +142,6 @@ Tester.prototype = {
   EventUtils: {},
   SimpleTest: {},
   Task: null,
-  Promise: null,
   Assert: null,
 
   repeat: 0,
@@ -585,7 +584,6 @@ Tester.prototype = {
     this.currentTest.scope.SimpleTest = this.SimpleTest;
     this.currentTest.scope.gTestPath = this.currentTest.path;
     this.currentTest.scope.Task = this.Task;
-    this.currentTest.scope.Promise = this.Promise;
     // Pass a custom report function for mochitest style reporting.
     this.currentTest.scope.Assert = new this.Assert(function(err, message, stack) {
       let res;
@@ -641,7 +639,8 @@ Tester.prototype = {
         if ("test" in this.currentTest.scope) {
           throw "Cannot run both a add_task test and a normal test at the same time.";
         }
-        this.Task.spawn(function() {
+        let Promise = this.Promise;
+        this.Task.spawn(function*() {
           let task;
           while ((task = this.__tasks.shift())) {
             this.SimpleTest.info("Entering test " + task.name);
@@ -654,7 +653,7 @@ Tester.prototype = {
               let result = new testResult(isExpected, name, ex, false, stack);
               currentTest.addResult(result);
             }
-            this.Promise.Debugging.flushUncaughtErrors();
+            Promise.Debugging.flushUncaughtErrors();
             this.SimpleTest.info("Leaving test " + task.name);
           }
           this.finish();
@@ -979,7 +978,6 @@ testScope.prototype = {
   EventUtils: {},
   SimpleTest: {},
   Task: null,
-  Promise: null,
   Assert: null,
 
   /**

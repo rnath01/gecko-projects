@@ -4,6 +4,28 @@
 
  /* Copyright © 2013 Deutsche Telekom, Inc. */
 
+enum NfcErrorMessage {
+  "",
+  "IOError",
+  "Timeout",
+  "Busy",
+  "ErrorConnect",
+  "ErrorDisconnect",
+  "ErrorRead",
+  "ErrorWrite",
+  "InvalidParameter",
+  "InsufficientResource",
+  "ErrorSocketCreation",
+  "FailEnableDiscovery",
+  "FailDisableDiscovery",
+  "NotInitialize",
+  "InitializeFail",
+  "DeinitializeFail",
+  "NotSupport",
+  "FailEnableLowPowerMode",
+  "FailDisableLowPowerMode"
+};
+
 [NoInterfaceObject]
 interface MozNFCManager {
   /**
@@ -65,6 +87,17 @@ interface MozNFC : EventTarget {
    */
   [CheckPermissions="nfc-write"]
   attribute EventHandler onpeerready;
+
+  /**
+   * This event will be fired when a NFCPeer is detected.
+   */
+  [CheckPermissions="nfc-write"]
+  attribute EventHandler onpeerfound;
+
+  /**
+   * This event will be fired when NFCPeer, earlier detected in onpeerready
+   * or onpeerfound, moves out of range.
+   */
   [CheckPermissions="nfc-write"]
   attribute EventHandler onpeerlost;
 

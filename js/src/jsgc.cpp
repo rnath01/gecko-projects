@@ -191,6 +191,7 @@
 
 #include <string.h>     /* for memset used when DEBUG */
 #ifndef XP_WIN
+# include <sys/mman.h>
 # include <unistd.h>
 #endif
 
@@ -837,18 +838,15 @@ Chunk::init(JSRuntime *rt)
 }
 
 inline Chunk **
-GCRuntime::getAvailableChunkList(Zone *zone)
+GCRuntime::getAvailableChunkList()
 {
-    return zone->isSystem
-           ? &systemAvailableChunkListHead
-           : &userAvailableChunkListHead;
+    return &availableChunkListHead;
 }
 
 inline void
-Chunk::addToAvailableList(Zone *zone)
+Chunk::addToAvailableList(JSRuntime *rt)
 {
-    JSRuntime *rt = zone->runtimeFromAnyThread();
-    insertToAvailableList(rt->gc.getAvailableChunkList(zone));
+    insertToAvailableList(rt->gc.getAvailableChunkList());
 }
 
 inline void
@@ -1051,7 +1049,7 @@ Chunk::releaseArena(ArenaHeader *aheader)
     if (info.numArenasFree == 1) {
         MOZ_ASSERT(!info.prevp);
         MOZ_ASSERT(!info.next);
-        addToAvailableList(zone);
+        addToAvailableList(rt);
     } else if (!unused()) {
         MOZ_ASSERT(info.prevp);
     } else {
@@ -1121,10 +1119,10 @@ class js::gc::AutoMaybeStartBackgroundAllocation
 };
 
 Chunk *
-GCRuntime::pickChunk(const AutoLockGC &lock, Zone *zone,
+GCRuntime::pickChunk(const AutoLockGC &lock,
                      AutoMaybeStartBackgroundAllocation &maybeStartBackgroundAllocation)
 {
-    Chunk **listHeadp = getAvailableChunkList(zone);
+    Chunk **listHeadp = getAvailableChunkList();
     Chunk *chunk = *listHeadp;
     if (chunk)
         return chunk;
@@ -1158,7 +1156,7 @@ GCRuntime::pickChunk(const AutoLockGC &lock, Zone *zone,
 
     chunk->info.prevp = nullptr;
     chunk->info.next = nullptr;
-    chunk->addToAvailableList(zone);
+    chunk->addToAvailableList(rt);
 
     return chunk;
 }
@@ -1173,8 +1171,7 @@ GCRuntime::GCRuntime(JSRuntime *rt) :
     stats(rt),
     marker(rt),
     usage(nullptr),
-    systemAvailableChunkListHead(nullptr),
-    userAvailableChunkListHead(nullptr),
+    availableChunkListHead(nullptr),
     maxMallocBytes(0),
     numArenasFreeCommitted(0),
     verifyPreData(nullptr),
@@ -1237,12 +1234,13 @@ GCRuntime::GCRuntime(JSRuntime *rt) :
     fullCompartmentChecks(false),
     mallocBytes(0),
     mallocGCTriggered(false),
-#ifdef DEBUG
-    inUnsafeRegion(0),
-#endif
     alwaysPreserveCode(false),
 #ifdef DEBUG
+    inUnsafeRegion(0),
     noGCOrAllocationCheck(0),
+#ifdef JSGC_COMPACTING
+    relocatedArenasToRelease(nullptr),
+#endif
 #endif
     lock(nullptr),
     lockOwner(nullptr),
@@ -1416,8 +1414,7 @@ GCRuntime::finish()
 
     zones.clear();
 
-    systemAvailableChunkListHead = nullptr;
-    userAvailableChunkListHead = nullptr;
+    availableChunkListHead = nullptr;
     if (chunkSet.initialized()) {
         for (GCChunkSet::Range r(chunkSet.all()); !r.empty(); r.popFront())
             releaseChunk(r.front());
@@ -1988,7 +1985,7 @@ ArenaLists::allocateFromArena(JS::Zone *zone, AllocKind thingKind,
     if (maybeLock.isNothing())
         maybeLock.emplace(rt);
 
-    Chunk *chunk = rt->gc.pickChunk(maybeLock.ref(), zone, maybeStartBGAlloc);
+    Chunk *chunk = rt->gc.pickChunk(maybeLock.ref(), maybeStartBGAlloc);
     if (!chunk)
         return nullptr;
 
@@ -2518,22 +2515,43 @@ GCRuntime::updatePointersToRelocatedCells()
     callWeakPointerCallbacks();
 }
 
+#ifdef DEBUG
+void
+GCRuntime::protectRelocatedArenas(ArenaHeader *relocatedList)
+{
+    for (ArenaHeader* arena = relocatedList, *next; arena; arena = next) {
+        next = arena->next;
+#if defined(XP_WIN)
+        DWORD oldProtect;
+        if (!VirtualProtect(arena, ArenaSize, PAGE_NOACCESS, &oldProtect))
+            MOZ_CRASH();
+#else  // assume Unix
+        if (mprotect(arena, ArenaSize, PROT_NONE))
+            MOZ_CRASH();
+#endif
+    }
+}
+
+void
+GCRuntime::unprotectRelocatedArenas(ArenaHeader *relocatedList)
+{
+    for (ArenaHeader* arena = relocatedList; arena; arena = arena->next) {
+#if defined(XP_WIN)
+        DWORD oldProtect;
+        if (!VirtualProtect(arena, ArenaSize, PAGE_READWRITE, &oldProtect))
+            MOZ_CRASH();
+#else  // assume Unix
+        if (mprotect(arena, ArenaSize, PROT_READ | PROT_WRITE))
+            MOZ_CRASH();
+#endif
+    }
+}
+#endif
+
 void
 GCRuntime::releaseRelocatedArenas(ArenaHeader *relocatedList)
 {
     // Release the relocated arenas, now containing only forwarding pointers
-
-#ifdef DEBUG
-    for (ArenaHeader *arena = relocatedList; arena; arena = arena->next) {
-        for (ArenaCellIterUnderFinalize i(arena); !i.done(); i.next()) {
-            TenuredCell *src = i.getCell();
-            MOZ_ASSERT(IsForwarded(src));
-            TenuredCell *dest = Forwarded(src);
-            MOZ_ASSERT(src->isMarked(BLACK) == dest->isMarked(BLACK));
-            MOZ_ASSERT(src->isMarked(GRAY) == dest->isMarked(GRAY));
-        }
-    }
-#endif
 
     unsigned count = 0;
     while (relocatedList) {
@@ -3220,8 +3238,7 @@ GCRuntime::decommitArenasFromAvailableList(Chunk **availableListHeadp)
 void
 GCRuntime::decommitArenas()
 {
-    decommitArenasFromAvailableList(&systemAvailableChunkListHead);
-    decommitArenasFromAvailableList(&userAvailableChunkListHead);
+    decommitArenasFromAvailableList(&availableChunkListHead);
 }
 
 void
@@ -4979,6 +4996,12 @@ GCRuntime::beginSweepPhase(bool lastGC)
 
     MOZ_ASSERT(!abortSweepAfterCurrentGroup);
 
+#if defined(JSGC_COMPACTING) && defined(DEBUG)
+    unprotectRelocatedArenas(relocatedArenasToRelease);
+    releaseRelocatedArenas(relocatedArenasToRelease);
+    relocatedArenasToRelease = nullptr;
+#endif
+
     computeNonIncrementalMarkingForValidation();
 
     gcstats::AutoPhase ap(stats, gcstats::PHASE_SWEEP);
@@ -5318,7 +5341,7 @@ GCRuntime::endSweepPhase(bool lastGC)
 
 #ifdef JSGC_COMPACTING
 void
-GCRuntime::compactPhase()
+GCRuntime::compactPhase(bool lastGC)
 {
     MOZ_ASSERT(rt->gc.nursery.isEmpty());
     MOZ_ASSERT(!sweepOnBackgroundThread);
@@ -5327,7 +5350,31 @@ GCRuntime::compactPhase()
 
     ArenaHeader *relocatedList = relocateArenas();
     updatePointersToRelocatedCells();
+
+#ifdef DEBUG
+    for (ArenaHeader *arena = relocatedList; arena; arena = arena->next) {
+        for (ArenaCellIterUnderFinalize i(arena); !i.done(); i.next()) {
+            TenuredCell *src = i.getCell();
+            MOZ_ASSERT(IsForwarded(src));
+            TenuredCell *dest = Forwarded(src);
+            MOZ_ASSERT(src->isMarked(BLACK) == dest->isMarked(BLACK));
+            MOZ_ASSERT(src->isMarked(GRAY) == dest->isMarked(GRAY));
+        }
+    }
+#endif
+
+    // Release the relocated arenas, or in debug builds queue them to be
+    // released until the start of the next GC unless this is the last GC.
+#ifndef DEBUG
     releaseRelocatedArenas(relocatedList);
+#else
+    protectRelocatedArenas(relocatedList);
+    MOZ_ASSERT(!relocatedArenasToRelease);
+    if (!lastGC)
+        relocatedArenasToRelease = relocatedList;
+    else
+        releaseRelocatedArenas(relocatedList);
+#endif
 
 #ifdef DEBUG
     CheckHashTablesAfterMovingGC(rt);
@@ -5694,7 +5741,7 @@ GCRuntime::incrementalCollectSlice(int64_t budget,
 #ifdef JSGC_COMPACTING
         if (shouldCompact()) {
             incrementalState = COMPACT;
-            compactPhase();
+            compactPhase(lastGC);
         }
 #endif
 

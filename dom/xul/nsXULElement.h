@@ -606,14 +606,11 @@ public:
     already_AddRefed<nsFrameLoader> GetFrameLoader();
     void SwapFrameLoaders(nsXULElement& aOtherOwner, mozilla::ErrorResult& rv);
 
-    // For XUL, the parent is the parent element, if any
-    mozilla::dom::ParentObject GetParentObject() const
+    nsINode* GetScopeChainParent() const MOZ_OVERRIDE
     {
+        // For XUL, the parent is the parent element, if any
         Element* parent = GetParentElement();
-        if (parent) {
-          return GetParentObjectInternal(parent);
-        }
-        return nsStyledElement::GetParentObject();
+        return parent ? parent : nsStyledElement::GetScopeChainParent();
     }
 
 protected:
@@ -695,6 +692,7 @@ protected:
 
     void SetDrawsInTitlebar(bool aState);
     void SetDrawsTitle(bool aState);
+    void UpdateBrightTitlebarForeground(nsIDocument* aDocument);
 
     void RemoveBroadcaster(const nsAString & broadcasterId);
 
