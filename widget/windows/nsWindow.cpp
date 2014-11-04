@@ -180,6 +180,8 @@
 
 #include "npapi.h"
 
+#include <d3d11.h>
+
 #if !defined(SM_CONVERTIBLESLATEMODE)
 #define SM_CONVERTIBLESLATEMODE 0x2003
 #endif
@@ -2292,9 +2294,15 @@ NS_IMETHODIMP
 nsWindow::SetNonClientMargins(nsIntMargin &margins)
 {
   if (!mIsTopWidgetWindow ||
-      mBorderStyle & eBorderStyle_none ||
-      mHideChrome)
+      mBorderStyle & eBorderStyle_none)
     return NS_ERROR_INVALID_ARG;
+
+  if (mHideChrome) {
+    mFutureMarginsOnceChromeShows = margins;
+    mFutureMarginsToUse = true;
+    return NS_OK;
+  }
+  mFutureMarginsToUse = false;
 
   // Request for a reset
   if (margins.top == -1 && margins.left == -1 &&
@@ -2766,6 +2774,9 @@ NS_IMETHODIMP nsWindow::HideWindowChrome(bool aShouldHide)
 
     style = mOldStyle;
     exStyle = mOldExStyle;
+    if (mFutureMarginsToUse) {
+      SetNonClientMargins(mFutureMarginsOnceChromeShows);
+    }
   }
 
   VERIFY_WINDOW_STYLE(style);
@@ -6735,7 +6746,9 @@ nsWindow::GetPreferredCompositorBackends(nsTArray<LayersBackend>& aHints)
     }
 
     ID3D11Device* device = gfxWindowsPlatform::GetPlatform()->GetD3D11Device();
-    if (device && !DoesD3D11DeviceSupportResourceSharing(device)) {
+    if (device &&
+        device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_10_0 &&
+        !DoesD3D11DeviceSupportResourceSharing(device)) {
       // bug 1083071 - bad things - fall back to basic layers
       // This should not happen aside from driver bugs, and in particular
       // should not happen on our test machines, so let's NS_ERROR to ensure

@@ -50,15 +50,11 @@ public:
 
   void OnAudioDecoded(AudioData* aSample);
 
-  void OnAudioEOS();
-
   void RequestVideoData(bool aSkipToNextKeyframe, int64_t aTimeThreshold) MOZ_OVERRIDE;
 
   void OnVideoDecoded(VideoData* aSample);
 
-  void OnVideoEOS();
-
-  void OnDecodeError();
+  void OnNotDecoded(MediaData::Type aType, RequestSampleCallback::NotDecodedReason aReason);
 
   bool HasVideo() MOZ_OVERRIDE
   {
@@ -69,6 +65,11 @@ public:
   {
     return mInfo.HasAudio();
   }
+
+  // We can't compute a proper start time since we won't necessarily
+  // have the first frame of the resource available. This does the same
+  // as chrome/blink and assumes that we always start at t=0.
+  virtual int64_t ComputeStartTime(const VideoData* aVideo, const AudioData* aAudio) MOZ_OVERRIDE { return 0; }
 
   bool IsMediaSeekable() { return true; }
 

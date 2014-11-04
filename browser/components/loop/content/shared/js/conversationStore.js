@@ -55,6 +55,8 @@ loop.store.ConversationStore = (function() {
 
   var ConversationStore = Backbone.Model.extend({
     defaults: {
+      // The id of the window. Currently used for getting the window id.
+      windowId: undefined,
       // The current state of the call
       callState: CALL_STATES.INIT,
       // The reason if a call was terminated
@@ -119,7 +121,7 @@ loop.store.ConversationStore = (function() {
       this.dispatcher.register(this, [
         "connectionFailure",
         "connectionProgress",
-        "gatherCallData",
+        "setupWindowData",
         "connectCall",
         "hangupCall",
         "peerHungupCall",
@@ -186,36 +188,22 @@ loop.store.ConversationStore = (function() {
       }
     },
 
-    /**
-     * Handles the gather call data action, setting the state
-     * and starting to get the appropriate data for the type of call.
-     *
-     * @param {sharedActions.GatherCallData} actionData The action data.
-     */
-    gatherCallData: function(actionData) {
-      if (!actionData.outgoing) {
-        // XXX Other types aren't supported yet, but set the state for the
-        // view selection.
-        this.set({outgoing: false});
-        return;
-      }
-
-      var callData = navigator.mozLoop.getCallData(actionData.callId);
-      if (!callData) {
-        console.error("Failed to get the call data");
-        this.set({callState: CALL_STATES.TERMINATED});
+    setupWindowData: function(actionData) {
+      var windowType = actionData.type;
+      if (windowType !== "outgoing" &&
+          windowType !== "incoming") {
+        // Not for this store, don't do anything.
         return;
       }
 
       this.set({
-        contact: callData.contact,
-        outgoing: actionData.outgoing,
-        callId: actionData.callId,
-        callType: callData.callType,
-        callState: CALL_STATES.GATHER
+        contact: actionData.contact,
+        outgoing: windowType === "outgoing",
+        windowId: actionData.windowId,
+        callType: actionData.callType,
+        callState: CALL_STATES.GATHER,
+        videoMuted: actionData.callType === CALL_TYPES.AUDIO_ONLY
       });
-
-      this.set({videoMuted: this.get("callType") === CALL_TYPES.AUDIO_ONLY});
 
       if (this.get("outgoing")) {
         this._setupOutgoingCall();
@@ -328,6 +316,8 @@ loop.store.ConversationStore = (function() {
       var contactAddresses = [];
       var contact = this.get("contact");
 
+      navigator.mozLoop.calls.setCallInProgress(this.get("windowId"));
+
       function appendContactValues(property, strip) {
         if (contact.hasOwnProperty(property)) {
           contact[property].forEach(function(item) {
@@ -407,11 +397,7 @@ loop.store.ConversationStore = (function() {
         delete this._websocket;
       }
 
-      // XXX: The internal callId is different from
-      // this.get("callId"), see bug 1084228 for more info.
-      var locationHash = new loop.shared.utils.Helper().locationData().hash;
-      var callId = locationHash.match(/\#outgoing\/(.*)/)[1];
-      navigator.mozLoop.releaseCallData(callId);
+      navigator.mozLoop.calls.clearCallInProgress(this.get("windowId"));
     },
 
     /**

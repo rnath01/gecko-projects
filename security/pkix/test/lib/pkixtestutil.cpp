@@ -183,7 +183,7 @@ BitString(const ByteString& rawBytes, bool corrupt)
   return TLV(der::BIT_STRING, prefixed);
 }
 
-static ByteString
+ByteString
 Boolean(bool value)
 {
   ByteString encodedValue;
@@ -191,7 +191,7 @@ Boolean(bool value)
   return TLV(der::BOOLEAN, encodedValue);
 }
 
-static ByteString
+ByteString
 Integer(long value)
 {
   if (value < 0 || value > 127) {
@@ -611,7 +611,7 @@ AVA(const uint8_t (&type)[N], uint8_t directoryStringType,
 }
 
 ByteString
-CN(const ByteString& value)
+CN(const ByteString& value, uint8_t encodingTag)
 {
   // id-at OBJECT IDENTIFIER ::= { joint-iso-ccitt(2) ds(5) 4 }
   // id-at-commonName        AttributeType ::= { id-at 3 }
@@ -619,7 +619,7 @@ CN(const ByteString& value)
   static const uint8_t tlv_id_at_commonName[] = {
     0x06, 0x03, 0x55, 0x04, 0x03
   };
-  return AVA(tlv_id_at_commonName, der::UTF8String, value);
+  return AVA(tlv_id_at_commonName, encodingTag, value);
 }
 
 ByteString

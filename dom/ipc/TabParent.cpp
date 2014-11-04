@@ -52,6 +52,7 @@
 #include "nsIWindowWatcher.h"
 #include "nsPIDOMWindow.h"
 #include "nsPIWindowWatcher.h"
+#include "nsPresShell.h"
 #include "nsPrintfCString.h"
 #include "nsServiceManagerUtils.h"
 #include "nsThreadUtils.h"
@@ -218,7 +219,10 @@ NS_IMPL_ISUPPORTS(TabParent,
                   nsISecureBrowserUI,
                   nsISupportsWeakReference)
 
-TabParent::TabParent(nsIContentParent* aManager, const TabContext& aContext, uint32_t aChromeFlags)
+TabParent::TabParent(nsIContentParent* aManager,
+                     const TabId& aTabId,
+                     const TabContext& aContext,
+                     uint32_t aChromeFlags)
   : TabContext(aContext)
   , mFrameElement(nullptr)
   , mIMESelectionAnchor(0)
@@ -242,6 +246,7 @@ TabParent::TabParent(nsIContentParent* aManager, const TabContext& aContext, uin
   , mAppPackageFileDescriptorSent(false)
   , mSendOfflineStatus(true)
   , mChromeFlags(aChromeFlags)
+  , mTabId(aTabId)
 {
   MOZ_ASSERT(aManager);
 }
@@ -318,7 +323,13 @@ TabParent::Recv__delete__()
 {
   if (XRE_GetProcessType() == GeckoProcessType_Default) {
     Manager()->AsContentParent()->NotifyTabDestroyed(this, mMarkedDestroying);
+    ContentParent::DeallocateTabId(mTabId,
+                                   Manager()->AsContentParent()->ChildID());
   }
+  else {
+    ContentParent::DeallocateTabId(mTabId, ContentParentId(0));
+  }
+
   return true;
 }
 
@@ -1465,6 +1476,29 @@ TabParent::RecvReplyKeyEvent(const WidgetKeyboardEvent& event)
   return true;
 }
 
+bool
+TabParent::RecvDispatchAfterKeyboardEvent(const WidgetKeyboardEvent& aEvent)
+{
+  NS_ENSURE_TRUE(mFrameElement, true);
+
+  WidgetKeyboardEvent localEvent(aEvent);
+  localEvent.widget = GetWidget();
+
+  nsIDocument* doc = mFrameElement->OwnerDoc();
+  nsCOMPtr<nsIPresShell> presShell = doc->GetShell();
+  NS_ENSURE_TRUE(presShell, true);
+
+  if (mFrameElement &&
+      PresShell::BeforeAfterKeyboardEventEnabled() &&
+      localEvent.message != NS_KEY_PRESS) {
+    nsCOMPtr<nsINode> node(do_QueryInterface(mFrameElement));
+    presShell->DispatchAfterKeyboardEvent(mFrameElement, localEvent,
+                                          aEvent.mFlags.mDefaultPrevented);
+  }
+
+  return true;
+}
+
 /**
  * Try to answer query event using cached text.
  *
@@ -1648,6 +1682,16 @@ TabParent::GetFrom(nsIContent* aContent)
   }
   nsRefPtr<nsFrameLoader> frameLoader = loaderOwner->GetFrameLoader();
   return GetFrom(frameLoader);
+}
+
+/*static*/ TabId
+TabParent::GetTabIdFrom(nsIDocShell *docShell)
+{
+  nsCOMPtr<nsITabChild> tabChild(TabChild::GetFrom(docShell));
+  if (tabChild) {
+    return static_cast<TabChild*>(tabChild.get())->GetTabId();
+  }
+  return TabId(0);
 }
 
 RenderFrameParent*

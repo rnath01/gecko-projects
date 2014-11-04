@@ -61,6 +61,7 @@ namespace jit {
     _(JSOP_UINT24)             \
     _(JSOP_DOUBLE)             \
     _(JSOP_STRING)             \
+    _(JSOP_SYMBOL)             \
     _(JSOP_OBJECT)             \
     _(JSOP_CALLSITEOBJ)        \
     _(JSOP_REGEXP)             \
@@ -104,7 +105,6 @@ namespace jit {
     _(JSOP_INITPROP)           \
     _(JSOP_INITPROP_GETTER)    \
     _(JSOP_INITPROP_SETTER)    \
-    _(JSOP_ENDINIT)            \
     _(JSOP_ARRAYPUSH)          \
     _(JSOP_GETELEM)            \
     _(JSOP_SETELEM)            \

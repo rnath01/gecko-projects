@@ -1124,6 +1124,7 @@ HandleError(JSContext *cx, InterpreterRegs &regs)
 #define PUSH_BOOLEAN(b)          REGS.sp++->setBoolean(b)
 #define PUSH_DOUBLE(d)           REGS.sp++->setDouble(d)
 #define PUSH_INT32(i)            REGS.sp++->setInt32(i)
+#define PUSH_SYMBOL(s)           REGS.sp++->setSymbol(s)
 #define PUSH_STRING(s)           do { REGS.sp++->setString(s); assertSameCompartmentDebugOnly(cx, REGS.sp[-1]); } while (0)
 #define PUSH_OBJECT(obj)         do { REGS.sp++->setObject(obj); assertSameCompartmentDebugOnly(cx, REGS.sp[-1]); } while (0)
 #define PUSH_OBJECT_OR_NULL(obj) do { REGS.sp++->setObjectOrNull(obj); assertSameCompartmentDebugOnly(cx, REGS.sp[-1]); } while (0)
@@ -1601,7 +1602,6 @@ CASE(EnableInterruptsPseudoOpcode)
 /* Various 1-byte no-ops. */
 CASE(JSOP_NOP)
 CASE(JSOP_UNUSED2)
-CASE(JSOP_UNUSED45)
 CASE(JSOP_UNUSED46)
 CASE(JSOP_UNUSED47)
 CASE(JSOP_UNUSED48)
@@ -1611,6 +1611,7 @@ CASE(JSOP_UNUSED51)
 CASE(JSOP_UNUSED52)
 CASE(JSOP_UNUSED57)
 CASE(JSOP_UNUSED83)
+CASE(JSOP_UNUSED92)
 CASE(JSOP_UNUSED103)
 CASE(JSOP_UNUSED104)
 CASE(JSOP_UNUSED105)
@@ -2705,6 +2706,10 @@ CASE(JSOP_TOSTRING)
 }
 END_CASE(JSOP_TOSTRING)
 
+CASE(JSOP_SYMBOL)
+    PUSH_SYMBOL(cx->wellKnownSymbols().get(GET_UINT8(REGS.pc)));
+END_CASE(JSOP_SYMBOL)
+
 CASE(JSOP_OBJECT)
 {
     RootedNativeObject &ref = rootNativeObject0;
@@ -3119,14 +3124,6 @@ CASE(JSOP_NEWOBJECT)
     PUSH_OBJECT(*obj);
 }
 END_CASE(JSOP_NEWOBJECT)
-
-CASE(JSOP_ENDINIT)
-{
-    /* FIXME remove JSOP_ENDINIT bug 588522 */
-    MOZ_ASSERT(REGS.stackDepth() >= 1);
-    MOZ_ASSERT(REGS.sp[-1].isObject() || REGS.sp[-1].isUndefined());
-}
-END_CASE(JSOP_ENDINIT)
 
 CASE(JSOP_MUTATEPROTO)
 {
@@ -3629,7 +3626,7 @@ js::Lambda(JSContext *cx, HandleFunction fun, HandleObject parent)
     if (!clone)
         return nullptr;
 
-    MOZ_ASSERT(clone->global() == clone->global());
+    MOZ_ASSERT(fun->global() == clone->global());
     return clone;
 }
 
@@ -3645,7 +3642,7 @@ js::LambdaArrow(JSContext *cx, HandleFunction fun, HandleObject parent, HandleVa
     MOZ_ASSERT(clone->as<JSFunction>().isArrow());
     clone->as<JSFunction>().setExtendedSlot(0, thisv);
 
-    MOZ_ASSERT(clone->global() == clone->global());
+    MOZ_ASSERT(fun->global() == clone->global());
     return clone;
 }
 
@@ -4074,7 +4071,7 @@ js::ReportUninitializedLexical(JSContext *cx, HandleScript script, jsbytecode *p
 
         // First search for a name among body-level lets.
         for (BindingIter bi(script); bi; bi++) {
-            if (bi->kind() != Binding::ARGUMENT && bi.frameIndex() == slot) {
+            if (bi->kind() != Binding::ARGUMENT && !bi->aliased() && bi.frameIndex() == slot) {
                 name = bi->name();
                 break;
             }

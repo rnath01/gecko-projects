@@ -804,6 +804,10 @@ js_DumpPC(JSContext *cx)
     if (!sprinter.init())
         return false;
     ScriptFrameIter iter(cx);
+    if (iter.done()) {
+        fprintf(stdout, "Empty stack.\n");
+        return true;
+    }
     RootedScript script(cx, iter.script());
     bool ok = js_DisassembleAtPC(cx, script, true, iter.pc(), false, &sprinter);
     fprintf(stdout, "%s", sprinter.string());
@@ -1588,6 +1592,13 @@ ExpressionDecompiler::decompilePC(jsbytecode *pc)
         return sprinter.printf("%d", GetBytecodeInteger(pc)) >= 0;
       case JSOP_STRING:
         return quote(loadAtom(pc), '"');
+      case JSOP_SYMBOL: {
+        unsigned i = uint8_t(pc[1]);
+        MOZ_ASSERT(i < JS::WellKnownSymbolLimit);
+        if (i < JS::WellKnownSymbolLimit)
+            return write(cx->names().wellKnownSymbolDescriptions()[i]);
+        break;
+      }
       case JSOP_UNDEFINED:
         return write(js_undefined_str);
       case JSOP_THIS:

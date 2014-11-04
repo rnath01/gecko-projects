@@ -5,6 +5,7 @@
 
 #include "nsTextBoxFrame.h"
 
+#include "gfx2DGlue.h"
 #include "gfxUtils.h"
 #include "mozilla/gfx/2D.h"
 #include "nsFontMetrics.h"
@@ -467,7 +468,7 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
                 presContext->AppUnitsToGfxUnits(aTextRect.y));
     gfxFloat width = presContext->AppUnitsToGfxUnits(aTextRect.width);
     gfxFloat ascentPixel = presContext->AppUnitsToGfxUnits(ascent);
-    gfxFloat xInFrame = PresContext()->AppUnitsToGfxUnits(mTextDrawRect.x);
+    Float xInFrame = Float(PresContext()->AppUnitsToGfxUnits(mTextDrawRect.x));
     gfxRect dirtyRect(presContext->AppUnitsToGfxUnits(aDirtyRect));
 
     // Underlines are drawn before overlines, and both before the text
@@ -482,7 +483,8 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
       gfxFloat sizePixel = presContext->AppUnitsToGfxUnits(size);
       if ((decorations & NS_FONT_DECORATION_UNDERLINE) &&
           underStyle != NS_STYLE_TEXT_DECORATION_STYLE_NONE) {
-        nsCSSRendering::PaintDecorationLine(this, ctx, dirtyRect, underColor,
+        nsCSSRendering::PaintDecorationLine(this, *drawTarget,
+                                            ToRect(dirtyRect), underColor,
                           pt, xInFrame, gfxSize(width, sizePixel),
                           ascentPixel, offsetPixel,
                           NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE, underStyle,
@@ -490,7 +492,8 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
       }
       if ((decorations & NS_FONT_DECORATION_OVERLINE) &&
           overStyle != NS_STYLE_TEXT_DECORATION_STYLE_NONE) {
-        nsCSSRendering::PaintDecorationLine(this, ctx, dirtyRect, overColor,
+        nsCSSRendering::PaintDecorationLine(this, *drawTarget,
+                                            ToRect(dirtyRect), overColor,
                           pt, xInFrame, gfxSize(width, sizePixel),
                           ascentPixel, ascentPixel,
                           NS_STYLE_TEXT_DECORATION_LINE_OVERLINE, overStyle,
@@ -498,10 +501,10 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
       }
     }
 
-    nsRefPtr<nsRenderingContext> refContext =
-        PresContext()->PresShell()->CreateReferenceRenderingContext();
+    nsRenderingContext refContext(
+        PresContext()->PresShell()->CreateReferenceRenderingContext());
 
-    CalculateUnderline(*refContext, *fontMet);
+    CalculateUnderline(refContext, *fontMet);
 
     nscolor c = aOverrideColor ? *aOverrideColor : StyleColor()->mColor;
     ColorPattern color(ToDeviceColor(c));
@@ -519,7 +522,7 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
           posResolve.logicalIndex = mAccessKeyInfo->mAccesskeyIndex;
           rv = nsBidiPresUtils::RenderText(mCroppedTitle.get(), mCroppedTitle.Length(), level,
                                            presContext, aRenderingContext,
-                                           *refContext, *fontMet,
+                                           refContext, *fontMet,
                                            aTextRect.x, baseline,
                                            &posResolve,
                                            1);
@@ -530,7 +533,7 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
       {
           rv = nsBidiPresUtils::RenderText(mCroppedTitle.get(), mCroppedTitle.Length(), level,
                                            presContext, aRenderingContext,
-                                           *refContext, *fontMet,
+                                           refContext, *fontMet,
                                            aTextRect.x, baseline);
       }
     }
@@ -545,14 +548,14 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
                mAccessKeyInfo->mBeforeWidth = nsLayoutUtils::
                    AppUnitWidthOfString(mCroppedTitle.get(),
                                         mAccessKeyInfo->mAccesskeyIndex,
-                                        *fontMet, *refContext);
+                                        *fontMet, refContext);
            else
                mAccessKeyInfo->mBeforeWidth = 0;
        }
 
        fontMet->DrawString(mCroppedTitle.get(), mCroppedTitle.Length(),
                            aTextRect.x, baseline, &aRenderingContext,
-                           refContext.get());
+                           &refContext);
     }
 
     if (mAccessKeyInfo && mAccessKeyInfo->mAccesskeyIndex != kNotFound) {
@@ -572,7 +575,8 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
       fontMet->GetStrikeout(offset, size);
       gfxFloat offsetPixel = presContext->AppUnitsToGfxUnits(offset);
       gfxFloat sizePixel = presContext->AppUnitsToGfxUnits(size);
-      nsCSSRendering::PaintDecorationLine(this, ctx, dirtyRect, strikeColor,
+      nsCSSRendering::PaintDecorationLine(this, *drawTarget, ToRect(dirtyRect),
+                                          strikeColor,
                         pt, xInFrame, gfxSize(width, sizePixel), ascentPixel,
                         offsetPixel, NS_STYLE_TEXT_DECORATION_LINE_LINE_THROUGH,
                         strikeStyle, vertical);

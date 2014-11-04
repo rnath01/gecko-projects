@@ -471,13 +471,11 @@ class IonBuilder
     MDefinition *loadTypedObjectType(MDefinition *value);
     void loadTypedObjectData(MDefinition *typedObj,
                              MDefinition *offset,
-                             bool canBeNeutered,
                              MDefinition **owner,
                              MDefinition **ownerOffset);
     void loadTypedObjectElements(MDefinition *typedObj,
                                  MDefinition *offset,
                                  int32_t unit,
-                                 bool canBeNeutered,
                                  MDefinition **ownerElements,
                                  MDefinition **ownerScaledOffset);
     MDefinition *typeObjectForElementFromArrayStructType(MDefinition *typedObj);
@@ -486,26 +484,22 @@ class IonBuilder
     bool storeScalarTypedObjectValue(MDefinition *typedObj,
                                      MDefinition *offset,
                                      ScalarTypeDescr::Type type,
-                                     bool canBeNeutered,
                                      bool racy,
                                      MDefinition *value);
     bool checkTypedObjectIndexInBounds(int32_t elemSize,
                                        MDefinition *obj,
                                        MDefinition *index,
                                        TypedObjectPrediction objTypeDescrs,
-                                       MDefinition **indexAsByteOffset,
-                                       bool *canBeNeutered);
+                                       MDefinition **indexAsByteOffset);
     bool pushDerivedTypedObject(bool *emitted,
                                 MDefinition *obj,
                                 MDefinition *offset,
                                 TypedObjectPrediction derivedTypeDescrs,
-                                MDefinition *derivedTypeObj,
-                                bool canBeNeutered);
+                                MDefinition *derivedTypeObj);
     bool pushScalarLoadFromTypedObject(bool *emitted,
                                        MDefinition *obj,
                                        MDefinition *offset,
-                                       ScalarTypeDescr::Type type,
-                                       bool canBeNeutered);
+                                       ScalarTypeDescr::Type type);
     MDefinition *neuterCheck(MDefinition *obj);
 
     // jsop_setelem() helpers.
@@ -768,7 +762,8 @@ class IonBuilder
     InliningStatus inlineDump(CallInfo &callInfo);
     InliningStatus inlineHasClass(CallInfo &callInfo, const Class *clasp,
                                   const Class *clasp2 = nullptr,
-                                  const Class *clasp3 = nullptr);
+                                  const Class *clasp3 = nullptr,
+                                  const Class *clasp4 = nullptr);
     InliningStatus inlineIsConstructing(CallInfo &callInfo);
 
     // Testing functions.
@@ -812,11 +807,12 @@ class IonBuilder
                                      MBasicBlock *bottom);
 
     bool objectsHaveCommonPrototype(types::TemporaryTypeSet *types, PropertyName *name,
-                                    bool isGetter, JSObject *foundProto);
+                                    bool isGetter, JSObject *foundProto, bool *guardGlobal);
     void freezePropertiesForCommonPrototype(types::TemporaryTypeSet *types, PropertyName *name,
-                                            JSObject *foundProto);
+                                            JSObject *foundProto, bool allowEmptyTypesForGlobal = false);
     MDefinition *testCommonGetterSetter(types::TemporaryTypeSet *types, PropertyName *name,
-                                        bool isGetter, JSObject *foundProto, Shape *lastProperty);
+                                        bool isGetter, JSObject *foundProto, Shape *lastProperty,
+                                        Shape *globalShape = nullptr);
     bool testShouldDOMCall(types::TypeSet *inTypes,
                            JSFunction *func, JSJitInfo::OpType opType);
 
@@ -905,9 +901,9 @@ class IonBuilder
     MBasicBlock *current;
     uint32_t loopDepth_;
 
-    BytecodeSite bytecodeSite(jsbytecode *pc) {
+    BytecodeSite *bytecodeSite(jsbytecode *pc) {
         MOZ_ASSERT(info().inlineScriptTree()->script()->containsPC(pc));
-        return BytecodeSite(info().inlineScriptTree(), pc);
+        return new(alloc()) BytecodeSite(info().inlineScriptTree(), pc);
     }
 
     MDefinition *lexicalCheck_;

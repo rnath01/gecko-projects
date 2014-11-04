@@ -846,6 +846,12 @@ SpecialPowersAPI.prototype = {
   },
 
 
+  setTestPluginEnabledState: function(newEnabledState, pluginName) {
+    return this._sendSyncMessage("SPSetTestPluginEnabledState",
+                                 { newEnabledState: newEnabledState, pluginName: pluginName })[0];
+  },
+
+
   _permissionObserver: {
     _self: null,
     _lastPermission: {},
@@ -1394,21 +1400,18 @@ SpecialPowersAPI.prototype = {
     var self = this;
     let count = 0;
 
-    function doPreciseGCandCC() {
-      function scheduledGCCallback() {
+    function genGCCallback(cb) {
+      return function() {
         self.getDOMWindowUtils(win).cycleCollect();
-
         if (++count < 2) {
-          doPreciseGCandCC();
+          Cu.schedulePreciseGC(genGCCallback(cb));
         } else {
-          callback();
+          cb();
         }
       }
-
-      Cu.schedulePreciseGC(scheduledGCCallback);
     }
 
-    doPreciseGCandCC();
+    Cu.schedulePreciseGC(genGCCallback(callback));
   },
 
   setGCZeal: function(zeal) {

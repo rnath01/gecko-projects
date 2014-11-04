@@ -109,13 +109,6 @@ interface nsICertOverrideService : nsISupports {
                              in int32_t aPort);
 
   /**
-   *  Count and return the number of permanent overrides.
-   *
-   *  @param aCount The number of permanent overrides
-   */
-  void getPermanentOverrideCount(out uint32_t aCount);
-
-  /**
    *  Is the given cert used in rules?
    *
    *  @param aCert The cert we're looking for

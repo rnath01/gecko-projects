@@ -253,7 +253,7 @@ add_task(function* basicAuthorizationAndRegistration() {
   mockPushHandler.registrationPushURL = "https://localhost/pushUrl/guest";
   // Notification observed due to the error being cleared upon successful registration.
   let statusChangedPromise = promiseObserverNotified("loop-status-changed");
-  yield MozLoopService.register();
+  yield MozLoopService.promiseRegisteredWithServers();
   yield statusChangedPromise;
 
   // Normally the same pushUrl would be registered but we change it in the test
@@ -318,7 +318,7 @@ add_task(function* loginWithParams401() {
     test_error: "params_401",
   };
   yield promiseOAuthParamsSetup(BASE_URL, params);
-  yield MozLoopService.register();
+  yield MozLoopService.promiseRegisteredWithServers();
 
   let loginPromise = MozLoopService.logInToFxA();
   yield loginPromise.then(tokenData => {
@@ -418,21 +418,21 @@ add_task(function* openFxASettings() {
   };
   yield promiseOAuthParamsSetup(BASE_URL, params);
 
-  let deferredTab = Promise.defer();
-  let progressListener = {
-    onLocationChange: function onLocationChange(aBrowser) {
-      gBrowser.removeTabsProgressListener(progressListener);
-      let contentURI = Services.io.newURI(params.content_uri, null, null);
-      is(aBrowser.currentURI.spec, Services.io.newURI("/settings", null, contentURI).spec,
-         "Check settings tab URL");
-      deferredTab.resolve();
-    },
-  };
-  gBrowser.addTabsProgressListener(progressListener);
+  yield new Promise((resolve, reject) => {
+    let progressListener = {
+      onLocationChange: function onLocationChange(aBrowser) {
+        gBrowser.removeTabsProgressListener(progressListener);
+        let contentURI = Services.io.newURI(params.content_uri, null, null);
+        is(aBrowser.currentURI.spec, Services.io.newURI("/settings", null, contentURI).spec,
+           "Check settings tab URL");
+        resolve();
+      },
+    };
+    gBrowser.addTabsProgressListener(progressListener);
 
-  MozLoopService.openFxASettings();
+    MozLoopService.openFxASettings();
+  });
 
-  yield deferredTab.promise;
   while (gBrowser.tabs.length > 1) {
     gBrowser.removeTab(gBrowser.tabs[1]);
   }

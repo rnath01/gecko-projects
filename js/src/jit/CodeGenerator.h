@@ -181,7 +181,6 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitSetArrayLength(LSetArrayLength *lir);
     bool visitTypedArrayLength(LTypedArrayLength *lir);
     bool visitTypedArrayElements(LTypedArrayElements *lir);
-    bool visitNeuterCheck(LNeuterCheck *lir);
     bool visitTypedObjectElements(LTypedObjectElements *lir);
     bool visitSetTypedObjectOffset(LSetTypedObjectOffset *lir);
     bool visitTypedObjectProto(LTypedObjectProto *ins);
@@ -306,6 +305,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitIsCallable(LIsCallable *lir);
     bool visitOutOfLineIsCallable(OutOfLineIsCallable *ool);
     bool visitIsObject(LIsObject *lir);
+    bool visitIsObjectAndBranch(LIsObjectAndBranch *lir);
     bool visitHaveSameClass(LHaveSameClass *lir);
     bool visitHasClass(LHasClass *lir);
     bool visitAsmJSParameter(LAsmJSParameter *lir);

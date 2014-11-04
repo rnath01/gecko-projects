@@ -15,6 +15,7 @@ import android.view.View;
 import android.widget.Checkable;
 import android.widget.ImageButton;
 import android.widget.ImageView;
+import android.widget.ImageView.ScaleType;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -94,16 +95,14 @@ public class TabsLayoutItemView extends LinearLayout
         mTabId = tab.getId();
 
         Drawable thumbnailImage = tab.getThumbnail();
-        if (thumbnailImage != null) {
-            mThumbnail.setImageDrawable(thumbnailImage);
-        } else {
-            mThumbnail.setImageResource(R.drawable.tab_thumbnail_default);
-        }
+        mThumbnail.setImageDrawable(thumbnailImage);
+
         if (mThumbnailWrapper != null) {
             mThumbnailWrapper.setRecording(tab.isRecording());
         }
         mTitle.setText(tab.getDisplayTitle());
         mCloseButton.setTag(this);
+
     }
 
     public int getTabId() {

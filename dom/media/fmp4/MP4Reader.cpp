@@ -531,6 +531,7 @@ MP4Reader::Decode(TrackType aTrack)
       nsAutoPtr<MP4Sample> compressed(PopSample(aTrack));
       if (!compressed) {
         // EOS, or error. Send the decoder a signal to drain.
+        LOG("MP4Reader: EOS or error - no samples available");
         LOG("Draining %s", TrackTypeToStr(aTrack));
         data.mMonitor.Lock();
         MOZ_ASSERT(!data.mEOS);
@@ -612,7 +613,7 @@ MP4Reader::Output(TrackType aTrack, MediaData* aSample)
 
   switch (aTrack) {
     case kAudio: {
-      MOZ_ASSERT(aSample->mType == MediaData::AUDIO_SAMPLES);
+      MOZ_ASSERT(aSample->mType == MediaData::AUDIO_DATA);
       AudioData* audioData = static_cast<AudioData*>(aSample);
       AudioQueue().Push(audioData);
       if (audioData->mChannels != mInfo.mAudio.mChannels ||
@@ -625,7 +626,7 @@ MP4Reader::Output(TrackType aTrack, MediaData* aSample)
       break;
     }
     case kVideo: {
-      MOZ_ASSERT(aSample->mType == MediaData::VIDEO_FRAME);
+      MOZ_ASSERT(aSample->mType == MediaData::VIDEO_DATA);
       VideoQueue().Push(static_cast<VideoData*>(aSample));
       break;
     }

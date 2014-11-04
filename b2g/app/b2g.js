@@ -788,6 +788,9 @@ pref("dom.ipc.systemMessageCPULockTimeoutSec", 30);
 // Ignore the "dialog=1" feature in window.open.
 pref("dom.disable_window_open_dialog_feature", true);
 
+// Enable before keyboard events and after keyboard events.
+pref("dom.beforeAfterKeyboardEvent.enabled", true);
+
 // Screen reader support
 pref("accessibility.accessfu.activate", 2);
 pref("accessibility.accessfu.quicknav_modes", "Link,Heading,FormElement,Landmark,ListItem");
@@ -797,6 +800,9 @@ pref("accessibility.accessfu.quicknav_index", 0);
 pref("accessibility.accessfu.utterance", 1);
 // Whether to skip images with empty alt text
 pref("accessibility.accessfu.skip_empty_images", true);
+// Setting to change the verbosity of entered text (0 - none, 1 - characters,
+// 2 - words, 3 - both)
+pref("accessibility.accessfu.keyboard_echo", 3);
 
 // Enable hit-target fluffing
 pref("ui.touch.radius.enabled", true);
@@ -982,8 +988,13 @@ pref("apz.asyncscroll.throttle", 40);
 pref("apz.pan_repaint_interval", 16);
 
 // APZ physics settings, tuned by UX designers
-pref("apz.max_velocity_inches_per_ms", "0.07");
+pref("apz.fling_curve_function_x1", "0.0");
+pref("apz.fling_curve_function_y1", "0.0");
+pref("apz.fling_curve_function_x2", "0.58");
+pref("apz.fling_curve_function_y2", "1.0");
+pref("apz.fling_curve_threshold_inches_per_ms", "0.03");
 pref("apz.fling_friction", "0.003");
+pref("apz.max_velocity_inches_per_ms", "0.07");
 
 // Tweak default displayport values to reduce the risk of running out of
 // memory when zooming in
@@ -998,12 +1009,11 @@ pref("apz.subframe.enabled", true);
 
 // Overscroll-related settings
 pref("apz.overscroll.enabled", true);
-pref("apz.overscroll.fling_friction", "0.05");
-pref("apz.overscroll.fling_stopped_threshold", "0.4");
 pref("apz.overscroll.stretch_factor", "0.5");
-pref("apz.overscroll.snap_back.spring_stiffness", "0.05");
-pref("apz.overscroll.snap_back.spring_friction", "0.1");
-pref("apz.overscroll.snap_back.mass", "100");
+pref("apz.overscroll.spring_stiffness", "0.001");
+pref("apz.overscroll.spring_friction", "0.015");
+pref("apz.overscroll.stop_distance_threshold", "5.0");
+pref("apz.overscroll.stop_velocity_threshold", "0.01");
 
 // This preference allows FirefoxOS apps (and content, I think) to force
 // the use of software (instead of hardware accelerated) 2D canvases by
@@ -1025,8 +1035,8 @@ pref("dom.wakelock.enabled", true);
 // Enable touch caret by default
 pref("touchcaret.enabled", true);
 
-// Disable selection caret by default
-pref("selectioncaret.enabled", false);
+// Enable selection caret by default
+pref("selectioncaret.enabled", true);
 
 // Enable sync and mozId with Firefox Accounts.
 pref("services.sync.fxaccounts.enabled", true);
@@ -1042,3 +1052,6 @@ pref("dom.mapped_arraybuffer.enabled", true);
 
 // UDPSocket API
 pref("dom.udpsocket.enabled", true);
+
+// Enable TV Manager API
+pref("dom.tv.enabled", true);

@@ -27,12 +27,7 @@ import android.widget.Toast;
 public final class ReadingListHelper implements GeckoEventListener, NativeEventListener {
     private static final String LOGTAG = "ReadingListHelper";
 
-    private static final int READER_ADD_SUCCESS = 0;
-    private static final int READER_ADD_FAILED = 1;
-    private static final int READER_ADD_DUPLICATE = 2;
-
     protected final Context context;
-
 
     public ReadingListHelper(Context context) {
         this.context = context;
@@ -85,30 +80,26 @@ public final class ReadingListHelper implements GeckoEventListener, NativeEventL
      * A page can be added to the ReadingList by long-tap of the page-action
      * icon, or by tapping the readinglist-add icon in the ReaderMode banner.
      */
-    private void handleAddToList(JSONObject message) {
-        final int result = message.optInt("result", READER_ADD_FAILED);
-        if (result != READER_ADD_SUCCESS) {
-            if (result == READER_ADD_FAILED) {
-                showToast(R.string.reading_list_failed, Toast.LENGTH_SHORT);
-            } else if (result == READER_ADD_DUPLICATE) {
-                showToast(R.string.reading_list_duplicate, Toast.LENGTH_SHORT);
-            }
-            return;
-        }
-
-        final ContentValues values = new ContentValues();
+    private void handleAddToList(final JSONObject message) {
+        final ContentResolver cr = context.getContentResolver();
         final String url = message.optString("url");
-
-        values.put(ReadingListItems.URL, url);
-        values.put(ReadingListItems.TITLE, message.optString("title"));
-        values.put(ReadingListItems.LENGTH, message.optInt("length"));
-        values.put(ReadingListItems.EXCERPT, message.optString("excerpt"));
 
         ThreadUtils.postToBackgroundThread(new Runnable() {
             @Override
             public void run() {
-                BrowserDB.addReadingListItem(context.getContentResolver(), values);
-                showToast(R.string.reading_list_added, Toast.LENGTH_SHORT);
+                if (BrowserDB.isReadingListItem(cr, url)) {
+                    showToast(R.string.reading_list_duplicate, Toast.LENGTH_SHORT);
+
+                } else {
+                    final ContentValues values = new ContentValues();
+                    values.put(ReadingListItems.URL, url);
+                    values.put(ReadingListItems.TITLE, message.optString("title"));
+                    values.put(ReadingListItems.LENGTH, message.optInt("length"));
+                    values.put(ReadingListItems.EXCERPT, message.optString("excerpt"));
+                    BrowserDB.addReadingListItem(cr, values);
+
+                    showToast(R.string.reading_list_added, Toast.LENGTH_SHORT);
+                }
             }
         });
 

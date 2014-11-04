@@ -855,6 +855,16 @@ LIRGenerator::visitTest(MTest *test)
         }
     }
 
+    if (opd->isIsObject() && opd->isEmittedAtUses()) {
+        MDefinition *input = opd->toIsObject()->input();
+        MOZ_ASSERT(input->type() == MIRType_Value);
+
+        LIsObjectAndBranch *lir = new(alloc()) LIsObjectAndBranch(ifTrue, ifFalse);
+        if (!useBoxAtStart(lir, LIsObjectAndBranch::Input, input))
+            return false;
+        return add(lir, test);
+    }
+
     if (opd->isIsNoIter()) {
         MOZ_ASSERT(opd->isEmittedAtUses());
 
@@ -875,6 +885,12 @@ LIRGenerator::visitTest(MTest *test)
 
     MOZ_ASSERT(opd->type() == MIRType_Int32 || opd->type() == MIRType_Boolean);
     return add(new(alloc()) LTestIAndBranch(useRegister(opd), ifTrue, ifFalse));
+}
+
+bool
+LIRGenerator::visitGotoWithFake(MGotoWithFake *gotoWithFake)
+{
+    return add(new(alloc()) LGoto(gotoWithFake->target()));
 }
 
 bool
@@ -2591,16 +2607,6 @@ LIRGenerator::visitNot(MNot *ins)
 }
 
 bool
-LIRGenerator::visitNeuterCheck(MNeuterCheck *ins)
-{
-    LNeuterCheck *chk = new(alloc()) LNeuterCheck(useRegister(ins->object()),
-                                                  temp());
-    if (!assignSnapshot(chk, Bailout_Neutered))
-        return false;
-    return redefine(ins, ins->input()) && add(chk, ins);
-}
-
-bool
 LIRGenerator::visitBoundsCheck(MBoundsCheck *ins)
 {
     LInstruction *check;
@@ -3559,9 +3565,33 @@ LIRGenerator::visitIsCallable(MIsCallable *ins)
     return define(new(alloc()) LIsCallable(useRegister(ins->object())), ins);
 }
 
+static bool
+CanEmitIsObjectAtUses(MInstruction *ins)
+{
+    if (!ins->canEmitAtUses())
+        return false;
+
+    MUseIterator iter(ins->usesBegin());
+    if (iter == ins->usesEnd())
+        return false;
+
+    MNode *node = iter->consumer();
+    if (!node->isDefinition())
+        return false;
+
+    if (!node->toDefinition()->isTest())
+        return false;
+
+    iter++;
+    return iter == ins->usesEnd();
+}
+
 bool
 LIRGenerator::visitIsObject(MIsObject *ins)
 {
+    if (CanEmitIsObjectAtUses(ins))
+        return emitAtUses(ins);
+
     MDefinition *opd = ins->input();
     MOZ_ASSERT(opd->type() == MIRType_Value);
     LIsObject *lir = new(alloc()) LIsObject();

@@ -10,6 +10,7 @@
 #include "MP4Decoder.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/ReentrantMonitor.h"
+#include "mp4_demuxer/Adts.h"
 #include "mp4_demuxer/DecoderData.h"
 #include "nsIThread.h"
 #include "AppleATDecoder.h"
@@ -38,7 +39,7 @@ AppleATDecoder::AppleATDecoder(const mp4_demuxer::AudioDecoderConfig& aConfig,
   , mFlushed(false)
 {
   MOZ_COUNT_CTOR(AppleATDecoder);
-  LOG("Creating Apple AudioToolbox Audio decoder");
+  LOG("Creating Apple AudioToolbox decoder");
   LOG("Audio Decoder configuration: %s %d Hz %d channels %d bits per channel",
       mConfig.mime_type,
       mConfig.samples_per_second,
@@ -92,7 +93,7 @@ AppleATDecoder::Init()
     NS_ERROR("Non recognised format");
     return NS_ERROR_FAILURE;
   }
-  LOG("Initializing Apple AudioToolbox Audio decoder");
+  LOG("Initializing Apple AudioToolbox decoder");
   OSStatus rv = AudioFileStreamOpen(this,
                                     _MetadataCallback,
                                     _SampleCallback,
@@ -272,7 +273,7 @@ AppleATDecoder::SampleCallback(uint32_t aNumBytes,
                                                   packets.get());
 
     if (rv && rv != kNeedMoreData) {
-      LOG("Error decoding audio stream: %#x\n", rv);
+      LOG("Error decoding audio stream: %d\n", rv);
       mCallback->Error();
       break;
     }
@@ -315,10 +316,10 @@ AppleATDecoder::SampleCallback(uint32_t aNumBytes,
 void
 AppleATDecoder::SetupDecoder()
 {
-  AudioStreamBasicDescription inputFormat;
-
+  LOG("Setting up Apple AudioToolbox decoder.");
   mHaveOutput = false;
 
+  AudioStreamBasicDescription inputFormat;
   nsresult rv = AppleUtils::GetRichestDecodableFormat(mStream, inputFormat);
   if (NS_FAILED(rv)) {
     mCallback->Error();
@@ -355,6 +356,19 @@ AppleATDecoder::SetupDecoder()
 void
 AppleATDecoder::SubmitSample(nsAutoPtr<mp4_demuxer::MP4Sample> aSample)
 {
+  // Prepend ADTS header to AAC audio.
+  if (!strcmp(mConfig.mime_type, "audio/mp4a-latm")) {
+    bool rv = mp4_demuxer::Adts::ConvertSample(mConfig.channel_count,
+                                               mConfig.frequency_index,
+                                               mConfig.aac_profile,
+                                               aSample);
+    if (!rv) {
+      NS_ERROR("Failed to apply ADTS header");
+      mCallback->Error();
+      return;
+    }
+  }
+  // Push the sample to the AudioFileStream for parsing.
   mSamplePosition = aSample->byte_offset;
   mCurrentAudioTimestamp = aSample->composition_timestamp;
   uint32_t flags = mFlushed ? kAudioFileStreamParseFlag_Discontinuity : 0;

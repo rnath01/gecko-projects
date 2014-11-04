@@ -38,7 +38,10 @@ describe("loop.store.ConversationStore", function () {
 
     navigator.mozLoop = {
       getLoopBoolPref: sandbox.stub(),
-      releaseCallData: sandbox.stub()
+      calls: {
+        setCallInProgress: sandbox.stub(),
+        clearCallInProgress: sandbox.stub()
+      }
     };
 
     dispatcher = new loop.Dispatcher();
@@ -125,11 +128,7 @@ describe("loop.store.ConversationStore", function () {
   describe("#connectionFailure", function() {
     beforeEach(function() {
       store._websocket = fakeWebsocket;
-      sandbox.stub(loop.shared.utils.Helper.prototype, "locationData")
-        .returns({
-          hash: "#outgoing/42",
-          pathname: ""
-        });
+      store.set({windowId: "42"});
     });
 
     it("should disconnect the session", function() {
@@ -160,8 +159,9 @@ describe("loop.store.ConversationStore", function () {
       dispatcher.dispatch(
         new sharedActions.ConnectionFailure({reason: "fake"}));
 
-      sinon.assert.calledOnce(navigator.mozLoop.releaseCallData);
-      sinon.assert.calledWithExactly(navigator.mozLoop.releaseCallData, "42");
+      sinon.assert.calledOnce(navigator.mozLoop.calls.clearCallInProgress);
+      sinon.assert.calledWithExactly(
+        navigator.mozLoop.calls.clearCallInProgress, "42");
     });
   });
 
@@ -225,69 +225,46 @@ describe("loop.store.ConversationStore", function () {
     });
   });
 
-  describe("#gatherCallData", function() {
+  describe("#setupWindowData", function() {
+    var fakeSetupWindowData;
+
     beforeEach(function() {
       store.set({callState: CALL_STATES.INIT});
-
-      navigator.mozLoop = {
-        getCallData: function() {
-          return {
-            contact: contact,
-            callType: sharedUtils.CALL_TYPES.AUDIO_VIDEO
-          };
-        }
+      fakeSetupWindowData = {
+        windowId: "123456",
+        type: "outgoing",
+        contact: contact,
+        callType: sharedUtils.CALL_TYPES.AUDIO_VIDEO
       };
-    });
-
-    afterEach(function() {
-      delete navigator.mozLoop;
     });
 
     it("should set the state to 'gather'", function() {
       dispatcher.dispatch(
-        new sharedActions.GatherCallData({
-          callId: "76543218",
-          outgoing: true
-        }));
+        new sharedActions.SetupWindowData(fakeSetupWindowData));
 
       expect(store.get("callState")).eql(CALL_STATES.GATHER);
     });
 
     it("should save the basic call information", function() {
       dispatcher.dispatch(
-        new sharedActions.GatherCallData({
-          callId: "123456",
-          outgoing: true
-        }));
+        new sharedActions.SetupWindowData(fakeSetupWindowData));
 
-      expect(store.get("callId")).eql("123456");
+      expect(store.get("windowId")).eql("123456");
       expect(store.get("outgoing")).eql(true);
     });
 
     it("should save the basic information from the mozLoop api", function() {
       dispatcher.dispatch(
-        new sharedActions.GatherCallData({
-          callId: "123456",
-          outgoing: true
-        }));
+        new sharedActions.SetupWindowData(fakeSetupWindowData));
 
       expect(store.get("contact")).eql(contact);
       expect(store.get("callType")).eql(sharedUtils.CALL_TYPES.AUDIO_VIDEO);
     });
 
     describe("outgoing calls", function() {
-      var outgoingCallData;
-
-      beforeEach(function() {
-        outgoingCallData = {
-          callId: "123456",
-          outgoing: true
-        };
-      });
-
       it("should request the outgoing call data", function() {
         dispatcher.dispatch(
-          new sharedActions.GatherCallData(outgoingCallData));
+          new sharedActions.SetupWindowData(fakeSetupWindowData));
 
         sinon.assert.calledOnce(client.setupOutgoingCall);
         sinon.assert.calledWith(client.setupOutgoingCall,
@@ -295,7 +272,7 @@ describe("loop.store.ConversationStore", function () {
       });
 
       it("should include all email addresses in the call data", function() {
-        contact = {
+        fakeSetupWindowData.contact = {
           name: [ "Mr Smith" ],
           email: [{
             type: "home",
@@ -310,7 +287,7 @@ describe("loop.store.ConversationStore", function () {
         };
 
         dispatcher.dispatch(
-          new sharedActions.GatherCallData(outgoingCallData));
+          new sharedActions.SetupWindowData(fakeSetupWindowData));
 
         sinon.assert.calledOnce(client.setupOutgoingCall);
         sinon.assert.calledWith(client.setupOutgoingCall,
@@ -318,7 +295,7 @@ describe("loop.store.ConversationStore", function () {
       });
 
       it("should include trim phone numbers for the call data", function() {
-        contact = {
+        fakeSetupWindowData.contact = {
           name: [ "Mr Smith" ],
           tel: [{
             type: "home",
@@ -328,7 +305,7 @@ describe("loop.store.ConversationStore", function () {
         };
 
         dispatcher.dispatch(
-          new sharedActions.GatherCallData(outgoingCallData));
+          new sharedActions.SetupWindowData(fakeSetupWindowData));
 
         sinon.assert.calledOnce(client.setupOutgoingCall);
         sinon.assert.calledWith(client.setupOutgoingCall,
@@ -336,7 +313,7 @@ describe("loop.store.ConversationStore", function () {
       });
 
       it("should include all email and telephone values in the call data", function() {
-        contact = {
+        fakeSetupWindowData.contact = {
           name: [ "Mr Smith" ],
           email: [{
             type: "home",
@@ -359,7 +336,7 @@ describe("loop.store.ConversationStore", function () {
         };
 
         dispatcher.dispatch(
-          new sharedActions.GatherCallData(outgoingCallData));
+          new sharedActions.SetupWindowData(fakeSetupWindowData));
 
         sinon.assert.calledOnce(client.setupOutgoingCall);
         sinon.assert.calledWith(client.setupOutgoingCall,
@@ -379,8 +356,8 @@ describe("loop.store.ConversationStore", function () {
 
           client.setupOutgoingCall.callsArgWith(2, null, callData);
 
-          store.gatherCallData(
-            new sharedActions.GatherCallData(outgoingCallData));
+          store.setupWindowData(
+            new sharedActions.SetupWindowData(fakeSetupWindowData));
 
           sinon.assert.calledOnce(dispatcher.dispatch);
           // Can't use instanceof here, as that matches any action
@@ -393,8 +370,8 @@ describe("loop.store.ConversationStore", function () {
         it("should dispatch a connection failure action on failure", function() {
           client.setupOutgoingCall.callsArgWith(2, {});
 
-          store.gatherCallData(
-            new sharedActions.GatherCallData(outgoingCallData));
+          store.setupWindowData(
+            new sharedActions.SetupWindowData(fakeSetupWindowData));
 
           sinon.assert.calledOnce(dispatcher.dispatch);
           // Can't use instanceof here, as that matches any action
@@ -499,11 +476,7 @@ describe("loop.store.ConversationStore", function () {
         close: wsCloseSpy
       };
       store.set({callState: CALL_STATES.ONGOING});
-      sandbox.stub(loop.shared.utils.Helper.prototype, "locationData")
-        .returns({
-          hash: "#outgoing/42",
-          pathname: ""
-        });
+      store.set({windowId: "42"});
     });
 
     it("should disconnect the session", function() {
@@ -533,8 +506,9 @@ describe("loop.store.ConversationStore", function () {
     it("should release mozLoop callsData", function() {
       dispatcher.dispatch(new sharedActions.HangupCall());
 
-      sinon.assert.calledOnce(navigator.mozLoop.releaseCallData);
-      sinon.assert.calledWithExactly(navigator.mozLoop.releaseCallData, "42");
+      sinon.assert.calledOnce(navigator.mozLoop.calls.clearCallInProgress);
+      sinon.assert.calledWithExactly(
+        navigator.mozLoop.calls.clearCallInProgress, "42");
     });
   });
 
@@ -549,11 +523,7 @@ describe("loop.store.ConversationStore", function () {
         close: wsCloseSpy
       };
       store.set({callState: CALL_STATES.ONGOING});
-      sandbox.stub(loop.shared.utils.Helper.prototype, "locationData")
-        .returns({
-          hash: "#outgoing/42",
-          pathname: ""
-        });
+      store.set({windowId: "42"});
     });
 
     it("should disconnect the session", function() {
@@ -577,8 +547,9 @@ describe("loop.store.ConversationStore", function () {
     it("should release mozLoop callsData", function() {
       dispatcher.dispatch(new sharedActions.PeerHungupCall());
 
-      sinon.assert.calledOnce(navigator.mozLoop.releaseCallData);
-      sinon.assert.calledWithExactly(navigator.mozLoop.releaseCallData, "42");
+      sinon.assert.calledOnce(navigator.mozLoop.calls.clearCallInProgress);
+      sinon.assert.calledWithExactly(
+        navigator.mozLoop.calls.clearCallInProgress, "42");
     });
   });
 
@@ -587,11 +558,7 @@ describe("loop.store.ConversationStore", function () {
       store._websocket = fakeWebsocket;
 
       store.set({callState: CALL_STATES.CONNECTING});
-      sandbox.stub(loop.shared.utils.Helper.prototype, "locationData")
-        .returns({
-          hash: "#outgoing/42",
-          pathname: ""
-        });
+      store.set({windowId: "42"});
     });
 
     it("should disconnect the session", function() {
@@ -629,8 +596,9 @@ describe("loop.store.ConversationStore", function () {
     it("should release mozLoop callsData", function() {
       dispatcher.dispatch(new sharedActions.CancelCall());
 
-      sinon.assert.calledOnce(navigator.mozLoop.releaseCallData);
-      sinon.assert.calledWithExactly(navigator.mozLoop.releaseCallData, "42");
+      sinon.assert.calledOnce(navigator.mozLoop.calls.clearCallInProgress);
+      sinon.assert.calledWithExactly(
+        navigator.mozLoop.calls.clearCallInProgress, "42");
     });
   });
 

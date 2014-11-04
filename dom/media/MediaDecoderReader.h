@@ -148,6 +148,8 @@ public:
   virtual nsresult GetBuffered(dom::TimeRanges* aBuffered,
                                int64_t aStartTime);
 
+  virtual int64_t ComputeStartTime(const VideoData* aVideo, const AudioData* aAudio);
+
   // Returns the number of bytes of memory allocated by structures/frames in
   // the video queue.
   size_t SizeOfVideoQueueInBytes() const;
@@ -253,23 +255,21 @@ class RequestSampleCallback {
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(RequestSampleCallback)
 
+  enum NotDecodedReason {
+    END_OF_STREAM,
+    DECODE_ERROR,
+    WAITING_FOR_DATA
+  };
+
   // Receives the result of a RequestAudioData() call.
   virtual void OnAudioDecoded(AudioData* aSample) = 0;
-
-  // Called when a RequestAudioData() call can't be fulfiled as we've
-  // reached the end of stream.
-  virtual void OnAudioEOS() = 0;
 
   // Receives the result of a RequestVideoData() call.
   virtual void OnVideoDecoded(VideoData* aSample) = 0;
 
-  // Called when a RequestVideoData() call can't be fulfiled as we've
-  // reached the end of stream.
-  virtual void OnVideoEOS() = 0;
-
-  // Called when there's a decode error. No more sample requests
-  // will succeed.
-  virtual void OnDecodeError() = 0;
+  // Called when a RequestAudioData() or RequestVideoData() call can't be
+  // fulfiled. The reason is passed as aReason.
+  virtual void OnNotDecoded(MediaData::Type aType, NotDecodedReason aReason) = 0;
 
   // Called during shutdown to break any reference cycles.
   virtual void BreakCycles() = 0;
@@ -284,16 +284,16 @@ protected:
 // model of the MediaDecoderReader to a synchronous model.
 class AudioDecodeRendezvous : public RequestSampleCallback {
 public:
+  using RequestSampleCallback::NotDecodedReason;
+
   AudioDecodeRendezvous();
   ~AudioDecodeRendezvous();
 
   // RequestSampleCallback implementation. Called when decode is complete.
   // Note: aSample is null at end of stream.
   virtual void OnAudioDecoded(AudioData* aSample) MOZ_OVERRIDE;
-  virtual void OnAudioEOS() MOZ_OVERRIDE;
   virtual void OnVideoDecoded(VideoData* aSample) MOZ_OVERRIDE {}
-  virtual void OnVideoEOS() MOZ_OVERRIDE {}
-  virtual void OnDecodeError() MOZ_OVERRIDE;
+  virtual void OnNotDecoded(MediaData::Type aType, NotDecodedReason aReason) MOZ_OVERRIDE;
   virtual void BreakCycles() MOZ_OVERRIDE {};
   void Reset();
 

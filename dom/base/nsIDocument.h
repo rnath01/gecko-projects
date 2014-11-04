@@ -92,6 +92,7 @@ class ImageLoader;
 
 namespace dom {
 class AnimationTimeline;
+class AnonymousContent;
 class Attr;
 class BoxObject;
 class CDATASection;
@@ -135,8 +136,8 @@ typedef CallbackObjectHolder<NodeFilter, nsIDOMNodeFilter> NodeFilterHolder;
 } // namespace mozilla
 
 #define NS_IDOCUMENT_IID \
-{ 0xbab5b447, 0x7e23, 0x4cdd, \
-  { 0xac, 0xe5, 0xaa, 0x04, 0x26, 0x87, 0x2b, 0x97 } }
+{ 0x6bbf1955, 0xd9c4, 0x4d61, \
+ { 0xbf, 0x75, 0x1b, 0xba, 0x55, 0xf7, 0x99, 0xc2 } }
 
 // Enum for requesting a particular type of document when creating a doc
 enum DocumentFlavor {
@@ -713,6 +714,15 @@ public:
 
   bool DidDocumentOpen() {
     return mDidDocumentOpen;
+  }
+
+  already_AddRefed<mozilla::dom::AnonymousContent>
+  InsertAnonymousContent(mozilla::dom::Element& aElement,
+                         mozilla::ErrorResult& aError);
+  void RemoveAnonymousContent(mozilla::dom::AnonymousContent& aContent,
+                              mozilla::ErrorResult& aError);
+  nsTArray<nsRefPtr<mozilla::dom::AnonymousContent>>& GetAnonymousContents() {
+    return mAnonymousContents;
   }
 
 protected:
@@ -2747,6 +2757,8 @@ protected:
 
   nsRefPtr<mozilla::dom::XPathEvaluator> mXPathEvaluator;
 
+  nsTArray<nsRefPtr<mozilla::dom::AnonymousContent>> mAnonymousContents;
+
   uint32_t mBlockDOMContentLoaded;
   bool mDidFireDOMContentLoaded:1;
 };
@@ -2865,7 +2877,11 @@ nsINode::OwnerDocAsNode() const
 inline mozilla::dom::ParentObject
 nsINode::GetParentObject() const
 {
-  return GetParentObjectInternal(OwnerDoc());
+  mozilla::dom::ParentObject p(OwnerDoc());
+    // Note that mUseXBLScope is a no-op for chrome, and other places where we
+    // don't use XBL scopes.
+  p.mUseXBLScope = IsInAnonymousSubtree() && !IsAnonymousContentInSVGUseSubtree();
+  return p;
 }
 
 #endif /* nsIDocument_h___ */

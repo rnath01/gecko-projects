@@ -14,6 +14,7 @@
 
 #include "MediaData.h"
 
+#include "mp4_demuxer/Adts.h"
 #include "mp4_demuxer/AnnexB.h"
 #include "mp4_demuxer/DecoderData.h"
 
@@ -21,6 +22,7 @@
 #include "nsAutoPtr.h"
 
 #include <jni.h>
+#include <string.h>
 
 using namespace mozilla;
 using namespace mozilla::gl;
@@ -47,7 +49,7 @@ public:
   VideoDataDecoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
                    MediaFormat* aFormat, MediaDataDecoderCallback* aCallback,
                    layers::ImageContainer* aImageContainer)
-    : MediaCodecDataDecoder(MediaData::Type::VIDEO_FRAME, aConfig.mime_type, aFormat, aCallback)
+    : MediaCodecDataDecoder(MediaData::Type::VIDEO_DATA, aConfig.mime_type, aFormat, aCallback)
     , mImageContainer(aImageContainer)
     , mConfig(aConfig)
   {
@@ -69,7 +71,7 @@ public:
     return MediaCodecDataDecoder::Input(aSample);
   }
 
-  virtual nsresult PostOutput(BufferInfo* aInfo, Microseconds aDuration) MOZ_OVERRIDE {
+  virtual nsresult PostOutput(BufferInfo* aInfo, MediaFormat* aFormat, Microseconds aDuration) MOZ_OVERRIDE {
     VideoInfo videoInfo;
     videoInfo.mDisplay = nsIntSize(mConfig.display_width, mConfig.display_height);
 
@@ -106,18 +108,35 @@ protected:
 
 class AudioDataDecoder : public MediaCodecDataDecoder {
 public:
-  AudioDataDecoder(const mp4_demuxer::AudioDecoderConfig& aConfig,
-                   MediaFormat* aFormat, MediaDataDecoderCallback* aCallback)
-  : MediaCodecDataDecoder(MediaData::Type::AUDIO_SAMPLES, aConfig.mime_type, aFormat, aCallback)
-  , mConfig(aConfig)
+  AudioDataDecoder(const char* aMimeType, MediaFormat* aFormat, MediaDataDecoderCallback* aCallback)
+  : MediaCodecDataDecoder(MediaData::Type::AUDIO_DATA, aMimeType, aFormat, aCallback)
   {
-    MOZ_ASSERT(mConfig.bits_per_sample == 16, "We only support 16-bit audio");
   }
 
-  nsresult Output(BufferInfo* aInfo, void* aBuffer, Microseconds aDuration) {
+  virtual nsresult Input(mp4_demuxer::MP4Sample* aSample) MOZ_OVERRIDE {
+    if (!strcmp(mMimeType, "audio/mp4a-latm")) {
+      uint32_t numChannels = mFormat->GetInteger(NS_LITERAL_STRING("channel-count"));
+      uint32_t sampleRate = mFormat->GetInteger(NS_LITERAL_STRING("sample-rate"));
+      uint8_t frequencyIndex =
+          mp4_demuxer::Adts::GetFrequencyIndex(sampleRate);
+      uint32_t aacProfile = mFormat->GetInteger(NS_LITERAL_STRING("aac-profile"));
+      bool rv = mp4_demuxer::Adts::ConvertSample(numChannels,
+                                                 frequencyIndex,
+                                                 aacProfile,
+                                                 aSample);
+      if (!rv) {
+        printf_stderr("Failed to prepend ADTS header\n");
+        return NS_ERROR_FAILURE;
+      }
+    }
+    return MediaCodecDataDecoder::Input(aSample);
+  }
+
+  nsresult Output(BufferInfo* aInfo, void* aBuffer, MediaFormat* aFormat, Microseconds aDuration) {
     // The output on Android is always 16-bit signed
 
-    uint32_t numChannels = mConfig.channel_count;
+    uint32_t numChannels = aFormat->GetInteger(NS_LITERAL_STRING("channel-count"));
+    uint32_t sampleRate = aFormat->GetInteger(NS_LITERAL_STRING("sample-rate"));
     uint32_t numFrames = (aInfo->getSize() / numChannels) / 2;
 
     AudioDataValue* audio = new AudioDataValue[aInfo->getSize()];
@@ -128,12 +147,9 @@ public:
                                     numFrames,
                                     audio,
                                     numChannels,
-                                    mConfig.samples_per_second));
+                                    sampleRate));
     return NS_OK;
   }
-
-protected:
-  const mp4_demuxer::AudioDecoderConfig& mConfig;
 };
 
 
@@ -181,6 +197,7 @@ AndroidDecoderModule::CreateAudioDecoder(const mp4_demuxer::AudioDecoderConfig& 
                                          MediaTaskQueue* aAudioTaskQueue,
                                          MediaDataDecoderCallback* aCallback)
 {
+  MOZ_ASSERT(aConfig.bits_per_sample == 16, "We only handle 16-bit audio!");
 
   nsAutoString mimeType;
   mimeType.AssignASCII(aConfig.mime_type);
@@ -213,10 +230,11 @@ AndroidDecoderModule::CreateAudioDecoder(const mp4_demuxer::AudioDecoderConfig& 
 
   if (mimeType.EqualsLiteral("audio/mp4a-latm")) {
     format->SetInteger(NS_LITERAL_STRING("is-adts"), 1);
+    format->SetInteger(NS_LITERAL_STRING("aac-profile"), aConfig.aac_profile);
   }
 
   nsRefPtr<MediaDataDecoder> decoder =
-    new AudioDataDecoder(aConfig, format, aCallback);
+    new AudioDataDecoder(aConfig.mime_type, format, aCallback);
 
   return decoder.forget();
 
@@ -302,6 +320,8 @@ void MediaCodecDataDecoder::DecoderLoop()
   JNIEnv* env = GetJNIForThread();
   mp4_demuxer::MP4Sample* sample = nullptr;
 
+  nsAutoPtr<MediaFormat> outputFormat;
+
   for (;;) {
     {
       MonitorAutoLock lock(mMonitor);
@@ -370,7 +390,7 @@ void MediaCodecDataDecoder::DecoderLoop()
       } else if (outputStatus == MediaCodec::getINFO_OUTPUT_BUFFERS_CHANGED()) {
         ResetOutputBuffers();
       } else if (outputStatus == MediaCodec::getINFO_OUTPUT_FORMAT_CHANGED()) {
-        // Don't care, we use SurfaceTexture for video
+        outputFormat = new MediaFormat(mDecoder->GetOutputFormat(), GetJNIForThread());
       } else if (outputStatus < 0) {
         printf_stderr("unknown error from decoder! %d\n", outputStatus);
         mCallback->Error();
@@ -392,13 +412,13 @@ void MediaCodecDataDecoder::DecoderLoop()
         if (buffer) {
           // The buffer will be null on Android L if we are decoding to a Surface
           void* directBuffer = env->GetDirectBufferAddress(buffer);
-          Output(&bufferInfo, directBuffer, duration);
+          Output(&bufferInfo, directBuffer, outputFormat, duration);
         }
 
         // The Surface will be updated at this point (for video)
         mDecoder->ReleaseOutputBuffer(outputStatus, true);
 
-        PostOutput(&bufferInfo, duration);
+        PostOutput(&bufferInfo, outputFormat, duration);
 
         if (buffer) {
           env->DeleteLocalRef(buffer);
