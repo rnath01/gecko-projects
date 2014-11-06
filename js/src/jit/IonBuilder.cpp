@@ -292,14 +292,7 @@ IonBuilder::getPolyCallTargets(types::TemporaryTypeSet *calleeTypes, bool constr
         return false;
     for(unsigned i = 0; i < objCount; i++) {
         JSObject *obj = calleeTypes->getSingleObject(i);
-        JSFunction *fun;
-        if (obj) {
-            if (!obj->is<JSFunction>()) {
-                targets.clear();
-                return true;
-            }
-            fun = &obj->as<JSFunction>();
-        } else {
+        if (!obj) {
             types::TypeObject *typeObj = calleeTypes->getTypeObject(i);
             MOZ_ASSERT(typeObj);
             if (!typeObj->interpretedFunction) {
@@ -307,19 +300,19 @@ IonBuilder::getPolyCallTargets(types::TemporaryTypeSet *calleeTypes, bool constr
                 return true;
             }
 
-            fun = typeObj->interpretedFunction;
+            obj = typeObj->interpretedFunction;
             *gotLambda = true;
         }
 
-        // Don't optimize if we're constructing and the callee is not a
-        // constructor, so that CallKnown does not have to handle this case
-        // (it should always throw).
-        if (constructing && !fun->isInterpretedConstructor() && !fun->isNativeConstructor()) {
+        // Don't optimize if the callee is not callable or constructable per
+        // the manner it is being invoked, so that CallKnown does not have to
+        // handle these cases (they will always throw).
+        if (constructing ? !obj->isConstructor() : !obj->isCallable()) {
             targets.clear();
             return true;
         }
 
-        DebugOnly<bool> appendOk = targets.append(fun);
+        DebugOnly<bool> appendOk = targets.append(obj);
         MOZ_ASSERT(appendOk);
     }
 
@@ -4417,11 +4410,17 @@ IonBuilder::patchInlinedReturns(CallInfo &callInfo, MIRGraphReturns &returns, MB
 }
 
 IonBuilder::InliningDecision
-IonBuilder::makeInliningDecision(JSFunction *target, CallInfo &callInfo)
+IonBuilder::makeInliningDecision(JSObject *targetArg, CallInfo &callInfo)
 {
     // When there is no target, inlining is impossible.
-    if (target == nullptr)
+    if (targetArg == nullptr)
         return InliningDecision_DontInline;
+
+    // Inlining non-function targets is handled by inlineNonFunctionCall().
+    if (!targetArg->is<JSFunction>())
+        return InliningDecision_Inline;
+
+    JSFunction *target = &targetArg->as<JSFunction>();
 
     // Never inline during the arguments usage analysis.
     if (info().executionMode() == ArgumentsUsageAnalysis)
@@ -4449,8 +4448,34 @@ IonBuilder::makeInliningDecision(JSFunction *target, CallInfo &callInfo)
             if (inliningDepth_ >= optimizationInfo().maxInlineDepth())
                 return DontInline(targetScript, "Vetoed: exceeding allowed inline depth");
 
-            if (targetScript->hasLoops())
-                return DontInline(targetScript, "Vetoed: big function that contains a loop");
+            if (targetScript->hasLoops()) {
+                // Currently, we are not inlining function which have loops because
+                // the cost inherent to inlining the function overcome the cost
+                // calling it. The reason is not yet clear to everybody, and we
+                // hope that we might be able to remove this restriction in the
+                // future.
+                //
+                // In the mean time, if we have opportunities to optimize the
+                // loop better, then we should try it. Such opportunity might be
+                // suggested by:
+                //
+                //  - Constant as argument. Inlining a function called with a
+                //    constant, might help GVN, as well as UCE, and potentially
+                //    improve bound check removal.
+                //
+                //  - Inner function as argument. Inlining a function called
+                //    with an inner function might help scalar replacement at
+                //    removing the scope chain, and thus using registers within
+                //    the loop instead of writting everything back to memory.
+                bool hasOpportunities = false;
+                for (size_t i = 0, e = callInfo.argv().length(); !hasOpportunities && i < e; i++) {
+                    MDefinition *arg = callInfo.argv()[i];
+                    hasOpportunities = arg->isLambda() || arg->isConstant();
+                }
+
+                if (!hasOpportunities)
+                    return DontInline(targetScript, "Vetoed: big function that contains a loop");
+            }
 
             // Caller must not be excessively large.
             if (script()->length() >= optimizationInfo().inliningMaxCallerBytecodeLength())
@@ -4499,7 +4524,7 @@ IonBuilder::selectInliningTargets(ObjectVector &targets, CallInfo &callInfo, Boo
         return true;
 
     for (size_t i = 0; i < targets.length(); i++) {
-        JSFunction *target = &targets[i]->as<JSFunction>();
+        JSObject *target = targets[i];
         bool inlineable;
         InliningDecision decision = makeInliningDecision(target, callInfo);
         switch (decision) {
@@ -4516,11 +4541,16 @@ IonBuilder::selectInliningTargets(ObjectVector &targets, CallInfo &callInfo, Boo
             MOZ_CRASH("Unhandled InliningDecision value!");
         }
 
-        // Enforce a maximum inlined bytecode limit at the callsite.
-        if (inlineable && target->isInterpreted()) {
-            totalSize += target->nonLazyScript()->length();
-            if (totalSize > optimizationInfo().inlineMaxTotalBytecodeLength())
-                inlineable = false;
+        if (target->is<JSFunction>()) {
+            // Enforce a maximum inlined bytecode limit at the callsite.
+            if (inlineable && target->as<JSFunction>().isInterpreted()) {
+                totalSize += target->as<JSFunction>().nonLazyScript()->length();
+                if (totalSize > optimizationInfo().inlineMaxTotalBytecodeLength())
+                    inlineable = false;
+            }
+        } else {
+            // Non-function targets are not supported by polymorphic inlining.
+            inlineable = false;
         }
 
         choiceSet.append(inlineable);
@@ -4648,9 +4678,12 @@ IonBuilder::getInlineableGetPropertyCache(CallInfo &callInfo)
 }
 
 IonBuilder::InliningStatus
-IonBuilder::inlineSingleCall(CallInfo &callInfo, JSFunction *target)
+IonBuilder::inlineSingleCall(CallInfo &callInfo, JSObject *targetArg)
 {
-    // Expects formals to be popped and wrapped.
+    if (!targetArg->is<JSFunction>())
+        return inlineNonFunctionCall(callInfo, targetArg);
+
+    JSFunction *target = &targetArg->as<JSFunction>();
     if (target->isNative())
         return inlineNativeCall(callInfo, target);
 
@@ -4675,7 +4708,7 @@ IonBuilder::inlineCallsite(ObjectVector &targets, ObjectVector &originals,
     // Inline single targets -- unless they derive from a cache, in which case
     // avoiding the cache and guarding is still faster.
     if (!propCache.get() && targets.length() == 1) {
-        JSFunction *target = &targets[0]->as<JSFunction>();
+        JSObject *target = targets[0];
         InliningDecision decision = makeInliningDecision(target, callInfo);
         switch (decision) {
           case InliningDecision_Error:
@@ -5480,14 +5513,19 @@ IonBuilder::jsop_call(uint32_t argc, bool constructing)
     bool hasClones = false;
     ObjectVector targets(alloc());
     for (uint32_t i = 0; i < originals.length(); i++) {
-        JSFunction *fun = &originals[i]->as<JSFunction>();
-        if (fun->hasScript() && fun->nonLazyScript()->shouldCloneAtCallsite()) {
-            if (JSFunction *clone = ExistingCloneFunctionAtCallsite(compartment->callsiteClones(), fun, script(), pc)) {
-                fun = clone;
-                hasClones = true;
+        JSObject *obj = originals[i];
+        if (obj->is<JSFunction>()) {
+            JSFunction *fun = &obj->as<JSFunction>();
+            if (fun->hasScript() && fun->nonLazyScript()->shouldCloneAtCallsite()) {
+                if (JSFunction *clone = ExistingCloneFunctionAtCallsite(compartment->callsiteClones(),
+                                                                        fun, script(), pc))
+                {
+                    obj = clone;
+                    hasClones = true;
+                }
             }
         }
-        if (!targets.append(fun))
+        if (!targets.append(obj))
             return false;
     }
 
@@ -5504,7 +5542,7 @@ IonBuilder::jsop_call(uint32_t argc, bool constructing)
 
     // No inline, just make the call.
     JSFunction *target = nullptr;
-    if (targets.length() == 1)
+    if (targets.length() == 1 && targets[0]->is<JSFunction>())
         target = &targets[0]->as<JSFunction>();
 
     if (target && status == InliningStatus_WarmUpCountTooLow) {
@@ -8114,11 +8152,8 @@ IonBuilder::setElemTryTypedObject(bool *emitted, MDefinition *obj,
         return true;
 
       case type::Reference:
-      case type::Struct:
-      case type::SizedArray:
-      case type::UnsizedArray:
-        // For now, only optimize storing scalars.
-        return true;
+        return setElemTryReferenceElemOfTypedObject(emitted, obj, index,
+                                                    objPrediction, value, elemPrediction);
 
       case type::Scalar:
         return setElemTryScalarElemOfTypedObject(emitted,
@@ -8128,9 +8163,39 @@ IonBuilder::setElemTryTypedObject(bool *emitted, MDefinition *obj,
                                                  value,
                                                  elemPrediction,
                                                  elemSize);
+
+      case type::Struct:
+      case type::SizedArray:
+      case type::UnsizedArray:
+        // Not yet optimized.
+        return true;
     }
 
     MOZ_CRASH("Bad kind");
+}
+
+bool
+IonBuilder::setElemTryReferenceElemOfTypedObject(bool *emitted,
+                                                 MDefinition *obj,
+                                                 MDefinition *index,
+                                                 TypedObjectPrediction objPrediction,
+                                                 MDefinition *value,
+                                                 TypedObjectPrediction elemPrediction)
+{
+    ReferenceTypeDescr::Type elemType = elemPrediction.referenceType();
+    size_t elemSize = ReferenceTypeDescr::size(elemType);
+
+    MDefinition *indexAsByteOffset;
+    if (!checkTypedObjectIndexInBounds(elemSize, obj, index, objPrediction, &indexAsByteOffset))
+        return true;
+
+    if (!storeReferenceTypedObjectValue(obj, indexAsByteOffset, elemType, value))
+        return false;
+
+    current->push(value);
+
+    *emitted = true;
+    return true;
 }
 
 bool
@@ -10009,18 +10074,42 @@ IonBuilder::setPropTryTypedObject(bool *emitted, MDefinition *obj,
         return true;
 
       case type::Reference:
-      case type::Struct:
-      case type::SizedArray:
-      case type::UnsizedArray:
-        // For now, only optimize storing scalars.
-        return true;
+        return setPropTryReferencePropOfTypedObject(emitted, obj, fieldOffset,
+                                                    value, fieldPrediction);
 
       case type::Scalar:
         return setPropTryScalarPropOfTypedObject(emitted, obj, fieldOffset,
                                                  value, fieldPrediction);
+
+      case type::Struct:
+      case type::SizedArray:
+      case type::UnsizedArray:
+        return true;
     }
 
     MOZ_CRASH("Unknown kind");
+}
+
+bool
+IonBuilder::setPropTryReferencePropOfTypedObject(bool *emitted,
+                                                 MDefinition *obj,
+                                                 int32_t fieldOffset,
+                                                 MDefinition *value,
+                                                 TypedObjectPrediction fieldPrediction)
+{
+    ReferenceTypeDescr::Type fieldType = fieldPrediction.referenceType();
+
+    types::TypeObjectKey *globalType = types::TypeObjectKey::get(&script()->global());
+    if (globalType->hasFlags(constraints(), types::OBJECT_FLAG_TYPED_OBJECT_NEUTERED))
+        return true;
+
+    if (!storeReferenceTypedObjectValue(obj, constantInt(fieldOffset), fieldType, value))
+        return false;
+
+    current->push(value);
+
+    *emitted = true;
+    return true;
 }
 
 bool
@@ -11156,6 +11245,37 @@ IonBuilder::storeScalarTypedObjectValue(MDefinition *typedObj,
         store->setRacy();
     current->add(store);
 
+    return true;
+}
+
+bool
+IonBuilder::storeReferenceTypedObjectValue(MDefinition *typedObj,
+                                           MDefinition *byteOffset,
+                                           ReferenceTypeDescr::Type type,
+                                           MDefinition *value)
+{
+    if (NeedsPostBarrier(info(), value))
+        current->add(MPostWriteBarrier::New(alloc(), typedObj, value));
+
+    // Find location within the owner object.
+    MDefinition *elements, *scaledOffset;
+    size_t alignment = ReferenceTypeDescr::alignment(type);
+    loadTypedObjectElements(typedObj, byteOffset, alignment, &elements, &scaledOffset);
+
+    MInstruction *store;
+    switch (type) {
+      case ReferenceTypeDescr::TYPE_ANY:
+        store = MStoreElement::New(alloc(), elements, scaledOffset, value, false);
+        break;
+      case ReferenceTypeDescr::TYPE_OBJECT:
+        store = MStoreUnboxedObjectOrNull::New(alloc(), elements, scaledOffset, value);
+        break;
+      case ReferenceTypeDescr::TYPE_STRING:
+        store = MStoreUnboxedString::New(alloc(), elements, scaledOffset, value);
+        break;
+    }
+
+    current->add(store);
     return true;
 }
 
