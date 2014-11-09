@@ -29,6 +29,7 @@ else ifneq (,$(filter nightly aurora nightly-elm nightly-profiling nightly-oak n
 	PRIMARY_CERT = nightly_aurora_level3_primary.der
 	SECONDARY_CERT = nightly_aurora_level3_secondary.der
 else
+	# Corresponds to ./certutil certutil -L -d modules/libmar/tests/unit/data -n mycert -r > xpcshellCertificate.der
 	PRIMARY_CERT = xpcshellCertificate.der
 	SECONDARY_CERT = xpcshellCertificate.der
 endif

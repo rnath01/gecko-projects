@@ -47,7 +47,7 @@ if CONFIG['OS_ARCH'] == 'WINNT':
         'crypt32',
         'advapi32',
     ]
-elif CONFIG['OS_ARCH'] == 'Linux':
+elif CONFIG['OS_ARCH'] == 'Linux' and CONFIG['MOZ_VERIFY_MAR_SIGNATURE']:
     USE_LIBS += [
         '/modules/libmar/sign/signmar',
         '/security/nss/lib/nss/nss3',
