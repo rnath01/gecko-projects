@@ -50,10 +50,10 @@ if CONFIG['OS_ARCH'] == 'WINNT':
 elif CONFIG['OS_ARCH'] == 'Linux' and CONFIG['MOZ_VERIFY_MAR_SIGNATURE']:
     USE_LIBS += [
         '/modules/libmar/sign/signmar',
+        'nss',
         'updatecommon',
     ]
     OS_LIBS += CONFIG['NSPR_LIBS']
-    OS_LIBS += CONFIG['NSS_LIBS']
 else:
     USE_LIBS += [
         'updatecommon',
