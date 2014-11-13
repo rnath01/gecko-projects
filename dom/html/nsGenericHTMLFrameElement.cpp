@@ -7,6 +7,7 @@
 
 #include "nsGenericHTMLFrameElement.h"
 
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/ErrorResult.h"
 #include "GeckoProfiler.h"
@@ -33,6 +34,7 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(nsGenericHTMLFrameElement)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(nsGenericHTMLFrameElement,
                                                   nsGenericHTMLElement)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mFrameLoader)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBrowserElementAPI)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_ADDREF_INHERITED(nsGenericHTMLFrameElement, nsGenericHTMLElement)
@@ -305,6 +307,10 @@ nsGenericHTMLFrameElement::GetReallyIsBrowserOrApp(bool *aOut)
   uint32_t permission = nsIPermissionManager::DENY_ACTION;
   nsresult rv = permMgr->TestPermissionFromPrincipal(principal, "browser", &permission);
   NS_ENSURE_SUCCESS(rv, NS_OK);
+  if (permission != nsIPermissionManager::ALLOW_ACTION) {
+    rv = permMgr->TestPermissionFromPrincipal(principal, "embed-widgets", &permission);
+    NS_ENSURE_SUCCESS(rv, NS_OK);
+  }
   *aOut = permission == nsIPermissionManager::ALLOW_ACTION;
   return NS_OK;
 }
@@ -434,6 +440,11 @@ nsGenericHTMLFrameElement::GetAppManifestURL(nsAString& aOut)
 
   // At the moment, you can't be an app without being a browser.
   if (!nsIMozBrowserFrame::GetReallyIsBrowserOrApp()) {
+    return NS_OK;
+  }
+
+  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+    NS_WARNING("Can't embed-apps. Embed-apps is restricted to in-proc apps, see bug 1059662");
     return NS_OK;
   }
 

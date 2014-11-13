@@ -60,19 +60,24 @@ GeneratorObject::create(JSContext *cx, AbstractFramePtr frame)
 
 bool
 GeneratorObject::suspend(JSContext *cx, HandleObject obj, AbstractFramePtr frame, jsbytecode *pc,
-                         Value *vp, unsigned nvalues, GeneratorObject::SuspendKind suspendKind)
+                         Value *vp, unsigned nvalues)
 {
+    MOZ_ASSERT(*pc == JSOP_INITIALYIELD || *pc == JSOP_YIELD);
+
     Rooted<GeneratorObject*> genObj(cx, &obj->as<GeneratorObject>());
     MOZ_ASSERT(!genObj->hasExpressionStack());
 
-    if (suspendKind == NORMAL && genObj->isClosing()) {
+    if (*pc == JSOP_YIELD && genObj->isClosing()) {
         MOZ_ASSERT(genObj->is<LegacyGeneratorObject>());
         RootedValue val(cx, ObjectValue(*frame.callee()));
         js_ReportValueError(cx, JSMSG_BAD_GENERATOR_YIELD, JSDVG_SEARCH_STACK, val, NullPtr());
         return false;
     }
 
-    genObj->setSuspendedBytecodeOffset(pc - frame.script()->code(), suspendKind == INITIAL);
+    uint32_t yieldIndex = GET_UINT24(pc);
+    MOZ_ASSERT((*pc == JSOP_INITIALYIELD) == (yieldIndex == 0)); // isNewborn() relies on this.
+
+    genObj->setYieldIndex(yieldIndex);
     genObj->setScopeChain(*frame.scopeChain());
 
     if (nvalues) {
@@ -102,6 +107,18 @@ GeneratorObject::finalSuspend(JSContext *cx, HandleObject obj)
 }
 
 bool
+js::GeneratorThrow(JSContext *cx, HandleObject obj, HandleValue arg)
+{
+    GeneratorObject *genObj = &obj->as<GeneratorObject>();
+    cx->setPendingException(arg);
+    if (genObj->isNewborn())
+        genObj->setClosed();
+    else
+        genObj->setRunning();
+    return false;
+}
+
+bool
 GeneratorObject::resume(JSContext *cx, InterpreterActivation &activation,
                         HandleObject obj, HandleValue arg, GeneratorObject::ResumeKind resumeKind)
 {
@@ -126,7 +143,9 @@ GeneratorObject::resume(JSContext *cx, InterpreterActivation &activation,
         genObj->clearExpressionStack();
     }
 
-    activation.regs().pc = callee->nonLazyScript()->code() + genObj->suspendedBytecodeOffset();
+    JSScript *script = callee->nonLazyScript();
+    uint32_t offset = script->yieldOffsets()[genObj->yieldIndex()];
+    activation.regs().pc = script->offsetToPC(offset);
 
     // Always push on a value, even if we are raising an exception. In the
     // exception case, the stack needs to have something on it so that exception
@@ -141,12 +160,7 @@ GeneratorObject::resume(JSContext *cx, InterpreterActivation &activation,
         return true;
 
       case THROW:
-        cx->setPendingException(arg);
-        if (genObj->isNewborn())
-            genObj->setClosed();
-        else
-            genObj->setRunning();
-        return false;
+        return GeneratorThrow(cx, genObj, arg);
 
       case CLOSE:
         MOZ_ASSERT(genObj->is<LegacyGeneratorObject>());
@@ -194,12 +208,6 @@ LegacyGeneratorObject::close(JSContext *cx, HandleObject obj)
     return Invoke(cx, args);
 }
 
-static JSObject *
-iterator_iteratorObject(JSContext *cx, HandleObject obj, bool keysonly)
-{
-    return obj;
-}
-
 const Class LegacyGeneratorObject::class_ = {
     "Generator",
     JSCLASS_HAS_RESERVED_SLOTS(GeneratorObject::RESERVED_SLOTS),
@@ -215,12 +223,6 @@ const Class LegacyGeneratorObject::class_ = {
     nullptr,                 /* hasInstance */
     nullptr,                 /* construct   */
     nullptr,                 /* trace       */
-    JS_NULL_CLASS_SPEC,
-    {
-        nullptr,             /* outerObject    */
-        nullptr,             /* innerObject    */
-        iterator_iteratorObject,
-    }
 };
 
 const Class StarGeneratorObject::class_ = {

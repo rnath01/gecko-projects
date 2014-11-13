@@ -18,22 +18,29 @@ namespace js {
 
 class GeneratorObject : public NativeObject
 {
-    static const int32_t MAX_BYTECODE_OFFSET = INT32_MAX >> 1;
-
   public:
+    // Magic values stored in the yield index slot when the generator is
+    // running or closing. See the yield index comment below.
+    static const int32_t YIELD_INDEX_RUNNING = INT32_MAX;
+    static const int32_t YIELD_INDEX_CLOSING = INT32_MAX - 1;
+
     enum {
         CALLEE_SLOT = 0,
         THIS_SLOT,
         SCOPE_CHAIN_SLOT,
         ARGS_OBJ_SLOT,
         EXPRESSION_STACK_SLOT,
-        BYTECODE_OFFSET_SLOT,
+        YIELD_INDEX_SLOT,
         RESERVED_SLOTS
     };
 
-    enum SuspendKind { INITIAL, NORMAL, FINAL };
     enum ResumeKind { NEXT, THROW, CLOSE };
 
+  private:
+    static bool suspend(JSContext *cx, HandleObject obj, AbstractFramePtr frame, jsbytecode *pc,
+                        Value *vp, unsigned nvalues);
+
+  public:
     static inline ResumeKind getResumeKind(jsbytecode *pc) {
         MOZ_ASSERT(*pc == JSOP_RESUME);
         unsigned arg = GET_UINT16(pc);
@@ -52,19 +59,16 @@ class GeneratorObject : public NativeObject
 
     static JSObject *create(JSContext *cx, AbstractFramePtr frame);
 
-    static bool suspend(JSContext *cx, HandleObject obj, AbstractFramePtr frame, jsbytecode *pc,
-                        Value *vp, unsigned nvalues, SuspendKind kind);
-
     static bool resume(JSContext *cx, InterpreterActivation &activation,
                        HandleObject obj, HandleValue arg, ResumeKind resumeKind);
 
     static bool initialSuspend(JSContext *cx, HandleObject obj, AbstractFramePtr frame, jsbytecode *pc) {
-        return suspend(cx, obj, frame, pc, nullptr, 0, INITIAL);
+        return suspend(cx, obj, frame, pc, nullptr, 0);
     }
 
     static bool normalSuspend(JSContext *cx, HandleObject obj, AbstractFramePtr frame, jsbytecode *pc,
                               Value *vp, unsigned nvalues) {
-        return suspend(cx, obj, frame, pc, vp, nvalues, NORMAL);
+        return suspend(cx, obj, frame, pc, vp, nvalues);
     }
 
     static bool finalSuspend(JSContext *cx, HandleObject obj);
@@ -113,20 +117,23 @@ class GeneratorObject : public NativeObject
         setFixedSlot(EXPRESSION_STACK_SLOT, NullValue());
     }
 
-    // The bytecode offset slot is abused for a few purposes.  It's undefined if
+    // The yield index slot is abused for a few purposes.  It's undefined if
     // it hasn't been set yet (before the initial yield), and null if the
-    // generator is closed.  Otherwise, the lower bit is set if the generator
-    // is in the "suspendedStart" set, and cleared otherwise.  The upper bits
-    // are used for the PC offset of the suspended continuation, and are zero if
-    // the generator is running.  If the generator is in that bizarre "closing"
-    // state, all upper bits are set.
+    // generator is closed. If the generator is running, the yield index is
+    // YIELD_INDEX_RUNNING. If the generator is in that bizarre "closing"
+    // state, the yield index is YIELD_INDEX_CLOSING.
+    //
+    // If the generator is suspended, it's the yield index (stored as
+    // JSOP_INITIALYIELD/JSOP_YIELD operand) of the yield instruction that
+    // suspended the generator. The yield index can be mapped to the bytecode
+    // offset (interpreter) or to the native code offset (JIT).
 
     bool isRunning() const {
         MOZ_ASSERT(!isClosed());
-        return getFixedSlot(BYTECODE_OFFSET_SLOT).toInt32() == 0;
+        return getFixedSlot(YIELD_INDEX_SLOT).toInt32() == YIELD_INDEX_RUNNING;
     }
     bool isClosing() const {
-        return getFixedSlot(BYTECODE_OFFSET_SLOT).toInt32() == MAX_BYTECODE_OFFSET << 1;
+        return getFixedSlot(YIELD_INDEX_SLOT).toInt32() == YIELD_INDEX_CLOSING;
     }
     bool isSuspended() const {
         MOZ_ASSERT(!isClosed());
@@ -135,25 +142,26 @@ class GeneratorObject : public NativeObject
     }
     bool isNewborn() const {
         MOZ_ASSERT(!isClosed());
-        return getFixedSlot(BYTECODE_OFFSET_SLOT).toInt32() & 0x1;
+        return getFixedSlot(YIELD_INDEX_SLOT).toInt32() == 0;
     }
     void setRunning() {
         MOZ_ASSERT(isSuspended());
-        setFixedSlot(BYTECODE_OFFSET_SLOT, Int32Value(0));
+        setFixedSlot(YIELD_INDEX_SLOT, Int32Value(YIELD_INDEX_RUNNING));
     }
     void setClosing() {
         MOZ_ASSERT(isSuspended());
-        setFixedSlot(BYTECODE_OFFSET_SLOT, Int32Value(MAX_BYTECODE_OFFSET << 1));
+        setFixedSlot(YIELD_INDEX_SLOT, Int32Value(YIELD_INDEX_CLOSING));
     }
-    ptrdiff_t suspendedBytecodeOffset() const {
+    void setYieldIndex(uint32_t yieldIndex) {
+        MOZ_ASSERT_IF(yieldIndex == 0, getFixedSlot(YIELD_INDEX_SLOT).isUndefined());
+        MOZ_ASSERT_IF(yieldIndex != 0, isRunning());
+        MOZ_ASSERT(yieldIndex < uint32_t(YIELD_INDEX_CLOSING));
+        setFixedSlot(YIELD_INDEX_SLOT, Int32Value(yieldIndex));
         MOZ_ASSERT(isSuspended());
-        return getFixedSlot(BYTECODE_OFFSET_SLOT).toInt32() >> 1;
     }
-    void setSuspendedBytecodeOffset(ptrdiff_t offset, bool newborn) {
-        MOZ_ASSERT(newborn ? getFixedSlot(BYTECODE_OFFSET_SLOT).isUndefined() : isRunning());
-        MOZ_ASSERT(offset > 0 && offset < MAX_BYTECODE_OFFSET);
-        setFixedSlot(BYTECODE_OFFSET_SLOT, Int32Value((offset << 1) | (newborn ? 0x1 : 0)));
+    uint32_t yieldIndex() const {
         MOZ_ASSERT(isSuspended());
+        return getFixedSlot(YIELD_INDEX_SLOT).toInt32();
     }
     bool isClosed() const {
         return getFixedSlot(CALLEE_SLOT).isNull();
@@ -164,7 +172,7 @@ class GeneratorObject : public NativeObject
         setFixedSlot(SCOPE_CHAIN_SLOT, NullValue());
         setFixedSlot(ARGS_OBJ_SLOT, NullValue());
         setFixedSlot(EXPRESSION_STACK_SLOT, NullValue());
-        setFixedSlot(BYTECODE_OFFSET_SLOT, NullValue());
+        setFixedSlot(YIELD_INDEX_SLOT, NullValue());
     }
 
     static size_t offsetOfCalleeSlot() {
@@ -179,8 +187,8 @@ class GeneratorObject : public NativeObject
     static size_t offsetOfArgsObjSlot() {
         return getFixedSlotOffset(ARGS_OBJ_SLOT);
     }
-    static size_t offsetOfBytecodeOffsetSlot() {
-        return getFixedSlotOffset(BYTECODE_OFFSET_SLOT);
+    static size_t offsetOfYieldIndexSlot() {
+        return getFixedSlotOffset(YIELD_INDEX_SLOT);
     }
     static size_t offsetOfExpressionStackSlot() {
         return getFixedSlotOffset(EXPRESSION_STACK_SLOT);
@@ -211,6 +219,8 @@ class StarGeneratorObject : public GeneratorObject
   public:
     static const Class class_;
 };
+
+bool GeneratorThrow(JSContext *cx, HandleObject obj, HandleValue val);
 
 } // namespace js
 

@@ -3361,6 +3361,10 @@ CheckHasNoSuchProperty(JSContext *cx, HandleObject obj, HandlePropertyName name,
         if (!curObj->isNative())
             return false;
 
+        // Don't handle proto chains with resolve hooks.
+        if (curObj->getClass()->resolve != JS_ResolveStub)
+            return false;
+
         Shape *shape = curObj->as<NativeObject>().lookup(cx, NameToId(name));
         if (shape)
             return false;
@@ -7921,6 +7925,7 @@ DoSetPropFallback(JSContext *cx, BaselineFrame *frame, ICSetProp_Fallback *stub_
     // end up attaching a stub for the exact same access later.
     bool isTemporarilyUnoptimizable = false;
     if (stub->numOptimizedStubs() < ICSetProp_Fallback::MAX_OPTIMIZED_STUBS &&
+        lhs.isObject() &&
         !TryAttachSetAccessorPropStub(cx, script, pc, stub, obj, oldShape, name, id,
                                       rhs, &attached, &isTemporarilyUnoptimizable))
     {
@@ -7963,6 +7968,7 @@ DoSetPropFallback(JSContext *cx, BaselineFrame *frame, ICSetProp_Fallback *stub_
     }
 
     if (!attached &&
+        lhs.isObject() &&
         !TryAttachSetValuePropStub(cx, script, pc, stub, obj, oldShape,
                                    oldType, oldSlots, name, id, rhs, &attached))
     {

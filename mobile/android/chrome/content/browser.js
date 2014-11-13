@@ -276,16 +276,19 @@ function resolveGeckoURI(aURI) {
 /**
  * Cache of commonly used string bundles.
  */
-var Strings = {};
-[
-  ["brand",      "chrome://branding/locale/brand.properties"],
-  ["browser",    "chrome://browser/locale/browser.properties"]
-].forEach(function (aStringBundle) {
-  let [name, bundle] = aStringBundle;
-  XPCOMUtils.defineLazyGetter(Strings, name, function() {
-    return Services.strings.createBundle(bundle);
-  });
-});
+let Strings = {
+  init: function () {
+    XPCOMUtils.defineLazyGetter(Strings, "brand", () => Services.strings.createBundle("chrome://branding/locale/brand.properties"));
+    XPCOMUtils.defineLazyGetter(Strings, "browser", () => Services.strings.createBundle("chrome://browser/locale/browser.properties"));
+  },
+
+  flush: function () {
+    Services.strings.flushBundles();
+    this.init();
+  },
+};
+
+Strings.init();
 
 const kFormHelperModeDisabled = 0;
 const kFormHelperModeEnabled = 1;
@@ -551,9 +554,14 @@ var BrowserApp = {
     WebappRT.init(status, url, callback);
   },
 
-  initContextMenu: function ba_initContextMenu() {
+  initContextMenu: function () {
+    // We pass a thunk in place of a raw label string. This allows the
+    // context menu to automatically accommodate locale changes without
+    // having to be rebuilt.
+    let stringGetter = name => () => Strings.browser.GetStringFromName(name);
+
     // TODO: These should eventually move into more appropriate classes
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.openInNewTab"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.openInNewTab"),
       NativeWindow.contextmenus.linkOpenableNonPrivateContext,
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_open_new_tab");
@@ -575,7 +583,7 @@ var BrowserApp = {
         });
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.openInPrivateTab"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.openInPrivateTab"),
       NativeWindow.contextmenus.linkOpenableContext,
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_open_private_tab");
@@ -597,7 +605,7 @@ var BrowserApp = {
         });
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.copyLink"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.copyLink"),
       NativeWindow.contextmenus.linkCopyableContext,
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_copy_link");
@@ -606,7 +614,7 @@ var BrowserApp = {
         NativeWindow.contextmenus._copyStringToDefaultClipboard(url);
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.copyEmailAddress"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.copyEmailAddress"),
       NativeWindow.contextmenus.emailLinkContext,
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_copy_email");
@@ -616,7 +624,7 @@ var BrowserApp = {
         NativeWindow.contextmenus._copyStringToDefaultClipboard(emailAddr);
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.copyPhoneNumber"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.copyPhoneNumber"),
       NativeWindow.contextmenus.phoneNumberLinkContext,
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_copy_phone");
@@ -627,7 +635,7 @@ var BrowserApp = {
       });
 
     NativeWindow.contextmenus.add({
-      label: Strings.browser.GetStringFromName("contextmenu.shareLink"),
+      label: stringGetter("contextmenu.shareLink"),
       order: NativeWindow.contextmenus.DEFAULT_HTML5_ORDER - 1, // Show above HTML5 menu items
       selector: NativeWindow.contextmenus._disableRestricted("SHARE", NativeWindow.contextmenus.linkShareableContext),
       showAsActions: function(aElement) {
@@ -643,7 +651,7 @@ var BrowserApp = {
     });
 
     NativeWindow.contextmenus.add({
-      label: Strings.browser.GetStringFromName("contextmenu.shareEmailAddress"),
+      label: stringGetter("contextmenu.shareEmailAddress"),
       order: NativeWindow.contextmenus.DEFAULT_HTML5_ORDER - 1,
       selector: NativeWindow.contextmenus._disableRestricted("SHARE", NativeWindow.contextmenus.emailLinkContext),
       showAsActions: function(aElement) {
@@ -662,7 +670,7 @@ var BrowserApp = {
     });
 
     NativeWindow.contextmenus.add({
-      label: Strings.browser.GetStringFromName("contextmenu.sharePhoneNumber"),
+      label: stringGetter("contextmenu.sharePhoneNumber"),
       order: NativeWindow.contextmenus.DEFAULT_HTML5_ORDER - 1,
       selector: NativeWindow.contextmenus._disableRestricted("SHARE", NativeWindow.contextmenus.phoneNumberLinkContext),
       showAsActions: function(aElement) {
@@ -680,7 +688,7 @@ var BrowserApp = {
       }
     });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.addToContacts"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.addToContacts"),
       NativeWindow.contextmenus._disableRestricted("ADD_CONTACT", NativeWindow.contextmenus.emailLinkContext),
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_contact_email");
@@ -692,7 +700,7 @@ var BrowserApp = {
         });
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.addToContacts"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.addToContacts"),
       NativeWindow.contextmenus._disableRestricted("ADD_CONTACT", NativeWindow.contextmenus.phoneNumberLinkContext),
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_contact_phone");
@@ -704,7 +712,7 @@ var BrowserApp = {
         });
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.bookmarkLink"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.bookmarkLink"),
       NativeWindow.contextmenus._disableRestricted("BOOKMARK", NativeWindow.contextmenus.linkBookmarkableContext),
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_bookmark");
@@ -718,21 +726,21 @@ var BrowserApp = {
         });
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.playMedia"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.playMedia"),
       NativeWindow.contextmenus.mediaContext("media-paused"),
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_play");
         aTarget.play();
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.pauseMedia"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.pauseMedia"),
       NativeWindow.contextmenus.mediaContext("media-playing"),
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_pause");
         aTarget.pause();
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.showControls2"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.showControls2"),
       NativeWindow.contextmenus.mediaContext("media-hidingcontrols"),
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_controls_media");
@@ -740,7 +748,7 @@ var BrowserApp = {
       });
 
     NativeWindow.contextmenus.add({
-      label: Strings.browser.GetStringFromName("contextmenu.shareMedia"),
+      label: stringGetter("contextmenu.shareMedia"),
       order: NativeWindow.contextmenus.DEFAULT_HTML5_ORDER - 1,
       selector: NativeWindow.contextmenus._disableRestricted("SHARE", NativeWindow.contextmenus.SelectorContext("video")),
       showAsActions: function(aElement) {
@@ -758,28 +766,28 @@ var BrowserApp = {
       }
     });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.fullScreen"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.fullScreen"),
       NativeWindow.contextmenus.SelectorContext("video:not(:-moz-full-screen)"),
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_fullscreen");
         aTarget.mozRequestFullScreen();
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.mute"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.mute"),
       NativeWindow.contextmenus.mediaContext("media-unmuted"),
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_mute");
         aTarget.muted = true;
       });
   
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.unmute"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.unmute"),
       NativeWindow.contextmenus.mediaContext("media-muted"),
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_unmute");
         aTarget.muted = false;
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.copyImageLocation"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.copyImageLocation"),
       NativeWindow.contextmenus.imageLocationCopyableContext,
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_copy_image");
@@ -789,7 +797,7 @@ var BrowserApp = {
       });
 
     NativeWindow.contextmenus.add({
-      label: Strings.browser.GetStringFromName("contextmenu.shareImage"),
+      label: stringGetter("contextmenu.shareImage"),
       selector: NativeWindow.contextmenus._disableRestricted("SHARE", NativeWindow.contextmenus.imageSaveableContext),
       order: NativeWindow.contextmenus.DEFAULT_HTML5_ORDER - 1, // Show above HTML5 menu items
       showAsActions: function(aTarget) {
@@ -811,7 +819,7 @@ var BrowserApp = {
       }
     });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.saveImage"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.saveImage"),
       NativeWindow.contextmenus.imageSaveableContext,
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_save_image");
@@ -821,7 +829,7 @@ var BrowserApp = {
                                       aTarget.ownerDocument);
       });
 
-    NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.setImageAs"),
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.setImageAs"),
       NativeWindow.contextmenus._disableRestricted("SET_IMAGE", NativeWindow.contextmenus.imageSaveableContext),
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_background_image");
@@ -1827,7 +1835,7 @@ var BrowserApp = {
 
         // Blow away the string cache so that future lookups get the
         // correct locale.
-        Services.strings.flushBundles();
+        Strings.flush();
 
         // Make sure we use the right Accept-Language header.
         let osLocale;
@@ -2482,8 +2490,9 @@ var NativeWindow = {
         return;
       }
 
-      // Use the highlighted element for the context menu target.
-      this._target = BrowserEventHandler._highlightElement;
+      // Use the highlighted element for the context menu target. When accessibility is
+      // enabled, elements may not be highlighted so use the event target instead.
+      this._target = BrowserEventHandler._highlightElement || event.target;
       if (!this._target) {
         return;
       }
@@ -3534,7 +3543,7 @@ Tab.prototype = {
 
   setDisplayPort: function(aDisplayPort) {
     let zoom = this._zoom;
-    let resolution = aDisplayPort.resolution;
+    let resolution = this.restoredSessionZoom() || aDisplayPort.resolution;
     if (zoom <= 0 || resolution <= 0)
       return;
 
@@ -4214,27 +4223,31 @@ Tab.prototype = {
           this.tilesData = null;
         }
 
-        if (!Reader.isEnabledForParseOnLoad)
+        if (!Reader.isEnabledForParseOnLoad) {
           return;
+        }
+
+        let resetReaderFlags = currentURL => {
+          // Don't clear the article for about:reader pages since we want to
+          // use the article from the previous page.
+          if (!currentURL.startsWith("about:reader")) {
+            this.savedArticle = null;
+            this.readerEnabled = false;
+            this.readerActive = false;
+          } else {
+            this.readerActive = true;
+          }
+        };
 
         // Once document is fully loaded, parse it
         Reader.parseDocumentFromTab(this).then(article => {
           // The loaded page may have changed while we were parsing the document. 
           // Make sure we've got the current one.
-          let uri = this.browser.currentURI;
-          let tabURL = uri.specIgnoringRef;
-          // Do nothing if there's no article or the page in this tab has
-          // changed
-          if (article == null || (article.url != tabURL)) {
-            // Don't clear the article for about:reader pages since we want to
-            // use the article from the previous page
-            if (!tabURL.startsWith("about:reader")) {
-              this.savedArticle = null;
-              this.readerEnabled = false;
-              this.readerActive = false;
-            } else {
-              this.readerActive = true;
-            }
+          let currentURL = this.browser.currentURI.specIgnoringRef;
+
+          // Do nothing if there's no article or the page in this tab has changed.
+          if (article == null || (article.url != currentURL)) {
+            resetReaderFlags(currentURL);
             return;
           }
 
@@ -4245,12 +4258,16 @@ Tab.prototype = {
             tabID: this.id
           });
 
-          if(this.readerActive)
+          if (this.readerActive) {
             this.readerActive = false;
-
-          if(!this.readerEnabled)
+          }
+          if (!this.readerEnabled) {
             this.readerEnabled = true;
-        }, e => Cu.reportError("Error parsing document from tab: " + e));
+          }
+        }).catch(e => {
+          Cu.reportError("Error parsing document from tab: " + e);
+          resetReaderFlags(this.browser.currentURI.specIgnoringRef);
+        });
       }
     }
   },
@@ -4380,6 +4397,10 @@ Tab.prototype = {
       ExternalApps.updatePageActionUri(fixedURI);
     }
 
+    let webNav = BrowserApp.selectedTab.window
+        .QueryInterface(Ci.nsIInterfaceRequestor)
+        .getInterface(Ci.nsIWebNavigation);
+
     let message = {
       type: "Content:LocationChange",
       tabID: this.id,
@@ -4387,7 +4408,12 @@ Tab.prototype = {
       userRequested: this.userRequested || "",
       baseDomain: baseDomain,
       contentType: (contentType ? contentType : ""),
-      sameDocument: sameDocument
+      sameDocument: sameDocument,
+
+      historyIndex: webNav.sessionHistory.index,
+      historySize: webNav.sessionHistory.count,
+      canGoBack: webNav.canGoBack,
+      canGoForward: webNav.canGoForward,
     };
 
     Messaging.sendRequest(message);
@@ -4438,27 +4464,6 @@ Tab.prototype = {
   onStatusChange: function(aBrowser, aWebProgress, aRequest, aStatus, aMessage) {
   },
 
-  _sendHistoryEvent: function(aMessage, aParams) {
-    let message = {
-      type: "SessionHistory:" + aMessage,
-      tabID: this.id,
-    };
-
-    // Restore zoom only when moving in session history, not for new page loads.
-    this._restoreZoom = aMessage != "New";
-
-    if (aParams) {
-      if ("url" in aParams)
-        message.url = aParams.url;
-      if ("index" in aParams)
-        message.index = aParams.index;
-      if ("numEntries" in aParams)
-        message.numEntries = aParams.numEntries;
-    }
-
-    Messaging.sendRequest(message);
-  },
-
   _getGeckoZoom: function() {
     let res = {x: {}, y: {}};
     let cwu = this.browser.contentWindow.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
@@ -4481,17 +4486,22 @@ Tab.prototype = {
     return null;
   },
 
+  _updateZoomFromHistoryEvent: function(aHistoryEventName) {
+    // Restore zoom only when moving in session history, not for new page loads.
+    this._restoreZoom = aHistoryEventName !== "New";
+  },
+
   OnHistoryNewEntry: function(aUri) {
-    this._sendHistoryEvent("New", { url: aUri.spec });
+    this._updateZoomFromHistoryEvent("New");
   },
 
   OnHistoryGoBack: function(aUri) {
-    this._sendHistoryEvent("Back");
+    this._updateZoomFromHistoryEvent("Back");
     return true;
   },
 
   OnHistoryGoForward: function(aUri) {
-    this._sendHistoryEvent("Forward");
+    this._updateZoomFromHistoryEvent("Forward");
     return true;
   },
 
@@ -4502,12 +4512,12 @@ Tab.prototype = {
   },
 
   OnHistoryGotoIndex: function(aIndex, aUri) {
-    this._sendHistoryEvent("Goto", { index: aIndex });
+    this._updateZoomFromHistoryEvent("Goto");
     return true;
   },
 
   OnHistoryPurge: function(aNumEntries) {
-    this._sendHistoryEvent("Purge", { numEntries: aNumEntries });
+    this._updateZoomFromHistoryEvent("Purge");
     return true;
   },
 
@@ -6668,14 +6678,28 @@ var IdentityHandler = {
   IDENTITY_MODE_IDENTIFIED: "identified",
 
   // The following mixed content modes are only used if "security.mixed_content.block_active_content"
-  // is enabled. Even though the mixed content state and identitity state are orthogonal,
-  // our Java frontend coalesces them into one indicator.
+  // is enabled. Our Java frontend coalesces them into one indicator.
+
+  // No mixed content information. No mixed content icon is shown.
+  MIXED_MODE_UNKNOWN: "unknown",
 
   // Blocked active mixed content. Shield icon is shown, with a popup option to load content.
-  IDENTITY_MODE_MIXED_CONTENT_BLOCKED: "mixed_content_blocked",
+  MIXED_MODE_CONTENT_BLOCKED: "mixed_content_blocked",
 
   // Loaded active mixed content. Yellow triangle icon is shown.
-  IDENTITY_MODE_MIXED_CONTENT_LOADED: "mixed_content_loaded",
+  MIXED_MODE_CONTENT_LOADED: "mixed_content_loaded",
+
+  // The following tracking content modes are only used if "privacy.trackingprotection.enabled"
+  // is enabled. Our Java frontend coalesces them into one indicator.
+
+  // No tracking content information. No tracking content icon is shown.
+  TRACKING_MODE_UNKNOWN: "unknown",
+
+  // Blocked active tracking content. Shield icon is shown, with a popup option to load content.
+  TRACKING_MODE_CONTENT_BLOCKED: "tracking_content_blocked",
+
+  // Loaded active tracking content. Yellow triangle icon is shown.
+  TRACKING_MODE_CONTENT_LOADED: "tracking_content_loaded",
 
   // Cache the most recent SSLStatus and Location seen in getIdentityStrings
   _lastStatus : null,
@@ -6718,21 +6742,43 @@ var IdentityHandler = {
    * Determines the identity mode corresponding to the icon we show in the urlbar.
    */
   getIdentityMode: function getIdentityMode(aState) {
-    if (aState & Ci.nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT)
-      return this.IDENTITY_MODE_MIXED_CONTENT_BLOCKED;
+    if (aState & Ci.nsIWebProgressListener.STATE_IDENTITY_EV_TOPLEVEL) {
+      return this.IDENTITY_MODE_IDENTIFIED;
+    }
+
+    if (aState & Ci.nsIWebProgressListener.STATE_IS_SECURE) {
+      return this.IDENTITY_MODE_DOMAIN_VERIFIED;
+    }
+
+    return this.IDENTITY_MODE_UNKNOWN;
+  },
+
+  getMixedMode: function getMixedMode(aState) {
+    if (aState & Ci.nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT) {
+      return this.MIXED_MODE_CONTENT_BLOCKED;
+    }
 
     // Only show an indicator for loaded mixed content if the pref to block it is enabled
     if ((aState & Ci.nsIWebProgressListener.STATE_LOADED_MIXED_ACTIVE_CONTENT) &&
-         Services.prefs.getBoolPref("security.mixed_content.block_active_content"))
-      return this.IDENTITY_MODE_MIXED_CONTENT_LOADED;
+         Services.prefs.getBoolPref("security.mixed_content.block_active_content")) {
+      return this.MIXED_MODE_CONTENT_LOADED;
+    }
 
-    if (aState & Ci.nsIWebProgressListener.STATE_IDENTITY_EV_TOPLEVEL)
-      return this.IDENTITY_MODE_IDENTIFIED;
+    return this.MIXED_MODE_UNKNOWN;
+  },
 
-    if (aState & Ci.nsIWebProgressListener.STATE_IS_SECURE)
-      return this.IDENTITY_MODE_DOMAIN_VERIFIED;
+  getTrackingMode: function getTrackingMode(aState) {
+    if (aState & Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT) {
+      return this.TRACKING_MODE_CONTENT_BLOCKED;
+    }
 
-    return this.IDENTITY_MODE_UNKNOWN;
+    // Only show an indicator for loaded tracking content if the pref to block it is enabled
+    if ((aState & Ci.nsIWebProgressListener.STATE_LOADED_TRACKING_CONTENT) &&
+         Services.prefs.getBoolPref("privacy.trackingprotection.enabled")) {
+      return this.TRACKING_MODE_CONTENT_LOADED;
+    }
+
+    return this.TRACKING_MODE_UNKNOWN;
   },
 
   /**
@@ -6760,14 +6806,22 @@ var IdentityHandler = {
     }
     this._lastLocation = locationObj;
 
-    let mode = this.getIdentityMode(aState);
-    let result = { mode: mode };
+    let identityMode = this.getIdentityMode(aState);
+    let mixedMode = this.getMixedMode(aState);
+    let trackingMode = this.getTrackingMode(aState);
+    let result = {
+      mode: {
+        identity: identityMode,
+        mixed: mixedMode,
+        tracking: trackingMode
+      }
+    };
 
     // Don't show identity data for pages with an unknown identity or if any
     // mixed content is loaded (mixed display content is loaded by default).
-    if (mode == this.IDENTITY_MODE_UNKNOWN ||
-        aState & Ci.nsIWebProgressListener.STATE_IS_BROKEN)
+    if (identityMode == this.IDENTITY_MODE_UNKNOWN || aState & Ci.nsIWebProgressListener.STATE_IS_BROKEN) {
       return result;
+    }
 
     // Ideally we'd just make this a Java string
     result.encrypted = Strings.browser.GetStringFromName("identity.encrypted2");

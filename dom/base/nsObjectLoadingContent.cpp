@@ -1033,17 +1033,6 @@ nsObjectLoadingContent::BuildParametersArray()
   }
 
   nsAdoptingCString wmodeOverride = Preferences::GetCString("plugins.force.wmode");
-#if defined(XP_WIN) || defined(XP_LINUX)
-  // Bug 923745 (/Bug 1061995) - Until we support windowed mode plugins in
-  // content processes, force flash to use a windowless rendering mode. This
-  // hack should go away when bug 923746 lands. (OS X plugins always use some
-  // native widgets, so unfortunately this does not help there)
-  if (wmodeOverride.IsEmpty() &&
-      XRE_GetProcessType() == GeckoProcessType_Content) {
-    wmodeOverride.AssignLiteral("transparent");
-  }
-#endif
-
   for (uint32_t i = 0; i < mCachedAttributes.Length(); i++) {
     if (!wmodeOverride.IsEmpty() && mCachedAttributes[i].mName.EqualsIgnoreCase("wmode")) {
       CopyASCIItoUTF16(wmodeOverride, mCachedAttributes[i].mValue);
@@ -3622,9 +3611,9 @@ nsObjectLoadingContent::TeardownProtoChain()
 }
 
 bool
-nsObjectLoadingContent::DoNewResolve(JSContext* aCx, JS::Handle<JSObject*> aObject,
-                                     JS::Handle<jsid> aId,
-                                     JS::MutableHandle<JSPropertyDescriptor> aDesc)
+nsObjectLoadingContent::DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObject,
+                                  JS::Handle<jsid> aId,
+                                  JS::MutableHandle<JSPropertyDescriptor> aDesc)
 {
   // We don't resolve anything; we just try to make sure we're instantiated.
   // This purposefully does not fire for chrome/xray resolves, see bug 967694
@@ -3642,7 +3631,7 @@ nsObjectLoadingContent::GetOwnPropertyNames(JSContext* aCx,
                                             nsTArray<nsString>& /* unused */,
                                             ErrorResult& aRv)
 {
-  // Just like DoNewResolve, just make sure we're instantiated.  That will do
+  // Just like DoResolve, just make sure we're instantiated.  That will do
   // the work our Enumerate hook needs to do.  This purposefully does not fire
   // for xray resolves, see bug 967694
   nsRefPtr<nsNPAPIPluginInstance> pi;

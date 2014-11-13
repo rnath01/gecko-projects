@@ -91,6 +91,19 @@ public:
     return true;
   }
 
+  virtual bool CachedReadAt(int64_t aOffset, void* aBuffer, size_t aCount,
+                            size_t* aBytesRead) MOZ_OVERRIDE
+  {
+    nsresult rv = mResource->ReadFromCache(reinterpret_cast<char*>(aBuffer),
+                                           aOffset, aCount);
+    if (NS_FAILED(rv)) {
+      *aBytesRead = 0;
+      return false;
+    }
+    *aBytesRead = aCount;
+    return true;
+  }
+
   virtual bool Length(int64_t* aSize) MOZ_OVERRIDE
   {
     if (mResource->GetLength() < 0)
@@ -785,14 +798,7 @@ void
 MP4Reader::NotifyDataArrived(const char* aBuffer, uint32_t aLength,
                              int64_t aOffset)
 {
-  if (NS_IsMainThread()) {
-    if (GetTaskQueue()) {
-      GetTaskQueue()->Dispatch(
-        NS_NewRunnableMethod(this, &MP4Reader::UpdateIndex));
-    }
-  } else {
-    UpdateIndex();
-  }
+  UpdateIndex();
 }
 
 void
@@ -803,13 +809,11 @@ MP4Reader::UpdateIndex()
     return;
   }
 
-  MediaResource* resource = mDecoder->GetResource();
-  resource->Pin();
+  AutoPinned<MediaResource> resource(mDecoder->GetResource());
   nsTArray<MediaByteRange> ranges;
   if (NS_SUCCEEDED(resource->GetCachedRanges(ranges))) {
     mDemuxer->UpdateIndex(ranges);
   }
-  resource->Unpin();
 }
 
 int64_t
@@ -824,25 +828,24 @@ MP4Reader::GetEvictionOffset(double aTime)
 }
 
 nsresult
-MP4Reader::GetBuffered(dom::TimeRanges* aBuffered, int64_t aStartTime)
+MP4Reader::GetBuffered(dom::TimeRanges* aBuffered)
 {
   MonitorAutoLock mon(mIndexMonitor);
   if (!mIndexReady) {
     return NS_OK;
   }
+  MOZ_ASSERT(mStartTime != -1, "Need to finish metadata decode first");
 
-  MediaResource* resource = mDecoder->GetResource();
+  AutoPinned<MediaResource> resource(mDecoder->GetResource());
   nsTArray<MediaByteRange> ranges;
-  resource->Pin();
   nsresult rv = resource->GetCachedRanges(ranges);
-  resource->Unpin();
 
   if (NS_SUCCEEDED(rv)) {
     nsTArray<Interval<Microseconds>> timeRanges;
     mDemuxer->ConvertByteRangesToTime(ranges, &timeRanges);
     for (size_t i = 0; i < timeRanges.Length(); i++) {
-      aBuffered->Add((timeRanges[i].start - aStartTime) / 1000000.0,
-                     (timeRanges[i].end - aStartTime) / 1000000.0);
+      aBuffered->Add((timeRanges[i].start - mStartTime) / 1000000.0,
+                     (timeRanges[i].end - mStartTime) / 1000000.0);
     }
   }
 

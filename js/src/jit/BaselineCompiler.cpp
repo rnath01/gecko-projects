@@ -30,6 +30,7 @@ using namespace js::jit;
 
 BaselineCompiler::BaselineCompiler(JSContext *cx, TempAllocator &alloc, JSScript *script)
   : BaselineCompilerSpecific(cx, alloc, script),
+    yieldOffsets_(cx),
     modifiesArguments_(false)
 {
 }
@@ -186,7 +187,8 @@ BaselineCompiler::compile()
                                                          icEntries_.length(),
                                                          pcMappingIndexEntries.length(),
                                                          pcEntries.length(),
-                                                         bytecodeTypeMapEntries);
+                                                         bytecodeTypeMapEntries,
+                                                         yieldOffsets_.length());
     if (!baselineScript)
         return Method_Error;
 
@@ -242,6 +244,8 @@ BaselineCompiler::compile()
     // The last entry in the last index found, and is used to avoid binary
     // searches for the sought entry when queries are in linear order.
     bytecodeMap[script->nTypeSets()] = 0;
+
+    baselineScript->copyYieldEntries(script, yieldOffsets_);
 
     if (script->compartment()->debugMode())
         baselineScript->setDebugMode();
@@ -496,7 +500,7 @@ bool
 BaselineCompiler::emitStackCheck(bool earlyCheck)
 {
     Label skipCall;
-    uintptr_t *limitAddr = &cx->runtime()->mainThread.jitStackLimit;
+    void *limitAddr = cx->runtime()->mainThread.addressOfJitStackLimit();
     uint32_t slotsSize = script->nslots() * sizeof(Value);
     uint32_t tolerance = earlyCheck ? slotsSize : 0;
 
@@ -646,7 +650,7 @@ BaselineCompiler::emitInterruptCheck()
     frame.syncStack(0);
 
     Label done;
-    void *interrupt = (void *)&cx->runtime()->interrupt;
+    void *interrupt = cx->runtimeAddressOfInterruptUint32();
     masm.branch32(Assembler::Equal, AbsoluteAddress(interrupt), Imm32(0), &done);
 
     prepareVMCall();
@@ -3235,3 +3239,346 @@ BaselineCompiler::emit_JSOP_REST()
     frame.push(R0);
     return true;
 }
+
+typedef JSObject *(*CreateGeneratorFn)(JSContext *, BaselineFrame *);
+static const VMFunction CreateGeneratorInfo = FunctionInfo<CreateGeneratorFn>(jit::CreateGenerator);
+
+bool
+BaselineCompiler::emit_JSOP_GENERATOR()
+{
+    MOZ_ASSERT(frame.stackDepth() == 0);
+
+    masm.loadBaselineFramePtr(BaselineFrameReg, R0.scratchReg());
+
+    prepareVMCall();
+    pushArg(R0.scratchReg());
+    if (!callVM(CreateGeneratorInfo))
+        return false;
+
+    masm.tagValue(JSVAL_TYPE_OBJECT, ReturnReg, R0);
+    frame.push(R0);
+    return true;
+}
+
+bool
+BaselineCompiler::addYieldOffset()
+{
+    MOZ_ASSERT(*pc == JSOP_INITIALYIELD || *pc == JSOP_YIELD);
+
+    uint32_t yieldIndex = GET_UINT24(pc);
+
+    while (yieldIndex >= yieldOffsets_.length()) {
+        if (!yieldOffsets_.append(0))
+            return false;
+    }
+
+    static_assert(JSOP_INITIALYIELD_LENGTH == JSOP_YIELD_LENGTH,
+                  "code below assumes INITIALYIELD and YIELD have same length");
+    yieldOffsets_[yieldIndex] = script->pcToOffset(pc + JSOP_YIELD_LENGTH);
+    return true;
+}
+
+typedef bool (*InitialSuspendFn)(JSContext *, HandleObject, BaselineFrame *, jsbytecode *);
+static const VMFunction InitialSuspendInfo = FunctionInfo<InitialSuspendFn>(jit::InitialSuspend);
+
+bool
+BaselineCompiler::emit_JSOP_INITIALYIELD()
+{
+    if (!addYieldOffset())
+        return false;
+
+    frame.syncStack(0);
+
+    // Store generator in R0, BaselineFrame pointer in R1.
+    masm.unboxObject(frame.addressOfStackValue(frame.peek(-1)), R0.scratchReg());
+    masm.loadBaselineFramePtr(BaselineFrameReg, R1.scratchReg());
+
+    prepareVMCall();
+    pushArg(ImmPtr(pc));
+    pushArg(R1.scratchReg());
+    pushArg(R0.scratchReg());
+
+    if (!callVM(InitialSuspendInfo))
+        return false;
+
+    masm.loadValue(frame.addressOfStackValue(frame.peek(-1)), JSReturnOperand);
+    return emitReturn();
+}
+
+typedef bool (*NormalSuspendFn)(JSContext *, HandleObject, BaselineFrame *, jsbytecode *, uint32_t);
+static const VMFunction NormalSuspendInfo = FunctionInfo<NormalSuspendFn>(jit::NormalSuspend);
+
+bool
+BaselineCompiler::emit_JSOP_YIELD()
+{
+    if (!addYieldOffset())
+        return false;
+
+    // Store generator in R0, BaselineFrame pointer in R1.
+    frame.popRegsAndSync(1);
+    masm.unboxObject(R0, R0.scratchReg());
+    masm.loadBaselineFramePtr(BaselineFrameReg, R1.scratchReg());
+
+    prepareVMCall();
+    pushArg(Imm32(frame.stackDepth()));
+    pushArg(ImmPtr(pc));
+    pushArg(R1.scratchReg());
+    pushArg(R0.scratchReg());
+
+    if (!callVM(NormalSuspendInfo))
+        return false;
+
+    masm.loadValue(frame.addressOfStackValue(frame.peek(-1)), JSReturnOperand);
+    return emitReturn();
+}
+
+typedef bool (*FinalSuspendFn)(JSContext *, HandleObject, BaselineFrame *, jsbytecode *);
+static const VMFunction FinalSuspendInfo = FunctionInfo<FinalSuspendFn>(jit::FinalSuspend);
+
+bool
+BaselineCompiler::emit_JSOP_FINALYIELDRVAL()
+{
+    // Store generator in R0, BaselineFrame pointer in R1.
+    frame.popRegsAndSync(1);
+    masm.unboxObject(R0, R0.scratchReg());
+    masm.loadBaselineFramePtr(BaselineFrameReg, R1.scratchReg());
+
+    prepareVMCall();
+    pushArg(ImmPtr(pc));
+    pushArg(R1.scratchReg());
+    pushArg(R0.scratchReg());
+
+    if (!callVM(FinalSuspendInfo))
+        return false;
+
+    masm.loadValue(frame.addressOfReturnValue(), JSReturnOperand);
+    return emitReturn();
+}
+
+typedef bool (*InterpretResumeFn)(JSContext *, HandleObject, HandleValue, HandlePropertyName,
+                                  MutableHandleValue);
+static const VMFunction InterpretResumeInfo = FunctionInfo<InterpretResumeFn>(jit::InterpretResume);
+
+typedef bool (*GeneratorThrowFn)(JSContext *, HandleObject, HandleValue);
+static const VMFunction GeneratorThrowInfo = FunctionInfo<GeneratorThrowFn>(js::GeneratorThrow);
+
+bool
+BaselineCompiler::emit_JSOP_RESUME()
+{
+    GeneratorObject::ResumeKind resumeKind = GeneratorObject::getResumeKind(pc);
+
+    frame.syncStack(0);
+    masm.checkStackAlignment();
+
+    GeneralRegisterSet regs(GeneralRegisterSet::All());
+    regs.take(BaselineFrameReg);
+
+    // Load generator object.
+    Register genObj = regs.takeAny();
+    masm.unboxObject(frame.addressOfStackValue(frame.peek(-2)), genObj);
+
+    if (resumeKind == GeneratorObject::CLOSE) {
+        // Resume the CLOSE operation in the interpreter. This is only used for
+        // legacy generators and requires some complicated exception handling
+        // logic to only execute |finally| blocks and then return to the caller
+        // without throwing. Furthermore, because it only executes |finally|
+        // blocks, it's unlikely to benefit from JIT compilation.
+
+        ValueOperand retVal = regs.takeAnyValue();
+        masm.loadValue(frame.addressOfStackValue(frame.peek(-1)), retVal);
+
+        prepareVMCall();
+        pushArg(ImmGCPtr(cx->names().close));
+        pushArg(retVal);
+        pushArg(genObj);
+
+        if (!callVM(InterpretResumeInfo))
+            return false;
+
+        frame.popn(2);
+        frame.push(R0);
+        return true;
+    }
+
+    // Load callee.
+    Register callee = regs.takeAny();
+    masm.unboxObject(Address(genObj, GeneratorObject::offsetOfCalleeSlot()), callee);
+
+    // Load the script. Note that we don't relazify generator scripts, so it's
+    // guaranteed to be non-lazy.
+    Register scratch1 = regs.takeAny();
+    masm.loadPtr(Address(callee, JSFunction::offsetOfNativeOrScript()), scratch1);
+
+    // Load the BaselineScript or call a stub if we don't have one.
+    Label interpret;
+    masm.loadPtr(Address(scratch1, JSScript::offsetOfBaselineScript()), scratch1);
+    masm.branchPtr(Assembler::BelowOrEqual, scratch1, ImmPtr(BASELINE_DISABLED_SCRIPT), &interpret);
+
+    // Determine the resume address based on the yieldIndex and the
+    // yieldIndex -> native table in the BaselineScript.
+    Register scratch2 = regs.takeAny();
+    masm.load32(Address(scratch1, BaselineScript::offsetOfYieldEntriesOffset()), scratch2);
+    masm.addPtr(scratch2, scratch1);
+    masm.unboxInt32(Address(genObj, GeneratorObject::offsetOfYieldIndexSlot()), scratch2);
+    masm.loadPtr(BaseIndex(scratch1, scratch2, ScaleFromElemWidth(sizeof(uintptr_t))), scratch1);
+
+    // Push |undefined| for all formals.
+    Label loop, loopDone;
+    masm.load16ZeroExtend(Address(callee, JSFunction::offsetOfNargs()), scratch2);
+    masm.bind(&loop);
+    masm.branchTest32(Assembler::Zero, scratch2, scratch2, &loopDone);
+    {
+        masm.pushValue(UndefinedValue());
+        masm.sub32(Imm32(1), scratch2);
+        masm.jump(&loop);
+    }
+    masm.bind(&loopDone);
+
+    // Push |this|.
+    masm.pushValue(Address(genObj, GeneratorObject::offsetOfThisSlot()));
+
+    // Update BaselineFrame frameSize field and create the frame descriptor.
+    masm.computeEffectiveAddress(Address(BaselineFrameReg, BaselineFrame::FramePointerOffset),
+                                 scratch2);
+    masm.subPtr(BaselineStackReg, scratch2);
+    masm.store32(scratch2, Address(BaselineFrameReg, BaselineFrame::reverseOffsetOfFrameSize()));
+    masm.makeFrameDescriptor(scratch2, JitFrame_BaselineJS);
+
+    masm.Push(Imm32(0)); // actual argc
+    masm.PushCalleeToken(callee, false);
+    masm.Push(scratch2); // frame descriptor
+
+    regs.add(callee);
+
+    // Load the return value.
+    ValueOperand retVal = regs.takeAnyValue();
+    masm.loadValue(frame.addressOfStackValue(frame.peek(-1)), retVal);
+
+    // Push a fake return address on the stack. We will resume here when the
+    // generator returns.
+    Label genStart, returnTarget;
+    masm.callAndPushReturnAddress(&genStart);
+
+    // Add an IC entry so the return offset -> pc mapping works.
+    ICEntry icEntry(script->pcToOffset(pc), ICEntry::Kind_Op);
+    icEntry.setReturnOffset(CodeOffsetLabel(masm.currentOffset()));
+    if (!icEntries_.append(icEntry))
+        return false;
+
+    masm.jump(&returnTarget);
+    masm.bind(&genStart);
+
+    // Construct BaselineFrame.
+    masm.push(BaselineFrameReg);
+    masm.mov(BaselineStackReg, BaselineFrameReg);
+    masm.subPtr(Imm32(BaselineFrame::Size()), BaselineStackReg);
+    masm.checkStackAlignment();
+
+    // Store flags and scope chain.
+    masm.store32(Imm32(BaselineFrame::HAS_CALL_OBJ), frame.addressOfFlags());
+    masm.unboxObject(Address(genObj, GeneratorObject::offsetOfScopeChainSlot()), scratch2);
+    masm.storePtr(scratch2, frame.addressOfScopeChain());
+
+    // Store the arguments object if there is one.
+    Label noArgsObj;
+    masm.unboxObject(Address(genObj, GeneratorObject::offsetOfArgsObjSlot()), scratch2);
+    masm.branchTestPtr(Assembler::Zero, scratch2, scratch2, &noArgsObj);
+    {
+        masm.storePtr(scratch2, frame.addressOfArgsObj());
+        masm.or32(Imm32(BaselineFrame::HAS_ARGS_OBJ), frame.addressOfFlags());
+    }
+    masm.bind(&noArgsObj);
+
+    // Push expression slots if needed.
+    Label noExprStack;
+    Address exprStackSlot(genObj, GeneratorObject::offsetOfExpressionStackSlot());
+    masm.branchTestNull(Assembler::Equal, exprStackSlot, &noExprStack);
+    {
+        masm.unboxObject(exprStackSlot, scratch2);
+
+        Register initLength = regs.takeAny();
+        masm.loadPtr(Address(scratch2, NativeObject::offsetOfElements()), scratch2);
+        masm.load32(Address(scratch2, ObjectElements::offsetOfInitializedLength()), initLength);
+
+        Label loop, loopDone;
+        masm.bind(&loop);
+        masm.branchTest32(Assembler::Zero, initLength, initLength, &loopDone);
+        {
+            masm.pushValue(Address(scratch2, 0));
+            masm.addPtr(Imm32(sizeof(Value)), scratch2);
+            masm.sub32(Imm32(1), initLength);
+            masm.jump(&loop);
+        }
+        masm.bind(&loopDone);
+
+        masm.storeValue(NullValue(), exprStackSlot);
+        regs.add(initLength);
+    }
+
+    masm.bind(&noExprStack);
+    masm.pushValue(retVal);
+
+    if (resumeKind == GeneratorObject::NEXT) {
+        // Mark as running and jump to the generator's JIT code.
+        masm.storeValue(Int32Value(GeneratorObject::YIELD_INDEX_RUNNING),
+                        Address(genObj, GeneratorObject::offsetOfYieldIndexSlot()));
+        masm.jump(scratch1);
+    } else {
+        MOZ_ASSERT(resumeKind == GeneratorObject::THROW);
+
+        // Update the frame's frameSize field.
+        Register scratch3 = regs.takeAny();
+        masm.computeEffectiveAddress(Address(BaselineFrameReg, BaselineFrame::FramePointerOffset),
+                                     scratch2);
+        masm.movePtr(scratch2, scratch3);
+        masm.subPtr(BaselineStackReg, scratch2);
+        masm.store32(scratch2, Address(BaselineFrameReg, BaselineFrame::reverseOffsetOfFrameSize()));
+
+        prepareVMCall();
+        pushArg(retVal);
+        pushArg(genObj);
+
+        JitCode *code = cx->runtime()->jitRuntime()->getVMWrapper(GeneratorThrowInfo);
+        if (!code)
+            return false;
+
+        // Create the frame descriptor.
+        masm.subPtr(BaselineStackReg, scratch3);
+        masm.makeFrameDescriptor(scratch3, JitFrame_BaselineJS);
+
+        // Push the frame descriptor and the native address of the op after the
+        // YIELD. The frame iteration code relies on this address to determine
+        // where we threw the exception.
+        masm.push(scratch3);
+        masm.push(scratch1);
+        masm.jump(code);
+        regs.add(scratch3);
+    }
+
+    // If the generator script has no JIT code, call into the VM.
+    masm.bind(&interpret);
+
+    prepareVMCall();
+    if (resumeKind == GeneratorObject::NEXT) {
+        pushArg(ImmGCPtr(cx->names().next));
+    } else {
+        MOZ_ASSERT(resumeKind == GeneratorObject::THROW);
+        pushArg(ImmGCPtr(cx->names().throw_));
+    }
+
+    masm.loadValue(frame.addressOfStackValue(frame.peek(-1)), retVal);
+    pushArg(retVal);
+    pushArg(genObj);
+
+    if (!callVM(InterpretResumeInfo))
+        return false;
+
+    // After the generator returns, we restore the stack pointer, push the
+    // return value and we're done.
+    masm.bind(&returnTarget);
+    masm.computeEffectiveAddress(frame.addressOfStackValue(frame.peek(-1)), BaselineStackReg);
+    frame.popn(2);
+    frame.push(R0);
+    return true;
+}
+
