@@ -30,6 +30,7 @@ from .data import (
     Defines,
     DirectoryTraversal,
     Exports,
+    FinalTargetFiles,
     GeneratedEventWebIDLFile,
     GeneratedInclude,
     GeneratedWebIDLFile,
@@ -413,6 +414,12 @@ class TreeMetadataEmitter(LoggingMixin):
             if v in context and context[v]:
                 passthru.variables[v] = context[v]
 
+        if context.config.substs.get('OS_TARGET') == 'WINNT' and \
+                context['DELAYLOAD_DLLS']:
+            context['LDFLAGS'].extend([('-DELAYLOAD:%s' % dll)
+                for dll in context['DELAYLOAD_DLLS']])
+            context['OS_LIBS'].append('delayimp')
+
         for v in ['CFLAGS', 'CXXFLAGS', 'CMFLAGS', 'CMMFLAGS', 'LDFLAGS']:
             if v in context and context[v]:
                 passthru.variables['MOZBUILD_' + v] = context[v]
@@ -420,11 +427,6 @@ class TreeMetadataEmitter(LoggingMixin):
         # NO_VISIBILITY_FLAGS is slightly different
         if context['NO_VISIBILITY_FLAGS']:
             passthru.variables['VISIBILITY_FLAGS'] = ''
-
-        if context['DELAYLOAD_DLLS']:
-            passthru.variables['DELAYLOAD_LDFLAGS'] = [('-DELAYLOAD:%s' % dll)
-                for dll in context['DELAYLOAD_DLLS']]
-            passthru.variables['USE_DELAYIMP'] = True
 
         varmap = dict(
             SOURCES={
@@ -598,6 +600,10 @@ class TreeMetadataEmitter(LoggingMixin):
         if context.get('FINAL_TARGET') or context.get('XPI_NAME') or \
                 context.get('DIST_SUBDIR'):
             yield InstallationTarget(context)
+
+        final_target_files = context.get('FINAL_TARGET_FILES')
+        if final_target_files:
+            yield FinalTargetFiles(context, final_target_files, context['FINAL_TARGET'])
 
         host_libname = context.get('HOST_LIBRARY_NAME')
         libname = context.get('LIBRARY_NAME')

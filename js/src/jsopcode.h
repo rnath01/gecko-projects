@@ -26,17 +26,7 @@ typedef enum JSOp {
 FOR_EACH_OPCODE(ENUMERATE_OPCODE)
 #undef ENUMERATE_OPCODE
 
-    JSOP_LIMIT,
-
-    /*
-     * These pseudo-ops help js_DecompileValueGenerator decompile JSOP_SETPROP,
-     * JSOP_SETELEM, and comprehension-tails, respectively.  They are never
-     * stored in bytecode, so they don't preempt valid opcodes.
-     */
-    JSOP_GETPROP2 = JSOP_LIMIT,
-    JSOP_GETELEM2 = JSOP_LIMIT + 1,
-    JSOP_FORLOCAL = JSOP_LIMIT + 2,
-    JSOP_FAKE_LIMIT = JSOP_FORLOCAL
+    JSOP_LIMIT
 } JSOp;
 
 /*
@@ -298,6 +288,7 @@ BytecodeFallsThrough(JSOp op)
       case JSOP_DEFAULT:
       case JSOP_RETURN:
       case JSOP_RETRVAL:
+      case JSOP_FINALYIELDRVAL:
       case JSOP_THROW:
       case JSOP_TABLESWITCH:
         return false;
@@ -599,8 +590,17 @@ inline bool
 FlowsIntoNext(JSOp op)
 {
     /* JSOP_YIELD is considered to flow into the next instruction, like JSOP_CALL. */
-    return op != JSOP_RETRVAL && op != JSOP_RETURN && op != JSOP_THROW &&
-           op != JSOP_GOTO && op != JSOP_RETSUB;
+    switch (op) {
+      case JSOP_RETRVAL:
+      case JSOP_RETURN:
+      case JSOP_THROW:
+      case JSOP_GOTO:
+      case JSOP_RETSUB:
+      case JSOP_FINALYIELDRVAL:
+        return false;
+      default:
+        return true;
+    }
 }
 
 inline bool

@@ -113,6 +113,9 @@ public:
   virtual bool IsSafeToFlush() const MOZ_OVERRIDE;
   virtual void FlushPendingNotifications(mozFlushType aType) MOZ_OVERRIDE;
   virtual void FlushPendingNotifications(mozilla::ChangesToFlush aType) MOZ_OVERRIDE;
+  virtual void DestroyFramesFor(nsIContent*  aContent,
+                                nsIContent** aDestroyedFramesFor) MOZ_OVERRIDE;
+  virtual void CreateFramesFor(nsIContent* aContent) MOZ_OVERRIDE;
 
   /**
    * Recreates the frames for a node
@@ -126,8 +129,9 @@ public:
   virtual void CancelReflowCallback(nsIReflowCallback* aCallback) MOZ_OVERRIDE;
 
   virtual void ClearFrameRefs(nsIFrame* aFrame) MOZ_OVERRIDE;
-  virtual already_AddRefed<nsRenderingContext> CreateReferenceRenderingContext();
-  virtual nsresult GoToAnchor(const nsAString& aAnchorName, bool aScroll) MOZ_OVERRIDE;
+  virtual already_AddRefed<gfxContext> CreateReferenceRenderingContext();
+  virtual nsresult GoToAnchor(const nsAString& aAnchorName, bool aScroll,
+                              uint32_t aAdditionalScrollFlags = 0) MOZ_OVERRIDE;
   virtual nsresult ScrollToAnchor() MOZ_OVERRIDE;
 
   virtual nsresult ScrollContentIntoView(nsIContent* aContent,

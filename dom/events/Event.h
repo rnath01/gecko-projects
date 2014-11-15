@@ -91,10 +91,9 @@ public:
     return mOwner;
   }
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE
-  {
-    return EventBinding::Wrap(aCx, this);
-  }
+  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE MOZ_FINAL;
+
+  virtual JSObject* WrapObjectInternal(JSContext* aCx);
 
   virtual ErrorEvent* AsErrorEvent()
   {
@@ -269,7 +268,8 @@ protected:
 class MOZ_STACK_CLASS WantsPopupControlCheck
 {
 public:
-  WantsPopupControlCheck(nsIDOMEvent* aEvent) : mEvent(aEvent->InternalDOMEvent())
+  explicit WantsPopupControlCheck(nsIDOMEvent* aEvent) :
+    mEvent(aEvent->InternalDOMEvent())
   {
     mOriginalWantsPopupControlCheck = mEvent->GetWantsPopupControlCheck();
     mEvent->SetWantsPopupControlCheck(mEvent->IsTrusted());

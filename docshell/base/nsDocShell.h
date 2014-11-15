@@ -333,11 +333,6 @@ protected:
     nsresult ScrollToAnchor(nsACString & curHash, nsACString & newHash,
                             uint32_t aLoadType);
 
-    // Tries to serialize a given variant using structured clone.  This only
-    // works if the variant is backed by a JSVal.
-    nsresult SerializeJSValVariant(JSContext *aCx, nsIVariant *aData,
-                                   nsAString &aResult);
-
     // Returns true if would have called FireOnLocationChange,
     // but did not because aFireOnLocationChange was false on entry.
     // In this case it is the caller's responsibility to ensure
@@ -376,8 +371,12 @@ protected:
                                          nsISupports* aOwner,
                                          bool aCloneChildren,
                                          nsISHEntry ** aNewEntry);
-    nsresult DoAddChildSHEntry(nsISHEntry* aNewEntry, int32_t aChildOffset,
-                               bool aCloneChildren);
+    nsresult AddChildSHEntryToParent(nsISHEntry* aNewEntry, int32_t aChildOffset,
+                                     bool aCloneChildren);
+
+    nsresult AddChildSHEntryInternal(nsISHEntry* aCloneRef, nsISHEntry* aNewEntry,
+                                     int32_t aChildOffset, uint32_t loadType,
+                                     bool aCloneChildren);
 
     NS_IMETHOD LoadHistoryEntry(nsISHEntry * aEntry, uint32_t aLoadType);
     NS_IMETHOD PersistLayoutHistoryState();
@@ -951,15 +950,19 @@ private:
     nsWeakPtr mOpener;
     nsWeakPtr mOpenedRemote;
 
-    // Storing profile timeline markers and if/when recording started
-    mozilla::TimeStamp mProfileTimelineStartTime;
+    // A depth count of how many times NotifyRunToCompletionStart
+    // has been called without a matching NotifyRunToCompletionStop.
+    uint32_t          mJSRunToCompletionDepth;
+
+    // True if recording profiles.
+    bool mProfileTimelineRecording;
 
 #ifdef MOZ_ENABLE_PROFILER_SPS
     struct InternalProfileTimelineMarker
     {
       InternalProfileTimelineMarker(const char* aName,
                                     ProfilerMarkerTracing* aPayload,
-                                    float aTime)
+                                    DOMHighResTimeStamp aTime)
         : mName(aName)
         , mPayload(aPayload)
         , mTime(aTime)
@@ -970,16 +973,12 @@ private:
         delete mPayload;
       }
 
-      const char* mName;
+      nsCString mName;
       ProfilerMarkerTracing* mPayload;
-      float mTime;
+      DOMHighResTimeStamp mTime;
     };
     nsTArray<InternalProfileTimelineMarker*> mProfileTimelineMarkers;
 #endif
-
-    // Get the elapsed time (in millis) since the profile timeline recording
-    // started
-    float GetProfileTimelineDelta();
 
     // Get rid of all the timeline markers accumulated so far
     void ClearProfileTimelineMarkers();

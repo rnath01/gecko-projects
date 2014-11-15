@@ -66,6 +66,8 @@
 #include "cairo.h"
 #include "qcms.h"
 
+#include "imgITools.h"
+
 #include "plstr.h"
 #include "nsCRT.h"
 #include "GLContext.h"
@@ -76,12 +78,19 @@
 #include "TexturePoolOGL.h"
 #endif
 
+#ifdef MOZ_WIDGET_GONK
+#include "mozilla/layers/GrallocTextureHost.h"
+#endif
+
 #include "mozilla/Hal.h"
 #ifdef USE_SKIA
 #include "skia/SkGraphics.h"
+# ifdef USE_SKIA_GPU
+#  include "SkiaGLGlue.h"
+# endif
+#endif
 
-#include "SkiaGLGlue.h"
-#else
+#if !defined(USE_SKIA) || !defined(USE_SKIA_GPU)
 class mozilla::gl::SkiaGLGlue : public GenericAtomicRefCounted {
 };
 #endif
@@ -277,7 +286,9 @@ static const char *gPrefLangNames[] = {
 };
 
 gfxPlatform::gfxPlatform()
-  : mAzureCanvasBackendCollector(MOZ_THIS_IN_INITIALIZER_LIST(),
+  : mTileWidth(-1)
+  , mTileHeight(-1)
+  , mAzureCanvasBackendCollector(MOZ_THIS_IN_INITIALIZER_LIST(),
                                  &gfxPlatform::GetAzureBackendInfo)
 {
     mAllowDownloadableFonts = UNINITIALIZED_VALUE;
@@ -379,7 +390,7 @@ gfxPlatform::Init()
     #error "No gfxPlatform implementation available"
 #endif
 
-#ifdef DEBUG
+#ifdef MOZ_GL_DEBUG
     mozilla::gl::GLContext::StaticInit();
 #endif
 
@@ -440,6 +451,12 @@ gfxPlatform::Init()
     if (obs) {
         gPlatform->mMemoryPressureObserver = new MemoryPressureObserver();
         obs->AddObserver(gPlatform->mMemoryPressureObserver, "memory-pressure", false);
+    }
+
+    // Request the imgITools service, implicitly initializing ImageLib.
+    nsCOMPtr<imgITools> imgTools = do_GetService("@mozilla.org/image/tools;1");
+    if (!imgTools) {
+      NS_RUNTIMEABORT("Could not initialize ImageLib");
     }
 
     RegisterStrongMemoryReporter(new GfxMemoryImageReporter());
@@ -844,6 +861,65 @@ gfxPlatform::GetScaledFontForFont(DrawTarget* aTarget, gfxFont *aFont)
     Factory::CreateScaledFontForNativeFont(nativeFont,
                                            aFont->GetAdjustedSize());
   return scaledFont;
+}
+
+int
+gfxPlatform::GetTileWidth()
+{
+  MOZ_ASSERT(mTileWidth != -1);
+  return mTileWidth;
+}
+
+int
+gfxPlatform::GetTileHeight()
+{
+  MOZ_ASSERT(mTileHeight != -1);
+  return mTileHeight;
+}
+
+void
+gfxPlatform::SetTileSize(int aWidth, int aHeight)
+{
+  // Don't allow changing the tile size after we've set it.
+  // Right now the code assumes that the tile size doesn't change.
+  MOZ_ASSERT((mTileWidth == -1 && mTileHeight == -1) ||
+    (mTileWidth == aWidth && mTileHeight == aHeight));
+
+  mTileWidth = aWidth;
+  mTileHeight = aHeight;
+}
+
+void
+gfxPlatform::ComputeTileSize()
+{
+  // The tile size should be picked in the parent processes
+  // and sent to the child processes over IPDL GetTileSize.
+  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+    NS_RUNTIMEABORT("wrong process.");
+  }
+
+  int32_t w = gfxPrefs::LayersTileWidth();
+  int32_t h = gfxPrefs::LayersTileHeight();
+
+  // TODO We may want to take the screen size into consideration here.
+  if (gfxPrefs::LayersTilesAdjust()) {
+#ifdef MOZ_WIDGET_GONK
+    int32_t format = android::PIXEL_FORMAT_RGBA_8888;
+    android::sp<android::GraphicBuffer> alloc =
+      new android::GraphicBuffer(gfxPrefs::LayersTileWidth(), gfxPrefs::LayersTileHeight(),
+                                 format,
+                                 android::GraphicBuffer::USAGE_SW_READ_OFTEN |
+                                 android::GraphicBuffer::USAGE_SW_WRITE_OFTEN |
+                                 android::GraphicBuffer::USAGE_HW_TEXTURE);
+
+    if (alloc.get()) {
+      w = alloc->getStride(); // We want the tiles to be gralloc stride aligned.
+      // No need to adjust the height here.
+    }
+#endif
+  }
+
+  SetTileSize(w, h);
 }
 
 bool
@@ -1598,53 +1674,31 @@ gfxPlatform::GetRenderingIntent()
 }
 
 void
-gfxPlatform::TransformPixel(const gfxRGBA& in, gfxRGBA& out, qcms_transform *transform)
+gfxPlatform::TransformPixel(const Color& in, Color& out, qcms_transform *transform)
 {
 
     if (transform) {
         /* we want the bytes in RGB order */
 #ifdef IS_LITTLE_ENDIAN
         /* ABGR puts the bytes in |RGBA| order on little endian */
-        uint32_t packed = in.Packed(gfxRGBA::PACKED_ABGR);
+        uint32_t packed = in.ToABGR();
         qcms_transform_data(transform,
                        (uint8_t *)&packed, (uint8_t *)&packed,
                        1);
-        out.~gfxRGBA();
-        new (&out) gfxRGBA(packed, gfxRGBA::PACKED_ABGR);
+        out = Color::FromABGR(packed);
 #else
         /* ARGB puts the bytes in |ARGB| order on big endian */
-        uint32_t packed = in.Packed(gfxRGBA::PACKED_ARGB);
+        uint32_t packed = in.ToARGB();
         /* add one to move past the alpha byte */
         qcms_transform_data(transform,
                        (uint8_t *)&packed + 1, (uint8_t *)&packed + 1,
                        1);
-        out.~gfxRGBA();
-        new (&out) gfxRGBA(packed, gfxRGBA::PACKED_ARGB);
+        out = Color::FromARGB(packed);
 #endif
     }
 
     else if (&out != &in)
         out = in;
-}
-
-Color
-gfxPlatform::MaybeTransformColor(const gfxRGBA& aColor)
-{
-    // We only return this object to get some return value optimization goodness:
-    Color color;
-    if (GetCMSMode() == eCMSMode_All) {
-        gfxRGBA cms;
-        qcms_transform *transform = GetCMSRGBTransform();
-        if (transform) {
-            TransformPixel(aColor, cms, transform);
-            // Use the original alpha to avoid unnecessary float->byte->float
-            // conversion errors
-            color = ToColor(cms);
-            return color;
-        }
-    }
-    color = ToColor(aColor);
-    return color;
 }
 
 void

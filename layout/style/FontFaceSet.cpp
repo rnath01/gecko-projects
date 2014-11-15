@@ -35,19 +35,11 @@
 using namespace mozilla;
 using namespace mozilla::dom;
 
-#ifdef PR_LOGGING
-static PRLogModuleInfo*
-GetFontFaceSetLog()
-{
-  static PRLogModuleInfo* sLog;
-  if (!sLog)
-    sLog = PR_NewLogModule("fontfaceset");
-  return sLog;
-}
-#endif /* PR_LOGGING */
+#define LOG(args) PR_LOG(gfxUserFontSet::GetUserFontsLog(), PR_LOG_DEBUG, args)
+#define LOG_ENABLED() PR_LOG_TEST(gfxUserFontSet::GetUserFontsLog(), \
+                                  PR_LOG_DEBUG)
 
-#define LOG(args) PR_LOG(GetFontFaceSetLog(), PR_LOG_DEBUG, args)
-#define LOG_ENABLED() PR_LOG_TEST(GetFontFaceSetLog(), PR_LOG_DEBUG)
+#define FONT_LOADING_API_ENABLED_PREF "layout.css.font-loading-api.enabled"
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(FontFaceSet)
 
@@ -93,7 +85,10 @@ FontFaceSet::FontFaceSet(nsPIDOMWindow* aWindow, nsPresContext* aPresContext)
 
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aWindow);
 
-  if (global) {
+  // If the pref is not set, don't create the Promise (which the page wouldn't
+  // be able to get to anyway) as it causes the window.FontFaceSet constructor
+  // to be created.
+  if (global && PrefEnabled()) {
     ErrorResult rv;
     mReady = Promise::Create(global, rv);
   }
@@ -394,17 +389,17 @@ FontFaceSet::StartLoad(gfxUserFontEntry* aUserFontEntry,
   nsCOMPtr<nsILoadGroup> loadGroup(ps->GetDocument()->GetDocumentLoadGroup());
 
   nsCOMPtr<nsIChannel> channel;
-  // Note we are calling NS_NewChannelInternal() with both a node and a
-  // principal.  This is because the document where the font is being loaded
-  // might have a different origin from the principal of the stylesheet
-  // that initiated the font load.
-  rv = NS_NewChannelInternal(getter_AddRefs(channel),
-                             aFontFaceSrc->mURI,
-                             ps->GetDocument(),
-                             aUserFontEntry->GetPrincipal(),
-                             nsILoadInfo::SEC_NORMAL,
-                             nsIContentPolicy::TYPE_FONT,
-                             loadGroup);
+  // Note we are calling NS_NewChannelWithTriggeringPrincipal() with both a
+  // node and a principal.  This is because the document where the font is
+  // being loaded might have a different origin from the principal of the
+  // stylesheet that initiated the font load.
+  rv = NS_NewChannelWithTriggeringPrincipal(getter_AddRefs(channel),
+                                            aFontFaceSrc->mURI,
+                                            ps->GetDocument(),
+                                            aUserFontEntry->GetPrincipal(),
+                                            nsILoadInfo::SEC_NORMAL,
+                                            nsIContentPolicy::TYPE_FONT,
+                                            loadGroup);
 
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -415,14 +410,16 @@ FontFaceSet::StartLoad(gfxUserFontEntry* aUserFontEntry,
     return NS_ERROR_OUT_OF_MEMORY;
 
 #ifdef PR_LOGGING
-  if (LOG_ENABLED()) {
+  if (PR_LOG_TEST(nsFontFaceLoader::GetFontDownloaderLog(),
+                  PR_LOG_DEBUG)) {
     nsAutoCString fontURI, referrerURI;
     aFontFaceSrc->mURI->GetSpec(fontURI);
     if (aFontFaceSrc->mReferrer)
       aFontFaceSrc->mReferrer->GetSpec(referrerURI);
-    LOG(("fontdownloader (%p) download start - font uri: (%s) "
-         "referrer uri: (%s)\n",
-         fontLoader.get(), fontURI.get(), referrerURI.get()));
+    PR_LOG(nsFontFaceLoader::GetFontDownloaderLog(), PR_LOG_DEBUG,
+           ("fontdownloader (%p) download start - font uri: (%s) "
+            "referrer uri: (%s)\n",
+            fontLoader.get(), fontURI.get(), referrerURI.get()));
   }
 #endif
 
@@ -612,6 +609,13 @@ FontFaceSet::UpdateRules(const nsTArray<nsFontFaceRuleContainer>& aRules)
 
   // local rules have been rebuilt, so clear the flag
   mUserFontSet->mLocalRulesUsed = false;
+
+#if PR_LOGGING
+  LOG(("userfonts (%p) userfont rules update (%s) rule count: %d",
+       mUserFontSet.get(),
+       (modified ? "modified" : "not modified"),
+       mRuleFaces.Length()));
+#endif
 
   return modified;
 }
@@ -862,6 +866,23 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(const nsAString& aFamilyName,
                  "@font-face font-language-override has unexpected unit");
   }
 
+  // set up unicode-range
+  nsAutoPtr<gfxCharacterMap> unicodeRanges;
+  aFontFace->GetDesc(eCSSFontDesc_UnicodeRange, val);
+  unit = val.GetUnit();
+  if (unit == eCSSUnit_Array) {
+    unicodeRanges = new gfxCharacterMap();
+    const nsCSSValue::Array& sources = *val.GetArrayValue();
+    NS_ABORT_IF_FALSE(sources.Count() % 2 == 0,
+                      "odd number of entries in a unicode-range: array");
+
+    for (uint32_t i = 0; i < sources.Count(); i += 2) {
+      uint32_t min = sources[i].GetIntValue();
+      uint32_t max = sources[i+1].GetIntValue();
+      unicodeRanges->SetRange(min, max);
+    }
+  }
+
   // set up src array
   nsTArray<gfxFontFaceSrc> srcArray;
 
@@ -962,7 +983,7 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(const nsAString& aFamilyName,
                                             stretch, italicStyle,
                                             featureSettings,
                                             languageOverride,
-                                            nullptr /* aUnicodeRanges */);
+                                            unicodeRanges);
   return entry.forget();
 }
 
@@ -1046,13 +1067,13 @@ FontFaceSet::LogMessage(gfxUserFontEntry* aUserFontEntry,
       break;
     }
   }
-  message.AppendLiteral("\nsource: ");
+  message.AppendLiteral(" source: ");
   message.Append(fontURI);
 
 #ifdef PR_LOGGING
-  if (PR_LOG_TEST(GetFontFaceSetLog(), PR_LOG_DEBUG)) {
-    PR_LOG(GetFontFaceSetLog(), PR_LOG_DEBUG,
-           ("userfonts (%p) %s", this, message.get()));
+  if (PR_LOG_TEST(gfxUserFontSet::GetUserFontsLog(), PR_LOG_DEBUG)) {
+    PR_LOG(gfxUserFontSet::GetUserFontsLog(), PR_LOG_DEBUG,
+           ("userfonts (%p) %s", mUserFontSet.get(), message.get()));
   }
 #endif
 
@@ -1164,16 +1185,16 @@ FontFaceSet::SyncLoadFontData(gfxUserFontEntry* aFontToLoad,
   if (!ps) {
     return NS_ERROR_FAILURE;
   }
-  // Note we are calling NS_NewChannelInternal() with both a node and a
-  // principal.  This is because the document where the font is being loaded
-  // might have a different origin from the principal of the stylesheet
-  // that initiated the font load.
-  rv = NS_NewChannelInternal(getter_AddRefs(channel),
-                             aFontFaceSrc->mURI,
-                             ps->GetDocument(),
-                             aFontToLoad->GetPrincipal(),
-                             nsILoadInfo::SEC_NORMAL,
-                             nsIContentPolicy::TYPE_FONT);
+  // Note we are calling NS_NewChannelWithTriggeringPrincipal() with both a
+  // node and a principal.  This is because the document where the font is
+  // being loaded might have a different origin from the principal of the
+  // stylesheet that initiated the font load.
+  rv = NS_NewChannelWithTriggeringPrincipal(getter_AddRefs(channel),
+                                            aFontFaceSrc->mURI,
+                                            ps->GetDocument(),
+                                            aFontToLoad->GetPrincipal(),
+                                            nsILoadInfo::SEC_NORMAL,
+                                            nsIContentPolicy::TYPE_FONT);
 
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -1321,7 +1342,7 @@ FontFaceSet::CheckLoadingStarted()
                               false))->RunDOMEventWhenSafe();
   }
 
-  if (mReadyIsResolved) {
+  if (mReadyIsResolved && PrefEnabled()) {
     nsRefPtr<Promise> ready;
     if (GetParentObject()) {
       ErrorResult rv;
@@ -1478,6 +1499,18 @@ FontFaceSet::HandleEvent(nsIDOMEvent* aEvent)
   CheckLoadingFinished();
 
   return NS_OK;
+}
+
+/* static */ bool
+FontFaceSet::PrefEnabled()
+{
+  static bool initialized = false;
+  static bool enabled;
+  if (!initialized) {
+    initialized = true;
+    Preferences::AddBoolVarCache(&enabled, FONT_LOADING_API_ENABLED_PREF);
+  }
+  return enabled;
 }
 
 // nsICSSLoaderObserver

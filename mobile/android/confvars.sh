@@ -66,8 +66,11 @@ MOZ_LOCALE_SWITCHER=1
 # Enable second screen and casting support for external devices.
 MOZ_DEVICES=1
 
-# Enable second screen using native Android libraries
-MOZ_NATIVE_DEVICES=1
+# Enable second screen using native Android libraries, provided we're
+# not resource constrained.
+if test -z "$MOZ_ANDROID_RESOURCE_CONSTRAINED"; then
+  MOZ_NATIVE_DEVICES=1
+fi
 
 # Mark as WebGL conformant
 MOZ_WEBGL_CONFORMANT=1
@@ -81,17 +84,11 @@ if test ! "$RELEASE_BUILD"; then
   MOZ_ANDROID_NEW_TABLET_UI=1
 fi
 
-# Enable the share handler in pre-release builds.
-if test ! "$RELEASE_BUILD"; then
-  MOZ_ANDROID_SHARE_OVERLAY=1
-fi
+# Enable the share handler.
+MOZ_ANDROID_SHARE_OVERLAY=1
 
-# Enable the Mozilla Location Service stumbler in Nightly.
-if test "$NIGHTLY_BUILD"; then
-  MOZ_ANDROID_MLS_STUMBLER=1
-else
-  MOZ_ANDROID_MLS_STUMBLER=
-fi
+# Enable the Mozilla Location Service stumbler.
+MOZ_ANDROID_MLS_STUMBLER=1
 
 # Enable adding to the system downloads list in pre-release builds.
 if test ! "$RELEASE_BUILD"; then
@@ -99,7 +96,7 @@ if test ! "$RELEASE_BUILD"; then
 fi
 
 # Enable generational GC on mobile.
-JSGC_GENERATIONAL=1
+export JSGC_GENERATIONAL=1
 
 # Use the low-memory GC tuning.
-JS_GC_SMALL_CHUNK_SIZE=1
+export JS_GC_SMALL_CHUNK_SIZE=1

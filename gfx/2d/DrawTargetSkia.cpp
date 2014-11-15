@@ -122,7 +122,11 @@ GetBitmapForSurface(SourceSurface* aSurface)
 }
 
 DrawTargetSkia::DrawTargetSkia()
-  : mTexture(0), mSnapshot(nullptr)
+  :
+#ifdef USE_SKIA_GPU
+ mTexture(0),
+#endif
+ mSnapshot(nullptr)
 {
 }
 
@@ -683,6 +687,15 @@ DrawTargetSkia::CreateSourceSurfaceFromNativeSurface(const NativeSurface &aSurfa
     }
     cairo_surface_t* surf = static_cast<cairo_surface_t*>(aSurface.mSurface);
     return new SourceSurfaceCairo(surf, aSurface.mSize, aSurface.mFormat);
+#if USE_SKIA_GPU
+  } else if (aSurface.mType == NativeSurfaceType::OPENGL_TEXTURE) {
+    RefPtr<SourceSurfaceSkia> newSurf = new SourceSurfaceSkia();
+    unsigned int texture = (unsigned int)((uintptr_t)aSurface.mSurface);
+    if (UsingSkiaGPU() && newSurf->InitFromTexture((DrawTargetSkia*)this, texture, aSurface.mSize, aSurface.mFormat)) {
+      return newSurf;
+    }
+    return nullptr;
+#endif
   }
 
   return nullptr;
@@ -848,10 +861,11 @@ DrawTargetSkia::SetTransform(const Matrix& aTransform)
 void*
 DrawTargetSkia::GetNativeSurface(NativeSurfaceType aType)
 {
+#ifdef USE_SKIA_GPU
   if (aType == NativeSurfaceType::OPENGL_TEXTURE) {
     return (void*)((uintptr_t)mTexture);
   }
-
+#endif
   return nullptr;
 }
 

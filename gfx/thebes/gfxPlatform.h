@@ -263,9 +263,10 @@ public:
     virtual bool UseAcceleratedSkiaCanvas();
     virtual void InitializeSkiaCacheLimits();
 
-    /// This should be used instead of directly accessing the preference,
+    /// These should be used instead of directly accessing the preference,
     /// as different platforms may override the behaviour.
     virtual bool UseTiling() { return gfxPrefs::LayersTilesEnabledDoNotUseDirectly(); }
+    virtual bool UseProgressivePaint() { return gfxPrefs::ProgressivePaintDoNotUseDirectly(); }
 
     void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj) {
       aObj.DefineProperty("AzureCanvasBackend", GetBackendName(mPreferredCanvasBackend));
@@ -296,6 +297,16 @@ public:
     virtual nsresult GetFontList(nsIAtom *aLangGroup,
                                  const nsACString& aGenericFamily,
                                  nsTArray<nsString>& aListOfFonts);
+
+    int GetTileWidth();
+    int GetTileHeight();
+    void SetTileSize(int aWidth, int aHeight);
+    /**
+     * Calling this function will compute and set the ideal tile size for the
+     * platform. This should only be called in the parent process; child processes
+     * should be updated via SetTileSize to match the value computed in the parent.
+     */
+    void ComputeTileSize();
 
     /**
      * Rebuilds the any cached system font lists
@@ -493,13 +504,7 @@ public:
      *
      * Sets 'out' to 'in' if transform is nullptr.
      */
-    static void TransformPixel(const gfxRGBA& in, gfxRGBA& out, qcms_transform *transform);
-
-    /**
-     * Converts the color using the GetCMSRGBTransform() transform if the
-     * CMS mode is eCMSMode_All, else just returns the color.
-     */
-    static Color MaybeTransformColor(const gfxRGBA& aColor);
+    static void TransformPixel(const Color& in, Color& out, qcms_transform *transform);
 
     /**
      * Return the output device ICC profile.
@@ -670,6 +675,9 @@ private:
     mozilla::gfx::BackendType mContentBackend;
     // Bitmask of backend types we can use to render content
     uint32_t mContentBackendBitmask;
+
+    int mTileWidth;
+    int mTileHeight;
 
     mozilla::widget::GfxInfoCollector<gfxPlatform> mAzureCanvasBackendCollector;
 

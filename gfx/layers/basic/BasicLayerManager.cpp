@@ -34,6 +34,7 @@
 #include "mozilla/gfx/BasePoint.h"      // for BasePoint
 #include "mozilla/gfx/BaseRect.h"       // for BaseRect
 #include "mozilla/gfx/Matrix.h"         // for Matrix
+#include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/gfx/Rect.h"           // for IntRect, Rect
 #include "mozilla/layers/LayersTypes.h"  // for BufferMode::BUFFER_NONE, etc
 #include "mozilla/mozalloc.h"           // for operator new
@@ -484,21 +485,25 @@ BasicLayerManager::EndTransactionInternal(DrawPaintedLayerCallback aCallback,
   mTransactionIncomplete = false;
 
   if (mRoot) {
+    if (aFlags & END_NO_COMPOSITE) {
+      // Apply pending tree updates before recomputing effective
+      // properties.
+      mRoot->ApplyPendingUpdatesToSubtree();
+    }
+
     // Need to do this before we call ApplyDoubleBuffering,
     // which depends on correct effective transforms
-    mSnapEffectiveTransforms =
-      mTarget ? !(mTarget->GetFlags() & gfxContext::FLAG_DISABLE_SNAPPING) : true;
+    if (mTarget) {
+      mSnapEffectiveTransforms =
+        !mTarget->GetDrawTarget()->GetUserData(&sDisablePixelSnapping);
+    } else {
+      mSnapEffectiveTransforms = true;
+    }
     mRoot->ComputeEffectiveTransforms(mTarget ? Matrix4x4::From2D(ToMatrix(mTarget->CurrentMatrix())) : Matrix4x4());
 
     ToData(mRoot)->Validate(aCallback, aCallbackData, nullptr);
     if (mRoot->GetMaskLayer()) {
       ToData(mRoot->GetMaskLayer())->Validate(aCallback, aCallbackData, nullptr);
-    }
-
-    if (aFlags & END_NO_COMPOSITE) {
-      // Apply pending tree updates before recomputing effective
-      // properties.
-      mRoot->ApplyPendingUpdatesToSubtree();
     }
   }
 

@@ -85,6 +85,7 @@ var ecmaGlobals =
     {name: "SharedFloat32Array", nightly: true},
     {name: "SharedFloat64Array", nightly: true},
     {name: "SIMD", nightly: true},
+    {name: "Atomics", nightly: true},
     "StopIteration",
     "String",
     "SyntaxError",
@@ -214,6 +215,14 @@ var interfaceNamesInGlobalScope =
     {name: "CameraFacesDetectedEvent", b2g: true, pref: "camera.control.face_detection.enabled"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "CameraManager", b2g: true},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "CameraRecorderAudioProfile", b2g: true},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "CameraRecorderProfile", b2g: true},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "CameraRecorderProfiles", b2g: true},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "CameraRecorderVideoProfile", b2g: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "CameraStateChangeEvent", b2g: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -638,6 +647,8 @@ var interfaceNamesInGlobalScope =
     "LocalMediaStream",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Location",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "MediaDevices",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MediaElementAudioSourceNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1235,6 +1246,28 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "TreeWalker",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "TVChannel", b2g: true, pref: "dom.tv.enabled", permission: "tv"},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+		{name: "TVCurrentChannelChangedEvent", b2g: true, pref: "dom.tv.enabled",
+     permission: "tv"},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+		{name: "TVCurrentSourceChangedEvent", b2g: true, pref: "dom.tv.enabled",
+     permission: "tv"},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+		{name: "TVEITBroadcastedEvent", b2g: true, pref: "dom.tv.enabled",
+     permission: ["tv"]},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "TVManager", b2g: true, pref: "dom.tv.enabled", permission: ["tv"]},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "TVProgram", b2g: true, pref: "dom.tv.enabled", permission: ["tv"]},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "TVScanningStateChangedEvent", b2g: true, pref: "dom.tv.enabled",
+     permission: ["tv"]},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "TVSource", b2g: true, pref: "dom.tv.enabled", permission: ["tv"]},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "TVTuner", b2g: true, pref: "dom.tv.enabled", permission: ["tv"]},
+// IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "UDPMessageEvent", pref: "dom.udpsocket.enabled",
      permission: ["udp-socket"]},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1250,8 +1283,6 @@ var interfaceNamesInGlobalScope =
     "URLSearchParams",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "UserProximityEvent",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "USSDReceivedEvent", b2g: true, pref: "dom.mobileconnection.enabled"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ValidityState",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1308,8 +1339,6 @@ var interfaceNamesInGlobalScope =
     "XPathEvaluator",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "XPathExpression",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    "XPathNSResolver",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "XPathResult",
 // IMPORTANT: Do not change this list without review from a DOM peer!

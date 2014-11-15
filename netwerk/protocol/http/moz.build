@@ -34,6 +34,7 @@ EXPORTS.mozilla.net += [
     'HttpInfo.h',
     'PHttpChannelParams.h',
     'PSpdyPush.h',
+    'TimingStruct.h',
 ]
 
 # ASpdySession.cpp and nsHttpAuthCache cannot be built in unified mode because
@@ -56,6 +57,7 @@ UNIFIED_SOURCES += [
     'HttpChannelParent.cpp',
     'HttpChannelParentListener.cpp',
     'HttpInfo.cpp',
+    'InterceptedChannel.cpp',
     'nsHttp.cpp',
     'nsHttpActivityDistributor.cpp',
     'nsHttpAuthManager.cpp',
@@ -107,5 +109,5 @@ FINAL_LIBRARY = 'xul'
 
 LOCAL_INCLUDES += [
     '../../base/src',
-    '/content/base/src',
+    '/dom/base',
 ]

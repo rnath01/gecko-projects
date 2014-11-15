@@ -1069,6 +1069,9 @@ class IDLInterface(IDLObjectWithScope):
     def isExposedInAnyWorker(self):
         return len(self.getWorkerExposureSet()) > 0
 
+    def isExposedInSystemGlobals(self):
+        return 'BackstagePass' in self.exposureSet
+
     def isExposedOnlyInSomeWorkers(self):
         assert self.isExposedInAnyWorker()
         workerScopes = self.parentScope.globalNameMapping["Worker"]
@@ -1222,7 +1225,7 @@ class IDLInterface(IDLObjectWithScope):
                 self.parentScope.globalNames.add(self.identifier.name)
                 self.parentScope.globalNameMapping[self.identifier.name].add(self.identifier.name)
                 self._isOnGlobalProtoChain = True
-            elif (identifier == "NeedNewResolve" or
+            elif (identifier == "NeedResolve" or
                   identifier == "OverrideBuiltins" or
                   identifier == "ChromeOnly" or
                   identifier == "Unforgeable" or
@@ -2057,6 +2060,10 @@ class IDLUnionType(IDLType):
 
     def __eq__(self, other):
         return isinstance(other, IDLUnionType) and self.memberTypes == other.memberTypes
+
+    def __hash__(self):
+        assert self.isComplete()
+        return self.name.__hash__()
 
     def isVoid(self):
         return False
@@ -5609,6 +5616,10 @@ class Parser(Tokenizer):
         self._globalScope.primaryGlobalName = "FakeTestPrimaryGlobal"
         self._globalScope.globalNames.add("FakeTestPrimaryGlobal")
         self._globalScope.globalNameMapping["FakeTestPrimaryGlobal"].add("FakeTestPrimaryGlobal")
+        # And we add the special-cased "System" global name, which
+        # doesn't have any corresponding interfaces.
+        self._globalScope.globalNames.add("System")
+        self._globalScope.globalNameMapping["System"].add("BackstagePass")
         self._installBuiltins(self._globalScope)
         self._productions = []
 

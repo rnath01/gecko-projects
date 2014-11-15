@@ -72,7 +72,6 @@ NS_IMPL_ISUPPORTS_INHERITED0(nsWindow, nsBaseWidget)
 static gfxIntSize gAndroidBounds = gfxIntSize(0, 0);
 static gfxIntSize gAndroidScreenBounds;
 
-#include "mozilla/layers/AsyncPanZoomController.h"
 #include "mozilla/layers/CompositorChild.h"
 #include "mozilla/layers/CompositorParent.h"
 #include "mozilla/layers/LayerTransactionParent.h"
@@ -930,10 +929,6 @@ nsWindow::OnGlobalAndroidEvent(AndroidGeckoEvent *ae)
             }
             break;
 
-        case AndroidGeckoEvent::COMPOSITOR_CREATE:
-            win->CreateLayerManager(ae->Width(), ae->Height());
-            break;
-
         case AndroidGeckoEvent::COMPOSITOR_PAUSE:
             // The compositor gets paused when the app is about to go into the
             // background. While the compositor is paused, we need to ensure that
@@ -944,6 +939,10 @@ nsWindow::OnGlobalAndroidEvent(AndroidGeckoEvent *ae)
             }
             sCompositorPaused = true;
             break;
+
+        case AndroidGeckoEvent::COMPOSITOR_CREATE:
+            win->CreateLayerManager(ae->Width(), ae->Height());
+            // Fallthrough
 
         case AndroidGeckoEvent::COMPOSITOR_RESUME:
             // When we receive this, the compositor has already been told to
@@ -1089,6 +1088,19 @@ bool nsWindow::OnMultitouchEvent(AndroidGeckoEvent *ae)
         isDownEvent = (event.message == NS_TOUCH_START);
     }
 
+    if (isDownEvent && event.touches.Length() == 1) {
+        // Since touch events don't get retargeted by PositionedEventTargeting.cpp
+        // code on Fennec, we dispatch a dummy mouse event that *does* get
+        // retargeted. The Fennec browser.js code can use this to activate the
+        // highlight element in case the this touchstart is the start of a tap.
+        WidgetMouseEvent hittest(true, NS_MOUSE_MOZHITTEST, this, WidgetMouseEvent::eReal);
+        hittest.refPoint = LayoutDeviceIntPoint::FromUntyped(event.touches[0]->mRefPoint);
+        hittest.ignoreRootScrollFrame = true;
+        hittest.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
+        nsEventStatus status;
+        DispatchEvent(&hittest, status);
+    }
+
     // if the last event we got was a down event, then by now we know for sure whether
     // this block has been default-prevented or not. if we haven't already sent the
     // notification for this block, do so now.
@@ -1097,7 +1109,7 @@ bool nsWindow::OnMultitouchEvent(AndroidGeckoEvent *ae)
         // previous block should not be default-prevented
         bool defaultPrevented = isDownEvent ? false : preventDefaultActions;
         if (ae->Type() == AndroidGeckoEvent::APZ_INPUT_EVENT) {
-            mozilla::widget::android::APZCCallbackHandler::GetInstance()->NotifyDefaultPrevented(ae->ApzGuid(), defaultPrevented);
+            mozilla::widget::android::APZCCallbackHandler::GetInstance()->NotifyDefaultPrevented(ae->ApzInputBlockId(), defaultPrevented);
         } else {
             mozilla::widget::android::GeckoAppShell::NotifyDefaultPrevented(defaultPrevented);
         }
@@ -1110,7 +1122,7 @@ bool nsWindow::OnMultitouchEvent(AndroidGeckoEvent *ae)
     if (isDownEvent) {
         if (preventDefaultActions) {
             if (ae->Type() == AndroidGeckoEvent::APZ_INPUT_EVENT) {
-                mozilla::widget::android::APZCCallbackHandler::GetInstance()->NotifyDefaultPrevented(ae->ApzGuid(), true);
+                mozilla::widget::android::APZCCallbackHandler::GetInstance()->NotifyDefaultPrevented(ae->ApzInputBlockId(), true);
             } else {
                 mozilla::widget::android::GeckoAppShell::NotifyDefaultPrevented(true);
             }
@@ -1912,13 +1924,6 @@ nsWindow::OnIMEEvent(AndroidGeckoEvent *ae)
             selEvent.mExpandToClusterBoundary = false;
 
             DispatchEvent(&selEvent);
-
-            // Notify SelectionHandler of final caret position
-            // Required after IME hide via 'Back' button
-            AndroidGeckoEvent* broadcastEvent = AndroidGeckoEvent::MakeBroadcastEvent(
-                NS_LITERAL_CSTRING("TextSelection:UpdateCaretPos"),
-                NS_LITERAL_CSTRING(""));
-            nsAppShell::gAppShell->PostEvent(broadcastEvent);
         }
         break;
     case AndroidGeckoEvent::IME_ADD_COMPOSITION_RANGE:
@@ -2012,14 +2017,6 @@ nsWindow::OnIMEEvent(AndroidGeckoEvent *ae)
 #endif // DEBUG_ANDROID_IME
 
             DispatchEvent(&event);
-
-            // Notify SelectionHandler of final caret position
-            // Required in cases of keyboards providing autoCorrections
-            AndroidGeckoEvent* broadcastEvent =
-                AndroidGeckoEvent::MakeBroadcastEvent(
-                    NS_LITERAL_CSTRING("TextSelection:UpdateCaretPos"),
-                    NS_LITERAL_CSTRING(""));
-            nsAppShell::gAppShell->PostEvent(broadcastEvent);
         }
         break;
 

@@ -69,20 +69,6 @@ public:
   /**
    * Decode notification.
    *
-   * Called when we know a frame has begun decoding.
-   */
-  virtual void OnStartFrame() = 0;
-
-  /**
-   * Decode notification.
-   *
-   * called when there is more to paint.
-   */
-  virtual void FrameChanged(const nsIntRect * aDirtyRect) = 0;
-
-  /**
-   * Decode notification.
-   *
    * called when a frame is finished decoding.
    */
   virtual void OnStopFrame() = 0;
@@ -108,13 +94,6 @@ public:
    * not imgIDecoder objects)
    */
   virtual void OnStopRequest(bool aIsLastPart, nsresult aStatus) = 0;
-
-  /**
-   * Called when the decoded image data is discarded. This means that the frames
-   * no longer exist in decoded form, and any attempt to access or draw the
-   * image will initiate a new series of progressive decode notifications.
-   */
-  virtual void OnDiscard() = 0;
 
   /**
    * Called when we are asked to Draw an image that is not locked.

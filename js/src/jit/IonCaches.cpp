@@ -466,7 +466,8 @@ GeneratePrototypeGuards(JSContext *cx, IonScript *ion, MacroAssembler &masm, JSO
                         JSObject *holder, Register objectReg, Register scratchReg,
                         Label *failures)
 {
-    /* The guards here protect against the effects of TradeGuts(). If the prototype chain
+    /*
+     * The guards here protect against the effects of JSObject::swap(). If the prototype chain
      * is directly altered, then TI will toss the jitcode, so we don't have to worry about
      * it, and any other change to the holder, or adding a shadowing property will result
      * in reshaping the holder, and thus the failure of the shape guard.
@@ -478,8 +479,8 @@ GeneratePrototypeGuards(JSContext *cx, IonScript *ion, MacroAssembler &masm, JSO
         // use objectReg in the rest of this function.
         masm.loadPtr(Address(objectReg, JSObject::offsetOfType()), scratchReg);
         Address proto(scratchReg, types::TypeObject::offsetOfProto());
-        masm.branchNurseryPtr(Assembler::NotEqual, proto,
-                              ImmMaybeNurseryPtr(obj->getProto()), failures);
+        masm.branchPtr(Assembler::NotEqual, proto,
+                       ImmMaybeNurseryPtr(obj->getProto()), failures);
     }
 
     JSObject *pobj = IsCacheableDOMProxy(obj)
@@ -490,7 +491,7 @@ GeneratePrototypeGuards(JSContext *cx, IonScript *ion, MacroAssembler &masm, JSO
     while (pobj != holder) {
         if (pobj->hasUncacheableProto()) {
             MOZ_ASSERT(!pobj->hasSingletonType());
-            masm.moveNurseryPtr(ImmMaybeNurseryPtr(pobj), scratchReg);
+            masm.movePtr(ImmMaybeNurseryPtr(pobj), scratchReg);
             Address objType(scratchReg, JSObject::offsetOfType());
             masm.branchPtr(Assembler::NotEqual, objType, ImmGCPtr(pobj->type()), failures);
         }
@@ -681,11 +682,10 @@ GenerateDOMProxyChecks(JSContext *cx, MacroAssembler &masm, JSObject *obj,
     //      2. The object does not have expando properties, or has an expando
     //          which is known to not have the desired property.
     Address handlerAddr(object, ProxyObject::offsetOfHandler());
-    Address expandoSlotAddr(object, NativeObject::getFixedSlotOffset(GetDOMProxyExpandoSlot()));
 
     // Check that object is a DOMProxy.
-    masm.branchPrivatePtr(Assembler::NotEqual, handlerAddr,
-                          ImmPtr(obj->as<ProxyObject>().handler()), stubFailure);
+    masm.branchPtr(Assembler::NotEqual, handlerAddr,
+                   ImmPtr(obj->as<ProxyObject>().handler()), stubFailure);
 
     if (skipExpandoCheck)
         return;
@@ -700,8 +700,12 @@ GenerateDOMProxyChecks(JSContext *cx, MacroAssembler &masm, JSObject *obj,
     Label failDOMProxyCheck;
     Label domProxyOk;
 
-    Value expandoVal = obj->fakeNativeGetSlot(GetDOMProxyExpandoSlot());
-    masm.loadValue(expandoSlotAddr, tempVal);
+    Value expandoVal = GetProxyExtra(obj, GetDOMProxyExpandoSlot());
+
+    masm.loadPtr(Address(object, ProxyObject::offsetOfValues()), tempVal.scratchReg());
+    masm.loadValue(Address(tempVal.scratchReg(),
+                           ProxyObject::offsetOfExtraSlotInValues(GetDOMProxyExpandoSlot())),
+                   tempVal);
 
     if (!expandoVal.isObject() && !expandoVal.isUndefined()) {
         masm.branchTestValue(Assembler::NotEqual, tempVal, expandoVal, &failDOMProxyCheck);
@@ -810,7 +814,7 @@ GenerateReadSlot(JSContext *cx, IonScript *ion, MacroAssembler &masm,
         if (holder) {
             // Guard on the holder's shape.
             holderReg = scratchReg;
-            masm.moveNurseryPtr(ImmMaybeNurseryPtr(holder), holderReg);
+            masm.movePtr(ImmMaybeNurseryPtr(holder), holderReg);
             masm.branchPtr(Assembler::NotEqual,
                            Address(holderReg, JSObject::offsetOfShape()),
                            ImmGCPtr(holder->lastProperty()),
@@ -1024,7 +1028,7 @@ GenerateCallGetter(JSContext *cx, IonScript *ion, MacroAssembler &masm,
 
     // Guard on the holder's shape.
     Register holderReg = scratchReg;
-    masm.moveNurseryPtr(ImmMaybeNurseryPtr(holder), holderReg);
+    masm.movePtr(ImmMaybeNurseryPtr(holder), holderReg);
     masm.branchPtr(Assembler::NotEqual,
                    Address(holderReg, JSObject::offsetOfShape()),
                    ImmGCPtr(holder->lastProperty()),
@@ -1498,7 +1502,7 @@ GetPropertyIC::tryAttachDOMProxyUnshadowed(JSContext *cx, HandleScript outerScri
         Register holderReg = scratchReg;
 
         // Guard on the holder of the property
-        masm.moveNurseryPtr(ImmMaybeNurseryPtr(holder), holderReg);
+        masm.movePtr(ImmMaybeNurseryPtr(holder), holderReg);
         masm.branchPtr(Assembler::NotEqual,
                     Address(holderReg, JSObject::offsetOfShape()),
                     ImmGCPtr(holder->lastProperty()),
@@ -2267,7 +2271,7 @@ GenerateCallSetter(JSContext *cx, IonScript *ion, MacroAssembler &masm,
         if (obj != holder)
             GeneratePrototypeGuards(cx, ion, masm, obj, holder, object, scratchReg, &protoFailure);
 
-        masm.moveNurseryPtr(ImmMaybeNurseryPtr(holder), scratchReg);
+        masm.movePtr(ImmMaybeNurseryPtr(holder), scratchReg);
         masm.branchPtr(Assembler::NotEqual,
                        Address(scratchReg, JSObject::offsetOfShape()),
                        ImmGCPtr(holder->lastProperty()),
@@ -2874,7 +2878,7 @@ SetPropertyIC::update(JSContext *cx, size_t cacheIndex, HandleObject obj,
         }
     }
 
-    uint32_t oldSlots = obj->fakeNativeNumDynamicSlots();
+    uint32_t oldSlots = obj->is<NativeObject>() ? obj->as<NativeObject>().numDynamicSlots() : 0;
     RootedShape oldShape(cx, obj->lastProperty());
 
     // Set/Add the property on the object, the inlined cache are setup for the next execution.

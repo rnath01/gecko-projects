@@ -34,6 +34,7 @@
 #include "mozilla/EventForwards.h"
 #include "mozilla/layers/CompositorTypes.h"
 #include "nsIWebBrowserChrome3.h"
+#include "mozilla/dom/ipc/IdType.h"
 
 class nsICachedFileDescriptorListener;
 class nsIDOMWindowUtils;
@@ -49,6 +50,10 @@ class ActiveElementManager;
 
 namespace widget {
 struct AutoCacheNativeKeyCommands;
+}
+
+namespace plugins {
+class PluginWidgetChild;
 }
 
 namespace dom {
@@ -254,7 +259,7 @@ class TabChild MOZ_FINAL : public TabChildBase,
     typedef mozilla::layers::ActiveElementManager ActiveElementManager;
 
 public:
-    static std::map<uint64_t, nsRefPtr<TabChild> >& NestedTabChildMap();
+    static std::map<TabId, nsRefPtr<TabChild>>& NestedTabChildMap();
 
 public:
     /** 
@@ -266,26 +271,13 @@ public:
 
     /** Return a TabChild with the given attributes. */
     static already_AddRefed<TabChild>
-    Create(nsIContentChild* aManager, const TabContext& aContext, uint32_t aChromeFlags);
+    Create(nsIContentChild* aManager, const TabId& aTabId, const TabContext& aContext, uint32_t aChromeFlags);
 
     bool IsRootContentDocument();
 
-    const uint64_t Id() const {
-        return mUniqueId;
-    }
-
-    static uint64_t
-    GetTabChildId(TabChild* aTabChild)
-    {
-        MOZ_ASSERT(NS_IsMainThread());
-        if (aTabChild->Id() != 0) {
-            return aTabChild->Id();
-        }
-        static uint64_t sId = 0;
-        sId++;
-        aTabChild->mUniqueId = sId;
-        NestedTabChildMap()[sId] = aTabChild;
-        return sId;
+    const TabId GetTabId() const {
+      MOZ_ASSERT(mUniqueId != 0);
+      return mUniqueId;
     }
 
     NS_DECL_ISUPPORTS_INHERITED
@@ -336,7 +328,8 @@ public:
     virtual bool RecvHandleSingleTap(const CSSPoint& aPoint,
                                      const mozilla::layers::ScrollableLayerGuid& aGuid) MOZ_OVERRIDE;
     virtual bool RecvHandleLongTap(const CSSPoint& aPoint,
-                                   const mozilla::layers::ScrollableLayerGuid& aGuid) MOZ_OVERRIDE;
+                                   const mozilla::layers::ScrollableLayerGuid& aGuid,
+                                   const uint64_t& aInputBlockId) MOZ_OVERRIDE;
     virtual bool RecvHandleLongTapUp(const CSSPoint& aPoint,
                                      const mozilla::layers::ScrollableLayerGuid& aGuid) MOZ_OVERRIDE;
     virtual bool RecvNotifyAPZStateChange(const ViewID& aViewId,
@@ -356,9 +349,11 @@ public:
                                   const MaybeNativeKeyBinding& aBindings) MOZ_OVERRIDE;
     virtual bool RecvMouseWheelEvent(const mozilla::WidgetWheelEvent& event) MOZ_OVERRIDE;
     virtual bool RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
-                                    const ScrollableLayerGuid& aGuid) MOZ_OVERRIDE;
+                                    const ScrollableLayerGuid& aGuid,
+                                    const uint64_t& aInputBlockId) MOZ_OVERRIDE;
     virtual bool RecvRealTouchMoveEvent(const WidgetTouchEvent& aEvent,
-                                        const ScrollableLayerGuid& aGuid) MOZ_OVERRIDE;
+                                        const ScrollableLayerGuid& aGuid,
+                                        const uint64_t& aInputBlockId) MOZ_OVERRIDE;
     virtual bool RecvKeyEvent(const nsString& aType,
                               const int32_t&  aKeyCode,
                               const int32_t&  aCharCode,
@@ -413,13 +408,6 @@ public:
     DeallocPIndexedDBPermissionRequestChild(
                                        PIndexedDBPermissionRequestChild* aActor)
                                        MOZ_OVERRIDE;
-
-    virtual POfflineCacheUpdateChild* AllocPOfflineCacheUpdateChild(
-            const URIParams& manifestURI,
-            const URIParams& documentURI,
-            const bool& stickDocument) MOZ_OVERRIDE;
-    virtual bool
-    DeallocPOfflineCacheUpdateChild(POfflineCacheUpdateChild* offlineCacheUpdate) MOZ_OVERRIDE;
 
     virtual nsIWebNavigation* WebNavigation() MOZ_OVERRIDE { return mWebNav; }
     virtual nsIWidget* WebWidget() MOZ_OVERRIDE { return mWidget; }
@@ -493,6 +481,13 @@ public:
 
     virtual bool RecvUIResolutionChanged() MOZ_OVERRIDE;
 
+    /**
+     * Native widget remoting protocol for use with windowed plugins with e10s.
+     */
+    PPluginWidgetChild* AllocPPluginWidgetChild() MOZ_OVERRIDE;
+    bool DeallocPPluginWidgetChild(PPluginWidgetChild* aActor) MOZ_OVERRIDE;
+    already_AddRefed<nsIWidget> CreatePluginWidget(nsIWidget* aParent);
+
 protected:
     virtual ~TabChild();
 
@@ -507,6 +502,10 @@ protected:
 
     virtual bool RecvRequestNotifyAfterRemotePaint();
 
+#ifdef MOZ_WIDGET_GONK
+    void MaybeRequestPreinitCamera();
+#endif
+
 private:
     /**
      * Create a new TabChild object.
@@ -516,7 +515,10 @@ private:
      *
      * |aIsBrowserElement| indicates whether we're a browser (but not an app).
      */
-    TabChild(nsIContentChild* aManager, const TabContext& aContext, uint32_t aChromeFlags);
+    TabChild(nsIContentChild* aManager,
+             const TabId& aTabId,
+             const TabContext& aContext,
+             uint32_t aChromeFlags);
 
     nsresult Init();
 
@@ -564,6 +566,14 @@ private:
     void SendPendingTouchPreventedResponse(bool aPreventDefault,
                                            const ScrollableLayerGuid& aGuid);
 
+    void SetTabId(const TabId& aTabId)
+    {
+      MOZ_ASSERT(mUniqueId == 0);
+
+      mUniqueId = aTabId;
+      NestedTabChildMap()[mUniqueId] = this;
+    }
+
     class CachedFileDescriptorInfo;
     class CachedFileDescriptorCallbackRunnable;
 
@@ -598,6 +608,7 @@ private:
     bool mUpdateHitRegion;
     bool mPendingTouchPreventedResponse;
     ScrollableLayerGuid mPendingTouchPreventedGuid;
+    uint64_t mPendingTouchPreventedBlockId;
     void FireSingleTapEvent(LayoutDevicePoint aPoint);
 
     bool mTouchEndCancelled;
@@ -606,8 +617,8 @@ private:
     bool mIgnoreKeyPressEvent;
     nsRefPtr<ActiveElementManager> mActiveElementManager;
     bool mHasValidInnerSize;
-    uint64_t mUniqueId;
     bool mDestroyed;
+    TabId mUniqueId;
 
     DISALLOW_EVIL_CONSTRUCTORS(TabChild);
 };

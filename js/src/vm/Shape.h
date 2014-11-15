@@ -335,6 +335,7 @@ class BaseShape : public gc::TenuredCell
         ITERATED_SINGLETON  =  0x200,
         NEW_TYPE_UNKNOWN    =  0x400,
         UNCACHEABLE_PROTO   =  0x800,
+        IMMUTABLE_PROTOTYPE = 0x1000,
 
         // These two flags control which scope a new variables ends up on in the
         // scope chain. If the variable is "qualified" (i.e., if it was defined
@@ -344,10 +345,10 @@ class BaseShape : public gc::TenuredCell
         // incidentally is an error in strict mode) then it goes on the lowest
         // scope in the chain with the UNQUALIFIED_VAROBJ flag set (which is
         // typically the global).
-        QUALIFIED_VAROBJ    = 0x1000,
-        UNQUALIFIED_VAROBJ  = 0x2000,
+        QUALIFIED_VAROBJ    = 0x2000,
+        UNQUALIFIED_VAROBJ  = 0x4000,
 
-        OBJECT_FLAG_MASK    = 0x3ff8
+        OBJECT_FLAG_MASK    = 0x7ff8
     };
 
   private:
@@ -1015,6 +1016,8 @@ class Shape : public gc::TenuredCell
 
     /* For JIT usage */
     static inline size_t offsetOfBase() { return offsetof(Shape, base_); }
+    static inline size_t offsetOfSlotInfo() { return offsetof(Shape, slotInfo); }
+    static inline uint32_t fixedSlotsMask() { return FIXED_SLOTS_MASK; }
 
   private:
 #ifdef JSGC_COMPACTING
@@ -1026,8 +1029,6 @@ class Shape : public gc::TenuredCell
         JS_STATIC_ASSERT(offsetof(Shape, base_) == offsetof(js::shadow::Shape, base));
         JS_STATIC_ASSERT(offsetof(Shape, slotInfo) == offsetof(js::shadow::Shape, slotInfo));
         JS_STATIC_ASSERT(FIXED_SLOTS_SHIFT == js::shadow::Shape::FIXED_SLOTS_SHIFT);
-        static_assert(js::shadow::Object::MAX_FIXED_SLOTS <= FIXED_SLOTS_MAX,
-                      "verify numFixedSlots() bitfield is big enough");
     }
 };
 
@@ -1082,6 +1083,9 @@ class AutoRooterGetterSetter
   public:
     inline AutoRooterGetterSetter(ThreadSafeContext *cx, uint8_t attrs,
                                   PropertyOp *pgetter, StrictPropertyOp *psetter
+                                  MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
+    inline AutoRooterGetterSetter(ThreadSafeContext *cx, uint8_t attrs,
+                                  JSNative *pgetter, JSNative *psetter
                                   MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
 
   private:

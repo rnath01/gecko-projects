@@ -6,7 +6,8 @@ var expect = chai.expect;
 describe("loop.conversationViews", function () {
   "use strict";
 
-  var sandbox, oldTitle, view, dispatcher, contact;
+  var sharedUtils = loop.shared.utils;
+  var sandbox, oldTitle, view, dispatcher, contact, fakeAudioXHR;
 
   var CALL_STATES = loop.store.CALL_STATES;
 
@@ -29,11 +30,39 @@ describe("loop.conversationViews", function () {
         pref: true
       }]
     };
+    fakeAudioXHR = {
+      open: sinon.spy(),
+      send: function() {},
+      abort: function() {},
+      getResponseHeader: function(header) {
+        if (header === "Content-Type")
+          return "audio/ogg";
+      },
+      responseType: null,
+      response: new ArrayBuffer(10),
+      onload: null
+    };
+
+    navigator.mozLoop = {
+      getLoopCharPref: sinon.stub().returns("http://fakeurl"),
+      composeEmail: sinon.spy(),
+      get appVersionInfo() {
+        return {
+          version: "42",
+          channel: "test",
+          platform: "test"
+        };
+      },
+      getAudioBlob: sinon.spy(function(name, callback) {
+        callback(null, new Blob([new ArrayBuffer(10)], {type: "audio/ogg"}));
+      })
+    };
   });
 
   afterEach(function() {
     document.title = oldTitle;
     view = undefined;
+    delete navigator.mozLoop;
     sandbox.restore();
   });
 
@@ -201,12 +230,30 @@ describe("loop.conversationViews", function () {
   });
 
   describe("CallFailedView", function() {
+    var store, fakeAudio;
+
     function mountTestComponent(props) {
       return TestUtils.renderIntoDocument(
         loop.conversationViews.CallFailedView({
-          dispatcher: dispatcher
+          dispatcher: dispatcher,
+          store: store,
+          contact: {email: [{value: "test@test.tld"}]}
         }));
     }
+
+    beforeEach(function() {
+      store = new loop.store.ConversationStore({}, {
+        dispatcher: dispatcher,
+        client: {},
+        sdkDriver: {}
+      });
+      fakeAudio = {
+        play: sinon.spy(),
+        pause: sinon.spy(),
+        removeAttribute: sinon.spy()
+      };
+      sandbox.stub(window, "Audio").returns(fakeAudio);
+    });
 
     it("should dispatch a retryCall action when the retry button is pressed",
       function() {
@@ -233,6 +280,76 @@ describe("loop.conversationViews", function () {
         sinon.assert.calledWithMatch(dispatcher.dispatch,
           sinon.match.hasOwn("name", "cancelCall"));
       });
+
+    it("should dispatch a fetchEmailLink action when the cancel button is pressed",
+      function() {
+        view = mountTestComponent();
+
+        var emailLinkBtn = view.getDOMNode().querySelector('.btn-email');
+
+        React.addons.TestUtils.Simulate.click(emailLinkBtn);
+
+        sinon.assert.calledOnce(dispatcher.dispatch);
+        sinon.assert.calledWithMatch(dispatcher.dispatch,
+          sinon.match.hasOwn("name", "fetchEmailLink"));
+      });
+
+    it("should disable the email link button once the action is dispatched",
+      function() {
+        view = mountTestComponent();
+        var emailLinkBtn = view.getDOMNode().querySelector('.btn-email');
+        React.addons.TestUtils.Simulate.click(emailLinkBtn);
+
+        expect(view.getDOMNode().querySelector(".btn-email").disabled).eql(true);
+      });
+
+    it("should compose an email once the email link is received", function() {
+      var composeCallUrlEmail = sandbox.stub(sharedUtils, "composeCallUrlEmail");
+      view = mountTestComponent();
+      store.set("emailLink", "http://fake.invalid/");
+
+      sinon.assert.calledOnce(composeCallUrlEmail);
+      sinon.assert.calledWithExactly(composeCallUrlEmail,
+        "http://fake.invalid/", "test@test.tld");
+    });
+
+    it("should close the conversation window once the email link is received",
+      function() {
+        sandbox.stub(window, "close");
+        view = mountTestComponent();
+
+        store.set("emailLink", "http://fake.invalid/");
+
+        sinon.assert.calledOnce(window.close);
+      });
+
+    it("should display an error message in case email link retrieval failed",
+      function() {
+        view = mountTestComponent();
+
+        store.trigger("error:emailLink");
+
+        expect(view.getDOMNode().querySelector(".error")).not.eql(null);
+      });
+
+    it("should allow retrying to get a call url if it failed previously",
+      function() {
+        view = mountTestComponent();
+
+        store.trigger("error:emailLink");
+
+        expect(view.getDOMNode().querySelector(".btn-email").disabled).eql(false);
+      });
+
+    it("should play a failure sound, once", function() {
+      view = mountTestComponent();
+
+      sinon.assert.calledOnce(navigator.mozLoop.getAudioBlob);
+      sinon.assert.calledWithExactly(navigator.mozLoop.getAudioBlob,
+                                     "failure", sinon.match.func);
+      sinon.assert.calledOnce(fakeAudio.play);
+      expect(fakeAudio.loop).to.equal(false);
+    });
   });
 
   describe("OngoingConversationView", function() {
@@ -339,20 +456,11 @@ describe("loop.conversationViews", function () {
     }
 
     beforeEach(function() {
-      navigator.mozLoop = {
-        getLoopCharPref: function() { return "fake"; },
-        appVersionInfo: sinon.spy()
-      };
-
       store = new loop.store.ConversationStore({}, {
         dispatcher: dispatcher,
         client: {},
         sdkDriver: {}
       });
-    });
-
-    afterEach(function() {
-      delete navigator.mozLoop;
     });
 
     it("should render the CallFailedView when the call state is 'terminated'",
@@ -365,10 +473,10 @@ describe("loop.conversationViews", function () {
           loop.conversationViews.CallFailedView);
     });
 
-    it("should render the PendingConversationView when the call state is 'init'",
+    it("should render the PendingConversationView when the call state is 'gather'",
       function() {
         store.set({
-          callState: CALL_STATES.INIT,
+          callState: CALL_STATES.GATHER,
           contact: contact
         });
 
@@ -401,7 +509,7 @@ describe("loop.conversationViews", function () {
     it("should update the rendered views when the state is changed.",
       function() {
         store.set({
-          callState: CALL_STATES.INIT,
+          callState: CALL_STATES.GATHER,
           contact: contact
         });
 

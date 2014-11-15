@@ -73,6 +73,9 @@ already_AddRefed<LayerManager>
 GetFrom(nsFrameLoader* aFrameLoader)
 {
   nsIDocument* doc = aFrameLoader->GetOwnerDoc();
+  if (!doc) {
+    return nullptr;
+  }
   return nsContentUtils::LayerManagerForDocument(doc);
 }
 
@@ -151,7 +154,8 @@ public:
 
   virtual void HandleLongTap(const CSSPoint& aPoint,
                              int32_t aModifiers,
-                             const ScrollableLayerGuid& aGuid) MOZ_OVERRIDE
+                             const ScrollableLayerGuid& aGuid,
+                             uint64_t aInputBlockId) MOZ_OVERRIDE
   {
     if (MessageLoop::current() != mUILoop) {
       // We have to send this message from the "UI thread" (main
@@ -159,12 +163,12 @@ public:
       mUILoop->PostTask(
         FROM_HERE,
         NewRunnableMethod(this, &RemoteContentController::HandleLongTap,
-                          aPoint, aModifiers, aGuid));
+                          aPoint, aModifiers, aGuid, aInputBlockId));
       return;
     }
     if (mRenderFrame) {
       TabParent* browser = static_cast<TabParent*>(mRenderFrame->Manager());
-      browser->HandleLongTap(aPoint, aModifiers, aGuid);
+      browser->HandleLongTap(aPoint, aModifiers, aGuid, aInputBlockId);
     }
   }
 
@@ -401,14 +405,24 @@ RenderFrameParent::OwnerContentChanged(nsIContent* aContent)
 {
   NS_ABORT_IF_FALSE(mFrameLoader->GetOwnerContent() == aContent,
                     "Don't build new map if owner is same!");
+
+  nsRefPtr<LayerManager> lm = GetFrom(mFrameLoader);
+  // Perhaps the document containing this frame currently has no presentation?
+  if (lm && lm->GetBackendType() == LayersBackend::LAYERS_CLIENT) {
+    ClientLayerManager *clientManager =
+      static_cast<ClientLayerManager*>(lm.get());
+    clientManager->GetRemoteRenderer()->SendAdoptChild(mLayersId);
+  }
 }
 
 nsEventStatus
 RenderFrameParent::NotifyInputEvent(WidgetInputEvent& aEvent,
-                                    ScrollableLayerGuid* aOutTargetGuid)
+                                    ScrollableLayerGuid* aOutTargetGuid,
+                                    uint64_t* aOutInputBlockId)
 {
   if (GetApzcTreeManager()) {
-    return GetApzcTreeManager()->ReceiveInputEvent(aEvent, aOutTargetGuid);
+    return GetApzcTreeManager()->ReceiveInputEvent(
+        aEvent, aOutTargetGuid, aOutInputBlockId);
   }
   return nsEventStatus_eIgnore;
 }
@@ -517,6 +531,7 @@ RenderFrameParent::ZoomToRect(uint32_t aPresShellId, ViewID aViewId,
 
 void
 RenderFrameParent::ContentReceivedTouch(const ScrollableLayerGuid& aGuid,
+                                        uint64_t aInputBlockId,
                                         bool aPreventDefault)
 {
   if (aGuid.mLayersId != mLayersId) {
@@ -525,7 +540,7 @@ RenderFrameParent::ContentReceivedTouch(const ScrollableLayerGuid& aGuid,
     return;
   }
   if (GetApzcTreeManager()) {
-    GetApzcTreeManager()->ContentReceivedTouch(aGuid, aPreventDefault);
+    GetApzcTreeManager()->ContentReceivedTouch(aInputBlockId, aPreventDefault);
   }
 }
 

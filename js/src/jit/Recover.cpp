@@ -874,12 +874,7 @@ RStringSplit::recover(JSContext *cx, SnapshotIterator &iter) const
     RootedString str(cx, iter.read().toString());
     RootedString sep(cx, iter.read().toString());
     RootedTypeObject typeObj(cx, iter.read().toObject().type());
-
     RootedValue result(cx);
-
-    // Use AutoEnterAnalysis to avoid invoking the object metadata callback,
-    // which could try to walk the stack while bailing out.
-    types::AutoEnterAnalysis enter(cx);
 
     JSObject *res = str_split_string(cx, typeObj, str, sep);
     if (!res)
@@ -988,6 +983,52 @@ RTypeOf::recover(JSContext *cx, SnapshotIterator &iter) const
 }
 
 bool
+MToDouble::writeRecoverData(CompactBufferWriter &writer) const
+{
+    MOZ_ASSERT(canRecoverOnBailout());
+    writer.writeUnsigned(uint32_t(RInstruction::Recover_ToDouble));
+    return true;
+}
+
+RToDouble::RToDouble(CompactBufferReader &reader)
+{ }
+
+bool
+RToDouble::recover(JSContext *cx, SnapshotIterator &iter) const
+{
+    Value v = iter.read();
+
+    MOZ_ASSERT(!v.isObject());
+    iter.storeInstructionResult(v);
+    return true;
+}
+
+bool
+MToFloat32::writeRecoverData(CompactBufferWriter &writer) const
+{
+    MOZ_ASSERT(canRecoverOnBailout());
+    writer.writeUnsigned(uint32_t(RInstruction::Recover_ToFloat32));
+    return true;
+}
+
+RToFloat32::RToFloat32(CompactBufferReader &reader)
+{ }
+
+bool
+RToFloat32::recover(JSContext *cx, SnapshotIterator &iter) const
+{
+    RootedValue v(cx, iter.read());
+    RootedValue result(cx);
+
+    MOZ_ASSERT(!v.isObject());
+    if (!RoundFloat32(cx, v, &result))
+        return false;
+
+    iter.storeInstructionResult(result);
+    return true;
+}
+
+bool
 MNewObject::writeRecoverData(CompactBufferWriter &writer) const
 {
     MOZ_ASSERT(canRecoverOnBailout());
@@ -1007,10 +1048,6 @@ RNewObject::recover(JSContext *cx, SnapshotIterator &iter) const
     RootedNativeObject templateObject(cx, &iter.read().toObject().as<NativeObject>());
     RootedValue result(cx);
     JSObject *resultObject = nullptr;
-
-    // Use AutoEnterAnalysis to avoid invoking the object metadata callback
-    // while bailing out, which could try to walk the stack.
-    types::AutoEnterAnalysis enter(cx);
 
     // See CodeGenerator::visitNewObjectVMCall
     if (templateObjectIsClassPrototype_)
@@ -1049,10 +1086,6 @@ RNewArray::recover(JSContext *cx, SnapshotIterator &iter) const
     RootedValue result(cx);
     RootedTypeObject type(cx);
 
-    // Use AutoEnterAnalysis to avoid invoking the object metadata callback
-    // while bailing out, which could try to walk the stack.
-    types::AutoEnterAnalysis enter(cx);
-
     // See CodeGenerator::visitNewArrayCallVM
     if (!templateObject->hasSingletonType())
         type = templateObject->type();
@@ -1080,13 +1113,9 @@ RNewDerivedTypedObject::RNewDerivedTypedObject(CompactBufferReader &reader)
 bool
 RNewDerivedTypedObject::recover(JSContext *cx, SnapshotIterator &iter) const
 {
-    Rooted<SizedTypeDescr *> descr(cx, &iter.read().toObject().as<SizedTypeDescr>());
+    Rooted<TypeDescr *> descr(cx, &iter.read().toObject().as<TypeDescr>());
     Rooted<TypedObject *> owner(cx, &iter.read().toObject().as<TypedObject>());
     int32_t offset = iter.read().toInt32();
-
-    // Use AutoEnterAnalysis to avoid invoking the object metadata callback
-    // while bailing out, which could try to walk the stack.
-    types::AutoEnterAnalysis enter(cx);
 
     JSObject *obj = OutlineTypedObject::createDerived(cx, descr, owner, offset);
     if (!obj)
@@ -1115,10 +1144,6 @@ bool
 RCreateThisWithTemplate::recover(JSContext *cx, SnapshotIterator &iter) const
 {
     RootedNativeObject templateObject(cx, &iter.read().toObject().as<NativeObject>());
-
-    // Use AutoEnterAnalysis to avoid invoking the object metadata callback
-    // while bailing out, which could try to walk the stack.
-    types::AutoEnterAnalysis enter(cx);
 
     // See CodeGenerator::visitCreateThisWithTemplate
     gc::AllocKind allocKind = templateObject->asTenured().getAllocKind();

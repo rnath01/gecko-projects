@@ -118,7 +118,7 @@ TypedArrayObject::ensureHasBuffer(JSContext *cx, Handle<TypedArrayObject *> tarr
         return false;
 
     memcpy(buffer->dataPointer(), tarray->viewData(), tarray->byteLength());
-    InitArrayBufferViewDataPointer(tarray, buffer, 0);
+    tarray->setPrivate(buffer->dataPointer());
 
     tarray->setSlot(TypedArrayLayout::BUFFER_SLOT, ObjectValue(*buffer));
     return true;
@@ -353,7 +353,7 @@ class TypedArrayObjectTemplate : public TypedArrayObject
         obj->setSlot(TypedArrayLayout::BUFFER_SLOT, ObjectOrNullValue(buffer));
 
         if (buffer) {
-            InitArrayBufferViewDataPointer(obj, buffer, byteOffset);
+            obj->initPrivate(buffer->dataPointer() + byteOffset);
         } else {
             void *data = obj->fixedData(FIXED_DATA_START);
             obj->initPrivate(data);
@@ -403,6 +403,10 @@ class TypedArrayObjectTemplate : public TypedArrayObject
     class_constructor(JSContext *cx, unsigned argc, Value *vp)
     {
         CallArgs args = CallArgsFromVp(argc, vp);
+
+        if (!WarnIfNotConstructing(cx, args, "typed array"))
+            return false;
+
         JSObject *obj = create(cx, args);
         if (!obj)
             return false;
@@ -756,7 +760,7 @@ TypedArrayObject::subarray(JSContext *cx, unsigned argc, Value *vp)
 
 /* static */ const JSFunctionSpec
 TypedArrayObject::protoFunctions[] = {
-    JS_SELF_HOSTED_FN("@@iterator", "ArrayValues", 0, 0),
+    JS_SELF_HOSTED_SYM_FN(iterator, "ArrayValues", 0, 0),                          \
     JS_FN("subarray", TypedArrayObject::subarray, 2, 0),
     JS_FN("set", TypedArrayObject::set, 2, 0),
     JS_FN("copyWithin", TypedArrayObject::copyWithin, 2, 0),
@@ -955,7 +959,7 @@ DataViewObject::create(JSContext *cx, uint32_t byteOffset, uint32_t byteLength,
     dvobj.setFixedSlot(TypedArrayLayout::BYTEOFFSET_SLOT, Int32Value(byteOffset));
     dvobj.setFixedSlot(TypedArrayLayout::LENGTH_SLOT, Int32Value(byteLength));
     dvobj.setFixedSlot(TypedArrayLayout::BUFFER_SLOT, ObjectValue(*arrayBuffer));
-    InitArrayBufferViewDataPointer(&dvobj, arrayBuffer, byteOffset);
+    dvobj.initPrivate(arrayBuffer->dataPointer() + byteOffset);
     MOZ_ASSERT(byteOffset + byteLength <= arrayBuffer->byteLength());
 
     // Verify that the private slot is at the expected place
@@ -1743,7 +1747,6 @@ IMPL_TYPED_ARRAY_COMBINED_UNWRAPPERS(Float64, double, double)
     {                                                                          \
         nullptr,             /* outerObject */                                 \
         nullptr,             /* innerObject */                                 \
-        nullptr,             /* iteratorObject */                              \
         false,               /* isWrappedNative */                             \
         nullptr,             /* weakmapKeyDelegateOp */                        \
         TypedArrayObject::ObjectMoved                                          \

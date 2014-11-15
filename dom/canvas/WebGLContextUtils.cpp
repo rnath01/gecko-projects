@@ -674,7 +674,7 @@ GLenum
 WebGLContext::GetAndFlushUnderlyingGLErrors()
 {
     // Get and clear GL error in ALL cases.
-    GLenum error = gl->GetAndClearError();
+    GLenum error = gl->fGetError();
 
     // Only store in mUnderlyingGLError if is hasn't already recorded an
     // error.
@@ -867,6 +867,7 @@ InfoFrom(WebGLTexImageFunc func, WebGLTexDimensions dims)
         }
     case WebGLTexDimensions::Tex3D:
         switch (func) {
+        case WebGLTexImageFunc::TexImage:        return "texImage3D";
         case WebGLTexImageFunc::TexSubImage:     return "texSubImage3D";
         case WebGLTexImageFunc::CopyTexSubImage: return "copyTexSubImage3D";
         case WebGLTexImageFunc::CompTexSubImage: return "compressedTexSubImage3D";

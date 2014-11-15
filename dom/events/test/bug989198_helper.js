@@ -1,5 +1,5 @@
 /*
- * Constants and helper functions for testing BeforeAfterKeyboardEvent.
+ * Helper functions for testing BeforeAfterKeyboardEvent.
  */
 
 const kUnknownEvent       = 0x000;
@@ -30,7 +30,11 @@ function frameScript()
 
 function prepareTest(useRemote)
 {
-  setupHandlers(window, embedderHandler);
+  if (useRemote) {
+    setupHandlers(window, embedderHandler);
+  } else {
+    setupHandlers(window, embedderHandlerWithCheck);
+  }
 
   var iframe = document.createElement("iframe");
   iframe.id = "embedded";
@@ -51,12 +55,6 @@ function prepareTest(useRemote)
   });
 
   document.body.appendChild(iframe);
-}
-
-function cleanupTest()
-{
-  teardownHandlers(window, embedderHandler);
-  runTests();
 }
 
 function setupHandlers(element, handler)
@@ -134,38 +132,9 @@ function embeddedHandler(e)
   return handler(e, kChild);
 }
 
-function embedderHandler(e)
+function embedderHandler(e, callback)
 {
-  // Verify value of attribute embeddedCancelled
-  handler(e, kParent, function checkEmbeddedCancelled(code){
-    switch (code) {
-      case kBeforeEvent | kKeyDownEvent:
-      case kBeforeEvent | kKeyUpEvent:
-        is(e.embeddedCancelled, null,
-           gCurrentTest.description + ': embeddedCancelled should be null');
-        break;
-      case kAfterEvent | kKeyDownEvent:
-        if ((gCurrentTest.doPreventDefaultAt & 0xFF) == kKeyDownEvent) {
-          is(e.embeddedCancelled, true,
-             gCurrentTest.description + ': embeddedCancelled should be true');
-        } else {
-          is(e.embeddedCancelled, false,
-             gCurrentTest.description + ': embeddedCancelled should be false');
-        }
-        break;
-      case kAfterEvent | kKeyUpEvent:
-        if ((gCurrentTest.doPreventDefaultAt & 0xFF) == kKeyUpEvent) {
-          is(e.embeddedCancelled, true,
-             gCurrentTest.description + ': embeddedCancelled should be true');
-        } else {
-          is(e.embeddedCancelled, false,
-             gCurrentTest.description + ': embeddedCancelled should be false');
-        }
-        break;
-      default:
-        break;
-    }
-  });
+  handler(e, kParent, callback);
 }
 
 function handler(e, highBit, callback)
@@ -178,8 +147,8 @@ function handler(e, highBit, callback)
     callback(code);
   }
 
-  // Return and let frameScript to handle
   if (highBit == kChild) {
+    // return and let frameScript to handle
     return newCode == gCurrentTest.doPreventDefaultAt;
   }
 
@@ -188,13 +157,36 @@ function handler(e, highBit, callback)
   }
 }
 
-function runTests()
+function embedderHandlerWithCheck(e)
 {
-  if (!tests.length) {
-    SimpleTest.finish();
-    return;
-  }
-
-  var test = tests.shift();
-  test();
+  // Verify value of attribute embeddedCancelled
+  embedderHandler(e, function checkEmbeddedCancelled(code){
+  switch (code) {
+    case kBeforeEvent | kKeyDownEvent:
+    case kBeforeEvent | kKeyUpEvent:
+      is(e.embeddedCancelled, null,
+         gCurrentTest.description + ": embeddedCancelled should be null");
+      break;
+    case kAfterEvent | kKeyDownEvent:
+      if ((gCurrentTest.doPreventDefaultAt & 0xFF) == kKeyDownEvent) {
+        is(e.embeddedCancelled, true,
+           gCurrentTest.description + ": embeddedCancelled should be true");
+      } else {
+        is(e.embeddedCancelled, false,
+           gCurrentTest.description + ": embeddedCancelled should be false");
+      }
+      break;
+    case kAfterEvent | kKeyUpEvent:
+      if ((gCurrentTest.doPreventDefaultAt & 0xFF) == kKeyUpEvent) {
+        is(e.embeddedCancelled, true,
+           gCurrentTest.description + ": embeddedCancelled should be true");
+      } else {
+        is(e.embeddedCancelled, false,
+           gCurrentTest.description + ": embeddedCancelled should be false");
+      }
+      break;
+    default:
+      break;
+    }
+  });
 }

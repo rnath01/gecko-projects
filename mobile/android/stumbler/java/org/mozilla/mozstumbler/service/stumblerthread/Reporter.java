@@ -30,7 +30,7 @@ import org.mozilla.mozstumbler.service.stumblerthread.scanners.GPSScanner;
 import org.mozilla.mozstumbler.service.stumblerthread.scanners.WifiScanner;
 
 public final class Reporter extends BroadcastReceiver {
-    private static final String LOG_TAG = AppGlobals.LOG_PREFIX + Reporter.class.getSimpleName();
+    private static final String LOG_TAG = AppGlobals.makeLogTag(Reporter.class.getSimpleName());
     public static final String ACTION_FLUSH_TO_BUNDLE = AppGlobals.ACTION_NAMESPACE + ".FLUSH";
     private boolean mIsStarted;
 
@@ -142,6 +142,10 @@ public final class Reporter extends BroadcastReceiver {
 
         Map<String, ScanResult> currentWifiData = mBundle.getWifiData();
         for (ScanResult result : results) {
+            if (currentWifiData.size() > MAX_WIFIS_PER_LOCATION) {
+                return;
+            }
+
             String key = result.BSSID;
             if (!currentWifiData.containsKey(key)) {
                 currentWifiData.put(key, result);
@@ -156,6 +160,9 @@ public final class Reporter extends BroadcastReceiver {
 
         Map<String, CellInfo> currentCellData = mBundle.getCellData();
         for (CellInfo result : cells) {
+            if (currentCellData.size() > MAX_CELLS_PER_LOCATION) {
+                return;
+            }
             String key = result.getCellIdentity();
             if (!currentCellData.containsKey(key)) {
                 currentCellData.put(key, result);
@@ -188,10 +195,13 @@ public final class Reporter extends BroadcastReceiver {
         }
 
         if (AppGlobals.isDebug) {
-            Log.d(LOG_TAG, "Received bundle: " + mlsObj.toString());
+            // PII: do not log the bundle without obfuscating it
+            Log.d(LOG_TAG, "Received bundle");
         }
 
-        AppGlobals.guiLogInfo(mlsObj.toString());
+        if (wifiCount + cellCount < 1) {
+            return;
+        }
 
         try {
             DataStorageManager.getInstance().insert(mlsObj.toString(), wifiCount, cellCount);

@@ -266,9 +266,6 @@ DoApplyRenderingChangeToTree(nsIFrame* aFrame,
     if ((aChange & nsChangeHint_UpdateTransformLayer) &&
         aFrame->IsTransformed()) {
       ActiveLayerTracker::NotifyRestyle(aFrame, eCSSProperty_transform);
-      if (!aFrame->GetPrevContinuation()) {
-        nsSVGEffects::InvalidateRenderingObservers(aFrame);
-      }
       // If we're not already going to do an invalidating paint, see
       // if we can get away with only updating the transform on a
       // layer for this frame, and not scheduling an invalidating
@@ -439,8 +436,8 @@ RestyleManager::RecomputePosition(nsIFrame* aFrame)
   // the frame, and then get the offsets and size from it. If the frame's size
   // doesn't need to change, we can simply update the frame position. Otherwise
   // we fall back to a reflow.
-  nsRefPtr<nsRenderingContext> rc =
-    aFrame->PresContext()->PresShell()->CreateReferenceRenderingContext();
+  nsRenderingContext rc(
+    aFrame->PresContext()->PresShell()->CreateReferenceRenderingContext());
 
   // Construct a bogus parent reflow state so that there's a usable
   // containing block reflow state.
@@ -451,7 +448,7 @@ RestyleManager::RecomputePosition(nsIFrame* aFrame)
 
   nsFrameState savedState = parentFrame->GetStateBits();
   nsHTMLReflowState parentReflowState(aFrame->PresContext(), parentFrame,
-                                      rc, parentSize);
+                                      &rc, parentSize);
   parentFrame->RemoveStateBits(~nsFrameState(0));
   parentFrame->AddStateBits(savedState);
 
@@ -750,7 +747,8 @@ RestyleManager::ProcessRestyledFrames(nsStyleChangeList& aChangeList)
       // We could also have problems with triggering of CSS transitions
       // on elements whose frames are reconstructed, since we depend on
       // the reconstruction happening synchronously.
-      FrameConstructor()->RecreateFramesForContent(content, false);
+      FrameConstructor()->RecreateFramesForContent(content, false,
+        nsCSSFrameConstructor::REMOVE_FOR_RECONSTRUCTION, nullptr);
     } else {
       NS_ASSERTION(frame, "This shouldn't happen");
 
@@ -776,6 +774,9 @@ RestyleManager::ProcessRestyledFrames(nsStyleChangeList& aChangeList)
              cont = nsLayoutUtils::GetNextContinuationOrIBSplitSibling(cont)) {
           nsSVGEffects::UpdateEffects(cont);
         }
+      }
+      if (hint & nsChangeHint_InvalidateRenderingObservers) {
+        nsSVGEffects::InvalidateRenderingObservers(frame);
       }
       if (hint & nsChangeHint_NeedReflow) {
         StyleChangeReflow(frame, hint);
@@ -931,7 +932,8 @@ RestyleManager::RestyleElement(Element*        aElement,
   }
 
   if (aMinHint & nsChangeHint_ReconstructFrame) {
-    FrameConstructor()->RecreateFramesForContent(aElement, false);
+    FrameConstructor()->RecreateFramesForContent(aElement, false,
+      nsCSSFrameConstructor::REMOVE_FOR_RECONSTRUCTION, nullptr);
   } else if (aPrimaryFrame) {
     ComputeAndProcessStyleChange(aPrimaryFrame, aMinHint, aRestyleTracker,
                                  aRestyleHint);
@@ -1451,9 +1453,12 @@ RestyleManager::RebuildAllStyleData(nsChangeHint aExtraHint,
   // Until we get rid of these phases in bug 960465, we need to skip
   // animation restyles during the non-animation phase, and post
   // animation restyles so that we restyle those elements again in the
-  // animation phase.
+  // animation phase.  Furthermore, we need to add
+  // eRestyle_ChangeAnimationPhaseDescendants so that we actually honor
+  // these booleans in all cases.
   mSkipAnimationRules = true;
   mPostAnimationRestyles = true;
+  aRestyleHint |= eRestyle_ChangeAnimationPhaseDescendants;
 
   DoRebuildAllStyleData(mPendingRestyles, aExtraHint, aRestyleHint);
 
@@ -1493,8 +1498,12 @@ RestyleManager::DoRebuildAllStyleData(RestyleTracker& aRestyleTracker,
     // different styles).  If we use up the hint for one of the
     // ancestors that we hit first, then we'll fail to do the restyling
     // we need to do.
-    aRestyleTracker.AddPendingRestyle(mPresContext->Document()->GetRootElement(),
-                                      aRestyleHint, nsChangeHint(0));
+    Element* root = mPresContext->Document()->GetRootElement();
+    if (root) {
+      // If the root element is gone, dropping the hint on the floor
+      // should be fine.
+      aRestyleTracker.AddPendingRestyle(root, aRestyleHint, nsChangeHint(0));
+    }
     aRestyleHint = nsRestyleHint(0);
   }
 
@@ -1526,6 +1535,12 @@ RestyleManager::ProcessPendingRestyles()
   NS_PRECONDITION(mPresContext->Document(), "No document?  Pshaw!");
   NS_PRECONDITION(!nsContentUtils::IsSafeToRunScript(),
                   "Missing a script blocker!");
+
+  if (mRebuildAllStyleData) {
+    RebuildAllStyleData(nsChangeHint(0), nsRestyleHint(0));
+    MOZ_ASSERT(mPendingRestyles.Count() == 0);
+    return;
+  }
 
   // First do any queued-up frame creation.  (We should really
   // merge this into the rest of the process, though; see bug 827239.)
@@ -2507,11 +2522,13 @@ ElementRestyler::Restyle(nsRestyleHint aRestyleHint)
     }
   }
 
-  // If we are restyling this frame with eRestyle_Self, we restyle
-  // children with nsRestyleHint(0).  But we pass the eRestyle_ForceDescendants
-  // flag down too.
+  // If we are restyling this frame with eRestyle_Self or weaker hints,
+  // we restyle children with nsRestyleHint(0).  But we pass the
+  // eRestyle_ChangeAnimationPhaseDescendants and eRestyle_ForceDescendants
+  // flags down too.
   nsRestyleHint childRestyleHint =
     nsRestyleHint(aRestyleHint & (eRestyle_Subtree |
+                                  eRestyle_ChangeAnimationPhaseDescendants |
                                   eRestyle_ForceDescendants));
 
   nsRefPtr<nsStyleContext> oldContext = mFrame->StyleContext();
@@ -3728,7 +3745,9 @@ RestyleManager::RestyleHintToString(nsRestyleHint aHint)
   bool any = false;
   const char* names[] = { "Self", "Subtree", "LaterSiblings", "CSSTransitions",
                           "CSSAnimations", "SVGAttrAnimations", "StyleAttribute",
-                          "ChangeAnimationPhase", "Force", "ForceDescendants" };
+                          "ChangeAnimationPhase",
+                          "ChangeAnimationPhaseDescendants",
+                          "Force", "ForceDescendants" };
   uint32_t hint = aHint & ((1 << ArrayLength(names)) - 1);
   uint32_t rest = aHint & ~((1 << ArrayLength(names)) - 1);
   for (uint32_t i = 0; i < ArrayLength(names); i++) {
@@ -3765,7 +3784,8 @@ RestyleManager::ChangeHintToString(nsChangeHint aHint)
     "UpdateTransformLayer", "ReconstructFrame", "UpdateOverflow",
     "UpdateSubtreeOverflow", "UpdatePostTransformOverflow",
     "ChildrenOnlyTransform", "RecomputePosition", "AddOrRemoveTransform",
-    "BorderStyleNoneChange", "UpdateTextPath", "NeutralChange"
+    "BorderStyleNoneChange", "UpdateTextPath", "NeutralChange",
+    "InvalidateRenderingObservers"
   };
   uint32_t hint = aHint & ((1 << ArrayLength(names)) - 1);
   uint32_t rest = aHint & ~((1 << ArrayLength(names)) - 1);

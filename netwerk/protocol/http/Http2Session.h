@@ -104,7 +104,8 @@ public:
     COMPRESSION_ERROR = 9,
     CONNECT_ERROR = 10,
     ENHANCE_YOUR_CALM = 11,
-    INADEQUATE_SECURITY = 12
+    INADEQUATE_SECURITY = 12,
+    HTTP_1_1_REQUIRED = 13
   };
 
   // These are frame flags. If they, or other undefined flags, are
@@ -246,6 +247,7 @@ private:
   void        GenerateRstStream(uint32_t, uint32_t);
   void        GenerateGoAway(uint32_t);
   void        CleanupStream(Http2Stream *, nsresult, errorType);
+  void        CleanupStream(uint32_t, nsresult, errorType);
   void        CloseStream(Http2Stream *, nsresult);
   void        SendHello();
   void        RemoveStreamFromQueues(Http2Stream *);

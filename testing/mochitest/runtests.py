@@ -12,6 +12,7 @@ import sys
 SCRIPT_DIR = os.path.abspath(os.path.realpath(os.path.dirname(__file__)))
 sys.path.insert(0, SCRIPT_DIR);
 
+from urlparse import urlparse
 import ctypes
 import glob
 import json
@@ -35,9 +36,6 @@ import bisection
 
 from automationutils import (
     environment,
-    isURL,
-    KeyValueParseError,
-    parseKeyValue,
     processLeakLog,
     dumpScreen,
     ShutdownLeaks,
@@ -661,7 +659,6 @@ class MochitestUtilsMixin(object):
 
     tests = self.getActiveTests(options, disabled)
     paths = []
-
     for test in tests:
       if testsToFilter and (test['path'] not in testsToFilter):
         continue
@@ -1033,6 +1030,27 @@ def findTestMediaDevices(log):
   # Hardcode the name since it's always the same.
   info['audio'] = 'Sine source at 440 Hz'
   return info
+
+class KeyValueParseError(Exception):
+  """error when parsing strings of serialized key-values"""
+  def __init__(self, msg, errors=()):
+    self.errors = errors
+    Exception.__init__(self, msg)
+
+def parseKeyValue(strings, separator='=', context='key, value: '):
+  """
+  parse string-serialized key-value pairs in the form of
+  `key = value`. Returns a list of 2-tuples.
+  Note that whitespace is not stripped.
+  """
+
+  # syntax check
+  missing = [string for string in strings if separator not in string]
+  if missing:
+    raise KeyValueParseError("Error: syntax error in %s" % (context,
+                                                            ','.join(missing)),
+                                                            errors=missing)
+  return [string.split(separator, 1) for string in strings]
 
 class Mochitest(MochitestUtilsMixin):
   certdbNew = False
@@ -1597,8 +1615,6 @@ class Mochitest(MochitestUtilsMixin):
     paths = []
 
     for test in tests:
-      if test.get('expected') == 'fail':
-        raise Exception('fail-if encountered for test: %s. There is no support for fail-if in Mochitests.' % test['name'])
       pathAbs = os.path.abspath(test['path'])
       assert pathAbs.startswith(self.testRootAbs)
       tp = pathAbs[len(self.testRootAbs):].replace('\\', '/').strip('/')
@@ -1612,8 +1628,10 @@ class Mochitest(MochitestUtilsMixin):
         continue
 
       testob = {'path': tp}
-      if test.has_key('disabled'):
+      if 'disabled' in test:
         testob['disabled'] = test['disabled']
+      if 'expected' in test:
+        testob['expected'] = test['expected']
       paths.append(testob)
 
     def path_sort(ob1, ob2):
@@ -1643,7 +1661,7 @@ class Mochitest(MochitestUtilsMixin):
 
     testsToRun = []
     for test in tests:
-      if test.has_key('disabled'):
+      if 'disabled' in test:
         continue
       testsToRun.append(test['path'])
 
@@ -2126,7 +2144,7 @@ def main():
 
   options.utilityPath = mochitest.getFullPath(options.utilityPath)
   options.certPath = mochitest.getFullPath(options.certPath)
-  if options.symbolsPath and not isURL(options.symbolsPath):
+  if options.symbolsPath and len(urlparse(options.symbolsPath).scheme) < 2:
     options.symbolsPath = mochitest.getFullPath(options.symbolsPath)
 
   return_code = mochitest.runTests(options)

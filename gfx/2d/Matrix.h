@@ -317,11 +317,21 @@ public:
            FuzzyEqual(_21, 0.0f) && FuzzyEqual(_22, 1.0f);
   }
 
+  static bool FuzzyIsInteger(Float aValue)
+  {
+    return FuzzyEqual(aValue, floorf(aValue + 0.5f));
+  }
+
   bool IsIntegerTranslation() const
   {
-    return IsTranslation() &&
-           FuzzyEqual(_31, floorf(_31 + 0.5f)) &&
-           FuzzyEqual(_32, floorf(_32 + 0.5f));
+    return IsTranslation() && FuzzyIsInteger(_31) && FuzzyIsInteger(_32);
+  }
+
+  bool IsAllIntegers() const
+  {
+    return FuzzyIsInteger(_11) && FuzzyIsInteger(_12) &&
+           FuzzyIsInteger(_21) && FuzzyIsInteger(_22) &&
+           FuzzyIsInteger(_31) && FuzzyIsInteger(_32);
   }
 
   Point GetTranslation() const {
@@ -344,14 +354,6 @@ public:
    */
   bool HasNonAxisAlignedTransform() const {
       return !FuzzyEqual(_21, 0.0) || !FuzzyEqual(_12, 0.0);
-  }
-
-  /**
-   * Returns true if the matrix has non-integer scale
-   */
-  bool HasNonIntegerScale() const {
-      return !FuzzyEqual(_11, floor(_11 + 0.5)) ||
-             !FuzzyEqual(_22, floor(_22 + 0.5));
   }
 };
 
@@ -801,19 +803,19 @@ public:
 
   Matrix4x4 &NudgeToIntegersFixedEpsilon()
   {
+    NudgeToInteger(&_11);
+    NudgeToInteger(&_12);
+    NudgeToInteger(&_13);
+    NudgeToInteger(&_14);
+    NudgeToInteger(&_21);
+    NudgeToInteger(&_22);
+    NudgeToInteger(&_23);
+    NudgeToInteger(&_24);
+    NudgeToInteger(&_31);
+    NudgeToInteger(&_32);
+    NudgeToInteger(&_33);
+    NudgeToInteger(&_34);
     static const float error = 1e-5f;
-    NudgeToInteger(&_11, error);
-    NudgeToInteger(&_12, error);
-    NudgeToInteger(&_13, error);
-    NudgeToInteger(&_14, error);
-    NudgeToInteger(&_21, error);
-    NudgeToInteger(&_22, error);
-    NudgeToInteger(&_23, error);
-    NudgeToInteger(&_24, error);
-    NudgeToInteger(&_31, error);
-    NudgeToInteger(&_32, error);
-    NudgeToInteger(&_33, error);
-    NudgeToInteger(&_34, error);
     NudgeToInteger(&_41, error);
     NudgeToInteger(&_42, error);
     NudgeToInteger(&_43, error);

@@ -55,6 +55,8 @@ loop.store.ConversationStore = (function() {
 
   var ConversationStore = Backbone.Model.extend({
     defaults: {
+      // The id of the window. Currently used for getting the window id.
+      windowId: undefined,
       // The current state of the call
       callState: CALL_STATES.INIT,
       // The reason if a call was terminated
@@ -116,17 +118,12 @@ loop.store.ConversationStore = (function() {
       this.dispatcher = options.dispatcher;
       this.sdkDriver = options.sdkDriver;
 
+      // XXX Further actions are registered in setupWindowData when
+      // we know what window type this is. At some stage, we might want to
+      // consider store mixins or some alternative which means the stores
+      // would only be created when we want them.
       this.dispatcher.register(this, [
-        "connectionFailure",
-        "connectionProgress",
-        "gatherCallData",
-        "connectCall",
-        "hangupCall",
-        "peerHungupCall",
-        "cancelCall",
-        "retryCall",
-        "mediaConnected",
-        "setMute"
+        "setupWindowData"
       ]);
     },
 
@@ -185,36 +182,35 @@ loop.store.ConversationStore = (function() {
       }
     },
 
-    /**
-     * Handles the gather call data action, setting the state
-     * and starting to get the appropriate data for the type of call.
-     *
-     * @param {sharedActions.GatherCallData} actionData The action data.
-     */
-    gatherCallData: function(actionData) {
-      if (!actionData.outgoing) {
-        // XXX Other types aren't supported yet, but set the state for the
-        // view selection.
-        this.set({outgoing: false});
+    setupWindowData: function(actionData) {
+      var windowType = actionData.type;
+      if (windowType !== "outgoing" &&
+          windowType !== "incoming") {
+        // Not for this store, don't do anything.
         return;
       }
 
-      var callData = navigator.mozLoop.getCallData(actionData.callId);
-      if (!callData) {
-        console.error("Failed to get the call data");
-        this.set({callState: CALL_STATES.TERMINATED});
-        return;
-      }
+      this.dispatcher.register(this, [
+        "connectionFailure",
+        "connectionProgress",
+        "connectCall",
+        "hangupCall",
+        "remotePeerDisconnected",
+        "cancelCall",
+        "retryCall",
+        "mediaConnected",
+        "setMute",
+        "fetchEmailLink"
+      ]);
 
       this.set({
-        contact: callData.contact,
-        outgoing: actionData.outgoing,
-        callId: actionData.callId,
-        callType: callData.callType,
-        callState: CALL_STATES.GATHER
+        contact: actionData.contact,
+        outgoing: windowType === "outgoing",
+        windowId: actionData.windowId,
+        callType: actionData.callType,
+        callState: CALL_STATES.GATHER,
+        videoMuted: actionData.callType === CALL_TYPES.AUDIO_ONLY
       });
-
-      this.set({videoMuted: this.get("callType") === CALL_TYPES.AUDIO_ONLY});
 
       if (this.get("outgoing")) {
         this._setupOutgoingCall();
@@ -247,11 +243,23 @@ loop.store.ConversationStore = (function() {
     },
 
     /**
-     * The peer hungup the call.
+     * The remote peer disconnected from the session.
+     *
+     * @param {sharedActions.RemotePeerDisconnected} actionData
      */
-    peerHungupCall: function() {
+    remotePeerDisconnected: function(actionData) {
       this._endSession();
-      this.set({callState: CALL_STATES.FINISHED});
+
+      // If the peer hungup, we end normally, otherwise
+      // we treat this as a call failure.
+      if (actionData.peerHungup) {
+        this.set({callState: CALL_STATES.FINISHED});
+      } else {
+        this.set({
+          callState: CALL_STATES.TERMINATED,
+          callStateReason: "peerNetworkDisconnected"
+        });
+      }
     },
 
     /**
@@ -304,15 +312,48 @@ loop.store.ConversationStore = (function() {
     },
 
     /**
+     * Fetches a new call URL intended to be sent over email when a contact
+     * can't be reached.
+     */
+    fetchEmailLink: function() {
+      // XXX This is an empty string as a conversation identifier. Bug 1015938 implements
+      // a user-set string.
+      this.client.requestCallUrl("", function(err, callUrlData) {
+        if (err) {
+          this.trigger("error:emailLink");
+          return;
+        }
+        this.set("emailLink", callUrlData.callUrl);
+      }.bind(this));
+    },
+
+    /**
      * Obtains the outgoing call data from the server and handles the
      * result.
      */
     _setupOutgoingCall: function() {
       var contactAddresses = [];
+      var contact = this.get("contact");
 
-      this.get("contact").email.forEach(function(address) {
-        contactAddresses.push(address.value);
-      });
+      navigator.mozLoop.calls.setCallInProgress(this.get("windowId"));
+
+      function appendContactValues(property, strip) {
+        if (contact.hasOwnProperty(property)) {
+          contact[property].forEach(function(item) {
+            if (strip) {
+              contactAddresses.push(item.value
+                .replace(/^(\+)?(.*)$/g, function(m, prefix, number) {
+                  return (prefix || "") + number.replace(/[\D]+/g, "");
+                }));
+            } else {
+              contactAddresses.push(item.value);
+            }
+          });
+        }
+      }
+
+      appendContactValues("email");
+      appendContactValues("tel", true);
 
       this.client.setupOutgoingCall(contactAddresses,
         this.get("callType"),
@@ -374,6 +415,8 @@ loop.store.ConversationStore = (function() {
         this._websocket.close();
         delete this._websocket;
       }
+
+      navigator.mozLoop.calls.clearCallInProgress(this.get("windowId"));
     },
 
     /**

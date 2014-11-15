@@ -1060,8 +1060,10 @@ JSStructuredCloneWriter::startWrite(HandleValue v)
             return out.writePair(SCTAG_REGEXP_OBJECT, re->getFlags()) &&
                    writeString(SCTAG_STRING, re->getSource());
         } else if (ObjectClassIs(obj, ESClass_Date, context())) {
-            double d = js_DateGetMsecSinceEpoch(obj);
-            return out.writePair(SCTAG_DATE_OBJECT, 0) && out.writeDouble(d);
+            RootedValue unboxed(context());
+            if (!Unbox(context(), obj, &unboxed))
+                return false;
+            return out.writePair(SCTAG_DATE_OBJECT, 0) && out.writeDouble(unboxed.toNumber());
         } else if (JS_IsTypedArrayObject(obj)) {
             return writeTypedArray(obj);
         } else if (JS_IsArrayBufferObject(obj) && JS_ArrayBufferHasData(obj)) {
@@ -1169,14 +1171,20 @@ JSStructuredCloneWriter::transferOwnership()
             // lend itself well to generic manipulation via proxies.
             Rooted<ArrayBufferObject *> arrayBuffer(context(), &CheckedUnwrap(obj)->as<ArrayBufferObject>());
             size_t nbytes = arrayBuffer->byteLength();
-            bool hasStealableContents = arrayBuffer->hasStealableContents();
+
+            // Structured cloning currently only has optimizations for mapped
+            // and malloc'd buffers, not asm.js-ified buffers.
+            bool hasStealableContents = arrayBuffer->hasStealableContents() &&
+                                        (arrayBuffer->isMapped() || arrayBuffer->hasMallocedContents());
+
             ArrayBufferObject::BufferContents bufContents =
                 ArrayBufferObject::stealContents(context(), arrayBuffer, hasStealableContents);
             if (!bufContents)
                 return false; // Destructor will clean up the already-transferred data.
+
             content = bufContents.data();
             tag = SCTAG_TRANSFER_MAP_ARRAY_BUFFER;
-            if (bufContents.kind() & ArrayBufferObject::MAPPED_BUFFER)
+            if (bufContents.kind() == ArrayBufferObject::MAPPED)
                 ownership = JS::SCTAG_TMO_MAPPED_DATA;
             else
                 ownership = JS::SCTAG_TMO_ALLOC_DATA;

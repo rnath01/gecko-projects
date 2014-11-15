@@ -189,7 +189,9 @@ nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
   : mType(aType), mDocument(aDocument), mBaseMinFontSize(0),
     mTextZoom(1.0), mFullZoom(1.0), mLastFontInflationScreenWidth(-1.0),
     mPageSize(-1, -1), mPPScale(1.0f),
-    mViewportStyleOverflow(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO),
+    mViewportStyleScrollbar(NS_STYLE_OVERFLOW_AUTO,
+                            NS_STYLE_OVERFLOW_AUTO,
+                            NS_STYLE_SCROLL_BEHAVIOR_AUTO),
     mImageAnimationModePref(imgIContainer::kNormalAnimMode),
     mAllInvalidated(false),
     mPaintFlashing(false), mPaintFlashingInitialized(false)
@@ -250,24 +252,14 @@ nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
   PR_INIT_CLIST(&mDOMMediaQueryLists);
 }
 
-nsPresContext::~nsPresContext()
+void
+nsPresContext::Destroy()
 {
-  NS_PRECONDITION(!mShell, "Presshell forgot to clear our mShell pointer");
-  SetShell(nullptr);
-
-  NS_ABORT_IF_FALSE(PR_CLIST_IS_EMPTY(&mDOMMediaQueryLists),
-                    "must not have media query lists left");
-
-  // Disconnect the refresh driver *after* the transition manager, which
-  // needs it.
-  if (mRefreshDriver && mRefreshDriver->PresContext() == this) {
-    mRefreshDriver->Disconnect();
-  }
-
   if (mEventManager) {
     // unclear if these are needed, but can't hurt
     mEventManager->NotifyDestroyPresContext(this);
     mEventManager->SetPresContext(nullptr);
+    mEventManager = nullptr;
   }
 
   if (mPrefChangedTimer)
@@ -319,6 +311,24 @@ nsPresContext::~nsPresContext()
   Preferences::UnregisterCallback(nsPresContext::PrefChangedCallback,
                                   "nglayout.debug.paint_flashing_chrome",
                                   this);
+
+  // Disconnect the refresh driver *after* the transition manager, which
+  // needs it.
+  if (mRefreshDriver && mRefreshDriver->PresContext() == this) {
+    mRefreshDriver->Disconnect();
+    mRefreshDriver = nullptr;
+  }
+}
+
+nsPresContext::~nsPresContext()
+{
+  NS_PRECONDITION(!mShell, "Presshell forgot to clear our mShell pointer");
+  SetShell(nullptr);
+
+  NS_ABORT_IF_FALSE(PR_CLIST_IS_EMPTY(&mDOMMediaQueryLists),
+                    "must not have media query lists left");
+
+  Destroy();
 }
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsPresContext)
@@ -366,13 +376,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsPresContext)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument);
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDeviceContext); // worth bothering?
-  if (tmp->mEventManager) {
-    // unclear if these are needed, but can't hurt
-    tmp->mEventManager->NotifyDestroyPresContext(tmp);
-    tmp->mEventManager->SetPresContext(nullptr);
-    tmp->mEventManager = nullptr;
-  }
-
   // We own only the items in mDOMMediaQueryLists that have listeners;
   // this reference is managed by their AddListener and RemoveListener
   // methods.
@@ -385,15 +388,11 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsPresContext)
   }
 
   // NS_RELEASE(tmp->mLanguage); // an atom
-
   // NS_IMPL_CYCLE_COLLECTION_UNLINK(mTheme); // a service
   // NS_IMPL_CYCLE_COLLECTION_UNLINK(mLangService); // a service
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mPrintSettings);
-  if (tmp->mPrefChangedTimer)
-  {
-    tmp->mPrefChangedTimer->Cancel();
-    tmp->mPrefChangedTimer = nullptr;
-  }
+
+  tmp->Destroy();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 
@@ -968,11 +967,6 @@ nsPresContext::Init(nsDeviceContext* aDeviceContext)
 
   mAnimationManager = new nsAnimationManager(this);
 
-  // Since CounterStyleManager is also the name of a method of
-  // nsPresContext, it is necessary to prefix the class with the mozilla
-  // namespace here.
-  mCounterStyleManager = new mozilla::CounterStyleManager(this);
-
   if (mDocument->GetDisplayDocument()) {
     NS_ASSERTION(mDocument->GetDisplayDocument()->GetShell() &&
                  mDocument->GetDisplayDocument()->GetShell()->GetPresContext(),
@@ -1100,6 +1094,10 @@ nsPresContext::SetShell(nsIPresShell* aShell)
     mFontFaceSet->DestroyUserFontSet();
     mFontFaceSet = nullptr;
   }
+  if (mCounterStyleManager) {
+    mCounterStyleManager->Disconnect();
+    mCounterStyleManager = nullptr;
+  }
 
   if (mShell) {
     // Remove ourselves as the charset observer from the shell's doc, because
@@ -1113,6 +1111,11 @@ nsPresContext::SetShell(nsIPresShell* aShell)
   mShell = aShell;
 
   if (mShell) {
+    // Since CounterStyleManager is also the name of a method of
+    // nsPresContext, it is necessary to prefix the class with the mozilla
+    // namespace here.
+    mCounterStyleManager = new mozilla::CounterStyleManager(this);
+
     nsIDocument *doc = mShell->GetDocument();
     NS_ASSERTION(doc, "expect document here");
     if (doc) {
@@ -1155,10 +1158,6 @@ nsPresContext::SetShell(nsIPresShell* aShell)
     if (mRestyleManager) {
       mRestyleManager->Disconnect();
       mRestyleManager = nullptr;
-    }
-    if (mCounterStyleManager) {
-      mCounterStyleManager->Disconnect();
-      mCounterStyleManager = nullptr;
     }
 
     if (IsRoot()) {
@@ -2522,6 +2521,11 @@ nsPresContext::NotifyDidPaintForSubtree(uint32_t aFlags)
       return;
     }
   }
+
+  if (!PresShell()->IsVisible() && !mFireAfterPaintEvents) {
+    return;
+  }
+
   // Non-root prescontexts fire MozAfterPaint to all their descendants
   // unconditionally, even if no invalidations have been collected. This is
   // because we don't want to eat the cost of collecting invalidations for

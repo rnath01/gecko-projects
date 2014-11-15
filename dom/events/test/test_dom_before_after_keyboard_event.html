@@ -17,12 +17,17 @@
 
 SimpleTest.waitForExplicitFinish();
 
+function cleanupTest()
+{
+  teardownHandlers(window, embedderHandler);
+  runTests();
+}
+
 function testEventOrderAndAttr()
 {
-  const mainDesc = 'Testing the order of the events';
   const kTests = [
     {
-      description: mainDesc,
+      description: "Testing the order of the events",
       expectedEvents: [ [ kParent | kBeforeEvent | kKeyDownEvent,
                           kChild | kKeyDownEvent,
                           kParent | kAfterEvent | kKeyDownEvent ],
@@ -34,7 +39,7 @@ function testEventOrderAndAttr()
       doPreventDefaultAt: kUnknownEvent
     },
     {
-      description: mainDesc + ', calling preventDefault() at "mozbrowserbeforekeydown" event',
+      description: "Testing the order of the events, calling preventDefault() at \"mozbrowserbeforekeydown\" event",
       expectedEvents: [ [ kParent | kBeforeEvent | kKeyDownEvent,
                           kParent | kAfterEvent | kKeyDownEvent ],
                         [ kParent | kBeforeEvent | kKeyUpEvent,
@@ -45,7 +50,7 @@ function testEventOrderAndAttr()
       doPreventDefaultAt: kParent | kBeforeEvent | kKeyDownEvent
     },
     {
-      description: mainDesc + ', calling preventDefault() at "mozbrowserbeforekeyup" event',
+      description: "Testing the order of the events, calling preventDefault() at \"mozbrowserbeforekeyup\" event",
       expectedEvents: [ [ kParent | kBeforeEvent | kKeyDownEvent,
                           kChild | kKeyDownEvent,
                           kParent | kAfterEvent | kKeyDownEvent ],
@@ -56,7 +61,7 @@ function testEventOrderAndAttr()
       doPreventDefaultAt: kParent | kBeforeEvent | kKeyUpEvent
     },
     {
-      description: mainDesc + ', calling preventDefault() at "keydown" event',
+      description: "Testing the order of the events, calling preventDefault() at \"keydown\" event",
       expectedEvents: [ [ kParent | kBeforeEvent | kKeyDownEvent,
                           kChild | kKeyDownEvent,
                           kParent | kAfterEvent | kKeyDownEvent ],
@@ -68,7 +73,7 @@ function testEventOrderAndAttr()
       doPreventDefaultAt: kChild | kKeyDownEvent
     },
     {
-      description: mainDesc + ', calling preventDefault() at "keyup" event',
+      description: "Testing the order of the events, calling preventDefault() at \"keyup\" event",
       expectedEvents: [ [ kParent | kBeforeEvent | kKeyDownEvent,
                           kChild | kKeyDownEvent,
                           kParent | kAfterEvent | kKeyDownEvent ],
@@ -107,10 +112,23 @@ var tests = [
   },
 
   // Tests for in-process iframe, i.e. <iframe mozbrowser>.
-  ()=>prepareTest(false),
+  function () {
+    prepareTest(false);
+  },
   testEventOrderAndAttr,
   cleanupTest,
 ];
+
+function runTests()
+{
+  if (!tests.length) {
+    SimpleTest.finish();
+    return;
+  }
+
+  var test = tests.shift();
+  test();
+}
 
 </script>
 </body>

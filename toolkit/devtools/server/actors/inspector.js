@@ -563,6 +563,18 @@ var NodeActor = exports.NodeActor = protocol.ActorClass({
   }),
 
   /**
+   * Get a unique selector string for this node.
+   */
+  getUniqueSelector: method(function() {
+    return CssLogic.findCssSelector(this.rawNode);
+  }, {
+    request: {},
+    response: {
+      value: RetVal("string")
+    }
+  }),
+
+  /**
    * Get the node's image data if any (for canvas and img nodes).
    * Returns an imageData object with the actual data being a LongStringActor
    * and a size json object.
@@ -3212,10 +3224,9 @@ DocumentWalker.prototype = {
   }
 };
 
-function isXULDocument(doc) {
-  return doc &&
-         doc.documentElement &&
-         doc.documentElement.namespaceURI === XUL_NS;
+function isXULElement(el) {
+  return el &&
+         el.namespaceURI === XUL_NS;
 }
 
 /**
@@ -3235,7 +3246,7 @@ function nodeFilter(aNode) {
   //   2) ::before/::after - we do want this to show in the walker so
   //      they can be inspected.
   if (LayoutHelpers.isNativeAnonymous(aNode) &&
-      !isXULDocument(aNode.ownerDocument) &&
+      !isXULElement(aNode.parentNode) &&
       (
         aNode.nodeName !== "_moz_generated_content_before" &&
         aNode.nodeName !== "_moz_generated_content_after")

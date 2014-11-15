@@ -952,7 +952,7 @@ void nsNPAPIPluginInstance::ReleaseContentTexture(nsNPAPIPluginInstance::Texture
   mContentTexture->Release(aTextureInfo);
 }
 
-nsSurfaceTexture* nsNPAPIPluginInstance::CreateSurfaceTexture()
+TemporaryRef<AndroidSurfaceTexture> nsNPAPIPluginInstance::CreateSurfaceTexture()
 {
   if (!EnsureGLContext())
     return nullptr;
@@ -961,13 +961,15 @@ nsSurfaceTexture* nsNPAPIPluginInstance::CreateSurfaceTexture()
   if (!texture)
     return nullptr;
 
-  nsSurfaceTexture* surface = nsSurfaceTexture::Create(texture);
-  if (!surface)
+  RefPtr<AndroidSurfaceTexture> surface = AndroidSurfaceTexture::Create(TexturePoolOGL::GetGLContext(),
+                                                                        texture);
+  if (!surface) {
     return nullptr;
+  }
 
   nsCOMPtr<nsIRunnable> frameCallback = NS_NewRunnableMethod(this, &nsNPAPIPluginInstance::OnSurfaceTextureFrameAvailable);
   surface->SetFrameAvailableCallback(frameCallback);
-  return surface;
+  return surface.forget();
 }
 
 void nsNPAPIPluginInstance::OnSurfaceTextureFrameAvailable()
@@ -985,7 +987,7 @@ void* nsNPAPIPluginInstance::AcquireContentWindow()
       return nullptr;
   }
 
-  return mContentSurface->GetNativeWindow();
+  return mContentSurface->NativeWindow()->Handle();
 }
 
 EGLImage
@@ -997,7 +999,7 @@ nsNPAPIPluginInstance::AsEGLImage()
   return mContentTexture->CreateEGLImage();
 }
 
-nsSurfaceTexture*
+AndroidSurfaceTexture*
 nsNPAPIPluginInstance::AsSurfaceTexture()
 {
   if (!mContentSurface)
@@ -1008,13 +1010,14 @@ nsNPAPIPluginInstance::AsSurfaceTexture()
 
 void* nsNPAPIPluginInstance::AcquireVideoWindow()
 {
-  nsSurfaceTexture* surface = CreateSurfaceTexture();
-  if (!surface)
+  RefPtr<AndroidSurfaceTexture> surface = CreateSurfaceTexture();
+  if (!surface) {
     return nullptr;
+  }
 
   VideoInfo* info = new VideoInfo(surface);
 
-  void* window = info->mSurfaceTexture->GetNativeWindow();
+  void* window = info->mSurfaceTexture->NativeWindow()->Handle();
   mVideos.insert(std::pair<void*, VideoInfo*>(window, info));
 
   return window;
@@ -1645,32 +1648,6 @@ nsNPAPIPluginInstance::URLRedirectResponse(void* notifyData, NPBool allow)
       currentListener->URLRedirectResponse(allow);
     }
   }
-}
-
-NPError
-nsNPAPIPluginInstance::InitAsyncSurface(NPSize *size, NPImageFormat format,
-                                        void *initData, NPAsyncSurface *surface)
-{
-  if (mOwner)
-    return mOwner->InitAsyncSurface(size, format, initData, surface);
-
-  return NPERR_GENERIC_ERROR;
-}
-
-NPError
-nsNPAPIPluginInstance::FinalizeAsyncSurface(NPAsyncSurface *surface)
-{
-  if (mOwner)
-    return mOwner->FinalizeAsyncSurface(surface);
-
-  return NPERR_GENERIC_ERROR;
-}
-
-void
-nsNPAPIPluginInstance::SetCurrentAsyncSurface(NPAsyncSurface *surface, NPRect *changed)
-{
-  if (mOwner)
-    mOwner->SetCurrentAsyncSurface(surface, changed);
 }
 
 class CarbonEventModelFailureEvent : public nsRunnable {

@@ -6,13 +6,14 @@ package org.mozilla.gecko.overlays.ui;
 
 import static org.mozilla.gecko.overlays.ui.SendTabList.State.LIST;
 import static org.mozilla.gecko.overlays.ui.SendTabList.State.LOADING;
-import static org.mozilla.gecko.overlays.ui.SendTabList.State.NONE;
 import static org.mozilla.gecko.overlays.ui.SendTabList.State.SHOW_DEVICES;
 
 import java.util.Arrays;
 
 import org.mozilla.gecko.Assert;
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.Telemetry;
+import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.overlays.service.sharemethods.ParcelableClientRecord;
 
 import android.app.AlertDialog;
@@ -111,16 +112,9 @@ public class SendTabList extends ListView {
     public void setSyncClients(final ParcelableClientRecord[] c) {
         final ParcelableClientRecord[] clients = c == null ? new ParcelableClientRecord[0] : c;
 
-        int size = clients.length;
-        if (size == 0) {
-            // Just show a button to set up Sync (or whatever).
-            switchState(NONE);
-            return;
-        }
-
         clientListAdapter.setClientRecordList(Arrays.asList(clients));
 
-        if (size <= MAXIMUM_INLINE_ELEMENTS) {
+        if (clients.length <= MAXIMUM_INLINE_ELEMENTS) {
             // Show the list of devices in-line.
             switchState(LIST);
             return;
@@ -133,7 +127,7 @@ public class SendTabList extends ListView {
     /**
      * Get an AlertDialog listing all devices, allowing the user to select the one they want.
      * Used when more than MAXIMUM_INLINE_ELEMENTS devices are found (to avoid displaying them all
-     * inline and looking crazy.
+     * inline and looking crazy).
      */
     public AlertDialog getDialog() {
         AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
@@ -150,6 +144,12 @@ public class SendTabList extends ListView {
                    @Override
                    public void onClick(DialogInterface dialog, int index) {
                        listener.onSendTabTargetSelected(records[index].guid);
+                   }
+                })
+               .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                   @Override
+                   public void onCancel(DialogInterface dialogInterface) {
+                       Telemetry.sendUIEvent(TelemetryContract.Event.CANCEL, TelemetryContract.Method.SHARE_OVERLAY, "device_selection_cancel");
                    }
                });
 

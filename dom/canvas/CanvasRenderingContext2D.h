@@ -714,6 +714,9 @@ protected:
    */
   void UpdateFilter();
 
+  nsLayoutUtils::SurfaceFromElementResult
+    CachedSurfaceFromElement(Element* aElement);
+
   void DrawImage(const HTMLImageOrCanvasOrVideoElement &imgElt,
                  double sx, double sy, double sw, double sh,
                  double dx, double dy, double dw, double dh,
@@ -723,7 +726,7 @@ protected:
                             mozilla::gfx::Rect* bounds,
                             mozilla::gfx::Rect dest,
                             mozilla::gfx::Rect src,
-                            gfxIntSize imgSize);
+                            gfx::IntSize imgSize);
 
   nsString& GetFont()
   {
@@ -740,6 +743,10 @@ protected:
   static void RemoveDemotableContext(CanvasRenderingContext2D* context);
 
   RenderingMode mRenderingMode;
+
+  // Texture informations for fast video rendering
+  unsigned int mVideoTexture;
+  nsIntSize mCurrentVideoSize;
 
   // Member vars
   int32_t mWidth, mHeight;

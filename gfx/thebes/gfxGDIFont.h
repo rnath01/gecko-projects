@@ -43,7 +43,8 @@ public:
                                uint32_t aStart, uint32_t aEnd,
                                BoundingBoxType aBoundingBoxType,
                                gfxContext *aContextForTightBoundingBox,
-                               Spacing *aSpacing);
+                               Spacing *aSpacing,
+                               uint16_t aOrientation);
 
     /* required for MathML to suppress effects of ClearType "padding" */
     virtual gfxFont* CopyWithAntialiasOption(AntialiasOption anAAOption);
@@ -59,7 +60,7 @@ public:
     virtual bool ProvidesGlyphWidths() const { return true; }
 
     // get hinted glyph width in pixels as 16.16 fixed-point value
-    virtual int32_t GetGlyphWidth(gfxContext *aCtx, uint16_t aGID);
+    virtual int32_t GetGlyphWidth(DrawTarget& aDrawTarget, uint16_t aGID);
 
     virtual void AddSizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                                         FontCacheSizes* aSizes) const;

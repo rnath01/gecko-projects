@@ -7,12 +7,12 @@
 
 #include "LayerTransactionParent.h"
 #include <vector>                       // for vector
+#include "apz/src/AsyncPanZoomController.h"
 #include "CompositableHost.h"           // for CompositableParent, Get, etc
 #include "ImageLayers.h"                // for ImageLayer
 #include "Layers.h"                     // for Layer, ContainerLayer, etc
 #include "ShadowLayerParent.h"          // for ShadowLayerParent
 #include "CompositableTransactionParent.h"  // for EditReplyVector
-#include "ShadowLayersManager.h"        // for ShadowLayersManager
 #include "mozilla/gfx/BasePoint3D.h"    // for BasePoint3D
 #include "mozilla/layers/CanvasLayerComposite.h"
 #include "mozilla/layers/ColorLayerComposite.h"
@@ -28,6 +28,7 @@
 #include "mozilla/layers/PLayerParent.h"  // for PLayerParent
 #include "mozilla/layers/TextureHostOGL.h"  // for TextureHostOGL
 #include "mozilla/layers/PaintedLayerComposite.h"
+#include "mozilla/layers/ShadowLayersManager.h" // for ShadowLayersManager
 #include "mozilla/mozalloc.h"           // for operator delete, etc
 #include "mozilla/unused.h"
 #include "nsCoord.h"                    // for NSAppUnitsToFloatPixels
@@ -41,7 +42,6 @@
 #include "GeckoProfiler.h"
 #include "mozilla/layers/TextureHost.h"
 #include "mozilla/layers/AsyncCompositionManager.h"
-#include "mozilla/layers/AsyncPanZoomController.h"
 
 typedef std::vector<mozilla::layers::EditReply> EditReplyVector;
 

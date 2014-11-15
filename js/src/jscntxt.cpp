@@ -41,7 +41,6 @@
 #include "gc/Marking.h"
 #include "jit/Ion.h"
 #include "js/CharacterEncoding.h"
-#include "vm/Debugger.h"
 #include "vm/HelperThreads.h"
 #include "vm/Shape.h"
 
@@ -55,7 +54,6 @@ using namespace js::gc;
 
 using mozilla::DebugOnly;
 using mozilla::PodArrayZero;
-using mozilla::PodZero;
 using mozilla::PointerRangeSize;
 
 bool
@@ -381,7 +379,6 @@ js_ReportOutOfMemory(ThreadSafeContext *cxArg)
 
     /* Fill out the report, but don't do anything that requires allocation. */
     JSErrorReport report;
-    PodZero(&report);
     report.flags = JSREPORT_ERROR;
     report.errorNumber = JSMSG_OUT_OF_MEMORY;
     PopulateReportBlame(cx, &report);
@@ -503,7 +500,6 @@ js_ReportErrorVA(JSContext *cx, unsigned flags, const char *format, va_list ap)
         return false;
     messagelen = strlen(message);
 
-    PodZero(&report);
     report.flags = flags;
     report.errorNumber = JSMSG_USER_DEFINED_ERROR;
     report.ucmessage = ucmessage = InflateString(cx, message, &messagelen);
@@ -808,7 +804,6 @@ js_ReportErrorNumberVA(JSContext *cx, unsigned flags, JSErrorCallback callback,
         return true;
     warning = JSREPORT_IS_WARNING(flags);
 
-    PodZero(&report);
     report.flags = flags;
     report.errorNumber = errorNumber;
     PopulateReportBlame(cx, &report);
@@ -848,7 +843,6 @@ js_ReportErrorNumberUCArray(JSContext *cx, unsigned flags, JSErrorCallback callb
     bool warning = JSREPORT_IS_WARNING(flags);
 
     JSErrorReport report;
-    PodZero(&report);
     report.flags = flags;
     report.errorNumber = errorNumber;
     PopulateReportBlame(cx, &report);
@@ -976,90 +970,6 @@ js_GetErrorMessage(void *userRef, const unsigned errorNumber)
     return nullptr;
 }
 
-bool
-js::InvokeInterruptCallback(JSContext *cx)
-{
-    MOZ_ASSERT(cx->runtime()->requestDepth >= 1);
-
-    JSRuntime *rt = cx->runtime();
-    MOZ_ASSERT(rt->interrupt);
-
-    // Reset the callback counter first, then run GC and yield. If another
-    // thread is racing us here we will accumulate another callback request
-    // which will be serviced at the next opportunity.
-    rt->interrupt = false;
-
-    // IonMonkey sets its stack limit to UINTPTR_MAX to trigger interrupt
-    // callbacks.
-    rt->resetJitStackLimit();
-
-    cx->gcIfNeeded();
-
-    rt->interruptPar = false;
-
-    // A worker thread may have requested an interrupt after finishing an Ion
-    // compilation.
-    jit::AttachFinishedCompilations(cx);
-
-    // Important: Additional callbacks can occur inside the callback handler
-    // if it re-enters the JS engine. The embedding must ensure that the
-    // callback is disconnected before attempting such re-entry.
-    JSInterruptCallback cb = cx->runtime()->interruptCallback;
-    if (!cb)
-        return true;
-
-    if (cb(cx)) {
-        // Debugger treats invoking the interrupt callback as a "step", so
-        // invoke the onStep handler.
-        if (cx->compartment()->debugMode()) {
-            ScriptFrameIter iter(cx);
-            if (iter.script()->stepModeEnabled()) {
-                RootedValue rval(cx);
-                switch (Debugger::onSingleStep(cx, &rval)) {
-                  case JSTRAP_ERROR:
-                    return false;
-                  case JSTRAP_CONTINUE:
-                    return true;
-                  case JSTRAP_RETURN:
-                    // See note in Debugger::propagateForcedReturn.
-                    Debugger::propagateForcedReturn(cx, iter.abstractFramePtr(), rval);
-                    return false;
-                  case JSTRAP_THROW:
-                    cx->setPendingException(rval);
-                    return false;
-                  default:;
-                }
-            }
-        }
-
-        return true;
-    }
-
-    // No need to set aside any pending exception here: ComputeStackString
-    // already does that.
-    JSString *stack = ComputeStackString(cx);
-    JSFlatString *flat = stack ? stack->ensureFlat(cx) : nullptr;
-
-    const char16_t *chars;
-    AutoStableStringChars stableChars(cx);
-    if (flat && stableChars.initTwoByte(cx, flat))
-        chars = stableChars.twoByteRange().start().get();
-    else
-        chars = MOZ_UTF16("(stack not available)");
-    JS_ReportErrorFlagsAndNumberUC(cx, JSREPORT_WARNING, js_GetErrorMessage, nullptr,
-                                   JSMSG_TERMINATED, chars);
-
-    return false;
-}
-
-bool
-js::HandleExecutionInterrupt(JSContext *cx)
-{
-    if (cx->runtime()->interrupt)
-        return InvokeInterruptCallback(cx);
-    return true;
-}
-
 ThreadSafeContext::ThreadSafeContext(JSRuntime *rt, PerThreadData *pt, ContextKind kind)
   : ContextFriendFields(rt),
     contextKind_(kind),
@@ -1101,6 +1011,7 @@ JSContext::JSContext(JSRuntime *rt)
     unwrappedException_(UndefinedValue()),
     options_(),
     propagatingForcedReturn_(false),
+    liveVolatileJitFrameIterators_(nullptr),
     reportGranularity(JS_DEFAULT_JITREPORT_GRANULARITY),
     resolvingList(nullptr),
     generatingError(false),
@@ -1109,11 +1020,10 @@ JSContext::JSContext(JSRuntime *rt)
     data(nullptr),
     data2(nullptr),
     outstandingRequests(0),
-    jitIsBroken(false),
+    jitIsBroken(false)
 #ifdef MOZ_TRACE_JSCALLS
-    functionCallback(nullptr),
+  , functionCallback(nullptr)
 #endif
-    innermostGenerator_(nullptr)
 {
     MOZ_ASSERT(static_cast<ContextFriendFields*>(this) ==
                ContextFriendFields::get(this));
@@ -1145,23 +1055,6 @@ JSContext::isThrowingOutOfMemory()
 {
     return throwing && unwrappedException_ == StringValue(names().outOfMemory);
 }
-
-void
-JSContext::enterGenerator(JSGenerator *gen)
-{
-    MOZ_ASSERT(!gen->prevGenerator);
-    gen->prevGenerator = innermostGenerator_;
-    innermostGenerator_ = gen;
-}
-
-void
-JSContext::leaveGenerator(JSGenerator *gen)
-{
-    MOZ_ASSERT(innermostGenerator_ == gen);
-    innermostGenerator_ = innermostGenerator_->prevGenerator;
-    gen->prevGenerator = nullptr;
-}
-
 
 bool
 JSContext::saveFrameChain()

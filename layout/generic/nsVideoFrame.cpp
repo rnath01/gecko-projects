@@ -223,9 +223,8 @@ nsVideoFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
   // Set a transform on the layer to draw the video in the right place
   gfxPoint p = r.TopLeft() + aContainerParameters.mOffset;
   Matrix transform = Matrix::Translation(p.x, p.y);
-  transform.PreScale(r.Width() / frameSize.width,
-                     r.Height() / frameSize.height);
   layer->SetBaseTransform(gfx::Matrix4x4::From2D(transform));
+  layer->SetScaleToSize(IntSize(r.width, r.height), ScaleMode::STRETCH);
   nsRefPtr<Layer> result = layer.forget();
   return result.forget();
 }
@@ -489,7 +488,7 @@ nsVideoFrame::ComputeSize(nsRenderingContext *aRenderingContext,
                           const LogicalSize& aMargin,
                           const LogicalSize& aBorder,
                           const LogicalSize& aPadding,
-                          uint32_t aFlags)
+                          ComputeSizeFlags aFlags)
 {
   nsSize size = GetVideoIntrinsicSize(aRenderingContext);
 

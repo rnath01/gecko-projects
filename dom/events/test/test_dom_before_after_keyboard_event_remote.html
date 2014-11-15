@@ -19,10 +19,9 @@
 
 SimpleTest.waitForExplicitFinish();
 
-const mainDesc = 'Testing the order of the events (OOP)';
 var testsForEventOrder = [
   {
-    description: mainDesc,
+    description: "Testing the order of the events (OOP)",
     expectedEvents: [ [ kParent | kBeforeEvent | kKeyDownEvent,
                         kParent | kKeyDownEvent,
                         kChild | kKeyDownEvent,
@@ -36,7 +35,7 @@ var testsForEventOrder = [
     doPreventDefaultAt: kUnknownEvent
   },
   {
-    description: mainDesc + ', calling preventDefault() at "mozbrowserbeforekeydown" event',
+    description: "Testing the order of the events (OOP), calling preventDefault() at \"mozbrowserbeforekeydown\" event",
     expectedEvents: [ [ kParent | kBeforeEvent | kKeyDownEvent,
                         kParent | kAfterEvent | kKeyDownEvent ],
                       [ kParent | kBeforeEvent | kKeyUpEvent,
@@ -48,7 +47,7 @@ var testsForEventOrder = [
     doPreventDefaultAt: kParent | kBeforeEvent | kKeyDownEvent
   },
   {
-    description: mainDesc + ', calling preventDefault() at "mozbrowserbeforekeyup" event',
+    description: "Testing the order of the events (OOP), calling preventDefault() at \"mozbrowserbeforekeyup\" event",
     expectedEvents: [ [ kParent | kBeforeEvent | kKeyDownEvent,
                         kParent | kKeyDownEvent,
                         kChild | kKeyDownEvent,
@@ -59,8 +58,9 @@ var testsForEventOrder = [
     classifiedEvents: [ [], [] ],
     doPreventDefaultAt: kParent | kBeforeEvent | kKeyUpEvent
   },
+
   {
-    description: mainDesc + ', calling preventDefault() at "keydown" event',
+    description: "Testing the order of the events (OOP), calling preventDefault() at \"keydown\" event",
     expectedEvents: [ [ kParent | kBeforeEvent | kKeyDownEvent,
                         kParent | kKeyDownEvent,
                         kChild | kKeyDownEvent,
@@ -74,7 +74,7 @@ var testsForEventOrder = [
     doPreventDefaultAt: kChild | kKeyDownEvent
   },
   {
-    description: mainDesc + ', calling preventDefault() at "keyup" event',
+    description: "Testing the order of the events (OOP), calling preventDefault() at \"keyup\" event",
     expectedEvents: [ [ kParent | kBeforeEvent | kKeyDownEvent,
                         kParent | kKeyDownEvent,
                         kChild | kKeyDownEvent,
@@ -88,6 +88,12 @@ var testsForEventOrder = [
     doPreventDefaultAt: kChild | kKeyUpEvent
   }
 ];
+
+function cleanupTest()
+{
+  teardownHandlers(window, embedderHandler);
+  runTests();
+}
 
 function testEventOrder()
 {
@@ -103,16 +109,17 @@ function testEventOrder()
   waitAndVerifyResult(0);
 }
 
-function waitAndVerifyResult(count) {
+function waitAndVerifyResult(aCount) {
   expectedEventLength = gCurrentTest.expectedEvents[0].length +
                         gCurrentTest.expectedEvents[1].length;
-  if (gCurrentTest.resultEvents.length >= expectedEventLength || count > 10) {
+  if (gCurrentTest.resultEvents.length >= expectedEventLength || aCount > 10) {
     classifyEvents(gCurrentTest);
     verifyResults(gCurrentTest);
     testEventOrder();
   }
   else {
-    setTimeout(()=>waitAndVerifyResult(count + 1), 100);
+    setTimeout(function () waitAndVerifyResult(aCount + 1),
+               100);
   }
 }
 
@@ -132,10 +139,23 @@ var tests = [
   },
 
   // Tests for out-of-process iframe, i.el. <iframe mozbrowser remote>
-  ()=>prepareTest(true),
+  function () {
+    prepareTest(true);
+  },
   testEventOrder,
   cleanupTest
 ];
+
+function runTests()
+{
+  if (!tests.length) {
+    SimpleTest.finish();
+    return;
+  }
+
+  var test = tests.shift();
+  test();
+}
 
 </script>
 </body>

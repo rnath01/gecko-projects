@@ -43,6 +43,44 @@ using namespace mozilla::gfx;
 
 #include "DeprecatedPremultiplyTables.h"
 
+extern "C" {
+
+/**
+ * Dump a raw image to the default log.  This function is exported
+ * from libxul, so it can be called from any library in addition to
+ * (of course) from a debugger.
+ *
+ * Note: this helper currently assumes that all 2-bytepp images are
+ * r5g6b5, and that all 4-bytepp images are r8g8b8a8.
+ */
+NS_EXPORT
+void mozilla_dump_image(void* bytes, int width, int height, int bytepp,
+                        int strideBytes)
+{
+    if (0 == strideBytes) {
+        strideBytes = width * bytepp;
+    }
+    SurfaceFormat format;
+    // TODO more flexible; parse string?
+    switch (bytepp) {
+    case 2:
+        format = SurfaceFormat::R5G6B5;
+        break;
+    case 4:
+    default:
+        format = SurfaceFormat::R8G8B8A8;
+        break;
+    }
+
+    RefPtr<DataSourceSurface> surf =
+        Factory::CreateWrappingDataSourceSurface((uint8_t*)bytes, strideBytes,
+                                                 gfx::IntSize(width, height),
+                                                 format);
+    gfxUtils::DumpAsDataURI(surf);
+}
+
+}
+
 static const uint8_t PremultiplyValue(uint8_t a, uint8_t v) {
     return gfxUtils::sPremultiplyTable[a*256+v];
 }
@@ -1184,6 +1222,8 @@ gfxUtils::EncodeSourceSurface(SourceSurface* aSurface,
       }
     }
   }
+  NS_ENSURE_SUCCESS(rv, rv);
+  NS_ENSURE_TRUE(!imgData.empty(), NS_ERROR_FAILURE);
 
   if (aBinaryOrData == eBinaryEncode) {
     if (aFile) {
@@ -1349,3 +1389,36 @@ bool gfxUtils::sDumpPainting = getenv("MOZ_DUMP_PAINT") != 0;
 bool gfxUtils::sDumpPaintingToFile = getenv("MOZ_DUMP_PAINT_TO_FILE") != 0;
 FILE *gfxUtils::sDumpPaintFile = nullptr;
 #endif
+
+namespace mozilla {
+namespace gfx {
+
+Color ToDeviceColor(Color aColor)
+{
+  // aColor is pass-by-value since to get return value optimization goodness we
+  // need to return the same object from all return points in this function. We
+  // could declare a local Color variable and use that, but we might as well
+  // just use aColor.
+  if (gfxPlatform::GetCMSMode() == eCMSMode_All) {
+    qcms_transform *transform = gfxPlatform::GetCMSRGBTransform();
+    if (transform) {
+      gfxPlatform::TransformPixel(aColor, aColor, transform);
+      // Use the original alpha to avoid unnecessary float->byte->float
+      // conversion errors
+    }
+  }
+  return aColor;
+}
+
+Color ToDeviceColor(nscolor aColor)
+{
+  return ToDeviceColor(Color::FromABGR(aColor));
+}
+
+Color ToDeviceColor(const gfxRGBA& aColor)
+{
+  return ToDeviceColor(ToColor(aColor));
+}
+
+} // namespace gfx
+} // namespace mozilla

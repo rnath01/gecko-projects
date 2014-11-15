@@ -11,7 +11,6 @@
 
 #include "GLContext.h"
 #include "GLBlitHelper.h"
-#include "GLBlitTextureImageHelper.h"
 #include "GLReadTexImageHelper.h"
 
 #include "gfxCrashReporterUtils.h"
@@ -49,7 +48,7 @@ namespace gl {
 using namespace mozilla::gfx;
 using namespace mozilla::layers;
 
-#ifdef DEBUG
+#ifdef MOZ_GL_DEBUG
 unsigned GLContext::sCurrentGLContextTLS = -1;
 #endif
 
@@ -162,10 +161,9 @@ static const char *sExtensionNames[] = {
 };
 
 static bool
-ParseGLVersion(GLContext* gl, unsigned int* version)
+ParseGLVersion(GLContext* gl, uint32_t* out_version)
 {
-    GLenum error = gl->fGetError();
-    if (error != LOCAL_GL_NO_ERROR) {
+    if (gl->fGetError() != LOCAL_GL_NO_ERROR) {
         MOZ_ASSERT(false, "An OpenGL error has been triggered before.");
         return false;
     }
@@ -175,29 +173,27 @@ ParseGLVersion(GLContext* gl, unsigned int* version)
      * OpenGL 3.2. The bug is that GetIntegerv(LOCAL_GL_{MAJOR,MINOR}_VERSION)
      * returns OpenGL 3.2 instead of generating an error.
      */
-    if (!gl->IsGLES())
-    {
+    if (!gl->IsGLES()) {
         /**
          * OpenGL 3.1 and OpenGL ES 3.0 both introduce GL_{MAJOR,MINOR}_VERSION
          * with GetIntegerv. So we first try those constants even though we
-         * might not have an OpenGL context supporting them, has this is a
+         * might not have an OpenGL context supporting them, as this is a
          * better way than parsing GL_VERSION.
          */
         GLint majorVersion = 0;
         GLint minorVersion = 0;
 
-        gl->fGetIntegerv(LOCAL_GL_MAJOR_VERSION, &majorVersion);
-        gl->fGetIntegerv(LOCAL_GL_MINOR_VERSION, &minorVersion);
+        const bool ok = (gl->GetPotentialInteger(LOCAL_GL_MAJOR_VERSION,
+                                                 &majorVersion) &&
+                         gl->GetPotentialInteger(LOCAL_GL_MINOR_VERSION,
+                                                 &minorVersion));
 
         // If it's not an OpenGL (ES) 3.0 context, we will have an error
-        error = gl->fGetError();
-        while (gl->fGetError() != LOCAL_GL_NO_ERROR);
-
-        if (error == LOCAL_GL_NO_ERROR &&
+        if (ok &&
             majorVersion > 0 &&
             minorVersion >= 0)
         {
-            *version = majorVersion * 100 + minorVersion * 10;
+            *out_version = majorVersion * 100 + minorVersion * 10;
             return true;
         }
     }
@@ -232,8 +228,7 @@ ParseGLVersion(GLContext* gl, unsigned int* version)
      */
     const char* versionString = (const char*)gl->fGetString(LOCAL_GL_VERSION);
 
-    error = gl->fGetError();
-    if (error != LOCAL_GL_NO_ERROR) {
+    if (gl->fGetError() != LOCAL_GL_NO_ERROR) {
         MOZ_ASSERT(false, "glGetString(GL_VERSION) has generated an error");
         return false;
     } else if (!versionString) {
@@ -248,7 +243,7 @@ ParseGLVersion(GLContext* gl, unsigned int* version)
 
     const char* itr = versionString;
     char* end = nullptr;
-    int majorVersion = (int)strtol(itr, &end, 10);
+    auto majorVersion = strtol(itr, &end, 10);
 
     if (!end) {
         MOZ_ASSERT(false, "Failed to parse the GL major version number.");
@@ -263,7 +258,7 @@ ParseGLVersion(GLContext* gl, unsigned int* version)
 
     end = nullptr;
 
-    int minorVersion = (int)strtol(itr, &end, 10);
+    auto minorVersion = strtol(itr, &end, 10);
     if (!end) {
         MOZ_ASSERT(false, "Failed to parse GL's minor version number.");
         return false;
@@ -277,7 +272,7 @@ ParseGLVersion(GLContext* gl, unsigned int* version)
         return false;
     }
 
-    *version = (unsigned int)(majorVersion * 100 + minorVersion * 10);
+    *out_version = (uint32_t)majorVersion * 100 + (uint32_t)minorVersion * 10;
     return true;
 }
 
@@ -292,9 +287,8 @@ GLContext::GLContext(const SurfaceCaps& caps,
     mVendor(GLVendor::Other),
     mRenderer(GLRenderer::Other),
     mHasRobustness(false),
-#ifdef DEBUG
-    mIsInLocalErrorCheck(false),
-#endif
+    mTopError(LOCAL_GL_NO_ERROR),
+    mLocalErrorScope(nullptr),
     mSharedContext(sharedContext),
     mCaps(caps),
     mScreen(nullptr),
@@ -312,7 +306,7 @@ GLContext::GLContext(const SurfaceCaps& caps,
 
 GLContext::~GLContext() {
     NS_ASSERTION(IsDestroyed(), "GLContext implementation must call MarkDestroyed in destructor!");
-#ifdef DEBUG
+#ifdef MOZ_GL_DEBUG
     if (mSharedContext) {
         GLContext *tip = mSharedContext;
         while (tip->mSharedContext)
@@ -507,11 +501,10 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
     mInitialized = LoadSymbols(&symbols[0], trygl, prefix);
     MakeCurrent();
     if (mInitialized) {
-        unsigned int version = 0;
-
+        uint32_t version = 0;
         ParseGLVersion(this, &version);
 
-#ifdef DEBUG
+#ifdef MOZ_GL_DEBUG
         printf_stderr("OpenGL version detected: %u\n", version);
         printf_stderr("OpenGL vendor: %s\n", fGetString(LOCAL_GL_VENDOR));
         printf_stderr("OpenGL renderer: %s\n", fGetString(LOCAL_GL_RENDERER));
@@ -631,7 +624,7 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
     }
 
 
-#ifdef DEBUG
+#ifdef MOZ_GL_DEBUG
     if (PR_GetEnv("MOZ_GL_DEBUG"))
         sDebugMode |= DebugEnabled;
 
@@ -646,7 +639,7 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
 #endif
 
     if (mInitialized) {
-#ifdef DEBUG
+#ifdef MOZ_GL_DEBUG
         static bool firstRun = true;
         if (firstRun && DebugMode()) {
             const char *vendors[size_t(GLVendor::Other)] = {
@@ -1253,7 +1246,7 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
 
         if (IsSupported(GLFeature::texture_3D)) {
             SymLoadStruct coreSymbols[] = {
-                // TexImage3D is not required for WebGL2 so not queried here.
+                { (PRFuncPtr*) &mSymbols.fTexImage3D, { "TexImage3D", nullptr } },
                 { (PRFuncPtr*) &mSymbols.fTexSubImage3D, { "TexSubImage3D", nullptr } },
                 END_SYMBOLS
             };
@@ -1591,7 +1584,7 @@ GLContext::DebugCallback(GLenum source,
         break;
     }
 
-    printf_stderr("[KHR_debug: 0x%" PRIxPTR "] ID %u: %s %s %s:\n    %s",
+    printf_stderr("[KHR_debug: 0x%" PRIxPTR "] ID %u: %s, %s, %s:\n    %s\n",
                   (uintptr_t)this,
                   id,
                   sourceStr.BeginReading(),
@@ -1608,7 +1601,7 @@ GLContext::InitExtensions()
     if (!extensions)
         return;
 
-#ifdef DEBUG
+#ifdef MOZ_GL_DEBUG
     static bool firstRun = true;
 #else
     // Non-DEBUG, so never spew.
@@ -1659,7 +1652,7 @@ GLContext::InitExtensions()
     }
 #endif
 
-#ifdef DEBUG
+#ifdef MOZ_GL_DEBUG
     firstRun = false;
 #endif
 }
@@ -1749,7 +1742,7 @@ void
 GLContext::UpdatePixelFormat()
 {
     PixelBufferFormat format = QueryPixelFormat();
-#ifdef DEBUG
+#ifdef MOZ_GL_DEBUG
     const SurfaceCaps& caps = Caps();
     MOZ_ASSERT(!caps.any, "Did you forget to DetermineCaps()?");
 
@@ -1973,7 +1966,7 @@ GLContext::AssembleOffscreenFBs(const GLuint colorMSRB,
 
     if (!IsFramebufferComplete(drawFB, &status)) {
         NS_WARNING("DrawFBO: Incomplete");
-  #ifdef DEBUG
+  #ifdef MOZ_GL_DEBUG
         if (DebugMode()) {
             printf_stderr("Framebuffer status: %X\n", status);
         }
@@ -1983,7 +1976,7 @@ GLContext::AssembleOffscreenFBs(const GLuint colorMSRB,
 
     if (!IsFramebufferComplete(readFB, &status)) {
         NS_WARNING("ReadFBO: Incomplete");
-  #ifdef DEBUG
+  #ifdef MOZ_GL_DEBUG
         if (DebugMode()) {
             printf_stderr("Framebuffer status: %X\n", status);
         }
@@ -2096,7 +2089,6 @@ GLContext::MarkDestroyed()
         DestroyScreenBuffer();
 
         mBlitHelper = nullptr;
-        mBlitTextureImageHelper = nullptr;
         mReadTexImageHelper = nullptr;
 
         mTexGarbageBin->GLContextTeardown();
@@ -2107,7 +2099,7 @@ GLContext::MarkDestroyed()
     mSymbols.Zero();
 }
 
-#ifdef DEBUG
+#ifdef MOZ_GL_DEBUG
 /* static */ void
 GLContext::AssertNotPassingStackBufferToTheGL(const void* ptr)
 {
@@ -2392,20 +2384,21 @@ GLContext::CleanDirtyScreen()
 void
 GLContext::EmptyTexGarbageBin()
 {
-   TexGarbageBin()->EmptyGarbage();
+    TexGarbageBin()->EmptyGarbage();
 }
 
 bool
-GLContext::IsOffscreenSizeAllowed(const IntSize& aSize) const {
-  int32_t biggerDimension = std::max(aSize.width, aSize.height);
-  int32_t maxAllowed = std::min(mMaxRenderbufferSize, mMaxTextureSize);
-  return biggerDimension <= maxAllowed;
+GLContext::IsOffscreenSizeAllowed(const IntSize& aSize) const
+{
+    int32_t biggerDimension = std::max(aSize.width, aSize.height);
+    int32_t maxAllowed = std::min(mMaxRenderbufferSize, mMaxTextureSize);
+    return biggerDimension <= maxAllowed;
 }
 
 bool
 GLContext::IsOwningThreadCurrent()
 {
-  return PlatformThread::CurrentId() == mOwningThreadId;
+    return PlatformThread::CurrentId() == mOwningThreadId;
 }
 
 GLBlitHelper*
@@ -2416,16 +2409,6 @@ GLContext::BlitHelper()
     }
 
     return mBlitHelper.get();
-}
-
-GLBlitTextureImageHelper*
-GLContext::BlitTextureImageHelper()
-{
-    if (!mBlitTextureImageHelper) {
-        mBlitTextureImageHelper = MakeUnique<GLBlitTextureImageHelper>(this);
-    }
-
-    return mBlitTextureImageHelper.get();
 }
 
 GLReadTexImageHelper*
