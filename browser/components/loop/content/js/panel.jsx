@@ -31,13 +31,19 @@ loop.panel = (function(_, mozL10n) {
 
     getDefaultProps: function() {
       return {
-        buttonsHidden: false,
-        selectedTab: "call"
+        buttonsHidden: false
       };
     },
 
     getInitialState: function() {
-      return {selectedTab: this.props.selectedTab};
+      // XXX Work around props.selectedTab being undefined initially.
+      // When we don't need to rely on the pref, this can move back to
+      // getDefaultProps (bug 1100258).
+      return {
+        selectedTab: this.props.selectedTab ||
+          (navigator.mozLoop.getLoopBoolPref("rooms.enabled") ?
+            "rooms" : "call")
+      };
     },
 
     handleSelectTab: function(event) {
@@ -399,18 +405,21 @@ loop.panel = (function(_, mozL10n) {
       // readOnly attr will suppress a warning regarding this issue
       // from the react lib.
       var cx = React.addons.classSet;
-      var inputCSSClass = cx({
-        "pending": this.state.pending,
-        // Used in functional testing, signals that
-        // call url was received from loop server
-        "callUrl": !this.state.pending
-      });
       return (
         <div className="generate-url">
           <header>{__("share_link_header_text")}</header>
-          <input type="url" value={this.state.callUrl} readOnly="true"
-                 onCopy={this.handleLinkExfiltration}
-                 className={inputCSSClass} />
+          <div className="generate-url-stack">
+            <input type="url" value={this.state.callUrl} readOnly="true"
+                   onCopy={this.handleLinkExfiltration}
+                   className={cx({"generate-url-input": true,
+                                  pending: this.state.pending,
+                                  // Used in functional testing, signals that
+                                  // call url was received from loop server
+                                  callUrl: !this.state.pending})} />
+            <div className={cx({"generate-url-spinner": true,
+                                spinner: true,
+                                busy: this.state.pending})} />
+          </div>
           <ButtonGroup additionalClass="url-actions">
             <Button additionalClass="button-email"
                     disabled={!this.state.callUrl}
@@ -668,10 +677,15 @@ loop.panel = (function(_, mozL10n) {
           message: serviceError.error.friendlyMessage,
           details: serviceError.error.friendlyDetails,
           detailsButtonLabel: serviceError.error.friendlyDetailsButtonLabel,
+          detailsButtonCallback: serviceError.error.friendlyDetailsButtonCallback,
         });
       } else {
         this.props.notifications.remove(this.props.notifications.get("service-error"));
       }
+    },
+
+    _roomsEnabled: function() {
+      return navigator.mozLoop.getLoopBoolPref("rooms.enabled");
     },
 
     _onStatusChanged: function() {
@@ -680,25 +694,36 @@ loop.panel = (function(_, mozL10n) {
       var newUid = profile ? profile.uid : null;
       if (currUid != newUid) {
         // On profile change (login, logout), switch back to the default tab.
-        this.selectTab("call");
+        this.selectTab(this._roomsEnabled() ? "rooms" : "call");
+        this.setState({userProfile: profile});
       }
-      this.setState({userProfile: profile});
       this.updateServiceErrors();
     },
 
     /**
      * The rooms feature is hidden by default for now. Once it gets mainstream,
-     * this method can be safely removed.
+     * this method can be simplified.
      */
-    _renderRoomsTab: function() {
-      if (!navigator.mozLoop.getLoopBoolPref("rooms.enabled")) {
-        return null;
+    _renderRoomsOrCallTab: function() {
+      if (!this._roomsEnabled()) {
+        return (
+          <Tab name="call">
+            <div className="content-area">
+              <CallUrlResult client={this.props.client}
+                             notifications={this.props.notifications}
+                             callUrl={this.props.callUrl} />
+              <ToSView />
+            </div>
+          </Tab>
+        );
       }
+
       return (
         <Tab name="rooms">
           <RoomList dispatcher={this.props.dispatcher}
                     store={this.props.roomStore}
                     userDisplayName={this._getUserDisplayName()}/>
+          <ToSView />
         </Tab>
       );
     },
@@ -731,21 +756,14 @@ loop.panel = (function(_, mozL10n) {
 
     render: function() {
       var NotificationListView = sharedViews.NotificationListView;
+
       return (
         <div>
           <NotificationListView notifications={this.props.notifications}
                                 clearOnDocumentHidden={true} />
           <TabView ref="tabView" selectedTab={this.props.selectedTab}
             buttonsHidden={!this.state.userProfile && !this.props.showTabButtons}>
-            <Tab name="call">
-              <div className="content-area">
-                <CallUrlResult client={this.props.client}
-                               notifications={this.props.notifications}
-                               callUrl={this.props.callUrl} />
-                <ToSView />
-              </div>
-            </Tab>
-            {this._renderRoomsTab()}
+            {this._renderRoomsOrCallTab()}
             <Tab name="contacts">
               <ContactsList selectTab={this.selectTab}
                             startForm={this.startForm} />

@@ -63,21 +63,10 @@ static const unsigned int MAX_SOURCE_BUFFERS = 16;
 namespace mozilla {
 
 static const char* const gMediaSourceTypes[6] = {
-// XXX: Disabled other temporarily on desktop to allow WebM testing.  For now,
-// set the developer-only media.mediasource.ignore_codecs pref to true to test
-// other codecs, and expect things to be broken.
-//
-// Disabled WebM in favour of MP4 on Firefox OS.
-#ifdef MOZ_GONK_MEDIACODEC
   "video/mp4",
   "audio/mp4",
-#else
   "video/webm",
   "audio/webm",
-#endif
-#if 0
-  "audio/mpeg",
-#endif
   nullptr
 };
 
@@ -87,10 +76,6 @@ IsTypeSupported(const nsAString& aType)
   if (aType.IsEmpty()) {
     return NS_ERROR_DOM_INVALID_ACCESS_ERR;
   }
-  if (Preferences::GetBool("media.mediasource.ignore_codecs", false)) {
-    return NS_OK;
-  }
-  // TODO: Further restrict this to formats in the spec.
   nsContentTypeParser parser(aType);
   nsAutoString mimeType;
   nsresult rv = parser.GetType(mimeType);
@@ -100,6 +85,16 @@ IsTypeSupported(const nsAString& aType)
   bool found = false;
   for (uint32_t i = 0; gMediaSourceTypes[i]; ++i) {
     if (mimeType.EqualsASCII(gMediaSourceTypes[i])) {
+      if ((mimeType.EqualsASCII("video/mp4") ||
+           mimeType.EqualsASCII("audio/mp4")) &&
+          !Preferences::GetBool("media.mediasource.mp4.enabled", false)) {
+        break;
+      }
+      if ((mimeType.EqualsASCII("video/webm") ||
+           mimeType.EqualsASCII("audio/webm")) &&
+          !Preferences::GetBool("media.mediasource.webm.enabled", false)) {
+        break;
+      }
       found = true;
       break;
     }
@@ -171,7 +166,8 @@ MediaSource::Duration()
   if (mReadyState == MediaSourceReadyState::Closed) {
     return UnspecifiedNaN<double>();
   }
-  return mDuration;
+  MOZ_ASSERT(mDecoder);
+  return mDecoder->GetMediaSourceDuration();
 }
 
 void
@@ -188,7 +184,7 @@ MediaSource::SetDuration(double aDuration, ErrorResult& aRv)
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
   }
-  DurationChange(aDuration, aRv);
+  mDecoder->SetMediaSourceDuration(aDuration);
 }
 
 already_AddRefed<SourceBuffer>
@@ -276,7 +272,7 @@ MediaSource::EndOfStream(const Optional<MediaSourceEndOfStreamError>& aError, Er
   mSourceBuffers->Ended();
   mDecoder->Ended();
   if (!aError.WasPassed()) {
-    DurationChange(mSourceBuffers->GetHighestBufferedEndTime(), aRv);
+    mDecoder->SetMediaSourceDuration(mSourceBuffers->GetHighestBufferedEndTime());
     if (aRv.Failed()) {
       return;
     }
@@ -341,7 +337,6 @@ MediaSource::Detach()
   mDecoder = nullptr;
   mFirstSourceBufferInitialized = false;
   SetReadyState(MediaSourceReadyState::Closed);
-  mDuration = UnspecifiedNaN<double>();
   if (mActiveSourceBuffers) {
     mActiveSourceBuffers->Clear();
   }
@@ -350,50 +345,8 @@ MediaSource::Detach()
   }
 }
 
-void
-MediaSource::GetBuffered(TimeRanges* aBuffered)
-{
-  MOZ_ASSERT(aBuffered->Length() == 0);
-  if (mActiveSourceBuffers->IsEmpty()) {
-    return;
-  }
-
-  double highestEndTime = 0;
-
-  nsTArray<nsRefPtr<TimeRanges>> activeRanges;
-  for (uint32_t i = 0; i < mActiveSourceBuffers->Length(); ++i) {
-    bool found;
-    SourceBuffer* sourceBuffer = mActiveSourceBuffers->IndexedGetter(i, found);
-
-    ErrorResult dummy;
-    *activeRanges.AppendElement() = sourceBuffer->GetBuffered(dummy);
-
-    highestEndTime = std::max(highestEndTime, activeRanges.LastElement()->GetEndTime());
-  }
-
-  TimeRanges* intersectionRanges = aBuffered;
-  intersectionRanges->Add(0, highestEndTime);
-
-  for (uint32_t i = 0; i < activeRanges.Length(); ++i) {
-    TimeRanges* sourceRanges = activeRanges[i];
-
-    if (mReadyState == MediaSourceReadyState::Ended) {
-      // Set the end time on the last range to highestEndTime by adding a
-      // new range spanning the current end time to highestEndTime, which
-      // Normalize() will then merge with the old last range.
-      sourceRanges->Add(sourceRanges->GetEndTime(), highestEndTime);
-      sourceRanges->Normalize();
-    }
-
-    intersectionRanges->Intersection(sourceRanges);
-  }
-
-  MSE_DEBUG("MediaSource(%p)::GetBuffered ranges=%s", this, DumpTimeRanges(intersectionRanges).get());
-}
-
 MediaSource::MediaSource(nsPIDOMWindow* aWindow)
   : DOMEventTargetHelper(aWindow)
-  , mDuration(UnspecifiedNaN<double>())
   , mDecoder(nullptr)
   , mPrincipal(nullptr)
   , mReadyState(MediaSourceReadyState::Closed)
@@ -462,23 +415,19 @@ MediaSource::QueueAsyncSimpleEvent(const char* aName)
 }
 
 void
-MediaSource::DurationChange(double aNewDuration, ErrorResult& aRv)
+MediaSource::DurationChange(double aOldDuration, double aNewDuration)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MSE_DEBUG("MediaSource(%p)::DurationChange(aNewDuration=%f)", this, aNewDuration);
-  if (mDuration == aNewDuration) {
-    return;
-  }
-  double oldDuration = mDuration;
-  mDuration = aNewDuration;
-  if (aNewDuration < oldDuration) {
-    mSourceBuffers->Remove(aNewDuration, oldDuration, aRv);
-    if (aRv.Failed()) {
+
+  if (aNewDuration < aOldDuration) {
+    ErrorResult rv;
+    mSourceBuffers->Remove(aNewDuration, aOldDuration, rv);
+    if (rv.Failed()) {
       return;
     }
   }
   // TODO: If partial audio frames/text cues exist, clamp duration based on mSourceBuffers.
-  // TODO: Update media element's duration and run element's duration change algorithm.
 }
 
 void

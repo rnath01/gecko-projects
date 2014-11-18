@@ -138,6 +138,7 @@ BytecodeEmitter::BytecodeEmitter(BytecodeEmitter *parent,
     constList(sc->context),
     tryNoteList(sc->context),
     blockScopeList(sc->context),
+    yieldOffsetList(sc->context),
     typesetCount(0),
     hasSingletons(false),
     emittingForInit(false),
@@ -465,17 +466,14 @@ UpdateSourceCoordNotes(ExclusiveContext *cx, BytecodeEmitter *bce, uint32_t offs
     uint32_t columnIndex = bce->parser->tokenStream.srcCoords.columnIndex(offset);
     ptrdiff_t colspan = ptrdiff_t(columnIndex) - ptrdiff_t(bce->current->lastColumn);
     if (colspan != 0) {
-        if (colspan < 0) {
-            colspan += SN_COLSPAN_DOMAIN;
-        } else if (colspan >= SN_COLSPAN_DOMAIN / 2) {
-            // If the column span is so large that we can't store it, then just
-            // discard this information because column information would most
-            // likely be useless anyway once the column numbers are ~4000000.
-            // This has been known to happen with scripts that have been
-            // minimized and put into all one line.
+        // If the column span is so large that we can't store it, then just
+        // discard this information. This can happen with minimized or otherwise
+        // machine-generated code. Even gigantic column numbers are still
+        // valuable if you have a source map to relate them to something real;
+        // but it's better to fail soft here.
+        if (!SN_REPRESENTABLE_COLSPAN(colspan))
             return true;
-        }
-        if (NewSrcNote2(cx, bce, SRC_COLSPAN, colspan) < 0)
+        if (NewSrcNote2(cx, bce, SRC_COLSPAN, SN_COLSPAN_TO_OFFSET(colspan)) < 0)
             return false;
         bce->current->lastColumn = columnIndex;
     }
@@ -2999,6 +2997,32 @@ BytecodeEmitter::isRunOnceLambda()
            !funbox->function()->name();
 }
 
+static bool
+EmitYieldOp(ExclusiveContext *cx, BytecodeEmitter *bce, JSOp op)
+{
+    if (op == JSOP_FINALYIELDRVAL)
+        return Emit1(cx, bce, JSOP_FINALYIELDRVAL) >= 0;
+
+    MOZ_ASSERT(op == JSOP_INITIALYIELD || op == JSOP_YIELD);
+
+    ptrdiff_t off = EmitN(cx, bce, op, 3);
+    if (off < 0)
+        return false;
+
+    uint32_t yieldIndex = bce->yieldOffsetList.length();
+    if (yieldIndex >= JS_BIT(24)) {
+        bce->reportError(nullptr, JSMSG_TOO_MANY_YIELDS);
+        return false;
+    }
+
+    SET_UINT24(bce->code(off), yieldIndex);
+
+    if (!bce->yieldOffsetList.append(bce->offset()))
+        return false;
+
+    return Emit1(cx, bce, JSOP_DEBUGAFTERYIELD) >= 0;
+}
+
 bool
 frontend::EmitFunctionScript(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *body)
 {
@@ -3062,6 +3086,9 @@ frontend::EmitFunctionScript(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNo
         if (bce->sc->asFunctionBox()->isStarGenerator() && !EmitFinishIteratorResult(cx, bce, true))
             return false;
 
+        if (Emit1(cx, bce, JSOP_SETRVAL) < 0)
+            return false;
+
         ScopeCoordinate sc;
         // We know that .generator is on the top scope chain node, as we are
         // at the function end.
@@ -3071,7 +3098,7 @@ frontend::EmitFunctionScript(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNo
             return false;
 
         // No need to check for finally blocks, etc as in EmitReturn.
-        if (Emit1(cx, bce, JSOP_FINALYIELD) < 0)
+        if (!EmitYieldOp(cx, bce, JSOP_FINALYIELDRVAL))
             return false;
     }
 
@@ -4801,6 +4828,7 @@ EmitForOf(ExclusiveContext *cx, BytecodeEmitter *bce, StmtType type, ParseNode *
     MOZ_ASSERT_IF(type == STMT_SPREAD, !pn);
 
     ParseNode *forHead = pn ? pn->pn_left : nullptr;
+    ParseNode *forHeadExpr = forHead ? forHead->pn_kid3 : nullptr;
     ParseNode *forBody = pn ? pn->pn_right : nullptr;
 
     ParseNode *pn1 = forHead ? forHead->pn_kid1 : nullptr;
@@ -4813,7 +4841,7 @@ EmitForOf(ExclusiveContext *cx, BytecodeEmitter *bce, StmtType type, ParseNode *
         // current result object.
 
         // Compile the object expression to the right of 'of'.
-        if (!EmitTree(cx, bce, forHead->pn_kid3))
+        if (!EmitTree(cx, bce, forHeadExpr))
             return false;
         if (!EmitIterator(cx, bce))
             return false;
@@ -4893,7 +4921,7 @@ EmitForOf(ExclusiveContext *cx, BytecodeEmitter *bce, StmtType type, ParseNode *
 
     // COME FROM the beginning of the loop to here.
     SetJumpOffsetAt(bce, jmp);
-    if (!EmitLoopEntry(cx, bce, nullptr))
+    if (!EmitLoopEntry(cx, bce, forHeadExpr))
         return false;
 
     if (type == STMT_FOR_OF_LOOP) {
@@ -5556,7 +5584,7 @@ EmitReturn(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
         MOZ_ALWAYS_TRUE(LookupAliasedNameSlot(bce, bce->script, cx->names().dotGenerator, &sc));
         if (!EmitAliasedVarOp(cx, JSOP_GETALIASEDVAR, sc, DontCheckLexical, bce))
             return false;
-        if (Emit1(cx, bce, JSOP_FINALYIELDRVAL) < 0)
+        if (!EmitYieldOp(cx, bce, JSOP_FINALYIELDRVAL))
             return false;
     } else if (top + static_cast<ptrdiff_t>(JSOP_RETURN_LENGTH) != bce->offset()) {
         bce->code()[top] = JSOP_SETRVAL;
@@ -5595,7 +5623,10 @@ EmitYield(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
     if (!EmitTree(cx, bce, pn->pn_right))
         return false;
 
-    if (Emit1(cx, bce, pn->getOp()) < 0)
+    if (!EmitYieldOp(cx, bce, pn->getOp()))
+        return false;
+
+    if (pn->getOp() == JSOP_INITIALYIELD && Emit1(cx, bce, JSOP_POP) < 0)
         return false;
 
     return true;
@@ -5637,7 +5668,7 @@ EmitYieldStar(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *iter, Parse
         return false;
 
     // Yield RESULT as-is, without re-boxing.
-    if (Emit1(cx, bce, JSOP_YIELD) < 0)                          // ITER RECEIVED
+    if (!EmitYieldOp(cx, bce, JSOP_YIELD))                       // ITER RECEIVED
         return false;
 
     // Try epilogue.
@@ -6001,6 +6032,16 @@ EmitSelfHostedResumeGenerator(ExclusiveContext *cx, BytecodeEmitter *bce, ParseN
 }
 
 static bool
+EmitSelfHostedForceInterpreter(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
+{
+    if (Emit1(cx, bce, JSOP_FORCEINTERPRETER) < 0)
+        return false;
+    if (Emit1(cx, bce, JSOP_UNDEFINED) < 0)
+        return false;
+    return true;
+}
+
+static bool
 EmitCallOrNew(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
 {
     bool callop = pn->isKind(PNK_CALL) || pn->isKind(PNK_TAGGED_TEMPLATE);
@@ -6036,12 +6077,14 @@ EmitCallOrNew(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
             // We shouldn't see foo(bar) = x in self-hosted code.
             MOZ_ASSERT(!(pn->pn_xflags & PNX_SETCALL));
 
-            // Calls to "callFunction" or "resumeGenerator" in self-hosted code
-            // generate inline bytecode.
+            // Calls to "forceInterpreter", "callFunction" or "resumeGenerator"
+            // in self-hosted code generate inline bytecode.
             if (pn2->name() == cx->names().callFunction)
                 return EmitSelfHostedCallFunction(cx, bce, pn);
             if (pn2->name() == cx->names().resumeGenerator)
                 return EmitSelfHostedResumeGenerator(cx, bce, pn);
+            if (pn2->name() == cx->names().forceInterpreter)
+                return EmitSelfHostedForceInterpreter(cx, bce, pn);
             // Fall through.
         }
         if (!EmitNameOp(cx, bce, pn2, callop))
@@ -7252,7 +7295,7 @@ static bool
 SetSrcNoteOffset(ExclusiveContext *cx, BytecodeEmitter *bce, unsigned index, unsigned which,
                  ptrdiff_t offset)
 {
-    if (size_t(offset) > SN_MAX_OFFSET) {
+    if (!SN_REPRESENTABLE_OFFSET(offset)) {
         ReportStatementTooLarge(bce->parser->tokenStream, bce->topStmt);
         return false;
     }
@@ -7269,14 +7312,14 @@ SetSrcNoteOffset(ExclusiveContext *cx, BytecodeEmitter *bce, unsigned index, uns
     }
 
     /*
-     * See if the new offset requires three bytes either by being too big or if
+     * See if the new offset requires four bytes either by being too big or if
      * the offset has already been inflated (in which case, we need to stay big
      * to not break the srcnote encoding if this isn't the last srcnote).
      */
     if (offset > (ptrdiff_t)SN_4BYTE_OFFSET_MASK || (*sn & SN_4BYTE_OFFSET_FLAG)) {
-        /* Maybe this offset was already set to a three-byte value. */
+        /* Maybe this offset was already set to a four-byte value. */
         if (!(*sn & SN_4BYTE_OFFSET_FLAG)) {
-            /* Insert two dummy bytes that will be overwritten shortly. */
+            /* Insert three dummy bytes that will be overwritten shortly. */
             jssrcnote dummy = 0;
             if (!(sn = notes.insert(sn, dummy)) ||
                 !(sn = notes.insert(sn, dummy)) ||
@@ -7534,6 +7577,15 @@ CGBlockScopeList::finish(BlockScopeArray *array)
 
     for (unsigned i = 0; i < length(); i++)
         array->vector[i] = list[i];
+}
+
+void
+CGYieldOffsetList::finish(YieldOffsetArray &array, uint32_t prologLength)
+{
+    MOZ_ASSERT(length() == array.length());
+
+    for (unsigned i = 0; i < length(); i++)
+        array[i] = prologLength + list[i];
 }
 
 /*

@@ -8,10 +8,10 @@
 namespace mozilla {
 
 #define NFCD_MAJOR_VERSION 1
-#define NFCD_MINOR_VERSION 14
+#define NFCD_MINOR_VERSION 16
 
 enum NfcRequest {
-  ConfigReq = 0,
+  ChangeRFStateReq = 0,
   ConnectReq,
   CloseReq,
   ReadNDEFReq,
@@ -21,7 +21,7 @@ enum NfcRequest {
 
 enum NfcResponse {
   GeneralRsp = 1000,
-  ConfigRsp,
+  ChangeRFStateRsp,
   ReadNDEFRsp,
 };
 

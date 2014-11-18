@@ -181,16 +181,6 @@ bool gRuntimeServiceDuringInit = false;
 bool gTestPBackground = false;
 #endif // ENABLE_TESTS
 
-enum {
-  ID_Worker = 0,
-  ID_ChromeWorker,
-  ID_Event,
-  ID_MessageEvent,
-  ID_ErrorEvent,
-
-  ID_COUNT
-};
-
 class LiteralRebindingCString : public nsDependentCString
 {
 public:
@@ -744,7 +734,7 @@ AsmJSCacheOpenEntryForRead(JS::Handle<JSObject*> aGlobal,
                                       aHandle);
 }
 
-static bool
+static JS::AsmJSCacheResult
 AsmJSCacheOpenEntryForWrite(JS::Handle<JSObject*> aGlobal,
                             bool aInstalled,
                             const char16_t* aBegin,
@@ -755,7 +745,7 @@ AsmJSCacheOpenEntryForWrite(JS::Handle<JSObject*> aGlobal,
 {
   nsIPrincipal* principal = GetPrincipalForAsmJSCacheOp();
   if (!principal) {
-    return false;
+    return JS::AsmJSCache_InternalError;
   }
 
   return asmjscache::OpenEntryForWrite(principal, aInstalled, aBegin, aEnd,

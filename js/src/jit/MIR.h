@@ -2807,36 +2807,6 @@ class MTypedObjectProto
     }
 };
 
-class MTypedObjectUnsizedLength
-  : public MUnaryInstruction,
-    public SingleObjectPolicy::Data
-{
-  private:
-    explicit MTypedObjectUnsizedLength(MDefinition *object)
-      : MUnaryInstruction(object)
-    {
-        setResultType(MIRType_Int32);
-        setMovable();
-    }
-
-  public:
-    INSTRUCTION_HEADER(TypedObjectUnsizedLength)
-
-    static MTypedObjectUnsizedLength *New(TempAllocator &alloc, MDefinition *object) {
-        return new(alloc) MTypedObjectUnsizedLength(object);
-    }
-
-    MDefinition *object() const {
-        return getOperand(0);
-    }
-    bool congruentTo(const MDefinition *ins) const {
-        return congruentIfOperandsEqual(ins);
-    }
-    AliasSet getAliasSet() const {
-        return AliasSet::Load(AliasSet::ObjectFields);
-    }
-};
-
 // Creates a new derived type object. At runtime, this is just a call
 // to `BinaryBlock::createDerived()`. That is, the MIR itself does not
 // compile to particularly optimized code. However, using a distinct
@@ -3736,6 +3706,11 @@ class MCompare
     }
     bool isFloat32Comparison() const {
         return compareType() == Compare_Float32;
+    }
+    bool isNumericComparison() const {
+        return isInt32Comparison() ||
+               isDoubleComparison() ||
+               isFloat32Comparison();
     }
     void setCompareType(CompareType type) {
         compareType_ = type;
@@ -7828,6 +7803,76 @@ class MLoadElementHole
     ALLOW_CLONE(MLoadElementHole)
 };
 
+class MLoadUnboxedObjectOrNull : public MBinaryInstruction
+{
+    MLoadUnboxedObjectOrNull(MDefinition *elements, MDefinition *index)
+      : MBinaryInstruction(elements, index)
+    {
+        setResultType(MIRType_Value);
+        setMovable();
+        MOZ_ASSERT(elements->type() == MIRType_Elements);
+        MOZ_ASSERT(index->type() == MIRType_Int32);
+    }
+
+  public:
+    INSTRUCTION_HEADER(LoadUnboxedObjectOrNull)
+
+    static MLoadUnboxedObjectOrNull *New(TempAllocator &alloc,
+                                         MDefinition *elements, MDefinition *index) {
+        return new(alloc) MLoadUnboxedObjectOrNull(elements, index);
+    }
+
+    MDefinition *elements() const {
+        return getOperand(0);
+    }
+    MDefinition *index() const {
+        return getOperand(1);
+    }
+    bool congruentTo(const MDefinition *ins) const {
+        return congruentIfOperandsEqual(ins);
+    }
+    AliasSet getAliasSet() const {
+        return AliasSet::Load(AliasSet::Element);
+    }
+
+    ALLOW_CLONE(MLoadUnboxedObjectOrNull)
+};
+
+class MLoadUnboxedString : public MBinaryInstruction
+{
+    MLoadUnboxedString(MDefinition *elements, MDefinition *index)
+      : MBinaryInstruction(elements, index)
+    {
+        setResultType(MIRType_String);
+        setMovable();
+        MOZ_ASSERT(elements->type() == MIRType_Elements);
+        MOZ_ASSERT(index->type() == MIRType_Int32);
+    }
+
+  public:
+    INSTRUCTION_HEADER(LoadUnboxedString)
+
+    static MLoadUnboxedString *New(TempAllocator &alloc,
+                                   MDefinition *elements, MDefinition *index) {
+        return new(alloc) MLoadUnboxedString(elements, index);
+    }
+
+    MDefinition *elements() const {
+        return getOperand(0);
+    }
+    MDefinition *index() const {
+        return getOperand(1);
+    }
+    bool congruentTo(const MDefinition *ins) const {
+        return congruentIfOperandsEqual(ins);
+    }
+    AliasSet getAliasSet() const {
+        return AliasSet::Load(AliasSet::Element);
+    }
+
+    ALLOW_CLONE(MLoadUnboxedString)
+};
+
 class MStoreElementCommon
 {
     MIRType elementType_;
@@ -7959,15 +8004,18 @@ class MStoreElementHole
 
 // Store an unboxed object or null pointer to a vector.
 class MStoreUnboxedObjectOrNull
-  : public MAryInstruction<3>,
-    public ConvertToObjectOrNullPolicy<2>::Data
+  : public MAryInstruction<4>,
+    public StoreUnboxedObjectOrNullPolicy::Data
 {
-    MStoreUnboxedObjectOrNull(MDefinition *elements, MDefinition *index, MDefinition *value) {
+    MStoreUnboxedObjectOrNull(MDefinition *elements, MDefinition *index,
+                              MDefinition *value, MDefinition *typedObj) {
         initOperand(0, elements);
         initOperand(1, index);
         initOperand(2, value);
+        initOperand(3, typedObj);
         MOZ_ASSERT(elements->type() == MIRType_Elements);
         MOZ_ASSERT(index->type() == MIRType_Int32);
+        MOZ_ASSERT(typedObj->type() == MIRType_Object);
     }
 
   public:
@@ -7975,8 +8023,8 @@ class MStoreUnboxedObjectOrNull
 
     static MStoreUnboxedObjectOrNull *New(TempAllocator &alloc,
                                           MDefinition *elements, MDefinition *index,
-                                          MDefinition *value) {
-        return new(alloc) MStoreUnboxedObjectOrNull(elements, index, value);
+                                          MDefinition *value, MDefinition *typedObj) {
+        return new(alloc) MStoreUnboxedObjectOrNull(elements, index, value, typedObj);
     }
     MDefinition *elements() const {
         return getOperand(0);
@@ -7987,9 +8035,17 @@ class MStoreUnboxedObjectOrNull
     MDefinition *value() const {
         return getOperand(2);
     }
+    MDefinition *typedObj() const {
+        return getOperand(3);
+    }
     AliasSet getAliasSet() const {
         // Use AliasSet::Element for reference typed object fields.
         return AliasSet::Store(AliasSet::Element);
+    }
+
+    // For StoreUnboxedObjectOrNullPolicy.
+    void setValue(MDefinition *def) {
+        replaceOperand(2, def);
     }
 
     ALLOW_CLONE(MStoreUnboxedObjectOrNull)

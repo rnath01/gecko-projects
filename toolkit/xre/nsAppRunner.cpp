@@ -615,6 +615,9 @@ bool gSafeMode = false;
  * singleton.
  */
 class nsXULAppInfo : public nsIXULAppInfo,
+#ifdef NIGHTLY_BUILD
+                     public nsIObserver,
+#endif
 #ifdef XP_WIN
                      public nsIWinAppHelper,
 #endif
@@ -630,6 +633,9 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIXULAPPINFO
   NS_DECL_NSIXULRUNTIME
+#ifdef NIGHTLY_BUILD
+  NS_DECL_NSIOBSERVER
+#endif
 #ifdef MOZ_CRASHREPORTER
   NS_DECL_NSICRASHREPORTER
   NS_DECL_NSIFINISHDUMPINGCALLBACK
@@ -642,6 +648,9 @@ public:
 NS_INTERFACE_MAP_BEGIN(nsXULAppInfo)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIXULRuntime)
   NS_INTERFACE_MAP_ENTRY(nsIXULRuntime)
+#ifdef NIGHTLY_BUILD
+  NS_INTERFACE_MAP_ENTRY(nsIObserver)
+#endif
 #ifdef XP_WIN
   NS_INTERFACE_MAP_ENTRY(nsIWinAppHelper)
 #endif
@@ -842,7 +851,24 @@ nsXULAppInfo::GetProcessID(uint32_t* aResult)
 }
 
 static bool gBrowserTabsRemoteAutostart = false;
+static nsString gBrowserTabsRemoteDisabledReason;
 static bool gBrowserTabsRemoteAutostartInitialized = false;
+
+#ifdef NIGHTLY_BUILD
+NS_IMETHODIMP
+nsXULAppInfo::Observe(nsISupports *aSubject, const char *aTopic, const char16_t *aData) {
+  if (!nsCRT::strcmp(aTopic, "getE10SBlocked")) {
+    nsCOMPtr<nsISupportsString> ret = do_QueryInterface(aSubject);
+    if (!ret)
+      return NS_ERROR_FAILURE;
+
+    ret->SetData(gBrowserTabsRemoteDisabledReason);
+
+    return NS_OK;
+  }
+  return NS_ERROR_FAILURE;
+}
+#endif
 
 NS_IMETHODIMP
 nsXULAppInfo::GetBrowserTabsRemoteAutostart(bool* aResult)
@@ -4538,8 +4564,10 @@ XRE_GetProcessType()
 
 static void
 LogE10sBlockedReason(const char *reason) {
+  gBrowserTabsRemoteDisabledReason.Assign(NS_ConvertASCIItoUTF16(reason));
+
   nsAutoString msg(NS_LITERAL_STRING("==================\nE10s has been blocked from running because:\n"));
-  msg.Append(NS_ConvertASCIItoUTF16(reason));
+  msg.Append(gBrowserTabsRemoteDisabledReason);
   msg.AppendLiteral("\n==================\n");
   nsCOMPtr<nsIConsoleService> console(do_GetService("@mozilla.org/consoleservice;1"));
   if (console) {
@@ -4574,53 +4602,35 @@ mozilla::BrowserTabsRemoteAutostart()
 
   if (prefEnabled) {
     if (gSafeMode) {
-      LogE10sBlockedReason("Firefox is in safe mode.");
+      LogE10sBlockedReason("Safe mode");
     } else if (disabledForA11y) {
-      LogE10sBlockedReason("An accessibility tool is active.");
+      LogE10sBlockedReason("An accessibility tool is active");
     } else if (disabledForIME) {
-      LogE10sBlockedReason("The keyboard being used has activated IME.");
+      LogE10sBlockedReason("The keyboard being used has activated IME");
     } else {
       gBrowserTabsRemoteAutostart = true;
     }
   }
 #endif
 
-#if defined(XP_WIN) || defined(XP_MACOSX)
+#if defined(XP_MACOSX)
   // If for any reason we suspect acceleration will be disabled, disabled
-  // e10s auto start. (bug 1068199) THIS IS A TEMPORARY WORKAROUND.
+  // e10s auto start on mac.
   if (gBrowserTabsRemoteAutostart) {
     // Check prefs
     bool accelDisabled = Preferences::GetBool("layers.acceleration.disabled", false) &&
                          !Preferences::GetBool("layers.acceleration.force-enabled", false);
 
-#if defined(XP_MACOSX)
-    accelDisabled = !nsCocoaFeatures::AccelerateByDefault();
-#endif
+    accelDisabled = accelDisabled || !nsCocoaFeatures::AccelerateByDefault();
 
     // Check for blocked drivers
     if (!accelDisabled) {
       nsCOMPtr<nsIGfxInfo> gfxInfo = do_GetService("@mozilla.org/gfx/info;1");
       if (gfxInfo) {
         int32_t status;
-#if defined(XP_WIN)
-        long flagsToCheck[4] = {
-          nsIGfxInfo::FEATURE_DIRECT3D_9_LAYERS,
-          nsIGfxInfo::FEATURE_DIRECT3D_10_LAYERS,
-          nsIGfxInfo::FEATURE_DIRECT3D_10_1_LAYERS,
-          nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS
-        };
-#elif defined(XP_MACOSX)
-        long flagsToCheck[1] = {
-          nsIGfxInfo::FEATURE_OPENGL_LAYERS
-        };
-#endif
-        for (unsigned int idx = 0; idx < ArrayLength(flagsToCheck); idx++) {
-          if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(flagsToCheck[idx], &status))) {
-            if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
-              accelDisabled = true;
-              break;
-            }
-          }
+        if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_OPENGL_LAYERS, &status)) &&
+            status != nsIGfxInfo::FEATURE_STATUS_OK) {
+          accelDisabled = true;
         }
       }
     }
@@ -4635,17 +4645,10 @@ mozilla::BrowserTabsRemoteAutostart()
 
     if (accelDisabled) {
       gBrowserTabsRemoteAutostart = false;
-      LogE10sBlockedReason("Hardware acceleration is disabled.");
+      LogE10sBlockedReason("Hardware acceleration is disabled");
     }
   }
-#endif
-
-  bool tpEnabled = Preferences::GetBool("privacy.trackingprotection.enabled",
-                                        false);
-  if (tpEnabled) {
-    gBrowserTabsRemoteAutostart = false;
-    LogE10sBlockedReason("Tracking protection is enabled");
-  }
+#endif // defined(XP_MACOSX)
 
   mozilla::Telemetry::Accumulate(mozilla::Telemetry::E10S_AUTOSTART, gBrowserTabsRemoteAutostart);
   if (Preferences::GetBool("browser.enabledE10SFromPrompt", false)) {

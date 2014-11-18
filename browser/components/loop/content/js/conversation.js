@@ -18,10 +18,10 @@ loop.conversation = (function(mozL10n) {
 
   var OutgoingConversationView = loop.conversationViews.OutgoingConversationView;
   var CallIdentifierView = loop.conversationViews.CallIdentifierView;
-  var DesktopRoomView = loop.roomViews.DesktopRoomView;
+  var DesktopRoomConversationView = loop.roomViews.DesktopRoomConversationView;
 
   var IncomingCallView = React.createClass({displayName: 'IncomingCallView',
-    mixins: [sharedMixins.DropdownMenuMixin],
+    mixins: [sharedMixins.DropdownMenuMixin, sharedMixins.AudioMixin],
 
     propTypes: {
       model: React.PropTypes.object.isRequired,
@@ -185,8 +185,14 @@ loop.conversation = (function(mozL10n) {
    * incoming call views (bug 1088672).
    */
   var GenericFailureView = React.createClass({displayName: 'GenericFailureView',
+    mixins: [sharedMixins.AudioMixin],
+
     propTypes: {
       cancelCall: React.PropTypes.func.isRequired
+    },
+
+    componentDidMount: function() {
+      this.play("failure");
     },
 
     render: function() {
@@ -578,9 +584,10 @@ loop.conversation = (function(mozL10n) {
           ));
         }
         case "room": {
-          return (DesktopRoomView({
-            mozLoop: navigator.mozLoop, 
-            roomStore: this.props.roomStore}
+          return (DesktopRoomConversationView({
+            dispatcher: this.props.dispatcher, 
+            roomStore: this.props.roomStore, 
+            dispatcher: this.props.dispatcher}
           ));
         }
         case "failed": {
@@ -636,7 +643,8 @@ loop.conversation = (function(mozL10n) {
     });
     var activeRoomStore = new loop.store.ActiveRoomStore({
       dispatcher: dispatcher,
-      mozLoop: navigator.mozLoop
+      mozLoop: navigator.mozLoop,
+      sdkDriver: sdkDriver
     });
     var roomStore = new loop.store.RoomStore({
       dispatcher: dispatcher,
@@ -665,7 +673,11 @@ loop.conversation = (function(mozL10n) {
 
     window.addEventListener("unload", function(event) {
       // Handle direct close of dialog box via [x] control.
+      // XXX Move to the conversation models, when we transition
+      // incoming calls to flux (bug 1088672).
       navigator.mozLoop.calls.clearCallInProgress(windowId);
+
+      dispatcher.dispatch(new sharedActions.WindowUnload());
     });
 
     React.renderComponent(AppControllerView({

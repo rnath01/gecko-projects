@@ -529,6 +529,8 @@ ClientLayerManager::StopFrameTimeRecording(uint32_t         aStartIndex,
 void
 ClientLayerManager::ForwardTransaction(bool aScheduleComposite)
 {
+  gfxPlatform::GetPlatform()->FenceContentDrawing();
+
   mPhase = PHASE_FORWARD;
 
   mLatestTransactionId = mTransactionIdAllocator->GetTransactionId();
@@ -662,8 +664,8 @@ ClientLayerManager::GetTexturePool(SurfaceFormat aFormat)
   }
 
   mTexturePools.AppendElement(
-      new TextureClientPool(aFormat, IntSize(gfxPrefs::LayersTileWidth(),
-                                             gfxPrefs::LayersTileHeight()),
+      new TextureClientPool(aFormat, IntSize(gfxPlatform::GetPlatform()->GetTileWidth(),
+                                             gfxPlatform::GetPlatform()->GetTileHeight()),
                             gfxPrefs::LayersTileMaxPoolSize(),
                             gfxPrefs::LayersTileShrinkPoolTimeout(),
                             mForwarder));
@@ -747,8 +749,8 @@ ClientLayerManager::ProgressiveUpdateCallback(bool aHasPendingNewThebesContent,
       aMetrics.mCriticalDisplayPort : aMetrics.mDisplayPort;
   LayerRect displayPort = (metricsDisplayPort + aMetrics.GetScrollOffset()) * paintScale;
 
-  ScreenPoint scrollOffset;
-  CSSToScreenScale zoom;
+  ParentLayerPoint scrollOffset;
+  CSSToParentLayerScale zoom;
   bool ret = AndroidBridge::Bridge()->ProgressiveUpdateCallback(
     aHasPendingNewThebesContent, displayPort, paintScale.scale, aDrawingCritical,
     scrollOffset, zoom);

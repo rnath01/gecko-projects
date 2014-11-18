@@ -101,13 +101,19 @@ public:
   virtual nsresult ReadMetadata(MediaInfo* aInfo,
                                 MetadataTags** aTags) = 0;
 
+  // Fills aInfo with the latest cached data required to present the media,
+  // ReadUpdatedMetadata will always be called once ReadMetadata has succeeded.
+  virtual void ReadUpdatedMetadata(MediaInfo* aInfo) { };
+
+  // Requests the Reader to seek and call OnSeekCompleted on the callback
+  // once completed.
   // Moves the decode head to aTime microseconds. aStartTime and aEndTime
   // denote the start and end times of the media in usecs, and aCurrentTime
   // is the current playback position in microseconds.
-  virtual nsresult Seek(int64_t aTime,
-                        int64_t aStartTime,
-                        int64_t aEndTime,
-                        int64_t aCurrentTime) = 0;
+  virtual void Seek(int64_t aTime,
+                    int64_t aStartTime,
+                    int64_t aEndTime,
+                    int64_t aCurrentTime) = 0;
 
   // Called to move the reader into idle state. When the reader is
   // created it is assumed to be active (i.e. not idle). When the media
@@ -129,9 +135,7 @@ public:
     mIgnoreAudioOutputFormat = true;
   }
 
-  // Populates aBuffered with the time ranges which are buffered. aStartTime
-  // must be the presentation time of the first frame in the media, e.g.
-  // the media time corresponding to playback time/position 0. This function
+  // Populates aBuffered with the time ranges which are buffered. This function
   // is called on the main, decode, and state machine threads.
   //
   // This base implementation in MediaDecoderReader estimates the time ranges
@@ -145,10 +149,14 @@ public:
   // The OggReader relies on this base implementation not performing I/O,
   // since in FirefoxOS we can't do I/O on the main thread, where this is
   // called.
-  virtual nsresult GetBuffered(dom::TimeRanges* aBuffered,
-                               int64_t aStartTime);
+  virtual nsresult GetBuffered(dom::TimeRanges* aBuffered);
 
   virtual int64_t ComputeStartTime(const VideoData* aVideo, const AudioData* aAudio);
+
+  // Wait this number of seconds when buffering, then leave and play
+  // as best as we can if the required amount of data hasn't been
+  // retrieved.
+  virtual uint32_t GetBufferingWait() { return 30; }
 
   // Returns the number of bytes of memory allocated by structures/frames in
   // the video queue.
@@ -179,6 +187,15 @@ public:
   // Indicates if the media is seekable.
   // ReadMetada should be called before calling this method.
   virtual bool IsMediaSeekable() = 0;
+  void SetStartTime(int64_t aStartTime);
+
+  MediaTaskQueue* GetTaskQueue() {
+    return mTaskQueue;
+  }
+
+  void ClearDecoder() {
+    mDecoder = nullptr;
+  }
 
 protected:
   virtual ~MediaDecoderReader();
@@ -206,10 +223,6 @@ protected:
     return mSampleDecodedCallback;
   }
 
-  virtual MediaTaskQueue* GetTaskQueue() {
-    return mTaskQueue;
-  }
-
   // Queue of audio frames. This queue is threadsafe, and is accessed from
   // the audio, decoder, state machine, and main threads.
   MediaQueue<AudioData> mAudioQueue;
@@ -235,6 +248,11 @@ protected:
   // what we support.
   bool mIgnoreAudioOutputFormat;
 
+  // The start time of the media, in microseconds. This is the presentation
+  // time of the first frame decoded from the media. This is initialized to -1,
+  // and then set to a value >= by MediaDecoderStateMachine::SetStartTime(),
+  // after which point it never changes.
+  int64_t mStartTime;
 private:
 
   nsRefPtr<RequestSampleCallback> mSampleDecodedCallback;
@@ -271,6 +289,8 @@ public:
   // fulfiled. The reason is passed as aReason.
   virtual void OnNotDecoded(MediaData::Type aType, NotDecodedReason aReason) = 0;
 
+  virtual void OnSeekCompleted(nsresult aResult) = 0;
+
   // Called during shutdown to break any reference cycles.
   virtual void BreakCycles() = 0;
 
@@ -294,6 +314,7 @@ public:
   virtual void OnAudioDecoded(AudioData* aSample) MOZ_OVERRIDE;
   virtual void OnVideoDecoded(VideoData* aSample) MOZ_OVERRIDE {}
   virtual void OnNotDecoded(MediaData::Type aType, NotDecodedReason aReason) MOZ_OVERRIDE;
+  virtual void OnSeekCompleted(nsresult aResult) MOZ_OVERRIDE {};
   virtual void BreakCycles() MOZ_OVERRIDE {};
   void Reset();
 

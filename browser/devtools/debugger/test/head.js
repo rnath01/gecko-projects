@@ -963,5 +963,26 @@ function waitForMessageFromTab(tab, name) {
 function callInTab(tab, name) {
   info("Calling function with name " + name + " in tab.");
 
-  sendMessageToTab(tab, "test:call", name);
+  sendMessageToTab(tab, "test:call", {
+    name: name,
+    args: Array.prototype.slice.call(arguments, 2)
+  });
+  waitForMessageFromTab(tab, "test:call");
+}
+
+function evalInTab(tab, string) {
+  info("Evalling string " + string + " in tab.");
+
+  sendMessageToTab(tab, "test:eval", {
+    string: string,
+  });
+  waitForMessageFromTab(tab, "test:eval");
+}
+
+function sendMouseClickToTab(tab, target) {
+  info("Sending mouse click to tab.");
+
+  sendMessageToTab(tab, "test:click", undefined, {
+    target: target
+  });
 }

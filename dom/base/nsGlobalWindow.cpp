@@ -620,8 +620,6 @@ public:
   virtual bool delete_(JSContext *cx, JS::Handle<JSObject*> proxy,
                        JS::Handle<jsid> id,
                        bool *bp) const MOZ_OVERRIDE;
-  virtual bool enumerate(JSContext *cx, JS::Handle<JSObject*> proxy,
-                         JS::AutoIdVector &props) const MOZ_OVERRIDE;
   virtual bool preventExtensions(JSContext *cx,
                                  JS::Handle<JSObject*> proxy,
                                  bool *succeeded) const MOZ_OVERRIDE;
@@ -649,6 +647,8 @@ public:
                       JS::Handle<jsid> id, bool *bp) const MOZ_OVERRIDE;
   virtual bool getOwnEnumerablePropertyKeys(JSContext *cx, JS::Handle<JSObject*> proxy,
                                             JS::AutoIdVector &props) const MOZ_OVERRIDE;
+  virtual bool getEnumerablePropertyKeys(JSContext *cx, JS::Handle<JSObject*> proxy,
+                                         JS::AutoIdVector &props) const MOZ_OVERRIDE;
   virtual bool iterate(JSContext *cx, JS::Handle<JSObject*> proxy,
                        unsigned flags,
                        JS::MutableHandle<JS::Value> vp) const MOZ_OVERRIDE;
@@ -704,7 +704,6 @@ const js::Class OuterWindowProxyClass =
         PROXY_MAKE_EXT(
             nullptr, /* outerObject */
             js::proxy_innerObject,
-            nullptr, /* iteratorObject */
             false,   /* isWrappedNative */
             nsOuterWindowProxy::ObjectMoved
         ));
@@ -831,22 +830,6 @@ nsOuterWindowProxy::delete_(JSContext *cx, JS::Handle<JSObject*> proxy,
 }
 
 bool
-nsOuterWindowProxy::enumerate(JSContext *cx, JS::Handle<JSObject*> proxy,
-                              JS::AutoIdVector &props) const
-{
-  // Just our indexed stuff followed by our "normal" own property names.
-  if (!AppendIndexedPropertyNames(cx, proxy, props)) {
-    return false;
-  }
-
-  JS::AutoIdVector innerProps(cx);
-  if (!js::Wrapper::enumerate(cx, proxy, innerProps)) {
-    return false;
-  }
-  return js::AppendUnique(cx, props, innerProps);
-}
-
-bool
 nsOuterWindowProxy::preventExtensions(JSContext *cx,
                                       JS::Handle<JSObject*> proxy,
                                       bool *succeeded) const
@@ -942,6 +925,23 @@ nsOuterWindowProxy::getOwnEnumerablePropertyKeys(JSContext *cx, JS::Handle<JSObj
   // ownPropertyKeys and then filter out the non-enumerable properties.
   return js::BaseProxyHandler::getOwnEnumerablePropertyKeys(cx, proxy, props);
 }
+
+bool
+nsOuterWindowProxy::getEnumerablePropertyKeys(JSContext *cx, JS::Handle<JSObject*> proxy,
+                                              JS::AutoIdVector &props) const
+{
+  // Just our indexed stuff followed by our "normal" own property names.
+  if (!AppendIndexedPropertyNames(cx, proxy, props)) {
+    return false;
+  }
+
+  JS::AutoIdVector innerProps(cx);
+  if (!js::Wrapper::getEnumerablePropertyKeys(cx, proxy, innerProps)) {
+    return false;
+  }
+  return js::AppendUnique(cx, props, innerProps);
+}
+
 
 bool
 nsOuterWindowProxy::iterate(JSContext *cx, JS::Handle<JSObject*> proxy,
@@ -1133,7 +1133,8 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
 #endif
     mCleanedUp(false),
     mDialogAbuseCount(0),
-    mAreDialogsEnabled(true)
+    mAreDialogsEnabled(true),
+    mCanSkipCCGeneration(0)
 {
   nsLayoutStatics::AddRef();
 
@@ -1684,6 +1685,10 @@ MarkXBLHandlers(nsXBLPrototypeHandler* aKey, JS::Heap<JSObject*>& aData, void* a
 
 NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_BEGIN(nsGlobalWindow)
   if (tmp->IsBlackForCC(false)) {
+    if (nsCCUncollectableMarker::InGeneration(tmp->mCanSkipCCGeneration)) {
+      return true;
+    }
+    tmp->mCanSkipCCGeneration = nsCCUncollectableMarker::sGeneration;
     if (tmp->mCachedXBLPrototypeHandlers) {
       tmp->mCachedXBLPrototypeHandlers->Enumerate(MarkXBLHandlers, nullptr);
     }
@@ -2408,9 +2413,10 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
 
   bool thisChrome = IsChromeWindow();
 
-  // Check if we're near the stack limit before we get anywhere near the
-  // transplanting code. We use a conservative check since we'll use a little
-  // more space before we actually hit the critical "can't fail" path.
+  // Check if we're anywhere near the stack limit before we reach the
+  // transplanting code, since it has no good way to handle errors. This uses
+  // the untrusted script limit, which is not strictly necessary since no
+  // actual script should run.
   JS_CHECK_RECURSION_CONSERVATIVE(cx, return NS_ERROR_FAILURE);
 
   nsCOMPtr<WindowStateHolder> wsh = do_QueryInterface(aState);
@@ -4239,9 +4245,9 @@ nsGlobalWindow::GetSupportedNames(nsTArray<nsString>& aNames)
 }
 
 bool
-nsGlobalWindow::DoNewResolve(JSContext* aCx, JS::Handle<JSObject*> aObj,
-                             JS::Handle<jsid> aId,
-                             JS::MutableHandle<JSPropertyDescriptor> aDesc)
+nsGlobalWindow::DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObj,
+                          JS::Handle<jsid> aId,
+                          JS::MutableHandle<JSPropertyDescriptor> aDesc)
 {
   MOZ_ASSERT(IsInnerWindow());
 
@@ -7779,46 +7785,15 @@ nsGlobalWindow::GetFrames(nsIDOMWindow** aFrames)
   return rv.ErrorCode();
 }
 
-JSObject* nsGlobalWindow::CallerGlobal()
-{
-  JSContext *cx = nsContentUtils::GetCurrentJSContext();
-  if (!cx) {
-    NS_ERROR("Please don't call this method from C++!");
-
-    return nullptr;
-  }
-
-  // If somebody does sameOriginIframeWindow.postMessage(...), they probably
-  // expect the .source attribute of the resulting message event to be |window|
-  // rather than |sameOriginIframeWindow|, even though the transparent wrapper
-  // semantics of same-origin access will cause us to be in the iframe's
-  // compartment at the time of the call. This means that we want the incumbent
-  // global here, rather than the global of the current compartment.
-  //
-  // There are various edge cases in which the incumbent global and the current
-  // global would not be same-origin. They include:
-  // * A privileged caller (System Principal or Expanded Principal) manipulating
-  //   less-privileged content via Xray Waivers.
-  // * An unprivileged caller invoking a cross-origin function that was exposed
-  //   to it by privileged code (i.e. Sandbox.importFunction).
-  //
-  // In these cases, we probably don't want the privileged global appearing in the
-  // .source attribute. So we fall back to the compartment global there.
-  JS::Rooted<JSObject*> incumbentGlobal(cx, &IncumbentJSGlobal());
-  JS::Rooted<JSObject*> compartmentGlobal(cx, JS::CurrentGlobalOrNull(cx));
-  nsIPrincipal* incumbentPrin = nsContentUtils::ObjectPrincipal(incumbentGlobal);
-  nsIPrincipal* compartmentPrin = nsContentUtils::ObjectPrincipal(compartmentGlobal);
-  return incumbentPrin->EqualsConsideringDomain(compartmentPrin) ? incumbentGlobal
-                                                                 : compartmentGlobal;
-}
-
-
 nsGlobalWindow*
 nsGlobalWindow::CallerInnerWindow()
 {
   JSContext *cx = nsContentUtils::GetCurrentJSContext();
   NS_ENSURE_TRUE(cx, nullptr);
-  JS::Rooted<JSObject*> scope(cx, CallerGlobal());
+  nsIGlobalObject* global = GetIncumbentGlobal();
+  NS_ENSURE_TRUE(global, nullptr);
+  JS::Rooted<JSObject*> scope(cx, global->GetGlobalJSObject());
+  NS_ENSURE_TRUE(scope, nullptr);
 
   // When Jetpack runs content scripts inside a sandbox, it uses
   // sandboxPrototype to make them appear as though they're running in the
@@ -7826,7 +7801,7 @@ nsGlobalWindow::CallerInnerWindow()
   // the |source| of the received message to be the window set as the
   // sandboxPrototype. This used to work incidentally for unrelated reasons, but
   // now we need to do some special handling to support it.
-  {
+  if (xpc::IsSandbox(scope)) {
     JSAutoCompartment ac(cx, scope);
     JS::Rooted<JSObject*> scopeProto(cx);
     bool ok = JS_GetPrototype(cx, scope, &scopeProto);
@@ -7834,26 +7809,14 @@ nsGlobalWindow::CallerInnerWindow()
     if (scopeProto && xpc::IsSandboxPrototypeProxy(scopeProto) &&
         (scopeProto = js::CheckedUnwrap(scopeProto, /* stopAtOuter = */ false)))
     {
-      scope = scopeProto;
+      global = xpc::NativeGlobal(scopeProto);
+      NS_ENSURE_TRUE(global, nullptr);
     }
   }
-  JSAutoCompartment ac(cx, scope);
 
-  // We don't use xpc::WindowOrNull here because we want to be able to tell
-  // apart the cases of "scope is not an nsISupports at all" and "scope is an
-  // nsISupports that's not a window". It's not clear whether that's desirable,
-  // see bug 984467.
-  nsISupports* native =
-    nsContentUtils::XPConnect()->GetNativeOfWrapper(cx, scope);
-  if (!native)
-    return nullptr;
-
-  // The calling window must be holding a reference, so we can just return a
-  // raw pointer here and let the QI's addref be balanced by the nsCOMPtr
-  // destructor's release.
-  nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(native);
-  if (!win)
-    return GetCurrentInnerWindowInternal();
+  // The calling window must be holding a reference, so we can return a weak
+  // pointer.
+  nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(global);
   return static_cast<nsGlobalWindow*>(win.get());
 }
 
@@ -8254,10 +8217,9 @@ nsGlobalWindow::PostMessageMoz(JSContext* aCx, JS::Handle<JS::Value> aMessage,
   else {
     // In case the global is not a window, it can be a sandbox, and the sandbox's
     // principal can be used for the security check.
-    JSObject *global = CallerGlobal();
+    nsIGlobalObject* global = GetIncumbentGlobal();
     NS_ASSERTION(global, "Why is there no global object?");
-    JSCompartment *compartment = js::GetObjectCompartment(global);
-    callerPrin = xpc::GetCompartmentPrincipal(compartment);
+    callerPrin = global->PrincipalOrNull();
   }
   if (!callerPrin) {
     return;
@@ -8819,6 +8781,16 @@ nsGlobalWindow::LeaveModalState()
   nsGlobalWindow *inner = topWin->GetCurrentInnerWindowInternal();
   if (inner)
     inner->mLastDialogQuitTime = TimeStamp::Now();
+
+  if (topWin->mModalStateDepth == 0) {
+    nsCOMPtr<nsIDOMEvent> event;
+    NS_NewDOMEvent(getter_AddRefs(event), topWin, nullptr, nullptr);
+    event->InitEvent(NS_LITERAL_STRING("endmodalstate"), true, false);
+    event->SetTrusted(true);
+    event->GetInternalNSEvent()->mFlags.mOnlyChromeDispatch = true;
+    bool dummy;
+    topWin->DispatchEvent(event, &dummy);
+  }
 }
 
 bool
@@ -12009,6 +11981,9 @@ nsGlobalWindow::InnerForSetTimeoutOrInterval(ErrorResult& aError)
     // inner window that's calling window.setTimeout().
 
     forwardTo = CallerInnerWindow();
+    if (!forwardTo && nsContentUtils::IsCallerChrome()) {
+      forwardTo = currentInner;
+    }
     if (!forwardTo) {
       aError.Throw(NS_ERROR_NOT_AVAILABLE);
       return nullptr;
@@ -12227,14 +12202,15 @@ nsGlobalWindow::SetTimeoutOrInterval(bool aIsInterval, int32_t *aReturn)
 
   if (IsOuterWindow()) {
     nsGlobalWindow* callerInner = CallerInnerWindow();
-    NS_ENSURE_TRUE(callerInner, NS_ERROR_NOT_AVAILABLE);
+    NS_ENSURE_TRUE(callerInner || nsContentUtils::IsCallerChrome(), NS_ERROR_NOT_AVAILABLE);
 
     // If the caller and the callee share the same outer window,
     // forward to the callee inner. Else, we forward to the current
     // inner (e.g. someone is calling setTimeout() on a reference to
     // some other window).
 
-    if (callerInner->GetOuterWindow() == this &&
+    if (callerInner &&
+        callerInner->GetOuterWindow() == this &&
         callerInner->IsInnerWindow()) {
       return callerInner->SetTimeoutOrInterval(aIsInterval, aReturn);
     }

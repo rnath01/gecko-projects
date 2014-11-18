@@ -39,6 +39,7 @@
 #include "nsString.h"                   // for nsString, nsAutoCString, etc
 #include "ScopedGLHelpers.h"
 #include "GLReadTexImageHelper.h"
+#include "GLBlitTextureImageHelper.h"
 #include "TiledLayerBuffer.h"           // for TiledLayerComposer
 #include "HeapCopyOfStackArray.h"
 
@@ -174,6 +175,9 @@ CompositorOGL::CleanupResources()
   }
 
   mGLContext->MakeCurrent();
+
+  mBlitTextureImageHelper = nullptr;
+
   mContextStateTracker.DestroyOGL(mGLContext);
 
   // On the main thread the Widget will be destroyed soon and calling MakeCurrent
@@ -770,7 +774,8 @@ CompositorOGL::GetShaderConfigFor(Effect *aEffect,
         static_cast<TexturedEffect*>(aEffect);
     TextureSourceOGL* source = texturedEffect->mTexture->AsSourceOGL();
     MOZ_ASSERT_IF(source->GetTextureTarget() == LOCAL_GL_TEXTURE_EXTERNAL,
-                  source->GetFormat() == gfx::SurfaceFormat::R8G8B8A8);
+                  source->GetFormat() == gfx::SurfaceFormat::R8G8B8A8 ||
+                  source->GetFormat() == gfx::SurfaceFormat::R8G8B8X8);
     MOZ_ASSERT_IF(source->GetTextureTarget() == LOCAL_GL_TEXTURE_RECTANGLE_ARB,
                   source->GetFormat() == gfx::SurfaceFormat::R8G8B8A8 ||
                   source->GetFormat() == gfx::SurfaceFormat::R8G8B8X8 ||
@@ -1382,7 +1387,7 @@ TemporaryRef<DataTextureSource>
 CompositorOGL::CreateDataTextureSource(TextureFlags aFlags)
 {
   RefPtr<DataTextureSource> result =
-    new TextureImageTextureSourceOGL(mGLContext, aFlags);
+    new TextureImageTextureSourceOGL(this, aFlags);
   return result;
 }
 
@@ -1437,6 +1442,18 @@ CompositorOGL::BindAndDrawQuads(ShaderProgramOGL *aProg,
   // process uniform arrays with GL_TRIANGLE_STRIP. Go figure.
   mGLContext->fDrawArrays(LOCAL_GL_TRIANGLES, 0, 6 * aQuads);
 }
+
+GLBlitTextureImageHelper*
+CompositorOGL::BlitTextureImageHelper()
+{
+    if (!mBlitTextureImageHelper) {
+        mBlitTextureImageHelper = MakeUnique<GLBlitTextureImageHelper>(this);
+    }
+
+    return mBlitTextureImageHelper.get();
+}
+
+
 
 GLuint
 CompositorOGL::GetTemporaryTexture(GLenum aTarget, GLenum aUnit)

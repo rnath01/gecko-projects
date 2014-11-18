@@ -15,7 +15,7 @@ describe("loop.shared.views", function() {
   var sharedModels = loop.shared.models,
       sharedViews = loop.shared.views,
       getReactElementByClass = TestUtils.findRenderedDOMComponentWithClass,
-      sandbox;
+      sandbox, fakeAudioXHR;
 
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
@@ -23,6 +23,18 @@ describe("loop.shared.views", function() {
     sandbox.stub(l10n, "get", function(x) {
       return "translated:" + x;
     });
+    fakeAudioXHR = {
+      open: sinon.spy(),
+      send: function() {},
+      abort: function() {},
+      getResponseHeader: function(header) {
+        if (header === "Content-Type")
+          return "audio/ogg";
+      },
+      responseType: null,
+      response: new ArrayBuffer(10),
+      onload: null
+    };
   });
 
   afterEach(function() {
@@ -87,6 +99,28 @@ describe("loop.shared.views", function() {
     beforeEach(function() {
       hangup = sandbox.stub();
       publishStream = sandbox.stub();
+    });
+
+    it("should accept a hangupButtonLabel optional prop", function() {
+      var comp = mountTestComponent({
+        hangupButtonLabel: "foo",
+        hangup: hangup,
+        publishStream: publishStream
+      });
+
+      expect(comp.getDOMNode().querySelector("button.btn-hangup").textContent)
+            .eql("foo");
+    });
+
+    it("should accept a enableHangup optional prop", function() {
+      var comp = mountTestComponent({
+        enableHangup: false,
+        hangup: hangup,
+        publishStream: publishStream
+      });
+
+      expect(comp.getDOMNode().querySelector("button.btn-hangup").disabled)
+            .eql(true);
     });
 
     it("should hangup when hangup button is clicked", function() {
@@ -368,16 +402,55 @@ describe("loop.shared.views", function() {
 
           it("should play a connected sound, once, on session:connected",
              function() {
+               var url = "shared/sounds/connected.ogg";
+               sandbox.stub(window, "XMLHttpRequest").returns(fakeAudioXHR);
                model.trigger("session:connected");
 
-               sinon.assert.calledOnce(window.Audio);
-               sinon.assert.calledWithExactly(
-                 window.Audio, "shared/sounds/connected.ogg");
+               fakeAudioXHR.onload();
+
+               sinon.assert.called(fakeAudioXHR.open);
+               sinon.assert.calledWithExactly(fakeAudioXHR.open, "GET", url, true);
+
+               sinon.assert.calledOnce(fakeAudio.play);
+               expect(fakeAudio.loop).to.not.equal(true);
+             });
+        });
+
+        describe("for desktop", function() {
+          var origMozLoop;
+
+          beforeEach(function() {
+            origMozLoop = navigator.mozLoop;
+            navigator.mozLoop = {
+              getAudioBlob: sinon.spy(function(name, callback) {
+                var data = new ArrayBuffer(10);
+                callback(null, new Blob([data], {type: "audio/ogg"}));
+              })
+            };
+          });
+
+          afterEach(function() {
+            navigator.mozLoop = origMozLoop;
+          });
+
+          it("should play a connected sound, once, on session:connected",
+             function() {
+               var url = "chrome://browser/content/loop/shared/sounds/connected.ogg";
+               model.trigger("session:connected");
+
+               sinon.assert.calledOnce(navigator.mozLoop.getAudioBlob);
+               sinon.assert.calledWithExactly(navigator.mozLoop.getAudioBlob,
+                                              "connected", sinon.match.func);
+               sinon.assert.calledOnce(fakeAudio.play);
                expect(fakeAudio.loop).to.not.equal(true);
              });
         });
 
         describe("for both (standalone and desktop)", function() {
+          beforeEach(function() {
+            sandbox.stub(window, "XMLHttpRequest").returns(fakeAudioXHR);
+          });
+
           it("should start streaming on session:connected", function() {
             model.trigger("session:connected");
 
@@ -458,6 +531,7 @@ describe("loop.shared.views", function() {
 
     beforeEach(function() {
       fakeFeedbackApiClient = {send: sandbox.stub()};
+      sandbox.stub(window, "XMLHttpRequest").returns(fakeAudioXHR);
       comp = TestUtils.renderIntoDocument(sharedViews.FeedbackView({
         feedbackApiClient: fakeFeedbackApiClient
       }));

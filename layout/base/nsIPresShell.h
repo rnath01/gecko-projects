@@ -1287,10 +1287,12 @@ public:
 
   static void DispatchGotOrLostPointerCaptureEvent(bool aIsGotCapture,
                                                    uint32_t aPointerId,
+                                                   uint16_t aPointerType,
                                                    nsIContent* aCaptureTarget);
   static void SetPointerCapturingContent(uint32_t aPointerId, nsIContent* aContent);
   static void ReleasePointerCapturingContent(uint32_t aPointerId, nsIContent* aContent);
   static nsIContent* GetPointerCapturingContent(uint32_t aPointerId);
+  static uint16_t GetPointerType(uint32_t aPointerId);
   
   // CheckPointerCaptureState checks cases, when got/lostpointercapture events should be fired.
   // Function returns true, if any of events was fired; false, if no one event was fired.
@@ -1424,6 +1426,8 @@ public:
     PAINT_LAYERS = 0x01,
     /* Composite layers to the window. */
     PAINT_COMPOSITE = 0x02,
+    /* Sync-decode images. */
+    PAINT_SYNC_DECODE_IMAGES = 0x04
   };
   virtual void Paint(nsView* aViewToPaint, const nsRegion& aDirtyRegion,
                      uint32_t aFlags) = 0;

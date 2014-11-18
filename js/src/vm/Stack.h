@@ -181,11 +181,10 @@ class AbstractFramePtr
     inline JSCompartment *compartment() const;
 
     inline bool hasCallObj() const;
-    inline bool isGeneratorFrame() const;
     inline bool isFunctionFrame() const;
     inline bool isGlobalFrame() const;
     inline bool isEvalFrame() const;
-    inline bool isDebuggerFrame() const;
+    inline bool isDebuggerEvalFrame() const;
 
     inline JSScript *script() const;
     inline JSFunction *fun() const;
@@ -219,6 +218,10 @@ class AbstractFramePtr
     inline bool prevUpToDate() const;
     inline void setPrevUpToDate() const;
 
+    inline bool isDebuggee() const;
+    inline void setIsDebuggee();
+    inline void unsetIsDebuggee();
+
     JSObject *evalPrevScopeChain(JSContext *cx) const;
 
     inline HandleValue returnValue() const;
@@ -243,7 +246,7 @@ class NullFramePtr : public AbstractFramePtr
 /* Flags specified for a frame as it is constructed. */
 enum InitialFrameFlags {
     INITIAL_NONE           =          0,
-    INITIAL_CONSTRUCT      =       0x20, /* == InterpreterFrame::CONSTRUCTING, asserted below */
+    INITIAL_CONSTRUCT      =       0x10, /* == InterpreterFrame::CONSTRUCTING, asserted below */
 };
 
 enum ExecuteType {
@@ -280,12 +283,11 @@ class InterpreterFrame
          *   previous frame in memory. Iteration should treat
          *   evalInFramePrev_ as this frame's previous frame.
          */
-        DEBUGGER           =        0x8,
+        DEBUGGER_EVAL      =        0x8,
 
-        GENERATOR          =       0x10,  /* frame is associated with a generator */
-        CONSTRUCTING       =       0x20,  /* frame is for a constructor invocation */
+        CONSTRUCTING       =       0x10,  /* frame is for a constructor invocation */
 
-        /* (0x40 and 0x80 are unused) */
+        /* (0x20, 0x40 and 0x80 are unused) */
 
         /* Function prologue state */
         HAS_CALL_OBJ       =      0x100,  /* CallObject created for heavyweight fun */
@@ -298,17 +300,23 @@ class InterpreterFrame
         /* Debugger state */
         PREV_UP_TO_DATE    =     0x4000,  /* see DebugScopes::updateLiveScopes */
 
+        /*
+         * See comment above 'debugMode' in jscompartment.h for explanation of
+         * invariants of debuggee compartments, scripts, and frames.
+         */
+        DEBUGGEE           =     0x8000,  /* Execution is being observed by Debugger */
+
         /* Used in tracking calls and profiling (see vm/SPSProfiler.cpp) */
-        HAS_PUSHED_SPS_FRAME =   0x8000,  /* SPS was notified of enty */
+        HAS_PUSHED_SPS_FRAME =   0x10000, /* SPS was notified of enty */
 
         /*
          * If set, we entered one of the JITs and ScriptFrameIter should skip
          * this frame.
          */
-        RUNNING_IN_JIT     =    0x10000,
+        RUNNING_IN_JIT     =    0x20000,
 
         /* Miscellaneous state. */
-        USE_NEW_TYPE       =    0x20000   /* Use new type for constructed |this| object. */
+        USE_NEW_TYPE       =    0x40000   /* Use new type for constructed |this| object. */
     };
 
   private:
@@ -337,8 +345,8 @@ class InterpreterFrame
     void                *unused;
 
     /*
-     * For an eval-in-frame DEBUGGER frame, the frame in whose scope we're
-     * evaluating code. Iteration treats this as our previous frame.
+     * For an eval-in-frame DEBUGGER_EVAL frame, the frame in whose scope
+     * we're evaluating code. Iteration treats this as our previous frame.
      */
     AbstractFramePtr    evalInFramePrev_;
 
@@ -758,34 +766,10 @@ class InterpreterFrame
         markReturnValue();
     }
 
-    /*
-     * A "generator" frame is a function frame associated with a generator.
-     * Since generators are not executed LIFO, the VM copies a single abstract
-     * generator frame back and forth between the LIFO VM stack (when the
-     * generator is active) and a snapshot stored in JSGenerator (when the
-     * generator is inactive). A generator frame is comprised of an
-     * InterpreterFrame structure and the values that make up the arguments,
-     * locals, and expression stack. The layout in the JSGenerator snapshot
-     * matches the layout on the stack (see the "VM stack layout" comment
-     * above).
-     */
-
-    bool isGeneratorFrame() const {
-        bool ret = flags_ & GENERATOR;
-        MOZ_ASSERT_IF(ret, isNonEvalFunctionFrame());
-        return ret;
-    }
-
-    void initGeneratorFrame() const {
-        MOZ_ASSERT(!isGeneratorFrame());
+    void resumeGeneratorFrame(JSObject *scopeChain) {
+        MOZ_ASSERT(script()->isGenerator());
         MOZ_ASSERT(isNonEvalFunctionFrame());
-        flags_ |= GENERATOR;
-    }
-
-    void resumeGeneratorFrame(HandleObject scopeChain) {
-        MOZ_ASSERT(!isGeneratorFrame());
-        MOZ_ASSERT(isNonEvalFunctionFrame());
-        flags_ |= GENERATOR | HAS_CALL_OBJ | HAS_SCOPECHAIN;
+        flags_ |= HAS_CALL_OBJ | HAS_SCOPECHAIN;
         scopeChain_ = scopeChain;
     }
 
@@ -837,8 +821,8 @@ class InterpreterFrame
         return flags_ & USE_NEW_TYPE;
     }
 
-    bool isDebuggerFrame() const {
-        return !!(flags_ & DEBUGGER);
+    bool isDebuggerEvalFrame() const {
+        return !!(flags_ & DEBUGGER_EVAL);
     }
 
     bool prevUpToDate() const {
@@ -848,6 +832,16 @@ class InterpreterFrame
     void setPrevUpToDate() {
         flags_ |= PREV_UP_TO_DATE;
     }
+
+    bool isDebuggee() const {
+        return !!(flags_ & DEBUGGEE);
+    }
+
+    void setIsDebuggee() {
+        flags_ |= DEBUGGEE;
+    }
+
+    inline void unsetIsDebuggee();
 
   public:
     void mark(JSTracer *trc);
@@ -1584,7 +1578,6 @@ class FrameIter
     bool isGlobalFrame() const;
     bool isEvalFrame() const;
     bool isNonEvalFunctionFrame() const;
-    bool isGeneratorFrame() const;
     bool hasArgs() const { return isNonEvalFunctionFrame(); }
 
     ScriptSource *scriptSource() const;

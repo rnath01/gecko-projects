@@ -4,9 +4,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/ArrayUtils.h"
-
 #include "gfxWindowsPlatform.h"
+
+#include "cairo.h"
+#include "mozilla/ArrayUtils.h"
 
 #include "gfxImageSurface.h"
 #include "gfxWindowsSurface.h"
@@ -79,6 +80,31 @@ using namespace mozilla::gfx;
 using namespace mozilla::layers;
 using namespace mozilla::widget;
 using namespace mozilla::image;
+
+DCFromDrawTarget::DCFromDrawTarget(DrawTarget& aDrawTarget)
+{
+  mDC = nullptr;
+  if (aDrawTarget.GetBackendType() == BackendType::CAIRO) {
+    cairo_surface_t *surf = (cairo_surface_t*)
+        aDrawTarget.GetNativeSurface(NativeSurfaceType::CAIRO_SURFACE);
+    cairo_surface_type_t surfaceType = cairo_surface_get_type(surf);
+    if (surfaceType == CAIRO_SURFACE_TYPE_WIN32 ||
+        surfaceType == CAIRO_SURFACE_TYPE_WIN32_PRINTING) {
+      mDC = cairo_win32_surface_get_dc(surf);
+      mNeedsRelease = false;
+      SaveDC(mDC);
+      cairo_t* ctx = (cairo_t*)
+          aDrawTarget.GetNativeSurface(NativeSurfaceType::CAIRO_CONTEXT);
+      cairo_scaled_font_t* scaled = cairo_get_scaled_font(ctx);
+      cairo_win32_scaled_font_select_font(scaled, mDC);
+    }
+    if (!mDC) {
+      mDC = GetDC(nullptr);
+      SetGraphicsMode(mDC, GM_ADVANCED);
+      mNeedsRelease = true;
+    }
+  }
+}
 
 #ifdef CAIRO_HAS_D2D_SURFACE
 
@@ -456,6 +482,7 @@ gfxWindowsPlatform::UpdateRenderMode()
 #ifdef USE_D2D1_1
       if (gfxPrefs::Direct2DUse1_1() && Factory::SupportsD2D1()) {
         contentMask |= BackendTypeBit(BackendType::DIRECT2D1_1);
+        canvasMask |= BackendTypeBit(BackendType::DIRECT2D1_1);
         defaultBackend = BackendType::DIRECT2D1_1;
       } else {
 #endif
@@ -583,6 +610,12 @@ gfxWindowsPlatform::VerifyD2DDevice(bool aAttemptForce)
     if (mD2DDevice) {
         reporter.SetSuccessful();
         mozilla::gfx::Factory::SetDirect3D10Device(cairo_d2d_device_get_device(mD2DDevice));
+    }
+
+    ScopedGfxFeatureReporter reporter1_1("D2D1.1");
+
+    if (Factory::SupportsD2D1()) {
+      reporter1_1.SetSuccessful();
     }
 #endif
 }
@@ -1401,6 +1434,106 @@ gfxWindowsPlatform::GetD3D9DeviceManager()
   return mDeviceManager;
 }
 
+ID3D11Texture2D*
+gfxWindowsPlatform::GetD3D11Texture()
+{
+  if (mD3D11Texture) {
+    return mD3D11Texture;
+  }
+
+  MOZ_ASSERT(mD3D10Texture || mD3D11ContentTexture);
+
+  RefPtr<IDXGIResource> resource;
+  if (mD3D10Texture) {
+    mD3D10Texture->QueryInterface((IDXGIResource**)byRef(resource));
+  } else {
+    mD3D11ContentTexture->QueryInterface((IDXGIResource**)byRef(resource));
+  }
+  HANDLE sharedHandle;
+  HRESULT hr = resource->GetSharedHandle(&sharedHandle);
+
+  hr = GetD3D11Device()->OpenSharedResource(sharedHandle,
+    __uuidof(ID3D11Texture2D),
+    (void**)(ID3D11Texture2D**)byRef(mD3D11Texture));
+
+  return mD3D11Texture;
+}
+
+ID3D11Texture2D*
+gfxWindowsPlatform::GetD3D11ContentTexture()
+{
+  if (mD3D11ContentTexture) {
+    return mD3D11ContentTexture;
+  }
+  ID3D11Device* device = GetD3D11ContentDevice();
+
+  CD3D11_TEXTURE2D_DESC newDesc(DXGI_FORMAT_B8G8R8A8_UNORM,
+    1, 1, 1, 1,
+    D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+
+  newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+
+  HRESULT hr = device->CreateTexture2D(&newDesc, nullptr, byRef(mD3D11ContentTexture));
+  return mD3D11ContentTexture;
+}
+
+ID3D10Texture2D*
+gfxWindowsPlatform::GetD3D10Texture()
+{
+  if (mD3D10Texture) {
+    return mD3D10Texture;
+  }
+  ID3D10Device* device = GetD3D10Device();
+
+  CD3D10_TEXTURE2D_DESC newDesc(DXGI_FORMAT_B8G8R8A8_UNORM,
+    1, 1, 1, 1,
+    D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE);
+
+  newDesc.MiscFlags = D3D10_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+
+  HRESULT hr = device->CreateTexture2D(&newDesc, nullptr, byRef(mD3D10Texture));
+  return mD3D10Texture;
+}
+
+void
+gfxWindowsPlatform::FenceContentDrawing()
+{
+#ifdef USE_D2D1_1
+  if (gfxPrefs::Direct2DUse1_1() && GetD3D11ContentDevice()) {
+    ID3D11Texture2D* tex = GetD3D11ContentTexture();
+    RefPtr<IDXGIKeyedMutex> mutex;
+    tex->QueryInterface((IDXGIKeyedMutex**)byRef(mutex));
+    mutex->AcquireSync(0, INFINITE);
+    RefPtr<DrawTarget> dt = Factory::CreateDrawTargetForD3D11Texture(tex, SurfaceFormat::B8G8R8A8);
+    dt->ClearRect(Rect(0, 0, 1, 1));
+    dt->Flush();
+    dt = nullptr;
+    mutex->ReleaseSync(0);
+  } else
+#endif
+  if (GetD3D10Device()) {
+    ID3D10Texture2D* tex = GetD3D10Texture();
+    RefPtr<IDXGIKeyedMutex> mutex;
+    tex->QueryInterface((IDXGIKeyedMutex**)byRef(mutex));
+    mutex->AcquireSync(0, INFINITE);
+    RefPtr<DrawTarget> dt = Factory::CreateDrawTargetForD3D10Texture(tex, SurfaceFormat::B8G8R8A8);
+    dt->ClearRect(Rect(0, 0, 1, 1));
+    dt->Flush();
+    dt = nullptr;
+    mutex->ReleaseSync(0);
+  }
+}
+
+void
+gfxWindowsPlatform::WaitContentDrawing()
+{
+  ID3D11Texture2D *sentinelTexture = GetD3D11Texture();
+  RefPtr<IDXGIKeyedMutex> mutex;
+  sentinelTexture->QueryInterface((IDXGIKeyedMutex**)byRef(mutex));
+  mutex->AcquireSync(0, INFINITE);
+  mutex->ReleaseSync(0);
+}
+
 ID3D11Device*
 gfxWindowsPlatform::GetD3D11Device()
 {
@@ -1521,6 +1654,13 @@ bool DoesD3D11DeviceWork(ID3D11Device *device)
       return result;
   checked = true;
 
+  if (gfxPrefs::Direct2DForceEnabled() ||
+      gfxPrefs::LayersAccelerationForceEnabled())
+  {
+    result = true;
+    return true;
+  }
+
   if (GetModuleHandleW(L"dlumd32.dll") && GetModuleHandleW(L"igd10umd32.dll")) {
     nsString displayLinkModuleVersionString;
     gfxWindowsPlatform::GetDLLVersion(L"dlumd32.dll", displayLinkModuleVersionString);
@@ -1531,11 +1671,26 @@ bool DoesD3D11DeviceWork(ID3D11Device *device)
 #endif
       return false;
     }
-    if (displayLinkModuleVersion <= GFX_DRIVER_VERSION(8,6,1,36484)) {
+    if (displayLinkModuleVersion <= V(8,6,1,36484)) {
 #if defined(MOZ_CRASHREPORTER)
       CrashReporter::AppendAppNotesToCrashReport(NS_LITERAL_CSTRING("DisplayLink: too old version\n"));
 #endif
       return false;
+    }
+  }
+
+  if (GetModuleHandleW(L"atidxx32.dll")) {
+    nsCOMPtr<nsIGfxInfo> gfxInfo = do_GetService("@mozilla.org/gfx/info;1");
+    if (gfxInfo) {
+      nsString vendorID, vendorID2;
+      gfxInfo->GetAdapterVendorID(vendorID);
+      gfxInfo->GetAdapterVendorID2(vendorID2);
+      if (vendorID.EqualsLiteral("0x8086") && vendorID2.IsEmpty()) {
+#if defined(MOZ_CRASHREPORTER)
+        CrashReporter::AppendAppNotesToCrashReport(NS_LITERAL_CSTRING("Unexpected Intel/AMD dual-GPU setup\n"));
+#endif
+        return false;
+      }
     }
   }
 

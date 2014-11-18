@@ -753,7 +753,7 @@ bool OggReader::ReadOggChain()
   OpusState* newOpusState = nullptr;
 #endif /* MOZ_OPUS */
   VorbisState* newVorbisState = nullptr;
-  MetadataTags* tags = nullptr;
+  nsAutoPtr<MetadataTags> tags;
 
   if (HasVideo() || HasSkeleton() || !HasAudio()) {
     return false;
@@ -846,7 +846,7 @@ bool OggReader::ReadOggChain()
       *info = mInfo;
       ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
       mDecoder->QueueMetadata((mDecodedAudioFrames * USECS_PER_S) / mInfo.mAudio.mRate,
-                              info.forget(), tags);
+                              info, tags);
     }
     return true;
   }
@@ -1454,10 +1454,19 @@ nsresult OggReader::SeekInUnbuffered(int64_t aTarget,
   return SeekBisection(seekTarget, k, SEEK_FUZZ_USECS);
 }
 
-nsresult OggReader::Seek(int64_t aTarget,
-                         int64_t aStartTime,
-                         int64_t aEndTime,
-                         int64_t aCurrentTime)
+void OggReader::Seek(int64_t aTarget,
+                     int64_t aStartTime,
+                     int64_t aEndTime,
+                     int64_t aCurrentTime)
+{
+  nsresult res = SeekInternal(aTarget, aStartTime, aEndTime, aCurrentTime);
+  GetCallback()->OnSeekCompleted(res);
+}
+
+nsresult OggReader::SeekInternal(int64_t aTarget,
+                                 int64_t aStartTime,
+                                 int64_t aEndTime,
+                                 int64_t aCurrentTime)
 {
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
   if (mIsChained)
@@ -1881,15 +1890,16 @@ nsresult OggReader::SeekBisection(int64_t aTarget,
   return NS_OK;
 }
 
-nsresult OggReader::GetBuffered(dom::TimeRanges* aBuffered, int64_t aStartTime)
+nsresult OggReader::GetBuffered(dom::TimeRanges* aBuffered)
 {
+  MOZ_ASSERT(mStartTime != -1, "Need to finish metadata decode first");
   {
     mozilla::ReentrantMonitorAutoEnter mon(mMonitor);
     if (mIsChained)
       return NS_ERROR_FAILURE;
   }
 #ifdef OGG_ESTIMATE_BUFFERED
-  return MediaDecoderReader::GetBuffered(aBuffered, aStartTime);
+  return MediaDecoderReader::GetBuffered(aBuffered);
 #else
   // HasAudio and HasVideo are not used here as they take a lock and cause
   // a deadlock. Accessing mInfo doesn't require a lock - it doesn't change
@@ -1899,7 +1909,7 @@ nsresult OggReader::GetBuffered(dom::TimeRanges* aBuffered, int64_t aStartTime)
     return NS_OK;
   }
 
-  MediaResource* resource = mDecoder->GetResource();
+  AutoPinned<MediaResource> resource(mDecoder->GetResource());
   nsTArray<MediaByteRange> ranges;
   nsresult res = resource->GetCachedRanges(ranges);
   NS_ENSURE_SUCCESS(res, res);
@@ -1919,7 +1929,7 @@ nsresult OggReader::GetBuffered(dom::TimeRanges* aBuffered, int64_t aStartTime)
     // we special-case (startOffset == 0) so that the first
     // buffered range always appears to be buffered from the media start
     // time, rather than from the end-time of the first page.
-    int64_t startTime = (startOffset == 0) ? aStartTime : -1;
+    int64_t startTime = (startOffset == 0) ? mStartTime : -1;
 
     // Find the start time of the range. Read pages until we find one with a
     // granulepos which we can convert into a timestamp to use as the time of
@@ -1987,8 +1997,8 @@ nsresult OggReader::GetBuffered(dom::TimeRanges* aBuffered, int64_t aStartTime)
       // find an end time.
       int64_t endTime = RangeEndTime(startOffset, endOffset, true);
       if (endTime != -1) {
-        aBuffered->Add((startTime - aStartTime) / static_cast<double>(USECS_PER_S),
-                       (endTime - aStartTime) / static_cast<double>(USECS_PER_S));
+        aBuffered->Add((startTime - mStartTime) / static_cast<double>(USECS_PER_S),
+                       (endTime - mStartTime) / static_cast<double>(USECS_PER_S));
       }
     }
   }

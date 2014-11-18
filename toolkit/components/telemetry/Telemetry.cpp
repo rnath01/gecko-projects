@@ -622,6 +622,7 @@ public:
                  uint32_t histogramType, uint32_t min, uint32_t max,
                  uint32_t bucketCount);
   nsresult GetHistogram(const nsCString& name, Histogram** histogram);
+  Histogram* GetHistogram(const nsCString& name);
   uint32_t GetHistogramType() const { return mHistogramType; }
   nsresult GetJSKeys(JSContext* cx, JS::CallArgs& args);
   nsresult GetJSSnapshot(JSContext* cx, JS::Handle<JSObject*> obj);
@@ -699,6 +700,16 @@ KeyedHistogram::GetHistogram(const nsCString& key, Histogram** histogram)
   return NS_OK;
 }
 
+Histogram*
+KeyedHistogram::GetHistogram(const nsCString& key)
+{
+  Histogram* h = nullptr;
+  if (NS_FAILED(GetHistogram(key, &h))) {
+    return nullptr;
+  }
+  return h;
+}
+
 /* static */
 PLDHashOperator
 KeyedHistogram::ClearHistogramEnumerator(KeyedHistogramEntry* entry, void*)
@@ -719,11 +730,10 @@ PLDHashOperator
 KeyedHistogram::ReflectKeys(KeyedHistogramEntry* entry, void* arg)
 {
   ReflectKeysArgs* args = static_cast<ReflectKeysArgs*>(arg);
-  const nsACString& key = entry->GetKey();
 
   JS::RootedValue jsKey(args->jsContext);
-  const nsCString& flat = nsPromiseFlatCString(key);
-  jsKey.setString(JS_NewStringCopyN(args->jsContext, flat.get(), flat.Length()));
+  const NS_ConvertUTF8toUTF16 key(entry->GetKey());
+  jsKey.setString(JS_NewUCStringCopyN(args->jsContext, key.Data(), key.Length()));
   args->vector->append(jsKey);
 
   return PL_DHASH_NEXT;
@@ -766,10 +776,9 @@ KeyedHistogram::ReflectKeyedHistogram(KeyedHistogramEntry* entry, JSContext* cx,
     return false;
   }
 
-  const nsACString& key = entry->GetKey();
-  const nsCString& flat = nsPromiseFlatCString(key);
-
-  if (!JS_DefineProperty(cx, obj, flat.get(), histogramSnapshot, JSPROP_ENUMERATE)) {
+  const NS_ConvertUTF8toUTF16 key(entry->GetKey());
+  if (!JS_DefineUCProperty(cx, obj, key.Data(), key.Length(),
+                           histogramSnapshot, JSPROP_ENUMERATE)) {
     return false;
   }
 
@@ -821,6 +830,8 @@ public:
     struct Stat otherThreads;
   };
   typedef nsBaseHashtableET<nsCStringHashKey, StmtStats> SlowSQLEntryType;
+
+  static KeyedHistogram* GetKeyedHistogramById(const nsACString &id);
 
 private:
   TelemetryImpl();
@@ -2934,6 +2945,19 @@ TelemetryImpl::GetKeyedHistogramById(const nsACString &name, JSContext *cx,
   return WrapAndReturnKeyedHistogram(keyed, cx, ret);
 }
 
+/* static */
+KeyedHistogram*
+TelemetryImpl::GetKeyedHistogramById(const nsACString &name)
+{
+  if (!sTelemetry) {
+    return nullptr;
+  }
+
+  KeyedHistogram* keyed = nullptr;
+  sTelemetry->mKeyedHistograms.Get(name, &keyed);
+  return keyed;
+}
+
 NS_IMETHODIMP
 TelemetryImpl::GetCanRecord(bool *ret) {
   *ret = mCanRecord;
@@ -3373,6 +3397,23 @@ Accumulate(ID aHistogram, uint32_t aSample)
   nsresult rv = GetHistogramByEnumId(aHistogram, &h);
   if (NS_SUCCEEDED(rv))
     h->Add(aSample);
+}
+
+void
+Accumulate(ID aID, const nsCString& aKey, uint32_t aSample)
+{
+  if (!TelemetryImpl::CanRecord()) {
+    return;
+  }
+
+  const TelemetryHistogram& th = gHistograms[aID];
+  KeyedHistogram* keyed = TelemetryImpl::GetKeyedHistogramById(nsDependentCString(th.id()));
+  MOZ_ASSERT(keyed);
+
+  Histogram* histogram = keyed->GetHistogram(aKey);
+  if (histogram) {
+    histogram->Add(aSample);
+  }
 }
 
 void

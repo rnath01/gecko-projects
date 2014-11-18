@@ -706,6 +706,14 @@ bool DebugPrologue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool *mu
 bool DebugEpilogue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool ok);
 bool DebugEpilogueOnBaselineReturn(JSContext *cx, BaselineFrame *frame, jsbytecode *pc);
 
+JSObject *CreateGenerator(JSContext *cx, BaselineFrame *frame);
+bool NormalSuspend(JSContext *cx, HandleObject obj, BaselineFrame *frame, jsbytecode *pc,
+                   uint32_t stackDepth);
+bool FinalSuspend(JSContext *cx, HandleObject obj, BaselineFrame *frame, jsbytecode *pc);
+bool InterpretResume(JSContext *cx, HandleObject obj, HandleValue val, HandlePropertyName kind,
+                     MutableHandleValue rval);
+bool DebugAfterYield(JSContext *cx, BaselineFrame *frame);
+
 bool StrictEvalPrologue(JSContext *cx, BaselineFrame *frame);
 bool HeavyweightFunPrologue(JSContext *cx, BaselineFrame *frame);
 

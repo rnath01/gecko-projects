@@ -829,6 +829,8 @@ CompositorD3D11::BeginFrame(const nsIntRegion& aInvalidRegion,
 
   UpdateRenderTarget();
 
+  gfxPlatform::GetPlatform()->WaitContentDrawing();
+
   // Failed to create a render target or the view.
   if (!mDefaultRT || !mDefaultRT->mRTView ||
       mSize.width == 0 || mSize.height == 0) {
@@ -935,7 +937,7 @@ CompositorD3D11::VerifyBufferSize()
 
   if ((swapDesc.BufferDesc.Width == mSize.width &&
        swapDesc.BufferDesc.Height == mSize.height) ||
-      mSize.width == 0 || mSize.height == 0) {
+      mSize.width <= 0 || mSize.height <= 0) {
     return;
   }
 

@@ -33,12 +33,28 @@ extern PRLogModuleInfo* GetMediaSourceAPILog();
 #define MSE_API(...)
 #endif
 
+// When a stream hits EOS it needs to decide what other stream to switch to. Due
+// to inaccuracies is determining buffer end frames (Bug 1065207) and rounding
+// issues we use a fuzz factor to determine the end time of this stream for
+// switching to the new stream. This value is based on the end of frame
+// default value used in Blink, kDefaultBufferDurationInMs.
+#define EOS_FUZZ_US 125000
+
+using mozilla::dom::TimeRanges;
+
 namespace mozilla {
 
 MediaSourceReader::MediaSourceReader(MediaSourceDecoder* aDecoder)
   : MediaDecoderReader(aDecoder)
   , mLastAudioTime(-1)
   , mLastVideoTime(-1)
+  , mPendingSeekTime(-1)
+  , mPendingStartTime(-1)
+  , mPendingEndTime(-1)
+  , mPendingCurrentTime(-1)
+  , mWaitingForSeekData(false)
+  , mPendingSeeks(0)
+  , mSeekResult(NS_OK)
   , mTimeThreshold(-1)
   , mDropAudioBeforeThreshold(false)
   , mDropVideoBeforeThreshold(false)
@@ -166,13 +182,43 @@ MediaSourceReader::OnNotDecoded(MediaData::Type aType, RequestSampleCallback::No
     GetCallback()->OnNotDecoded(aType, aReason);
     return;
   }
+  // End of stream. Force switching past this stream to another reader by
+  // switching to the end of the buffered range.
+  MOZ_ASSERT(aReason == RequestSampleCallback::END_OF_STREAM);
+  nsRefPtr<MediaDecoderReader> reader = aType == MediaData::AUDIO_DATA ?
+                                          mAudioReader : mVideoReader;
 
-  // See if we can find a different reader that can pick up where we left off.
-  if (aType == MediaData::AUDIO_DATA && SwitchAudioReader(mLastAudioTime)) {
+  // Find the closest approximation to the end time for this stream.
+  // mLast{Audio,Video}Time differs from the actual end time because of
+  // Bug 1065207 - the duration of a WebM fragment is an estimate not the
+  // actual duration. In the case of audio time an example of where they
+  // differ would be the actual sample duration being small but the
+  // previous sample being large. The buffered end time uses that last
+  // sample duration as an estimate of the end time duration giving an end
+  // time that is greater than mLastAudioTime, which is the actual sample
+  // end time.
+  // Reader switching is based on the buffered end time though so they can be
+  // quite different. By using the EOS_FUZZ_US and the buffered end time we
+  // attempt to account for this difference.
+  int64_t* time = aType == MediaData::AUDIO_DATA ? &mLastAudioTime : &mLastVideoTime;
+  if (reader) {
+    nsRefPtr<dom::TimeRanges> ranges = new dom::TimeRanges();
+    reader->GetBuffered(ranges);
+    if (ranges->Length() > 0) {
+      // End time is a double so we convert to nearest by adding 0.5.
+      int64_t end = ranges->GetEndTime() * USECS_PER_S + 0.5;
+      *time = std::max(*time, end);
+    }
+  }
+
+  // See if we can find a different reader that can pick up where we left off. We use the
+  // EOS_FUZZ_US to allow for the fact that our end time can be inaccurate due to bug
+  // 1065207 - the duration of a WebM frame is an estimate.
+  if (aType == MediaData::AUDIO_DATA && SwitchAudioReader(*time + EOS_FUZZ_US)) {
     RequestAudioData();
     return;
   }
-  if (aType == MediaData::VIDEO_DATA && SwitchVideoReader(mLastVideoTime)) {
+  if (aType == MediaData::VIDEO_DATA && SwitchVideoReader(*time + EOS_FUZZ_US)) {
     RequestVideoData(false, 0);
     return;
   }
@@ -309,6 +355,15 @@ MediaSourceReader::CreateSubDecoder(const nsACString& aType)
   if (!reader) {
     return nullptr;
   }
+
+  // MSE uses a start time of 0 everywhere. Set that immediately on the
+  // subreader to make sure that it's always in a state where we can invoke
+  // GetBuffered on it.
+  {
+    ReentrantMonitorAutoEnter mon(decoder->GetReentrantMonitor());
+    reader->SetStartTime(0);
+  }
+
   // Set a callback on the subreader that forwards calls to this reader.
   // This reader will then forward them onto the state machine via this
   // reader's callback.
@@ -366,21 +421,6 @@ MediaSourceReader::OnTrackBufferConfigured(TrackBuffer* aTrackBuffer, const Medi
   mDecoder->NotifyWaitingForResourcesStatusChanged();
 }
 
-void
-MediaSourceReader::WaitForTimeRange(int64_t aTime)
-{
-  MSE_DEBUG("MediaSourceReader(%p)::WaitForTimeRange(%lld)", this, aTime);
-  ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
-
-  // Loop until we have the requested time range in the active TrackBuffers.
-  // Ideally, this wait loop would use an async request and callback
-  // instead.  Bug 1056441 covers that change.
-  while (!TrackBuffersContainTime(aTime) && !IsShutdown() && !IsEnded()) {
-    MSE_DEBUG("MediaSourceReader(%p)::WaitForTimeRange(%lld) waiting", this, aTime);
-    mon.Wait();
-  }
-}
-
 bool
 MediaSourceReader::TrackBuffersContainTime(int64_t aTime)
 {
@@ -394,12 +434,84 @@ MediaSourceReader::TrackBuffersContainTime(int64_t aTime)
   return true;
 }
 
-nsresult
+void
+MediaSourceReader::NotifyTimeRangesChanged()
+{
+  ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+  if (mWaitingForSeekData) {
+    //post a task to the state machine thread to call seek.
+    RefPtr<nsIRunnable> task(NS_NewRunnableMethod(
+        this, &MediaSourceReader::AttemptSeek));
+    GetTaskQueue()->Dispatch(task.forget());
+  }
+}
+
+void
 MediaSourceReader::Seek(int64_t aTime, int64_t aStartTime, int64_t aEndTime,
                         int64_t aCurrentTime)
 {
   MSE_DEBUG("MediaSourceReader(%p)::Seek(aTime=%lld, aStart=%lld, aEnd=%lld, aCurrent=%lld)",
             this, aTime, aStartTime, aEndTime, aCurrentTime);
+
+  if (IsShutdown()) {
+    GetCallback()->OnSeekCompleted(NS_ERROR_FAILURE);
+    return;
+  }
+
+  // Store pending seek target in case the track buffers don't contain
+  // the desired time and we delay doing the seek.
+  mPendingSeekTime = aTime;
+  mPendingStartTime = aStartTime;
+  mPendingEndTime = aEndTime;
+  mPendingCurrentTime = aCurrentTime;
+
+  // Only increment the number of expected OnSeekCompleted
+  // notifications if we weren't already waiting for AttemptSeek
+  // to complete (and they would have been accounted for already).
+  {
+    ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+
+    if (!mWaitingForSeekData) {
+      mWaitingForSeekData = true;
+      if (mAudioTrack) {
+        mPendingSeeks++;
+      }
+      if (mVideoTrack) {
+        mPendingSeeks++;
+      }
+    }
+  }
+
+  AttemptSeek();
+}
+
+void
+MediaSourceReader::OnSeekCompleted(nsresult aResult)
+{
+  mPendingSeeks--;
+  // Keep the most recent failed result (if any)
+  if (NS_FAILED(aResult)) {
+    mSeekResult = aResult;
+  }
+  // Only dispatch the final event onto the state machine
+  // since it's only expecting one response.
+  if (!mPendingSeeks) {
+    GetCallback()->OnSeekCompleted(mSeekResult);
+    mSeekResult = NS_OK;
+  }
+}
+
+void
+MediaSourceReader::AttemptSeek()
+{
+  // Make sure we don't hold the monitor while calling into the reader
+  // Seek methods since it can deadlock.
+  {
+    ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+    if (!mWaitingForSeekData || !TrackBuffersContainTime(mPendingSeekTime)) {
+      return;
+    }
+  }
 
   ResetDecode();
   for (uint32_t i = 0; i < mTrackBuffers.Length(); ++i) {
@@ -407,33 +519,70 @@ MediaSourceReader::Seek(int64_t aTime, int64_t aStartTime, int64_t aEndTime,
   }
 
   // Decoding discontinuity upon seek, reset last times to seek target.
-  mLastAudioTime = aTime;
-  mLastVideoTime = aTime;
-
-  WaitForTimeRange(aTime);
-
-  if (IsShutdown()) {
-    return NS_ERROR_FAILURE;
-  }
+  mLastAudioTime = mPendingSeekTime;
+  mLastVideoTime = mPendingSeekTime;
 
   if (mAudioTrack) {
     mAudioIsSeeking = true;
-    SwitchAudioReader(aTime);
-    nsresult rv = mAudioReader->Seek(aTime, aStartTime, aEndTime, aCurrentTime);
-    MSE_DEBUG("MediaSourceReader(%p)::Seek audio reader=%p rv=%x", this, mAudioReader.get(), rv);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
+    SwitchAudioReader(mPendingSeekTime);
+    mAudioReader->Seek(mPendingSeekTime,
+                       mPendingStartTime,
+                       mPendingEndTime,
+                       mPendingCurrentTime);
+    MSE_DEBUG("MediaSourceReader(%p)::Seek audio reader=%p", this, mAudioReader.get());
   }
   if (mVideoTrack) {
     mVideoIsSeeking = true;
-    SwitchVideoReader(aTime);
-    nsresult rv = mVideoReader->Seek(aTime, aStartTime, aEndTime, aCurrentTime);
-    MSE_DEBUG("MediaSourceReader(%p)::Seek video reader=%p rv=%x", this, mVideoReader.get(), rv);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
+    SwitchVideoReader(mPendingSeekTime);
+    mVideoReader->Seek(mPendingSeekTime,
+                       mPendingStartTime,
+                       mPendingEndTime,
+                       mPendingCurrentTime);
+    MSE_DEBUG("MediaSourceReader(%p)::Seek video reader=%p", this, mVideoReader.get());
   }
+  {
+    ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+    mWaitingForSeekData = false;
+  }
+}
+
+nsresult
+MediaSourceReader::GetBuffered(dom::TimeRanges* aBuffered)
+{
+  ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+  MOZ_ASSERT(aBuffered->Length() == 0);
+  if (mTrackBuffers.IsEmpty()) {
+    return NS_OK;
+  }
+
+  double highestEndTime = 0;
+
+  nsTArray<nsRefPtr<TimeRanges>> activeRanges;
+  for (uint32_t i = 0; i < mTrackBuffers.Length(); ++i) {
+    nsRefPtr<TimeRanges> r = new TimeRanges();
+    mTrackBuffers[i]->Buffered(r);
+    activeRanges.AppendElement(r);
+    highestEndTime = std::max(highestEndTime, activeRanges.LastElement()->GetEndTime());
+  }
+
+  TimeRanges* intersectionRanges = aBuffered;
+  intersectionRanges->Add(0, highestEndTime);
+
+  for (uint32_t i = 0; i < activeRanges.Length(); ++i) {
+    TimeRanges* sourceRanges = activeRanges[i];
+
+    if (IsEnded()) {
+      // Set the end time on the last range to highestEndTime by adding a
+      // new range spanning the current end time to highestEndTime, which
+      // Normalize() will then merge with the old last range.
+      sourceRanges->Add(sourceRanges->GetEndTime(), highestEndTime);
+      sourceRanges->Normalize();
+    }
+
+    intersectionRanges->Intersection(sourceRanges);
+  }
+
+  MSE_DEBUG("MediaSourceReader(%p)::GetBuffered ranges=%s", this, DumpTimeRanges(intersectionRanges).get());
   return NS_OK;
 }
 
@@ -481,13 +630,7 @@ MediaSourceReader::ReadMetadata(MediaInfo* aInfo, MetadataTags** aTags)
   }
 
   if (maxDuration != -1) {
-    ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
-    mDecoder->SetMediaDuration(maxDuration);
-    nsRefPtr<nsIRunnable> task (
-      NS_NewRunnableMethodWithArg<double>(static_cast<MediaSourceDecoder*>(mDecoder),
-                                          &MediaSourceDecoder::SetMediaSourceDuration,
-                                          static_cast<double>(maxDuration) / USECS_PER_S));
-    NS_DispatchToMainThread(task);
+    static_cast<MediaSourceDecoder*>(mDecoder)->SetDecodedDuration(maxDuration);
   }
 
   *aInfo = mInfo;

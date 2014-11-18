@@ -3772,7 +3772,7 @@ CodeGenerator::visitCheckOverRecursedPar(LCheckOverRecursedPar *lir)
     Register tempReg = ToRegister(lir->getTempReg());
 
     masm.loadPtr(Address(cxReg, offsetof(ForkJoinContext, perThreadData)), tempReg);
-    masm.loadPtr(Address(tempReg, offsetof(PerThreadData, jitStackLimit)), tempReg);
+    masm.loadPtr(Address(tempReg, PerThreadData::offsetOfJitStackLimit()), tempReg);
 
     // Conditional forward (unlikely) branch to failure.
     CheckOverRecursedFailure *ool = new(alloc()) CheckOverRecursedFailure(lir);
@@ -4103,8 +4103,22 @@ CodeGenerator::generateBody()
         if (current->isTrivial())
             continue;
 
-        JitSpew(JitSpew_Codegen, "# block%lu%s:", i,
+#ifdef DEBUG
+        const char *filename = nullptr;
+        unsigned lineNumber = 0, columnNumber = 0;
+        if (current->mir()->info().script()) {
+            filename = current->mir()->info().script()->filename();
+            if (current->mir()->pc())
+                lineNumber = PCToLineNumber(current->mir()->info().script(), current->mir()->pc(),
+                                            &columnNumber);
+        } else {
+            lineNumber = current->mir()->lineno();
+            columnNumber = current->mir()->columnIndex();
+        }
+        JitSpew(JitSpew_Codegen, "# block%lu %s:%u:%u%s:", i,
+                filename ? filename : "?", lineNumber, columnNumber,
                 current->mir()->isLoopHeader() ? " (loop header)" : "");
+#endif
 
         masm.bind(current->label());
 
@@ -5094,16 +5108,6 @@ CodeGenerator::visitTypedObjectProto(LTypedObjectProto *lir)
     masm.setupUnalignedABICall(1, tempReg);
     masm.passABIArg(obj);
     masm.callWithABI(JS_FUNC_TO_DATA_PTR(void *, TypedObjectProto));
-    return true;
-}
-
-bool
-CodeGenerator::visitTypedObjectUnsizedLength(LTypedObjectUnsizedLength *lir)
-{
-    Register obj = ToRegister(lir->object());
-    Register out = ToRegister(lir->output());
-
-    masm.load32(Address(obj, OutlineTypedObject::offsetOfUnsizedLength()), out);
     return true;
 }
 
@@ -7634,20 +7638,6 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
         return false;
     discardIonCode.ionScript = ionScript;
 
-    // Lock the runtime against interrupt callbacks during the link.
-    // We don't want an interrupt request to protect the code for the script
-    // before it has been filled in, as we could segv before the runtime's
-    // patchable backedges have been fully updated.
-    JSRuntime::AutoLockForInterrupt lock(cx->runtime());
-
-    // Make sure we don't segv while filling in the code, to avoid deadlocking
-    // inside the signal handler.
-    cx->runtime()->jitRuntime()->ensureIonCodeAccessible(cx->runtime());
-
-    // Implicit interrupts are used only for sequential code. In parallel mode
-    // use the normal executable allocator so that we cannot segv during
-    // execution off the main thread.
-    //
     // Also, note that creating the code here during an incremental GC will
     // trace the code and mark all GC things it refers to. This captures any
     // read barriers which were skipped while compiling the script off thread.
@@ -7673,8 +7663,13 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
         if (!ionTable->makeIonEntry(cx, code, nativeToBytecodeScriptListLength_,
                                     nativeToBytecodeScriptList_, entry))
         {
+            js_free(nativeToBytecodeScriptList_);
+            js_free(nativeToBytecodeMap_);
             return false;
         }
+
+        // nativeToBytecodeScriptList_ is no longer needed.
+        js_free(nativeToBytecodeScriptList_);
 
         // Add entry to the global table.
         JitcodeGlobalTable *globalTable = cx->runtime()->jitRuntime()->getJitcodeGlobalTable();
@@ -8914,6 +8909,44 @@ CodeGenerator::visitLoadElementHole(LLoadElementHole *lir)
 }
 
 bool
+CodeGenerator::visitLoadUnboxedPointerV(LLoadUnboxedPointerV *lir)
+{
+    Register elements = ToRegister(lir->elements());
+    const ValueOperand out = ToOutValue(lir);
+
+    if (lir->index()->isConstant())
+        masm.loadPtr(Address(elements, ToInt32(lir->index()) * sizeof(uintptr_t)), out.scratchReg());
+    else
+        masm.loadPtr(BaseIndex(elements, ToRegister(lir->index()), ScalePointer), out.scratchReg());
+
+    Label notNull, done;
+    masm.branchPtr(Assembler::NotEqual, out.scratchReg(), ImmWord(0), &notNull);
+
+    masm.moveValue(NullValue(), out);
+    masm.jump(&done);
+
+    masm.bind(&notNull);
+    masm.tagValue(JSVAL_TYPE_OBJECT, out.scratchReg(), out);
+
+    masm.bind(&done);
+    return true;
+}
+
+bool
+CodeGenerator::visitLoadUnboxedPointerT(LLoadUnboxedPointerT *lir)
+{
+    Register elements = ToRegister(lir->elements());
+    const LAllocation *index = lir->index();
+    Register out = ToRegister(lir->output());
+
+    if (index->isConstant())
+        masm.loadPtr(Address(elements, ToInt32(index) * sizeof(uintptr_t)), out);
+    else
+        masm.loadPtr(BaseIndex(elements, ToRegister(index), ScalePointer), out);
+    return true;
+}
+
+bool
 CodeGenerator::visitLoadTypedArrayElement(LLoadTypedArrayElement *lir)
 {
     Register elements = ToRegister(lir->elements());
@@ -9922,7 +9955,7 @@ CodeGenerator::visitInterruptCheck(LInterruptCheck *lir)
     if (!ool)
         return false;
 
-    AbsoluteAddress interruptAddr(GetIonContext()->runtime->addressOfInterrupt());
+    AbsoluteAddress interruptAddr(GetIonContext()->runtime->addressOfInterruptUint32());
     masm.branch32(Assembler::NotEqual, interruptAddr, Imm32(0), ool->entry());
     masm.bind(ool->rejoin());
     return true;
@@ -9932,8 +9965,8 @@ bool
 CodeGenerator::visitAsmJSInterruptCheck(LAsmJSInterruptCheck *lir)
 {
     Register scratch = ToRegister(lir->scratch());
-    masm.movePtr(AsmJSImmPtr(AsmJSImm_RuntimeInterrupt), scratch);
-    masm.load8ZeroExtend(Address(scratch, 0), scratch);
+    masm.movePtr(AsmJSImmPtr(AsmJSImm_RuntimeInterruptUint32), scratch);
+    masm.load32(Address(scratch, 0), scratch);
     Label rejoin;
     masm.branch32(Assembler::Equal, scratch, Imm32(0), &rejoin);
     {

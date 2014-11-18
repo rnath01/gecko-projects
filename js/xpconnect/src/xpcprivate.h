@@ -974,7 +974,7 @@ XPC_WN_JSOp_ThisObject(JSContext *cx, JS::HandleObject obj);
         nullptr, /* setGenericAttributes  */                                  \
         nullptr, /* deleteGeneric */                                          \
         nullptr, nullptr, /* watch/unwatch */                                 \
-        nullptr, /* slice */                                                  \
+        nullptr, /* getElements */                                            \
         XPC_WN_JSOp_Enumerate,                                                \
         XPC_WN_JSOp_ThisObject,                                               \
     }
@@ -997,7 +997,7 @@ XPC_WN_JSOp_ThisObject(JSContext *cx, JS::HandleObject obj);
         nullptr, /* setGenericAttributes  */                                  \
         nullptr, /* deleteGeneric */                                          \
         nullptr, nullptr, /* watch/unwatch */                                 \
-        nullptr, /* slice */                                                  \
+        nullptr, /* getElements */                                            \
         XPC_WN_JSOp_Enumerate,                                                \
         XPC_WN_JSOp_ThisObject,                                               \
     }
@@ -1147,8 +1147,11 @@ public:
         return mDOMExpandoSet->put(expando);
     }
     void RemoveDOMExpandoObject(JSObject *expando) {
-        if (mDOMExpandoSet)
-            mDOMExpandoSet->remove(expando);
+        if (mDOMExpandoSet) {
+            DOMExpandoSet::Ptr p = mDOMExpandoSet->lookup(expando);
+            MOZ_ASSERT(p.found());
+            mDOMExpandoSet->remove(p);
+        }
     }
 
     typedef js::HashMap<JSAddonId *,
@@ -1614,7 +1617,7 @@ public:
     bool WantSetProperty()              GET_IT(WANT_SETPROPERTY)
     bool WantEnumerate()                GET_IT(WANT_ENUMERATE)
     bool WantNewEnumerate()             GET_IT(WANT_NEWENUMERATE)
-    bool WantNewResolve()               GET_IT(WANT_NEWRESOLVE)
+    bool WantResolve()                  GET_IT(WANT_RESOLVE)
     bool WantConvert()                  GET_IT(WANT_CONVERT)
     bool WantFinalize()                 GET_IT(WANT_FINALIZE)
     bool WantCall()                     GET_IT(WANT_CALL)

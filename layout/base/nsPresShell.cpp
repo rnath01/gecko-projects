@@ -903,6 +903,7 @@ PresShell::Init(nsIDocument* aDocument,
   if (SelectionCaretPrefEnabled()) {
     // Create selection caret handle
     mSelectionCarets = new SelectionCarets(this);
+    mSelectionCarets->Init();
   }
 
 
@@ -6269,7 +6270,8 @@ PresShell::Paint(nsView*        aViewToPaint,
       NS_WARNING("Must complete empty transaction when compositing!");
     }
 
-    if (!(frame->GetStateBits() & NS_FRAME_UPDATE_LAYER_TREE) &&
+    if (!(aFlags & PAINT_SYNC_DECODE_IMAGES) &&
+        !(frame->GetStateBits() & NS_FRAME_UPDATE_LAYER_TREE) &&
         !mNextPaintCompressed) {
       NotifySubDocInvalidationFunc computeInvalidFunc =
         presContext->MayHavePaintEventListenerInSubDocument() ? nsPresContext::NotifySubDocInvalidation : 0;
@@ -6321,6 +6323,9 @@ PresShell::Paint(nsView*        aViewToPaint,
   uint32_t flags = nsLayoutUtils::PAINT_WIDGET_LAYERS | nsLayoutUtils::PAINT_EXISTING_TRANSACTION;
   if (!(aFlags & PAINT_COMPOSITE)) {
     flags |= nsLayoutUtils::PAINT_NO_COMPOSITE;
+  }
+  if (aFlags & PAINT_SYNC_DECODE_IMAGES) {
+    flags |= nsLayoutUtils::PAINT_SYNC_DECODE_IMAGES;
   }
   if (mNextPaintCompressed) {
     flags |= nsLayoutUtils::PAINT_COMPRESSED;
@@ -6399,10 +6404,7 @@ nsIPresShell::SetPointerCapturingContent(uint32_t aPointerId, nsIContent* aConte
   gPointerCaptureList->Get(aPointerId, &pointerCaptureInfo);
   nsIContent* content = pointerCaptureInfo ? pointerCaptureInfo->mOverrideContent : nullptr;
 
-  PointerInfo* pointerInfo = nullptr;
-  if (!content && gActivePointersIds->Get(aPointerId, &pointerInfo) &&
-      pointerInfo &&
-      nsIDOMMouseEvent::MOZ_SOURCE_MOUSE == pointerInfo->mPointerType) {
+  if (!content && (nsIDOMMouseEvent::MOZ_SOURCE_MOUSE == GetPointerType(aPointerId))) {
     SetCapturingContent(aContent, CAPTURE_PREVENTDRAG);
   }
 
@@ -6440,6 +6442,16 @@ nsIPresShell::GetPointerCapturingContent(uint32_t aPointerId)
   return nullptr;
 }
 
+/* static */ uint16_t
+nsIPresShell::GetPointerType(uint32_t aPointerId)
+{
+  PointerInfo* pointerInfo = nullptr;
+  if (gActivePointersIds->Get(aPointerId, &pointerInfo) && pointerInfo) {
+    return pointerInfo->mPointerType;
+  }
+  return nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN;
+}
+
 /* static */ bool
 nsIPresShell::CheckPointerCaptureState(uint32_t aPointerId)
 {
@@ -6450,6 +6462,7 @@ nsIPresShell::CheckPointerCaptureState(uint32_t aPointerId)
     // we should dispatch lostpointercapture event to overrideContent if it exist
     if (pointerCaptureInfo->mPendingContent || pointerCaptureInfo->mReleaseContent) {
       if (pointerCaptureInfo->mOverrideContent) {
+        uint16_t pointerType = GetPointerType(aPointerId);
         nsCOMPtr<nsIContent> content;
         pointerCaptureInfo->mOverrideContent.swap(content);
         if (pointerCaptureInfo->mReleaseContent) {
@@ -6458,7 +6471,7 @@ nsIPresShell::CheckPointerCaptureState(uint32_t aPointerId)
         if (pointerCaptureInfo->Empty()) {
           gPointerCaptureList->Remove(aPointerId);
         }
-        DispatchGotOrLostPointerCaptureEvent(false, aPointerId, content);
+        DispatchGotOrLostPointerCaptureEvent(false, aPointerId, pointerType, content);
         didDispatchEvent = true;
       } else if (pointerCaptureInfo->mPendingContent && pointerCaptureInfo->mReleaseContent) {
         // If anybody calls element.releasePointerCapture
@@ -6474,7 +6487,9 @@ nsIPresShell::CheckPointerCaptureState(uint32_t aPointerId)
       pointerCaptureInfo->mOverrideContent = pointerCaptureInfo->mPendingContent;
       pointerCaptureInfo->mPendingContent = nullptr;
       pointerCaptureInfo->mReleaseContent = false;
-      DispatchGotOrLostPointerCaptureEvent(true, aPointerId, pointerCaptureInfo->mOverrideContent);
+      DispatchGotOrLostPointerCaptureEvent(true, aPointerId,
+                                           GetPointerType(aPointerId),
+                                           pointerCaptureInfo->mOverrideContent);
       didDispatchEvent = true;
     }
   }
@@ -8229,11 +8244,13 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent, nsEventStatus* aStatus)
 void
 nsIPresShell::DispatchGotOrLostPointerCaptureEvent(bool aIsGotCapture,
                                                    uint32_t aPointerId,
+                                                   uint16_t aPointerType,
                                                    nsIContent* aCaptureTarget)
 {
   PointerEventInit init;
   init.mPointerId = aPointerId;
   init.mBubbles = true;
+  ConvertPointerTypeToString(aPointerType, init.mPointerType);
   nsRefPtr<mozilla::dom::PointerEvent> event;
   event = PointerEvent::Constructor(aCaptureTarget,
                                     aIsGotCapture
@@ -8827,7 +8844,7 @@ PresShell::IsVisible()
   // inner view of subdoc frame
   view = view->GetParent();
   if (!view)
-    return true;
+    return mIsActive;
 
   // subdoc view
   view = view->GetParent();

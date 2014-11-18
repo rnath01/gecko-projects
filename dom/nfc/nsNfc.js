@@ -72,6 +72,19 @@ MozNFCTagImpl.prototype = {
       throw new this._window.DOMError("InvalidStateError", "NFCTag object is invalid");
     }
 
+    if (this.isReadOnly) {
+      throw new this._window.DOMError("InvalidAccessError", "NFCTag object is read-only");
+    }
+
+    let ndefLen = 0;
+    for (let record of records) {
+      ndefLen += record.size;
+    }
+
+    if (ndefLen > this.maxNDEFSize) {
+      throw new this._window.DOMError("NotSupportedError", "Exceed max NDEF size");
+    }
+
     return this._nfcContentHelper.writeNDEF(records, this.session);
   },
 
@@ -79,6 +92,12 @@ MozNFCTagImpl.prototype = {
     if (this.isLost) {
       throw new this._window.DOMError("InvalidStateError", "NFCTag object is invalid");
     }
+
+    if (!this.canBeMadeReadOnly) {
+      throw new this._window.DOMError("InvalidAccessError",
+                                      "NFCTag object cannot be made read-only");
+    }
+
     return this._nfcContentHelper.makeReadOnly(this.session);
   },
 
@@ -147,13 +166,20 @@ function MozNFCImpl() {
     debug("No NFC support.")
   }
 
-  this._nfcContentHelper.registerEventTarget(this);
+  this._nfcContentHelper.addEventListener(this);
 }
 MozNFCImpl.prototype = {
   _nfcContentHelper: null,
   _window: null,
   nfcPeer: null,
   nfcTag: null,
+
+  // Should be mapped to the RFState defined in WebIDL.
+  rfState: {
+    IDLE: "idle",
+    LISTEN: "listen",
+    DISCOVERY: "discovery"
+  },
 
   init: function init(aWindow) {
     debug("MozNFCImpl init called");
@@ -189,15 +215,15 @@ MozNFCImpl.prototype = {
   },
 
   startPoll: function startPoll() {
-    return this._nfcContentHelper.startPoll();
+    return this._nfcContentHelper.changeRFState(this.rfState.DISCOVERY);
   },
 
   stopPoll: function stopPoll() {
-    return this._nfcContentHelper.stopPoll();
+    return this._nfcContentHelper.changeRFState(this.rfState.LISTEN);
   },
 
   powerOff: function powerOff() {
-    return this._nfcContentHelper.powerOff();
+    return this._nfcContentHelper.changeRFState(this.rfState.IDLE);
   },
 
   _createNFCPeer: function _createNFCPeer(sessionToken) {
@@ -211,7 +237,7 @@ MozNFCImpl.prototype = {
     }
 
     if (!this.nfcPeer || this.nfcPeer.session != sessionToken) {
-      this.nfcPeer = this._createNFCPeer();
+      this.nfcPeer = this._createNFCPeer(sessionToken);
     }
 
     return this.nfcPeer;
@@ -370,7 +396,7 @@ MozNFCImpl.prototype = {
   contractID: "@mozilla.org/navigatorNfc;1",
   QueryInterface: XPCOMUtils.generateQI([Ci.nsISupports,
                                          Ci.nsIDOMGlobalPropertyInitializer,
-                                         Ci.nsINfcDOMEventTarget]),
+                                         Ci.nsINfcEventListener]),
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([MozNFCTagImpl,

@@ -55,6 +55,7 @@ WEBIDL_FILES = [
     'BiquadFilterNode.webidl',
     'Blob.webidl',
     'BoxObject.webidl',
+    'BrowserElement.webidl',
     'BrowserElementDictionaries.webidl',
     'CallsList.webidl',
     'CameraCapabilities.webidl',
@@ -276,6 +277,7 @@ WEBIDL_FILES = [
     'MessagePortList.webidl',
     'MimeType.webidl',
     'MimeTypeArray.webidl',
+    'MMICall.webidl',
     'MouseEvent.webidl',
     'MouseScrollEvent.webidl',
     'MozActivity.webidl',
@@ -780,7 +782,7 @@ if CONFIG['MOZ_NFC']:
         'MozNFCTagEvent.webidl',
     ]
 
-if CONFIG['MOZ_BUILD_APP'] in ['browser', 'xulrunner']:
+if CONFIG['MOZ_BUILD_APP'] in ['browser', 'xulrunner'] or CONFIG['MOZ_SUITE']:
     WEBIDL_FILES += [
         'BrowserFeedWriter.webidl',
     ]

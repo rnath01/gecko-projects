@@ -681,6 +681,22 @@ intrinsic_StarGeneratorObjectIsClosed(JSContext *cx, unsigned argc, Value *vp)
     return true;
 }
 
+bool
+js::intrinsic_IsSuspendedStarGenerator(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+
+    if (!args[0].isObject() || !args[0].toObject().is<StarGeneratorObject>()) {
+        args.rval().setBoolean(false);
+        return true;
+    }
+
+    StarGeneratorObject &genObj = args[0].toObject().as<StarGeneratorObject>();
+    args.rval().setBoolean(!genObj.isClosed() && genObj.isSuspended());
+    return true;
+}
+
 static bool
 intrinsic_IsLegacyGeneratorObject(JSContext *cx, unsigned argc, Value *vp)
 {
@@ -701,18 +717,6 @@ intrinsic_LegacyGeneratorObjectIsClosed(JSContext *cx, unsigned argc, Value *vp)
 
     LegacyGeneratorObject *genObj = &args[0].toObject().as<LegacyGeneratorObject>();
     args.rval().setBoolean(genObj->isClosed());
-    return true;
-}
-
-static bool
-intrinsic_CloseNewbornLegacyGeneratorObject(JSContext *cx, unsigned argc, Value *vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    MOZ_ASSERT(args.length() == 1);
-    MOZ_ASSERT(args[0].isObject());
-
-    LegacyGeneratorObject *genObj = &args[0].toObject().as<LegacyGeneratorObject>();
-    args.rval().setBoolean(LegacyGeneratorObject::maybeCloseNewborn(genObj));
     return true;
 }
 
@@ -914,18 +918,6 @@ js::intrinsic_TypeDescrIsArrayType(JSContext *cx, unsigned argc, Value *vp)
     return js::TypeDescrIsArrayType(cx, argc, vp);
 }
 
-bool
-js::intrinsic_TypeDescrIsUnsizedArrayType(JSContext *cx, unsigned argc, Value *vp)
-{
-    return js::TypeDescrIsUnsizedArrayType(cx, argc, vp);
-}
-
-bool
-js::intrinsic_TypeDescrIsSizedArrayType(JSContext *cx, unsigned argc, Value *vp)
-{
-    return js::TypeDescrIsSizedArrayType(cx, argc, vp);
-}
-
 /**
  * Returns the default locale as a well-formed, but not necessarily canonicalized,
  * BCP-47 language tag.
@@ -1059,10 +1051,10 @@ static const JSFunctionSpec intrinsic_functions[] = {
 
     JS_FN("IsStarGeneratorObject",   intrinsic_IsStarGeneratorObject,   1,0),
     JS_FN("StarGeneratorObjectIsClosed", intrinsic_StarGeneratorObjectIsClosed, 1,0),
+    JS_FN("IsSuspendedStarGenerator",intrinsic_IsSuspendedStarGenerator,1,0),
 
     JS_FN("IsLegacyGeneratorObject", intrinsic_IsLegacyGeneratorObject, 1,0),
     JS_FN("LegacyGeneratorObjectIsClosed", intrinsic_LegacyGeneratorObjectIsClosed, 1,0),
-    JS_FN("CloseNewbornLegacyGeneratorObject", intrinsic_CloseNewbornLegacyGeneratorObject, 1,0),
     JS_FN("CloseClosingLegacyGeneratorObject", intrinsic_CloseClosingLegacyGeneratorObject, 1,0),
     JS_FN("ThrowStopIteration",      intrinsic_ThrowStopIteration,      0,0),
 
@@ -1131,12 +1123,6 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FNINFO("TypeDescrIsArrayType",
               intrinsic_TypeDescrIsArrayType,
               &js::TypeDescrIsArrayTypeJitInfo, 1, 0),
-    JS_FNINFO("TypeDescrIsUnsizedArrayType",
-              intrinsic_TypeDescrIsUnsizedArrayType,
-              &js::TypeDescrIsUnsizedArrayTypeJitInfo, 1, 0),
-    JS_FNINFO("TypeDescrIsSizedArrayType",
-              intrinsic_TypeDescrIsSizedArrayType,
-              &js::TypeDescrIsSizedArrayTypeJitInfo, 1, 0),
     JS_FNINFO("TypeDescrIsSimpleType",
               intrinsic_TypeDescrIsSimpleType,
               &js::TypeDescrIsSimpleTypeJitInfo, 1, 0),
