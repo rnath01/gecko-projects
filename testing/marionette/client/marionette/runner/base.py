@@ -23,6 +23,7 @@ from mozhttpd import MozHttpd
 from mozlog.structured.structuredlog import get_default_logger
 from moztest.adapters.unit import StructuredTestRunner, StructuredTestResult
 from moztest.results import TestResultCollection, TestResult, relevant_line
+import mozversion
 
 class MarionetteTest(TestResult):
 
@@ -331,7 +332,7 @@ class BaseMarionetteOptions(OptionParser):
                         help='xml output')
         self.add_option('--testvars',
                         dest='testvars',
-                        action='store',
+                        action='append',
                         help='path to a json file with any test data required')
         self.add_option('--tree',
                         dest='tree',
@@ -378,7 +379,8 @@ class BaseMarionetteOptions(OptionParser):
                         help="Define the path to store log file. If the path is"
                              " a directory, the real log file will be created"
                              " given the format gecko-(timestamp).log. If it is"
-                             " a file, if will be used directly. Default: 'gecko.log'")
+                             " a file, if will be used directly. '-' may be passed"
+                             " to write to stdout. Default: './gecko.log'")
         self.add_option('--logger-name',
                         dest='logger_name',
                         action='store',
@@ -472,7 +474,6 @@ class BaseMarionetteTestRunner(object):
         self.logcat_stdout = logcat_stdout
         self.xml_output = xml_output
         self.repeat = repeat
-        self.testvars = {}
         self.test_kwargs = kwargs
         self.tree = tree
         self.type = type
@@ -513,17 +514,29 @@ class BaseMarionetteTestRunner(object):
 
         self.result_callbacks.append(gather_debug)
 
-        if testvars:
-            if not os.path.exists(testvars):
-                raise IOError('--testvars file does not exist')
+        def update(d, u):
+            """ Update a dictionary that may contain nested dictionaries. """
+            for k, v in u.iteritems():
+                o = d.get(k, {})
+                if isinstance(v, dict) and isinstance(o, dict):
+                    d[k] = update(d.get(k, {}), v)
+                else:
+                    d[k] = u[k]
+            return d
 
-            try:
-                with open(testvars) as f:
-                    self.testvars = json.loads(f.read())
-            except ValueError as e:
-                json_path = os.path.abspath(testvars)
-                raise Exception("JSON file (%s) is not properly "
-                                "formatted: %s" % (json_path, e.message))
+        self.testvars = {}
+        if testvars is not None:
+            for path in list(testvars):
+                if not os.path.exists(path):
+                    raise IOError('--testvars file %s does not exist' % path)
+                try:
+                    with open(path) as f:
+                        self.testvars = update(self.testvars,
+                                               json.loads(f.read()))
+                except ValueError as e:
+                    raise Exception("JSON file (%s) is not properly "
+                                    "formatted: %s" % (os.path.abspath(path),
+                                                       e.message))
 
         # set up test handlers
         self.test_handlers = []
@@ -712,7 +725,19 @@ setReq.onerror = function() {
         for test in tests:
             self.add_test(test)
 
-        self.logger.suite_start(self.tests)
+        version_info = mozversion.get_version(binary=self.bin,
+                                              sources=self.sources,
+                                              dm_type=os.environ.get('DM_TRANS', 'adb'),
+                                              device_serial=self.device_serial)
+
+        device_info = None
+        if self.capabilities['device'] != 'desktop' and self.capabilities['browserName'] == 'B2G':
+            dm = get_dm(self.marionette)
+            device_info = dm.getInfo()
+
+        self.logger.suite_start(self.tests,
+                                version_info=version_info,
+                                device_info=device_info)
 
         for test in self.manifest_skipped_tests:
             name = os.path.basename(test['path'])

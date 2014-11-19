@@ -72,6 +72,7 @@ loop.store = loop.store || {};
 
     if (options.activeRoomStore) {
       this.activeRoomStore = options.activeRoomStore;
+      this.setStoreState({activeRoom: this.activeRoomStore.getStoreState()});
       this.activeRoomStore.on("change",
                               this._onActiveRoomStoreChange.bind(this));
     }
@@ -82,9 +83,11 @@ loop.store = loop.store || {};
       "copyRoomUrl",
       "deleteRoom",
       "deleteRoomError",
+      "emailRoomUrl",
       "getAllRooms",
       "getAllRoomsError",
       "openRoom",
+      "renameRoom",
       "updateRoomList"
     ]);
   }
@@ -99,10 +102,10 @@ loop.store = loop.store || {};
     maxRoomCreationSize: 2,
 
     /**
-     * The number of hours for which the room will exist.
+     * The number of hours for which the room will exist - default 8 weeks
      * @type {Number}
      */
-    defaultExpiresIn: 5,
+    defaultExpiresIn: 24 * 7 * 8,
 
     /**
      * Internal store state representation.
@@ -327,6 +330,15 @@ loop.store = loop.store || {};
     },
 
     /**
+     * Emails a room url.
+     *
+     * @param  {sharedActions.EmailRoomUrl} actionData The action data.
+     */
+    emailRoomUrl: function(actionData) {
+      loop.shared.utils.composeCallUrlEmail(actionData.roomUrl);
+    },
+
+    /**
      * Creates a new room.
      *
      * @param {sharedActions.DeleteRoom} actionData The action data.
@@ -400,6 +412,21 @@ loop.store = loop.store || {};
      */
     openRoom: function(actionData) {
       this._mozLoop.rooms.open(actionData.roomToken);
+    },
+
+    /**
+     * Renames a room.
+     *
+     * @param {sharedActions.RenameRoom} actionData
+     */
+    renameRoom: function(actionData) {
+      this._mozLoop.rooms.rename(actionData.roomToken, actionData.newRoomName,
+        function(err) {
+          if (err) {
+            // XXX Give this a proper UI - bug 1100595.
+            console.error("Failed to rename the room", err);
+          }
+        });
     }
   }, Backbone.Events);
 

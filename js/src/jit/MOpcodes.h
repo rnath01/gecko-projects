@@ -95,6 +95,7 @@ namespace jit {
     _(CharCodeAt)                                                           \
     _(FromCharCode)                                                         \
     _(StringSplit)                                                          \
+    _(Substr)                                                               \
     _(Return)                                                               \
     _(Throw)                                                                \
     _(Box)                                                                  \
@@ -163,7 +164,6 @@ namespace jit {
     _(TypedArrayLength)                                                     \
     _(TypedArrayElements)                                                   \
     _(TypedObjectProto)                                                     \
-    _(TypedObjectUnsizedLength)                                             \
     _(TypedObjectElements)                                                  \
     _(SetTypedObjectOffset)                                                 \
     _(InitializedLength)                                                    \
@@ -174,6 +174,8 @@ namespace jit {
     _(InArray)                                                              \
     _(LoadElement)                                                          \
     _(LoadElementHole)                                                      \
+    _(LoadUnboxedObjectOrNull)                                              \
+    _(LoadUnboxedString)                                                    \
     _(StoreElement)                                                         \
     _(StoreElementHole)                                                     \
     _(StoreUnboxedObjectOrNull)                                             \
@@ -260,7 +262,8 @@ namespace jit {
     _(MemoryBarrier)                                                        \
     _(UnknownValue)                                                         \
     _(LexicalCheck)                                                         \
-    _(ThrowUninitializedLexical)
+    _(ThrowUninitializedLexical)                                            \
+    _(Debugger)
 
 // Forward declarations of MIR types.
 #define FORWARD_DECLARE(op) class M##op;

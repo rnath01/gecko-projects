@@ -249,7 +249,6 @@ class ParallelSafetyVisitor : public MDefinitionVisitor
     SAFE_OP(TypedArrayLength)
     SAFE_OP(TypedArrayElements)
     SAFE_OP(TypedObjectProto)
-    SAFE_OP(TypedObjectUnsizedLength)
     SAFE_OP(TypedObjectElements)
     SAFE_OP(SetTypedObjectOffset)
     SAFE_OP(InitializedLength)
@@ -259,6 +258,8 @@ class ParallelSafetyVisitor : public MDefinitionVisitor
     SAFE_OP(BoundsCheckLower)
     SAFE_OP(LoadElement)
     SAFE_OP(LoadElementHole)
+    SAFE_OP(LoadUnboxedObjectOrNull)
+    SAFE_OP(LoadUnboxedString)
     MAYBE_WRITE_GUARDED_OP(StoreElement, elements)
     WRITE_GUARDED_OP(StoreElementHole, elements)
     UNSAFE_OP(StoreUnboxedObjectOrNull)
@@ -324,6 +325,7 @@ class ParallelSafetyVisitor : public MDefinitionVisitor
     UNSAFE_OP(CallInstanceOf)
     UNSAFE_OP(ProfilerStackOp)
     UNSAFE_OP(GuardString)
+    UNSAFE_OP(Substr)
     UNSAFE_OP(NewDeclEnvObject)
     UNSAFE_OP(In)
     UNSAFE_OP(InArray)
@@ -358,6 +360,7 @@ class ParallelSafetyVisitor : public MDefinitionVisitor
     UNSAFE_OP(UnknownValue)
     UNSAFE_OP(LexicalCheck)
     UNSAFE_OP(ThrowUninitializedLexical)
+    UNSAFE_OP(Debugger)
 
     // It looks like these could easily be made safe:
     UNSAFE_OP(ConvertElementsToDoubles)

@@ -275,8 +275,13 @@ NS_IMETHODIMP
 nsDOMWindowUtils::UpdateLayerTree()
 {
   if (nsIPresShell* presShell = GetPresShell()) {
+    presShell->FlushPendingNotifications(Flush_Display);
     nsRefPtr<nsViewManager> vm = presShell->GetViewManager();
-    vm->ProcessPendingUpdates();
+    nsView* view = vm->GetRootView();
+    if (view) {
+      presShell->Paint(view, view->GetBounds(),
+          nsIPresShell::PAINT_LAYERS | nsIPresShell::PAINT_SYNC_DECODE_IMAGES);
+    }
   }
   return NS_OK;
 }
@@ -410,8 +415,6 @@ nsDOMWindowUtils::SetDisplayPortMarginsForElement(float aLeftMargin,
                                                   float aTopMargin,
                                                   float aRightMargin,
                                                   float aBottomMargin,
-                                                  uint32_t aAlignmentX,
-                                                  uint32_t aAlignmentY,
                                                   nsIDOMElement* aElement,
                                                   uint32_t aPriority)
 {
@@ -439,14 +442,14 @@ nsDOMWindowUtils::SetDisplayPortMarginsForElement(float aLeftMargin,
   }
 
   // Note order change of arguments between our function signature and
-  // LayerMargin constructor.
-  LayerMargin displayportMargins(aTopMargin,
-                                 aRightMargin,
-                                 aBottomMargin,
-                                 aLeftMargin);
+  // ScreenMargin constructor.
+  ScreenMargin displayportMargins(aTopMargin,
+                                  aRightMargin,
+                                  aBottomMargin,
+                                  aLeftMargin);
 
   nsLayoutUtils::SetDisplayPortMargins(content, presShell, displayportMargins,
-                                       aAlignmentX, aAlignmentY, aPriority);
+                                       aPriority);
 
   return NS_OK;
 }
@@ -863,7 +866,7 @@ nsDOMWindowUtils::SendPointerEventCommon(const nsAString& aType,
   event.height = aHeight;
   event.tiltX = aTiltX;
   event.tiltY = aTiltY;
-  event.isPrimary = aIsPrimary;
+  event.isPrimary = (nsIDOMMouseEvent::MOZ_SOURCE_MOUSE == aInputSourceArg) ? true : aIsPrimary;
   event.clickCount = aClickCount;
   event.time = PR_IntervalNow();
   event.mFlags.mIsSynthesizedForTests = aOptionalArgCount >= 10 ? aIsSynthesized : true;

@@ -13,6 +13,7 @@
 #include "mozilla/LinkedList.h"
 
 #include "jit/BytecodeAnalysis.h"
+#include "jit/IonAnalysis.h"
 #include "jit/IonOptimizationLevels.h"
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
@@ -426,6 +427,10 @@ class IonBuilder
                                            int32_t fieldOffset,
                                            TypedObjectPrediction fieldTypeReprs,
                                            types::TemporaryTypeSet *resultTypes);
+    bool getPropTryReferencePropOfTypedObject(bool *emitted, MDefinition *typedObj,
+                                              int32_t fieldOffset,
+                                              TypedObjectPrediction fieldPrediction,
+                                              types::TemporaryTypeSet *resultTypes);
     bool getPropTryComplexPropOfTypedObject(bool *emitted, MDefinition *typedObj,
                                             int32_t fieldOffset,
                                             TypedObjectPrediction fieldTypeReprs,
@@ -475,23 +480,23 @@ class IonBuilder
                              size_t *fieldIndex);
     MDefinition *loadTypedObjectType(MDefinition *value);
     void loadTypedObjectData(MDefinition *typedObj,
-                             MDefinition *offset,
                              MDefinition **owner,
-                             MDefinition **ownerOffset);
+                             LinearSum *ownerOffset);
     void loadTypedObjectElements(MDefinition *typedObj,
-                                 MDefinition *offset,
-                                 int32_t unit,
+                                 const LinearSum &byteOffset,
+                                 int32_t scale,
                                  MDefinition **ownerElements,
-                                 MDefinition **ownerScaledOffset);
+                                 MDefinition **ownerScaledOffset,
+                                 int32_t *ownerByteAdjustment);
     MDefinition *typeObjectForElementFromArrayStructType(MDefinition *typedObj);
     MDefinition *typeObjectForFieldFromStructType(MDefinition *type,
                                                   size_t fieldIndex);
     bool storeReferenceTypedObjectValue(MDefinition *typedObj,
-                                        MDefinition *byteOffset,
+                                        const LinearSum &byteOffset,
                                         ReferenceTypeDescr::Type type,
                                         MDefinition *value);
     bool storeScalarTypedObjectValue(MDefinition *typedObj,
-                                     MDefinition *offset,
+                                     const LinearSum &byteOffset,
                                      ScalarTypeDescr::Type type,
                                      bool racy,
                                      MDefinition *value);
@@ -499,16 +504,18 @@ class IonBuilder
                                        MDefinition *obj,
                                        MDefinition *index,
                                        TypedObjectPrediction objTypeDescrs,
-                                       MDefinition **indexAsByteOffset);
+                                       LinearSum *indexAsByteOffset);
     bool pushDerivedTypedObject(bool *emitted,
                                 MDefinition *obj,
-                                MDefinition *offset,
+                                const LinearSum &byteOffset,
                                 TypedObjectPrediction derivedTypeDescrs,
                                 MDefinition *derivedTypeObj);
-    bool pushScalarLoadFromTypedObject(bool *emitted,
-                                       MDefinition *obj,
-                                       MDefinition *offset,
+    bool pushScalarLoadFromTypedObject(MDefinition *obj,
+                                       const LinearSum &byteoffset,
                                        ScalarTypeDescr::Type type);
+    bool pushReferenceLoadFromTypedObject(MDefinition *typedObj,
+                                          const LinearSum &byteOffset,
+                                          ReferenceTypeDescr::Type type);
     MDefinition *neuterCheck(MDefinition *obj);
 
     // jsop_setelem() helpers.
@@ -553,6 +560,11 @@ class IonBuilder
                                            TypedObjectPrediction objTypeReprs,
                                            TypedObjectPrediction elemTypeReprs,
                                            int32_t elemSize);
+    bool getElemTryReferenceElemOfTypedObject(bool *emitted,
+                                              MDefinition *obj,
+                                              MDefinition *index,
+                                              TypedObjectPrediction objPrediction,
+                                              TypedObjectPrediction elemPrediction);
     bool getElemTryComplexElemOfTypedObject(bool *emitted,
                                             MDefinition *obj,
                                             MDefinition *index,
@@ -668,6 +680,7 @@ class IonBuilder
     bool jsop_instanceof();
     bool jsop_getaliasedvar(ScopeCoordinate sc);
     bool jsop_setaliasedvar(ScopeCoordinate sc);
+    bool jsop_debugger();
 
     /* Inlining. */
 
@@ -766,7 +779,7 @@ class IonBuilder
     InliningStatus inlineSetTypedObjectOffset(CallInfo &callInfo);
     bool elementAccessIsTypedObjectArrayOfScalarType(MDefinition* obj, MDefinition* id,
                                                      ScalarTypeDescr::Type *arrayType);
-    InliningStatus inlineConstructTypedObject(CallInfo &callInfo, SizedTypeDescr *target);
+    InliningStatus inlineConstructTypedObject(CallInfo &callInfo, TypeDescr *target);
 
     // Utility intrinsics.
     InliningStatus inlineIsCallable(CallInfo &callInfo);
@@ -781,6 +794,7 @@ class IonBuilder
                                   const Class *clasp3 = nullptr,
                                   const Class *clasp4 = nullptr);
     InliningStatus inlineIsConstructing(CallInfo &callInfo);
+    InliningStatus inlineSubstringKernel(CallInfo &callInfo);
 
     // Testing functions.
     InliningStatus inlineForceSequentialOrInParallelSection(CallInfo &callInfo);

@@ -19,7 +19,7 @@ var gMozLoopAPI;
 function promiseGetMozLoopAPI() {
   return new Promise((resolve, reject) => {
     let loopPanel = document.getElementById("loop-notification-panel");
-    let btn = document.getElementById("loop-call-button");
+    let btn = document.getElementById("loop-button");
 
     // Wait for the popup to be shown if it's not already, then we can get the iframe and
     // wait for the iframe's load to be completed.
@@ -77,6 +77,11 @@ function promiseGetMozLoopAPI() {
  * This assumes that the tests are running in a generatorTest.
  */
 function loadLoopPanel(aOverrideOptions = {}) {
+  Services.prefs.setBoolPref("loop.rooms.enabled", false);
+  registerCleanupFunction(function() {
+     Services.prefs.clearUserPref("loop.rooms.enabled");
+  });
+
   // Set prefs to ensure we don't access the network externally.
   Services.prefs.setCharPref("services.push.serverURL", aOverrideOptions.pushURL || "ws://localhost/");
   Services.prefs.setCharPref("loop.server", aOverrideOptions.loopURL || "http://localhost/");
@@ -120,7 +125,7 @@ function* resetFxA() {
   global.gHawkClient = null;
   global.gFxAOAuthClientPromise = null;
   global.gFxAOAuthClient = null;
-  global.gRegisteredDeferred = null;
+  MozLoopServiceInternal.deferredRegistrations.delete(LOOP_SESSION_TYPE.FXA);
   MozLoopServiceInternal.fxAOAuthProfile = null;
   MozLoopServiceInternal.fxAOAuthTokenData = null;
   const fxASessionPref = MozLoopServiceInternal.getSessionTokenPrefName(LOOP_SESSION_TYPE.FXA);
@@ -161,7 +166,7 @@ function promiseObserverNotified(aTopic, aExpectedData = null) {
   return new Promise((resolve, reject) => {
     Services.obs.addObserver(function onNotification(aSubject, aTopic, aData) {
       Services.obs.removeObserver(onNotification, aTopic);
-      is(aData, aExpectedData, "observer data should match expected data")
+      is(aData, aExpectedData, "observer data should match expected data");
       resolve({subject: aSubject, data: aData});
     }, aTopic, false);
   });

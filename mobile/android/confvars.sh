@@ -55,11 +55,6 @@ MOZ_PAY=1
 # Enable UI for healthreporter
 MOZ_SERVICES_HEALTHREPORT=1
 
-# Wifi-AP/cell tower data reporting is enabled on non-release builds.
-if test ! "$RELEASE_BUILD"; then
-MOZ_DATA_REPORTING=1
-fi
-
 # Enable runtime locale switching.
 MOZ_LOCALE_SWITCHER=1
 
@@ -84,10 +79,8 @@ if test ! "$RELEASE_BUILD"; then
   MOZ_ANDROID_NEW_TABLET_UI=1
 fi
 
-# Enable the share handler in pre-release builds.
-if test ! "$RELEASE_BUILD"; then
-  MOZ_ANDROID_SHARE_OVERLAY=1
-fi
+# Enable the share handler.
+MOZ_ANDROID_SHARE_OVERLAY=1
 
 # Enable the Mozilla Location Service stumbler.
 MOZ_ANDROID_MLS_STUMBLER=1

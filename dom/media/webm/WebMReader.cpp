@@ -287,7 +287,8 @@ nsresult WebMReader::ReadMetadata(MediaInfo* aInfo,
   io.seek = webm_seek;
   io.tell = webm_tell;
   io.userdata = mDecoder;
-  int64_t maxOffset = -1;
+  int64_t maxOffset = mDecoder->HasInitializationData() ?
+    mDecoder->GetResource()->GetLength() : -1;
   int r = nestegg_init(&mContext, io, &webm_log, maxOffset);
   if (r == -1) {
     return NS_ERROR_FAILURE;
@@ -1046,8 +1047,14 @@ WebMReader::PushVideoPacket(NesteggPacketHolder* aItem)
     mVideoPackets.PushFront(aItem);
 }
 
-nsresult WebMReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndTime,
-                          int64_t aCurrentTime)
+void WebMReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndTime,
+                      int64_t aCurrentTime)
+{
+  nsresult res = SeekInternal(aTarget, aStartTime);
+  GetCallback()->OnSeekCompleted(res);
+}
+
+nsresult WebMReader::SeekInternal(int64_t aTarget, int64_t aStartTime)
 {
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
 
@@ -1085,13 +1092,14 @@ nsresult WebMReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndTime,
   return NS_OK;
 }
 
-nsresult WebMReader::GetBuffered(dom::TimeRanges* aBuffered, int64_t aStartTime)
+nsresult WebMReader::GetBuffered(dom::TimeRanges* aBuffered)
 {
+  MOZ_ASSERT(mStartTime != -1, "Need to finish metadata decode first");
   if (aBuffered->Length() != 0) {
     return NS_ERROR_FAILURE;
   }
 
-  MediaResource* resource = mDecoder->GetResource();
+  AutoPinned<MediaResource> resource(mDecoder->GetResource());
 
   // Special case completely cached files.  This also handles local files.
   if (mContext && resource->IsDataCachedToEndOfResource(0)) {
@@ -1114,7 +1122,7 @@ nsresult WebMReader::GetBuffered(dom::TimeRanges* aBuffered, int64_t aStartTime)
                                                         ranges[index].mEnd,
                                                         &start, &end);
     if (rv) {
-      int64_t startOffset = aStartTime * NS_PER_USEC;
+      int64_t startOffset = mStartTime * NS_PER_USEC;
       NS_ASSERTION(startOffset >= 0 && uint64_t(startOffset) <= start,
                    "startOffset negative or larger than start time");
       if (!(startOffset >= 0 && uint64_t(startOffset) <= start)) {

@@ -198,14 +198,14 @@ let DebuggerController = {
     }
 
     let target = this._target;
-    let { client, form: { chromeDebugger, traceActor, addonActor } } = target;
+    let { client, form: { chromeDebugger, traceActor, actor } } = target;
     target.on("close", this._onTabDetached);
     target.on("navigate", this._onTabNavigated);
     target.on("will-navigate", this._onTabNavigated);
     this.client = client;
 
-    if (addonActor) {
-      yield this._startAddonDebugging(addonActor);
+    if (target.isAddon) {
+      yield this._startAddonDebugging(actor);
     } else if (target.chrome) {
       yield this._startChromeDebugging(chromeDebugger);
     } else {
@@ -215,6 +215,8 @@ let DebuggerController = {
         yield this._startTracingTab(traceActor);
       }
     }
+
+    this._hideUnsupportedFeatures();
   }),
 
   /**
@@ -229,6 +231,16 @@ let DebuggerController = {
     this._connected = false;
     this.client = null;
     this.activeThread = null;
+  },
+
+  _hideUnsupportedFeatures: function() {
+    if (this.client.mainRoot.traits.noPrettyPrinting) {
+      DebuggerView.Sources.hidePrettyPrinting();
+    }
+
+    if (this.client.mainRoot.traits.noBlackBoxing) {
+      DebuggerView.Sources.hideBlackBoxing();
+    }
   },
 
   /**

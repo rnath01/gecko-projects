@@ -25,7 +25,7 @@ var bigListenerMD5 = '8f607cfdd2c87d6a7eedb657dafbd836';
 
 function checkIsHttp2(request) {
   try {
-    if (request.getResponseHeader("X-Firefox-Spdy") == "h2-14") {
+    if (request.getResponseHeader("X-Firefox-Spdy") == "h2-15") {
       if (request.getResponseHeader("X-Connection-Http2") == "yes") {
         return true;
       }
@@ -378,7 +378,7 @@ var altsvcClientListener = {
 function altsvcHttp1Server(metadata, response) {
   response.setStatusLine(metadata.httpVersion, 200, "OK");
   response.setHeader("Content-Type", "text/plain", false);
-  response.setHeader("Alt-Svc", 'h2=":6944"; ma=3200, h2-14=":6944"', false);
+  response.setHeader("Alt-Svc", 'h2=":6944"; ma=3200, h2-15=":6944"', false);
   var body = "this is where a cool kid would write something neat.\n";
   response.bodyOutputStream.write(body, body.length);
 }
@@ -473,6 +473,41 @@ function test_http2_pushapi_1() {
   chan.asyncOpen(listener, chan);
 }
 
+function test_http2_h11required_stream() {
+  var chan = makeChan("https://localhost:6944/h11required_stream");
+  var listener = new Http2CheckListener();
+  listener.shouldBeHttp2 = false;
+  chan.asyncOpen(listener, null);
+}
+
+function H11RequiredSessionListener () { }
+H11RequiredSessionListener.prototype = new Http2CheckListener();
+
+H11RequiredSessionListener.prototype.onStopRequest = function (request, ctx, status) {
+  var streamReused = request.getResponseHeader("X-H11Required-Stream-Ok");
+  do_check_eq(streamReused, "yes");
+
+  do_check_true(this.onStartRequestFired);
+  do_check_true(this.onDataAvailableFired);
+  do_check_true(this.isHttp2Connection == this.shouldBeHttp2);
+
+  run_next_test();
+  do_test_finished();
+};
+
+function test_http2_h11required_session() {
+  var chan = makeChan("https://localhost:6944/h11required_session");
+  var listener = new H11RequiredSessionListener();
+  listener.shouldBeHttp2 = false;
+  chan.asyncOpen(listener, null);
+}
+
+function test_http2_retry_rst() {
+  var chan = makeChan("https://localhost:6944/rstonce");
+  var listener = new Http2CheckListener();
+  chan.asyncOpen(listener, null);
+}
+
 // hack - the header test resets the multiplex object on the server,
 // so make sure header is always run before the multiplex test.
 //
@@ -494,6 +529,10 @@ var tests = [ test_http2_post_big
             , test_http2_big
             , test_http2_post
             , test_http2_pushapi_1
+            // These next two must always come in this order
+            , test_http2_h11required_stream
+            , test_http2_h11required_session
+            , test_http2_retry_rst
             ];
 var current_test = 0;
 
@@ -571,7 +610,7 @@ var loadGroup;
 
 function resetPrefs() {
   prefs.setBoolPref("network.http.spdy.enabled", spdypref);
-  prefs.setBoolPref("network.http.spdy.enabled.v3", spdy3pref);
+  prefs.setBoolPref("network.http.spdy.enabled.v3-1", spdy3pref);
   prefs.setBoolPref("network.http.spdy.allow-push", spdypush);
   prefs.setBoolPref("network.http.spdy.enabled.http2draft", http2pref);
   prefs.setBoolPref("network.http.spdy.enforce-tls-profile", tlspref);
@@ -595,7 +634,7 @@ function run_test() {
 
   // Enable all versions of spdy to see that we auto negotiate http/2
   spdypref = prefs.getBoolPref("network.http.spdy.enabled");
-  spdy3pref = prefs.getBoolPref("network.http.spdy.enabled.v3");
+  spdy3pref = prefs.getBoolPref("network.http.spdy.enabled.v3-1");
   spdypush = prefs.getBoolPref("network.http.spdy.allow-push");
   http2pref = prefs.getBoolPref("network.http.spdy.enabled.http2draft");
   tlspref = prefs.getBoolPref("network.http.spdy.enforce-tls-profile");
@@ -603,7 +642,7 @@ function run_test() {
   altsvcpref2 = prefs.getBoolPref("network.http.altsvc.oe", true);
 
   prefs.setBoolPref("network.http.spdy.enabled", true);
-  prefs.setBoolPref("network.http.spdy.enabled.v3", true);
+  prefs.setBoolPref("network.http.spdy.enabled.v3-1", true);
   prefs.setBoolPref("network.http.spdy.allow-push", true);
   prefs.setBoolPref("network.http.spdy.enabled.http2draft", true);
   prefs.setBoolPref("network.http.spdy.enforce-tls-profile", false);

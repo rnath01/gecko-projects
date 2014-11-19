@@ -209,10 +209,25 @@ add_task(function* setup_server() {
     res.finish();
   }
 
+  function getJSONData(body) {
+    return JSON.parse(CommonUtils.readBytesFromInputStream(body));
+  }
+
   // Add a request handler for each room in the list.
   [...kRooms.values()].forEach(function(room) {
     loopServer.registerPathHandler("/rooms/" + encodeURIComponent(room.roomToken), (req, res) => {
-      returnRoomDetails(res, room.roomName);
+      if (req.method == "POST") {
+        let data = getJSONData(req.bodyInputStream);
+        res.setStatusLine(null, 200, "OK");
+        res.write(JSON.stringify(data));
+        res.processAsync();
+        res.finish();
+      } else if (req.method == "PATCH") {
+        let data = getJSONData(req.bodyInputStream);
+        returnRoomDetails(res, data.roomName);
+      } else {
+        returnRoomDetails(res, room.roomName);
+      }
     });
   });
 
@@ -228,6 +243,8 @@ add_task(function* setup_server() {
     res.processAsync();
     res.finish();
   });
+
+  mockPushHandler.registrationPushURL = kEndPointUrl;
 
   yield MozLoopService.promiseRegisteredWithServers();
 });
@@ -319,6 +336,46 @@ add_task(function* test_roomUpdates() {
   yield waitForCondition(() => Object.getOwnPropertyNames(gExpectedJoins).length === 0);
 });
 
+// Test if joining a room works as expected.
+add_task(function* test_joinRoom() {
+  // We need these set up for getting the email address.
+  Services.prefs.setCharPref("loop.fxa_oauth.profile", JSON.stringify({
+    email: "fake@invalid.com"
+  }));
+  Services.prefs.setCharPref("loop.fxa_oauth.tokendata", JSON.stringify({
+    token_type: "bearer"
+  }));
+
+  let roomToken = "_nxD4V4FflQ";
+  let joinedData = yield LoopRooms.promise("join", roomToken);
+  Assert.equal(joinedData.action, "join");
+  Assert.equal(joinedData.displayName, "fake@invalid.com");
+});
+
+// Test if refreshing a room works as expected.
+add_task(function* test_refreshMembership() {
+  let roomToken = "_nxD4V4FflQ";
+  let refreshedData = yield LoopRooms.promise("refreshMembership", roomToken,
+    "fakeSessionToken");
+  Assert.equal(refreshedData.action, "refresh");
+  Assert.equal(refreshedData.sessionToken, "fakeSessionToken");
+});
+
+// Test if leaving a room works as expected.
+add_task(function* test_leaveRoom() {
+  let roomToken = "_nxD4V4FflQ";
+  let leaveData = yield LoopRooms.promise("leave", roomToken, "fakeLeaveSessionToken");
+  Assert.equal(leaveData.action, "leave");
+  Assert.equal(leaveData.sessionToken, "fakeLeaveSessionToken");
+});
+
+// Test if renaming a room works as expected.
+add_task(function* test_renameRoom() {
+  let roomToken = "_nxD4V4FflQ";
+  let renameData = yield LoopRooms.promise("rename", roomToken, "fakeName");
+  Assert.equal(renameData.roomName, "fakeName");
+});
+
 // Test if the event emitter implementation doesn't leak and is working as expected.
 add_task(function* () {
   Assert.strictEqual(gExpectedAdds.length, 0, "No room additions should be expected anymore");
@@ -336,6 +393,9 @@ function run_test() {
   do_register_cleanup(function () {
     // Revert original Chat.open implementation
     Chat.open = openChatOrig;
+
+    Services.prefs.clearUserPref("loop.fxa_oauth.profile");
+    Services.prefs.clearUserPref("loop.fxa_oauth.tokendata");
 
     LoopRooms.off("add", onRoomAdded);
     LoopRooms.off("update", onRoomUpdated);

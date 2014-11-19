@@ -375,6 +375,10 @@ public:
   {
     return mProjMatrix;
   }
+  virtual void ActivateProgram(ShaderProgramOGL *aProg) MOZ_OVERRIDE
+  {
+    mGLContext->fUseProgram(aProg->GetProgram());
+  }
   virtual void BindAndDrawQuad(ShaderProgramOGL *aProg,
                                const gfx::Rect& aLayerRect,
                                const gfx::Rect& aTextureRect) MOZ_OVERRIDE;
@@ -2121,15 +2125,6 @@ nsChildView::NewCompositorParent(int aSurfaceWidth, int aSurfaceHeight)
   return compositor;
 }
 
-void
-nsChildView::NotifyDirtyRegion(const nsIntRegion& aDirtyRegion)
-{
-  if ([(ChildView*)mView isCoveringTitlebar]) {
-    // We store the dirty region so that we know what to repaint in the titlebar.
-    mDirtyTitlebarRegion.Or(mDirtyTitlebarRegion, aDirtyRegion);
-  }
-}
-
 nsIntRect
 nsChildView::RectContainingTitlebarControls()
 {
@@ -2343,47 +2338,40 @@ CreateCGContext(const nsIntSize& aSize)
 void
 nsChildView::UpdateTitlebarCGContext()
 {
-  nsIntRegion dirtyTitlebarRegion;
-  dirtyTitlebarRegion.And(mDirtyTitlebarRegion, mTitlebarRect);
-  mDirtyTitlebarRegion.SetEmpty();
-
   if (mTitlebarRect.IsEmpty()) {
     ReleaseTitlebarCGContext();
     return;
   }
 
+  NSRect titlebarRect = DevPixelsToCocoaPoints(mTitlebarRect);
+  NSRect dirtyRect = [mView convertRect:[(BaseWindow*)[mView window] getAndResetNativeDirtyRect] fromView:nil];
+  NSRect dirtyTitlebarRect = NSIntersectionRect(titlebarRect, dirtyRect);
+
   nsIntSize texSize = RectTextureImage::TextureSizeForSize(mTitlebarRect.Size());
   if (!mTitlebarCGContext ||
       CGBitmapContextGetWidth(mTitlebarCGContext) != size_t(texSize.width) ||
       CGBitmapContextGetHeight(mTitlebarCGContext) != size_t(texSize.height)) {
-    dirtyTitlebarRegion = mTitlebarRect;
+    dirtyTitlebarRect = titlebarRect;
 
     ReleaseTitlebarCGContext();
 
     mTitlebarCGContext = CreateCGContext(texSize);
   }
 
-  if (dirtyTitlebarRegion.IsEmpty())
+  if (NSIsEmptyRect(dirtyTitlebarRect)) {
     return;
+  }
 
   CGContextRef ctx = mTitlebarCGContext;
 
   CGContextSaveGState(ctx);
 
-  nsTArray<CGRect> rects;
-  nsIntRegionRectIterator iter(dirtyTitlebarRegion);
-  for (;;) {
-    const nsIntRect* r = iter.Next();
-    if (!r)
-      break;
-    rects.AppendElement(CGRectMake(r->x, r->y, r->width, r->height));
-  }
-  CGContextClipToRects(ctx, rects.Elements(), rects.Length());
-
-  CGContextClearRect(ctx, CGRectMake(0, 0, texSize.width, texSize.height));
-
   double scale = BackingScaleFactor();
   CGContextScaleCTM(ctx, scale, scale);
+
+  CGContextClipToRect(ctx, NSRectToCGRect(dirtyTitlebarRect));
+  CGContextClearRect(ctx, NSRectToCGRect(dirtyTitlebarRect));
+
   NSGraphicsContext* oldContext = [NSGraphicsContext currentContext];
 
   CGContextSaveGState(ctx);
@@ -2405,8 +2393,8 @@ nsChildView::UpdateTitlebarCGContext()
   // Draw the titlebar controls into the titlebar image.
   for (id view in [window titlebarControls]) {
     NSRect viewFrame = [view frame];
-    nsIntRect viewRect = CocoaPointsToDevPixels([mView convertRect:viewFrame fromView:frameView]);
-    if (!dirtyTitlebarRegion.Intersects(viewRect)) {
+    NSRect viewRect = [mView convertRect:viewFrame fromView:frameView];
+    if (!NSIntersectsRect(dirtyTitlebarRect, viewRect)) {
       continue;
     }
     // All of the titlebar controls we're interested in are subclasses of
@@ -2466,7 +2454,7 @@ nsChildView::UpdateTitlebarCGContext()
 
   CGContextRestoreGState(ctx);
 
-  mUpdatedTitlebarRegion.Or(mUpdatedTitlebarRegion, dirtyTitlebarRegion);
+  mUpdatedTitlebarRegion.OrWith(CocoaPointsToDevPixels(dirtyTitlebarRect));
 }
 
 // This method draws an overlay in the top of the window which contains the
@@ -2972,7 +2960,7 @@ RectTextureImage::Draw(GLManager* aManager,
 
   aManager->gl()->fBindTexture(LOCAL_GL_TEXTURE_RECTANGLE_ARB, mTexture);
 
-  program->Activate();
+  aManager->ActivateProgram(program);
   program->SetProjectionMatrix(aManager->GetProjMatrix());
   program->SetLayerTransform(Matrix4x4(aTransform).PostTranslate(aLocation.x, aLocation.y, 0));
   program->SetTextureTransform(gfx::Matrix4x4());
@@ -4102,11 +4090,6 @@ NSEvent* gLastDragMouseDownEvent = nil;
     }
 
     if ([self isUsingOpenGL]) {
-      // When our view covers the titlebar, we need to repaint the titlebar
-      // texture buffer when, for example, the window buttons are hovered.
-      // So we notify our nsChildView about any areas needing repainting.
-      mGeckoChild->NotifyDirtyRegion([self nativeDirtyRegionWithBoundingRect:[self bounds]]);
-
       if (mGeckoChild->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT) {
         ClientLayerManager *manager = static_cast<ClientLayerManager*>(mGeckoChild->GetLayerManager());
         manager->AsShadowForwarder()->WindowOverlayChanged();

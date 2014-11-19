@@ -19,6 +19,7 @@ describe("loop.store.RoomStore", function () {
   "use strict";
 
   var sharedActions = loop.shared.actions;
+  var sharedUtils = loop.shared.utils;
   var sandbox, dispatcher;
 
   var fakeRoomList = [{
@@ -273,6 +274,20 @@ describe("loop.store.RoomStore", function () {
       });
     });
 
+    describe("#emailRoomUrl", function() {
+      it("should call composeCallUrlEmail to email the url", function() {
+        sandbox.stub(sharedUtils, "composeCallUrlEmail");
+
+        store.emailRoomUrl(new sharedActions.EmailRoomUrl({
+          roomUrl: "http://invalid"
+        }));
+
+        sinon.assert.calledOnce(sharedUtils.composeCallUrlEmail);
+        sinon.assert.calledWithExactly(sharedUtils.composeCallUrlEmail,
+          "http://invalid");
+      });
+    });
+
     describe("#setStoreState", function() {
       it("should update store state data", function() {
         store.setStoreState({pendingCreation: true});
@@ -370,7 +385,8 @@ describe("loop.store.RoomStore", function () {
       beforeEach(function() {
         activeRoomStore = new loop.store.ActiveRoomStore({
           dispatcher: dispatcher,
-          mozLoop: fakeMozLoop
+          mozLoop: fakeMozLoop,
+          sdkDriver: {}
         });
         store = new loop.store.RoomStore({
           dispatcher: dispatcher,
@@ -419,6 +435,33 @@ describe("loop.store.RoomStore", function () {
 
       sinon.assert.calledOnce(fakeMozLoop.rooms.open);
       sinon.assert.calledWithExactly(fakeMozLoop.rooms.open, "42abc");
+    });
+  });
+
+  describe("#renameRoom", function() {
+    var store, fakeMozLoop;
+
+    beforeEach(function() {
+      fakeMozLoop = {
+        rooms: {
+          rename: sinon.spy()
+        }
+      };
+      store = new loop.store.RoomStore({
+        dispatcher: dispatcher,
+        mozLoop: fakeMozLoop
+      });
+    });
+
+    it("should rename the room via mozLoop", function() {
+      dispatcher.dispatch(new sharedActions.RenameRoom({
+        roomToken: "42abc",
+        newRoomName: "silly name"
+      }));
+
+      sinon.assert.calledOnce(fakeMozLoop.rooms.rename);
+      sinon.assert.calledWith(fakeMozLoop.rooms.rename, "42abc",
+        "silly name");
     });
   });
 });

@@ -44,8 +44,8 @@ AppleVTDecoder::AppleVTDecoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
   MOZ_COUNT_CTOR(AppleVTDecoder);
   // TODO: Verify aConfig.mime_type.
   LOG("Creating AppleVTDecoder for %dx%d h.264 video",
-      mConfig.display_width,
-      mConfig.display_height
+      mConfig.image_width,
+      mConfig.image_height
      );
 }
 
@@ -240,7 +240,7 @@ AppleVTDecoder::SubmitFrame(mp4_demuxer::MP4Sample* aSample)
                                          CreateAppleFrameRef(aSample),
                                          &flags);
   if (rv != noErr) {
-    NS_ERROR("Couldn't pass frame to decoder");
+    NS_WARNING("Couldn't pass frame to decoder");
     return NS_ERROR_FAILURE;
   }
 
@@ -275,8 +275,8 @@ AppleVTDecoder::InitializeSession()
 
   rv = CMVideoFormatDescriptionCreate(kCFAllocatorDefault,
                                       kCMVideoCodecType_H264,
-                                      mConfig.display_width,
-                                      mConfig.display_height,
+                                      mConfig.image_width,
+                                      mConfig.image_height,
                                       extensions,
                                       &mFormat);
   if (rv != noErr) {

@@ -235,7 +235,13 @@ bool RawReader::DecodeVideoFrame(bool &aKeyframeSkip,
   return true;
 }
 
-nsresult RawReader::Seek(int64_t aTime, int64_t aStartTime, int64_t aEndTime, int64_t aCurrentTime)
+void RawReader::Seek(int64_t aTime, int64_t aStartTime, int64_t aEndTime, int64_t aCurrentTime)
+{
+  nsresult res = SeekInternal(aTime);
+  GetCallback()->OnSeekCompleted(res);
+}
+
+nsresult RawReader::SeekInternal(int64_t aTime)
 {
   NS_ASSERTION(mDecoder->OnDecodeThread(),
                "Should be on decode thread.");
@@ -284,7 +290,7 @@ nsresult RawReader::Seek(int64_t aTime, int64_t aStartTime, int64_t aEndTime, in
   return NS_OK;
 }
 
-nsresult RawReader::GetBuffered(dom::TimeRanges* aBuffered, int64_t aStartTime)
+nsresult RawReader::GetBuffered(dom::TimeRanges* aBuffered)
 {
   return NS_OK;
 }

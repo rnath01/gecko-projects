@@ -839,6 +839,12 @@ MacroAssemblerMIPS::ma_sw(Imm32 imm, Address address)
 }
 
 void
+MacroAssemblerMIPS::ma_sw(Register data, BaseIndex &address)
+{
+    ma_store(data, address, SizeWord);
+}
+
+void
 MacroAssemblerMIPS::ma_pop(Register r)
 {
     as_lw(r, StackPointer, 0);
@@ -2341,6 +2347,13 @@ MacroAssemblerMIPSCompat::branchTestNull(Condition cond, const BaseIndex &src, L
 }
 
 void
+MacroAssemblerMIPSCompat::branchTestNull(Condition cond, const Address &address, Label *label) {
+    MOZ_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, SecondScratchReg);
+    ma_b(SecondScratchReg, ImmTag(JSVAL_TAG_NULL), label, cond);
+}
+
+void
 MacroAssemblerMIPSCompat::testNullSet(Condition cond, const ValueOperand &value, Register dest)
 {
     MOZ_ASSERT(cond == Equal || cond == NotEqual);
@@ -2535,6 +2548,19 @@ MacroAssemblerMIPSCompat::branchTestValue(Condition cond, const Address &valaddr
 }
 
 // unboxing code
+void
+MacroAssemblerMIPSCompat::unboxNonDouble(const ValueOperand &operand, Register dest)
+{
+    if (operand.payloadReg() != dest)
+        ma_move(dest, operand.payloadReg());
+}
+
+void
+MacroAssemblerMIPSCompat::unboxNonDouble(const Address &src, Register dest)
+{
+    ma_lw(dest, Address(src.base, src.offset + PAYLOAD_OFFSET));
+}
+
 void
 MacroAssemblerMIPSCompat::unboxInt32(const ValueOperand &operand, Register dest)
 {

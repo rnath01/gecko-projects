@@ -69,6 +69,8 @@
 #include "AlternateServices.h"
 #include "InterceptedChannel.h"
 #include "nsIHttpPushListener.h"
+#include "nsIX509Cert.h"
+#include "ScopedNSSTypes.h"
 
 namespace mozilla { namespace net {
 
@@ -491,7 +493,7 @@ nsHttpChannel::HandleAsyncRedirect()
         }
     }
     else {
-        ContinueHandleAsyncRedirect(NS_OK);
+        ContinueHandleAsyncRedirect(mStatus);
     }
 }
 
@@ -1214,6 +1216,29 @@ nsHttpChannel::ProcessSSLInformation()
     if (!sslstat)
         return;
 
+    // Send (SHA-1) signature algorithm errors to the web console
+    nsCOMPtr<nsIX509Cert> cert;
+    sslstat->GetServerCert(getter_AddRefs(cert));
+    if (cert) {
+        ScopedCERTCertificate nssCert(cert->GetCert());
+        if (nssCert) {
+            SECOidTag tag = SECOID_GetAlgorithmTag(&nssCert->signature);
+            LOG(("Checking certificate signature: The OID tag is %i [this=%p]\n", tag, this));
+            // Check to see if the signature is sha-1 based.
+            // Not including checks for SEC_OID_ISO_SHA1_WITH_RSA_SIGNATURE
+            // from http://tools.ietf.org/html/rfc2437#section-8 since I
+            // can't see reference to it outside this spec
+            if (tag == SEC_OID_PKCS1_SHA1_WITH_RSA_ENCRYPTION ||
+                tag == SEC_OID_ANSIX9_DSA_SIGNATURE_WITH_SHA1_DIGEST ||
+                tag == SEC_OID_ANSIX962_ECDSA_SHA1_SIGNATURE) {
+                nsString consoleErrorTag = NS_LITERAL_STRING("SHA1Sig");
+                nsString consoleErrorMessage
+                        = NS_LITERAL_STRING("SHA-1 Signature");
+                AddSecurityMessage(consoleErrorTag, consoleErrorMessage);
+            }
+        }
+    }
+
     // If certificate exceptions are being used don't record this information
     // in the permission manager.
     bool trustCheck;
@@ -1413,7 +1438,15 @@ nsHttpChannel::ProcessResponse()
     // notify "http-on-examine-response" observers
     gHttpHandler->OnExamineResponse(this);
 
-    SetCookie(mResponseHead->PeekHeader(nsHttp::Set_Cookie));
+    // Cookies and Alt-Service should not be handled on proxy failure either.
+    // This would be consolidated with ProcessSecurityHeaders but it should
+    // happen after OnExamineResponse.
+    if (!mTransaction->ProxyConnectFailed() && (httpStatus != 407)) {
+        SetCookie(mResponseHead->PeekHeader(nsHttp::Set_Cookie));
+        if (httpStatus < 500) {
+            ProcessAltService();
+        }
+    }
 
     // handle unused username and password in url (see bug 232567)
     if (httpStatus != 401 && httpStatus != 407) {
@@ -1427,10 +1460,6 @@ nsHttpChannel::ProcessResponse()
         mAuthProvider->Disconnect(NS_ERROR_ABORT);
         mAuthProvider = nullptr;
         LOG(("  continuation state has been reset"));
-    }
-
-    if (httpStatus < 500) {
-        ProcessAltService();
     }
 
     bool successfulReval = false;
@@ -4958,7 +4987,7 @@ nsHttpChannel::SetupFallbackChannel(const char *aFallbackKey)
 {
     ENSURE_CALLED_BEFORE_CONNECT();
 
-    LOG(("nsHttpChannel::SetupFallbackChannel [this=%p, key=%s]",
+    LOG(("nsHttpChannel::SetupFallbackChannel [this=%p, key=%s]\n",
          this, aFallbackKey));
     mFallbackChannel = true;
     mFallbackKey = aFallbackKey;

@@ -1565,28 +1565,19 @@
      * interpretation.
      *   Category: Statements
      *   Type: Generator
-     *   Operands:
+     *   Operands: uint24_t yieldIndex
      *   Stack: generator =>
      */ \
-    macro(JSOP_INITIALYIELD,  202,"initialyield", NULL,   1,  1,  0,  JOF_BYTE) \
+    macro(JSOP_INITIALYIELD,  202,"initialyield", NULL,   4,  1,  1,  JOF_UINT24) \
     /*
      * Pops the generator and the return value 'rval1', stops interpretation and
      * returns 'rval1'. Pushes sent value from 'send()' onto the stack.
      *   Category: Statements
      *   Type: Generator
-     *   Operands:
+     *   Operands: uint24_t yieldIndex
      *   Stack: rval1, gen => rval2
      */ \
-    macro(JSOP_YIELD,         203,"yield",       NULL,    1,  2,  1,  JOF_BYTE) \
-    /*
-     * Pops the generator and the value to yield from the stack. Then suspends
-     * and closes the generator.
-     *   Category: Statements
-     *   Type: Generator
-     *   Operands:
-     *   Stack: gen, val =>
-     */ \
-    macro(JSOP_FINALYIELD,    204,"finalyield",  NULL,    1,  2,  0,  JOF_BYTE) \
+    macro(JSOP_YIELD,         203,"yield",       NULL,    4,  2,  1,  JOF_UINT24) \
     /*
      * Pops the generator and suspends and closes it. Yields the value in the
      * frame's return value slot.
@@ -1595,7 +1586,7 @@
      *   Operands:
      *   Stack: gen =>
      */ \
-    macro(JSOP_FINALYIELDRVAL,205,"finalyieldrval",NULL,  1,  1,  0,  JOF_BYTE) \
+    macro(JSOP_FINALYIELDRVAL,204,"finalyieldrval",NULL,  1,  1,  0,  JOF_BYTE) \
     /*
      * Pops the generator and argument from the stack, pushes a new generator
      * frame and resumes execution of it. Pushes the return value after the
@@ -1605,7 +1596,7 @@
      *   Operands: resume kind (GeneratorObject::ResumeKind)
      *   Stack: gen, val => rval
      */ \
-    macro(JSOP_RESUME,        206,"resume",      NULL,    3,  2,  1,  JOF_UINT8|JOF_INVOKE) \
+    macro(JSOP_RESUME,        205,"resume",      NULL,    3,  2,  1,  JOF_UINT8|JOF_INVOKE) \
     /*
      * Pops the top two values on the stack as 'obj' and 'v', pushes 'v' to
      * 'obj'.
@@ -1616,9 +1607,27 @@
      *   Operands:
      *   Stack: v, obj =>
      */ \
-    macro(JSOP_ARRAYPUSH,     207,"arraypush",   NULL,    1,  2,  0,  JOF_BYTE) \
+    macro(JSOP_ARRAYPUSH,     206,"arraypush",   NULL,    1,  2,  0,  JOF_BYTE) \
     \
-    macro(JSOP_UNUSED208,     208, "unused208",    NULL,  1,  0,  0,  JOF_BYTE) \
+    /*
+     * No-op bytecode only emitted in some self-hosted functions. Not handled by
+     * the JITs so the script always runs in the interpreter.
+     *
+     *   Category: Other
+     *   Operands:
+     *   Stack: =>
+     */ \
+    macro(JSOP_FORCEINTERPRETER, 207, "forceinterpreter", NULL,  1,  0,  0,  JOF_BYTE) \
+    \
+    /*
+     * Bytecode emitted after 'yield' statements to help the Debugger
+     * fix up the frame in the JITs. No-op in the interpreter.
+     *
+     *   Category: Debugger
+     *   Operands:
+     *   Stack: =>
+     */ \
+    macro(JSOP_DEBUGAFTERYIELD,  208, "debugafteryield",  NULL,  1,  0,  0,  JOF_BYTE) \
     macro(JSOP_UNUSED209,     209, "unused209",    NULL,  1,  0,  0,  JOF_BYTE) \
     macro(JSOP_UNUSED210,     210, "unused210",    NULL,  1,  0,  0,  JOF_BYTE) \
     macro(JSOP_UNUSED211,     211, "unused211",    NULL,  1,  0,  0,  JOF_BYTE) \

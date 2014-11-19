@@ -257,12 +257,13 @@ bool WaveReader::DecodeVideoFrame(bool &aKeyframeSkip,
   return false;
 }
 
-nsresult WaveReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndTime, int64_t aCurrentTime)
+void WaveReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndTime, int64_t aCurrentTime)
 {
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
   LOG(PR_LOG_DEBUG, ("%p About to seek to %lld", mDecoder, aTarget));
   if (NS_FAILED(ResetDecode())) {
-    return NS_ERROR_FAILURE;
+    GetCallback()->OnSeekCompleted(NS_ERROR_FAILURE);
+    return;
   }
   double d = BytesToTime(GetDataLength());
   NS_ASSERTION(d < INT64_MAX / USECS_PER_S, "Duration overflow");
@@ -271,21 +272,23 @@ nsresult WaveReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndTime,
   int64_t position = RoundDownToFrame(static_cast<int64_t>(TimeToBytes(seekTime)));
   NS_ASSERTION(INT64_MAX - mWavePCMOffset > position, "Integer overflow during wave seek");
   position += mWavePCMOffset;
-  return mDecoder->GetResource()->Seek(nsISeekableStream::NS_SEEK_SET, position);
+  nsresult res = mDecoder->GetResource()->Seek(nsISeekableStream::NS_SEEK_SET, position);
+  GetCallback()->OnSeekCompleted(res);
 }
 
 static double RoundToUsecs(double aSeconds) {
   return floor(aSeconds * USECS_PER_S) / USECS_PER_S;
 }
 
-nsresult WaveReader::GetBuffered(dom::TimeRanges* aBuffered, int64_t aStartTime)
+nsresult WaveReader::GetBuffered(dom::TimeRanges* aBuffered)
 {
   if (!mInfo.HasAudio()) {
     return NS_OK;
   }
-  int64_t startOffset = mDecoder->GetResource()->GetNextCachedData(mWavePCMOffset);
+  AutoPinned<MediaResource> resource(mDecoder->GetResource());
+  int64_t startOffset = resource->GetNextCachedData(mWavePCMOffset);
   while (startOffset >= 0) {
-    int64_t endOffset = mDecoder->GetResource()->GetCachedDataEnd(startOffset);
+    int64_t endOffset = resource->GetCachedDataEnd(startOffset);
     // Bytes [startOffset..endOffset] are cached.
     NS_ASSERTION(startOffset >= mWavePCMOffset, "Integer underflow in GetBuffered");
     NS_ASSERTION(endOffset >= mWavePCMOffset, "Integer underflow in GetBuffered");
@@ -295,7 +298,7 @@ nsresult WaveReader::GetBuffered(dom::TimeRanges* aBuffered, int64_t aStartTime)
     // the media element.
     aBuffered->Add(RoundToUsecs(BytesToTime(startOffset - mWavePCMOffset)),
                    RoundToUsecs(BytesToTime(endOffset - mWavePCMOffset)));
-    startOffset = mDecoder->GetResource()->GetNextCachedData(endOffset);
+    startOffset = resource->GetNextCachedData(endOffset);
   }
   return NS_OK;
 }

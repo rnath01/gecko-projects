@@ -290,47 +290,33 @@ TelephonyDialCallback.prototype = {
   QueryInterface:   XPCOMUtils.generateQI([Ci.nsITelephonyDialCallback]),
   classID:          TELEPHONYDIALCALLBACK_CID,
 
-  _notifySendCancelMmiSuccess: function(aResult) {
-    // No additional information.
-    if (aResult.additionalInformation === undefined) {
-      this.callback.notifySendCancelMmiSuccess(aResult.serviceCode,
-                                               aResult.statusMessage);
-      return;
-    }
-
-    // Additional information is an integer.
-    if (!isNaN(parseInt(aResult.additionalInformation, 10))) {
-      this.callback.notifySendCancelMmiSuccessWithInteger(
-        aResult.serviceCode, aResult.statusMessage, aResult.additionalInformation);
-      return;
-    }
-
-    // Additional information should be an array.
-    let array = aResult.additionalInformation;
-    if (Array.isArray(array) && array.length > 0) {
-      let item = array[0];
-      if (typeof item === "string" || item instanceof String) {
-        this.callback.notifySendCancelMmiSuccessWithStrings(
-          aResult.serviceCode, aResult.statusMessage,
-          aResult.additionalInformation.length, aResult.additionalInformation);
-        return;
-      }
-
-      this.callback.notifySendCancelMmiSuccessWithCallForwardingOptions(
-        aResult.serviceCode, aResult.statusMessage,
-        aResult.additionalInformation.length, aResult.additionalInformation);
-      return;
-    }
-
-    throw Cr.NS_ERROR_UNEXPECTED;
-  },
-
   notifyDialMMI: function(mmiServiceCode) {
     this.serviceCode = mmiServiceCode;
   },
 
-  notifyDialMMISuccess: function(result) {
-    this._notifySendCancelMmiSuccess(result);
+  notifyDialMMISuccess: function(statusMessage) {
+    this.callback.notifySendCancelMmiSuccess(this.serviceCode, statusMessage);
+  },
+
+  notifyDialMMISuccessWithInteger: function(statusMessage, additionalInfo) {
+    this.callback.notifySendCancelMmiSuccessWithInteger(this.serviceCode,
+                                                        statusMessage,
+                                                        additionalInfo);
+  },
+
+  notifyDialMMISuccessWithStrings: function(statusMessage, count, additionalInfo) {
+    this.callback.notifySendCancelMmiSuccessWithStrings(this.serviceCode,
+                                                        statusMessage,
+                                                        count,
+                                                        additionalInfo);
+  },
+
+  notifyDialMMISuccessWithCallForwardingOptions: function(statusMessage, count, additionalInfo) {
+    this.callback.notifySendCancelMmiSuccessWithCallForwardingOptions(
+                                                        this.serviceCode,
+                                                        statusMessage,
+                                                        count,
+                                                        additionalInfo);
   },
 
   notifyDialMMIError: function(error) {
@@ -412,6 +398,7 @@ MobileConnectionProvider.prototype = {
         RIL.GECKO_SUPPORTED_NETWORK_TYPES_DEFAULT.split(",");
     }
 
+    let enumNetworkTypes = [];
     for (let type of supportedNetworkTypes) {
       // If the value in system property is not valid, use the default one which
       // is defined in ril_consts.js.
@@ -419,15 +406,18 @@ MobileConnectionProvider.prototype = {
         if (DEBUG) {
           this._debug("Unknown network type: " + type);
         }
-        supportedNetworkTypes =
-          RIL.GECKO_SUPPORTED_NETWORK_TYPES_DEFAULT.split(",");
+        RIL.GECKO_SUPPORTED_NETWORK_TYPES_DEFAULT.split(",").forEach(aType => {
+          enumNetworkTypes.push(RIL.GECKO_SUPPORTED_NETWORK_TYPES.indexOf(aType));
+        });
         break;
       }
+      enumNetworkTypes.push(RIL.GECKO_SUPPORTED_NETWORK_TYPES.indexOf(type));
     }
     if (DEBUG) {
-      this._debug("Supported Network Types: " + supportedNetworkTypes);
+      this._debug("Supported Network Types: " + enumNetworkTypes);
     }
-    return supportedNetworkTypes;
+
+    return enumNetworkTypes;
   },
 
   /**
@@ -811,7 +801,7 @@ MobileConnectionProvider.prototype = {
         return false;
       }
 
-      aCallback.notifySuccessWithString(aResponse.mode);
+      aCallback.notifyGetRoamingPreferenceSuccess(aResponse.mode);
       return false;
     }).bind(this));
   },

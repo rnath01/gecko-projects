@@ -9,6 +9,7 @@ const { Services } = require("resource://gre/modules/Services.jsm");
 const { DOMHelpers } = require("resource:///modules/devtools/DOMHelpers.jsm");
 const { Task } = require("resource://gre/modules/Task.jsm");
 const { Promise } = require("resource://gre/modules/Promise.jsm");
+const { setTimeout } = require("sdk/timers");
 const { getMostRecentBrowserWindow } = require("sdk/window/utils");
 
 const XULNS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
@@ -75,6 +76,14 @@ exports.showDoorhanger = Task.async(function *({ window, type, anchor }) {
     return;
   }
 
+  // Call success function to set preferences/cleanup immediately,
+  // so if triggered multiple times, only happens once (Windows/Linux)
+  success();
+
+  // Wait 200ms to prevent flickering where the popup is displayed
+  // before the underlying window (Windows 7, 64bit)
+  yield wait(200);
+
   let document = window.document;
 
   let panel = document.createElementNS(XULNS, "panel");
@@ -107,15 +116,16 @@ exports.showDoorhanger = Task.async(function *({ window, type, anchor }) {
       close();
     });
   }
-
-  // Call success function to set preferences, etc.
-  success();
 });
 
 function setDoorhangerStyle (panel, frame) {
   Object.keys(panelAttrs).forEach(prop => panel.setAttribute(prop, panelAttrs[prop]));
   panel.style.margin = "20px";
   panel.style.borderRadius = "5px";
+  panel.style.border = "none";
+  panel.style.MozAppearance = "none";
+  panel.style.backgroundColor = "transparent";
+
   frame.style.borderRadius = "5px";
   frame.setAttribute("flex", "1");
   frame.setAttribute("width", "450");
@@ -141,4 +151,10 @@ function onFrameLoad (frame) {
 
 function getGBrowser () {
   return getMostRecentBrowserWindow().gBrowser;
+}
+
+function wait (n) {
+  let { resolve, promise } = Promise.defer();
+  setTimeout(resolve, n);
+  return promise;
 }

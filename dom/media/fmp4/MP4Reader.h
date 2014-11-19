@@ -45,10 +45,12 @@ public:
   virtual nsresult ReadMetadata(MediaInfo* aInfo,
                                 MetadataTags** aTags) MOZ_OVERRIDE;
 
-  virtual nsresult Seek(int64_t aTime,
-                        int64_t aStartTime,
-                        int64_t aEndTime,
-                        int64_t aCurrentTime) MOZ_OVERRIDE;
+  virtual void ReadUpdatedMetadata(MediaInfo* aInfo) MOZ_OVERRIDE;
+
+  virtual void Seek(int64_t aTime,
+                    int64_t aStartTime,
+                    int64_t aEndTime,
+                    int64_t aCurrentTime) MOZ_OVERRIDE;
 
   virtual bool IsMediaSeekable() MOZ_OVERRIDE;
 
@@ -57,13 +59,15 @@ public:
 
   virtual int64_t GetEvictionOffset(double aTime) MOZ_OVERRIDE;
 
-  virtual nsresult GetBuffered(dom::TimeRanges* aBuffered,
-                               int64_t aStartTime) MOZ_OVERRIDE;
+  virtual nsresult GetBuffered(dom::TimeRanges* aBuffered) MOZ_OVERRIDE;
 
   // For Media Resource Management
+  virtual void SetIdle() MOZ_OVERRIDE;
   virtual bool IsWaitingMediaResources() MOZ_OVERRIDE;
   virtual bool IsDormantNeeded() MOZ_OVERRIDE;
   virtual void ReleaseMediaResources() MOZ_OVERRIDE;
+  virtual void SetSharedDecoderManager(SharedDecoderManager* aManager)
+    MOZ_OVERRIDE;
 
   virtual nsresult ResetDecode() MOZ_OVERRIDE;
 
@@ -178,7 +182,6 @@ private:
   uint64_t mLastReportedNumDecodedFrames;
 
   DecoderData& GetDecoderData(mp4_demuxer::TrackType aTrack);
-  MediaDataDecoder* Decoder(mp4_demuxer::TrackType aTrack);
 
   layers::LayersBackend mLayersBackendType;
 
@@ -192,6 +195,7 @@ private:
 
   bool mIndexReady;
   Monitor mIndexMonitor;
+  nsRefPtr<SharedDecoderManager> mSharedDecoderManager;
 };
 
 } // namespace mozilla

@@ -308,7 +308,7 @@ const CustomizableWidgets = [
                 aEvent.target.ownerDocument &&
                 aEvent.target.ownerDocument.defaultView;
       if (win && typeof win.saveDocument == "function") {
-        win.saveDocument(win.content.document);
+        win.saveDocument(win.gBrowser.selectedBrowser.contentDocumentAsCPOW);
       }
     }
   }, {
@@ -399,8 +399,6 @@ const CustomizableWidgets = [
     }
   }, {
     id: "social-share-button",
-    tooltiptext: "social-share-button.label",
-    label: "social-share-button.tooltiptext",
     // custom build our button so we can attach to the share command
     type: "custom",
     onBuild: function(aDocument) {
@@ -925,13 +923,18 @@ const CustomizableWidgets = [
       win.MailIntegration.sendLinkForWindow(win.content);
     }
   }, {
-    id: "loop-call-button",
+    id: "loop-button",
     type: "custom",
     label: "loop-call-button3.label",
     tooltiptext: "loop-call-button3.tooltiptext",
     defaultArea: CustomizableUI.AREA_NAVBAR,
-    introducedInVersion: 1,
+    introducedInVersion: 4,
     onBuild: function(aDocument) {
+      // If we're not supposed to see the button, return zip.
+      if (!Services.prefs.getBoolPref("loop.enabled")) {
+        return null;
+      }
+
       let node = aDocument.createElementNS(kNSXUL, "toolbarbutton");
       node.setAttribute("id", this.id);
       node.classList.add("toolbarbutton-1");
@@ -943,6 +946,7 @@ const CustomizableWidgets = [
       node.addEventListener("command", function(event) {
         aDocument.defaultView.LoopUI.openCallPanel(event);
       });
+
       return node;
     }
   }, {

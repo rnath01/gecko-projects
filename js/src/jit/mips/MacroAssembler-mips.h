@@ -216,6 +216,7 @@ class MacroAssemblerMIPS : public Assembler
 
     void ma_sw(Register data, Address address);
     void ma_sw(Imm32 imm, Address address);
+    void ma_sw(Register data, BaseIndex &address);
 
     void ma_pop(Register r);
     void ma_push(Register r);
@@ -429,6 +430,10 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
         append(desc, currentOffset(), framePushed_);
     }
 
+    void callAndPushReturnAddress(Label *label) {
+        ma_callIonHalfPush(label);
+    }
+
     void branch(JitCode *c) {
         BufferOffset bo = m_buffer.nextOffset();
         addPendingJump(bo, ImmPtr(c->raw()), Relocation::JITCODE);
@@ -526,6 +531,10 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
         as_nop();
     }
 
+    void jump(JitCode *code) {
+        branch(code);
+    }
+
     void neg32(Register reg) {
         ma_negu(reg, reg);
     }
@@ -549,6 +558,8 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
                          Label *label);
 
     // unboxing code
+    void unboxNonDouble(const ValueOperand &operand, Register dest);
+    void unboxNonDouble(const Address &src, Register dest);
     void unboxInt32(const ValueOperand &operand, Register dest);
     void unboxInt32(const Address &src, Register dest);
     void unboxBoolean(const ValueOperand &operand, Register dest);
@@ -665,6 +676,7 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
     void branchTestNull(Condition cond, const ValueOperand &value, Label *label);
     void branchTestNull(Condition cond, Register tag, Label *label);
     void branchTestNull(Condition cond, const BaseIndex &src, Label *label);
+    void branchTestNull(Condition cond, const Address &address, Label *label);
     void testNullSet(Condition cond, const ValueOperand &value, Register dest);
 
     void branchTestObject(Condition cond, const ValueOperand &value, Label *label);

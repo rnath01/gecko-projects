@@ -841,9 +841,9 @@ function _loadURIWithFlags(browser, uri, flags, referrer, charset, postdata) {
     browser.userTypedClear++;
   }
 
+  let shouldBeRemote = gMultiProcessBrowser &&
+                       E10SUtils.shouldBrowserBeRemote(uri);
   try {
-    let shouldBeRemote = gMultiProcessBrowser &&
-                         E10SUtils.shouldBrowserBeRemote(uri);
     if (browser.isRemoteBrowser == shouldBeRemote) {
       browser.webNavigation.loadURI(uri, flags, referrer, postdata, null);
     } else {
@@ -853,6 +853,13 @@ function _loadURIWithFlags(browser, uri, flags, referrer, charset, postdata) {
         referrer: referrer ? referrer.spec : null,
       });
     }
+  } catch (e) {
+    // If anything goes wrong just switch remoteness manually and load the URI.
+    // We might lose history that way but at least the browser loaded a page.
+    // This might be necessary if SessionStore wasn't initialized yet i.e.
+    // when the homepage is a non-remote page.
+    gBrowser.updateBrowserRemoteness(browser, shouldBeRemote);
+    browser.webNavigation.loadURI(uri, flags, referrer, postdata, null);
   } finally {
     if (browser.userTypedClear) {
       browser.userTypedClear--;
@@ -1736,7 +1743,7 @@ function HandleAppCommandEvent(evt) {
                      gBrowser.selectedBrowser);
     break;
   case "Save":
-    saveDocument(window.content.document);
+    saveDocument(gBrowser.selectedBrowser.contentDocumentAsCPOW);
     break;
   case "SendMail":
     MailIntegration.sendLinkForWindow(window.content);
@@ -3972,7 +3979,7 @@ var XULBrowserWindow = {
                            .chromeEventHandler;
 
     // Ignore loads that aren't in the main tabbrowser
-    if (browser.localName != "browser" || browser.getTabBrowser() != gBrowser)
+    if (browser.localName != "browser" || !browser.getTabBrowser || browser.getTabBrowser() != gBrowser)
       return true;
 
     if (!E10SUtils.shouldLoadURI(aDocShell, aURI, aReferrer)) {
@@ -4551,15 +4558,14 @@ function nsBrowserAccess() { }
 nsBrowserAccess.prototype = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIBrowserDOMWindow, Ci.nsISupports]),
 
-  _openURIInNewTab: function(aURI, aOpener, aIsExternal) {
+  _openURIInNewTab: function(aURI, aReferrer, aIsPrivate, aIsExternal) {
     let win, needToFocusWin;
 
     // try the current window.  if we're in a popup, fall back on the most recent browser window
     if (window.toolbar.visible)
       win = window;
     else {
-      let isPrivate = PrivateBrowsingUtils.isWindowPrivate(aOpener || window);
-      win = RecentWindow.getMostRecentBrowserWindow({private: isPrivate});
+      win = RecentWindow.getMostRecentBrowserWindow({private: aIsPrivate});
       needToFocusWin = true;
     }
 
@@ -4575,10 +4581,9 @@ nsBrowserAccess.prototype = {
     }
 
     let loadInBackground = gPrefService.getBoolPref("browser.tabs.loadDivertedInBackground");
-    let referrer = aOpener ? makeURI(aOpener.location.href) : null;
 
     let tab = win.gBrowser.loadOneTab(aURI ? aURI.spec : "about:blank", {
-                                      referrerURI: referrer,
+                                      referrerURI: aReferrer,
                                       fromExternal: aIsExternal,
                                       inBackground: loadInBackground});
     let browser = win.gBrowser.getBrowserForTab(tab);
@@ -4615,7 +4620,9 @@ nsBrowserAccess.prototype = {
         newWindow = openDialog(getBrowserURL(), "_blank", "all,dialog=no", url, null, null, null);
         break;
       case Ci.nsIBrowserDOMWindow.OPEN_NEWTAB :
-        let browser = this._openURIInNewTab(aURI, aOpener, isExternal);
+        let referrer = aOpener ? makeURI(aOpener.location.href) : null;
+        let isPrivate = PrivateBrowsingUtils.isWindowPrivate(aOpener || window);
+        let browser = this._openURIInNewTab(aURI, referrer, isPrivate, isExternal);
         if (browser)
           newWindow = browser.contentWindow;
         break;
@@ -4634,14 +4641,14 @@ nsBrowserAccess.prototype = {
     return newWindow;
   },
 
-  openURIInFrame: function browser_openURIInFrame(aURI, aOpener, aWhere, aContext) {
+  openURIInFrame: function browser_openURIInFrame(aURI, aParams, aWhere, aContext) {
     if (aWhere != Ci.nsIBrowserDOMWindow.OPEN_NEWTAB) {
       dump("Error: openURIInFrame can only open in new tabs");
       return null;
     }
 
     var isExternal = (aContext == Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL);
-    let browser = this._openURIInNewTab(aURI, aOpener, isExternal);
+    let browser = this._openURIInNewTab(aURI, aParams.referrer, aParams.isPrivate, isExternal);
     if (browser)
       return browser.QueryInterface(Ci.nsIFrameLoaderOwner);
 
@@ -6682,11 +6689,11 @@ var gIdentityHandler = {
     this._encryptionLabel[this.IDENTITY_MODE_UNKNOWN] =
       gNavigatorBundle.getString("identity.unencrypted");
     this._encryptionLabel[this.IDENTITY_MODE_MIXED_DISPLAY_LOADED] =
-      gNavigatorBundle.getString("identity.mixed_display_loaded");
+      gNavigatorBundle.getString("identity.broken_loaded");
     this._encryptionLabel[this.IDENTITY_MODE_MIXED_ACTIVE_LOADED] =
       gNavigatorBundle.getString("identity.mixed_active_loaded2");
     this._encryptionLabel[this.IDENTITY_MODE_MIXED_DISPLAY_LOADED_ACTIVE_BLOCKED] =
-      gNavigatorBundle.getString("identity.mixed_display_loaded");
+      gNavigatorBundle.getString("identity.broken_loaded");
     return this._encryptionLabel;
   },
   get _identityPopup () {

@@ -133,6 +133,8 @@ public:
   NS_IMETHOD SetRequestMethod(const nsACString& aMethod);
   NS_IMETHOD GetReferrer(nsIURI **referrer);
   NS_IMETHOD SetReferrer(nsIURI *referrer);
+  NS_IMETHOD GetReferrerPolicy(uint32_t *referrerPolicy);
+  NS_IMETHOD SetReferrerWithPolicy(nsIURI *referrer, uint32_t referrerPolicy);
   NS_IMETHOD GetRequestHeader(const nsACString& aHeader, nsACString& aValue);
   NS_IMETHOD SetRequestHeader(const nsACString& aHeader,
                               const nsACString& aValue, bool aMerge);
@@ -187,6 +189,7 @@ public:
   NS_IMETHOD ForcePending(bool aForcePending);
   NS_IMETHOD GetLastModifiedTime(PRTime* lastModifiedTime);
   NS_IMETHOD ForceNoIntercept();
+  NS_IMETHOD GetTopWindowURI(nsIURI **aTopWindowURI);
 
   inline void CleanRedirectCacheChainIfNecessary()
   {
@@ -382,6 +385,8 @@ protected:
 
   nsRefPtr<nsHttpHandler>           mHttpHandler;  // keep gHttpHandler alive
 
+  uint32_t                          mReferrerPolicy;
+
   // Performance tracking
   // The initiator type (for this resource) - how was the resource referenced in
   // the HTML file.
@@ -407,6 +412,7 @@ protected:
   nsCOMPtr<nsIPrincipal>            mPrincipal;
 
   bool                              mForcePending;
+  nsCOMPtr<nsIURI>                  mTopWindowURI;
 };
 
 // Share some code while working around C++'s absurd inability to handle casting

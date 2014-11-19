@@ -352,7 +352,13 @@ Tester.prototype = {
         catch (ex) {
           this.currentTest.addResult(new testResult(false, "Cleanup function threw an exception", ex, false));
         }
-      };
+      }
+
+      if (this.currentTest.passCount === 0 &&
+          this.currentTest.failCount === 0 &&
+          this.currentTest.todoCount === 0) {
+        this.currentTest.addResult(new testResult(false, "This test contains no passes, no fails and no todos. Maybe it threw a silent exception? Make sure you use waitForExplicitFinish() if you need it.", "", false));
+      }
 
       if (testScope.__expected == 'fail' && testScope.__num_failed <= 0) {
         this.currentTest.addResult(new testResult(false, "We expected at least one assertion to fail because this test file was marked as fail-if in the manifest", "", false));
@@ -622,7 +628,7 @@ Tester.prototype = {
       // Ignore if no head.js exists, but report all other errors.  Note this
       // will also ignore an existing head.js attempting to import a missing
       // module - see bug 755558 for why this strategy is preferred anyway.
-      if (ex.toString() != 'Error opening input stream (invalid filename?)') {
+      if (!/^Error opening input stream/.test(ex.toString())) {
        this.currentTest.addResult(new testResult(false, "head.js import threw an exception", ex, false));
       }
     }

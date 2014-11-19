@@ -183,7 +183,11 @@ pref("app.update.metro.enabled", true);
 pref("app.update.silent", false);
 
 // If set to true, the hamburger button will show badges for update events.
+#ifdef MOZ_DEV_EDITION
+pref("app.update.badge", true);
+#else
 pref("app.update.badge", false);
+#endif
 
 // If set to true, the Update Service will apply updates in the background
 // when it finishes downloading them.
@@ -251,6 +255,7 @@ pref("lightweightThemes.recommendedThemes", "[{\"id\":\"recommended-1\",\"homepa
 
 // UI tour experience.
 pref("browser.uitour.enabled", true);
+pref("browser.uitour.loglevel", "Error");
 pref("browser.uitour.requireSecure", true);
 pref("browser.uitour.themeOrigin", "https://addons.mozilla.org/%LOCALE%/firefox/themes/");
 pref("browser.uitour.pinnedTabUrl", "https://support.mozilla.org/%LOCALE%/kb/pinned-tabs-keep-favorite-websites-open");
@@ -346,13 +351,14 @@ pref("browser.urlbar.match.title", "#");
 pref("browser.urlbar.match.url", "@");
 
 // The default behavior for the urlbar can be configured to use any combination
-// of the restrict or match filters with each additional filter restricting
-// more (intersection). Add the following values to set the behavior as the
-// default: 1: history, 2: bookmark, 4: tag, 8: title, 16: url, 32: typed,
-//          64: javascript, 128: tabs
-// E.g., 0 = show all results (no filtering), 1 = only visited pages in history,
-// 2 = only bookmarks, 3 = visited bookmarks, 1+16 = history matching in the url
-pref("browser.urlbar.default.behavior", 0);
+// of the match filters with each additional filter adding more results (union).
+pref("browser.urlbar.suggest.history",              true);
+pref("browser.urlbar.suggest.bookmark",             true);
+pref("browser.urlbar.suggest.openpage",             true);
+
+// Restrictions to current suggestions can also be applied (intersection).
+// Typed suggestion works only if history is set to true.
+pref("browser.urlbar.suggest.history.onlyTyped",    false);
 
 pref("browser.urlbar.formatting.enabled", true);
 pref("browser.urlbar.trimURLs", true);
@@ -1244,6 +1250,9 @@ pref("services.sync.prefs.sync.addons.ignoreUserEnabledChanges", true);
 pref("services.sync.prefs.sync.app.update.mode", true);
 pref("services.sync.prefs.sync.browser.formfill.enable", true);
 pref("services.sync.prefs.sync.browser.link.open_newwindow", true);
+pref("services.sync.prefs.sync.browser.newtabpage.enabled", true);
+pref("services.sync.prefs.sync.browser.newtabpage.enhanced", true);
+pref("services.sync.prefs.sync.browser.newtabpage.pinned", true);
 pref("services.sync.prefs.sync.browser.offline-apps.notify", true);
 pref("services.sync.prefs.sync.browser.safebrowsing.enabled", true);
 pref("services.sync.prefs.sync.browser.safebrowsing.malware.enabled", true);
@@ -1255,7 +1264,6 @@ pref("services.sync.prefs.sync.browser.tabs.loadInBackground", true);
 pref("services.sync.prefs.sync.browser.tabs.warnOnClose", true);
 pref("services.sync.prefs.sync.browser.tabs.warnOnOpen", true);
 pref("services.sync.prefs.sync.browser.urlbar.autocomplete.enabled", true);
-pref("services.sync.prefs.sync.browser.urlbar.default.behavior", true);
 pref("services.sync.prefs.sync.browser.urlbar.maxRichResults", true);
 pref("services.sync.prefs.sync.dom.disable_open_during_load", true);
 pref("services.sync.prefs.sync.dom.disable_window_flip", true);
@@ -1311,7 +1319,7 @@ pref("devtools.devedition.promo.shown", false);
 pref("devtools.devedition.promo.url", "https://mozilla.org/firefox/developer");
 
 // Only potentially show in beta release
-#ifdef MOZ_UPDATE_CHANNEL == beta
+#if MOZ_UPDATE_CHANNEL == beta
   pref("devtools.devedition.promo.enabled", true);
 #else
   pref("devtools.devedition.promo.enabled", false);
@@ -1633,24 +1641,16 @@ pref("shumway.disabled", true);
 // (This is intentionally on the high side; see bug 746055.)
 pref("image.mem.max_decoded_image_kb", 256000);
 
-// Enable by default development builds up until early beta
-#ifdef EARLY_BETA_OR_EARLIER
 pref("loop.enabled", true);
-pref("loop.throttled", false);
-#else
-pref("loop.enabled", true);
-pref("loop.throttled", true);
-pref("loop.soft_start_ticket_number", -1);
-pref("loop.soft_start_hostname", "soft-start.loop.services.mozilla.com");
-#endif
-
 pref("loop.server", "https://loop.services.mozilla.com");
 pref("loop.seenToS", "unseen");
+pref("loop.gettingStarted.seen", false);
+pref("loop.gettingStarted.url", "https://bugzilla.mozilla.org/show_bug.cgi?id=1099462");
 pref("loop.learnMoreUrl", "https://www.firefox.com/hello/");
 pref("loop.legal.ToS_url", "https://hello.firefox.com/legal/terms/");
 pref("loop.legal.privacy_url", "https://www.mozilla.org/privacy/");
 pref("loop.do_not_disturb", false);
-pref("loop.ringtone", "chrome://browser/content/loop/shared/sounds/Firefox-Long.ogg");
+pref("loop.ringtone", "chrome://browser/content/loop/shared/sounds/ringtone.ogg");
 pref("loop.retry_delay.start", 60000);
 pref("loop.retry_delay.limit", 300000);
 pref("loop.feedback.baseUrl", "https://input.mozilla.org/api/v1/feedback");
@@ -1660,13 +1660,13 @@ pref("loop.debug.dispatcher", false);
 pref("loop.debug.websocket", false);
 pref("loop.debug.sdk", false);
 #ifdef DEBUG
-pref("loop.CSP", "default-src 'self' about: file: chrome: http://localhost:*; img-src 'self' data: http://www.gravatar.com/ about: file: chrome:; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net http://localhost:* ws://localhost:*");
+pref("loop.CSP", "default-src 'self' about: file: chrome: http://localhost:*; img-src 'self' data: http://www.gravatar.com/ about: file: chrome:; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net http://localhost:* ws://localhost:*; media-src blob:");
 #else
-pref("loop.CSP", "default-src 'self' about: file: chrome:; img-src 'self' data: http://www.gravatar.com/ about: file: chrome:; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net");
+pref("loop.CSP", "default-src 'self' about: file: chrome:; img-src 'self' data: http://www.gravatar.com/ about: file: chrome:; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net; media-src blob:");
 #endif
 pref("loop.oauth.google.redirect_uri", "urn:ietf:wg:oauth:2.0:oob:auto");
 pref("loop.oauth.google.scope", "https://www.google.com/m8/feeds");
-pref("loop.rooms.enabled", false);
+pref("loop.rooms.enabled", true);
 pref("loop.fxa_oauth.tokendata", "");
 pref("loop.fxa_oauth.profile", "");
 
@@ -1807,6 +1807,10 @@ pref("browser.apps.URL", "https://marketplace.firefox.com/discovery/");
 #ifdef NIGHTLY_BUILD
 pref("browser.polaris.enabled", false);
 pref("privacy.trackingprotection.ui.enabled", false);
+#endif
+
+#ifdef NIGHTLY_BUILD
+pref("browser.tabs.remote.autostart.1", true);
 #endif
 
 // Temporary pref to allow printing in e10s windows on some platforms.

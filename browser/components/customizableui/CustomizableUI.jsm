@@ -61,7 +61,7 @@ const kIteratorSymbol = JS_HAS_SYMBOLS ? Symbol.iterator : "@@iterator";
  * The current version. We can use this to auto-add new default widgets as necessary.
  * (would be const but isn't because of testing purposes)
  */
-let kVersion = 1;
+let kVersion = 4;
 
 /**
  * gPalette is a map of every widget that CustomizableUI.jsm knows about, keyed
@@ -217,7 +217,7 @@ let CustomizableUIInternal = {
       "bookmarks-menu-button",
       "downloads-button",
       "home-button",
-      "loop-call-button",
+      "loop-button",
     ];
 
     if (Services.prefs.getBoolPref(kPrefWebIDEInNavbar)) {
@@ -314,6 +314,15 @@ let CustomizableUIInternal = {
           gFuturePlacements.set(widget.defaultArea, new Set([id]));
         }
       }
+    }
+
+    if (currentVersion < 2) {
+      // Nuke the old 'loop-call-button' out of orbit.
+      CustomizableUI.removeWidgetFromArea("loop-call-button");
+    }
+
+    if (currentVersion < 4) {
+      CustomizableUI.removeWidgetFromArea("loop-button-throttled");
     }
   },
 
@@ -2047,25 +2056,23 @@ let CustomizableUIInternal = {
     // If we're restoring the widget to it's old placement, fire off the
     // onWidgetAdded event - our own handler will take care of adding it to
     // any build areas.
-    if (widget.currentArea) {
-      this.notifyListeners("onWidgetAdded", widget.id, widget.currentArea,
-                           widget.currentPosition);
-    } else if (widgetMightNeedAutoAdding) {
-      let autoAdd = true;
-      try {
-        autoAdd = Services.prefs.getBoolPref(kPrefCustomizationAutoAdd);
-      } catch (e) {}
-
-      // If the widget doesn't have an existing placement, and it hasn't been
-      // seen before, then add it to its default area so it can be used.
-      // If the widget is not removable, we *have* to add it to its default
-      // area here.
-      let canBeAutoAdded = autoAdd && !gSeenWidgets.has(widget.id);
-      if (!widget.currentArea && (!widget.removable || canBeAutoAdded)) {
-        this.beginBatchUpdate();
+    this.beginBatchUpdate();
+    try {
+      if (widget.currentArea) {
+        this.notifyListeners("onWidgetAdded", widget.id, widget.currentArea,
+                             widget.currentPosition);
+      } else if (widgetMightNeedAutoAdding) {
+        let autoAdd = true;
         try {
-          gSeenWidgets.add(widget.id);
+          autoAdd = Services.prefs.getBoolPref(kPrefCustomizationAutoAdd);
+        } catch (e) {}
 
+        // If the widget doesn't have an existing placement, and it hasn't been
+        // seen before, then add it to its default area so it can be used.
+        // If the widget is not removable, we *have* to add it to its default
+        // area here.
+        let canBeAutoAdded = autoAdd && !gSeenWidgets.has(widget.id);
+        if (!widget.currentArea && (!widget.removable || canBeAutoAdded)) {
           if (widget.defaultArea) {
             if (this.isAreaLazy(widget.defaultArea)) {
               gFuturePlacements.get(widget.defaultArea).add(widget.id);
@@ -2073,10 +2080,13 @@ let CustomizableUIInternal = {
               this.addWidgetToArea(widget.id, widget.defaultArea);
             }
           }
-        } finally {
-          this.endBatchUpdate(true);
         }
       }
+    } finally {
+      // Ensure we always have this widget in gSeenWidgets, and save
+      // state in case this needs to be done here.
+      gSeenWidgets.add(widget.id);
+      this.endBatchUpdate(true);
     }
 
     this.notifyListeners("onWidgetAfterCreation", widget.id, widget.currentArea);
@@ -2110,7 +2120,7 @@ let CustomizableUIInternal = {
   normalizeWidget: function(aData, aSource) {
     let widget = {
       implementation: aData,
-      source: aSource || "addon",
+      source: aSource || CustomizableUI.SOURCE_EXTERNAL,
       instances: new Map(),
       currentArea: null,
       removable: true,
@@ -2313,6 +2323,15 @@ let CustomizableUIInternal = {
     // Rebuild each registered area (across windows) to reflect the state that
     // was reset above.
     this._rebuildRegisteredAreas();
+
+    for (let [widgetId, widget] of gPalette) {
+      if (widget.source == CustomizableUI.SOURCE_EXTERNAL) {
+        gSeenWidgets.add(widgetId);
+      }
+    }
+    if (gSeenWidgets.size) {
+      gDirty = true;
+    }
 
     gResetting = false;
   },

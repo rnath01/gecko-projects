@@ -2579,6 +2579,13 @@ static NSMutableSet *gSwizzledFrameViewClasses = nil;
  - (void)_setNeedsDisplayInRect:(NSRect)aRect;
 @end
 
+// This method is on NSThemeFrame starting with 10.10, but since NSThemeFrame
+// is not a public class, we declare the method on NSView instead. We only have
+// this declaration in order to avoid compiler warnings.
+@interface NSView(PrivateAddKnownSubviewMethod)
+ - (void)_addKnownSubview:(id)arg1 positioned:(long long)arg2 relativeTo:(id)arg3;
+@end
+
 @interface BaseWindow(Private)
 - (void)removeTrackingArea;
 - (void)cursorUpdated:(NSEvent*)aEvent;
@@ -2650,6 +2657,7 @@ static NSMutableSet *gSwizzledFrameViewClasses = nil;
   mDisabledNeedsDisplay = NO;
   mDPI = GetDPI(self);
   mTrackingArea = nil;
+  mDirtyRect = NSZeroRect;
   mBeingShown = NO;
   mDrawTitle = NO;
   mBrightTitlebarForeground = NO;
@@ -2871,7 +2879,15 @@ static const NSString* kStateShowsToolbarButton = @"showsToolbarButton";
     // it's available and don't need to check whether our superclass responds
     // to the selector.
     [super _setNeedsDisplayInRect:aRect];
+    mDirtyRect = NSUnionRect(mDirtyRect, aRect);
   }
+}
+
+- (NSRect)getAndResetNativeDirtyRect
+{
+  NSRect dirtyRect = mDirtyRect;
+  mDirtyRect = NSZeroRect;
+  return dirtyRect;
 }
 
 - (void)updateContentViewSize
@@ -2938,7 +2954,13 @@ static const NSString* kStateShowsToolbarButton = @"showsToolbarButton";
   // to be under the window buttons.
   NSView* frameView = [aView superview];
   [aView removeFromSuperview];
-  [frameView addSubview:aView positioned:NSWindowBelow relativeTo:nil];
+  if ([frameView respondsToSelector:@selector(_addKnownSubview:positioned:relativeTo:)]) {
+    // 10.10 prints a warning when we call addSubview on the frame view, so we
+    // silence the warning by calling a private method instead.
+    [frameView _addKnownSubview:aView positioned:NSWindowBelow relativeTo:nil];
+  } else {
+    [frameView addSubview:aView positioned:NSWindowBelow relativeTo:nil];
+  }
 }
 
 - (NSArray*)titlebarControls
