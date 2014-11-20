@@ -14,8 +14,9 @@ config = {
                 "--http-port=%(http_port)s", "--ssl-port=%(ssl_port)s",
                 "--certificate-path=%(certs_path)s", "--symbols-path=%(symbols_path)s",
                 "--quiet", "--log-raw=%(raw_log_file)s",
-                "--total-chunks=16",
-                "--run-only-tests=android23.json",
+                # Bug 1064002 - Land once mozharness changes land
+                #"--total-chunks=16",
+                #"--run-only-tests=android23.json",
             ],
         },
         "mochitest-gl": {
@@ -58,8 +59,9 @@ config = {
                 "--devicePort=%(device_port)s", "--http-port=%(http_port)s",
                 "--ssl-port=%(ssl_port)s", "--httpd-path", "reftest/components",
                 "--symbols-path=%(symbols_path)s",
-                "--total-chunks=16",
-                "tests/layout/reftests/reftest.list",
+                # Bug 1064002 - Land once mozharness changes land
+                #"--total-chunks=16",
+                #"tests/layout/reftests/reftest.list",
             ],
         },
         "crashtest": {
@@ -99,8 +101,9 @@ config = {
                 "--apk=%(installer_path)s", "--no-logfiles",
                 "--symbols-path=%(symbols_path)s",
                 "--manifest=tests/xpcshell.ini",
-                "--log-raw=%(raw_log_file)s",
-                "--total-chunks=3",
+                # Bug 1064002 - Land once mozharness changes land
+                #"--log-raw=%(raw_log_file)s",
+                #"--total-chunks=3",
             ],
         },
     }, # end suite_definitions
