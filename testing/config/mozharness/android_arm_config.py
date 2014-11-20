@@ -6,6 +6,7 @@ config = {
     "suite_definitions": {
         "mochitest": {
             "run_filename": "runtestsremote.py",
+            "testsdir": "mochitest",
             "options": ["--autorun", "--close-when-done", "--dm_trans=sut",
                 "--console-level=INFO", "--app=%(app)s", "--remote-webserver=%(remote_webserver)s",
                 "--xre-path=%(xre_path)s", "--utility-path=%(utility_path)s",
@@ -14,11 +15,12 @@ config = {
                 "--certificate-path=%(certs_path)s", "--symbols-path=%(symbols_path)s",
                 "--quiet", "--log-raw=%(raw_log_file)s",
                 "--total-chunks=16",
-                "--run-only-tests=android23.json"
+                "--run-only-tests=android23.json",
             ],
         },
         "mochitest-gl": {
             "run_filename": "runtestsremote.py",
+            "testsdir": "mochitest",
             "options": ["--autorun", "--close-when-done", "--dm_trans=sut",
                 "--console-level=INFO", "--app=%(app)s", "--remote-webserver=%(remote_webserver)s",
                 "--xre-path=%(xre_path)s", "--utility-path=%(utility_path)s",
@@ -27,11 +29,12 @@ config = {
                 "--certificate-path=%(certs_path)s", "--symbols-path=%(symbols_path)s",
                 "--quiet", "--log-raw=%(raw_log_file)s",
                 "--total-chunks=2",
-                "--test-manifest=gl.json"
+                "--test-manifest=gl.json",
             ],
         },
         "robocop": {
             "run_filename": "runtestsremote.py",
+            "testsdir": "mochitest",
             "options": ["--autorun", "--close-when-done", "--dm_trans=sut",
                 "--console-level=INFO", "--app=%(app)s", "--remote-webserver=%(remote_webserver)s",
                 "--xre-path=%(xre_path)s", "--utility-path=%(utility_path)s",
@@ -47,6 +50,7 @@ config = {
         },
         "reftest": {
             "run_filename": "remotereftest.py",
+            "testsdir": "reftest",
             "options": [ "--app=%(app)s", "--ignore-window-size",
                 "--bootstrap",
                 "--remote-webserver=%(remote_webserver)s", "--xre-path=%(xre_path)s",
@@ -60,6 +64,7 @@ config = {
         },
         "crashtest": {
             "run_filename": "remotereftest.py",
+            "testsdir": "reftest",
             "options": [ "--app=%(app)s", "--ignore-window-size",
                 "--bootstrap",
                 "--remote-webserver=%(remote_webserver)s", "--xre-path=%(xre_path)s",
@@ -68,11 +73,12 @@ config = {
                 "--ssl-port=%(ssl_port)s", "--httpd-path", "reftest/components",
                 "--symbols-path=%(symbols_path)s",
                 "--total-chunks=2",
-                "tests/testing/crashtest/crashtests.list"
+                "tests/testing/crashtest/crashtests.list",
             ],
         },
         "jsreftest": {
             "run_filename": "remotereftest.py",
+            "testsdir": "reftest",
             "options": [ "--app=%(app)s", "--ignore-window-size",
                 "--bootstrap",
                 "--remote-webserver=%(remote_webserver)s", "--xre-path=%(xre_path)s",
@@ -87,6 +93,7 @@ config = {
         },
         "xpcshell": {
             "run_filename": "remotexpcshelltests.py",
+            "testsdir": "xpcshell",
             "options": ["--deviceIP=%(device_ip)s", "--devicePort=%(device_port)s",
                 "--xre-path=%(xre_path)s", "--testing-modules-dir=%(modules_dir)s",
                 "--apk=%(installer_path)s", "--no-logfiles",
