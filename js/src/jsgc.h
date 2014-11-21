@@ -500,8 +500,8 @@ class ArenaList {
 
 #ifdef JSGC_COMPACTING
     size_t countUsedCells();
-    ArenaHeader *removeRemainingArenas(ArenaHeader **arenap);
-    ArenaHeader *pickArenasToRelocate();
+    ArenaHeader *removeRemainingArenas(ArenaHeader **arenap, const AutoLockGC &lock);
+    ArenaHeader *pickArenasToRelocate(JSRuntime *runtime);
     ArenaHeader *relocateArenas(ArenaHeader *toRelocate, ArenaHeader *relocated);
 #endif
 };
@@ -1030,8 +1030,7 @@ class GCHelperState
         js_free(array);
     }
 
-    /* Must be called with the GC lock taken. */
-    void doSweep(const AutoLockGC &lock);
+    void doSweep(AutoLockGC &lock);
 
   public:
     explicit GCHelperState(JSRuntime *rt)

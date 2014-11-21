@@ -101,6 +101,19 @@ MozNFCTagImpl.prototype = {
     return this._nfcContentHelper.makeReadOnly(this.session);
   },
 
+  format: function format() {
+    if (this.isLost) {
+      throw new this._window.DOMError("InvalidStateError", "NFCTag object is invalid");
+    }
+
+    if (!this.isFormatable) {
+      throw new this._window.DOMError("InvalidAccessError",
+                                      "NFCTag object is not formatable");
+    }
+
+    return this._nfcContentHelper.format(this.session);
+  },
+
   classID: Components.ID("{4e1e2e90-3137-11e3-aa6e-0800200c9a66}"),
   contractID: "@mozilla.org/nfc/NFCTag;1",
   QueryInterface: XPCOMUtils.generateQI([Ci.nsISupports,
@@ -174,6 +187,13 @@ MozNFCImpl.prototype = {
   nfcPeer: null,
   nfcTag: null,
 
+  // Should be mapped to the RFState defined in WebIDL.
+  rfState: {
+    IDLE: "idle",
+    LISTEN: "listen",
+    DISCOVERY: "discovery"
+  },
+
   init: function init(aWindow) {
     debug("MozNFCImpl init called");
     this._window = aWindow;
@@ -208,15 +228,15 @@ MozNFCImpl.prototype = {
   },
 
   startPoll: function startPoll() {
-    return this._nfcContentHelper.startPoll();
+    return this._nfcContentHelper.changeRFState(this.rfState.DISCOVERY);
   },
 
   stopPoll: function stopPoll() {
-    return this._nfcContentHelper.stopPoll();
+    return this._nfcContentHelper.changeRFState(this.rfState.LISTEN);
   },
 
   powerOff: function powerOff() {
-    return this._nfcContentHelper.powerOff();
+    return this._nfcContentHelper.changeRFState(this.rfState.IDLE);
   },
 
   _createNFCPeer: function _createNFCPeer(sessionToken) {
@@ -230,7 +250,7 @@ MozNFCImpl.prototype = {
     }
 
     if (!this.nfcPeer || this.nfcPeer.session != sessionToken) {
-      this.nfcPeer = this._createNFCPeer();
+      this.nfcPeer = this._createNFCPeer(sessionToken);
     }
 
     return this.nfcPeer;

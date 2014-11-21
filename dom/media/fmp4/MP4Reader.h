@@ -28,6 +28,8 @@ class MP4Stream;
 
 class MP4Reader : public MediaDecoderReader
 {
+  typedef mp4_demuxer::TrackType TrackType;
+
 public:
   explicit MP4Reader(AbstractMediaDecoder* aDecoder);
 
@@ -35,9 +37,10 @@ public:
 
   virtual nsresult Init(MediaDecoderReader* aCloneDonor) MOZ_OVERRIDE;
 
-  virtual bool DecodeAudioData() MOZ_OVERRIDE;
-  virtual bool DecodeVideoFrame(bool &aKeyframeSkip,
+  virtual void RequestVideoData(bool aSkipToNextKeyframe,
                                 int64_t aTimeThreshold) MOZ_OVERRIDE;
+
+  virtual void RequestAudioData() MOZ_OVERRIDE;
 
   virtual bool HasAudio() MOZ_OVERRIDE;
   virtual bool HasVideo() MOZ_OVERRIDE;
@@ -62,15 +65,29 @@ public:
   virtual nsresult GetBuffered(dom::TimeRanges* aBuffered) MOZ_OVERRIDE;
 
   // For Media Resource Management
+  virtual void SetIdle() MOZ_OVERRIDE;
   virtual bool IsWaitingMediaResources() MOZ_OVERRIDE;
   virtual bool IsDormantNeeded() MOZ_OVERRIDE;
   virtual void ReleaseMediaResources() MOZ_OVERRIDE;
+  virtual void SetSharedDecoderManager(SharedDecoderManager* aManager)
+    MOZ_OVERRIDE;
 
   virtual nsresult ResetDecode() MOZ_OVERRIDE;
 
   virtual void Shutdown() MOZ_OVERRIDE;
 
 private:
+
+  void ReturnEOS(TrackType aTrack);
+  void ReturnOutput(MediaData* aData, TrackType aTrack);
+
+  // Sends input to decoder for aTrack, and output to the state machine,
+  // if necessary.
+  void Update(TrackType aTrack);
+
+  // Enqueues a task to call Update(aTrack) on the decoder task queue.
+  // Lock for corresponding track must be held.
+  void ScheduleUpdate(TrackType aTrack);
 
   void ExtractCryptoInitData(nsTArray<uint8_t>& aInitData);
 
@@ -83,10 +100,11 @@ private:
 
   bool SkipVideoDemuxToNextKeyFrame(int64_t aTimeThreshold, uint32_t& parsed);
 
+  // DecoderCallback proxies the MediaDataDecoderCallback calls to these
+  // functions.
   void Output(mp4_demuxer::TrackType aType, MediaData* aSample);
   void InputExhausted(mp4_demuxer::TrackType aTrack);
   void Error(mp4_demuxer::TrackType aTrack);
-  bool Decode(mp4_demuxer::TrackType aTrack);
   void Flush(mp4_demuxer::TrackType aTrack);
   void DrainComplete(mp4_demuxer::TrackType aTrack);
   void UpdateIndex();
@@ -141,7 +159,10 @@ private:
       , mError(false)
       , mIsFlushing(false)
       , mDrainComplete(false)
+      , mOutputRequested(false)
+      , mUpdateScheduled(false)
       , mEOS(false)
+      , mDiscontinuity(false)
     {
     }
 
@@ -152,6 +173,10 @@ private:
     nsRefPtr<MediaTaskQueue> mTaskQueue;
     // Callback that receives output and error notifications from the decoder.
     nsAutoPtr<DecoderCallback> mCallback;
+    // Decoded samples returned my mDecoder awaiting being returned to
+    // state machine upon request.
+    nsTArray<nsRefPtr<MediaData> > mOutput;
+
     // Monitor that protects all non-threadsafe state; the primitives
     // that follow.
     Monitor mMonitor;
@@ -164,13 +189,20 @@ private:
     bool mError;
     bool mIsFlushing;
     bool mDrainComplete;
+    bool mOutputRequested;
+    bool mUpdateScheduled;
     bool mEOS;
+    bool mDiscontinuity;
   };
   DecoderData mAudio;
   DecoderData mVideo;
   // Queued samples extracted by the demuxer, but not yet sent to the platform
   // decoder.
   nsAutoPtr<mp4_demuxer::MP4Sample> mQueuedVideoSample;
+
+  // Returns true when the decoder for this track needs input.
+  // aDecoder.mMonitor must be locked.
+  bool NeedInput(DecoderData& aDecoder);
 
   // The last number of decoded output frames that we've reported to
   // MediaDecoder::NotifyDecoded(). We diff the number of output video
@@ -179,7 +211,6 @@ private:
   uint64_t mLastReportedNumDecodedFrames;
 
   DecoderData& GetDecoderData(mp4_demuxer::TrackType aTrack);
-  MediaDataDecoder* Decoder(mp4_demuxer::TrackType aTrack);
 
   layers::LayersBackend mLayersBackendType;
 
@@ -193,6 +224,7 @@ private:
 
   bool mIndexReady;
   Monitor mIndexMonitor;
+  nsRefPtr<SharedDecoderManager> mSharedDecoderManager;
 };
 
 } // namespace mozilla

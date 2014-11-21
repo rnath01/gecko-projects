@@ -18,8 +18,7 @@ describe("loop.standaloneRoomViews", function() {
     sandbox = sinon.sandbox.create();
     dispatcher = new loop.Dispatcher();
     dispatch = sandbox.stub(dispatcher, "dispatch");
-    activeRoomStore = new loop.store.ActiveRoomStore({
-      dispatcher: dispatcher,
+    activeRoomStore = new loop.store.ActiveRoomStore(dispatcher, {
       mozLoop: {},
       sdkDriver: {}
     });
@@ -34,7 +33,8 @@ describe("loop.standaloneRoomViews", function() {
       return TestUtils.renderIntoDocument(
         loop.standaloneRoomViews.StandaloneRoomView({
           dispatcher: dispatcher,
-          activeRoomStore: activeRoomStore
+          activeRoomStore: activeRoomStore,
+          helper: new loop.shared.utils.Helper()
         }));
     }
 
@@ -128,6 +128,26 @@ describe("loop.standaloneRoomViews", function() {
           });
       });
 
+      describe("Full room message", function() {
+        it("should display a full room message on FULL",
+          function() {
+            activeRoomStore.setStoreState({roomState: ROOM_STATES.FULL});
+
+            expect(view.getDOMNode().querySelector(".full-room-message"))
+              .not.eql(null);
+          });
+      });
+
+      describe("Failed room message", function() {
+        it("should display a failed room message on FAILED",
+          function() {
+            activeRoomStore.setStoreState({roomState: ROOM_STATES.FAILED});
+
+            expect(view.getDOMNode().querySelector(".failed-room-message"))
+              .not.eql(null);
+          });
+      });
+
       describe("Join button", function() {
         function getJoinButton(view) {
           return view.getDOMNode().querySelector(".btn-join");
@@ -171,6 +191,13 @@ describe("loop.standaloneRoomViews", function() {
         it("should disable the Leave button when the room state is FAILED",
           function() {
             activeRoomStore.setStoreState({roomState: ROOM_STATES.FAILED});
+
+            expect(getLeaveButton(view).disabled).eql(true);
+          });
+
+        it("should disable the Leave button when the room state is FULL",
+          function() {
+            activeRoomStore.setStoreState({roomState: ROOM_STATES.FULL});
 
             expect(getLeaveButton(view).disabled).eql(true);
           });

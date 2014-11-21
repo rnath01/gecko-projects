@@ -141,8 +141,7 @@ class MediaDataDecoderCallback {
 public:
   virtual ~MediaDataDecoderCallback() {}
 
-  // Called by MediaDataDecoder when a sample has been decoded. Callee is
-  // responsibile for deleting aData.
+  // Called by MediaDataDecoder when a sample has been decoded.
   virtual void Output(MediaData* aData) = 0;
 
   // Denotes an error in the decoding process. The reader will stop calling
@@ -165,8 +164,9 @@ public:
 // media data that the decoder accepts as valid input and produces as
 // output is determined when the MediaDataDecoder is created.
 //
-// All functions must be threadsafe, and be able to be called on an
-// arbitrary thread.
+// All functions are only called on the decode task queue. Don't block
+// inside these functions, unless it's explicitly noted that you should
+// (like in Flush() and Drain()).
 //
 // Decoding is done asynchronously. Any async work can be done on the
 // MediaTaskQueue passed into the PlatformDecoderModules's Create*Decoder()
@@ -230,8 +230,8 @@ public:
   virtual bool IsDormantNeeded() {
     return false;
   };
-  virtual void ReleaseMediaResources() {};
-  virtual void ReleaseDecoder() {};
+  virtual void ReleaseMediaResources() {}
+  virtual void ReleaseDecoder() {}
 };
 
 } // namespace mozilla

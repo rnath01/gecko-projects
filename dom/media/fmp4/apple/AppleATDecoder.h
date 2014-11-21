@@ -31,16 +31,6 @@ public:
   virtual nsresult Drain() MOZ_OVERRIDE;
   virtual nsresult Shutdown() MOZ_OVERRIDE;
 
-
-  // Internal callbacks for the platform C api. Don't call externally.
-  void MetadataCallback(AudioFileStreamID aFileStream,
-                        AudioFileStreamPropertyID aPropertyID,
-                        UInt32* aFlags);
-  void SampleCallback(uint32_t aNumBytes,
-                      uint32_t aNumPackets,
-                      const void* aData,
-                      AudioStreamPacketDescription* aPackets);
-
   // Callbacks also need access to the config.
   const mp4_demuxer::AudioDecoderConfig& mConfig;
 
@@ -48,17 +38,11 @@ private:
   RefPtr<MediaTaskQueue> mTaskQueue;
   MediaDataDecoderCallback* mCallback;
   AudioConverterRef mConverter;
-  AudioFileStreamID mStream;
-  Microseconds mCurrentAudioTimestamp;
-  int64_t mSamplePosition;
-  bool mHaveOutput;
-  bool mFlushed;
   AudioStreamBasicDescription mOutputFormat;
-  AudioFileTypeID mFileType;
+  UInt32 mFormatID;
 
-  void SetupDecoder();
   void SubmitSample(nsAutoPtr<mp4_demuxer::MP4Sample> aSample);
-  void SignalFlush();
+  nsresult GetInputAudioDescription(AudioStreamBasicDescription& aDesc);
 };
 
 } // namespace mozilla

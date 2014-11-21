@@ -71,6 +71,7 @@ const NFC_IPC_READ_PERM_MSG_NAMES = [
 const NFC_IPC_WRITE_PERM_MSG_NAMES = [
   "NFC:WriteNDEF",
   "NFC:MakeReadOnly",
+  "NFC:Format",
   "NFC:SendFile",
   "NFC:RegisterPeerReadyTarget",
   "NFC:UnregisterPeerReadyTarget"
@@ -80,9 +81,7 @@ const NFC_IPC_MANAGER_PERM_MSG_NAMES = [
   "NFC:CheckP2PRegistration",
   "NFC:NotifyUserAcceptedP2P",
   "NFC:NotifySendFileStatus",
-  "NFC:StartPoll",
-  "NFC:StopPoll",
-  "NFC:PowerOff"
+  "NFC:ChangeRFState"
 ];
 
 XPCOMUtils.defineLazyServiceGetter(this, "ppmm",
@@ -452,7 +451,7 @@ Nfc.prototype = {
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver, Ci.nsINfcGonkEventListener]),
 
-  powerLevel: NFC.NFC_POWER_LEVEL_UNKNOWN,
+  rfState: null,
 
   nfcService: null,
 
@@ -555,9 +554,9 @@ Nfc.prototype = {
      case "HCIEventTransactionNotification":
         this.notifyHCIEventTransaction(message);
         break;
-     case "PowerResponse":
+     case "ChangeRFStateResponse":
         if (!message.errorMsg) {
-          this.powerLevel = message.powerLevel;
+          this.rfState = message.rfState;
         }
 
         this.sendNfcResponse(message);
@@ -566,6 +565,7 @@ Nfc.prototype = {
       case "CloseResponse":
       case "ReadNDEFResponse":
       case "MakeReadOnlyResponse":
+      case "FormatResponse":
       case "WriteNDEFResponse":
         this.sendNfcResponse(message);
         break;
@@ -598,33 +598,22 @@ Nfc.prototype = {
    * Process a message from the gMessageManager.
    */
   receiveMessage: function receiveMessage(message) {
-    let isPowerAPI = message.name == "NFC:StartPoll" ||
-                     message.name == "NFC:StopPoll"  ||
-                     message.name == "NFC:PowerOff";
+    let isRFAPI = message.name == "NFC:ChangeRFState";
+    let isSendFile = message.name == "NFC:SendFile";
+    if (!isRFAPI && (this.rfState != NFC.NFC_RF_STATE_DISCOVERY)) {
+      debug("NFC is not enabled. current rfState:" + this.rfState);
+      this.sendNfcErrorResponse(message, NFC.NFC_GECKO_ERROR_NOT_ENABLED);
+      return null;
+    }
 
-    if (!isPowerAPI) {
-      if (this.powerLevel != NFC.NFC_POWER_LEVEL_ENABLED) {
-        debug("NFC is not enabled. current powerLevel:" + this.powerLevel);
-        this.sendNfcErrorResponse(message, NFC.NFC_GECKO_ERROR_NOT_ENABLED);
-        return null;
-      }
-
+    if (!isRFAPI && !isSendFile) {
       // Update the current sessionId before sending to the NFC service.
       message.data.sessionId = SessionHelper.getId(message.data.sessionToken);
     }
 
     switch (message.name) {
-      case "NFC:StartPoll":
-        message.data.powerLevel = NFC.NFC_POWER_LEVEL_ENABLED;
-        this.sendToNfcService("power", message.data);
-        break;
-      case "NFC:StopPoll":
-        message.data.powerLevel = NFC.NFC_POWER_LEVEL_LOW;
-        this.sendToNfcService("power", message.data);
-        break;
-      case "NFC:PowerOff":
-        message.data.powerLevel = NFC.NFC_POWER_LEVEL_DISABLED;
-        this.sendToNfcService("power", message.data);
+      case "NFC:ChangeRFState":
+        this.sendToNfcService("changeRFState", message.data);
         break;
       case "NFC:ReadNDEF":
         this.sendToNfcService("readNDEF", message.data);
@@ -635,6 +624,9 @@ Nfc.prototype = {
         break;
       case "NFC:MakeReadOnly":
         this.sendToNfcService("makeReadOnly", message.data);
+        break;
+      case "NFC:Format":
+        this.sendToNfcService("format", message.data);
         break;
       case "NFC:Connect":
         this.sendToNfcService("connect", message.data);

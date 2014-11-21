@@ -1195,9 +1195,9 @@ test-pref(dom.use_xbl_scopes_for_remote_xul,true) != 449149-1b.html about:blank
 == 455280-1.xhtml 455280-1-ref.xhtml
 skip-if(B2G) fails-if(Android) == 455826-1.html 455826-1-ref.html
 skip-if(B2G) fails-if(cocoaWidget) fails-if(Android) == 456147.xul 456147-ref.html # bug 458047
-skip-if(B2G) fails-if(Android) fuzzy-if(/^Windows\x20NT\x206\.1/.test(http.oscpu),1,1) fuzzy-if(/^Windows\x20NT\x206\.2/.test(http.oscpu),1,69) == 456219-1a.html 456219-1-ref.html # bug 853273
-skip-if(B2G) fails-if(Android) fuzzy-if(/^Windows\x20NT\x206\.1/.test(http.oscpu),1,1) fuzzy-if(/^Windows\x20NT\x206\.2/.test(http.oscpu),1,69) == 456219-1b.html 456219-1-ref.html # bug 853273
-skip-if(B2G) fails-if(Android) fuzzy-if(/^Windows\x20NT\x206\.1/.test(http.oscpu),1,1) fuzzy-if(/^Windows\x20NT\x206\.2/.test(http.oscpu),1,69) == 456219-1c.html 456219-1-ref.html # bug 853273
+fuzzy-if(Android,11,40) fuzzy-if(B2G,11,35) fuzzy-if(d2d&&/^Windows\x20NT\x206\.2/.test(http.oscpu),1,69) == 456219-1a.html 456219-1-ref.html # bug 853273
+fuzzy-if(Android,11,40) fuzzy-if(B2G,11,35) fuzzy-if(d2d&&/^Windows\x20NT\x206\.2/.test(http.oscpu),1,69) == 456219-1b.html 456219-1-ref.html # bug 853273
+fuzzy-if(Android,11,40) fuzzy-if(B2G,11,35) fuzzy-if(d2d&&/^Windows\x20NT\x206\.2/.test(http.oscpu),1,69) == 456219-1c.html 456219-1-ref.html # bug 853273
 == 456219-2.html 456219-2-ref.html
 == 456330-1.gif 456330-1-ref.png
 == 456484-1.html 456484-1-ref.html
@@ -1383,7 +1383,7 @@ pref(dom.use_xbl_scopes_for_remote_xul,true) skip-if(B2G&&browserIsRemote) == 49
 == 495385-3.html 495385-3-ref.html
 == 495385-4.html 495385-4-ref.html
 == 495385-5.html 495385-5-ref.html
-asserts(1) == 496032-1.html 496032-1-ref.html # bug 399262
+== 496032-1.html 496032-1-ref.html
 == 496840-1.html 496840-1-ref.html
 skip-if(B2G&&browserIsRemote) == 498228-1.xul 498228-1-ref.xul # bug 974780
 == 501037.html 501037-ref.html
@@ -1843,5 +1843,5 @@ test-pref(dom.webcomponents.enabled,true) == 1066554-1.html 1066554-1-ref.html
 == 1069716-1.html 1069716-1-ref.html
 == 1078262-1.html about:blank
 test-pref(layout.testing.overlay-scrollbars.always-visible,false) == 1081072-1.html 1081072-1-ref.html
-== 1081185-1.html 1081185-1-ref.html
+fuzzy-if(winWidget&&!layersGPUAccelerated,1,31) == 1081185-1.html 1081185-1-ref.html
 == 1097437-1.html 1097437-1-ref.html

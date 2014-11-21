@@ -19,6 +19,7 @@ config = {
                 #"--run-only-tests=android23.json",
             ],
         },
+        # Bug 1064002 - Not yet in use
         "mochitest-gl": {
             "run_filename": "runtestsremote.py",
             "testsdir": "mochitest",
@@ -33,6 +34,7 @@ config = {
                 "--test-manifest=gl.json",
             ],
         },
+        # Bug 1064002 - Not yet in use
         "robocop": {
             "run_filename": "runtestsremote.py",
             "testsdir": "mochitest",
@@ -64,6 +66,7 @@ config = {
                 #"tests/layout/reftests/reftest.list",
             ],
         },
+        # Bug 1064002 - Not yet in use
         "crashtest": {
             "run_filename": "remotereftest.py",
             "testsdir": "reftest",
@@ -78,6 +81,7 @@ config = {
                 "tests/testing/crashtest/crashtests.list",
             ],
         },
+        # Bug 1064002 - Not yet in use
         "jsreftest": {
             "run_filename": "remotereftest.py",
             "testsdir": "reftest",

@@ -33,7 +33,7 @@ public:
   class TrackChange : public nsRunnable {
   public:
     TrackChange(StreamListener* aListener,
-                TrackID aID, TrackTicks aTrackOffset,
+                TrackID aID, StreamTime aTrackOffset,
                 uint32_t aEvents, MediaSegment::Type aType)
       : mListener(aListener), mID(aID), mEvents(aEvents), mType(aType)
     {
@@ -85,8 +85,7 @@ public:
    * aQueuedMedia can be null if there is no output.
    */
   virtual void NotifyQueuedTrackChanges(MediaStreamGraph* aGraph, TrackID aID,
-                                        TrackRate aTrackRate,
-                                        TrackTicks aTrackOffset,
+                                        StreamTime aTrackOffset,
                                         uint32_t aTrackEvents,
                                         const MediaSegment& aQueuedMedia) MOZ_OVERRIDE
   {
@@ -107,10 +106,7 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(DOMMediaStream)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(DOMMediaStream,
                                                 DOMEventTargetHelper)
-  if (tmp->mListener) {
-    // Make sure |mListener| cannot call back after |mTracks| is collected
-    tmp->mListener->Forget();
-  }
+  tmp->Destroy();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mWindow)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mTracks)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mConsumersToKeepAlive)

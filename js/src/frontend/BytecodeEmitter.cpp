@@ -1679,30 +1679,18 @@ BindNameToSlotHelper(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn)
         return true;
     }
 
-    /*
-     * Turn attempts to mutate const-declared bindings into get ops (for
-     * pre-increment and pre-decrement ops, our caller will have to emit
-     * JSOP_POS, JSOP_ONE, and JSOP_ADD as well).
-     *
-     * Turn JSOP_DELNAME into JSOP_FALSE if dn is known, as all declared
-     * bindings visible to the compiler are permanent in JS unless the
-     * declaration originates at top level in eval code.
-     */
+    // Throw an error on attempts to mutate const-declared bindings.
     switch (op) {
       case JSOP_NAME:
       case JSOP_SETCONST:
         break;
       default:
         if (pn->isConst()) {
-            if (bce->sc->needStrictChecks()) {
-                JSAutoByteString name;
-                if (!AtomToPrintableString(cx, pn->pn_atom, &name) ||
-                    !bce->reportStrictModeError(pn, JSMSG_READ_ONLY, name.ptr()))
-                {
-                    return false;
-                }
-            }
-            pn->setOp(op = JSOP_NAME);
+            JSAutoByteString name;
+            if (!AtomToPrintableString(cx, pn->pn_atom, &name))
+                return false;
+            bce->reportError(pn, JSMSG_BAD_CONST_ASSIGN, name.ptr());
+            return false;
         }
     }
 
@@ -3017,7 +3005,10 @@ EmitYieldOp(ExclusiveContext *cx, BytecodeEmitter *bce, JSOp op)
 
     SET_UINT24(bce->code(off), yieldIndex);
 
-    return bce->yieldOffsetList.append(bce->offset());
+    if (!bce->yieldOffsetList.append(bce->offset()))
+        return false;
+
+    return Emit1(cx, bce, JSOP_DEBUGAFTERYIELD) >= 0;
 }
 
 bool
@@ -3314,10 +3305,6 @@ EmitDestructuringLHS(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn, 
             if (!BindNameToSlot(cx, bce, pn))
                 return false;
 
-            // Allow 'const [x,y] = o', make 'const x,y; [x,y] = o' a nop.
-            if (pn->isConst() && !pn->isDefn())
-                return Emit1(cx, bce, JSOP_POP) >= 0;
-
             switch (pn->getOp()) {
               case JSOP_SETNAME:
               case JSOP_SETGNAME:
@@ -3422,6 +3409,10 @@ static bool EmitIterator(ExclusiveContext *cx, BytecodeEmitter *bce);
 static bool
 EmitIteratorNext(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn=nullptr)
 {
+    MOZ_ASSERT(bce->emitterMode != BytecodeEmitter::SelfHosting,
+               ".next() iteration is prohibited in self-hosted code because it "
+               "can run user-modifiable iteration code");
+
     if (Emit1(cx, bce, JSOP_DUP) < 0)                          // ... ITER ITER
         return false;
     if (!EmitAtomOp(cx, cx->names().next, JSOP_CALLPROP, bce)) // ... ITER NEXT
@@ -4079,13 +4070,6 @@ EmitAssignment(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *lhs, JSOp 
     /* Finally, emit the specialized assignment bytecode. */
     switch (lhs->getKind()) {
       case PNK_NAME:
-        if (lhs->isConst()) {
-            if (!rhs) {
-                bce->reportError(lhs, JSMSG_BAD_FOR_LEFTSIDE);
-                return false;
-            }
-            break;
-        }
         if (lhs->isOp(JSOP_SETARG) || lhs->isOp(JSOP_SETLOCAL) || lhs->isOp(JSOP_SETALIASEDVAR)) {
             if (!EmitVarOp(cx, lhs, lhs->getOp(), bce))
                 return false;
@@ -4825,6 +4809,7 @@ EmitForOf(ExclusiveContext *cx, BytecodeEmitter *bce, StmtType type, ParseNode *
     MOZ_ASSERT_IF(type == STMT_SPREAD, !pn);
 
     ParseNode *forHead = pn ? pn->pn_left : nullptr;
+    ParseNode *forHeadExpr = forHead ? forHead->pn_kid3 : nullptr;
     ParseNode *forBody = pn ? pn->pn_right : nullptr;
 
     ParseNode *pn1 = forHead ? forHead->pn_kid1 : nullptr;
@@ -4837,7 +4822,7 @@ EmitForOf(ExclusiveContext *cx, BytecodeEmitter *bce, StmtType type, ParseNode *
         // current result object.
 
         // Compile the object expression to the right of 'of'.
-        if (!EmitTree(cx, bce, forHead->pn_kid3))
+        if (!EmitTree(cx, bce, forHeadExpr))
             return false;
         if (!EmitIterator(cx, bce))
             return false;
@@ -4917,7 +4902,7 @@ EmitForOf(ExclusiveContext *cx, BytecodeEmitter *bce, StmtType type, ParseNode *
 
     // COME FROM the beginning of the loop to here.
     SetJumpOffsetAt(bce, jmp);
-    if (!EmitLoopEntry(cx, bce, nullptr))
+    if (!EmitLoopEntry(cx, bce, forHeadExpr))
         return false;
 
     if (type == STMT_FOR_OF_LOOP) {

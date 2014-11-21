@@ -806,7 +806,15 @@ Layer::ComputeEffectiveTransformForMaskLayer(const Matrix4x4& aTransformToSurfac
     bool maskIs2D = mMaskLayer->GetTransform().CanDraw2D();
     NS_ASSERTION(maskIs2D, "How did we end up with a 3D transform here?!");
 #endif
-    mMaskLayer->mEffectiveTransform = mMaskLayer->GetTransform() * mMaskLayer->mEffectiveTransform;
+    // Use our shadow transform and base transform to compute a delta for the
+    // mask layer's effective transform, as though it was also transformed by
+    // the APZ.
+    //
+    // Note: This will fail if the base transform is degenerate. Currently, this
+    //       is not expected for OMTA transformed layers.
+    mMaskLayer->mEffectiveTransform = mMaskLayer->GetTransform() *
+      GetTransform().Inverse() * GetLocalTransform() *
+      mMaskLayer->mEffectiveTransform;
   }
 }
 
@@ -830,7 +838,8 @@ ContainerLayer::ContainerLayer(LayerManager* aManager, void* aImplData)
     mInheritedYScale(1.0f),
     mUseIntermediateSurface(false),
     mSupportsComponentAlphaChildren(false),
-    mMayHaveReadbackChild(false)
+    mMayHaveReadbackChild(false),
+    mChildrenChanged(false)
 {
   mContentFlags = 0; // Clear NO_TEXT, NO_TEXT_OVER_TRANSPARENT
 }
@@ -1476,11 +1485,8 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   } else {
     aStream << " [not visible]";
   }
-  if (!mEventRegions.mHitRegion.IsEmpty()) {
-    AppendToString(aStream, mEventRegions.mHitRegion, " [hitregion=", "]");
-  }
-  if (!mEventRegions.mDispatchToContentHitRegion.IsEmpty()) {
-    AppendToString(aStream, mEventRegions.mDispatchToContentHitRegion, " [dispatchtocontentregion=", "]");
+  if (!mEventRegions.IsEmpty()) {
+    AppendToString(aStream, mEventRegions, " ", "");
   }
   if (1.0 != mOpacity) {
     aStream << nsPrintfCString(" [opacity=%g]", mOpacity).get();

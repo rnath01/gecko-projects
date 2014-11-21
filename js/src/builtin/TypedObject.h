@@ -725,7 +725,11 @@ class InlineTypedObject : public TypedObject
         size_t nbytes = descr->size();
         MOZ_ASSERT(nbytes <= MaximumSize);
 
-        size_t dataSlots = AlignBytes(nbytes, sizeof(Value) / sizeof(Value));
+        if (nbytes <= sizeof(NativeObject) - sizeof(TypedObject))
+            return gc::FINALIZE_OBJECT0;
+        nbytes -= sizeof(NativeObject) - sizeof(TypedObject);
+
+        size_t dataSlots = AlignBytes(nbytes, sizeof(Value)) / sizeof(Value);
         MOZ_ASSERT(nbytes <= dataSlots * sizeof(Value));
         return gc::GetGCObjectKind(dataSlots);
     }
@@ -906,9 +910,9 @@ class StoreScalar##T {                                                        \
 };
 
 /*
- * Usage: Store_Any(targetDatum, targetOffset, value)
- *        Store_Object(targetDatum, targetOffset, value)
- *        Store_string(targetDatum, targetOffset, value)
+ * Usage: Store_Any(targetDatum, targetOffset, fieldName, value)
+ *        Store_Object(targetDatum, targetOffset, fieldName, value)
+ *        Store_string(targetDatum, targetOffset, fieldName, value)
  *
  * Intrinsic function. Stores `value` into the memory referenced by
  * `targetDatum` at the offset `targetOffset`.
@@ -916,12 +920,13 @@ class StoreScalar##T {                                                        \
  * Assumes (and asserts) that:
  * - `targetDatum` is attached
  * - `targetOffset` is a valid offset within the bounds of `targetDatum`
- * - `value` is an object (`Store_Object`) or string (`Store_string`).
+ * - `value` is an object or null (`Store_Object`) or string (`Store_string`).
  */
 #define JS_STORE_REFERENCE_CLASS_DEFN(_constant, T, _name)                    \
 class StoreReference##T {                                                     \
   private:                                                                    \
-    static void store(T* heap, const Value &v);                               \
+    static bool store(ThreadSafeContext *cx, T* heap, const Value &v,         \
+                      TypedObject *obj, jsid id);                             \
                                                                               \
   public:                                                                     \
     static bool Func(ThreadSafeContext *cx, unsigned argc, Value *vp);        \
@@ -982,6 +987,20 @@ IsOpaqueTypedObjectClass(const Class *class_)
 {
     return class_ == &OutlineOpaqueTypedObject::class_ ||
            class_ == &InlineOpaqueTypedObject::class_;
+}
+
+inline bool
+IsOutlineTypedObjectClass(const Class *class_)
+{
+    return class_ == &OutlineOpaqueTypedObject::class_ ||
+           class_ == &OutlineTransparentTypedObject::class_;
+}
+
+inline bool
+IsInlineTypedObjectClass(const Class *class_)
+{
+    return class_ == &InlineOpaqueTypedObject::class_ ||
+           class_ == &InlineTransparentTypedObject::class_;
 }
 
 inline const Class *

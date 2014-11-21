@@ -139,7 +139,7 @@ private:
         off64_t offset;
         uint32_t size;
         uint32_t duration;
-        uint32_t ctsOffset;
+        int64_t ctsOffset;
         uint32_t flags;
         uint8_t iv[16];
         Vector<uint16_t> clearsizes;
@@ -464,6 +464,14 @@ status_t MPEG4Extractor::readMetaData() {
     status_t err;
     while (!mFirstTrack) {
         err = parseChunk(&offset, 0);
+        // The parseChunk function returns UNKNOWN_ERROR to skip
+        // some boxes we don't want to handle. Filter that error
+        // code but return others so e.g. I/O errors propagate.
+        if (err != OK && err != (status_t) UNKNOWN_ERROR) {
+          ALOGW("Error %d parsing chuck at offset %lld looking for first track",
+              err, (long long)offset);
+          break;
+        }
     }
 
     if (mInitCheck == OK) {
@@ -2993,9 +3001,10 @@ status_t MPEG4Source::parseTrackFragmentRun(off64_t offset, off64_t size) {
     if (!mDataSource->getUInt32(offset, &flags)) {
         return ERROR_MALFORMED;
     }
+    uint8_t version = flags >> 24;
     ALOGV("fragment run flags: %08x", flags);
 
-    if (flags & 0xff000000) {
+    if (version > 1) {
         return -EINVAL;
     }
 
@@ -3124,7 +3133,11 @@ status_t MPEG4Source::parseTrackFragmentRun(off64_t offset, off64_t size) {
         tmp.offset = dataOffset;
         tmp.size = sampleSize;
         tmp.duration = sampleDuration;
-        tmp.ctsOffset = sampleCtsOffset;
+        if (version == 0) {
+          tmp.ctsOffset = sampleCtsOffset;
+        } else {
+          tmp.ctsOffset = (int32_t)sampleCtsOffset;
+        }
         mCurrentSamples.add(tmp);
 
         dataOffset += sampleSize;
@@ -3606,7 +3619,7 @@ status_t MPEG4Source::fragmentedRead(
 
                     // If we're pointing to a segment type or sidx box then we skip them.
                     if (chunk_type != FOURCC('m', 'o', 'o', 'f')) {
-                        moofOffset += chunk_size;
+                        mNextMoofOffset += chunk_size;
                         continue;
                     }
                     mCurrentMoofOffset = moofOffset;
@@ -3649,7 +3662,7 @@ status_t MPEG4Source::fragmentedRead(
     off64_t offset = 0;
     size_t size = 0;
     uint32_t dts = 0;
-    uint32_t cts = 0;
+    int64_t cts = 0;
     uint32_t duration = 0;
     bool isSyncSample = false;
     bool newBuffer = false;
@@ -3740,7 +3753,7 @@ status_t MPEG4Source::fragmentedRead(
             mBuffer->meta_data()->setInt64(
                     kKeyDecodingTime, ((int64_t)dts * 1000000) / mTimescale);
             mBuffer->meta_data()->setInt64(
-                    kKeyTime, ((int64_t)cts * 1000000) / mTimescale);
+                    kKeyTime, (cts * 1000000) / mTimescale);
             mBuffer->meta_data()->setInt64(
                     kKeyDuration, ((int64_t)duration * 1000000) / mTimescale);
 
@@ -3869,7 +3882,7 @@ status_t MPEG4Source::fragmentedRead(
         mBuffer->meta_data()->setInt64(
                 kKeyDecodingTime, ((int64_t)dts * 1000000) / mTimescale);
         mBuffer->meta_data()->setInt64(
-                kKeyTime, ((int64_t)cts * 1000000) / mTimescale);
+                kKeyTime, (cts * 1000000) / mTimescale);
         mBuffer->meta_data()->setInt64(
                 kKeyDuration, ((int64_t)duration * 1000000) / mTimescale);
 

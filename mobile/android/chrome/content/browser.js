@@ -478,36 +478,6 @@ var BrowserApp = {
       Services.prefs.setBoolPref("xpinstall.enabled", false);
     }
 
-    // Fix fallout from Bug 1091803.
-    if (Services.prefs.prefHasUserValue("intl.locale.os")) {
-      try {
-        let currentAcceptLang = Services.prefs.getCharPref("intl.accept_languages");
-
-        // The trailing comma is very important. This means we've set it to a
-        // real char pref, and it's something like "chrome://...,en-US,en".
-        if (currentAcceptLang.startsWith("chrome://global/locale/intl.properties,")) {
-          // If general.useragent.locale was set to a plain string, we ought to fix it, too.
-          try {
-            let currentUALocale = Services.prefs.getCharPref("general.useragent.locale");
-            if (currentUALocale.startsWith("chrome://")) {
-              // We're fine. This is what happens when you read a localized string as a char pref.
-            } else {
-              // Turn it into a localized string.
-              this.setLocalizedPref("general.useragent.locale", currentUALocale);
-            }
-          } catch (ee) {
-          }
-
-          // Now compute and save a valid Accept-Languages header from the clean strings.
-          let osLocale = this.getOSLocalePref();
-          let uaLocale = this.getUALocalePref();
-          this.computeAcceptLanguages(osLocale, uaLocale);
-        }
-      } catch (e) {
-        // Phew.
-      }
-    }
-
     try {
       // Set the tiles click observer only if tiles reporting is enabled (that
       // is, a report URL is set in prefs).
@@ -1925,18 +1895,6 @@ var BrowserApp = {
     return this.defaultBrowserWidth = width;
   },
 
-  get layersTileWidth() {
-    delete this.layersTileWidth;
-    let width = Services.prefs.getIntPref("layers.tile-width");
-    return this.layersTileWidth = width;
-  },
-
-  get layersTileHeight() {
-    delete this.layersTileHeight;
-    let height = Services.prefs.getIntPref("layers.tile-height");
-    return this.layersTileHeight = height;
-  },
-
   // nsIAndroidBrowserApp
   get selectedTab() {
     return this._selectedTab;
@@ -2957,6 +2915,8 @@ var LightWeightThemeWebInstaller = {
 
 var DesktopUserAgent = {
   DESKTOP_UA: null,
+  TCO_DOMAIN: "t.co",
+  TCO_REPLACE: / Gecko.*/,
 
   init: function ua_init() {
     Services.obs.addObserver(this, "DesktopMode:Change", false);
@@ -2970,26 +2930,40 @@ var DesktopUserAgent = {
   },
 
   onRequest: function(channel, defaultUA) {
+#ifdef NIGHTLY_BUILD
+    if (this.TCO_DOMAIN == channel.URI.host) {
+      // Force the referrer
+      channel.referrer = channel.URI;
+
+      // Send a bot-like UA to t.co to get a real redirect. We strip off the
+      // "Gecko/x.y Firefox/x.y" part
+      return defaultUA.replace(this.TCO_REPLACE, "");
+    }
+#endif
+
     let channelWindow = this._getWindowForRequest(channel);
     let tab = BrowserApp.getTabForWindow(channelWindow);
-    if (tab == null)
-      return null;
+    if (tab) {
+      return this.getUserAgentForTab(tab);
+    }
 
-    return this.getUserAgentForTab(tab);
+    return null;
   },
 
   getUserAgentForWindow: function ua_getUserAgentForWindow(aWindow) {
     let tab = BrowserApp.getTabForWindow(aWindow.top);
-    if (tab)
+    if (tab) {
       return this.getUserAgentForTab(tab);
+    }
 
     return null;
   },
 
   getUserAgentForTab: function ua_getUserAgentForTab(aTab) {
     // Send desktop UA if "Request Desktop Site" is enabled.
-    if (aTab.desktopMode)
+    if (aTab.desktopMode) {
       return this.DESKTOP_UA;
+    }
 
     return null;
   },
@@ -3026,8 +3000,9 @@ var DesktopUserAgent = {
     if (aTopic === "DesktopMode:Change") {
       let args = JSON.parse(aData);
       let tab = BrowserApp.getTabForId(args.tabId);
-      if (tab != null)
+      if (tab) {
         tab.reloadWithMode(args.desktopMode);
+      }
     }
   }
 };
@@ -3161,8 +3136,6 @@ function Tab(aURL, aParams) {
   this._fixedMarginTop = 0;
   this._fixedMarginRight = 0;
   this._fixedMarginBottom = 0;
-  this._readerEnabled = false;
-  this._readerActive = false;
   this.userScrollPos = { x: 0, y: 0 };
   this.viewportExcludesHorizontalMargins = true;
   this.viewportExcludesVerticalMargins = true;
@@ -3597,7 +3570,6 @@ Tab.prototype = {
                                           displayPortMargins.top,
                                           displayPortMargins.right,
                                           displayPortMargins.bottom,
-                                          BrowserApp.layersTileWidth, BrowserApp.layersTileHeight,
                                           element, 0);
     }
     this._oldDisplayPortMargins = displayPortMargins;
@@ -3920,6 +3892,8 @@ Tab.prototype = {
           if (contentDocument.body) {
             new AboutReader(contentDocument, this.browser.contentWindow);
           }
+          // Update the page action to show the "reader active" icon.
+          Reader.updatePageAction(this);
         }
 
         break;
@@ -4223,21 +4197,15 @@ Tab.prototype = {
           this.tilesData = null;
         }
 
-        if (!Reader.isEnabledForParseOnLoad) {
+        // Don't try to parse the document if reader mode is disabled,
+        // or if the page is already in reader mode.
+        if (!Reader.isEnabledForParseOnLoad || this.readerActive) {
           return;
         }
 
-        let resetReaderFlags = currentURL => {
-          // Don't clear the article for about:reader pages since we want to
-          // use the article from the previous page.
-          if (!currentURL.startsWith("about:reader")) {
-            this.savedArticle = null;
-            this.readerEnabled = false;
-            this.readerActive = false;
-          } else {
-            this.readerActive = true;
-          }
-        };
+        // Reader mode is disabled until proven enabled.
+        this.savedArticle = null;
+        Reader.updatePageAction(this);
 
         // Once document is fully loaded, parse it
         Reader.parseDocumentFromTab(this).then(article => {
@@ -4247,27 +4215,17 @@ Tab.prototype = {
 
           // Do nothing if there's no article or the page in this tab has changed.
           if (article == null || (article.url != currentURL)) {
-            resetReaderFlags(currentURL);
             return;
           }
 
           this.savedArticle = article;
+          Reader.updatePageAction(this);
 
           Messaging.sendRequest({
             type: "Content:ReaderEnabled",
             tabID: this.id
           });
-
-          if (this.readerActive) {
-            this.readerActive = false;
-          }
-          if (!this.readerEnabled) {
-            this.readerEnabled = true;
-          }
-        }).catch(e => {
-          Cu.reportError("Error parsing document from tab: " + e);
-          resetReaderFlags(this.browser.currentURI.specIgnoringRef);
-        });
+        }).catch(e => Cu.reportError("Error parsing document from tab: " + e));
       }
     }
   },
@@ -4812,24 +4770,8 @@ Tab.prototype = {
     }
   },
 
-  set readerEnabled(isReaderEnabled) {
-    this._readerEnabled = isReaderEnabled;
-    if (this.getActive())
-      Reader.updatePageAction(this);
-  },
-
-  get readerEnabled() {
-    return this._readerEnabled;
-  },
-
-  set readerActive(isReaderActive) {
-    this._readerActive = isReaderActive;
-    if (this.getActive())
-      Reader.updatePageAction(this);
-  },
-
   get readerActive() {
-    return this._readerActive;
+    return this.browser.currentURI.spec.startsWith("about:reader");
   },
 
   // nsIBrowserTab
@@ -6920,7 +6862,7 @@ var SearchEngines = {
   PREF_SUGGEST_PROMPTED: "browser.search.suggest.prompted",
 
   // Shared preference key used for search activity default engine.
-  PREF_SEARCH_ACTIVITY_ENGINE_KEY: "search.engines.default",
+  PREF_SEARCH_ACTIVITY_ENGINE_KEY: "search.engines.defaultname",
 
   init: function init() {
     Services.obs.addObserver(this, "SearchEngines:Add", false);
@@ -7060,34 +7002,7 @@ var SearchEngines = {
 
   // Updates the search activity pref when the default engine changes.
   _setSearchActivityDefaultPref: function _setSearchActivityDefaultPref(engine) {
-    // Helper function copied from nsSearchService.js. This is the logic that is used
-    // to create file names for search plugin XML serialized to disk.
-    function sanitizeName(aName) {
-      const maxLength = 60;
-      const minLength = 1;
-      let name = aName.toLowerCase();
-      name = name.replace(/\s+/g, "-");
-      name = name.replace(/[^-a-z0-9]/g, "");
-
-      if (name.length < minLength) {
-        // Well, in this case, we're kinda screwed. In this case, the search service
-        // generates a random file name, so to do this the right way, we'd need
-        // to open up search.json and see what file name is stored.
-        Cu.reportError("Couldn't create search plugin file name from engine name: " + aName);
-        return null;
-      }
-
-      // Force max length.
-      return name.substring(0, maxLength);
-    }
-
-    let identifier = engine.identifier;
-    if (identifier === null) {
-      // The identifier will be null for non-built-in engines. In this case, we need to
-      // figure out an identifier to store from the engine name.
-      identifier = sanitizeName(engine.name);
-    }
-    SharedPreferences.forApp().setCharPref(this.PREF_SEARCH_ACTIVITY_ENGINE_KEY, identifier);
+    SharedPreferences.forApp().setCharPref(this.PREF_SEARCH_ACTIVITY_ENGINE_KEY, engine.name);
   },
 
   // Display context menu listing names of the search engines available to be added.

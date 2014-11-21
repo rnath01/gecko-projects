@@ -16,6 +16,7 @@
 #include <android/log.h>
 #define ALOG(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define TIMEOUT_DEQUEUE_INPUTBUFFER_MS 1000000ll
+
 namespace android {
 
 // General Template: MediaCodec::getOutputGraphicBufferFromIndex(...)
@@ -109,10 +110,6 @@ MediaCodecProxy::MediaCodecProxy(sp<ALooper> aLooper,
 MediaCodecProxy::~MediaCodecProxy()
 {
   releaseCodec();
-
-  // Complete all pending Binder ipc transactions
-  IPCThreadState::self()->flushCommands();
-
   cancelResource();
 }
 
@@ -180,6 +177,7 @@ MediaCodecProxy::releaseCodec()
 
     // Release MediaCodec
     if (mCodec != nullptr) {
+      status_t err = mCodec->stop();
       mCodec->release();
       mCodec = nullptr;
     }
@@ -189,6 +187,10 @@ MediaCodecProxy::releaseCodec()
     // this value come from stagefright's AwesomePlayer.
     usleep(1000);
   }
+
+  // Complete all pending Binder ipc transactions
+  IPCThreadState::self()->flushCommands();
+
 }
 
 bool
@@ -224,6 +226,7 @@ MediaCodecProxy::start()
   if (mCodec == nullptr) {
     return NO_INIT;
   }
+
   return mCodec->start();
 }
 
@@ -502,6 +505,21 @@ bool MediaCodecProxy::Prepare()
   return true;
 }
 
+bool MediaCodecProxy::UpdateOutputBuffers()
+{
+  if (mCodec == nullptr) {
+    ALOG("MediaCodec has not been inited from input!");
+    return false;
+  }
+
+  status_t err = getOutputBuffers(&mOutputBuffers);
+  if (err != OK){
+    ALOG("Couldn't update output buffers from MediaCodec");
+    return false;
+  }
+  return true;
+}
+
 status_t MediaCodecProxy::Input(const uint8_t* aData, uint32_t aDataSize,
                                 int64_t aTimestampUsecs, uint64_t aflags)
 {
@@ -538,7 +556,6 @@ status_t MediaCodecProxy::Input(const uint8_t* aData, uint32_t aDataSize,
 
 status_t MediaCodecProxy::Output(MediaBuffer** aBuffer, int64_t aTimeoutUs)
 {
-
   if (mCodec == nullptr) {
     ALOG("MediaCodec has not been inited from output!");
     return NO_INIT;
@@ -560,8 +577,14 @@ status_t MediaCodecProxy::Output(MediaBuffer** aBuffer, int64_t aTimeoutUs)
   }
 
   MediaBuffer *buffer;
+  sp<GraphicBuffer> graphicBuffer;
 
-  buffer = new MediaBuffer(mOutputBuffers.itemAt(index));
+  if (getOutputGraphicBufferFromIndex(index, &graphicBuffer) == OK &&
+      graphicBuffer != nullptr) {
+    buffer = new MediaBuffer(graphicBuffer);
+  } else {
+    buffer = new MediaBuffer(mOutputBuffers.itemAt(index));
+  }
   sp<MetaData> metaData = buffer->meta_data();
   metaData->setInt32(kKeyBufferIndex, index);
   metaData->setInt64(kKeyTime, timeUs);
@@ -575,6 +598,8 @@ status_t MediaCodecProxy::Output(MediaBuffer** aBuffer, int64_t aTimeoutUs)
 
 bool MediaCodecProxy::IsWaitingResources()
 {
+  // Write Lock for mCodec
+  RWLock::AutoWLock awl(mCodecLock);
   return mCodec == nullptr;
 }
 
@@ -585,10 +610,17 @@ bool MediaCodecProxy::IsDormantNeeded()
 
 void MediaCodecProxy::ReleaseMediaResources()
 {
-  if (mCodec.get()) {
-    mCodec->stop();
-    mCodec->release();
-    mCodec.clear();
+  releaseCodec();
+  cancelResource();
+}
+
+void MediaCodecProxy::ReleaseMediaBuffer(MediaBuffer* aBuffer) {
+  if (aBuffer) {
+    sp<MetaData> metaData = aBuffer->meta_data();
+    int32_t index;
+    metaData->findInt32(kKeyBufferIndex, &index);
+    aBuffer->release();
+    releaseOutputBuffer(index);
   }
 }
 

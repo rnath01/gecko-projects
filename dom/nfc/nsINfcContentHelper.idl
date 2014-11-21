@@ -65,12 +65,9 @@ interface nsINfcEventListener : nsISupports
   void notifyPeerLost(in DOMString sessionToken);
 };
 
-[scriptable, uuid(632cd911-06bf-410b-a91e-8afa4e200e3b)]
+[scriptable, uuid(9343ae1a-6e2f-11e4-b5c4-fbb166b38b62)]
 interface nsINfcContentHelper : nsISupports
 {
-  const long NFC_EVENT_PEER_READY = 0x01;
-  const long NFC_EVENT_PEER_LOST  = 0x02;
-
   void init(in nsIDOMWindow window);
 
   boolean checkSessionToken(in DOMString sessionToken, in boolean isP2P);
@@ -78,6 +75,7 @@ interface nsINfcContentHelper : nsISupports
   nsIDOMDOMRequest readNDEF(in DOMString sessionToken);
   nsIDOMDOMRequest writeNDEF(in nsIVariant records, in DOMString sessionToken);
   nsIDOMDOMRequest makeReadOnly(in DOMString sessionToken);
+  nsIDOMDOMRequest format(in DOMString sessionToken);
 
   nsIDOMDOMRequest connect(in unsigned long techType, in DOMString sessionToken);
   nsIDOMDOMRequest close(in DOMString sessionToken);
@@ -154,17 +152,9 @@ interface nsINfcContentHelper : nsISupports
                             in DOMString requestId);
 
   /**
-   * Power on the NFC hardware and start polling for NFC tags or devices.
+   * Change RF state.
+   *
+   * @param rfState. Possible values are 'idle', 'listen' and 'discovery'.
    */
-  nsIDOMDOMRequest startPoll();
-
-  /**
-   * Stop polling for NFC tags or devices. i.e. enter low power mode.
-   */
-  nsIDOMDOMRequest stopPoll();
-
-  /**
-   * Power off the NFC hardware.
-   */
-  nsIDOMDOMRequest powerOff();
+  nsIDOMDOMRequest changeRFState(in DOMString rfState);
 };

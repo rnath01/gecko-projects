@@ -55,7 +55,6 @@ WEBIDL_FILES = [
     'BiquadFilterNode.webidl',
     'Blob.webidl',
     'BoxObject.webidl',
-    'BrowserElement.webidl',
     'BrowserElementDictionaries.webidl',
     'CallsList.webidl',
     'CameraCapabilities.webidl',
@@ -715,6 +714,7 @@ GENERATED_EVENTS_WEBIDL_FILES = [
     'MozStkCommandEvent.webidl',
     'MozVoicemailEvent.webidl',
     'PageTransitionEvent.webidl',
+    'PluginCrashedEvent.webidl',
     'PopStateEvent.webidl',
     'PopupBlockedEvent.webidl',
     'ProgressEvent.webidl',
@@ -799,4 +799,5 @@ if CONFIG['MOZ_EME']:
         'MediaKeyMessageEvent.webidl',
         'MediaKeys.webidl',
         'MediaKeySession.webidl',
+        'MediaKeySystemAccess.webidl',
     ]

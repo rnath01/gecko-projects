@@ -136,17 +136,20 @@ public:
     // notification of its parent.  (We can know about both if the
     // binding loads were triggered from the DOM rather than frame
     // construction.)  So we have to check both whether the element
-    // has a primary frame and whether it's in the undisplayed map
+    // has a primary frame and whether it's in the frame manager maps
     // before sending a ContentInserted notification, or bad things
     // will happen.
     MOZ_ASSERT(shell == doc->GetShell());
     if (shell) {
       nsIFrame* childFrame = mBoundElement->GetPrimaryFrame();
       if (!childFrame) {
-        // Check to see if it's in the undisplayed content map.
-        nsStyleContext* sc =
-          shell->FrameManager()->GetUndisplayedContent(mBoundElement);
-
+        // Check to see if it's in the undisplayed content map...
+        nsFrameManager* fm = shell->FrameManager();
+        nsStyleContext* sc = fm->GetUndisplayedContent(mBoundElement);
+        if (!sc) {
+          // or in the display:contents map.
+          sc = fm->GetDisplayContentsStyleFor(mBoundElement);
+        }
         if (!sc) {
           shell->CreateFramesFor(destroyedFramesFor);
         }
@@ -1073,18 +1076,27 @@ nsXBLService::FetchBindingDocument(nsIContent* aBoundElement, nsIDocument* aBoun
   // FetchBindingDocument().  LoadInfo will end up with no principal or node in those cases,
   // so we use systemPrincipal.  This achieves the same result of bypassing security checks,
   // but it gives the wrong information to potential future consumers of loadInfo.
-  nsCOMPtr<nsIPrincipal> requestingPrincipal = aOriginPrincipal ? aOriginPrincipal
-                                                                : nsContentUtils::GetSystemPrincipal();
   nsCOMPtr<nsIChannel> channel;
-  // Note that we are calling NS_NewChannelInternal here with both a node and a principal.
-  // This is because the principal and node could be different.
-  rv = NS_NewChannelInternal(getter_AddRefs(channel),
-                             aDocumentURI,
-                             aBoundDocument,
-                             requestingPrincipal,
-                             nsILoadInfo::SEC_NORMAL,
-                             nsIContentPolicy::TYPE_OTHER,
-                             loadGroup);
+
+  if (aOriginPrincipal) {
+    // if there is an originPrincipal we should also have aBoundDocument
+    NS_ASSERTION(aBoundDocument, "can not create a channel without aBoundDocument");
+    rv = NS_NewChannelWithTriggeringPrincipal(getter_AddRefs(channel),
+                                              aDocumentURI,
+                                              aBoundDocument,
+                                              aOriginPrincipal,
+                                              nsILoadInfo::SEC_NORMAL,
+                                              nsIContentPolicy::TYPE_OTHER,
+                                              loadGroup);
+  }
+  else {
+    rv = NS_NewChannel(getter_AddRefs(channel),
+                       aDocumentURI,
+                       nsContentUtils::GetSystemPrincipal(),
+                       nsILoadInfo::SEC_NORMAL,
+                       nsIContentPolicy::TYPE_OTHER,
+                       loadGroup);
+  }
 
   NS_ENSURE_SUCCESS(rv, rv);
 

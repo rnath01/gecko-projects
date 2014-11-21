@@ -13,6 +13,7 @@
 #include "nsCaret.h"
 #include "nsContentUtils.h"
 #include "nsDebug.h"
+#include "nsDocShell.h"
 #include "nsDOMTokenList.h"
 #include "nsFocusManager.h"
 #include "nsFrame.h"
@@ -62,13 +63,6 @@ static const char* kSelectionCaretsLogModuleName = "SelectionCarets";
 static const int32_t kMoveStartTolerancePx = 5;
 // Time for trigger scroll end event, in miliseconds.
 static const int32_t kScrollEndTimerDelay = 300;
-// Read from preference "selectioncaret.noneditable". Indicate whether support
-// non-editable fields selection or not. We have stable state for editable
-// fields selection now. And we don't want to break this stable state when
-// enabling non-editable support. So I add a pref to control to support or
-// not. Once non-editable fields support is stable. We should remove this
-// pref.
-static bool kSupportNonEditableFields = false;
 
 NS_IMPL_ISUPPORTS(SelectionCarets,
                   nsIReflowObserver,
@@ -102,8 +96,6 @@ SelectionCarets::SelectionCarets(nsIPresShell* aPresShell)
   if (!addedPref) {
     Preferences::AddIntVarCache(&sSelectionCaretsInflateSize,
                                 "selectioncaret.inflatesize.threshold");
-    Preferences::AddBoolVarCache(&kSupportNonEditableFields,
-                                 "selectioncaret.noneditable");
     addedPref = true;
   }
 }
@@ -124,6 +116,8 @@ SelectionCarets::Init()
 
   docShell->AddWeakReflowObserver(this);
   docShell->AddWeakScrollObserver(this);
+
+  mDocShell = static_cast<nsDocShell*>(docShell);
 }
 
 SelectionCarets::~SelectionCarets()
@@ -147,10 +141,7 @@ SelectionCarets::~SelectionCarets()
 void
 SelectionCarets::Terminate()
 {
-  nsPresContext* presContext = mPresShell->GetPresContext();
-  MOZ_ASSERT(presContext, "PresContext should be given in PresShell::Init()");
-
-  nsIDocShell* docShell = presContext->GetDocShell();
+  nsRefPtr<nsDocShell> docShell(mDocShell.get());
   if (docShell) {
     docShell->RemoveWeakReflowObserver(this);
     docShell->RemoveWeakScrollObserver(this);
@@ -211,13 +202,13 @@ SelectionCarets::HandleEvent(WidgetEvent* aEvent)
 
     mActiveTouchId = nowTouchId;
     mDownPoint = ptInRoot;
-    if (IsOnStartFrame(ptInRoot)) {
+    if (IsOnStartFrameInner(ptInRoot)) {
       mDragMode = START_FRAME;
       mCaretCenterToDownPointOffsetY = GetCaretYCenterPosition() - ptInRoot.y;
       SetSelectionDirection(false);
       SetSelectionDragState(true);
       return nsEventStatus_eConsumeNoDefault;
-    } else if (IsOnEndFrame(ptInRoot)) {
+    } else if (IsOnEndFrameInner(ptInRoot)) {
       mDragMode = END_FRAME;
       mCaretCenterToDownPointOffsetY = GetCaretYCenterPosition() - ptInRoot.y;
       SetSelectionDirection(true);
@@ -325,7 +316,7 @@ SelectionCarets::SetEndFrameVisibility(bool aVisible)
 {
   mEndCaretVisible = aVisible;
   SELECTIONCARETS_LOG("Set end frame visibility %s",
-                      (mStartCaretVisible ? "shown" : "hidden"));
+                      (mEndCaretVisible ? "shown" : "hidden"));
 
   dom::Element* element = mPresShell->GetSelectionCaretsEndElement();
   SetElementVisibility(element, mVisible && mEndCaretVisible);
@@ -365,16 +356,6 @@ SetCaretDirection(dom::Element* aElement, bool aIsRight)
     aElement->ClassList()->Add(NS_LITERAL_STRING("moz-selectioncaret-left"), err);
     aElement->ClassList()->Remove(NS_LITERAL_STRING("moz-selectioncaret-right"), err);
   }
-}
-
-static bool
-IsRightToLeft(nsIFrame* aFrame)
-{
-  MOZ_ASSERT(aFrame);
-
-  return aFrame->IsFrameOfType(nsIFrame::eLineParticipant) ?
-    (nsBidiPresUtils::GetFrameEmbeddingLevel(aFrame) & 1) :
-    aFrame->StyleVisibility()->mDirection == NS_STYLE_DIRECTION_RTL;
 }
 
 static nsIFrame*
@@ -469,6 +450,11 @@ SelectionCarets::UpdateSelectionCarets()
 
   // Check start and end frame is rtl or ltr text
   nsRefPtr<nsFrameSelection> fs = GetFrameSelection();
+  if (!fs) {
+    SetVisibility(false);
+    return;
+  }
+
   int32_t startOffset;
   nsIFrame* startFrame = FindFirstNodeWithFrame(mPresShell->GetDocument(),
                                                 firstRange, fs, false, startOffset);
@@ -482,22 +468,11 @@ SelectionCarets::UpdateSelectionCarets()
     return;
   }
 
-  // If frame isn't editable and we don't support non-editable fields, bail
-  // out.
-  if (!kSupportNonEditableFields &&
-      (!startFrame->GetContent()->IsEditable() ||
-       !endFrame->GetContent()->IsEditable())) {
-    return;
-  }
-
   // Check if startFrame is after endFrame.
   if (nsLayoutUtils::CompareTreePosition(startFrame, endFrame) > 0) {
     SetVisibility(false);
     return;
   }
-
-  bool startFrameIsRTL = IsRightToLeft(startFrame);
-  bool endFrameIsRTL = IsRightToLeft(endFrame);
 
   mPresShell->FlushPendingNotifications(Flush_Layout);
   nsRect firstRectInRootFrame =
@@ -542,46 +517,13 @@ SelectionCarets::UpdateSelectionCarets()
   SetEndFramePos(lastRectInCanvasFrame.BottomRight());
   SetVisibility(true);
 
-  // If range select only one character, append tilt class name to it.
-  bool isTilt = false;
-  if (startFrame && endFrame) {
-    // In this case <textarea>abc</textarea> and we select 'c' character,
-    // EndContent would be HTMLDivElement and mResultContent which get by
-    // calling startFrame->PeekOffset() with selecting next cluster would be
-    // TextNode. Although the position is same, nsContentUtils::ComparePoints
-    // still shows HTMLDivElement is after TextNode. So that we cannot use
-    // EndContent or StartContent to compare with result of PeekOffset().
-    // So we compare between next charater of startFrame and previous character
-    // of endFrame.
-    nsPeekOffsetStruct posNext(eSelectCluster,
-                               eDirNext,
-                               startOffset,
-                               0,
-                               false,
-                               true,  //limit on scrolled views
-                               false,
-                               false);
-
-    nsPeekOffsetStruct posPrev(eSelectCluster,
-                               eDirPrevious,
-                               endOffset,
-                               0,
-                               false,
-                               true,  //limit on scrolled views
-                               false,
-                               false);
-    startFrame->PeekOffset(&posNext);
-    endFrame->PeekOffset(&posPrev);
-
-    if (posNext.mResultContent && posPrev.mResultContent &&
-        nsContentUtils::ComparePoints(posNext.mResultContent, posNext.mContentOffset,
-                                      posPrev.mResultContent, posPrev.mContentOffset) > 0) {
-      isTilt = true;
-    }
+  nsRect rectStart = GetStartFrameRect();
+  nsRect rectEnd = GetEndFrameRect();
+  bool isTilt = rectStart.Intersects(rectEnd);
+  if (isTilt) {
+    SetCaretDirection(mPresShell->GetSelectionCaretsStartElement(), rectStart.x > rectEnd.x);
+    SetCaretDirection(mPresShell->GetSelectionCaretsEndElement(), rectStart.x <= rectEnd.x);
   }
-
-  SetCaretDirection(mPresShell->GetSelectionCaretsStartElement(), startFrameIsRTL);
-  SetCaretDirection(mPresShell->GetSelectionCaretsEndElement(), !endFrameIsRTL);
   SetTilted(isTilt);
 }
 
@@ -601,12 +543,6 @@ SelectionCarets::SelectWord()
   nsIFrame *ptFrame = nsLayoutUtils::GetFrameForPoint(rootFrame, mDownPoint,
     nsLayoutUtils::IGNORE_PAINT_SUPPRESSION | nsLayoutUtils::IGNORE_CROSS_DOC);
   if (!ptFrame) {
-    return NS_OK;
-  }
-
-  // If frame isn't editable and we don't support non-editable fields, bail
-  // out.
-  if (!kSupportNonEditableFields && !ptFrame->GetContent()->IsEditable()) {
     return NS_OK;
   }
 
@@ -649,7 +585,9 @@ SelectionCarets::SelectWord()
 
   // Clear maintain selection otherwise we cannot select less than a word
   nsRefPtr<nsFrameSelection> fs = GetFrameSelection();
-  fs->MaintainSelection();
+  if (fs) {
+    fs->MaintainSelection();
+  }
   return rs;
 }
 
@@ -739,6 +677,9 @@ SelectionCarets::DragSelection(const nsPoint &movePoint)
   }
 
   nsRefPtr<nsFrameSelection> fs = GetFrameSelection();
+  if (!fs) {
+    return nsEventStatus_eConsumeNoDefault;
+  }
 
   nsresult result;
   nsIFrame *newFrame = nullptr;
@@ -763,6 +704,10 @@ SelectionCarets::DragSelection(const nsPoint &movePoint)
   }
 
   nsRefPtr<dom::Selection> selection = GetSelection();
+  if (!selection) {
+    return nsEventStatus_eConsumeNoDefault;
+  }
+
   int32_t rangeCount = selection->GetRangeCount();
   if (rangeCount <= 0) {
     return nsEventStatus_eConsumeNoDefault;
@@ -813,12 +758,19 @@ SelectionCarets::GetCaretYCenterPosition()
   }
 
   nsRefPtr<dom::Selection> selection = GetSelection();
+  if (!selection) {
+    return 0;
+  }
+
   int32_t rangeCount = selection->GetRangeCount();
   if (rangeCount <= 0) {
     return 0;
   }
 
   nsRefPtr<nsFrameSelection> fs = GetFrameSelection();
+  if (!fs) {
+    return 0;
+  }
 
   MOZ_ASSERT(mDragMode != NONE);
   nsCOMPtr<nsIContent> node;
@@ -851,14 +803,18 @@ void
 SelectionCarets::SetSelectionDragState(bool aState)
 {
   nsRefPtr<nsFrameSelection> fs = GetFrameSelection();
-  fs->SetDragState(aState);
+  if (fs) {
+    fs->SetDragState(aState);
+  }
 }
 
 void
 SelectionCarets::SetSelectionDirection(bool aForward)
 {
   nsRefPtr<dom::Selection> selection = GetSelection();
-  selection->SetDirection(aForward ? eDirNext : eDirPrevious);
+  if (selection) {
+    selection->SetDirection(aForward ? eDirNext : eDirPrevious);
+  }
 }
 
 static void
@@ -896,18 +852,18 @@ SelectionCarets::SetEndFramePos(const nsPoint& aPosition)
 }
 
 bool
-SelectionCarets::IsOnStartFrame(const nsPoint& aPosition)
+SelectionCarets::IsOnStartFrameInner(const nsPoint& aPosition)
 {
   return mVisible &&
-    nsLayoutUtils::ContainsPoint(GetStartFrameRect(), aPosition,
+    nsLayoutUtils::ContainsPoint(GetStartFrameRectInner(), aPosition,
                                  SelectionCaretsInflateSize());
 }
 
 bool
-SelectionCarets::IsOnEndFrame(const nsPoint& aPosition)
+SelectionCarets::IsOnEndFrameInner(const nsPoint& aPosition)
 {
   return mVisible &&
-    nsLayoutUtils::ContainsPoint(GetEndFrameRect(), aPosition,
+    nsLayoutUtils::ContainsPoint(GetEndFrameRectInner(), aPosition,
                                  SelectionCaretsInflateSize());
 }
 
@@ -925,6 +881,24 @@ SelectionCarets::GetEndFrameRect()
   dom::Element* element = mPresShell->GetSelectionCaretsEndElement();
   nsIFrame* rootFrame = mPresShell->GetRootFrame();
   return nsLayoutUtils::GetRectRelativeToFrame(element, rootFrame);
+}
+
+nsRect
+SelectionCarets::GetStartFrameRectInner()
+{
+  dom::Element* element = mPresShell->GetSelectionCaretsStartElement();
+  dom::Element* childElement = element->GetFirstElementChild();
+  nsIFrame* rootFrame = mPresShell->GetRootFrame();
+  return nsLayoutUtils::GetRectRelativeToFrame(childElement, rootFrame);
+}
+
+nsRect
+SelectionCarets::GetEndFrameRectInner()
+{
+  dom::Element* element = mPresShell->GetSelectionCaretsEndElement();
+  dom::Element* childElement = element->GetFirstElementChild();
+  nsIFrame* rootFrame = mPresShell->GetRootFrame();
+  return nsLayoutUtils::GetRectRelativeToFrame(childElement, rootFrame);
 }
 
 nsIContent*

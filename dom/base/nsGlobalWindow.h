@@ -110,7 +110,7 @@ class Navigator;
 class OwningExternalOrWindowProxy;
 class Promise;
 struct RequestInit;
-class RequestOrScalarValueString;
+class RequestOrUSVString;
 class Selection;
 class SpeechSynthesis;
 class WakeLock;
@@ -857,7 +857,7 @@ public:
   void Alert(mozilla::ErrorResult& aError);
   void Alert(const nsAString& aMessage, mozilla::ErrorResult& aError);
   bool Confirm(const nsAString& aMessage, mozilla::ErrorResult& aError);
-  already_AddRefed<mozilla::dom::Promise> Fetch(const mozilla::dom::RequestOrScalarValueString& aInput,
+  already_AddRefed<mozilla::dom::Promise> Fetch(const mozilla::dom::RequestOrUSVString& aInput,
                                                 const mozilla::dom::RequestInit& aInit,
                                                 mozilla::ErrorResult& aRv);
   void Prompt(const nsAString& aMessage, const nsAString& aInitial,
@@ -1092,7 +1092,6 @@ protected:
   }
 
   void FreeInnerObjects();
-  JSObject *CallerGlobal();
   nsGlobalWindow *CallerInnerWindow();
 
   // Only to be called on an inner window.
@@ -1627,6 +1626,9 @@ protected:
   // mSpeechSynthesis is only used on inner windows.
   nsRefPtr<mozilla::dom::SpeechSynthesis> mSpeechSynthesis;
 #endif
+
+  // This is the CC generation the last time we called CanSkip.
+  uint32_t mCanSkipCCGeneration;
 
   friend class nsDOMScriptableHelper;
   friend class nsDOMWindowUtils;

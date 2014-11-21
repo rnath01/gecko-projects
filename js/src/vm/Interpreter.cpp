@@ -867,7 +867,7 @@ PopScope(JSContext *cx, ScopeIter &si)
 {
     switch (si.type()) {
       case ScopeIter::Block:
-        if (cx->compartment()->debugMode())
+        if (cx->compartment()->isDebuggee())
             DebugScopes::onPopBlock(cx, si);
         if (si.staticBlock().needsClone())
             si.frame().popBlock(cx);
@@ -1028,24 +1028,29 @@ HandleError(JSContext *cx, InterpreterRegs &regs)
   again:
     if (cx->isExceptionPending()) {
         /* Call debugger throw hooks. */
-        JSTrapStatus status = Debugger::onExceptionUnwind(cx, regs.fp());
-        switch (status) {
-          case JSTRAP_ERROR:
+        RootedValue exception(cx);
+        if (!cx->getPendingException(&exception))
             goto again;
 
-          case JSTRAP_CONTINUE:
-          case JSTRAP_THROW:
-            break;
+        if (!exception.isMagic(JS_GENERATOR_CLOSING)) {
+            JSTrapStatus status = Debugger::onExceptionUnwind(cx, regs.fp());
+            switch (status) {
+              case JSTRAP_ERROR:
+                goto again;
 
-          case JSTRAP_RETURN:
-            ForcedReturn(cx, si, regs);
-            return SuccessfulReturnContinuation;
+              case JSTRAP_CONTINUE:
+              case JSTRAP_THROW:
+                break;
 
-          default:
-            MOZ_CRASH("Bad Debugger::onExceptionUnwind status");
+              case JSTRAP_RETURN:
+                ForcedReturn(cx, si, regs);
+                return SuccessfulReturnContinuation;
+
+              default:
+                MOZ_CRASH("Bad Debugger::onExceptionUnwind status");
+            }
         }
 
-        RootedValue exception(cx);
         for (TryNoteIter tni(cx, regs); !tni.done(); ++tni) {
             JSTryNote *tn = *tni;
 
@@ -1525,7 +1530,7 @@ CASE(EnableInterruptsPseudoOpcode)
         moreInterrupts = true;
     }
 
-    if (cx->compartment()->debugMode()) {
+    if (script->isDebuggee()) {
         if (script->stepModeEnabled()) {
             RootedValue rval(cx);
             JSTrapStatus status = JSTRAP_CONTINUE;
@@ -1640,7 +1645,6 @@ CASE(JSOP_UNUSED190)
 CASE(JSOP_UNUSED191)
 CASE(JSOP_UNUSED192)
 CASE(JSOP_UNUSED196)
-CASE(JSOP_UNUSED208)
 CASE(JSOP_UNUSED209)
 CASE(JSOP_UNUSED210)
 CASE(JSOP_UNUSED211)
@@ -3291,17 +3295,15 @@ END_CASE(JSOP_INSTANCEOF)
 CASE(JSOP_DEBUGGER)
 {
     RootedValue rval(cx);
-    switch (Debugger::onDebuggerStatement(cx, &rval)) {
+    switch (Debugger::onDebuggerStatement(cx, REGS.fp())) {
       case JSTRAP_ERROR:
         goto error;
       case JSTRAP_CONTINUE:
         break;
       case JSTRAP_RETURN:
-        REGS.fp()->setReturnValue(rval);
         ForcedReturn(cx, REGS);
         goto successful_return_continuation;
       case JSTRAP_THROW:
-        cx->setPendingException(rval);
         goto error;
       default:;
     }
@@ -3343,7 +3345,7 @@ CASE(JSOP_DEBUGLEAVEBLOCK)
     // FIXME: This opcode should not be necessary.  The debugger shouldn't need
     // help from bytecode to do its job.  See bug 927782.
 
-    if (MOZ_UNLIKELY(cx->compartment()->debugMode()))
+    if (MOZ_UNLIKELY(cx->compartment()->isDebuggee()))
         DebugScopes::onPopBlock(cx, REGS.fp(), REGS.pc);
 }
 END_CASE(JSOP_DEBUGLEAVEBLOCK)
@@ -3407,6 +3409,14 @@ CASE(JSOP_RESUME)
 
     ADVANCE_AND_DISPATCH(0);
 }
+
+CASE(JSOP_DEBUGAFTERYIELD)
+{
+    // No-op in the interpreter, as GeneratorObject::resume takes care of
+    // fixing up InterpreterFrames.
+    MOZ_ASSERT_IF(REGS.fp()->script()->isDebuggee(), REGS.fp()->isDebuggee());
+}
+END_CASE(JSOP_DEBUGAFTERYIELD)
 
 CASE(JSOP_FINALYIELDRVAL)
 {

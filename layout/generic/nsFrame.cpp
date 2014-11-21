@@ -130,6 +130,11 @@ struct nsContentAndOffset
 #define FORCE_SELECTION_UPDATE 1
 #define CALC_DEBUG             0
 
+// This is faster than nsBidiPresUtils::IsFrameInParagraphDirection,
+// because it uses the frame pointer passed in without drilling down to
+// the leaf frame.
+#define REVERSED_DIRECTION_FRAME(frame) \
+  (!IS_SAME_DIRECTION(NS_GET_EMBEDDING_LEVEL(frame), NS_GET_BASE_LEVEL(frame)))
 
 #include "nsILineIterator.h"
 
@@ -1339,7 +1344,12 @@ nsFrame::GetLogicalBaseline(WritingMode aWritingMode) const
 {
   NS_ASSERTION(!NS_SUBTREE_DIRTY(this),
                "frame must not be dirty");
-  // Default to the bottom margin edge, per CSS2.1's definition of the
+  // Baseline for inverted line content is the top (block-start) margin edge,
+  // as the frame is in effect "flipped" for alignment purposes.
+  if (aWritingMode.IsLineInverted()) {
+    return -GetLogicalUsedMargin(aWritingMode).BStart(aWritingMode);
+  }
+  // Otherwise, the bottom margin edge, per CSS2.1's definition of the
   // 'baseline' value of 'vertical-align'.
   return BSize(aWritingMode) +
          GetLogicalUsedMargin(aWritingMode).BEnd(aWritingMode);
@@ -2385,6 +2395,21 @@ nsIFrame::BuildDisplayListForChild(nsDisplayListBuilder*   aBuilder,
       // THIS IS THE COMMON CASE.
       // Not a pseudo or real stacking context. Do the simple thing and
       // return early.
+
+      if (aBuilder->IsBuildingLayerEventRegions()) {
+        MOZ_ASSERT(buildingForChild.GetPrevAnimatedGeometryRoot() ==
+                   aBuilder->FindAnimatedGeometryRootFor(child->GetParent()));
+
+        // If this frame has a different animated geometry root than its parent,
+        // make sure we accumulate event regions for its layer.
+        nsIFrame *animatedGeometryRoot = aBuilder->FindAnimatedGeometryRootFor(child);
+        if (animatedGeometryRoot != buildingForChild.GetPrevAnimatedGeometryRoot()) {
+          nsDisplayLayerEventRegions* eventRegions =
+            new (aBuilder) nsDisplayLayerEventRegions(aBuilder, this);
+          aBuilder->SetLayerEventRegions(eventRegions);
+        }
+      }
+
       nsDisplayLayerEventRegions* eventRegions = aBuilder->GetLayerEventRegions();
       if (eventRegions) {
         eventRegions->AddFrame(aBuilder, child);
@@ -5400,7 +5425,7 @@ nsFrame::IsFrameTreeTooDeep(const nsHTMLReflowState& aReflowState,
     ClearOverflowRects();
     aMetrics.ClearSize();
     aMetrics.SetBlockStartAscent(0);
-    aMetrics.mCarriedOutBottomMargin.Zero();
+    aMetrics.mCarriedOutBEndMargin.Zero();
     aMetrics.mOverflowAreas.Clear();
 
     if (GetNextInFlow()) {
@@ -5569,8 +5594,15 @@ nsIFrame::ListGeneric(nsACString& aTo, const char* aPrefix, uint32_t aFlags) con
       pseudoTag->ToString(atomString);
       aTo += nsPrintfCString("%s", NS_LossyConvertUTF16toASCII(atomString).get());
     }
-    if (GetParent() && mStyleContext->GetParent() != GetParent()->StyleContext()) {
-      aTo += nsPrintfCString(",parent=%p", mStyleContext->GetParent());
+    if (!mStyleContext->GetParent() ||
+        (GetParent() && GetParent()->StyleContext() != mStyleContext->GetParent())) {
+      aTo += nsPrintfCString("^%p", mStyleContext->GetParent());
+      if (mStyleContext->GetParent()) {
+        aTo += nsPrintfCString("^%p", mStyleContext->GetParent()->GetParent());
+        if (mStyleContext->GetParent()->GetParent()) {
+          aTo += nsPrintfCString("^%p", mStyleContext->GetParent()->GetParent()->GetParent());
+        }
+      }
     }
   }
   aTo += "]";
@@ -5895,7 +5927,18 @@ nsFrame::GetPointFromOffset(int32_t inOffset, nsPoint* outPoint)
     if (newContent){
       int32_t newOffset = newContent->IndexOf(mContent);
 
-      bool isRTL = (NS_GET_EMBEDDING_LEVEL(this) & 1) == 1;
+      // Find the direction of the frame from the EmbeddingLevelProperty,
+      // which is the resolved bidi level set in
+      // nsBidiPresUtils::ResolveParagraph (odd levels = right-to-left).
+      // If the embedding level isn't set, just use the CSS direction
+      // property.
+      bool hasEmbeddingLevel;
+      nsBidiLevel embeddingLevel =
+        NS_PTR_TO_INT32(Properties().Get(nsIFrame::EmbeddingLevelProperty(),
+                                         &hasEmbeddingLevel));
+      bool isRTL = hasEmbeddingLevel
+        ? IS_LEVEL_RTL(embeddingLevel)
+        : StyleVisibility()->mDirection == NS_STYLE_DIRECTION_RTL;
       if ((!isRTL && inOffset > newOffset) ||
           (isRTL && inOffset <= newOffset)) {
         pt = contentRect.TopRight();
@@ -6338,8 +6381,7 @@ nsIFrame::PeekOffsetParagraph(nsPeekOffsetStruct *aPos)
 // Determine movement direction relative to frame
 static bool IsMovingInFrameDirection(nsIFrame* frame, nsDirection aDirection, bool aVisual)
 {
-  bool isReverseDirection = aVisual ?
-    (NS_GET_EMBEDDING_LEVEL(frame) & 1) != (NS_GET_BASE_LEVEL(frame) & 1) : false;
+  bool isReverseDirection = aVisual && REVERSED_DIRECTION_FRAME(frame);
   return aDirection == (isReverseDirection ? eDirPrevious : eDirNext);
 }
 
@@ -6633,11 +6675,14 @@ nsIFrame::PeekOffset(nsPeekOffsetStruct* aPos)
         result = it->CheckLineOrder(thisLine, &isReordered, &firstFrame, &lastFrame);
         baseFrame = endOfLine ? lastFrame : firstFrame;
         if (baseFrame) {
-          nsBidiLevel embeddingLevel = nsBidiPresUtils::GetFrameEmbeddingLevel(baseFrame);
-          // If the direction of the frame on the edge is opposite to that of the line,
-          // we'll need to drill down to its opposite end, so reverse endOfLine.
-          if ((embeddingLevel & 1) == !lineIsRTL)
+          bool frameIsRTL =
+            (nsBidiPresUtils::FrameDirection(baseFrame) == NSBIDI_RTL);
+          // If the direction of the frame on the edge is opposite to
+          // that of the line, we'll need to drill down to its opposite
+          // end, so reverse endOfLine.
+          if (frameIsRTL != lineIsRTL) {
             endOfLine = !endOfLine;
+          }
         }
       } else {
         it->GetLine(thisLine, &firstFrame, &lineFrameCount, usedRect, &lineFlags);
@@ -6858,9 +6903,9 @@ nsIFrame::GetFrameFromDirection(nsDirection aDirection, bool aVisual,
       result = it->CheckLineOrder(thisLine, &isReordered, &firstFrame, &lastFrame);
       nsIFrame** framePtr = aDirection == eDirPrevious ? &firstFrame : &lastFrame;
       if (*framePtr) {
-        nsBidiLevel embeddingLevel = nsBidiPresUtils::GetFrameEmbeddingLevel(*framePtr);
-        if ((((embeddingLevel & 1) && lineIsRTL) || (!(embeddingLevel & 1) && !lineIsRTL)) ==
-            (aDirection == eDirPrevious)) {
+        bool frameIsRTL =
+          (nsBidiPresUtils::FrameDirection(*framePtr) == NSBIDI_RTL);
+        if ((frameIsRTL == lineIsRTL) == (aDirection == eDirPrevious)) {
           nsFrame::GetFirstLeaf(presContext, framePtr);
         } else {
           nsFrame::GetLastLeaf(presContext, framePtr);
@@ -6929,11 +6974,9 @@ nsIFrame::GetFrameFromDirection(nsDirection aDirection, bool aVisual,
 
   *aOutOffset = (aDirection == eDirNext) ? 0 : -1;
 
-  if (aVisual) {
-    uint8_t newLevel = NS_GET_EMBEDDING_LEVEL(traversedFrame);
-    uint8_t newBaseLevel = NS_GET_BASE_LEVEL(traversedFrame);
-    if ((newLevel & 1) != (newBaseLevel & 1)) // The new frame is reverse-direction, go to the other end
-      *aOutOffset = -1 - *aOutOffset;
+  if (aVisual && REVERSED_DIRECTION_FRAME(traversedFrame)) {
+    // The new frame is reverse-direction, go to the other end
+    *aOutOffset = -1 - *aOutOffset;
   }
   *aOutFrame = traversedFrame;
   return NS_OK;
@@ -7713,15 +7756,33 @@ nsFrame::CorrectStyleParentFrame(nsIFrame* aProspectiveParent,
   return nullptr;
 }
 
-nsIFrame*
-nsFrame::DoGetParentStyleContextFrame() const
+nsStyleContext*
+nsFrame::DoGetParentStyleContext(nsIFrame** aProviderFrame) const
 {
-  if (mContent && !mContent->GetParent() &&
-      !StyleContext()->GetPseudo()) {
-    // we're a frame for the root.  We have no style context parent.
-    return nullptr;
+  *aProviderFrame = nullptr;
+  nsFrameManager* fm = PresContext()->FrameManager();
+  if (MOZ_LIKELY(mContent)) {
+    nsIContent* parentContent = mContent->GetFlattenedTreeParent();
+    if (MOZ_LIKELY(parentContent)) {
+      nsIAtom* pseudo = StyleContext()->GetPseudo();
+      if (!pseudo || !mContent->IsElement() ||
+          !nsCSSAnonBoxes::IsAnonBox(pseudo) ||
+          /* if next is true then it's really a request for the table frame's
+             parent context, see nsTable[Outer]Frame::GetParentStyleContext. */
+          pseudo == nsCSSAnonBoxes::tableOuter) {
+        nsStyleContext* sc = fm->GetDisplayContentsStyleFor(parentContent);
+        if (MOZ_UNLIKELY(sc)) {
+          return sc;
+        }
+      }
+    } else {
+      if (!StyleContext()->GetPseudo()) {
+        // we're a frame for the root.  We have no style context parent.
+        return nullptr;
+      }
+    }
   }
-  
+
   if (!(mState & NS_FRAME_OUT_OF_FLOW)) {
     /*
      * If this frame is an anonymous block created when an inline with a block
@@ -7731,26 +7792,27 @@ nsFrame::DoGetParentStyleContextFrame() const
     if (mState & NS_FRAME_PART_OF_IBSPLIT) {
       nsIFrame* ibSplitSibling = GetIBSplitSiblingForAnonymousBlock(this);
       if (ibSplitSibling) {
-        return ibSplitSibling;
+        return (*aProviderFrame = ibSplitSibling)->StyleContext();
       }
     }
 
     // If this frame is one of the blocks that split an inline, we must
     // return the "special" inline parent, i.e., the parent that this
     // frame would have if we didn't mangle the frame structure.
-    return GetCorrectedParent(this);
+    *aProviderFrame = GetCorrectedParent(this);
+    return *aProviderFrame ? (*aProviderFrame)->StyleContext() : nullptr;
   }
 
   // We're an out-of-flow frame.  For out-of-flow frames, we must
   // resolve underneath the placeholder's parent.  The placeholder is
   // reached from the first-in-flow.
-  nsIFrame* placeholder = PresContext()->FrameManager()->
-                            GetPlaceholderFrameFor(FirstInFlow());
+  nsIFrame* placeholder = fm->GetPlaceholderFrameFor(FirstInFlow());
   if (!placeholder) {
     NS_NOTREACHED("no placeholder frame for out-of-flow frame");
-    return GetCorrectedParent(this);
+    *aProviderFrame = GetCorrectedParent(this);
+    return *aProviderFrame ? (*aProviderFrame)->StyleContext() : nullptr;
   }
-  return placeholder->GetParentStyleContextFrame();
+  return placeholder->GetParentStyleContext(aProviderFrame);
 }
 
 void
@@ -8611,6 +8673,19 @@ void
 nsIFrame::DestroyRegion(void* aPropertyValue)
 {
   delete static_cast<nsRegion*>(aPropertyValue);
+}
+
+/*static*/ void
+nsIFrame::DestroyContentArray(void* aPropertyValue)
+{
+  typedef nsTArray<nsIContent*> T;
+  T* arr = static_cast<T*>(aPropertyValue);
+  for (T::size_type i = 0; i < arr->Length(); ++i) {
+    nsIContent* content = (*arr)[i];
+    content->UnbindFromTree();
+    NS_RELEASE(content);
+  }
+  delete arr;
 }
 
 bool

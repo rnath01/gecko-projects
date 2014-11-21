@@ -613,16 +613,16 @@ PeerConnectionTest.prototype.close = function PCT_close(onSuccess) {
     }
   }
 
-  function signalingstatechangeLocalClose(state) {
-    info("'onsignalingstatechange' event '" + state + "' received");
-    is(state, "closed", "onsignalingstatechange event is closed");
+  function signalingstatechangeLocalClose(e) {
+    info("'signalingstatechange' event received");
+    is(e.target.signalingState, "closed", "signalingState is closed");
     self.waitingForLocal = false;
     verifyClosed();
   }
 
-  function signalingstatechangeRemoteClose(state) {
-    info("'onsignalingstatechange' event '" + state + "' received");
-    is(state, "closed", "onsignalingstatechange event is closed");
+  function signalingstatechangeRemoteClose(e) {
+    info("'signalingstatechange' event received");
+    is(e.target.signalingState, "closed", "signalingState is closed");
     self.waitingForRemote = false;
     verifyClosed();
   }
@@ -744,9 +744,10 @@ function PCT_setLocalDescription(peer, desc, stateExpected, onSuccess) {
     }
   }
 
-  peer.onsignalingstatechange = function (state) {
-    info(peer + ": 'onsignalingstatechange' event '" + state + "' received");
-    if(stateExpected === state && eventFired == false) {
+  peer.onsignalingstatechange = function (e) {
+    info(peer + ": 'signalingstatechange' event received");
+    var state = e.target.signalingState;
+    if(stateExpected === state && !eventFired) {
       eventFired = true;
       peer.setLocalDescStableEventDate = new Date();
       check_next_test();
@@ -812,9 +813,10 @@ function PCT_setRemoteDescription(peer, desc, stateExpected, onSuccess) {
     }
   }
 
-  peer.onsignalingstatechange = function (state) {
-    info(peer + ": 'onsignalingstatechange' event '" + state + "' received");
-    if(stateExpected === state && eventFired == false) {
+  peer.onsignalingstatechange = function(e) {
+    info(peer + ": 'signalingstatechange' event received");
+    var state = e.target.signalingState;
+    if(stateExpected === state && !eventFired) {
       eventFired = true;
       peer.setRemoteDescStableEventDate = new Date();
       check_next_test();
@@ -1618,7 +1620,6 @@ function PeerConnectionWrapper(label, configuration, h264) {
    * failure will be raised if an event of this type is caught.
    *
    * @param {Object} aEvent
-   *        Event data which includes the newly created data channel
    */
   this._pc.onsignalingstatechange = function (anEvent) {
     info(self + ": 'onsignalingstatechange' event fired");
@@ -1930,7 +1931,7 @@ PeerConnectionWrapper.prototype = {
   logSignalingState: function PCW_logSignalingState() {
     var self = this;
 
-    function _logSignalingState(state) {
+    function _logSignalingState(e) {
       var newstate = self._pc.signalingState;
       var oldstate = self.signalingStateLog[self.signalingStateLog.length - 1]
       if (Object.keys(signalingStateTransitions).indexOf(oldstate) != -1) {
@@ -1956,7 +1957,7 @@ PeerConnectionWrapper.prototype = {
     var self = this;
 
     self._remote_ice_candidates.push(candidate);
-    if (self.signalingstate === 'closed') {
+    if (self.signalingState === 'closed') {
       info("Received ICE candidate for closed PeerConnection - discarding");
       return;
     }
@@ -2354,10 +2355,11 @@ PeerConnectionWrapper.prototype = {
     }
   },
 
-  verifySdp : function PCW_verifySdp(desc, expectedType, constraints,
-      offerOptions, trickleIceCallback) {
+  verifySdp : function PCW_verifySdp(desc, expectedType, offerConstraintsList,
+      answerConstraintsList, offerOptions, trickleIceCallback) {
     info("Examining this SessionDescription: " + JSON.stringify(desc));
-    info("constraints: " + JSON.stringify(constraints));
+    info("offerConstraintsList: " + JSON.stringify(offerConstraintsList));
+    info("answerConstraintsList: " + JSON.stringify(answerConstraintsList));
     info("offerOptions: " + JSON.stringify(offerOptions));
     ok(desc, "SessionDescription is not null");
     is(desc.type, expectedType, "SessionDescription type is " + expectedType);
@@ -2376,11 +2378,11 @@ PeerConnectionWrapper.prototype = {
     }
     //TODO: how can we check for absence/presence of m=application?
 
-    //TODO: how to handle media contraints + offer options
-    var audioTracks = this.countAudioTracksInMediaConstraint(constraints);
-    if (constraints.length === 0) {
-      audioTracks = this.audioInOfferOptions(offerOptions);
-    }
+    var audioTracks =
+      Math.max(this.countAudioTracksInMediaConstraint(offerConstraintsList),
+               this.countAudioTracksInMediaConstraint(answerConstraintsList)) ||
+      this.audioInOfferOptions(offerOptions);
+
     info("expected audio tracks: " + audioTracks);
     if (audioTracks == 0) {
       ok(!desc.sdp.contains("m=audio"), "audio m-line is absent from SDP");
@@ -2393,11 +2395,11 @@ PeerConnectionWrapper.prototype = {
 
     }
 
-    //TODO: how to handle media contraints + offer options
-    var videoTracks = this.countVideoTracksInMediaConstraint(constraints);
-    if (constraints.length === 0) {
-      videoTracks = this.videoInOfferOptions(offerOptions);
-    }
+    var videoTracks =
+      Math.max(this.countVideoTracksInMediaConstraint(offerConstraintsList),
+               this.countVideoTracksInMediaConstraint(answerConstraintsList)) ||
+      this.videoInOfferOptions(offerOptions);
+
     info("expected video tracks: " + videoTracks);
     if (videoTracks == 0) {
       ok(!desc.sdp.contains("m=video"), "video m-line is absent from SDP");
@@ -2578,6 +2580,48 @@ PeerConnectionWrapper.prototype = {
     } else {
       is(numLocalCandidates, 0, "Have no localcandidate stats");
       is(numRemoteCandidates, 0, "Have no remotecandidate stats");
+    }
+  },
+
+  /**
+   * Compares the Ice server configured for this PeerConnectionWrapper
+   * with the ICE candidates received in the RTCP stats.
+   *
+   * @param {object} stats
+   *        The stats to be verified for relayed vs. direct connection.
+   */
+  checkStatsIceConnectionType : function PCW_checkStatsIceConnectionType(stats)
+  {
+    var lId;
+    var rId;
+    Object.keys(stats).forEach(function(name) {
+      if ((stats[name].type === "candidatepair") &&
+          (stats[name].selected)) {
+        lId = stats[name].localCandidateId;
+        rId = stats[name].remoteCandidateId;
+      }
+    });
+    info("checkStatsIceConnectionType verifying: local=" +
+         JSON.stringify(stats[lId]) + " remote=" + JSON.stringify(stats[rId]));
+    if ((typeof stats[lId] === 'undefined') ||
+        (typeof stats[rId] === 'undefined')) {
+      info("checkStatsIceConnectionType failed to find candidatepair IDs");
+      return;
+    }
+    var lType = stats[lId].candidateType;
+    var rType = stats[rId].candidateType;
+    var lIp = stats[lId].ipAddress;
+    var rIp = stats[rId].ipAddress;
+    if ((this.configuration) && (typeof this.configuration.iceServers !== 'undefined')) {
+      info("Ice Server configured");
+      // Note: the IP comparising is a workaround for bug 1097333
+      //       And this will fail if a TURN server address is a DNS name!
+      var serverIp = this.configuration.iceServers[0].url.split(':')[1];
+      ok((lType === "relayed" || rType === "relayed") ||
+         (lIp === serverIp || rIp === serverIp), "One peer uses a relay");
+    } else {
+      info("P2P configured");
+      ok(((lType !== "relayed") && (rType !== "relayed")), "Pure peer to peer call without a relay");
     }
   },
 

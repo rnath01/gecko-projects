@@ -67,16 +67,24 @@ class StaticScopeIter
     StaticScopeIter(ExclusiveContext *cx, JSObject *obj)
       : obj(cx, obj), onNamedLambda(false)
     {
-        JS_STATIC_ASSERT(allowGC == CanGC);
-        MOZ_ASSERT_IF(obj, obj->is<StaticBlockObject>() || obj->is<StaticWithObject>() ||
+        static_assert(allowGC == CanGC,
+                      "the context-accepting constructor should only be used "
+                      "in CanGC code");
+        MOZ_ASSERT_IF(obj,
+                      obj->is<StaticBlockObject>() ||
+                      obj->is<StaticWithObject>() ||
                       obj->is<JSFunction>());
     }
 
     explicit StaticScopeIter(JSObject *obj)
       : obj((ExclusiveContext *) nullptr, obj), onNamedLambda(false)
     {
-        JS_STATIC_ASSERT(allowGC == NoGC);
-        MOZ_ASSERT_IF(obj, obj->is<StaticBlockObject>() || obj->is<StaticWithObject>() ||
+        static_assert(allowGC == NoGC,
+                      "the constructor not taking a context should only be "
+                      "used in NoGC code");
+        MOZ_ASSERT_IF(obj,
+                      obj->is<StaticBlockObject>() ||
+                      obj->is<StaticWithObject>() ||
                       obj->is<JSFunction>());
     }
 
@@ -766,6 +774,7 @@ class ScopeIterKey
 
     void updateCur(JSObject *obj) { cur_ = obj; }
     void updateStaticScope(NestedScopeObject *obj) { staticScope_ = obj; }
+    void updateFrame(AbstractFramePtr frame) { frame_ = frame; }
 
     /* For use as hash policy */
     typedef ScopeIterKey Lookup;
@@ -933,6 +942,8 @@ class DebugScopes
     static bool updateLiveScopes(JSContext *cx);
     static ScopeIterVal *hasLiveScope(ScopeObject &scope);
 
+    static void rekeyMissingScopes(JSContext *cx, AbstractFramePtr from, AbstractFramePtr to);
+
     // In debug-mode, these must be called whenever exiting a scope that might
     // have stack-allocated locals.
     static void onPopCall(AbstractFramePtr frame, JSContext *cx);
@@ -940,7 +951,7 @@ class DebugScopes
     static void onPopBlock(JSContext *cx, AbstractFramePtr frame, jsbytecode *pc);
     static void onPopWith(AbstractFramePtr frame);
     static void onPopStrictEvalScope(AbstractFramePtr frame);
-    static void onCompartmentLeaveDebugMode(JSCompartment *c);
+    static void onCompartmentUnsetIsDebuggee(JSCompartment *c);
 };
 
 }  /* namespace js */

@@ -62,13 +62,11 @@
   );
 
   var dispatcher = new loop.Dispatcher();
-  var activeRoomStore = new loop.store.ActiveRoomStore({
-    dispatcher: dispatcher,
+  var activeRoomStore = new loop.store.ActiveRoomStore(dispatcher, {
     mozLoop: navigator.mozLoop,
     sdkDriver: {}
   });
-  var roomStore = new loop.store.RoomStore({
-    dispatcher: dispatcher,
+  var roomStore = new loop.store.RoomStore(dispatcher, {
     mozLoop: navigator.mozLoop
   });
 
@@ -565,7 +563,8 @@
                 StandaloneRoomView({
                   dispatcher: dispatcher, 
                   activeRoomStore: activeRoomStore, 
-                  roomState: ROOM_STATES.READY})
+                  roomState: ROOM_STATES.READY, 
+                  helper: {isFirefox: returnTrue}})
               )
             ), 
 
@@ -574,7 +573,8 @@
                 StandaloneRoomView({
                   dispatcher: dispatcher, 
                   activeRoomStore: activeRoomStore, 
-                  roomState: ROOM_STATES.JOINED})
+                  roomState: ROOM_STATES.JOINED, 
+                  helper: {isFirefox: returnTrue}})
               )
             ), 
 
@@ -583,7 +583,38 @@
                 StandaloneRoomView({
                   dispatcher: dispatcher, 
                   activeRoomStore: activeRoomStore, 
-                  roomState: ROOM_STATES.HAS_PARTICIPANTS})
+                  roomState: ROOM_STATES.HAS_PARTICIPANTS, 
+                  helper: {isFirefox: returnTrue}})
+              )
+            ), 
+
+            Example({summary: "Standalone room conversation (full - FFx user)"}, 
+              React.DOM.div({className: "standalone"}, 
+                StandaloneRoomView({
+                  dispatcher: dispatcher, 
+                  activeRoomStore: activeRoomStore, 
+                  roomState: ROOM_STATES.FULL, 
+                  helper: {isFirefox: returnTrue}})
+              )
+            ), 
+
+            Example({summary: "Standalone room conversation (full - non FFx user)"}, 
+              React.DOM.div({className: "standalone"}, 
+                StandaloneRoomView({
+                  dispatcher: dispatcher, 
+                  activeRoomStore: activeRoomStore, 
+                  roomState: ROOM_STATES.FULL, 
+                  helper: {isFirefox: returnFalse}})
+              )
+            ), 
+
+            Example({summary: "Standalone room conversation (failed)"}, 
+              React.DOM.div({className: "standalone"}, 
+                StandaloneRoomView({
+                  dispatcher: dispatcher, 
+                  activeRoomStore: activeRoomStore, 
+                  roomState: ROOM_STATES.FAILED, 
+                  helper: {isFirefox: returnFalse}})
               )
             )
           ), 
