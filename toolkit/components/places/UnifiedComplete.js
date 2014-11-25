@@ -568,7 +568,10 @@ function Search(searchString, searchParam, autocompleteListener,
   // Set the default behavior for this search.
   this._behavior = this._searchString ? Prefs.defaultBehavior
                                       : Prefs.emptySearchDefaultBehavior;
-  this._enableActions = searchParam.split(" ").indexOf("enable-actions") != -1;
+
+  let params = new Set(searchParam.split(" "));
+  this._enableActions = params.has("enable-actions");
+  this._disablePrivateActions = params.has("disable-private-actions");
 
   this._searchTokens =
     this.filterTokens(getUnfilteredSearchTokens(this._searchString));
@@ -630,8 +633,14 @@ Search.prototype = {
    * @return true if the behavior is set, false otherwise.
    */
   hasBehavior: function (type) {
-    return this._behavior &
-           Ci.mozIPlacesAutoComplete["BEHAVIOR_" + type.toUpperCase()];
+    let behavior = Ci.mozIPlacesAutoComplete["BEHAVIOR_" + type.toUpperCase()];
+
+    if (this._disablePrivateActions &&
+        behavior == Ci.mozIPlacesAutoComplete.BEHAVIOR_OPENPAGE) {
+      return false;
+    }
+
+    return this._behavior & behavior;
   },
 
   /**
@@ -768,7 +777,7 @@ Search.prototype = {
     let hasFirstResult = false;
 
     if (this._searchTokens.length > 0 &&
-        PlacesUtils.bookmarks.getURIForKeyword(this._searchTokens[0])) {
+        (yield PlacesUtils.promiseHrefAndPostDataForKeyword(this._searchTokens[0])).href) {
       // This may be a keyword of a bookmark.
       queries.unshift(this._keywordQuery);
       hasFirstResult = true;

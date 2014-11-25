@@ -167,7 +167,7 @@ static bool type##SignMask(JSContext *cx, unsigned argc, Value *vp) { \
 
 const Class SimdTypeDescr::class_ = {
     "SIMD",
-    JSCLASS_HAS_RESERVED_SLOTS(JS_DESCR_SLOTS),
+    JSCLASS_HAS_RESERVED_SLOTS(JS_DESCR_SLOTS) | JSCLASS_BACKGROUND_FINALIZE,
     JS_PropertyStub,         /* addProperty */
     JS_DeletePropertyStub,   /* delProperty */
     JS_PropertyStub,         /* getProperty */
@@ -175,7 +175,7 @@ const Class SimdTypeDescr::class_ = {
     JS_EnumerateStub,
     JS_ResolveStub,
     JS_ConvertStub,
-    nullptr,             /* finalize    */
+    TypeDescr::finalize,
     call,                /* call        */
     nullptr,             /* hasInstance */
     nullptr,             /* construct   */
@@ -267,6 +267,7 @@ CreateSimdClass(JSContext *cx,
     typeDescr->initReservedSlot(JS_DESCR_SLOT_SIZE, Int32Value(SimdTypeDescr::size(type)));
     typeDescr->initReservedSlot(JS_DESCR_SLOT_OPAQUE, BooleanValue(false));
     typeDescr->initReservedSlot(JS_DESCR_SLOT_TYPE, Int32Value(T::type));
+    typeDescr->initReservedSlot(JS_DESCR_SLOT_TRACE_LIST, PrivateValue(nullptr));
 
     if (!CreateUserSizeAndAlignmentProperties(cx, typeDescr))
         return nullptr;
@@ -559,10 +560,6 @@ struct Or {
     static inline T apply(T l, T r) { return l | r; }
 };
 template<typename T>
-struct Scale {
-    static inline T apply(int32_t lane, T scalar, T x) { return scalar * x; }
-};
-template<typename T>
 struct WithX {
     static inline T apply(int32_t lane, T scalar, T x) { return lane == 0 ? scalar : x; }
 };
@@ -577,22 +574,6 @@ struct WithZ {
 template<typename T>
 struct WithW {
     static inline T apply(int32_t lane, T scalar, T x) { return lane == 3 ? scalar : x; }
-};
-template<typename T>
-struct WithFlagX {
-    static inline T apply(T l, T f, T x) { return l == 0 ? (f ? 0xFFFFFFFF : 0x0) : x; }
-};
-template<typename T>
-struct WithFlagY {
-    static inline T apply(T l, T f, T x) { return l == 1 ? (f ? 0xFFFFFFFF : 0x0) : x; }
-};
-template<typename T>
-struct WithFlagZ {
-    static inline T apply(T l, T f, T x) { return l == 2 ? (f ? 0xFFFFFFFF : 0x0) : x; }
-};
-template<typename T>
-struct WithFlagW {
-    static inline T apply(T l, T f, T x) { return l == 3 ? (f ? 0xFFFFFFFF : 0x0) : x; }
 };
 struct ShiftLeft {
     static inline int32_t apply(int32_t v, int32_t bits) { return v << bits; }
