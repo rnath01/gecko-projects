@@ -103,7 +103,7 @@ const FILE_MAINTENANCE_SERVICE_BIN = "maintenanceservice.exe";
 const FILE_MAINTENANCE_SERVICE_INSTALLER_BIN = "maintenanceservice_installer.exe";
 const FILE_OLD_VERSION_MAR = "old_version.mar";
 const FILE_PARTIAL_EXE = "partial.exe";
-const FILE_UPDATER_BIN = "updater" + BIN_SUFFIX;
+const FILE_UPDATER_BIN = "updater-xpcshell" + BIN_SUFFIX;
 const FILE_WRONG_CHANNEL_MAR = "wrong_product_channel.mar";
 
 const LOG_SWITCH_SUCCESS = "rename_file: proceeding to rename the directory\n" +
@@ -1477,7 +1477,7 @@ function runUpdate(aExpectedExitValue, aExpectedStatus, aCallback) {
   // Copy the updater binary to the updates directory.
   let binDir = gGREBinDirOrig.clone();
   let updater = binDir.clone();
-  updater.append("updater.app");
+  updater.append("updater-xpcshell.app");
   if (!updater.exists()) {
     updater = binDir.clone();
     updater.append(FILE_UPDATER_BIN);
@@ -1490,10 +1490,10 @@ function runUpdate(aExpectedExitValue, aExpectedStatus, aCallback) {
   updater.copyToFollowingLinks(updatesDir, updater.leafName);
   let updateBin = updatesDir.clone();
   updateBin.append(updater.leafName);
-  if (updateBin.leafName == "updater.app") {
+  if (updateBin.leafName == "updater-xpcshell.app") {
     updateBin.append("Contents");
     updateBin.append("MacOS");
-    updateBin.append("updater");
+    updateBin.append("updater-xpcshell");
     if (!updateBin.exists()) {
       do_throw("Unable to find the updater executable!");
     }

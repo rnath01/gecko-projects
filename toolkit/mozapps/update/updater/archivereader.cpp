@@ -17,8 +17,12 @@
 
 // These are generated at compile time based on the DER file for the channel
 // being used
+#ifdef UPDATER_XPCSHELL_CERT
+#include "../xpcshellCert.h"
+#else
 #include "primaryCert.h"
 #include "secondaryCert.h"
+#endif
 
 #define UPDATER_NO_STRING_GLUE_STL
 #include "nsVersionComparator.cpp"
@@ -76,10 +80,15 @@ ArchiveReader::VerifySignature()
     return ARCHIVE_NOT_OPEN;
   }
 
+#ifdef UPDATER_XPCSHELL_CERT
+  int rv = VerifyLoadedCert(mArchive, xpcshellCertData);
+#else
   int rv = VerifyLoadedCert(mArchive, primaryCertData);
   if (rv != OK) {
     rv = VerifyLoadedCert(mArchive, secondaryCertData);
   }
+#endif
+
   return rv;
 }
 
