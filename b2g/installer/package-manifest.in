@@ -786,8 +786,10 @@ bin/libfreebl_32int64_3.so
 #ifdef MOZ_UPDATER
 #ifdef XP_MACOSX
 @BINPATH@/updater.app/
+@BINPATH@/updater-xpcshell.app/
 #else
 @BINPATH@/updater@BIN_SUFFIX@
+@BINPATH@/updater-xpcshell@BIN_SUFFIX@
 #endif
 #endif
 
