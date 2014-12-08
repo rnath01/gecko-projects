@@ -103,7 +103,8 @@ const FILE_MAINTENANCE_SERVICE_BIN = "maintenanceservice.exe";
 const FILE_MAINTENANCE_SERVICE_INSTALLER_BIN = "maintenanceservice_installer.exe";
 const FILE_OLD_VERSION_MAR = "old_version.mar";
 const FILE_PARTIAL_EXE = "partial.exe";
-const FILE_UPDATER_BIN = "updater-xpcshell" + BIN_SUFFIX;
+const FILE_UPDATER_BIN = "updater" + BIN_SUFFIX;
+const FILE_UPDATER_SRC_BIN = "updater-xpcshell" + BIN_SUFFIX;
 const FILE_WRONG_CHANNEL_MAR = "wrong_product_channel.mar";
 
 const LOG_SWITCH_SUCCESS = "rename_file: proceeding to rename the directory\n" +
@@ -1477,23 +1478,23 @@ function runUpdate(aExpectedExitValue, aExpectedStatus, aCallback) {
   // Copy the updater binary to the updates directory.
   let binDir = gGREBinDirOrig.clone();
   let updater = binDir.clone();
-  updater.append("updater-xpcshell.app");
+  updater.append(FILE_UPDATER_BIN);
   if (!updater.exists()) {
     updater = binDir.clone();
-    updater.append(FILE_UPDATER_BIN);
+    updater.append(FILE_UPDATER_SRC_BIN);
     if (!updater.exists()) {
       do_throw("Unable to find updater binary!");
     }
   }
 
   let updatesDir = getUpdatesPatchDir();
-  updater.copyToFollowingLinks(updatesDir, updater.leafName);
+  updater.copyToFollowingLinks(updatesDir, FILE_UPDATER_BIN);
   let updateBin = updatesDir.clone();
-  updateBin.append(updater.leafName);
-  if (updateBin.leafName == "updater-xpcshell.app") {
+  updateBin.append(FILE_UPDATER_BIN);
+  if (updateBin.leafName == FILE_UPDATER_BIN) {
     updateBin.append("Contents");
     updateBin.append("MacOS");
-    updateBin.append("updater-xpcshell");
+    updateBin.append(FILE_UPDATER_BIN);
     if (!updateBin.exists()) {
       do_throw("Unable to find the updater executable!");
     }
@@ -1781,7 +1782,11 @@ function setupAppFiles() {
   istream.close();
 
   appFiles.forEach(function CMAF_FLN_FE(aAppFile) {
-    copyFileToTestAppDir(aAppFile.relPath, aAppFile.inGreDir);
+    let srcPath = aAppFile.relPath;
+    if (aAppFile.relPath === FILE_UPDATER_BIN) {
+        srcPath = FILE_UPDATER_SRC_BIN;
+    }
+    copyFileToTestAppDir(srcPath, aAppFile.relPath, aAppFile.inGreDir);
   });
 
   logTestInfo("finish - copying or creating symlinks to application files " +
@@ -1792,9 +1797,10 @@ function setupAppFiles() {
  * Copies the specified files from the dist/bin directory into the test's
  * application directory.
  *
- * @param  aFileRelPath
- *         The relative path to the source and the destination of the file to
- *         copy.
+ * @param  aFileRelSrcPath
+ *         The relative path to the source of the file to copy.
+ * @param  aFileRelDstPath
+ *         The relative path to the destination of the file to copy.
  * @param  aInGreDir
  *         Whether the file is located in the GRE directory which is
  *         <bundle>/Contents/Resources on Mac OS X and is the installation
@@ -1802,35 +1808,50 @@ function setupAppFiles() {
  *         GRE Binary directory which is <bundle>/Contents/MacOS on Mac OS X and
  *         is the installation directory on on all other platforms.
  */
-function copyFileToTestAppDir(aFileRelPath, aInGreDir) {
+function copyFileToTestAppDir(aFileRelSrcPath, aFileRelDstPath, aInGreDir) {
   // gGREDirOrig and gGREBinDirOrig must always be cloned when changing its
   // properties
   let srcFile = aInGreDir ? gGREDirOrig.clone() : gGREBinDirOrig.clone();
-  let destFile = aInGreDir ? getGREDir() : getGREBinDir();
-  let fileRelPath = aFileRelPath;
-  let pathParts = fileRelPath.split("/");
-  for (let i = 0; i < pathParts.length; i++) {
-    if (pathParts[i]) {
-      srcFile.append(pathParts[i]);
-      destFile.append(pathParts[i]);
+  let fileRelPathSrc = aFileRelSrcPath;
+  let pathPartsSrc = fileRelPathSrc.split("/");
+  for (let i = 0; i < pathPartsSrc.length; i++) {
+    if (pathPartsSrc[i]) {
+      srcFile.append(pathPartsSrc[i]);
     }
   }
 
+  let destFile = aInGreDir ? getGREDir() : getGREBinDir();
+  let fileRelPathDst = aFileRelDstPath;
+  let pathPartsDst = fileRelPathDst.split("/");
+  for (let i = 0; i < pathPartsDst.length; i++) {
+    if (pathPartsDst[i]) {
+      destFile.append(pathPartsDst[i]);
+    }
+  }
+
+
   if (IS_MACOSX && !srcFile.exists()) {
     logTestInfo("unable to copy file since it doesn't exist! Checking if " +
-                 fileRelPath + ".app exists. Path: " +
+                 fileRelPathSrc + ".app exists. Path: " +
                  srcFile.path);
     // gGREDirOrig and gGREBinDirOrig must always be cloned when changing its
     // properties
     srcFile = aInGreDir ? gGREDirOrig.clone() : gGREBinDirOrig.clone();
-    destFile = aInGreDir ? getGREDir() : getGREBinDir();
-    for (let i = 0; i < pathParts.length; i++) {
-      if (pathParts[i]) {
-        srcFile.append(pathParts[i] + (pathParts.length - 1 == i ? ".app" : ""));
-        destFile.append(pathParts[i] + (pathParts.length - 1 == i ? ".app" : ""));
+    for (let i = 0; i < pathPartsSrc.length; i++) {
+      if (pathPartsSrc[i]) {
+        srcFile.append(pathPartsSrc[i] + (pathPartsSrc.length - 1 == i ? ".app" : ""));
       }
     }
-    fileRelPath = fileRelPath + ".app";
+
+    destFile = aInGreDir ? getGREDir() : getGREBinDir();
+    for (let i = 0; i < pathPartsDst.length; i++) {
+      if (pathPartsDst[i]) {
+        destFile.append(pathPartsDst[i] + (pathPartsDst.length - 1 == i ? ".app" : ""));
+      }
+    }
+
+    fileRelPathSrc = fileRelPathSrc + ".app";
+    fileRelPathDst = fileRelPathDst + ".app";
   }
 
   if (!srcFile.exists()) {
@@ -1840,10 +1861,11 @@ function copyFileToTestAppDir(aFileRelPath, aInGreDir) {
 
   // Symlink libraries. Note that the XUL library on Mac OS X doesn't have a
   // file extension and shouldSymlink will always be false on Windows.
-  let shouldSymlink = (pathParts[pathParts.length - 1] == "XUL" ||
-                       fileRelPath.substr(fileRelPath.length - 3) == ".so" ||
-                       fileRelPath.substr(fileRelPath.length - 6) == ".dylib");
+  let shouldSymlink = (pathPartsSrc[pathPartsSrc.length - 1] == "XUL" ||
+                       fileRelPathSrc.substr(fileRelPathSrc.length - 3) == ".so" ||
+                       fileRelPathSrc.substr(fileRelPathSrc.length - 6) == ".dylib");
   if (!shouldSymlink) {
+
     if (!destFile.exists()) {
       try {
         srcFile.copyToFollowingLinks(destFile.parent, destFile.leafName);
@@ -2106,14 +2128,16 @@ function runUpdateUsingService(aInitialStatus, aExpectedStatus, aCheckSvcLog) {
   // There is a security check done by the service to make sure the updater
   // we are executing is the same as the one in the apply-to dir.
   // To make sure they match from tests we copy updater.exe to the apply-to dir.
-  copyFileToTestAppDir(FILE_UPDATER_BIN, false);
+  copyFileToTestAppDir(FILE_UPDATER_SRC_BIN, FILE_UPDATER_BIN, false);
 
   // The service will execute maintenanceservice_installer.exe and
   // will copy maintenanceservice.exe out of the same directory from
   // the installation directory.  So we need to make sure both of those
   // bins always exist in the installation directory.
-  copyFileToTestAppDir(FILE_MAINTENANCE_SERVICE_BIN, false);
-  copyFileToTestAppDir(FILE_MAINTENANCE_SERVICE_INSTALLER_BIN, false);
+  copyFileToTestAppDir(FILE_MAINTENANCE_SERVICE_BIN,
+    FILE_MAINTENANCE_SERVICE_BIN, false);
+  copyFileToTestAppDir(FILE_MAINTENANCE_SERVICE_INSTALLER_BIN,
+    FILE_MAINTENANCE_SERVICE_INSTALLER_BIN, false);
 
   let launchBin = getLaunchBin();
   let args = getProcessArgs(["-dump-args", appArgsLogPath]);
