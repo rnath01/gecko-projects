@@ -71,6 +71,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "roomsPushNotification",
 XPCOMUtils.defineLazyModuleGetter(this, "MozLoopPushHandler",
                                   "resource:///modules/loop/MozLoopPushHandler.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "UITour",
+                                  "resource:///modules/UITour.jsm");
+
 XPCOMUtils.defineLazyServiceGetter(this, "uuidgen",
                                    "@mozilla.org/uuid-generator;1",
                                    "nsIUUIDGenerator");
@@ -120,6 +123,8 @@ let gConversationWindowData = new Map();
  * and register with the Loop server.
  */
 let MozLoopServiceInternal = {
+  conversationContexts: new Map(),
+
   mocks: {
     pushHandler: undefined,
     webSocket: undefined,
@@ -808,6 +813,11 @@ let MozLoopServiceInternal = {
         chatbox.removeEventListener("DOMContentLoaded", loaded, true);
 
         let window = chatbox.contentWindow;
+
+        window.addEventListener("unload", function onUnloadChat(evt) {
+          UITour.notify("Loop:ChatWindowClosed");
+        });
+
         injectLoopAPI(window);
 
         let ourID = window.QueryInterface(Ci.nsIInterfaceRequestor)
@@ -817,6 +827,22 @@ let MozLoopServiceInternal = {
           if (winID != ourID) {
             return;
           }
+
+          // Chat Window Id, this is different that the internal winId
+          let windowId = window.location.hash.slice(1);
+          var context = this.conversationContexts.get(windowId);
+          var exists = pc.id.match(/session=(\S+)/);
+          if (context && !exists) {
+            // Not ideal but insert our data amidst existing data like this:
+            // - 000 (id=00 url=http)
+            // + 000 (session=000 call=000 id=00 url=http)
+            var pair = pc.id.split("(");  //)
+            if (pair.length == 2) {
+              pc.id = pair[0] + "(session=" + context.sessionId +
+                  (context.callId? " call=" + context.callId : "") + " " + pair[1]; //)
+            }
+          }
+
           if (type == "iceconnectionstatechange") {
             switch(pc.iceConnectionState) {
               case "failed":
@@ -832,6 +858,8 @@ let MozLoopServiceInternal = {
 
         let pc_static = new window.mozRTCPeerConnectionStatic();
         pc_static.registerPeerConnectionLifecycleCallback(onPCLifecycleChange);
+
+        UITour.notify("Loop:ChatWindowOpened");
       }.bind(this), true);
     };
 
@@ -1030,7 +1058,7 @@ this.MozLoopService = {
     };
     LoopRooms.on("add", onRoomsChange);
     LoopRooms.on("update", onRoomsChange);
-    LoopRooms.on("joined", (e, roomToken, participant) => {
+    LoopRooms.on("joined", (e, room, participant) => {
       // Don't alert if we're in the doNotDisturb mode, or the participant
       // is the owner - the content code deals with the rest of the sounds.
       if (MozLoopServiceInternal.doNotDisturb || participant.owner) {
@@ -1039,7 +1067,12 @@ this.MozLoopService = {
 
       let window = gWM.getMostRecentWindow("navigator:browser");
       if (window) {
-        window.LoopUI.playSound("room-joined");
+        window.LoopUI.showNotification({
+          sound: "room-joined",
+          title: room.roomName,
+          message: MozLoopServiceInternal.localizedStrings.get("rooms_room_joined_label"),
+          selectTab: "rooms"
+        });
       }
     });
 
@@ -1480,5 +1513,13 @@ this.MozLoopService = {
 
     log.error("Window data was already fetched before. Possible race condition!");
     return null;
+  },
+
+  getConversationContext: function(winId) {
+    return MozLoopServiceInternal.conversationContexts.get(winId);
+  },
+
+  addConversationContext: function(windowId, context) {
+    MozLoopServiceInternal.conversationContexts.set(windowId, context);
   }
 };

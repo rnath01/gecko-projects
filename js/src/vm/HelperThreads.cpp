@@ -176,10 +176,9 @@ js::CancelOffThreadIonCompile(JSCompartment *compartment, JSScript *script)
 
 static const JSClass parseTaskGlobalClass = {
     "internal-parse-task-global", JSCLASS_GLOBAL_FLAGS,
-    JS_PropertyStub,  JS_DeletePropertyStub,
+    nullptr,          nullptr,
     JS_PropertyStub,  JS_StrictPropertyStub,
-    JS_EnumerateStub, JS_ResolveStub,
-    JS_ConvertStub,   nullptr,
+    nullptr, nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr,
     JS_GlobalObjectTraceHook
 };
@@ -987,7 +986,7 @@ HelperThread::handleAsmJSWorkload()
         AutoUnlockHelperThreadState unlock;
         PerThreadData::AutoEnterRuntime enter(threadData.ptr(), asmData->runtime);
 
-        jit::IonContext icx(asmData->mir->compartment->runtime(),
+        jit::JitContext jcx(asmData->mir->compartment->runtime(),
                             asmData->mir->compartment,
                             &asmData->mir->alloc());
 
@@ -1057,7 +1056,7 @@ HelperThread::handleIonWorkload()
         AutoUnlockHelperThreadState unlock;
         PerThreadData::AutoEnterRuntime enter(threadData.ptr(),
                                               ionBuilder->script()->runtimeFromAnyThread());
-        jit::IonContext ictx(jit::CompileRuntime::get(rt),
+        jit::JitContext jctx(jit::CompileRuntime::get(rt),
                              jit::CompileCompartment::get(ionBuilder->script()->compartment()),
                              &ionBuilder->alloc());
         ionBuilder->setBackgroundCodegen(jit::CompileBackEnd(ionBuilder));

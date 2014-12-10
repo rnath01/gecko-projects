@@ -223,6 +223,8 @@ loop.conversation = (function(mozL10n) {
    * At the moment, it does more than that, these parts need refactoring out.
    */
   var IncomingConversationView = React.createClass({displayName: 'IncomingConversationView',
+    mixins: [sharedMixins.AudioMixin, sharedMixins.WindowCloseMixin],
+
     propTypes: {
       client: React.PropTypes.instanceOf(loop.Client).isRequired,
       conversation: React.PropTypes.instanceOf(sharedModels.ConversationModel)
@@ -230,7 +232,8 @@ loop.conversation = (function(mozL10n) {
       sdk: React.PropTypes.object.isRequired,
       conversationAppStore: React.PropTypes.instanceOf(
         loop.store.ConversationAppStore).isRequired,
-      feedbackStore: React.PropTypes.instanceOf(loop.store.FeedbackStore)
+      feedbackStore:
+        React.PropTypes.instanceOf(loop.store.FeedbackStore).isRequired
     },
 
     getInitialState: function() {
@@ -302,6 +305,8 @@ loop.conversation = (function(mozL10n) {
 
           document.title = mozL10n.get("conversation_has_ended");
 
+          this.play("terminated");
+
           return (
             sharedViews.FeedbackView({
               feedbackStore: this.props.feedbackStore, 
@@ -310,7 +315,7 @@ loop.conversation = (function(mozL10n) {
           );
         }
         case "close": {
-          window.close();
+          this.closeWindow();
           return (React.DOM.div(null));
         }
       }
@@ -454,10 +459,6 @@ loop.conversation = (function(mozL10n) {
       setTimeout(this.closeWindow, 0);
     },
 
-    closeWindow: function() {
-      window.close();
-    },
-
     /**
      * Accepts an incoming call.
      */
@@ -536,7 +537,7 @@ loop.conversation = (function(mozL10n) {
    * in progress, and hence, which view to display.
    */
   var AppControllerView = React.createClass({displayName: 'AppControllerView',
-    mixins: [Backbone.Events],
+    mixins: [Backbone.Events, sharedMixins.WindowCloseMixin],
 
     propTypes: {
       // XXX Old types required for incoming call view.
@@ -552,7 +553,8 @@ loop.conversation = (function(mozL10n) {
                               .isRequired,
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
       roomStore: React.PropTypes.instanceOf(loop.store.RoomStore),
-      feedbackStore: React.PropTypes.instanceOf(loop.store.FeedbackStore)
+      feedbackStore:
+        React.PropTypes.instanceOf(loop.store.FeedbackStore).isRequired
     },
 
     getInitialState: function() {
@@ -567,10 +569,6 @@ loop.conversation = (function(mozL10n) {
 
     componentWillUnmount: function() {
       this.stopListening(this.props.conversationAppStore);
-    },
-
-    closeWindow: function() {
-      window.close();
     },
 
     render: function() {
@@ -650,9 +648,9 @@ loop.conversation = (function(mozL10n) {
       dispatcher: dispatcher,
       mozLoop: navigator.mozLoop
     });
-    var conversationStore = new loop.store.ConversationStore({}, {
+    var conversationStore = new loop.store.ConversationStore(dispatcher, {
       client: client,
-      dispatcher: dispatcher,
+      mozLoop: navigator.mozLoop,
       sdkDriver: sdkDriver
     });
     var activeRoomStore = new loop.store.ActiveRoomStore(dispatcher, {
@@ -669,10 +667,10 @@ loop.conversation = (function(mozL10n) {
 
     // XXX Old class creation for the incoming conversation view, whilst
     // we transition across (bug 1072323).
-    var conversation = new sharedModels.ConversationModel(
-      {},                // Model attributes
-      {sdk: window.OT}   // Model dependencies
-    );
+    var conversation = new sharedModels.ConversationModel({}, {
+      sdk: window.OT,
+      mozLoop: navigator.mozLoop
+    });
 
     // Obtain the windowId and pass it through
     var helper = new loop.shared.utils.Helper();

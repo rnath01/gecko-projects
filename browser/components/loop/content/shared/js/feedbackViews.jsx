@@ -15,7 +15,8 @@ loop.shared.views.FeedbackView = (function(l10n) {
   var sharedActions = loop.shared.actions;
   var sharedMixins = loop.shared.mixins;
 
-  var WINDOW_AUTOCLOSE_TIMEOUT_IN_SECONDS = 5;
+  var WINDOW_AUTOCLOSE_TIMEOUT_IN_SECONDS =
+      loop.shared.views.WINDOW_AUTOCLOSE_TIMEOUT_IN_SECONDS = 5;
   var FEEDBACK_STATES = loop.store.FEEDBACK_STATES;
 
   /**
@@ -222,7 +223,7 @@ loop.shared.views.FeedbackView = (function(l10n) {
    * Feedback view.
    */
   var FeedbackView = React.createClass({
-    mixins: [Backbone.Events, sharedMixins.AudioMixin],
+    mixins: [Backbone.Events],
 
     propTypes: {
       feedbackStore: React.PropTypes.instanceOf(loop.store.FeedbackStore),
@@ -240,10 +241,6 @@ loop.shared.views.FeedbackView = (function(l10n) {
 
     componentWillMount: function() {
       this.listenTo(this.props.feedbackStore, "change", this._onStoreStateChanged);
-    },
-
-    componentDidMount: function() {
-      this.play("terminated");
     },
 
     componentWillUnmount: function() {

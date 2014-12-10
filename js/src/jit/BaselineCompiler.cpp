@@ -13,9 +13,9 @@
 #include "jit/BaselineJIT.h"
 #include "jit/FixedList.h"
 #include "jit/IonAnalysis.h"
-#include "jit/IonLinker.h"
 #include "jit/JitcodeMap.h"
 #include "jit/JitSpewer.h"
+#include "jit/Linker.h"
 #ifdef JS_ION_PERF
 # include "jit/PerfSpewer.h"
 #endif
@@ -103,10 +103,8 @@ BaselineCompiler::compile()
     if (!emitEpilogue())
         return Method_Error;
 
-#ifdef JSGC_GENERATIONAL
     if (!emitOutOfLinePostBarrierSlot())
         return Method_Error;
-#endif
 
     if (masm.oom())
         return Method_Error;
@@ -410,6 +408,10 @@ BaselineCompiler::emitPrologue()
     if (!emitSPSPush())
         return false;
 
+    // Pad a nop so that the last non-op ICEntry we pushed does not get
+    // confused with the start address of the first op for PC mapping.
+    masm.nop();
+
     return true;
 }
 
@@ -444,7 +446,6 @@ BaselineCompiler::emitEpilogue()
     return true;
 }
 
-#ifdef JSGC_GENERATIONAL
 // On input:
 //  R2.scratchReg() contains object being written to.
 //  Called with the baseline stack synced, except for R0 which is preserved.
@@ -481,7 +482,6 @@ BaselineCompiler::emitOutOfLinePostBarrierSlot()
     masm.ret();
     return true;
 }
-#endif // JSGC_GENERATIONAL
 
 bool
 BaselineCompiler::emitIC(ICStub *stub, ICEntry::Kind kind)
@@ -1680,7 +1680,7 @@ BaselineCompiler::emit_JSOP_NEWARRAY()
     return true;
 }
 
-typedef JSObject *(*NewArrayCopyOnWriteFn)(JSContext *, HandleNativeObject, gc::InitialHeap);
+typedef JSObject *(*NewArrayCopyOnWriteFn)(JSContext *, HandleArrayObject, gc::InitialHeap);
 const VMFunction jit::NewArrayCopyOnWriteInfo =
     FunctionInfo<NewArrayCopyOnWriteFn>(js::NewDenseCopyOnWriteArray);
 
@@ -1738,8 +1738,8 @@ BaselineCompiler::emit_JSOP_NEWOBJECT()
             return false;
     }
 
-    RootedNativeObject baseObject(cx, script->getObject(pc));
-    RootedNativeObject templateObject(cx, CopyInitializerObject(cx, baseObject, TenuredObject));
+    RootedPlainObject baseObject(cx, &script->getObject(pc)->as<PlainObject>());
+    RootedPlainObject templateObject(cx, CopyInitializerObject(cx, baseObject, TenuredObject));
     if (!templateObject)
         return false;
 
@@ -1805,8 +1805,8 @@ BaselineCompiler::emit_JSOP_NEWINIT()
     } else {
         MOZ_ASSERT(key == JSProto_Object);
 
-        RootedNativeObject templateObject(cx);
-        templateObject = NewNativeBuiltinClassInstance(cx, &JSObject::class_, TenuredObject);
+        RootedPlainObject templateObject(cx,
+            NewBuiltinClassInstance<PlainObject>(cx, TenuredObject));
         if (!templateObject)
             return false;
 
@@ -1853,7 +1853,7 @@ BaselineCompiler::emit_JSOP_INITELEM()
     return true;
 }
 
-typedef bool (*MutateProtoFn)(JSContext *cx, HandleObject obj, HandleValue newProto);
+typedef bool (*MutateProtoFn)(JSContext *cx, HandlePlainObject obj, HandleValue newProto);
 static const VMFunction MutateProtoInfo = FunctionInfo<MutateProtoFn>(MutatePrototype);
 
 bool
@@ -1953,6 +1953,12 @@ BaselineCompiler::emit_JSOP_SETELEM()
     return true;
 }
 
+bool
+BaselineCompiler::emit_JSOP_STRICTSETELEM()
+{
+    return emit_JSOP_SETELEM();
+}
+
 typedef bool (*DeleteElementFn)(JSContext *, HandleValue, HandleValue, bool *);
 static const VMFunction DeleteElementStrictInfo = FunctionInfo<DeleteElementFn>(DeleteElement<true>);
 static const VMFunction DeleteElementNonStrictInfo = FunctionInfo<DeleteElementFn>(DeleteElement<false>);
@@ -1970,13 +1976,20 @@ BaselineCompiler::emit_JSOP_DELELEM()
     pushArg(R1);
     pushArg(R0);
 
-    if (!callVM(script->strict() ? DeleteElementStrictInfo : DeleteElementNonStrictInfo))
+    bool strict = JSOp(*pc) == JSOP_STRICTDELELEM;
+    if (!callVM(strict ? DeleteElementStrictInfo : DeleteElementNonStrictInfo))
         return false;
 
     masm.boxNonDouble(JSVAL_TYPE_BOOLEAN, ReturnReg, R1);
     frame.popn(2);
     frame.push(R1);
     return true;
+}
+
+bool
+BaselineCompiler::emit_JSOP_STRICTDELELEM()
+{
+    return emit_JSOP_DELELEM();
 }
 
 bool
@@ -2048,13 +2061,31 @@ BaselineCompiler::emit_JSOP_SETPROP()
 }
 
 bool
+BaselineCompiler::emit_JSOP_STRICTSETPROP()
+{
+    return emit_JSOP_SETPROP();
+}
+
+bool
 BaselineCompiler::emit_JSOP_SETNAME()
 {
     return emit_JSOP_SETPROP();
 }
 
 bool
+BaselineCompiler::emit_JSOP_STRICTSETNAME()
+{
+    return emit_JSOP_SETPROP();
+}
+
+bool
 BaselineCompiler::emit_JSOP_SETGNAME()
+{
+    return emit_JSOP_SETPROP();
+}
+
+bool
+BaselineCompiler::emit_JSOP_STRICTSETGNAME()
 {
     return emit_JSOP_SETPROP();
 }
@@ -2109,13 +2140,20 @@ BaselineCompiler::emit_JSOP_DELPROP()
     pushArg(ImmGCPtr(script->getName(pc)));
     pushArg(R0);
 
-    if (!callVM(script->strict() ? DeletePropertyStrictInfo : DeletePropertyNonStrictInfo))
+    bool strict = JSOp(*pc) == JSOP_STRICTDELPROP;
+    if (!callVM(strict ? DeletePropertyStrictInfo : DeletePropertyNonStrictInfo))
         return false;
 
     masm.boxNonDouble(JSVAL_TYPE_BOOLEAN, ReturnReg, R1);
     frame.pop();
     frame.push(R1);
     return true;
+}
+
+bool
+BaselineCompiler::emit_JSOP_STRICTDELPROP()
+{
+    return emit_JSOP_DELPROP();
 }
 
 void
@@ -2205,7 +2243,6 @@ BaselineCompiler::emit_JSOP_SETALIASEDVAR()
     masm.storeValue(R0, address);
     frame.push(R0);
 
-#ifdef JSGC_GENERATIONAL
     // Only R0 is live at this point.
     // Scope coordinate object is already in R2.scratchReg().
     Register temp = R1.scratchReg();
@@ -2217,13 +2254,11 @@ BaselineCompiler::emit_JSOP_SETALIASEDVAR()
     masm.call(&postBarrierSlot_); // Won't clobber R0
 
     masm.bind(&skipBarrier);
-#endif
-
     return true;
 }
 
 bool
-BaselineCompiler::emit_JSOP_NAME()
+BaselineCompiler::emit_JSOP_GETNAME()
 {
     frame.syncStack(0);
 
@@ -2545,7 +2580,6 @@ BaselineCompiler::emitFormalArgAccess(uint32_t arg, bool get)
         masm.loadValue(frame.addressOfStackValue(frame.peek(-1)), R0);
         masm.storeValue(R0, argAddr);
 
-#ifdef JSGC_GENERATIONAL
         MOZ_ASSERT(frame.numUnsyncedSlots() == 0);
 
         Register temp = R1.scratchReg();
@@ -2562,7 +2596,6 @@ BaselineCompiler::emitFormalArgAccess(uint32_t arg, bool get)
         masm.call(&postBarrierSlot_);
 
         masm.bind(&skipBarrier);
-#endif
     }
 
     masm.bind(&done);
@@ -2716,6 +2749,12 @@ BaselineCompiler::emit_JSOP_EVAL()
 }
 
 bool
+BaselineCompiler::emit_JSOP_STRICTEVAL()
+{
+    return emitCall();
+}
+
+bool
 BaselineCompiler::emit_JSOP_SPREADCALL()
 {
     return emitSpreadCall();
@@ -2729,6 +2768,12 @@ BaselineCompiler::emit_JSOP_SPREADNEW()
 
 bool
 BaselineCompiler::emit_JSOP_SPREADEVAL()
+{
+    return emitSpreadCall();
+}
+
+bool
+BaselineCompiler::emit_JSOP_STRICTSPREADEVAL()
 {
     return emitSpreadCall();
 }
@@ -3325,7 +3370,6 @@ BaselineCompiler::emit_JSOP_INITIALYIELD()
     masm.patchableCallPreBarrier(scopeChainSlot, MIRType_Value);
     masm.storeValue(JSVAL_TYPE_OBJECT, scopeObj, scopeChainSlot);
 
-#ifdef JSGC_GENERATIONAL
     Register temp = R1.scratchReg();
     Label skipBarrier;
     masm.branchPtrInNurseryRange(Assembler::Equal, genObj, temp, &skipBarrier);
@@ -3335,7 +3379,6 @@ BaselineCompiler::emit_JSOP_INITIALYIELD()
     masm.call(&postBarrierSlot_);
     masm.pop(genObj);
     masm.bind(&skipBarrier);
-#endif
 
     masm.tagValue(JSVAL_TYPE_OBJECT, genObj, JSReturnOperand);
     return emitReturn();
@@ -3384,7 +3427,6 @@ BaselineCompiler::emit_JSOP_YIELD()
         masm.patchableCallPreBarrier(scopeChainSlot, MIRType_Value);
         masm.storeValue(JSVAL_TYPE_OBJECT, scopeObj, scopeChainSlot);
 
-#ifdef JSGC_GENERATIONAL
         Register temp = R1.scratchReg();
         Label skipBarrier;
         masm.branchPtrInNurseryRange(Assembler::Equal, genObj, temp, &skipBarrier);
@@ -3392,7 +3434,6 @@ BaselineCompiler::emit_JSOP_YIELD()
         MOZ_ASSERT(genObj == R2.scratchReg());
         masm.call(&postBarrierSlot_);
         masm.bind(&skipBarrier);
-#endif
     } else {
         masm.loadBaselineFramePtr(BaselineFrameReg, R1.scratchReg());
 

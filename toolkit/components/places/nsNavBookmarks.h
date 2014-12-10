@@ -210,6 +210,11 @@ public:
   nsresult GetDescendantFolders(int64_t aFolderId,
                                 nsTArray<int64_t>& aDescendantFoldersArray);
 
+  static const int32_t kGetChildrenIndex_Guid;
+  static const int32_t kGetChildrenIndex_Position;
+  static const int32_t kGetChildrenIndex_Type;
+  static const int32_t kGetChildrenIndex_PlaceID;
+
 private:
   static nsNavBookmarks* gBookmarksService;
 
@@ -356,11 +361,6 @@ private:
 
   int64_t RecursiveFindRedirectedBookmark(int64_t aPlaceId);
 
-  static const int32_t kGetChildrenIndex_Position;
-  static const int32_t kGetChildrenIndex_Type;
-  static const int32_t kGetChildrenIndex_PlaceID;
-  static const int32_t kGetChildrenIndex_Guid;
-
   class RemoveFolderTransaction MOZ_FINAL : public nsITransaction {
   public:
     explicit RemoveFolderTransaction(int64_t aID) : mID(aID) {}
@@ -422,9 +422,20 @@ private:
   bool mBatching;
 
   /**
-   * Removes orphan keywords.
+   * Always call EnsureKeywordsHash() and check it for errors before actually
+   * using the hash.  Internal keyword methods are already doing that.
    */
-  nsresult removeOrphanKeywords();
+  nsresult EnsureKeywordsHash();
+  nsDataHashtable<nsTrimInt64HashKey, nsString> mBookmarkToKeywordHash;
+  bool mBookmarkToKeywordHashInitialized;
+
+  /**
+   * This function must be called every time a bookmark is removed.
+   *
+   * @param aURI
+   *        Uri to test.
+   */
+  nsresult UpdateKeywordsHashForRemovedBookmark(int64_t aItemId);
 };
 
 #endif // nsNavBookmarks_h_

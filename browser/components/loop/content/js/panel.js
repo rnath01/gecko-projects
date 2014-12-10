@@ -214,7 +214,7 @@ loop.panel = (function(_, mozL10n) {
             )
           ),
         });
-        return React.DOM.div(null, 
+        return React.DOM.div({id: "powered-by-wrapper"}, 
           React.DOM.p({id: "powered-by"}, 
             mozL10n.get("powered_by_beforeLogo"), 
             React.DOM.img({id: "powered-by-logo", className: locale}), 
@@ -521,6 +521,71 @@ loop.panel = (function(_, mozL10n) {
     }
   });
 
+  var EditInPlace = React.createClass({displayName: 'EditInPlace',
+    mixins: [React.addons.LinkedStateMixin],
+
+    propTypes: {
+      onChange: React.PropTypes.func.isRequired,
+      text: React.PropTypes.string,
+    },
+
+    getDefaultProps: function() {
+      return {text: ""};
+    },
+
+    getInitialState: function() {
+      return {edit: false, text: this.props.text};
+    },
+
+    componentWillReceiveProps: function(nextProps) {
+      if (nextProps.text !== this.props.text) {
+        this.setState({text: nextProps.text});
+      }
+    },
+
+    handleTextClick: function(event) {
+      event.stopPropagation();
+      event.preventDefault();
+      this.setState({edit: true}, function() {
+        this.getDOMNode().querySelector("input").select();
+      }.bind(this));
+    },
+
+    handleInputClick: function(event) {
+      event.stopPropagation();
+    },
+
+    handleFormSubmit: function(event) {
+      event.preventDefault();
+      this.props.onChange(this.state.text);
+      this.setState({edit: false});
+    },
+
+    cancelEdit: function(event) {
+      event.stopPropagation();
+      event.preventDefault();
+      this.setState({edit: false, text: this.props.text});
+    },
+
+    render: function() {
+      if (!this.state.edit) {
+        return (
+          React.DOM.span({className: "edit-in-place", onClick: this.handleTextClick, 
+                title: mozL10n.get("rooms_name_this_room_tooltip2")}, 
+            this.state.text
+          )
+        );
+      }
+      return (
+        React.DOM.form({onSubmit: this.handleFormSubmit}, 
+          React.DOM.input({type: "text", valueLink: this.linkState("text"), 
+                 onClick: this.handleInputClick, 
+                 onBlur: this.cancelEdit})
+        )
+      );
+    }
+  });
+
   /**
    * Room list entry.
    */
@@ -529,6 +594,8 @@ loop.panel = (function(_, mozL10n) {
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
       room:       React.PropTypes.instanceOf(loop.store.Room).isRequired
     },
+
+    mixins: [loop.shared.mixins.WindowCloseMixin],
 
     getInitialState: function() {
       return { urlCopied: false };
@@ -539,14 +606,16 @@ loop.panel = (function(_, mozL10n) {
         (nextState.urlCopied !== this.state.urlCopied);
     },
 
-    handleClickRoomUrl: function(event) {
+    handleClickEntry: function(event) {
       event.preventDefault();
       this.props.dispatcher.dispatch(new sharedActions.OpenRoom({
         roomToken: this.props.room.roomToken
       }));
+      this.closeWindow();
     },
 
     handleCopyButtonClick: function(event) {
+      event.stopPropagation();
       event.preventDefault();
       this.props.dispatcher.dispatch(new sharedActions.CopyRoomUrl({
         roomUrl: this.props.room.roomUrl
@@ -555,10 +624,31 @@ loop.panel = (function(_, mozL10n) {
     },
 
     handleDeleteButtonClick: function(event) {
+      event.stopPropagation();
       event.preventDefault();
-      // XXX We should prompt end user for confirmation; see bug 1092953.
-      this.props.dispatcher.dispatch(new sharedActions.DeleteRoom({
-        roomToken: this.props.room.roomToken
+      navigator.mozLoop.confirm({
+        message: mozL10n.get("rooms_list_deleteConfirmation_label"),
+        okButton: null,
+        cancelButton: null
+      }, function(err, result) {
+        if (err) {
+          throw err;
+        }
+
+        if (!result) {
+          return;
+        }
+
+        this.props.dispatcher.dispatch(new sharedActions.DeleteRoom({
+          roomToken: this.props.room.roomToken
+        }));
+      }.bind(this));
+    },
+
+    renameRoom: function(newRoomName) {
+      this.props.dispatcher.dispatch(new sharedActions.RenameRoom({
+        roomToken: this.props.room.roomToken,
+        newRoomName: newRoomName
       }));
     },
 
@@ -582,20 +672,19 @@ loop.panel = (function(_, mozL10n) {
       });
 
       return (
-        React.DOM.div({className: roomClasses, onMouseLeave: this.handleMouseLeave}, 
+        React.DOM.div({className: roomClasses, onMouseLeave: this.handleMouseLeave, 
+             onClick: this.handleClickEntry}, 
           React.DOM.h2(null, 
             React.DOM.span({className: "room-notification"}), 
-            room.roomName, 
+            EditInPlace({text: room.roomName, onChange: this.renameRoom}), 
             React.DOM.button({className: copyButtonClasses, 
+              title: mozL10n.get("rooms_list_copy_url_tooltip"), 
               onClick: this.handleCopyButtonClick}), 
             React.DOM.button({className: "delete-link", 
+              title: mozL10n.get("rooms_list_delete_tooltip"), 
               onClick: this.handleDeleteButtonClick})
           ), 
-          React.DOM.p(null, 
-            React.DOM.a({href: "#", onClick: this.handleClickRoomUrl}, 
-              room.roomUrl
-            )
-          )
+          React.DOM.p(null, React.DOM.a({href: "#"}, room.roomUrl))
         )
       );
     }
@@ -672,7 +761,7 @@ loop.panel = (function(_, mozL10n) {
             }, this)
           ), 
           React.DOM.p(null, 
-            React.DOM.button({className: "btn btn-info", 
+            React.DOM.button({className: "btn btn-info new-room-button", 
                     onClick: this.handleCreateButtonClick, 
                     disabled: this._hasPendingOperation()}, 
               mozL10n.get("rooms_new_room_button_label")
@@ -757,6 +846,17 @@ loop.panel = (function(_, mozL10n) {
       });
     },
 
+    _UIActionHandler: function(e) {
+      switch (e.detail.action) {
+        case "selectTab":
+          this.selectTab(e.detail.tab);
+          break;
+        default:
+          console.error("Invalid action", e.detail.action);
+          break;
+      }
+    },
+
     /**
      * The rooms feature is hidden by default for now. Once it gets mainstream,
      * this method can be simplified.
@@ -801,11 +901,13 @@ loop.panel = (function(_, mozL10n) {
     componentDidMount: function() {
       window.addEventListener("LoopStatusChanged", this._onStatusChanged);
       window.addEventListener("GettingStartedSeen", this._gettingStartedSeen);
+      window.addEventListener("UIAction", this._UIActionHandler);
     },
 
     componentWillUnmount: function() {
       window.removeEventListener("LoopStatusChanged", this._onStatusChanged);
       window.removeEventListener("GettingStartedSeen", this._gettingStartedSeen);
+      window.removeEventListener("UIAction", this._UIActionHandler);
     },
 
     _getUserDisplayName: function() {

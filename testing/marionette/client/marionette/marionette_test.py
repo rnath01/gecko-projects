@@ -82,10 +82,10 @@ def expectedFailure(func):
 
 def skip_if_b2g(target):
     def wrapper(self, *args, **kwargs):
-        if not self.marionette.session_capabilities['device'] == 'qemu':
-            return target(self, *args, **kwargs)
-        else:
+        if self.marionette.session_capabilities.get('b2g') == True:
             raise SkipTest('skipping due to b2g')
+        return target(self, *args, **kwargs)
+
     return wrapper
 
 def parameterized(func_suffix, *args, **kwargs):
