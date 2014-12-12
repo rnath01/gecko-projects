@@ -3,6 +3,19 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+XPCSHELLTESTROOT = $(abspath $(DEPTH))/_tests/xpcshell/$(relativesrcdir)
+
+ifndef MOZ_PROFILE_GENERATE
+ifdef COMPILE_ENVIRONMENT
+INSTALL_TARGETS              += xpcshell-updater
+xpcshell-updater_TARGET  := libs
+xpcshell-updater_DEST    := $(XPCSHELLTESTROOT)/data
+xpcshell-updater_FILES   := $(DIST)/bin/updater-xpcshell$(BIN_SUFFIX)
+endif
+endif # Not MOZ_PROFILE_GENERATE
+
+include $(topsrcdir)/config/rules.mk
+
 ifndef MOZ_WINCONSOLE
 ifdef MOZ_DEBUG
 MOZ_WINCONSOLE = 1
@@ -10,8 +23,6 @@ else
 MOZ_WINCONSOLE = 0
 endif
 endif
-
-include $(topsrcdir)/config/rules.mk
 
 ifdef MOZ_WIDGET_GTK
 libs:: ../updater.png
@@ -21,13 +32,15 @@ endif
 
 ifeq (cocoa,$(MOZ_WIDGET_TOOLKIT))
 libs::
-	$(NSINSTALL) -D $(DIST)/bin/updater-xpcshell.app
-	rsync -a -C --exclude '*.in' $(srcdir)/../macbuild/Contents $(DIST)/bin/updater-xpcshell.app
+	$(NSINSTALL) -D $(XPCSHELLTESTROOT)/data/updater-xpcshell.app
+	rsync -a -C --exclude '*.in' $(srcdir)/../macbuild/Contents $(XPCSHELLTESTROOT)/data/updater-xpcshell.app
 	sed -e 's/%APP_NAME%/$(MOZ_APP_DISPLAYNAME)/' $(srcdir)/../macbuild/Contents/Resources/English.lproj/InfoPlist.strings.in | \
-	  iconv -f UTF-8 -t UTF-16 > $(DIST)/bin/updater-xpcshell.app/Contents/Resources/English.lproj/InfoPlist.strings
-	$(NSINSTALL) -D $(DIST)/bin/updater-xpcshell.app/Contents/MacOS
-	$(NSINSTALL) $(DIST)/bin/updater-xpcshell $(DIST)/bin/updater-xpcshell.app/Contents/MacOS
-	rm -f $(DIST)/bin/updater-xpcshell
+	  iconv -f UTF-8 -t UTF-16 > $(XPCSHELLTESTROOT)/data/updater-xpcshell.app/Contents/Resources/English.lproj/InfoPlist.strings
+	$(NSINSTALL) -D $(XPCSHELLTESTROOT)/data/updater-xpcshell.app/Contents/MacOS/updater-xpcshell
+	$(NSINSTALL) $(XPCSHELLTESTROOT)/data/updater-xpcshell $(XPCSHELLTESTROOT)/data/updater-xpcshell.app/Contents/MacOS
+	rm -f $(XPCSHELLTESTROOT)/data/updater-xpcshell
+	mv $(XPCSHELLTESTROOT)/data/updater-xpcshell.app $(XPCSHELLTESTROOT)/data/updater.app
+	mv $(XPCSHELLTESTROOT)/data/updater.app/Contents/MacOS/updater-xpcshell $(XPCSHELLTESTROOT)/data/updater.app/Contents/MacOS/updater
 endif
 
 CXXFLAGS += $(MOZ_BZ2_CFLAGS)
