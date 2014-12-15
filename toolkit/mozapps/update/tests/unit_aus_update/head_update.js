@@ -1476,11 +1476,9 @@ if (IS_WIN) {
 function runUpdate(aExpectedExitValue, aExpectedStatus, aCallback) {
   // Copy the updater binary to the updates directory.
   let binDir = gGREBinDirOrig.clone();
-  let updater = binDir.clone();
-  updater.append("updater.app");
+  let updater = getTestDirFile("updater.app");
   if (!updater.exists()) {
-    updater = binDir.clone();
-    updater.append(FILE_UPDATER_BIN);
+    updater = getTestDirFile(FILE_UPDATER_BIN);
     if (!updater.exists()) {
       do_throw("Unable to find updater binary!");
     }
@@ -1781,8 +1779,23 @@ function setupAppFiles() {
   istream.close();
 
   appFiles.forEach(function CMAF_FLN_FE(aAppFile) {
-    copyFileToTestAppDir(aAppFile.relPath, aAppFile.inGreDir);
+    // We use the updater binary after this loop from the data dir instead
+    // because it has the xpcshell certs.
+    if (aAppFile.relPath !== FILE_UPDATER_BIN) {
+        copyFileToTestAppDir(aAppFile.relPath, aAppFile.inGreDir);
+    }
   });
+
+  // Copy the xpcshell updater binary
+  let updater = getTestDirFile("updater.app");
+  if (!updater.exists()) {
+    updater = getTestDirFile(FILE_UPDATER_BIN);
+    if (!updater.exists()) {
+      do_throw("Unable to find updater binary!");
+    }
+  }
+  let outputBinDir = getGREBinDir()
+  updater.copyToFollowingLinks(outputBinDir, updater.leafName);
 
   logTestInfo("finish - copying or creating symlinks to application files " +
               "for the test");
