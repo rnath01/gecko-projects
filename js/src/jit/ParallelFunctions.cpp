@@ -289,7 +289,7 @@ do {                                                                            
         *res = (l OP r) == EXPECTED;                                            \
     } else if (lhs.isNumber() && rhs.isBoolean()) {                             \
         double l = lhs.toNumber();                                              \
-        double r = lhs.toBoolean() ? 1.0 : 0.0;                                 \
+        double r = rhs.toBoolean() ? 1.0 : 0.0;                                 \
         *res = (l OP r) == EXPECTED;                                            \
     } else {                                                                    \
         int32_t vsZero;                                                         \
@@ -549,7 +549,8 @@ jit::BailoutPar(BailoutStack *sp, uint8_t **entryFramePointer)
     SnapshotIterator snapIter(frameIter);
 
     cx->bailoutRecord->setIonBailoutKind(snapIter.bailoutKind());
-    cx->bailoutRecord->rematerializeFrames(cx, frameIter);
+    while (!frameIter.done())
+        ++frameIter;
 
     MOZ_ASSERT(frameIter.done());
     *entryFramePointer = frameIter.fp();

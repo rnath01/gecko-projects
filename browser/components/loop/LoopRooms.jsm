@@ -135,7 +135,7 @@ let LoopRoomsInternal = {
   get participantsCount() {
     let count = 0;
     for (let room of this.rooms.values()) {
-      if (!("participants" in room)) {
+      if (room.deleted || !("participants" in room)) {
         continue;
       }
       count += room.participants.length;
@@ -469,6 +469,13 @@ let LoopRoomsInternal = {
    * @param {String} channelID Notification channel identifier.
    */
   onNotification: function(version, channelID) {
+    // See if we received a notification for the channel that's currently active:
+    let channelIDs = MozLoopService.channelIDs;
+    if ((this.sessionType == LOOP_SESSION_TYPE.GUEST && channelID != channelIDs.roomsGuest) ||
+        (this.sessionType == LOOP_SESSION_TYPE.FXA   && channelID != channelIDs.roomsFxA)) {
+      return;
+    }
+
     gDirty = true;
     this.getAll(version, () => {});
   },

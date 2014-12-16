@@ -23,14 +23,14 @@ loop.panel = (function(_, mozL10n) {
 
   var TabView = React.createClass({
     propTypes: {
-      buttonsHidden: React.PropTypes.bool,
+      buttonsHidden: React.PropTypes.array,
       // The selectedTab prop is used by the UI showcase.
       selectedTab: React.PropTypes.string
     },
 
     getDefaultProps: function() {
       return {
-        buttonsHidden: false
+        buttonsHidden: []
       };
     },
 
@@ -60,6 +60,9 @@ loop.panel = (function(_, mozL10n) {
           return;
         }
         var tabName = tab.props.name;
+        if (this.props.buttonsHidden.indexOf(tabName) > -1) {
+          return;
+        }
         var isSelected = (this.state.selectedTab == tabName);
         if (!tab.props.hidden) {
           tabButtons.push(
@@ -77,9 +80,7 @@ loop.panel = (function(_, mozL10n) {
       }, this);
       return (
         <div className="tab-view-container">
-          {!this.props.buttonsHidden
-            ? <ul className="tab-view">{tabButtons}</ul>
-            : null}
+          <ul className="tab-view">{tabButtons}</ul>
           {tabs}
         </div>
       );
@@ -193,11 +194,16 @@ loop.panel = (function(_, mozL10n) {
 
   var ToSView = React.createClass({
     getInitialState: function() {
-      return {seenToS: navigator.mozLoop.getLoopPref("seenToS")};
+      var getPref = navigator.mozLoop.getLoopPref.bind(navigator.mozLoop);
+
+      return {
+        seenToS: getPref("seenToS"),
+        gettingStartedSeen: getPref("gettingStarted.seen")
+      };
     },
 
     render: function() {
-      if (this.state.seenToS == "unseen") {
+      if (!this.state.gettingStartedSeen || this.state.seenToS == "unseen") {
         var locale = mozL10n.getLanguage();
         var terms_of_use_url = navigator.mozLoop.getLoopPref('legal.ToS_url');
         var privacy_notice_url = navigator.mozLoop.getLoopPref('legal.privacy_url');
@@ -318,7 +324,8 @@ loop.panel = (function(_, mozL10n) {
                                    onClick={this.handleClickAccountEntry}
                                    icon="account"
                                    displayed={this._isSignedIn()} />
-            <SettingsDropdownEntry label={mozL10n.get("tour_label")}
+            <SettingsDropdownEntry icon="tour"
+                                   label={mozL10n.get("tour_label")}
                                    onClick={this.openGettingStartedTour} />
             <SettingsDropdownEntry label={this._isSignedIn() ?
                                           mozL10n.get("settings_menu_item_signout") :
@@ -684,7 +691,7 @@ loop.panel = (function(_, mozL10n) {
               title={mozL10n.get("rooms_list_delete_tooltip")}
               onClick={this.handleDeleteButtonClick} />
           </h2>
-          <p><a href="#">{room.roomUrl}</a></p>
+          <p><a className="room-url-link" href="#">{room.roomUrl}</a></p>
         </div>
       );
     }
@@ -694,7 +701,7 @@ loop.panel = (function(_, mozL10n) {
    * Room list.
    */
   var RoomList = React.createClass({
-    mixins: [Backbone.Events],
+    mixins: [Backbone.Events, sharedMixins.WindowCloseMixin],
 
     propTypes: {
       store: React.PropTypes.instanceOf(loop.store.RoomStore).isRequired,
@@ -736,6 +743,8 @@ loop.panel = (function(_, mozL10n) {
     },
 
     handleCreateButtonClick: function() {
+      this.closeWindow();
+
       this.props.dispatcher.dispatch(new sharedActions.CreateRoom({
         nameTemplate: mozL10n.get("rooms_default_room_name_template"),
         roomOwner: this.props.userDisplayName
@@ -782,29 +791,32 @@ loop.panel = (function(_, mozL10n) {
       // Mostly used for UI components showcase and unit tests
       callUrl: React.PropTypes.string,
       userProfile: React.PropTypes.object,
+      // Used only for unit tests.
       showTabButtons: React.PropTypes.bool,
       selectedTab: React.PropTypes.string,
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
+      mozLoop: React.PropTypes.object,
       roomStore:
         React.PropTypes.instanceOf(loop.store.RoomStore).isRequired
     },
 
     getInitialState: function() {
       return {
-        userProfile: this.props.userProfile || navigator.mozLoop.userProfile,
-        gettingStartedSeen: navigator.mozLoop.getLoopPref("gettingStarted.seen"),
+        userProfile: this.props.userProfile || this.props.mozLoop.userProfile,
+        gettingStartedSeen: this.props.mozLoop.getLoopPref("gettingStarted.seen"),
       };
     },
 
     _serviceErrorToShow: function() {
-      if (!navigator.mozLoop.errors || !Object.keys(navigator.mozLoop.errors).length) {
+      if (!this.props.mozLoop.errors ||
+          !Object.keys(this.props.mozLoop.errors).length) {
         return null;
       }
       // Just get the first error for now since more than one should be rare.
-      var firstErrorKey = Object.keys(navigator.mozLoop.errors)[0];
+      var firstErrorKey = Object.keys(this.props.mozLoop.errors)[0];
       return {
         type: firstErrorKey,
-        error: navigator.mozLoop.errors[firstErrorKey],
+        error: this.props.mozLoop.errors[firstErrorKey],
       };
     },
 
@@ -825,11 +837,11 @@ loop.panel = (function(_, mozL10n) {
     },
 
     _roomsEnabled: function() {
-      return navigator.mozLoop.getLoopPref("rooms.enabled");
+      return this.props.mozLoop.getLoopPref("rooms.enabled");
     },
 
     _onStatusChanged: function() {
-      var profile = navigator.mozLoop.userProfile;
+      var profile = this.props.mozLoop.userProfile;
       var currUid = this.state.userProfile ? this.state.userProfile.uid : null;
       var newUid = profile ? profile.uid : null;
       if (currUid != newUid) {
@@ -842,7 +854,7 @@ loop.panel = (function(_, mozL10n) {
 
     _gettingStartedSeen: function() {
       this.setState({
-        gettingStartedSeen: navigator.mozLoop.getLoopPref("gettingStarted.seen"),
+        gettingStartedSeen: this.props.mozLoop.getLoopPref("gettingStarted.seen"),
       });
     },
 
@@ -929,12 +941,18 @@ loop.panel = (function(_, mozL10n) {
         );
       }
 
+      // Determine which buttons to NOT show.
+      var hideButtons = [];
+      if (!this.state.userProfile && !this.props.showTabButtons) {
+        hideButtons.push("contacts");
+      }
+
       return (
         <div>
           <NotificationListView notifications={this.props.notifications}
                                 clearOnDocumentHidden={true} />
           <TabView ref="tabView" selectedTab={this.props.selectedTab}
-            buttonsHidden={!this.state.userProfile && !this.props.showTabButtons}>
+            buttonsHidden={hideButtons}>
             {this._renderRoomsOrCallTab()}
             <Tab name="contacts">
               <ContactsList selectTab={this.selectTab}
@@ -988,6 +1006,7 @@ loop.panel = (function(_, mozL10n) {
       client={client}
       notifications={notifications}
       roomStore={roomStore}
+      mozLoop={navigator.mozLoop}
       dispatcher={dispatcher}
     />, document.querySelector("#main"));
 

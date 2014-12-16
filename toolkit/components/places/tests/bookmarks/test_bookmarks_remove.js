@@ -90,13 +90,14 @@ add_task(function* remove_bookmark_orphans() {
                                                  type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                  url: "http://example.com/",
                                                  title: "a bookmark",
-                                                 keyword: "test"});
+                                                 keyword: "tEsT"});
   checkBookmarkObject(bm1);
   PlacesUtils.annotations.setItemAnnotation((yield PlacesUtils.promiseItemId(bm1.guid)),
                                             "testanno", "testvalue", 0, 0);
 
   let bm2 = yield PlacesUtils.bookmarks.remove(bm1.guid);
   checkBookmarkObject(bm2);
+  // Keywords are case-insensitive.
   Assert.equal(bm2.keyword, "test");
 
   // Check there are no orphan keywords or annotations.
@@ -146,6 +147,20 @@ add_task(function* remove_folder() {
   Assert.ok(!("keyword" in bm2));
 });
 
+add_task(function* test_nested_contents_removed() {
+  let folder1 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
+                                                     type: PlacesUtils.bookmarks.TYPE_FOLDER,
+                                                     title: "a folder" });
+  let folder2 = yield PlacesUtils.bookmarks.insert({ parentGuid: folder1.guid,
+                                                     type: PlacesUtils.bookmarks.TYPE_FOLDER,
+                                                     title: "a folder" });
+  let sep = yield PlacesUtils.bookmarks.insert({ parentGuid: folder2.guid,
+                                                 type: PlacesUtils.bookmarks.TYPE_SEPARATOR });
+  yield PlacesUtils.bookmarks.remove(folder1);
+  Assert.strictEqual((yield PlacesUtils.bookmarks.fetch(folder1.guid)), null);
+  Assert.strictEqual((yield PlacesUtils.bookmarks.fetch(folder2.guid)), null);
+  Assert.strictEqual((yield PlacesUtils.bookmarks.fetch(sep.guid)), null);
+});
 add_task(function* remove_folder_empty_title() {
   let bm1 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                  type: PlacesUtils.bookmarks.TYPE_FOLDER,

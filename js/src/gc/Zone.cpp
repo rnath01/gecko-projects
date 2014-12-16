@@ -269,9 +269,17 @@ js::ZonesIter::atAtomsZone(JSRuntime *rt)
     return rt->isAtomsZone(*it);
 }
 
-bool Zone::isOnList()
+bool
+Zone::isOnList() const
 {
     return listNext_ != NotOnList;
+}
+
+Zone *
+Zone::nextZone() const
+{
+    MOZ_ASSERT(isOnList());
+    return listNext_;
 }
 
 ZoneList::ZoneList()
@@ -281,7 +289,7 @@ ZoneList::ZoneList()
 ZoneList::ZoneList(Zone *zone)
   : head(zone), tail(zone)
 {
-    MOZ_ASSERT(!zone->isOnList());
+    MOZ_RELEASE_ASSERT(!zone->isOnList());
     zone->listNext_ = nullptr;
 }
 
@@ -325,7 +333,6 @@ ZoneList::front() const
 void
 ZoneList::append(Zone *zone)
 {
-    MOZ_ASSERT(!zone->isOnList());
     ZoneList singleZone(zone);
     transferFrom(singleZone);
 }

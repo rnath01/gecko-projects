@@ -176,8 +176,7 @@ js::CancelOffThreadIonCompile(JSCompartment *compartment, JSScript *script)
 
 static const JSClass parseTaskGlobalClass = {
     "internal-parse-task-global", JSCLASS_GLOBAL_FLAGS,
-    nullptr,          nullptr,
-    JS_PropertyStub,  JS_StrictPropertyStub,
+    nullptr, nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr,
     JS_GlobalObjectTraceHook
@@ -197,7 +196,17 @@ ParseTask::ParseTask(ExclusiveContext *cx, JSObject *exclusiveContextGlobal, JSC
 bool
 ParseTask::init(JSContext *cx, const ReadOnlyCompileOptions &options)
 {
-    return this->options.copy(cx, options);
+    if (!this->options.copy(cx, options))
+        return false;
+
+    // If the main-thread global is a debuggee, disable asm.js
+    // compilation. This is preferred to marking the task compartment as a
+    // debuggee, as the task compartment is (1) invisible to Debugger and (2)
+    // cannot have any Debuggers.
+    if (cx->compartment()->isDebuggee())
+        this->options.asmJSOption = false;
+
+    return true;
 }
 
 void
@@ -364,12 +373,6 @@ js::StartOffThreadParseScript(JSContext *cx, const ReadOnlyCompileOptions &optio
     } else {
         task->activate(cx->runtime());
 
-        if (cx->compartment()->isDebuggee()) {
-            task->cx->compartment()->setIsDebuggee();
-            if (cx->compartment()->debugObservesAllExecution())
-                task->cx->compartment()->setDebugObservesAllExecution();
-        }
-
         AutoLockHelperThreadState lock;
 
         if (!HelperThreadState().parseWorklist().append(task.get()))
@@ -481,8 +484,10 @@ GlobalHelperThreadState::finish()
 {
     if (threads) {
         MOZ_ASSERT(CanUseExtraThreads());
-        for (size_t i = 0; i < threadCount; i++)
+        for (size_t i = 0; i < threadCount; i++) {
             threads[i].destroy();
+            threads[i].~HelperThread();
+        }
         js_free(threads);
     }
 
@@ -1198,7 +1203,7 @@ HelperThread::handleCompressionWorkload()
 
     {
         AutoUnlockHelperThreadState unlock;
-        compressionTask->result = compressionTask->work();
+        compressionTask->result = compressionTask->work(sourceCompressor);
     }
 
     compressionTask->helperThread = nullptr;

@@ -121,11 +121,14 @@ JsepSessionImpl::AddAudioRtpExtension(const std::string& extensionName)
     return NS_ERROR_FAILURE;
   }
 
-  mAudioRtpExtensions.push_back(
+  SdpExtmapAttributeList::Extmap extmap =
       { static_cast<uint16_t>(mAudioRtpExtensions.size() + 1),
         SdpDirectionAttribute::kSendrecv,
         false, // don't actually specify direction
-        extensionName, "" });
+        extensionName,
+        "" };
+
+  mAudioRtpExtensions.push_back(extmap);
   return NS_OK;
 }
 
@@ -139,11 +142,13 @@ JsepSessionImpl::AddVideoRtpExtension(const std::string& extensionName)
     return NS_ERROR_FAILURE;
   }
 
-  mVideoRtpExtensions.push_back(
+  SdpExtmapAttributeList::Extmap extmap =
       { static_cast<uint16_t>(mVideoRtpExtensions.size() + 1),
         SdpDirectionAttribute::kSendrecv,
         false, // don't actually specify direction
-        extensionName, "" });
+        extensionName, "" };
+
+  mVideoRtpExtensions.push_back(extmap);
   return NS_OK;
 }
 
@@ -392,7 +397,7 @@ JsepSessionImpl::AddCommonExtmaps(const SdpMediaSection& remoteMsection,
         if (ourExtmap->mExtmaps.back().entry >= 4096) {
           ourExtmap->mExtmaps.back().entry = j->entry;
         }
-      } 
+      }
     }
   }
 
@@ -1394,7 +1399,11 @@ JsepSessionImpl::CreateGenericSDP(UniquePtr<Sdp>* sdpp)
   //     for <sess-id> is sufficient to accomplish this.
 
   auto origin =
-      SdpOrigin("-", mSessionId, mSessionVersion, sdp::kIPv4, "0.0.0.0");
+      SdpOrigin("mozilla...THIS_IS_SDPARTA-" MOZ_APP_UA_VERSION,
+                mSessionId,
+                mSessionVersion,
+                sdp::kIPv4,
+                "0.0.0.0");
 
   UniquePtr<Sdp> sdp = MakeUnique<SipccSdp>(origin);
 

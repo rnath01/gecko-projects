@@ -51,6 +51,7 @@ JSCompartment::JSCompartment(Zone *zone, const JS::CompartmentOptions &options =
 #endif
     global_(nullptr),
     enterCompartmentDepth(0),
+    totalTime(0),
     data(nullptr),
     objectMetadataCallback(nullptr),
     lastAnimationTime(0),
@@ -560,12 +561,7 @@ void
 JSCompartment::sweepGlobalObject(FreeOp *fop)
 {
     if (global_.unbarrieredGet() && IsObjectAboutToBeFinalizedFromAnyThread(global_.unsafeGet())) {
-        // For main thread compartments, the invariant is that debug mode
-        // implies having at least one Debugger still attached. However, for
-        // off-thread compartments, which are used in off-thread parsing, they
-        // may be isDebuggee() without there being any Debuggers to prohibit
-        // asm.js.
-        if (isDebuggee() && !global_->compartment()->options().invisibleToDebugger())
+        if (isDebuggee())
             Debugger::detachAllDebuggersFromGlobal(fop, global_);
         global_.set(nullptr);
     }
