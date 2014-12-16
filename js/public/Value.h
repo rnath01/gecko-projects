@@ -84,7 +84,8 @@ JS_ENUM_HEADER(JSValueType, uint8_t)
     JSVAL_TYPE_MISSING             = 0x21
 } JS_ENUM_FOOTER(JSValueType);
 
-JS_STATIC_ASSERT(sizeof(JSValueType) == 1);
+static_assert(sizeof(JSValueType) == 1,
+              "compiler typed enum support is apparently buggy");
 
 #if defined(JS_NUNBOX32)
 
@@ -102,7 +103,8 @@ JS_ENUM_HEADER(JSValueTag, uint32_t)
     JSVAL_TAG_OBJECT               = JSVAL_TAG_CLEAR | JSVAL_TYPE_OBJECT
 } JS_ENUM_FOOTER(JSValueTag);
 
-JS_STATIC_ASSERT(sizeof(JSValueTag) == 4);
+static_assert(sizeof(JSValueTag) == sizeof(uint32_t),
+              "compiler typed enum support is apparently buggy");
 
 #elif defined(JS_PUNBOX64)
 
@@ -120,7 +122,8 @@ JS_ENUM_HEADER(JSValueTag, uint32_t)
     JSVAL_TAG_OBJECT               = JSVAL_TAG_MAX_DOUBLE | JSVAL_TYPE_OBJECT
 } JS_ENUM_FOOTER(JSValueTag);
 
-JS_STATIC_ASSERT(sizeof(JSValueTag) == sizeof(uint32_t));
+static_assert(sizeof(JSValueTag) == sizeof(uint32_t),
+              "compiler typed enum support is apparently buggy");
 
 JS_ENUM_HEADER(JSValueShiftedTag, uint64_t)
 {
@@ -135,9 +138,20 @@ JS_ENUM_HEADER(JSValueShiftedTag, uint64_t)
     JSVAL_SHIFTED_TAG_OBJECT       = (((uint64_t)JSVAL_TAG_OBJECT)     << JSVAL_TAG_SHIFT)
 } JS_ENUM_FOOTER(JSValueShiftedTag);
 
-JS_STATIC_ASSERT(sizeof(JSValueShiftedTag) == sizeof(uint64_t));
+static_assert(sizeof(JSValueShiftedTag) == sizeof(uint64_t),
+              "compiler typed enum support is apparently buggy");
 
 #endif
+
+/*
+ * All our supported compilers implement C++11 |enum Foo : T| syntax, so don't
+ * expose these macros. (This macro exists *only* because gcc bug 51242
+ * <https://gcc.gnu.org/bugzilla/show_bug.cgi?id=51242> makes bit-fields of
+ * typed enums trigger a warning that can't be turned off. Don't expose it
+ * beyond this file!)
+ */
+#undef JS_ENUM_HEADER
+#undef JS_ENUM_FOOTER
 
 #else  /* !defined(__SUNPRO_CC) && !defined(__xlC__) */
 
@@ -224,9 +238,6 @@ typedef uint64_t JSValueShiftedTag;
 typedef enum JSWhyMagic
 {
     JS_ELEMENTS_HOLE,            /* a hole in a native object's elements */
-    JS_NATIVE_ENUMERATE,         /* indicates that a custom enumerate hook forwarded
-                                  * to JS_EnumerateState, which really means the object can be
-                                  * enumerated like a native object. */
     JS_NO_ITER_VALUE,            /* there is not a pending iterator value */
     JS_GENERATOR_CLOSING,        /* exception value thrown when closing a generator */
     JS_NO_CONSTANT,              /* compiler sentinel value */
@@ -1355,7 +1366,7 @@ static MOZ_ALWAYS_INLINE void
 ExposeValueToActiveJS(const Value &v)
 {
     if (v.isMarkable())
-        js::gc::ExposeGCThingToActiveJS(v.toGCThing(), v.gcKind());
+        js::gc::ExposeGCThingToActiveJS(GCCellPtr(v));
 }
 
 /************************************************************************/
@@ -1616,12 +1627,10 @@ SameType(const Value &lhs, const Value &rhs)
 
 /************************************************************************/
 
-#ifdef JSGC_GENERATIONAL
 namespace JS {
 JS_PUBLIC_API(void) HeapValuePostBarrier(Value *valuep);
 JS_PUBLIC_API(void) HeapValueRelocate(Value *valuep);
 }
-#endif
 
 namespace js {
 
@@ -1645,10 +1654,8 @@ template <> struct GCMethods<JS::Value>
     static bool needsPostBarrier(const JS::Value &v) {
         return v.isObject() && gc::IsInsideNursery(reinterpret_cast<gc::Cell*>(&v.toObject()));
     }
-#ifdef JSGC_GENERATIONAL
     static void postBarrier(JS::Value *v) { JS::HeapValuePostBarrier(v); }
     static void relocate(JS::Value *v) { JS::HeapValueRelocate(v); }
-#endif
 };
 
 template <class Outer> class MutableValueOperations;

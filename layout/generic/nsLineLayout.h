@@ -29,10 +29,15 @@ struct nsStyleText;
 
 class nsLineLayout {
 public:
+  /**
+   * @param aBaseLineLayout the nsLineLayout for ruby base,
+   * nullptr if no separate base nsLineLayout is needed.
+   */
   nsLineLayout(nsPresContext* aPresContext,
                nsFloatManager* aFloatManager,
                const nsHTMLReflowState* aOuterReflowState,
-               const nsLineList::iterator* aLine);
+               const nsLineList::iterator* aLine,
+               nsLineLayout* aBaseLineLayout);
   ~nsLineLayout();
 
   void Init(nsBlockReflowState* aState, nscoord aMinLineBSize,
@@ -72,6 +77,20 @@ public:
 
   // Returns the width of the span
   nscoord EndSpan(nsIFrame* aFrame);
+
+  // This method attaches the last frame reflowed in this line layout
+  // to that in the base line layout.
+  void AttachLastFrameToBaseLineLayout()
+  {
+    AttachFrameToBaseLineLayout(LastFrame());
+  }
+
+  // This method attaches the root frame of this line layout to the
+  // last reflowed frame in the base line layout.
+  void AttachRootFrameToBaseLineLayout()
+  {
+    AttachFrameToBaseLineLayout(mRootSpan->mFrame);
+  }
 
   int32_t GetCurrentSpanCount() const;
 
@@ -154,6 +173,12 @@ public:
   // XXX get rid of this: use get-frame-type?
   bool AddFloat(nsIFrame* aFloat, nscoord aAvailableISize)
   {
+    // When reflowing ruby text frames, no block reflow state is
+    // provided to the line layout. However, floats should never be
+    // associated with ruby text containers, hence this method should
+    // not be called in that case.
+    NS_ABORT_IF_FALSE(mBlockRS, "Should not call this method "
+                      "if there is no block reflow state available");
     return mBlockRS->AddFloat(this, aFloat, aAvailableISize);
   }
 
@@ -340,6 +365,14 @@ protected:
   const nsStyleText* mStyleText; // for the block
   const nsHTMLReflowState* mBlockReflowState;
 
+  // The line layout for the base text. It is usually same as |this|.
+  // It becomes different when the current line layout is for ruby
+  // annotations. All line layouts share the same base line layout
+  // when they are associated. The base line layout is responsible
+  // for managing the life cycle of per-frame data and per-span data,
+  // and handling floats.
+  nsLineLayout* const mBaseLineLayout;
+
   nsIFrame* mLastOptionalBreakFrame;
   nsIFrame* mForceBreakFrame;
   
@@ -348,6 +381,10 @@ protected:
 
   nsBlockReflowState* mBlockRS;/* XXX hack! */
 
+  // XXX Take care that nsRubyBaseContainer would give nullptr to this
+  //     member. It should not be a problem currently, since the only
+  //     code use it is handling float, which does not affect ruby.
+  //     See comment in nsLineLayout::AddFloat
   nsLineList::iterator mLineBox;
 
   // Per-frame data recorded by the line-layout reflow logic. This
@@ -371,6 +408,14 @@ protected:
     // link to next/prev frame in same span
     PerFrameData* mNext;
     PerFrameData* mPrev;
+
+    // Link to the frame of next ruby annotation.  It is a linked list
+    // through this pointer from ruby base to all its annotations.  It
+    // could be nullptr if there is no more annotation.
+    // If PFD_ISLINKEDTOBASE is set, the current PFD is one of the ruby
+    // annotations in the base's list, otherwise it is the ruby base,
+    // and its mNextAnnotation is the start of the linked list.
+    PerFrameData* mNextAnnotation;
 
     // pointer to child span data if this is an inline container frame
     PerSpanData* mSpan;
@@ -405,7 +450,8 @@ protected:
 #define PFD_ISBULLET                    0x00000040
 #define PFD_SKIPWHENTRIMMINGWHITESPACE  0x00000080
 #define PFD_ISEMPTY                     0x00000100
-#define PFD_LASTFLAG                    PFD_ISEMPTY
+#define PFD_ISLINKEDTOBASE              0x00000200
+#define PFD_LASTFLAG                    PFD_ISLINKEDTOBASE
 
     // Other state we use
     uint16_t mFlags;
@@ -573,6 +619,21 @@ protected:
    */
   PerSpanData* NewPerSpanData();
 
+  PerFrameData* LastFrame() const { return mCurrentSpan->mLastFrame; }
+
+  /**
+   * Unlink the given PerFrameData and all the siblings after it from
+   * the span. The unlinked PFDs are usually freed immediately.
+   * However, if PFD_ISLINKEDTOBASE is set, it won't be freed until
+   * the frame of its base is unlinked.
+   */
+  void UnlinkFrame(PerFrameData* pfd);
+
+  /**
+   * Free the given PerFrameData.
+   */
+  void FreeFrame(PerFrameData* pfd);
+
   void FreeSpan(PerSpanData* psd);
 
   bool InBlockContext() const {
@@ -614,6 +675,7 @@ protected:
   nscoord ApplyFrameJustification(
       PerSpanData* aPSD, mozilla::JustificationApplicationState& aState);
 
+  void AttachFrameToBaseLineLayout(PerFrameData* aFrame);
 
 #ifdef DEBUG
   void DumpPerSpanData(PerSpanData* psd, int32_t aIndent);

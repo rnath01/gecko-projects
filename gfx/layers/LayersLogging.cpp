@@ -108,6 +108,23 @@ AppendToString(std::stringstream& aStream, const nsIntRect& r,
 }
 
 void
+AppendToString(std::stringstream& aStream, const nsRegion& r,
+               const char* pfx, const char* sfx)
+{
+  aStream << pfx;
+
+  nsRegionRectIterator it(r);
+  aStream << "< ";
+  while (const nsRect* sr = it.Next()) {
+    AppendToString(aStream, *sr);
+    aStream << "; ";
+  }
+  aStream << ">";
+
+  aStream << sfx;
+}
+
+void
 AppendToString(std::stringstream& aStream, const nsIntRegion& r,
                const char* pfx, const char* sfx)
 {
@@ -274,8 +291,6 @@ AppendToString(std::stringstream& aStream, TextureFlags flags,
     AppendFlag(TextureFlags::USE_NEAREST_FILTER);
     AppendFlag(TextureFlags::NEEDS_Y_FLIP);
     AppendFlag(TextureFlags::DISALLOW_BIGIMAGE);
-    AppendFlag(TextureFlags::ALLOW_REPEAT);
-    AppendFlag(TextureFlags::NEW_TILE);
 
 #undef AppendFlag
   }
@@ -312,17 +327,9 @@ print_stderr(std::stringstream& aStr)
   // we usually use std::stringstream to build up giant multi-line gobs
   // of output. So to avoid the truncation we find the newlines and
   // print the lines individually.
-  char line[1024];
-  while (!aStr.eof()) {
-    aStr.getline(line, sizeof(line));
-    if (!aStr.eof() || strlen(line) > 0) {
-      printf_stderr("%s\n", line);
-    }
-    if (aStr.fail()) {
-      // line was too long, skip to next newline
-      aStr.clear();
-      aStr.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-    }
+  std::string line;
+  while (std::getline(aStr, line)) {
+    printf_stderr("%s\n", line.c_str());
   }
 #else
   printf_stderr("%s", aStr.str().c_str());

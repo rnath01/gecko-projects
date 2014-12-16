@@ -31,6 +31,7 @@
 #include "nsDOMCID.h"
 #include "nsError.h"
 #include "nsGkAtoms.h"
+#include "nsHtml5Atoms.h"
 #include "nsIContent.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsIDocument.h"
@@ -97,6 +98,7 @@ EventListenerManager::EventListenerManager(EventTarget* aTarget)
   , mMayHaveCapturingListeners(false)
   , mMayHaveSystemGroupListeners(false)
   , mMayHaveTouchEventListener(false)
+  , mMayHaveScrollWheelEventListener(false)
   , mMayHaveMouseEnterLeaveEventListener(false)
   , mMayHavePointerEnterLeaveEventListener(false)
   , mClearingListeners(false)
@@ -337,6 +339,16 @@ EventListenerManager::AddEventListenerInternal(
     // so we ignore listeners created with system event flag
     if (window && !aFlags.mInSystemGroup) {
       window->SetHasTouchEventListeners();
+    }
+  } else if (aTypeAtom == nsGkAtoms::onwheel ||
+             aTypeAtom == nsGkAtoms::onDOMMouseScroll ||
+             aTypeAtom == nsHtml5Atoms::onmousewheel) {
+    mMayHaveScrollWheelEventListener = true;
+    nsPIDOMWindow* window = GetInnerWindowForTarget();
+    // we don't want touchevent listeners added by scrollbars to flip this flag
+    // so we ignore listeners created with system event flag
+    if (window && !aFlags.mInSystemGroup) {
+      window->SetHasScrollWheelEventListeners();
     }
   } else if (aType >= NS_POINTER_EVENT_START && aType <= NS_POINTER_LOST_CAPTURE) {
     nsPIDOMWindow* window = GetInnerWindowForTarget();
@@ -900,7 +912,7 @@ EventListenerManager::CompileEventHandlerInternal(Listener* aListener,
   NS_ENSURE_TRUE(jsStr, NS_ERROR_OUT_OF_MEMORY);
 
   // Get the reflector for |aElement|, so that we can pass to setElement.
-  if (NS_WARN_IF(!WrapNewBindingObject(cx, target, aElement, &v))) {
+  if (NS_WARN_IF(!GetOrCreateDOMReflector(cx, target, aElement, &v))) {
     return NS_ERROR_FAILURE;
   }
   JS::CompileOptions options(cx);
@@ -1012,6 +1024,26 @@ EventListenerManager::GetDocShellForTarget()
   return docShell;
 }
 
+class EventTimelineMarker : public nsDocShell::TimelineMarker
+{
+public:
+  EventTimelineMarker(nsDocShell* aDocShell, TracingMetadata aMetaData,
+                      uint16_t aPhase, const nsAString& aCause)
+    : nsDocShell::TimelineMarker(aDocShell, "DOMEvent", aMetaData, aCause)
+    , mPhase(aPhase)
+  {
+  }
+
+  virtual void AddDetails(mozilla::dom::ProfileTimelineMarker& aMarker)
+  {
+    aMarker.mType.Construct(GetCause());
+    aMarker.mEventPhase.Construct(mPhase);
+  }
+
+private:
+  uint16_t mPhase;
+};
+
 /**
 * Causes a check for event listeners and processing by them if they exist.
 * @param an event listener
@@ -1066,13 +1098,24 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
           // Maybe add a marker to the docshell's timeline, but only
           // bother with all the logic if some docshell is recording.
           nsCOMPtr<nsIDocShell> docShell;
+          bool isTimelineRecording = false;
           if (mIsMainThreadELM &&
               nsDocShell::gProfileTimelineRecordingsCount > 0 &&
               listener->mListenerType != Listener::eNativeListener) {
             docShell = GetDocShellForTarget();
             if (docShell) {
+              docShell->GetRecordProfileTimelineMarkers(&isTimelineRecording);
+            }
+            if (isTimelineRecording) {
               nsDocShell* ds = static_cast<nsDocShell*>(docShell.get());
-              ds->AddProfileTimelineMarker("DOMEvent", TRACING_INTERVAL_START);
+              nsAutoString typeStr;
+              (*aDOMEvent)->GetType(typeStr);
+              uint16_t phase;
+              (*aDOMEvent)->GetEventPhase(&phase);
+              mozilla::UniquePtr<nsDocShell::TimelineMarker> marker =
+                MakeUnique<EventTimelineMarker>(ds, TRACING_INTERVAL_START,
+                                                phase, typeStr);
+              ds->AddProfileTimelineMarker(marker);
             }
           }
 
@@ -1081,7 +1124,7 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
             aEvent->mFlags.mExceptionHasBeenRisen = true;
           }
 
-          if (docShell) {
+          if (isTimelineRecording) {
             nsDocShell* ds = static_cast<nsDocShell*>(docShell.get());
             ds->AddProfileTimelineMarker("DOMEvent", TRACING_INTERVAL_END);
           }

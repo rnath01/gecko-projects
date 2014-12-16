@@ -67,13 +67,11 @@ GetGCObjectKind(const Class *clasp)
     return GetGCObjectKind(nslots);
 }
 
-#ifdef JSGC_GENERATIONAL
 inline bool
 ShouldNurseryAllocate(const Nursery &nursery, AllocKind kind, InitialHeap heap)
 {
     return nursery.isEnabled() && IsNurseryAllocable(kind) && heap != TenuredHeap;
 }
-#endif
 
 #ifdef JSGC_FJGENERATIONAL
 inline bool
@@ -88,10 +86,8 @@ GetGCThingTraceKind(const void *thing)
 {
     MOZ_ASSERT(thing);
     const Cell *cell = static_cast<const Cell *>(thing);
-#ifdef JSGC_GENERATIONAL
     if (IsInsideNursery(cell))
         return JSTRACE_OBJECT;
-#endif
     return MapAllocToTraceKind(cell->asTenured().getAllocKind());
 }
 
@@ -317,9 +313,7 @@ class ZoneCellIterUnderGC : public ZoneCellIterImpl
 {
   public:
     ZoneCellIterUnderGC(JS::Zone *zone, AllocKind kind) {
-#ifdef JSGC_GENERATIONAL
         MOZ_ASSERT(zone->runtimeFromAnyThread()->gc.nursery.isEmpty());
-#endif
         MOZ_ASSERT(zone->runtimeFromAnyThread()->isHeapBusy());
         init(zone, kind);
     }
@@ -348,11 +342,9 @@ class ZoneCellIter : public ZoneCellIterImpl
             zone->runtimeFromMainThread()->gc.waitBackgroundSweepEnd();
         }
 
-#ifdef JSGC_GENERATIONAL
         /* Evict the nursery before iterating so we can see all things. */
         JSRuntime *rt = zone->runtimeFromMainThread();
         rt->gc.evictNursery();
-#endif
 
         if (lists->isSynchronizedFreeList(kind)) {
             lists = nullptr;
@@ -379,7 +371,9 @@ class GCZonesIter
     ZonesIter zone;
 
   public:
-    explicit GCZonesIter(JSRuntime *rt) : zone(rt, WithAtoms) {
+    explicit GCZonesIter(JSRuntime *rt, ZoneSelector selector = WithAtoms)
+      : zone(rt, selector)
+    {
         if (!zone->isCollecting())
             next();
     }
@@ -390,7 +384,7 @@ class GCZonesIter
         MOZ_ASSERT(!done());
         do {
             zone.next();
-        } while (!zone.done() && !zone->isCollecting());
+        } while (!zone.done() && !zone->isCollectingFromAnyThread());
     }
 
     JS::Zone *get() const {
@@ -433,7 +427,6 @@ class GCZoneGroupIter {
 
 typedef CompartmentsIterT<GCZoneGroupIter> GCCompartmentGroupIter;
 
-#ifdef JSGC_GENERATIONAL
 /*
  * Attempt to allocate a new GC thing out of the nursery. If there is not enough
  * room in the nursery or there is an OOM, this method will return nullptr.
@@ -460,7 +453,6 @@ TryNewNurseryObject(JSContext *cx, size_t thingSize, size_t nDynamicSlots)
     }
     return nullptr;
 }
-#endif /* JSGC_GENERATIONAL */
 
 #ifdef JSGC_FJGENERATIONAL
 template <AllowGC allowGC>
@@ -571,14 +563,12 @@ AllocateObject(ThreadSafeContext *cx, AllocKind kind, size_t nDynamicSlots, Init
     if (!CheckAllocatorState<allowGC>(cx, kind))
         return nullptr;
 
-#ifdef JSGC_GENERATIONAL
     if (cx->isJSContext() &&
         ShouldNurseryAllocate(cx->asJSContext()->nursery(), kind, heap)) {
         JSObject *obj = TryNewNurseryObject<allowGC>(cx->asJSContext(), thingSize, nDynamicSlots);
         if (obj)
             return obj;
     }
-#endif
 #ifdef JSGC_FJGENERATIONAL
     if (cx->isForkJoinContext() &&
         ShouldFJNurseryAllocate(cx->asForkJoinContext()->nursery(), kind, heap))
@@ -652,7 +642,6 @@ template <AllowGC allowGC>
 inline JSObject *
 AllocateObjectForCacheHit(JSContext *cx, AllocKind kind, InitialHeap heap)
 {
-#ifdef JSGC_GENERATIONAL
     if (ShouldNurseryAllocate(cx->nursery(), kind, heap)) {
         size_t thingSize = Arena::thingSize(kind);
 
@@ -667,7 +656,6 @@ AllocateObjectForCacheHit(JSContext *cx, AllocKind kind, InitialHeap heap)
         }
         return obj;
     }
-#endif
 
     JSObject *obj = AllocateObject<NoGC>(cx, kind, 0, heap);
     if (!obj && allowGC) {
@@ -681,7 +669,6 @@ AllocateObjectForCacheHit(JSContext *cx, AllocKind kind, InitialHeap heap)
 inline bool
 IsInsideGGCNursery(const js::gc::Cell *cell)
 {
-#ifdef JSGC_GENERATIONAL
     if (!cell)
         return false;
     uintptr_t addr = uintptr_t(cell);
@@ -690,9 +677,6 @@ IsInsideGGCNursery(const js::gc::Cell *cell)
     uint32_t location = *reinterpret_cast<uint32_t *>(addr);
     MOZ_ASSERT(location != 0);
     return location & js::gc::ChunkLocationBitNursery;
-#else
-    return false;
-#endif
 }
 
 } /* namespace gc */

@@ -266,12 +266,13 @@ class UnboundnessFixer
 {
     CGRect mClipBounds;
     CGLayerRef mLayer;
-    CGContextRef mCg;
+    CGContextRef mLayerCg;
   public:
-    UnboundnessFixer() : mCg(nullptr) {}
+    UnboundnessFixer() : mLayerCg(nullptr) {}
 
     CGContextRef Check(CGContextRef baseCg, CompositionOp blend, const Rect* maskBounds = nullptr)
     {
+      MOZ_ASSERT(baseCg);
       if (!IsOperatorBoundByMask(blend)) {
         mClipBounds = CGContextGetClipBoundingBox(baseCg);
         // If we're entirely clipped out or if the drawing operation covers the entire clip then
@@ -287,14 +288,17 @@ class UnboundnessFixer
         //XXX: The size here is in default user space units, of the layer relative to the graphics context.
         // is the clip bounds still correct if, for example, we have a scale applied to the context?
         mLayer = CGLayerCreateWithContext(baseCg, mClipBounds.size, nullptr);
-        mCg = CGLayerGetContext(mLayer);
+        mLayerCg = CGLayerGetContext(mLayer);
         // CGContext's default to have the origin at the bottom left
         // so flip it to the top left and adjust for the origin
         // of the layer
-        CGContextTranslateCTM(mCg, -mClipBounds.origin.x, mClipBounds.origin.y + mClipBounds.size.height);
-        CGContextScaleCTM(mCg, 1, -1);
+        if (MOZ2D_ERROR_IF(!mLayerCg)) {
+          return nullptr;
+        }
+        CGContextTranslateCTM(mLayerCg, -mClipBounds.origin.x, mClipBounds.origin.y + mClipBounds.size.height);
+        CGContextScaleCTM(mLayerCg, 1, -1);
 
-        return mCg;
+        return mLayerCg;
       } else {
         return baseCg;
       }
@@ -302,12 +306,14 @@ class UnboundnessFixer
 
     void Fix(CGContextRef baseCg)
     {
-        if (mCg) {
+        if (mLayerCg) {
+            // we pushed a layer so draw it to baseCg
+            MOZ_ASSERT(baseCg);
             CGContextTranslateCTM(baseCg, 0, mClipBounds.size.height);
             CGContextScaleCTM(baseCg, 1, -1);
             mClipBounds.origin.y *= -1;
             CGContextDrawLayerAtPoint(baseCg, mClipBounds.origin, mLayer);
-            CGContextRelease(mCg);
+            CGContextRelease(mLayerCg);
         }
     }
 };
@@ -319,6 +325,9 @@ DrawTargetCG::DrawSurface(SourceSurface *aSurface,
                            const DrawSurfaceOptions &aSurfOptions,
                            const DrawOptions &aDrawOptions)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
   MarkChanged();
 
   CGContextSaveGState(mCg);
@@ -326,6 +335,9 @@ DrawTargetCG::DrawSurface(SourceSurface *aSurface,
   CGContextSetBlendMode(mCg, ToBlendMode(aDrawOptions.mCompositionOp));
   UnboundnessFixer fixer;
   CGContextRef cg = fixer.Check(mCg, aDrawOptions.mCompositionOp, &aDest);
+  if (MOZ2D_ERROR_IF(!cg)) {
+    return;
+  }
   CGContextSetAlpha(cg, aDrawOptions.mAlpha);
   CGContextSetShouldAntialias(cg, aDrawOptions.mAntialiasMode != AntialiasMode::NONE);
 
@@ -658,6 +670,10 @@ static void
 DrawGradient(CGColorSpaceRef aColorSpace,
              CGContextRef cg, const Pattern &aPattern, const CGRect &aExtents)
 {
+  if (MOZ2D_ERROR_IF(!cg)) {
+    return;
+  }
+
   if (CGRectIsEmpty(aExtents)) {
     return;
   }
@@ -803,6 +819,10 @@ CreateCGPattern(const Pattern &aPattern, CGAffineTransform aUserSpace)
 static void
 SetFillFromPattern(CGContextRef cg, CGColorSpaceRef aColorSpace, const Pattern &aPattern)
 {
+  if (MOZ2D_ERROR_IF(!cg)) {
+    return;
+  }
+
   assert(!isGradient(aPattern));
   if (aPattern.GetType() == PatternType::COLOR) {
 
@@ -859,6 +879,10 @@ DrawTargetCG::MaskSurface(const Pattern &aSource,
                           Point aOffset,
                           const DrawOptions &aDrawOptions)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   MarkChanged();
 
   CGContextSaveGState(mCg);
@@ -866,6 +890,10 @@ DrawTargetCG::MaskSurface(const Pattern &aSource,
   CGContextSetBlendMode(mCg, ToBlendMode(aDrawOptions.mCompositionOp));
   UnboundnessFixer fixer;
   CGContextRef cg = fixer.Check(mCg, aDrawOptions.mCompositionOp);
+  if (MOZ2D_ERROR_IF(!cg)) {
+    return;
+  }
+
   CGContextSetAlpha(cg, aDrawOptions.mAlpha);
   CGContextSetShouldAntialias(cg, aDrawOptions.mAntialiasMode != AntialiasMode::NONE);
 
@@ -903,12 +931,20 @@ DrawTargetCG::FillRect(const Rect &aRect,
                        const Pattern &aPattern,
                        const DrawOptions &aDrawOptions)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   MarkChanged();
 
   CGContextSaveGState(mCg);
 
   UnboundnessFixer fixer;
   CGContextRef cg = fixer.Check(mCg, aDrawOptions.mCompositionOp, &aRect);
+  if (MOZ2D_ERROR_IF(!cg)) {
+    return;
+  }
+
   CGContextSetAlpha(mCg, aDrawOptions.mAlpha);
   CGContextSetShouldAntialias(cg, aDrawOptions.mAntialiasMode != AntialiasMode::NONE);
   CGContextSetBlendMode(mCg, ToBlendMode(aDrawOptions.mCompositionOp));
@@ -962,12 +998,19 @@ DrawTargetCG::StrokeLine(const Point &p1, const Point &p2, const Pattern &aPatte
     return;
   }
 
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   MarkChanged();
 
   CGContextSaveGState(mCg);
 
   UnboundnessFixer fixer;
   CGContextRef cg = fixer.Check(mCg, aDrawOptions.mCompositionOp);
+  if (MOZ2D_ERROR_IF(!cg)) {
+    return;
+  }
   CGContextSetAlpha(mCg, aDrawOptions.mAlpha);
   CGContextSetShouldAntialias(cg, aDrawOptions.mAntialiasMode != AntialiasMode::NONE);
   CGContextSetBlendMode(mCg, ToBlendMode(aDrawOptions.mCompositionOp));
@@ -1016,6 +1059,10 @@ DrawTargetCG::StrokeRect(const Rect &aRect,
                          const StrokeOptions &aStrokeOptions,
                          const DrawOptions &aDrawOptions)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   if (!aRect.IsFinite()) {
     return;
   }
@@ -1026,6 +1073,9 @@ DrawTargetCG::StrokeRect(const Rect &aRect,
 
   UnboundnessFixer fixer;
   CGContextRef cg = fixer.Check(mCg, aDrawOptions.mCompositionOp);
+  if (MOZ2D_ERROR_IF(!cg)) {
+    return;
+  }
   CGContextSetAlpha(mCg, aDrawOptions.mAlpha);
   CGContextSetBlendMode(mCg, ToBlendMode(aDrawOptions.mCompositionOp));
 
@@ -1067,6 +1117,10 @@ DrawTargetCG::StrokeRect(const Rect &aRect,
 void
 DrawTargetCG::ClearRect(const Rect &aRect)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   MarkChanged();
 
   CGContextSaveGState(mCg);
@@ -1080,6 +1134,10 @@ DrawTargetCG::ClearRect(const Rect &aRect)
 void
 DrawTargetCG::Stroke(const Path *aPath, const Pattern &aPattern, const StrokeOptions &aStrokeOptions, const DrawOptions &aDrawOptions)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   if (!aPath->GetBounds().IsFinite()) {
     return;
   }
@@ -1090,6 +1148,10 @@ DrawTargetCG::Stroke(const Path *aPath, const Pattern &aPattern, const StrokeOpt
 
   UnboundnessFixer fixer;
   CGContextRef cg = fixer.Check(mCg, aDrawOptions.mCompositionOp);
+  if (MOZ2D_ERROR_IF(!cg)) {
+    return;
+  }
+
   CGContextSetAlpha(mCg, aDrawOptions.mAlpha);
   CGContextSetShouldAntialias(cg, aDrawOptions.mAntialiasMode != AntialiasMode::NONE);
   CGContextSetBlendMode(mCg, ToBlendMode(aDrawOptions.mCompositionOp));
@@ -1125,6 +1187,10 @@ DrawTargetCG::Stroke(const Path *aPath, const Pattern &aPattern, const StrokeOpt
 void
 DrawTargetCG::Fill(const Path *aPath, const Pattern &aPattern, const DrawOptions &aDrawOptions)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   MarkChanged();
 
   assert(aPath->GetBackendType() == BackendType::COREGRAPHICS);
@@ -1134,6 +1200,10 @@ DrawTargetCG::Fill(const Path *aPath, const Pattern &aPattern, const DrawOptions
   CGContextSetBlendMode(mCg, ToBlendMode(aDrawOptions.mCompositionOp));
   UnboundnessFixer fixer;
   CGContextRef cg = fixer.Check(mCg, aDrawOptions.mCompositionOp);
+  if (MOZ2D_ERROR_IF(!cg)) {
+    return;
+  }
+
   CGContextSetAlpha(cg, aDrawOptions.mAlpha);
   CGContextSetShouldAntialias(cg, aDrawOptions.mAntialiasMode != AntialiasMode::NONE);
 
@@ -1218,6 +1288,10 @@ void
 DrawTargetCG::FillGlyphs(ScaledFont *aFont, const GlyphBuffer &aBuffer, const Pattern &aPattern, const DrawOptions &aDrawOptions,
                          const GlyphRenderingOptions *aGlyphRenderingOptions)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   MarkChanged();
 
   assert(aBuffer.mNumGlyphs);
@@ -1255,6 +1329,10 @@ DrawTargetCG::FillGlyphs(ScaledFont *aFont, const GlyphBuffer &aBuffer, const Pa
   CGContextSetBlendMode(mCg, ToBlendMode(aDrawOptions.mCompositionOp));
   UnboundnessFixer fixer;
   CGContextRef cg = fixer.Check(mCg, aDrawOptions.mCompositionOp);
+  if (MOZ2D_ERROR_IF(!cg)) {
+    return;
+  }
+
   CGContextSetAlpha(cg, aDrawOptions.mAlpha);
   CGContextSetShouldAntialias(cg, aDrawOptions.mAntialiasMode != AntialiasMode::NONE);
   if (aDrawOptions.mAntialiasMode != AntialiasMode::DEFAULT) {
@@ -1341,6 +1419,10 @@ DrawTargetCG::CopySurface(SourceSurface *aSurface,
                           const IntRect& aSourceRect,
                           const IntPoint &aDestination)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   MarkChanged();
 
   if (aSurface->GetType() == SurfaceType::COREGRAPHICS_IMAGE ||
@@ -1380,6 +1462,10 @@ DrawTargetCG::CopySurface(SourceSurface *aSurface,
 void
 DrawTargetCG::DrawSurfaceWithShadow(SourceSurface *aSurface, const Point &aDest, const Color &aColor, const Point &aOffset, Float aSigma, CompositionOp aOperator)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   MarkChanged();
 
   CGImageRef image = GetRetainedImageFromSourceSurface(aSurface);
@@ -1486,6 +1572,11 @@ DrawTargetCG::Init(BackendType aType,
   }
 
   assert(mCg);
+  if (!mCg) {
+    gfxCriticalError() << "Failed to create CG context";
+    return false;
+  }
+
   // CGContext's default to have the origin at the bottom left
   // so flip it to the top left
   CGContextTranslateCTM(mCg, 0, mSize.height);
@@ -1583,6 +1674,10 @@ DrawTargetCG::Init(CGContextRef cgContext, const IntSize &aSize)
   CGContextRetain(mCg);
 
   assert(mCg);
+  if (!mCg) {
+    gfxCriticalError() << "Invalid CG context at Init";
+    return false;
+  }
 
   // CGContext's default to have the origin at the bottom left.
   // However, currently the only use of this function is to construct a
@@ -1671,6 +1766,10 @@ DrawTargetCG::Mask(const Pattern &aSource,
 void
 DrawTargetCG::PushClipRect(const Rect &aRect)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   CGContextSaveGState(mCg);
 
   /* We go through a bit of trouble to temporarilly set the transform
@@ -1685,6 +1784,10 @@ DrawTargetCG::PushClipRect(const Rect &aRect)
 void
 DrawTargetCG::PushClip(const Path *aPath)
 {
+  if (MOZ2D_ERROR_IF(!mCg)) {
+    return;
+  }
+
   CGContextSaveGState(mCg);
 
   CGContextBeginPath(mCg);
@@ -1745,6 +1848,9 @@ BorrowedCGContext::BorrowCGContextFromDrawTarget(DrawTarget *aDT)
 
     // swap out the context
     CGContextRef cg = cgDT->mCg;
+    if (MOZ2D_ERROR_IF(!cg)) {
+      return nullptr;
+    }
     cgDT->mCg = nullptr;
 
     // save the state to make it easier for callers to avoid mucking with things

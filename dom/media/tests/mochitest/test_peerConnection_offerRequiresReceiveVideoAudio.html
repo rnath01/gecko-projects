@@ -11,6 +11,8 @@
 <body>
 <pre id="test">
 <script type="application/javascript">
+  SimpleTest.requestFlakyTimeout("untriaged");
+
   createHTML({
     bug: "850275",
     title: "Simple offer media constraint test with video/audio"
@@ -18,10 +20,8 @@
 
   runNetworkTest(function() {
     var test = new PeerConnectionTest();
-    test.setOfferOptions({
-      offerToReceiveVideo: true,
-      offerToReceiveAudio: true
-    });
+    test.setMediaConstraints([], [{audio: true, video: true}]);
+    test.setOfferOptions({ offerToReceiveVideo: true, offerToReceiveAudio: true });
     test.run();
   });
 </script>

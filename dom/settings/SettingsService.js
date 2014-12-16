@@ -2,13 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-"use strict"
-
-/* static functions */
-const DEBUG = false;
-function debug(s) {
-  dump("-*- SettingsService: " + s + "\n");
-}
+"use strict";
 
 const Ci = Components.interfaces;
 const Cu = Components.utils;
@@ -16,6 +10,21 @@ const Cu = Components.utils;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import('resource://gre/modules/SettingsRequestManager.jsm');
+
+/* static functions */
+let DEBUG = false;
+let VERBOSE = false;
+
+try {
+  DEBUG   =
+    Services.prefs.getBoolPref("dom.mozSettings.SettingsService.debug.enabled");
+  VERBOSE =
+    Services.prefs.getBoolPref("dom.mozSettings.SettingsService.verbose.enabled");
+} catch (ex) { }
+
+function debug(s) {
+  dump("-*- SettingsService: " + s + "\n");
+}
 
 XPCOMUtils.defineLazyServiceGetter(this, "uuidgen",
                                    "@mozilla.org/uuid-generator;1",
@@ -39,14 +48,14 @@ function makeSettingsServiceRequest(aCallback, aName, aValue) {
 };
 
 function SettingsServiceLock(aSettingsService, aTransactionCallback) {
-  if (DEBUG) debug("settingsServiceLock constr!");
+  if (VERBOSE) debug("settingsServiceLock constr!");
   this._open = true;
   this._settingsService = aSettingsService;
   this._id = uuidgen.generateUUID().toString();
   this._transactionCallback = aTransactionCallback;
   this._requests = {};
   let closeHelper = function() {
-    if (DEBUG) debug("closing lock " + this._id);
+    if (VERBOSE) debug("closing lock " + this._id);
     this._open = false;
     this.runOrFinalizeQueries();
   }.bind(this);
@@ -90,13 +99,13 @@ SettingsServiceLock.prototype = {
     if(msg.lockID != this._id) {
       return;
     }
-    if (DEBUG) debug("receiveMessage (" + this._id + "): " + aMessage.name);
+    if (VERBOSE) debug("receiveMessage (" + this._id + "): " + aMessage.name);
     // Finalizing a transaction does not return a request ID since we are
     // supposed to fire callbacks.
     if (!msg.requestID) {
       switch (aMessage.name) {
         case "Settings:Finalize:OK":
-          if (DEBUG) debug("Lock finalize ok!");
+          if (VERBOSE) debug("Lock finalize ok!");
           this.callTransactionHandle();
           break;
         case "Settings:Finalize:KO":
@@ -149,7 +158,7 @@ SettingsServiceLock.prototype = {
   },
 
   get: function get(aName, aCallback) {
-    if (DEBUG) debug("get (" + this._id + "): " + aName);
+    if (VERBOSE) debug("get (" + this._id + "): " + aName);
     if (!this._open) {
       dump("Settings lock not open!\n");
       throw Components.results.NS_ERROR_ABORT;
@@ -164,7 +173,7 @@ SettingsServiceLock.prototype = {
   },
 
   set: function set(aName, aValue, aCallback) {
-    if (DEBUG) debug("set: " + aName + " " + aValue);
+    if (VERBOSE) debug("set: " + aName + " " + aValue);
     if (!this._open) {
       throw "Settings lock not open";
     }
@@ -219,7 +228,7 @@ const SETTINGSSERVICE_CID        = Components.ID("{f656f0c0-f776-11e1-a21f-08002
 
 function SettingsService()
 {
-  if (DEBUG) debug("settingsService Constructor");
+  if (VERBOSE) debug("settingsService Constructor");
 }
 
 SettingsService.prototype = {

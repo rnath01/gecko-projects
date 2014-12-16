@@ -6,6 +6,7 @@
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 const {MozLoopService, LOOP_SESSION_TYPE} = Cu.import("resource:///modules/loop/MozLoopService.jsm", {});
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
                                   "resource://gre/modules/Promise.jsm");
@@ -14,6 +15,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
 XPCOMUtils.defineLazyGetter(this, "eventEmitter", function() {
   const {EventEmitter} = Cu.import("resource://gre/modules/devtools/event-emitter.js", {});
   return new EventEmitter();
+});
+XPCOMUtils.defineLazyGetter(this, "gLoopBundle", function() {
+  return Services.strings.createBundle('chrome://browser/locale/loop/loop.properties');
 });
 
 this.EXPORTED_SYMBOLS = ["LoopRooms", "roomsPushNotification"];
@@ -89,7 +93,7 @@ const checkForParticipantsUpdate = function(room, updatedRoom) {
   // Check for participants that joined.
   for (participant of updatedRoom.participants) {
     if (!containsParticipant(room, participant)) {
-      eventEmitter.emit("joined", room.roomToken, participant);
+      eventEmitter.emit("joined", room, participant);
       eventEmitter.emit("joined:" + room.roomToken, participant);
     }
   }
@@ -97,7 +101,7 @@ const checkForParticipantsUpdate = function(room, updatedRoom) {
   // Check for participants that left.
   for (participant of room.participants) {
     if (!containsParticipant(updatedRoom, participant)) {
-      eventEmitter.emit("left", room.roomToken, participant);
+      eventEmitter.emit("left", room, participant);
       eventEmitter.emit("left:" + room.roomToken, participant);
     }
   }
@@ -131,7 +135,7 @@ let LoopRoomsInternal = {
   get participantsCount() {
     let count = 0;
     for (let room of this.rooms.values()) {
-      if (!("participants" in room)) {
+      if (room.deleted || !("participants" in room)) {
         continue;
       }
       count += room.participants.length;
@@ -156,10 +160,6 @@ let LoopRoomsInternal = {
     }
 
     Task.spawn(function* () {
-      let deferredInitialization = Promise.defer();
-      MozLoopService.delayedInitialize(deferredInitialization);
-      yield deferredInitialization.promise;
-
       if (!gDirty) {
         callback(null, [...this.rooms.values()]);
         return;
@@ -176,24 +176,37 @@ let LoopRoomsInternal = {
       for (let room of roomsList) {
         // See if we already have this room in our cache.
         let orig = this.rooms.get(room.roomToken);
-        if (orig) {
-          checkForParticipantsUpdate(orig, room);
-        }
-        // Remove the `currSize` for posterity.
-        if ("currSize" in room) {
-          delete room.currSize;
-        }
-        this.rooms.set(room.roomToken, room);
-        // When a version is specified, all the data is already provided by this
-        // request.
-        if (version) {
-          eventEmitter.emit("update", room);
-          eventEmitter.emit("update" + ":" + room.roomToken, room);
+
+        if (room.deleted) {
+          // If this client deleted the room, then we'll already have
+          // deleted the room in the function below.
+          if (orig) {
+            this.rooms.delete(room.roomToken);
+          }
+
+          eventEmitter.emit("delete", room);
+          eventEmitter.emit("delete:" + room.roomToken, room);
         } else {
-          // Next, request the detailed information for each room. If the request
-          // fails the room data will not be added to the map.
-          yield LoopRooms.promise("get", room.roomToken);
+          if (orig) {
+            checkForParticipantsUpdate(orig, room);
+          }
+          // Remove the `currSize` for posterity.
+          if ("currSize" in room) {
+            delete room.currSize;
+          }
+
+          this.rooms.set(room.roomToken, room);
+
+          let eventName = orig ? "update" : "add";
+          eventEmitter.emit(eventName, room);
+          eventEmitter.emit(eventName + ":" + room.roomToken, room);
         }
+      }
+
+      // If there's no rooms in the list, remove the guest created room flag, so that
+      // we don't keep registering for guest when we don't need to.
+      if (this.sessionType == LOOP_SESSION_TYPE.GUEST && !this.rooms.size) {
+        this.setGuestCreatedRoom(false);
       }
 
       // Set the 'dirty' flag back to FALSE, since the list is as fresh as can be now.
@@ -230,13 +243,22 @@ let LoopRoomsInternal = {
         let data = JSON.parse(response.body);
 
         room.roomToken = roomToken;
-        checkForParticipantsUpdate(room, data);
-        extend(room, data);
-        this.rooms.set(roomToken, room);
 
-        let eventName = !needsUpdate ? "update" : "add";
-        eventEmitter.emit(eventName, room);
-        eventEmitter.emit(eventName + ":" + roomToken, room);
+        if (data.deleted) {
+          this.rooms.delete(room.roomToken);
+
+          extend(room, data);
+          eventEmitter.emit("delete", room);
+          eventEmitter.emit("delete:" + room.roomToken, room);
+        } else {
+          checkForParticipantsUpdate(room, data);
+          extend(room, data);
+          this.rooms.set(roomToken, room);
+
+          let eventName = !needsUpdate ? "update" : "add";
+          eventEmitter.emit(eventName, room);
+          eventEmitter.emit(eventName + ":" + roomToken, room);
+        }
         callback(null, room);
       }, err => callback(err)).catch(err => callback(err));
   },
@@ -265,9 +287,37 @@ let LoopRoomsInternal = {
         delete room.expiresIn;
         this.rooms.set(room.roomToken, room);
 
+        if (this.sessionType == LOOP_SESSION_TYPE.GUEST) {
+          this.setGuestCreatedRoom(true);
+        }
+
         eventEmitter.emit("add", room);
         callback(null, room);
       }, error => callback(error)).catch(error => callback(error));
+  },
+
+  /**
+   * Sets whether or not the user has created a room in guest mode.
+   *
+   * @param {Boolean} created If the user has created the room.
+   */
+  setGuestCreatedRoom: function(created) {
+    if (created) {
+      Services.prefs.setBoolPref("loop.createdRoom", created);
+    } else {
+      Services.prefs.clearUserPref("loop.createdRoom");
+    }
+  },
+
+  /**
+   * Returns true if the user has a created room in guest mode.
+   */
+  getGuestCreatedRoom: function() {
+    try {
+      return Services.prefs.getBoolPref("loop.createdRoom");
+    } catch (x) {
+      return false;
+    }
   },
 
   open: function(roomToken) {
@@ -296,6 +346,7 @@ let LoopRoomsInternal = {
       .then(response => {
         this.rooms.delete(roomToken);
         eventEmitter.emit("delete", room);
+        eventEmitter.emit("delete:" + room.roomToken, room);
         callback(null, room);
       }, error => callback(error)).catch(error => callback(error));
   },
@@ -327,9 +378,16 @@ let LoopRoomsInternal = {
    *                            `Error` object or `null`.
    */
   join: function(roomToken, callback) {
+    let displayName;
+    if (MozLoopService.userProfile && MozLoopService.userProfile.email) {
+      displayName = MozLoopService.userProfile.email;
+    } else {
+      displayName = gLoopBundle.GetStringFromName("display_name_guest");
+    }
+
     this._postToRoom(roomToken, {
       action: "join",
-      displayName: MozLoopService.userProfile.email,
+      displayName: displayName,
       clientMaxSize: CLIENT_MAX_SIZE
     }, callback);
   },
@@ -377,12 +435,47 @@ let LoopRoomsInternal = {
   },
 
   /**
+   * Renames a room.
+   *
+   * @param {String} roomToken   The room token
+   * @param {String} newRoomName The new name for the room
+   * @param {Function} callback   Function that will be invoked once the operation
+   *                              finished. The first argument passed will be an
+   *                              `Error` object or `null`.
+   */
+  rename: function(roomToken, newRoomName, callback) {
+    let room = this.rooms.get(roomToken);
+    let url = "/rooms/" + encodeURIComponent(roomToken);
+
+    let origRoom = this.rooms.get(roomToken);
+    let patchData = {
+      roomName: newRoomName,
+      // XXX We have to supply the max size and room owner due to bug 1099063.
+      maxSize: origRoom.maxSize,
+      roomOwner: origRoom.roomOwner
+    };
+    MozLoopService.hawkRequest(this.sessionType, url, "PATCH", patchData)
+      .then(response => {
+        let data = JSON.parse(response.body);
+        extend(room, data);
+        callback(null, room);
+      }, error => callback(error)).catch(error => callback(error));
+  },
+
+  /**
    * Callback used to indicate changes to rooms data on the LoopServer.
    *
    * @param {String} version   Version number assigned to this change set.
    * @param {String} channelID Notification channel identifier.
    */
   onNotification: function(version, channelID) {
+    // See if we received a notification for the channel that's currently active:
+    let channelIDs = MozLoopService.channelIDs;
+    if ((this.sessionType == LOOP_SESSION_TYPE.GUEST && channelID != channelIDs.roomsGuest) ||
+        (this.sessionType == LOOP_SESSION_TYPE.FXA   && channelID != channelIDs.roomsFxA)) {
+      return;
+    }
+
     gDirty = true;
     this.getAll(version, () => {});
   },
@@ -441,6 +534,14 @@ this.LoopRooms = {
 
   leave: function(roomToken, sessionToken, callback) {
     return LoopRoomsInternal.leave(roomToken, sessionToken, callback);
+  },
+
+  rename: function(roomToken, newRoomName, callback) {
+    return LoopRoomsInternal.rename(roomToken, newRoomName, callback);
+  },
+
+  getGuestCreatedRoom: function() {
+    return LoopRoomsInternal.getGuestCreatedRoom();
   },
 
   promise: function(method, ...params) {

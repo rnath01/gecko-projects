@@ -18,7 +18,6 @@ import mozinfo
 
 __all__ = [
   "ZipFileReader",
-  "addCommonOptions",
   "dumpLeakLog",
   "processLeakLog",
   'systemMemory',
@@ -139,30 +138,6 @@ def printstatus(status, name = ""):
   else:
     # This is probably a can't-happen condition on Unix, but let's be defensive
     print "TEST-INFO | %s: undecodable exit status %04x\n" % (name, status)
-
-def addCommonOptions(parser, defaults={}):
-  parser.add_option("--xre-path",
-                    action = "store", type = "string", dest = "xrePath",
-                    # individual scripts will set a sane default
-                    default = None,
-                    help = "absolute path to directory containing XRE (probably xulrunner)")
-  if 'SYMBOLS_PATH' not in defaults:
-    defaults['SYMBOLS_PATH'] = None
-  parser.add_option("--symbols-path",
-                    action = "store", type = "string", dest = "symbolsPath",
-                    default = defaults['SYMBOLS_PATH'],
-                    help = "absolute path to directory containing breakpad symbols, or the URL of a zip file containing symbols")
-  parser.add_option("--debugger",
-                    action = "store", dest = "debugger",
-                    help = "use the given debugger to launch the application")
-  parser.add_option("--debugger-args",
-                    action = "store", dest = "debuggerArgs",
-                    help = "pass the given args to the debugger _before_ "
-                           "the application on the command line")
-  parser.add_option("--debugger-interactive",
-                    action = "store_true", dest = "debuggerInteractive",
-                    help = "prevents the test harness from redirecting "
-                        "stdout and stderr for interactive debuggers")
 
 def dumpLeakLog(leakLogFile, filter = False):
   """Process the leak log, without parsing it.
@@ -414,7 +389,6 @@ def environment(xrePath, env=None, crashreporter=True, debugger=False, dmdPath=N
     env[envVar] = os.path.pathsep.join([path for path in envValue if path])
 
   if dmdPath and dmdLibrary and preloadEnvVar:
-    env['DMD'] = '1'
     env[preloadEnvVar] = os.path.join(dmdPath, dmdLibrary)
 
   # crashreporter
@@ -435,7 +409,7 @@ def environment(xrePath, env=None, crashreporter=True, debugger=False, dmdPath=N
   env.setdefault('MOZ_DISABLE_NONLOCAL_CONNECTIONS', '1')
 
   # Set WebRTC logging in case it is not set yet
-  env.setdefault('NSPR_LOG_MODULES', 'signaling:5,mtransport:5,datachannel:5')
+  env.setdefault('NSPR_LOG_MODULES', 'signaling:5,mtransport:5,datachannel:5,jsep:5,MediaPipelineFactory:5')
   env.setdefault('R_LOG_LEVEL', '6')
   env.setdefault('R_LOG_DESTINATION', 'stderr')
   env.setdefault('R_LOG_VERBOSE', '1')

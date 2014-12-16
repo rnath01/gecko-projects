@@ -11,6 +11,7 @@
 
 #include "jsapi.h"
 
+#include "mozilla/LoadContext.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/DOMError.h"
 #include "mozilla/dom/ErrorEvent.h"
@@ -31,6 +32,10 @@
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
 #include "WorkerScope.h"
+
+#ifdef PostMessage
+#undef PostMessage
+#endif
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -151,11 +156,17 @@ UpdatePromise::RejectAllPromises(const ErrorEventInit& aErrorDesc)
       JS::Rooted<JSString*> stack(cx, JS_GetEmptyString(JS_GetRuntime(cx)));
 
       JS::Rooted<JS::Value> fnval(cx);
-      ToJSValue(cx, aErrorDesc.mFilename, &fnval);
+      if (!ToJSValue(cx, aErrorDesc.mFilename, &fnval)) {
+        pendingPromise->MaybeReject(NS_ERROR_FAILURE);
+        continue;
+      }
       JS::Rooted<JSString*> fn(cx, fnval.toString());
 
       JS::Rooted<JS::Value> msgval(cx);
-      ToJSValue(cx, aErrorDesc.mMessage, &msgval);
+      if (!ToJSValue(cx, aErrorDesc.mMessage, &msgval)) {
+        pendingPromise->MaybeReject(NS_ERROR_FAILURE);
+        continue;
+      }
       JS::Rooted<JSString*> msg(cx, msgval.toString());
 
       JS::Rooted<JS::Value> error(cx);
@@ -2088,6 +2099,17 @@ ServiceWorkerManager::CreateServiceWorker(const nsACString& aScriptSpec,
   // the ServiceWorkerRegistrationInfo and use that?
   nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
   rv = ssm->GetNoAppCodebasePrincipal(info.mBaseURI, getter_AddRefs(info.mPrincipal));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  // NOTE: this defaults the SW load context to:
+  //  - private browsing = false
+  //  - content = true
+  //  - use remote tabs = false
+  // Alternatively we could persist the original load group values and use
+  // them here.
+  rv = NS_NewLoadGroup(getter_AddRefs(info.mLoadGroup), info.mPrincipal);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }

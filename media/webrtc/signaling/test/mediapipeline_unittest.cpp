@@ -271,7 +271,6 @@ class TestAgentSend : public TestAgent {
         test_utils->sts_target(),
         audio_,
         1,
-        1,
         false,
         audio_conduit_,
         rtp,
@@ -296,7 +295,7 @@ class TestAgentReceive : public TestAgent {
     audio->SetPullEnabled(true);
 
     mozilla::AudioSegment* segment= new mozilla::AudioSegment();
-    audio->AddTrack(0, 100, 0, segment);
+    audio->AddAudioTrack(0, 100, 0, segment);
     audio->AdvanceKnownTracksTime(mozilla::STREAM_TIME_MAX);
 
     audio_ = new Fake_DOMMediaStream(audio);

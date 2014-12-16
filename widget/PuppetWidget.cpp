@@ -14,6 +14,7 @@
 #include "mozilla/IMEStateManager.h"
 #include "mozilla/layers/CompositorChild.h"
 #include "mozilla/layers/PLayerTransactionChild.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/TextComposition.h"
 #include "mozilla/TextEvents.h"
 #include "PuppetWidget.h"
@@ -331,7 +332,8 @@ PuppetWidget::DispatchEvent(WidgetGUIEvent* event, nsEventStatus& aStatus)
     aStatus = mAttachedWidgetListener->HandleEvent(event, mUseAttachedEvents);
   }
 
-  if (event->message == NS_COMPOSITION_END) {
+  if (event->mClass == eCompositionEventClass &&
+      event->AsCompositionEvent()->CausesDOMCompositionEndEvent()) {
     mIMEComposing = false;
   }
 
@@ -650,6 +652,7 @@ PuppetWidget::NotifyIMEOfSelectionChange(
       mIMELastReceivedSeqno,
       queryEvent.GetSelectionStart(),
       queryEvent.GetSelectionEnd(),
+      queryEvent.GetWritingMode(),
       aIMENotification.mSelectionChangeData.mCausedByComposition);
   }
   return NS_OK;
@@ -761,6 +764,14 @@ PuppetWidget::PaintTask::Run()
 bool
 PuppetWidget::NeedsPaint()
 {
+  // e10s popups are handled by the parent process, so never should be painted here
+  if (XRE_GetProcessType() == GeckoProcessType_Content &&
+      Preferences::GetBool("browser.tabs.remote.desktopbehavior", false) &&
+      mWindowType == eWindowType_popup) {
+    NS_WARNING("Trying to paint an e10s popup in the child process!");
+    return false;
+  }
+
   return mVisible;
 }
 
@@ -819,6 +830,28 @@ PuppetWidget::GetNativeData(uint32_t aDataType)
   return nullptr;
 }
 
+nsIntPoint
+PuppetWidget::GetChromeDimensions()
+{
+  if (!GetOwningTabChild()) {
+    NS_WARNING("PuppetWidget without Tab does not have chrome information.");
+    return nsIntPoint();
+  }
+  return GetOwningTabChild()->GetChromeDisplacement();
+}
+
+nsIntPoint
+PuppetWidget::GetWindowPosition()
+{
+  if (!GetOwningTabChild()) {
+    return nsIntPoint();
+  }
+
+  int32_t winX, winY, winW, winH;
+  NS_ENSURE_SUCCESS(GetOwningTabChild()->GetDimensions(0, &winX, &winY, &winW, &winH), nsIntPoint());
+  return nsIntPoint(winX, winY);
+}
+
 PuppetScreen::PuppetScreen(void *nativeScreen)
 {
 }
@@ -833,6 +866,13 @@ ScreenConfig()
   ScreenConfiguration config;
   hal::GetCurrentScreenConfiguration(&config);
   return config;
+}
+
+nsIntSize
+PuppetWidget::GetScreenDimensions()
+{
+  nsIntRect r = ScreenConfig().rect();
+  return nsIntSize(r.width, r.height);
 }
 
 NS_IMETHODIMP

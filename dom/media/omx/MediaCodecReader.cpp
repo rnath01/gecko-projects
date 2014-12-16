@@ -282,10 +282,6 @@ void
 MediaCodecReader::ProcessCachedDataTask::Run()
 {
   mReader->ProcessCachedData(mOffset, nullptr);
-  nsRefPtr<ReferenceKeeperRunnable<MediaCodecReader>> runnable(
-      new ReferenceKeeperRunnable<MediaCodecReader>(mReader));
-  mReader = nullptr;
-  NS_DispatchToMainThread(runnable.get());
 }
 
 MediaCodecReader::MediaCodecReader(AbstractMediaDecoder* aDecoder)
@@ -305,7 +301,6 @@ MediaCodecReader::MediaCodecReader(AbstractMediaDecoder* aDecoder)
 
 MediaCodecReader::~MediaCodecReader()
 {
-  MOZ_ASSERT(NS_IsMainThread(), "Should be on main thread.");
 }
 
 nsresult
@@ -349,10 +344,13 @@ MediaCodecReader::ReleaseMediaResources()
   ReleaseCriticalResources();
 }
 
-void
+nsRefPtr<ShutdownPromise>
 MediaCodecReader::Shutdown()
 {
+  MOZ_ASSERT(mAudioPromise.IsEmpty());
+  MOZ_ASSERT(mVideoPromise.IsEmpty());
   ReleaseResources();
+  return MediaDecoderReader::Shutdown();
 }
 
 void
@@ -378,23 +376,28 @@ MediaCodecReader::DispatchVideoTask(int64_t aTimeThreshold)
   }
 }
 
-void
+nsRefPtr<MediaDecoderReader::AudioDataPromise>
 MediaCodecReader::RequestAudioData()
 {
   MOZ_ASSERT(GetTaskQueue()->IsCurrentThreadIn());
   MOZ_ASSERT(HasAudio());
+
+  nsRefPtr<AudioDataPromise> p = mAudioPromise.Ensure(__func__);
   if (CheckAudioResources()) {
     DispatchAudioTask();
   }
+
+  return p;
 }
 
-void
+nsRefPtr<MediaDecoderReader::VideoDataPromise>
 MediaCodecReader::RequestVideoData(bool aSkipToNextKeyframe,
                                    int64_t aTimeThreshold)
 {
   MOZ_ASSERT(GetTaskQueue()->IsCurrentThreadIn());
   MOZ_ASSERT(HasVideo());
 
+  nsRefPtr<VideoDataPromise> p = mVideoPromise.Ensure(__func__);
   int64_t threshold = sInvalidTimestampUs;
   if (aSkipToNextKeyframe && IsValidTimestampUs(aTimeThreshold)) {
     mVideoTrack.mTaskQueue->Flush();
@@ -403,6 +406,8 @@ MediaCodecReader::RequestVideoData(bool aSkipToNextKeyframe,
   if (CheckVideoResources()) {
     DispatchVideoTask(threshold);
   }
+
+  return p;
 }
 
 bool
@@ -482,17 +487,17 @@ MediaCodecReader::DecodeAudioDataTask()
 {
   bool result = DecodeAudioDataSync();
   if (AudioQueue().GetSize() > 0) {
-    AudioData* a = AudioQueue().PopFront();
+    nsRefPtr<AudioData> a = AudioQueue().PopFront();
     if (a) {
       if (mAudioTrack.mDiscontinuity) {
         a->mDiscontinuity = true;
         mAudioTrack.mDiscontinuity = false;
       }
-      GetCallback()->OnAudioDecoded(a);
+      mAudioPromise.Resolve(a, __func__);
     }
   }
-  if (AudioQueue().AtEndOfStream()) {
-    GetCallback()->OnNotDecoded(MediaData::AUDIO_DATA, RequestSampleCallback::END_OF_STREAM);
+  else if (AudioQueue().AtEndOfStream()) {
+    mAudioPromise.Reject(END_OF_STREAM, __func__);
   }
   return result;
 }
@@ -502,17 +507,17 @@ MediaCodecReader::DecodeVideoFrameTask(int64_t aTimeThreshold)
 {
   bool result = DecodeVideoFrameSync(aTimeThreshold);
   if (VideoQueue().GetSize() > 0) {
-    VideoData* v = VideoQueue().PopFront();
+    nsRefPtr<VideoData> v = VideoQueue().PopFront();
     if (v) {
       if (mVideoTrack.mDiscontinuity) {
         v->mDiscontinuity = true;
         mVideoTrack.mDiscontinuity = false;
       }
-      GetCallback()->OnVideoDecoded(v);
+      mVideoPromise.Resolve(v, __func__);
     }
   }
-  if (VideoQueue().AtEndOfStream()) {
-    GetCallback()->OnNotDecoded(MediaData::VIDEO_DATA, RequestSampleCallback::END_OF_STREAM);
+  else if (VideoQueue().AtEndOfStream()) {
+    mVideoPromise.Reject(END_OF_STREAM, __func__);
   }
   return result;
 }
@@ -883,7 +888,7 @@ MediaCodecReader::DecodeVideoFrameSync(int64_t aTimeThreshold)
   }
 
   bool result = false;
-  VideoData *v = nullptr;
+  nsRefPtr<VideoData> v;
   RefPtr<TextureClient> textureClient;
   sp<GraphicBuffer> graphicBuffer;
   if (bufferInfo.mBuffer != nullptr) {
@@ -1253,11 +1258,13 @@ void
 MediaCodecReader::ShutdownTaskQueues()
 {
   if(mAudioTrack.mTaskQueue) {
-    mAudioTrack.mTaskQueue->Shutdown();
+    mAudioTrack.mTaskQueue->BeginShutdown();
+    mAudioTrack.mTaskQueue->AwaitShutdownAndIdle();
     mAudioTrack.mTaskQueue = nullptr;
   }
   if(mVideoTrack.mTaskQueue) {
-    mVideoTrack.mTaskQueue->Shutdown();
+    mVideoTrack.mTaskQueue->BeginShutdown();
+    mVideoTrack.mTaskQueue->AwaitShutdownAndIdle();
     mVideoTrack.mTaskQueue = nullptr;
   }
 }

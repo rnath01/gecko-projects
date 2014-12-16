@@ -163,6 +163,8 @@ void
 CompositableForwarder::IdentifyTextureHost(const TextureFactoryIdentifier& aIdentifier)
 {
   mTextureFactoryIdentifier = aIdentifier;
+
+  mSyncObject = SyncObject::CreateSyncObject(aIdentifier.mSyncHandle);
 }
 
 ShadowLayerForwarder::ShadowLayerForwarder()
@@ -642,7 +644,7 @@ ShadowLayerForwarder::EndTransaction(InfallibleTArray<EditReply>* aReplies,
 
   AutoInfallibleTArray<Edit, 10> cset;
   size_t nCsets = mTxn->mCset.size() + mTxn->mPaints.size();
-  NS_ABORT_IF_FALSE(nCsets > 0 || mWindowOverlayChanged, "should have bailed by now");
+  NS_ABORT_IF_FALSE(nCsets > 0 || mWindowOverlayChanged || mTxn->RotationChanged(), "should have bailed by now");
 
   cset.SetCapacity(nCsets);
   if (!mTxn->mCset.empty()) {
@@ -738,13 +740,13 @@ ShadowLayerForwarder::DeallocShmem(ipc::Shmem& aShmem)
 bool
 ShadowLayerForwarder::IPCOpen() const
 {
-  return mShadowManager->IPCOpen();
+  return HasShadowManager() && mShadowManager->IPCOpen();
 }
 
 bool
 ShadowLayerForwarder::IsSameProcess() const
 {
-  if (!mShadowManager->IPCOpen()) {
+  if (!HasShadowManager() || !mShadowManager->IPCOpen()) {
     return false;
   }
   return mShadowManager->OtherProcess() == kInvalidProcessHandle;

@@ -166,10 +166,7 @@ LayerManagerComposite::BeginTransaction()
   
   mIsCompositorReady = true;
 
-  if (Compositor::GetBackend() == LayersBackend::LAYERS_OPENGL ||
-      Compositor::GetBackend() == LayersBackend::LAYERS_BASIC) {
-    mClonedLayerTreeProperties = LayerProperties::CloneFrom(GetRoot());
-  }
+  mClonedLayerTreeProperties = LayerProperties::CloneFrom(GetRoot());
 }
 
 void
@@ -630,7 +627,7 @@ LayerManagerComposite::Render()
   LayerScopeAutoFrame frame(PR_Now());
 
   // Dump to console
-  if (gfxPrefs::LayersDump()) {
+  if (gfxPrefs::LayersDump() || profiler_feature_active("layersdump")) {
     this->Dump();
   }
 

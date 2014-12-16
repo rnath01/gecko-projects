@@ -20,18 +20,17 @@ loop.panel = (function(_, mozL10n) {
   var ButtonGroup = sharedViews.ButtonGroup;
   var ContactsList = loop.contacts.ContactsList;
   var ContactDetailsForm = loop.contacts.ContactDetailsForm;
-  var __ = mozL10n.get; // aliasing translation function as __ for concision
 
   var TabView = React.createClass({
     propTypes: {
-      buttonsHidden: React.PropTypes.bool,
+      buttonsHidden: React.PropTypes.array,
       // The selectedTab prop is used by the UI showcase.
       selectedTab: React.PropTypes.string
     },
 
     getDefaultProps: function() {
       return {
-        buttonsHidden: false
+        buttonsHidden: []
       };
     },
 
@@ -41,7 +40,7 @@ loop.panel = (function(_, mozL10n) {
       // getDefaultProps (bug 1100258).
       return {
         selectedTab: this.props.selectedTab ||
-          (navigator.mozLoop.getLoopBoolPref("rooms.enabled") ?
+          (navigator.mozLoop.getLoopPref("rooms.enabled") ?
             "rooms" : "call")
       };
     },
@@ -61,6 +60,9 @@ loop.panel = (function(_, mozL10n) {
           return;
         }
         var tabName = tab.props.name;
+        if (this.props.buttonsHidden.indexOf(tabName) > -1) {
+          return;
+        }
         var isSelected = (this.state.selectedTab == tabName);
         if (!tab.props.hidden) {
           tabButtons.push(
@@ -78,9 +80,7 @@ loop.panel = (function(_, mozL10n) {
       }, this);
       return (
         <div className="tab-view-container">
-          {!this.props.buttonsHidden
-            ? <ul className="tab-view">{tabButtons}</ul>
-            : null}
+          <ul className="tab-view">{tabButtons}</ul>
           {tabs}
         </div>
       );
@@ -138,8 +138,8 @@ loop.panel = (function(_, mozL10n) {
         'hide': !this.state.showMenu
       });
       var availabilityText = this.state.doNotDisturb ?
-                              __("display_name_dnd_status") :
-                              __("display_name_available_status");
+                              mozL10n.get("display_name_dnd_status") :
+                              mozL10n.get("display_name_available_status");
 
       return (
         <div className="dropdown">
@@ -152,12 +152,12 @@ loop.panel = (function(_, mozL10n) {
             <li onClick={this.changeAvailability("available")}
                 className="dropdown-menu-item dnd-make-available">
               <i className="status status-available"></i>
-              <span>{__("display_name_available_status")}</span>
+              <span>{mozL10n.get("display_name_available_status")}</span>
             </li>
             <li onClick={this.changeAvailability("do-not-disturb")}
                 className="dropdown-menu-item dnd-make-unavailable">
               <i className="status status-dnd"></i>
-              <span>{__("display_name_dnd_status")}</span>
+              <span>{mozL10n.get("display_name_dnd_status")}</span>
             </li>
           </ul>
         </div>
@@ -165,30 +165,65 @@ loop.panel = (function(_, mozL10n) {
     }
   });
 
+  var GettingStartedView = React.createClass({
+    handleButtonClick: function() {
+      navigator.mozLoop.openGettingStartedTour("getting-started");
+      navigator.mozLoop.setLoopPref("gettingStarted.seen", true);
+      var event = new CustomEvent("GettingStartedSeen");
+      window.dispatchEvent(event);
+    },
+
+    render: function() {
+      if (navigator.mozLoop.getLoopPref("gettingStarted.seen")) {
+        return null;
+      }
+      return (
+        <div id="fte-getstarted">
+          <header id="fte-title">
+            {mozL10n.get("first_time_experience_title", {
+              "clientShortname": mozL10n.get("clientShortname2")
+            })}
+          </header>
+          <Button htmlId="fte-button"
+                  onClick={this.handleButtonClick}
+                  caption={mozL10n.get("first_time_experience_button_label")} />
+        </div>
+      );
+    }
+  });
+
   var ToSView = React.createClass({
     getInitialState: function() {
-      return {seenToS: navigator.mozLoop.getLoopCharPref('seenToS')};
+      return {seenToS: navigator.mozLoop.getLoopPref("seenToS")};
     },
 
     render: function() {
       if (this.state.seenToS == "unseen") {
-        var terms_of_use_url = navigator.mozLoop.getLoopCharPref('legal.ToS_url');
-        var privacy_notice_url = navigator.mozLoop.getLoopCharPref('legal.privacy_url');
-        var tosHTML = __("legal_text_and_links3", {
-          "clientShortname": __("clientShortname2"),
+        var locale = mozL10n.getLanguage();
+        var terms_of_use_url = navigator.mozLoop.getLoopPref('legal.ToS_url');
+        var privacy_notice_url = navigator.mozLoop.getLoopPref('legal.privacy_url');
+        var tosHTML = mozL10n.get("legal_text_and_links3", {
+          "clientShortname": mozL10n.get("clientShortname2"),
           "terms_of_use": React.renderComponentToStaticMarkup(
             <a href={terms_of_use_url} target="_blank">
-              {__("legal_text_tos")}
+              {mozL10n.get("legal_text_tos")}
             </a>
           ),
           "privacy_notice": React.renderComponentToStaticMarkup(
             <a href={privacy_notice_url} target="_blank">
-              {__("legal_text_privacy")}
+              {mozL10n.get("legal_text_privacy")}
             </a>
           ),
         });
-        return <p className="terms-service"
-                  dangerouslySetInnerHTML={{__html: tosHTML}}></p>;
+        return <div id="powered-by-wrapper">
+          <p id="powered-by">
+            {mozL10n.get("powered_by_beforeLogo")}
+            <img id="powered-by-logo" className={locale} />
+            {mozL10n.get("powered_by_afterLogo")}
+          </p>
+          <p className="terms-service"
+             dangerouslySetInnerHTML={{__html: tosHTML}}></p>
+         </div>;
       } else {
         return <div />;
       }
@@ -247,8 +282,19 @@ loop.panel = (function(_, mozL10n) {
       }
     },
 
+    handleHelpEntry: function(event) {
+      event.preventDefault();
+      var helloSupportUrl = navigator.mozLoop.getLoopPref('support_url');
+      window.open(helloSupportUrl);
+      window.close();
+    },
+
     _isSignedIn: function() {
       return !!navigator.mozLoop.userProfile;
+    },
+
+    openGettingStartedTour: function() {
+      navigator.mozLoop.openGettingStartedTour("settings-menu");
     },
 
     render: function() {
@@ -262,23 +308,29 @@ loop.panel = (function(_, mozL10n) {
       return (
         <div className="settings-menu dropdown">
           <a className="button-settings" onClick={this.showDropdownMenu}
-             title={__("settings_menu_button_tooltip")} />
+             title={mozL10n.get("settings_menu_button_tooltip")} />
           <ul className={cx({"dropdown-menu": true, hide: !this.state.showMenu})}
               onMouseLeave={this.hideDropdownMenu}>
-            <SettingsDropdownEntry label={__("settings_menu_item_settings")}
+            <SettingsDropdownEntry label={mozL10n.get("settings_menu_item_settings")}
                                    onClick={this.handleClickSettingsEntry}
                                    displayed={false}
                                    icon="settings" />
-            <SettingsDropdownEntry label={__("settings_menu_item_account")}
+            <SettingsDropdownEntry label={mozL10n.get("settings_menu_item_account")}
                                    onClick={this.handleClickAccountEntry}
                                    icon="account"
                                    displayed={this._isSignedIn()} />
+            <SettingsDropdownEntry icon="tour"
+                                   label={mozL10n.get("tour_label")}
+                                   onClick={this.openGettingStartedTour} />
             <SettingsDropdownEntry label={this._isSignedIn() ?
-                                          __("settings_menu_item_signout") :
-                                          __("settings_menu_item_signin")}
+                                          mozL10n.get("settings_menu_item_signout") :
+                                          mozL10n.get("settings_menu_item_signin")}
                                    onClick={this.handleClickAuthEntry}
                                    displayed={navigator.mozLoop.fxAEnabled}
                                    icon={this._isSignedIn() ? "signout" : "signin"} />
+            <SettingsDropdownEntry label={mozL10n.get("help_label")}
+                                   onClick={this.handleHelpEntry}
+                                   icon="help" />
           </ul>
         </div>
       );
@@ -407,7 +459,7 @@ loop.panel = (function(_, mozL10n) {
       var cx = React.addons.classSet;
       return (
         <div className="generate-url">
-          <header>{__("share_link_header_text")}</header>
+          <header id="share-link-header">{mozL10n.get("share_link_header_text")}</header>
           <div className="generate-url-stack">
             <input type="url" value={this.state.callUrl} readOnly="true"
                    onCopy={this.handleLinkExfiltration}
@@ -451,7 +503,7 @@ loop.panel = (function(_, mozL10n) {
       return (
         <p className="signin-link">
           <a href="#" onClick={this.handleSignUpLinkClick}>
-            {__("panel_footer_signin_or_signup_link")}
+            {mozL10n.get("panel_footer_signin_or_signup_link")}
           </a>
         </p>
       );
@@ -471,6 +523,71 @@ loop.panel = (function(_, mozL10n) {
     }
   });
 
+  var EditInPlace = React.createClass({
+    mixins: [React.addons.LinkedStateMixin],
+
+    propTypes: {
+      onChange: React.PropTypes.func.isRequired,
+      text: React.PropTypes.string,
+    },
+
+    getDefaultProps: function() {
+      return {text: ""};
+    },
+
+    getInitialState: function() {
+      return {edit: false, text: this.props.text};
+    },
+
+    componentWillReceiveProps: function(nextProps) {
+      if (nextProps.text !== this.props.text) {
+        this.setState({text: nextProps.text});
+      }
+    },
+
+    handleTextClick: function(event) {
+      event.stopPropagation();
+      event.preventDefault();
+      this.setState({edit: true}, function() {
+        this.getDOMNode().querySelector("input").select();
+      }.bind(this));
+    },
+
+    handleInputClick: function(event) {
+      event.stopPropagation();
+    },
+
+    handleFormSubmit: function(event) {
+      event.preventDefault();
+      this.props.onChange(this.state.text);
+      this.setState({edit: false});
+    },
+
+    cancelEdit: function(event) {
+      event.stopPropagation();
+      event.preventDefault();
+      this.setState({edit: false, text: this.props.text});
+    },
+
+    render: function() {
+      if (!this.state.edit) {
+        return (
+          <span className="edit-in-place" onClick={this.handleTextClick}
+                title={mozL10n.get("rooms_name_this_room_tooltip2")}>
+            {this.state.text}
+          </span>
+        );
+      }
+      return (
+        <form onSubmit={this.handleFormSubmit}>
+          <input type="text" valueLink={this.linkState("text")}
+                 onClick={this.handleInputClick}
+                 onBlur={this.cancelEdit} />
+        </form>
+      );
+    }
+  });
+
   /**
    * Room list entry.
    */
@@ -479,6 +596,8 @@ loop.panel = (function(_, mozL10n) {
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
       room:       React.PropTypes.instanceOf(loop.store.Room).isRequired
     },
+
+    mixins: [loop.shared.mixins.WindowCloseMixin],
 
     getInitialState: function() {
       return { urlCopied: false };
@@ -489,14 +608,16 @@ loop.panel = (function(_, mozL10n) {
         (nextState.urlCopied !== this.state.urlCopied);
     },
 
-    handleClickRoomUrl: function(event) {
+    handleClickEntry: function(event) {
       event.preventDefault();
       this.props.dispatcher.dispatch(new sharedActions.OpenRoom({
         roomToken: this.props.room.roomToken
       }));
+      this.closeWindow();
     },
 
     handleCopyButtonClick: function(event) {
+      event.stopPropagation();
       event.preventDefault();
       this.props.dispatcher.dispatch(new sharedActions.CopyRoomUrl({
         roomUrl: this.props.room.roomUrl
@@ -505,10 +626,31 @@ loop.panel = (function(_, mozL10n) {
     },
 
     handleDeleteButtonClick: function(event) {
+      event.stopPropagation();
       event.preventDefault();
-      // XXX We should prompt end user for confirmation; see bug 1092953.
-      this.props.dispatcher.dispatch(new sharedActions.DeleteRoom({
-        roomToken: this.props.room.roomToken
+      navigator.mozLoop.confirm({
+        message: mozL10n.get("rooms_list_deleteConfirmation_label"),
+        okButton: null,
+        cancelButton: null
+      }, function(err, result) {
+        if (err) {
+          throw err;
+        }
+
+        if (!result) {
+          return;
+        }
+
+        this.props.dispatcher.dispatch(new sharedActions.DeleteRoom({
+          roomToken: this.props.room.roomToken
+        }));
+      }.bind(this));
+    },
+
+    renameRoom: function(newRoomName) {
+      this.props.dispatcher.dispatch(new sharedActions.RenameRoom({
+        roomToken: this.props.room.roomToken,
+        newRoomName: newRoomName
       }));
     },
 
@@ -532,20 +674,19 @@ loop.panel = (function(_, mozL10n) {
       });
 
       return (
-        <div className={roomClasses} onMouseLeave={this.handleMouseLeave}>
+        <div className={roomClasses} onMouseLeave={this.handleMouseLeave}
+             onClick={this.handleClickEntry}>
           <h2>
             <span className="room-notification" />
-            {room.roomName}
+            <EditInPlace text={room.roomName} onChange={this.renameRoom} />
             <button className={copyButtonClasses}
+              title={mozL10n.get("rooms_list_copy_url_tooltip")}
               onClick={this.handleCopyButtonClick} />
             <button className="delete-link"
+              title={mozL10n.get("rooms_list_delete_tooltip")}
               onClick={this.handleDeleteButtonClick} />
           </h2>
-          <p>
-            <a href="#" onClick={this.handleClickRoomUrl}>
-              {room.roomUrl}
-            </a>
-          </p>
+          <p><a className="room-url-link" href="#">{room.roomUrl}</a></p>
         </div>
       );
     }
@@ -555,7 +696,7 @@ loop.panel = (function(_, mozL10n) {
    * Room list.
    */
   var RoomList = React.createClass({
-    mixins: [Backbone.Events],
+    mixins: [Backbone.Events, sharedMixins.WindowCloseMixin],
 
     propTypes: {
       store: React.PropTypes.instanceOf(loop.store.RoomStore).isRequired,
@@ -597,6 +738,8 @@ loop.panel = (function(_, mozL10n) {
     },
 
     handleCreateButtonClick: function() {
+      this.closeWindow();
+
       this.props.dispatcher.dispatch(new sharedActions.CreateRoom({
         nameTemplate: mozL10n.get("rooms_default_room_name_template"),
         roomOwner: this.props.userDisplayName
@@ -622,7 +765,7 @@ loop.panel = (function(_, mozL10n) {
             }, this)
           }</div>
           <p>
-            <button className="btn btn-info"
+            <button className="btn btn-info new-room-button"
                     onClick={this.handleCreateButtonClick}
                     disabled={this._hasPendingOperation()}>
               {mozL10n.get("rooms_new_room_button_label")}
@@ -643,28 +786,32 @@ loop.panel = (function(_, mozL10n) {
       // Mostly used for UI components showcase and unit tests
       callUrl: React.PropTypes.string,
       userProfile: React.PropTypes.object,
+      // Used only for unit tests.
       showTabButtons: React.PropTypes.bool,
       selectedTab: React.PropTypes.string,
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
+      mozLoop: React.PropTypes.object,
       roomStore:
         React.PropTypes.instanceOf(loop.store.RoomStore).isRequired
     },
 
     getInitialState: function() {
       return {
-        userProfile: this.props.userProfile || navigator.mozLoop.userProfile,
+        userProfile: this.props.userProfile || this.props.mozLoop.userProfile,
+        gettingStartedSeen: this.props.mozLoop.getLoopPref("gettingStarted.seen"),
       };
     },
 
     _serviceErrorToShow: function() {
-      if (!navigator.mozLoop.errors || !Object.keys(navigator.mozLoop.errors).length) {
+      if (!this.props.mozLoop.errors ||
+          !Object.keys(this.props.mozLoop.errors).length) {
         return null;
       }
       // Just get the first error for now since more than one should be rare.
-      var firstErrorKey = Object.keys(navigator.mozLoop.errors)[0];
+      var firstErrorKey = Object.keys(this.props.mozLoop.errors)[0];
       return {
         type: firstErrorKey,
-        error: navigator.mozLoop.errors[firstErrorKey],
+        error: this.props.mozLoop.errors[firstErrorKey],
       };
     },
 
@@ -685,11 +832,11 @@ loop.panel = (function(_, mozL10n) {
     },
 
     _roomsEnabled: function() {
-      return navigator.mozLoop.getLoopBoolPref("rooms.enabled");
+      return this.props.mozLoop.getLoopPref("rooms.enabled");
     },
 
     _onStatusChanged: function() {
-      var profile = navigator.mozLoop.userProfile;
+      var profile = this.props.mozLoop.userProfile;
       var currUid = this.state.userProfile ? this.state.userProfile.uid : null;
       var newUid = profile ? profile.uid : null;
       if (currUid != newUid) {
@@ -698,6 +845,23 @@ loop.panel = (function(_, mozL10n) {
         this.setState({userProfile: profile});
       }
       this.updateServiceErrors();
+    },
+
+    _gettingStartedSeen: function() {
+      this.setState({
+        gettingStartedSeen: this.props.mozLoop.getLoopPref("gettingStarted.seen"),
+      });
+    },
+
+    _UIActionHandler: function(e) {
+      switch (e.detail.action) {
+        case "selectTab":
+          this.selectTab(e.detail.tab);
+          break;
+        default:
+          console.error("Invalid action", e.detail.action);
+          break;
+      }
     },
 
     /**
@@ -743,26 +907,47 @@ loop.panel = (function(_, mozL10n) {
 
     componentDidMount: function() {
       window.addEventListener("LoopStatusChanged", this._onStatusChanged);
+      window.addEventListener("GettingStartedSeen", this._gettingStartedSeen);
+      window.addEventListener("UIAction", this._UIActionHandler);
     },
 
     componentWillUnmount: function() {
       window.removeEventListener("LoopStatusChanged", this._onStatusChanged);
+      window.removeEventListener("GettingStartedSeen", this._gettingStartedSeen);
+      window.removeEventListener("UIAction", this._UIActionHandler);
     },
 
     _getUserDisplayName: function() {
       return this.state.userProfile && this.state.userProfile.email ||
-             __("display_name_guest");
+             mozL10n.get("display_name_guest");
     },
 
     render: function() {
       var NotificationListView = sharedViews.NotificationListView;
+
+      if (!this.state.gettingStartedSeen) {
+        return (
+          <div>
+            <NotificationListView notifications={this.props.notifications}
+                                  clearOnDocumentHidden={true} />
+            <GettingStartedView />
+            <ToSView />
+          </div>
+        );
+      }
+
+      // Determine which buttons to NOT show.
+      var hideButtons = [];
+      if (!this.state.userProfile && !this.props.showTabButtons) {
+        hideButtons.push("contacts");
+      }
 
       return (
         <div>
           <NotificationListView notifications={this.props.notifications}
                                 clearOnDocumentHidden={true} />
           <TabView ref="tabView" selectedTab={this.props.selectedTab}
-            buttonsHidden={!this.state.userProfile && !this.props.showTabButtons}>
+            buttonsHidden={hideButtons}>
             {this._renderRoomsOrCallTab()}
             <Tab name="contacts">
               <ContactsList selectTab={this.selectTab}
@@ -808,15 +993,15 @@ loop.panel = (function(_, mozL10n) {
     var client = new loop.Client();
     var notifications = new sharedModels.NotificationCollection();
     var dispatcher = new loop.Dispatcher();
-    var roomStore = new loop.store.RoomStore({
-      mozLoop: navigator.mozLoop,
-      dispatcher: dispatcher
+    var roomStore = new loop.store.RoomStore(dispatcher, {
+      mozLoop: navigator.mozLoop
     });
 
     React.renderComponent(<PanelView
       client={client}
       notifications={notifications}
       roomStore={roomStore}
+      mozLoop={navigator.mozLoop}
       dispatcher={dispatcher}
     />, document.querySelector("#main"));
 
@@ -830,15 +1015,16 @@ loop.panel = (function(_, mozL10n) {
 
   return {
     init: init,
-    UserIdentity: UserIdentity,
     AuthLink: AuthLink,
     AvailabilityDropdown: AvailabilityDropdown,
     CallUrlResult: CallUrlResult,
+    GettingStartedView: GettingStartedView,
     PanelView: PanelView,
     RoomEntry: RoomEntry,
     RoomList: RoomList,
     SettingsDropdown: SettingsDropdown,
-    ToSView: ToSView
+    ToSView: ToSView,
+    UserIdentity: UserIdentity,
   };
 })(_, document.mozL10n);
 

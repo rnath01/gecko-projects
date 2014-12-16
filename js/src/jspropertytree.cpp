@@ -151,7 +151,6 @@ PropertyTree::getChild(ExclusiveContext *cx, Shape *parentArg, StackShape &unroo
         /* If kidp->isNull(), we always insert. */
     }
 
-#ifdef JSGC_INCREMENTAL
     if (existingShape) {
         JS::Zone *zone = existingShape->zone();
         if (zone->needsIncrementalBarrier()) {
@@ -173,10 +172,9 @@ PropertyTree::getChild(ExclusiveContext *cx, Shape *parentArg, StackShape &unroo
             parent->removeChild(existingShape);
             existingShape = nullptr;
         } else if (existingShape->isMarked(gc::GRAY)) {
-            JS::UnmarkGrayGCThingRecursively(existingShape, JSTRACE_SHAPE);
+            UnmarkGrayShapeRecursively(existingShape);
         }
     }
-#endif
 
     if (existingShape)
         return existingShape;
@@ -211,14 +209,12 @@ PropertyTree::lookupChild(ThreadSafeContext *cx, Shape *parent, const StackShape
         return nullptr;
     }
 
-#if defined(JSGC_INCREMENTAL) && defined(DEBUG)
     if (shape) {
         JS::Zone *zone = shape->arenaHeader()->zone;
         MOZ_ASSERT(!zone->needsIncrementalBarrier());
         MOZ_ASSERT(!(zone->isGCSweeping() && !shape->isMarked() &&
                      !shape->arenaHeader()->allocatedDuringIncremental));
     }
-#endif
 
     return shape;
 }
@@ -323,12 +319,12 @@ Shape::fixupShapeTreeAfterMovingGC()
             unowned = Forwarded(unowned);
 
         PropertyOp getter = key->getter();
-        if (key->hasGetterObject() && IsForwarded(key->getterObject()))
-            getter = PropertyOp(Forwarded(key->getterObject()));
+        if (key->hasGetterObject())
+            getter = PropertyOp(MaybeForwarded(key->getterObject()));
 
         StrictPropertyOp setter = key->setter();
-        if (key->hasSetterObject() && IsForwarded(key->setterObject()))
-            setter = StrictPropertyOp(Forwarded(key->setterObject()));
+        if (key->hasSetterObject())
+            setter = StrictPropertyOp(MaybeForwarded(key->setterObject()));
 
         StackShape lookup(unowned,
                           const_cast<Shape *>(key)->propidRef(),
@@ -351,7 +347,6 @@ Shape::fixupAfterMovingGC()
 
 #endif // JSGC_COMPACTING
 
-#ifdef JSGC_GENERATIONAL
 void
 ShapeGetterSetterRef::mark(JSTracer *trc)
 {
@@ -380,7 +375,6 @@ ShapeGetterSetterRef::mark(JSTracer *trc)
     *objp = obj;
     MOZ_ALWAYS_TRUE(kh->putNew(StackShape(shape), shape));
 }
-#endif
 
 #ifdef DEBUG
 

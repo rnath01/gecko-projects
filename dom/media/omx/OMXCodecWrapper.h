@@ -250,12 +250,13 @@ private:
     : OMXCodecWrapper(aCodecType)
     , mResampler(nullptr)
     , mChannels(0)
+    , mResamplingRatio(0)
     , mTimestamp(0)
-    , mSampleDuration(0)
-    , mResamplingRatio(0) {}
+    , mSampleDuration(0) {}
 
   // For creator function to access hidden constructor.
   friend class OMXCodecWrapper;
+  friend class InputBufferHelper;
 
   /**
    * If the input sample rate does not divide 48kHz evenly, the input data are

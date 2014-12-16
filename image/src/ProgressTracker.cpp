@@ -46,23 +46,20 @@ CheckProgressConsistency(Progress aProgress)
 {
   // Check preconditions for every progress bit.
 
-  if (aProgress & FLAG_REQUEST_STARTED) {
+  if (aProgress & FLAG_SIZE_AVAILABLE) {
     // No preconditions.
   }
-  if (aProgress & FLAG_HAS_SIZE) {
-    MOZ_ASSERT(aProgress & FLAG_REQUEST_STARTED);
-  }
   if (aProgress & FLAG_DECODE_STARTED) {
-    MOZ_ASSERT(aProgress & FLAG_REQUEST_STARTED);
+    // No preconditions.
   }
-  if (aProgress & FLAG_DECODE_STOPPED) {
+  if (aProgress & FLAG_DECODE_COMPLETE) {
     MOZ_ASSERT(aProgress & FLAG_DECODE_STARTED);
   }
-  if (aProgress & FLAG_FRAME_STOPPED) {
+  if (aProgress & FLAG_FRAME_COMPLETE) {
     MOZ_ASSERT(aProgress & FLAG_DECODE_STARTED);
   }
-  if (aProgress & FLAG_REQUEST_STOPPED) {
-    MOZ_ASSERT(aProgress & FLAG_REQUEST_STARTED);
+  if (aProgress & FLAG_LOAD_COMPLETE) {
+    // No preconditions.
   }
   if (aProgress & FLAG_ONLOAD_BLOCKED) {
     if (aProgress & FLAG_IS_MULTIPART) {
@@ -73,18 +70,22 @@ CheckProgressConsistency(Progress aProgress)
   }
   if (aProgress & FLAG_ONLOAD_UNBLOCKED) {
     MOZ_ASSERT(aProgress & FLAG_ONLOAD_BLOCKED);
-    MOZ_ASSERT(aProgress & (FLAG_FRAME_STOPPED |
+    MOZ_ASSERT(aProgress & (FLAG_FRAME_COMPLETE |
                             FLAG_IS_MULTIPART |
                             FLAG_HAS_ERROR));
   }
   if (aProgress & FLAG_IS_ANIMATED) {
     MOZ_ASSERT(aProgress & FLAG_DECODE_STARTED);
+    MOZ_ASSERT(aProgress & FLAG_SIZE_AVAILABLE);
+  }
+  if (aProgress & FLAG_HAS_TRANSPARENCY) {
+    MOZ_ASSERT(aProgress & FLAG_SIZE_AVAILABLE);
   }
   if (aProgress & FLAG_IS_MULTIPART) {
     // No preconditions.
   }
-  if (aProgress & FLAG_MULTIPART_STOPPED) {
-    MOZ_ASSERT(aProgress & FLAG_REQUEST_STOPPED);
+  if (aProgress & FLAG_LAST_PART_COMPLETE) {
+    MOZ_ASSERT(aProgress & FLAG_LOAD_COMPLETE);
   }
   if (aProgress & FLAG_HAS_ERROR) {
     // No preconditions.
@@ -106,7 +107,8 @@ ProgressTracker::ResetImage()
   mImage = nullptr;
 }
 
-void ProgressTracker::SetIsMultipart()
+void
+ProgressTracker::SetIsMultipart()
 {
   if (mProgress & FLAG_IS_MULTIPART) {
     return;
@@ -127,7 +129,7 @@ ProgressTracker::IsLoading() const
   // Checking for whether OnStopRequest has fired allows us to say we're
   // loading before OnStartRequest gets called, letting the request properly
   // get removed from the cache in certain cases.
-  return !(mProgress & FLAG_REQUEST_STOPPED);
+  return !(mProgress & FLAG_LOAD_COMPLETE);
 }
 
 uint32_t
@@ -136,20 +138,26 @@ ProgressTracker::GetImageStatus() const
   uint32_t status = imgIRequest::STATUS_NONE;
 
   // Translate our current state to a set of imgIRequest::STATE_* flags.
-  if (mProgress & FLAG_HAS_SIZE) {
+  if (mProgress & FLAG_SIZE_AVAILABLE) {
     status |= imgIRequest::STATUS_SIZE_AVAILABLE;
   }
   if (mProgress & FLAG_DECODE_STARTED) {
     status |= imgIRequest::STATUS_DECODE_STARTED;
   }
-  if (mProgress & FLAG_DECODE_STOPPED) {
+  if (mProgress & FLAG_DECODE_COMPLETE) {
     status |= imgIRequest::STATUS_DECODE_COMPLETE;
   }
-  if (mProgress & FLAG_FRAME_STOPPED) {
+  if (mProgress & FLAG_FRAME_COMPLETE) {
     status |= imgIRequest::STATUS_FRAME_COMPLETE;
   }
-  if (mProgress & FLAG_REQUEST_STOPPED) {
+  if (mProgress & FLAG_LOAD_COMPLETE) {
     status |= imgIRequest::STATUS_LOAD_COMPLETE;
+  }
+  if (mProgress & FLAG_IS_ANIMATED) {
+    status |= imgIRequest::STATUS_IS_ANIMATED;
+  }
+  if (mProgress & FLAG_HAS_TRANSPARENCY) {
+    status |= imgIRequest::STATUS_HAS_TRANSPARENCY;
   }
   if (mProgress & FLAG_HAS_ERROR) {
     status |= imgIRequest::STATUS_ERROR;
@@ -211,9 +219,11 @@ ProgressTracker::Notify(imgRequestProxy* proxy)
     nsRefPtr<ImageURL> uri(mImage->GetURI());
     nsAutoCString spec;
     uri->GetSpec(spec);
-    LOG_FUNC_WITH_PARAM(GetImgLog(), "ProgressTracker::Notify async", "uri", spec.get());
+    LOG_FUNC_WITH_PARAM(GetImgLog(),
+                        "ProgressTracker::Notify async", "uri", spec.get());
   } else {
-    LOG_FUNC_WITH_PARAM(GetImgLog(), "ProgressTracker::Notify async", "uri", "<unknown>");
+    LOG_FUNC_WITH_PARAM(GetImgLog(),
+                        "ProgressTracker::Notify async", "uri", "<unknown>");
   }
 #endif
 
@@ -276,7 +286,8 @@ ProgressTracker::NotifyCurrentState(imgRequestProxy* proxy)
   proxy->GetURI(getter_AddRefs(uri));
   nsAutoCString spec;
   uri->GetSpec(spec);
-  LOG_FUNC_WITH_PARAM(GetImgLog(), "ProgressTracker::NotifyCurrentState", "uri", spec.get());
+  LOG_FUNC_WITH_PARAM(GetImgLog(),
+                      "ProgressTracker::NotifyCurrentState", "uri", spec.get());
 #endif
 
   proxy->SetNotificationsDeferred(true);
@@ -303,36 +314,39 @@ ProgressTracker::SyncNotifyInternal(ProxyArray& aProxies,
                                     const nsIntRect& aDirtyRect)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  // OnStartRequest
-  if (aProgress & FLAG_REQUEST_STARTED)
-    NOTIFY_IMAGE_OBSERVERS(aProxies, OnStartRequest());
 
-  // OnStartContainer
-  if (aProgress & FLAG_HAS_SIZE)
-    NOTIFY_IMAGE_OBSERVERS(aProxies, OnStartContainer());
+  if (aProgress & FLAG_SIZE_AVAILABLE) {
+    NOTIFY_IMAGE_OBSERVERS(aProxies, OnSizeAvailable());
+  }
 
-  // OnStartDecode
-  if (aProgress & FLAG_DECODE_STARTED)
+  if (aProgress & FLAG_DECODE_STARTED) {
     NOTIFY_IMAGE_OBSERVERS(aProxies, OnStartDecode());
+  }
 
-  // BlockOnload
-  if (aProgress & FLAG_ONLOAD_BLOCKED)
+  if (aProgress & FLAG_ONLOAD_BLOCKED) {
     NOTIFY_IMAGE_OBSERVERS(aProxies, BlockOnload());
+  }
 
   if (aHasImage) {
     // OnFrameUpdate
     // If there's any content in this frame at all (always true for
     // vector images, true for raster images that have decoded at
     // least one frame) then send OnFrameUpdate.
-    if (!aDirtyRect.IsEmpty())
+    if (!aDirtyRect.IsEmpty()) {
       NOTIFY_IMAGE_OBSERVERS(aProxies, OnFrameUpdate(&aDirtyRect));
+    }
 
-    if (aProgress & FLAG_FRAME_STOPPED)
-      NOTIFY_IMAGE_OBSERVERS(aProxies, OnStopFrame());
+    if (aProgress & FLAG_FRAME_COMPLETE) {
+      NOTIFY_IMAGE_OBSERVERS(aProxies, OnFrameComplete());
+    }
 
-    // OnImageIsAnimated
-    if (aProgress & FLAG_IS_ANIMATED)
+    if (aProgress & FLAG_HAS_TRANSPARENCY) {
+      NOTIFY_IMAGE_OBSERVERS(aProxies, OnImageHasTransparency());
+    }
+
+    if (aProgress & FLAG_IS_ANIMATED) {
       NOTIFY_IMAGE_OBSERVERS(aProxies, OnImageIsAnimated());
+    }
   }
 
   // Send UnblockOnload before OnStopDecode and OnStopRequest. This allows
@@ -342,20 +356,21 @@ ProgressTracker::SyncNotifyInternal(ProxyArray& aProxies,
     NOTIFY_IMAGE_OBSERVERS(aProxies, UnblockOnload());
   }
 
-  if (aProgress & FLAG_DECODE_STOPPED) {
+  if (aProgress & FLAG_DECODE_COMPLETE) {
     MOZ_ASSERT(aHasImage, "Stopped decoding without ever having an image?");
-    NOTIFY_IMAGE_OBSERVERS(aProxies, OnStopDecode());
+    NOTIFY_IMAGE_OBSERVERS(aProxies, OnDecodeComplete());
   }
 
-  if (aProgress & FLAG_REQUEST_STOPPED) {
+  if (aProgress & FLAG_LOAD_COMPLETE) {
     NOTIFY_IMAGE_OBSERVERS(aProxies,
-                           OnStopRequest(aProgress & FLAG_MULTIPART_STOPPED));
+                           OnLoadComplete(aProgress & FLAG_LAST_PART_COMPLETE));
   }
 }
 
 void
 ProgressTracker::SyncNotifyProgress(Progress aProgress,
-                                    const nsIntRect& aInvalidRect /* = nsIntRect() */)
+                                    const nsIntRect& aInvalidRect
+                                                  /* = nsIntRect() */)
 {
   MOZ_ASSERT(NS_IsMainThread(), "Use mConsumers on main thread only");
 
@@ -387,7 +402,8 @@ ProgressTracker::SyncNotify(imgRequestProxy* proxy)
   proxy->GetURI(getter_AddRefs(uri));
   nsAutoCString spec;
   uri->GetSpec(spec);
-  LOG_SCOPE_WITH_PARAM(GetImgLog(), "ProgressTracker::SyncNotify", "uri", spec.get());
+  LOG_SCOPE_WITH_PARAM(GetImgLog(),
+                       "ProgressTracker::SyncNotify", "uri", spec.get());
 #endif
 
   nsIntRect r;
@@ -410,18 +426,12 @@ ProgressTracker::EmulateRequestFinished(imgRequestProxy* aProxy,
              "SyncNotifyState and mConsumers are not threadsafe");
   nsCOMPtr<imgIRequest> kungFuDeathGrip(aProxy);
 
-  // In certain cases the request might not have started yet.
-  // We still need to fulfill the contract.
-  if (!(mProgress & FLAG_REQUEST_STARTED)) {
-    aProxy->OnStartRequest();
-  }
-
   if (mProgress & FLAG_ONLOAD_BLOCKED && !(mProgress & FLAG_ONLOAD_UNBLOCKED)) {
     aProxy->UnblockOnload();
   }
 
-  if (!(mProgress & FLAG_REQUEST_STOPPED)) {
-    aProxy->OnStopRequest(true);
+  if (!(mProgress & FLAG_LOAD_COMPLETE)) {
+    aProxy->OnLoadComplete(true);
   }
 }
 

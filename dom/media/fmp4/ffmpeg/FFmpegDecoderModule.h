@@ -26,11 +26,11 @@ public:
   virtual nsresult Shutdown() MOZ_OVERRIDE { return NS_OK; }
 
   virtual already_AddRefed<MediaDataDecoder>
-  CreateH264Decoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
-                    layers::LayersBackend aLayersBackend,
-                    layers::ImageContainer* aImageContainer,
-                    MediaTaskQueue* aVideoTaskQueue,
-                    MediaDataDecoderCallback* aCallback) MOZ_OVERRIDE
+  CreateVideoDecoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
+                     layers::LayersBackend aLayersBackend,
+                     layers::ImageContainer* aImageContainer,
+                     MediaTaskQueue* aVideoTaskQueue,
+                     MediaDataDecoderCallback* aCallback) MOZ_OVERRIDE
   {
     nsRefPtr<MediaDataDecoder> decoder =
       new FFmpegH264Decoder<V>(aVideoTaskQueue, aCallback, aConfig,
@@ -51,6 +51,11 @@ public:
   virtual bool SupportsAudioMimeType(const char* aMimeType) MOZ_OVERRIDE
   {
     return FFmpegAudioDecoder<V>::GetCodecId(aMimeType) != AV_CODEC_ID_NONE;
+  }
+
+  virtual bool SupportsVideoMimeType(const char* aMimeType) MOZ_OVERRIDE
+  {
+    return FFmpegH264Decoder<V>::GetCodecId(aMimeType) != AV_CODEC_ID_NONE;
   }
 };
 

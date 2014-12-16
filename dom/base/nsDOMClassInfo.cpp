@@ -108,7 +108,6 @@
 #include "FMRadio.h"
 #endif
 
-#include "nsIDOMGlobalObjectConstructor.h"
 #include "nsDebug.h"
 
 #include "mozilla/dom/BindingUtils.h"
@@ -431,9 +430,7 @@ NS_INTERFACE_MAP_END
 
 
 static const JSClass sDOMConstructorProtoClass = {
-  "DOM Constructor.prototype", 0,
-  JS_PropertyStub, JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-  JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, nullptr
+  "DOM Constructor.prototype", 0
 };
 
 
@@ -1006,9 +1003,9 @@ nsDOMClassInfo::Enumerate(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
 }
 
 NS_IMETHODIMP
-nsDOMClassInfo::NewEnumerate(nsIXPConnectWrappedNative *wrapper,
-                             JSContext *cx, JSObject *obj, uint32_t enum_op,
-                             jsval *statep, jsid *idp, bool *_retval)
+nsDOMClassInfo::NewEnumerate(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                             JSObject *obj, JS::AutoIdVector &properties,
+                             bool *_retval)
 {
   NS_WARNING("nsDOMClassInfo::NewEnumerate Don't call me!");
 
@@ -1349,65 +1346,6 @@ BaseStubConstructor(nsIWeakReference* aWeakOwner,
   if (NS_FAILED(rv)) {
     NS_ERROR("Failed to create the object");
     return rv;
-  }
-
-  nsCOMPtr<nsIDOMGlobalObjectConstructor> constructor(do_QueryInterface(native));
-  if (constructor) {
-    // Initialize object using the current inner window, but only if
-    // the caller can access it.
-    nsCOMPtr<nsPIDOMWindow> owner = do_QueryReferent(aWeakOwner);
-    nsPIDOMWindow* outerWindow = owner ? owner->GetOuterWindow() : nullptr;
-    nsPIDOMWindow* currentInner =
-      outerWindow ? outerWindow->GetCurrentInnerWindow() : nullptr;
-    if (!currentInner ||
-        (owner != currentInner &&
-         !nsContentUtils::CanCallerAccess(currentInner))) {
-      return NS_ERROR_DOM_SECURITY_ERR;
-    }
-
-    nsCOMPtr<nsIXPConnectWrappedJS> wrappedJS = do_QueryInterface(native);
-
-    JS::Rooted<JSObject*> thisObject(cx, wrappedJS->GetJSObject());
-    if (!thisObject) {
-      return NS_ERROR_UNEXPECTED;
-    }
-
-    JSAutoCompartment ac(cx, thisObject);
-
-    JS::Rooted<JS::Value> funval(cx);
-    if (!JS_GetProperty(cx, thisObject, "constructor", &funval) ||
-        !funval.isObject()) {
-      return NS_ERROR_UNEXPECTED;
-    }
-
-    // Check if the object is even callable.
-    NS_ENSURE_STATE(JS::IsCallable(&funval.toObject()));
-    {
-      // wrap parameters in the target compartment
-      // we also pass in the calling window as the first argument
-      unsigned argc = args.length() + 1;
-      JS::AutoValueVector argv(cx);
-      if (!argv.resize(argc)) {
-        return NS_ERROR_OUT_OF_MEMORY;
-      }
-
-      nsCOMPtr<nsIDOMWindow> currentWin(do_GetInterface(currentInner));
-      rv = WrapNative(cx, currentWin, &NS_GET_IID(nsIDOMWindow),
-                      true, argv[0]);
-
-      for (size_t i = 1; i < argc; ++i) {
-        argv[i].set(args[i - 1]);
-        if (!JS_WrapValue(cx, argv[i]))
-          return NS_ERROR_FAILURE;
-      }
-
-      JS::Rooted<JS::Value> frval(cx);
-      bool ret = JS_CallFunctionValue(cx, thisObject, funval, argv, &frval);
-
-      if (!ret) {
-        return NS_ERROR_FAILURE;
-      }
-    }
   }
 
   js::AssertSameCompartment(cx, obj);
@@ -2112,9 +2050,7 @@ nsWindowSH::NameStructEnabled(JSContext* aCx, nsGlobalWindow *aWin,
 
 #ifdef USE_CONTROLLERS_SHIM
 static const JSClass ControllersShimClass = {
-    "XULControllers", 0,
-    JS_PropertyStub,   JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, nullptr
+    "XULControllers", 0
 };
 #endif
 

@@ -627,7 +627,10 @@ nsContextMenu.prototype = {
         this.onCanvas = true;
       }
       else if (this.target instanceof HTMLVideoElement) {
-        this.mediaURL = this.target.currentSrc || this.target.src;
+        let mediaURL = this.target.currentSrc || this.target.src;
+        if (this.isMediaURLReusable(mediaURL)) {
+          this.mediaURL = mediaURL;
+        }
         // Firefox always creates a HTMLVideoElement when loading an ogg file
         // directly. If the media is actually audio, be smarter and provide a
         // context menu with audio operations.
@@ -640,7 +643,10 @@ nsContextMenu.prototype = {
       }
       else if (this.target instanceof HTMLAudioElement) {
         this.onAudio = true;
-        this.mediaURL = this.target.currentSrc || this.target.src;
+        let mediaURL = this.target.currentSrc || this.target.src;
+        if (this.isMediaURLReusable(mediaURL)) {
+          this.mediaURL = mediaURL;
+        }
       }
       else if (editFlags & (SpellCheckHelper.INPUT | SpellCheckHelper.TEXTAREA)) {
         this.onTextInput = (editFlags & SpellCheckHelper.TEXTINPUT) !== 0;
@@ -1504,6 +1510,10 @@ nsContextMenu.prototype = {
     return !this.focusedWindow.getSelection().isCollapsed;
   },
 
+  isMediaURLReusable: function(aURL) {
+    return !/^(?:blob|mediasource):/.test(aURL);
+  },
+
   toString: function () {
     return "contextMenu.target     = " + this.target + "\n" +
            "contextMenu.onImage    = " + this.onImage + "\n" +
@@ -1763,31 +1773,18 @@ nsContextMenu.prototype = {
   },
 
   _getTelemetryPageContextInfo: function() {
-    if (this.isContentSelected) {
-      return "selection";
-    }
-    if (this.onLink) {
-      if (this.onImage || this.onCanvas) {
-        return "image-link";
+    let rv = [];
+    for (let k of ["isContentSelected", "onLink", "onImage", "onCanvas", "onVideo", "onAudio",
+                   "onTextInput", "onSocial"]) {
+      if (this[k]) {
+        rv.push(k.replace(/^(?:is|on)(.)/, (match, firstLetter) => firstLetter.toLowerCase()));
       }
-      return "link";
     }
-    if (this.onImage) {
-      return "image"
+    if (!rv.length) {
+      rv.push('other');
     }
-    if (this.onCanvas) {
-      return "canvas";
-    }
-    if (this.onVideo || this.onAudio) {
-      return "media";
-    }
-    if (this.onTextInput) {
-      return "input";
-    }
-    if (this.onSocial) {
-      return "social";
-    }
-    return "other";
+
+    return JSON.stringify(rv);
   },
 
   _checkTelemetryForMenu: function(aXulMenu) {

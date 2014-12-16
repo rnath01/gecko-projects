@@ -179,7 +179,6 @@ nsHttpHandler::nsHttpHandler()
     , mAllowExperiments(true)
     , mHandlerActive(false)
     , mEnableSpdy(false)
-    , mSpdyV3(true)
     , mSpdyV31(true)
     , mHttp2DraftEnabled(true)
     , mHttp2Enabled(true)
@@ -713,7 +712,7 @@ nsHttpHandler::InitUserAgentComponents()
     if (NS_SUCCEEDED(rv)) {
         bool valid = true;
         deviceId.Trim(" ", true, true);
-        for (int i = 0; i < deviceId.Length(); i++) {
+        for (size_t i = 0; i < deviceId.Length(); i++) {
             char c = deviceId.CharAt(i);
             if (!(isalnum(c) || c == '-' || c == '.')) {
                 valid = false;
@@ -1177,12 +1176,6 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
             mEnableSpdy = cVar;
     }
 
-    if (PREF_CHANGED(HTTP_PREF("spdy.enabled.v3"))) {
-        rv = prefs->GetBoolPref(HTTP_PREF("spdy.enabled.v3"), &cVar);
-        if (NS_SUCCEEDED(rv))
-            mSpdyV3 = cVar;
-    }
-
     if (PREF_CHANGED(HTTP_PREF("spdy.enabled.v3-1"))) {
         rv = prefs->GetBoolPref(HTTP_PREF("spdy.enabled.v3-1"), &cVar);
         if (NS_SUCCEEDED(rv))
@@ -1526,6 +1519,25 @@ nsHttpHandler::TimerCallback(nsITimer * aTimer, void * aClosure)
         thisObject->mCapabilities &= ~NS_HTTP_ALLOW_PIPELINING;
 }
 
+static void
+NormalizeLanguageTag(char *code)
+{
+    bool is_region = false;
+    while (*code != '\0')
+    {
+        if (*code == '-') {
+            is_region = true;
+        } else {
+            if (is_region) {
+                *code = nsCRT::ToUpper(*code);
+            } else {
+                *code = nsCRT::ToLower(*code);
+            }
+        }
+        code++;
+    }
+}
+
 /**
  *  Allocates a C string into that contains a ISO 639 language list
  *  notated with HTTP "q" values for output with a HTTP Accept-Language
@@ -1581,6 +1593,8 @@ PrepareAcceptLanguages(const char *i_AcceptLanguages, nsACString &o_AcceptLangua
             *trim = '\0';
 
         if (*token != '\0') {
+            NormalizeLanguageTag(token);
+
             comma = count_n++ != 0 ? "," : ""; // delimiter if not first item
             uint32_t u = QVAL_TO_UINT(q);
 
@@ -1711,7 +1725,7 @@ nsHttpHandler::NewChannel2(nsIURI* uri,
         }
     }
 
-    return NewProxiedChannel(uri, nullptr, 0, nullptr, result);
+    return NewProxiedChannel2(uri, nullptr, 0, nullptr, aLoadInfo, result);
 }
 
 NS_IMETHODIMP
@@ -1778,6 +1792,12 @@ nsHttpHandler::NewProxiedChannel2(nsIURI *uri,
     rv = httpChannel->Init(uri, caps, proxyInfo, proxyResolveFlags, proxyURI);
     if (NS_FAILED(rv))
         return rv;
+
+    // set the loadInfo on the new channel
+    rv = httpChannel->SetLoadInfo(aLoadInfo);
+    if (NS_FAILED(rv)) {
+        return rv;
+    }
 
     httpChannel.forget(result);
     return NS_OK;
@@ -2093,7 +2113,7 @@ nsHttpsHandler::NewChannel2(nsIURI* aURI,
     MOZ_ASSERT(gHttpHandler);
     if (!gHttpHandler)
       return NS_ERROR_UNEXPECTED;
-    return gHttpHandler->NewChannel(aURI, _retval);
+    return gHttpHandler->NewChannel2(aURI, aLoadInfo, _retval);
 }
 
 NS_IMETHODIMP

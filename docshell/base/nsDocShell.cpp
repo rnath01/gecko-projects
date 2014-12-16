@@ -38,6 +38,7 @@
 #include "nsDocShellCID.h"
 #include "nsDOMCID.h"
 #include "nsNetUtil.h"
+#include "mozilla/net/ReferrerPolicy.h"
 #include "nsRect.h"
 #include "prenv.h"
 #include "nsIDOMWindow.h"
@@ -554,6 +555,7 @@ struct SendPingInfo {
   bool    requireSameHost;
   nsIURI *target;
   nsIURI *referrer;
+  uint32_t referrerPolicy;
 };
 
 static void
@@ -633,7 +635,7 @@ SendPing(void *closure, nsIContent *content, nsIURI *uri, nsIIOService *ios)
     // over an encrypted connection and its address does not have the same
     // origin as "ping URL", send a referrer.
     if (!sameOrigin && !referrerIsSecure)
-      httpChan->SetReferrer(info->referrer);
+      httpChan->SetReferrerWithPolicy(info->referrer, info->referrerPolicy);
   }
 
   nsCOMPtr<nsIUploadChannel2> uploadChan = do_QueryInterface(httpChan);
@@ -691,7 +693,10 @@ SendPing(void *closure, nsIContent *content, nsIURI *uri, nsIIOService *ios)
 
 // Spec: http://whatwg.org/specs/web-apps/current-work/#ping
 static void
-DispatchPings(nsIContent *content, nsIURI *target, nsIURI *referrer)
+DispatchPings(nsIContent *content,
+              nsIURI *target,
+              nsIURI *referrer,
+              uint32_t referrerPolicy)
 {
   SendPingInfo info;
 
@@ -703,6 +708,7 @@ DispatchPings(nsIContent *content, nsIURI *target, nsIURI *referrer)
   info.numPings = 0;
   info.target = target;
   info.referrer = referrer;
+  info.referrerPolicy = referrerPolicy;
 
   ForEachPing(content, SendPing, &info);
 }
@@ -1339,6 +1345,11 @@ nsDocShell::LoadURI(nsIURI * aURI,
     if (!IsNavigationAllowed(true, false)) {
       return NS_OK; // JS may not handle returning of an error code
     }
+
+    if (DoAppRedirectIfNeeded(aURI, aLoadInfo, aFirstParty)) {
+      return NS_OK;
+    }
+
     nsCOMPtr<nsIURI> referrer;
     nsCOMPtr<nsIInputStream> postStream;
     nsCOMPtr<nsIInputStream> headersStream;
@@ -1346,6 +1357,7 @@ nsDocShell::LoadURI(nsIURI * aURI,
     bool inheritOwner = false;
     bool ownerIsExplicit = false;
     bool sendReferrer = true;
+    uint32_t referrerPolicy = mozilla::net::RP_Default;
     bool isSrcdoc = false;
     nsCOMPtr<nsISHEntry> shEntry;
     nsXPIDLString target;
@@ -1379,6 +1391,7 @@ nsDocShell::LoadURI(nsIURI * aURI,
         aLoadInfo->GetPostDataStream(getter_AddRefs(postStream));
         aLoadInfo->GetHeadersStream(getter_AddRefs(headersStream));
         aLoadInfo->GetSendReferrer(&sendReferrer);
+        aLoadInfo->GetReferrerPolicy(&referrerPolicy);
         aLoadInfo->GetIsSrcdocLoad(&isSrcdoc);
         aLoadInfo->GetSrcdocData(srcdoc);
         aLoadInfo->GetSourceDocShell(getter_AddRefs(sourceDocShell));
@@ -1602,6 +1615,7 @@ nsDocShell::LoadURI(nsIURI * aURI,
 
     return InternalLoad(aURI,
                         referrer,
+                        referrerPolicy,
                         owner,
                         flags,
                         target.get(),
@@ -2877,14 +2891,18 @@ nsDocShell::PopProfileTimelineMarkers(JSContext* aCx,
   // If we see an unpaired START, we keep it around for the next call
   // to PopProfileTimelineMarkers.  We store the kept START objects in
   // this array.
-  nsTArray<InternalProfileTimelineMarker*> keptMarkers;
+  nsTArray<TimelineMarker*> keptMarkers;
 
   for (uint32_t i = 0; i < mProfileTimelineMarkers.Length(); ++i) {
-    ProfilerMarkerTracing* startPayload = static_cast<ProfilerMarkerTracing*>(
-      mProfileTimelineMarkers[i]->mPayload);
-    const char* startMarkerName = mProfileTimelineMarkers[i]->mName.get();
+    TimelineMarker* startPayload = mProfileTimelineMarkers[i];
+    const char* startMarkerName = startPayload->GetName();
 
     bool hasSeenPaintedLayer = false;
+    bool isPaint = strcmp(startMarkerName, "Paint") == 0;
+
+    // If we are processing a Paint marker, we append information from
+    // all the embedded Layer markers to this array.
+    mozilla::dom::Sequence<mozilla::dom::ProfileTimelineLayerRect> layerRectangles;
 
     if (startPayload->GetMetaData() == TRACING_INTERVAL_START) {
       bool hasSeenEnd = false;
@@ -2898,19 +2916,18 @@ nsDocShell::PopProfileTimelineMarkers(JSContext* aCx,
       // enough for the amount of markers to always be small enough that the
       // nested for loop isn't going to be a performance problem.
       for (uint32_t j = i + 1; j < mProfileTimelineMarkers.Length(); ++j) {
-        ProfilerMarkerTracing* endPayload = static_cast<ProfilerMarkerTracing*>(
-          mProfileTimelineMarkers[j]->mPayload);
-        const char* endMarkerName = mProfileTimelineMarkers[j]->mName.get();
+        TimelineMarker* endPayload = mProfileTimelineMarkers[j];
+        const char* endMarkerName = endPayload->GetName();
 
         // Look for Layer markers to stream out paint markers.
-        if (strcmp(endMarkerName, "Layer") == 0) {
+        if (isPaint && strcmp(endMarkerName, "Layer") == 0) {
           hasSeenPaintedLayer = true;
+          endPayload->AddLayerRectangles(layerRectangles);
         }
 
-        if (strcmp(startMarkerName, endMarkerName) != 0) {
+        if (!startPayload->Equals(endPayload)) {
           continue;
         }
-        bool isPaint = strcmp(startMarkerName, "Paint") == 0;
 
         // Pair start and end markers.
         if (endPayload->GetMetaData() == TRACING_INTERVAL_START) {
@@ -2922,9 +2939,15 @@ nsDocShell::PopProfileTimelineMarkers(JSContext* aCx,
             // But ignore paint start/end if no layer has been painted.
             if (!isPaint || (isPaint && hasSeenPaintedLayer)) {
               mozilla::dom::ProfileTimelineMarker marker;
-              marker.mName = NS_ConvertUTF8toUTF16(startMarkerName);
-              marker.mStart = mProfileTimelineMarkers[i]->mTime;
-              marker.mEnd = mProfileTimelineMarkers[j]->mTime;
+
+              marker.mName = NS_ConvertUTF8toUTF16(startPayload->GetName());
+              marker.mStart = startPayload->GetTime();
+              marker.mEnd = endPayload->GetTime();
+              if (isPaint) {
+                marker.mRectangles.Construct(layerRectangles);
+              } else {
+                startPayload->AddDetails(marker);
+              }
               profileTimelineMarkers.AppendElement(marker);
             }
 
@@ -2973,30 +2996,18 @@ nsDocShell::AddProfileTimelineMarker(const char* aName,
 {
 #ifdef MOZ_ENABLE_PROFILER_SPS
   if (mProfileTimelineRecording) {
-    DOMHighResTimeStamp delta;
-    Now(&delta);
-    ProfilerMarkerTracing* payload = new ProfilerMarkerTracing("Timeline",
-                                                               aMetaData);
-    mProfileTimelineMarkers.AppendElement(
-      new InternalProfileTimelineMarker(aName, payload, delta));
+    TimelineMarker* marker = new TimelineMarker(this, aName, aMetaData);
+    mProfileTimelineMarkers.AppendElement(marker);
   }
 #endif
 }
 
 void
-nsDocShell::AddProfileTimelineMarker(const char* aName,
-                                     ProfilerBacktrace* aCause,
-                                     TracingMetadata aMetaData)
+nsDocShell::AddProfileTimelineMarker(UniquePtr<TimelineMarker>& aMarker)
 {
 #ifdef MOZ_ENABLE_PROFILER_SPS
   if (mProfileTimelineRecording) {
-    DOMHighResTimeStamp delta;
-    Now(&delta);
-    ProfilerMarkerTracing* payload = new ProfilerMarkerTracing("Timeline",
-                                                               aMetaData,
-                                                               aCause);
-    mProfileTimelineMarkers.AppendElement(
-      new InternalProfileTimelineMarker(aName, payload, delta));
+    mProfileTimelineMarkers.AppendElement(aMarker.release());
   }
 #endif
 }
@@ -4865,10 +4876,11 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI *aURI,
         formatStrCount = 1;
         error.AssignLiteral("netTimeout");
     }
-    else if (NS_ERROR_CSP_FRAME_ANCESTOR_VIOLATION == aError) {
+    else if (NS_ERROR_CSP_FRAME_ANCESTOR_VIOLATION == aError ||
+             NS_ERROR_CSP_FORM_ACTION_VIOLATION == aError) {
         // CSP error
         cssClass.AssignLiteral("neterror");
-        error.AssignLiteral("cspFrameAncestorBlocked");
+        error.AssignLiteral("cspBlocked");
     }
     else if (NS_ERROR_GET_MODULE(aError) == NS_ERROR_MODULE_SECURITY) {
         nsCOMPtr<nsINSSErrorsService> nsserr =
@@ -5264,8 +5276,8 @@ nsDocShell::LoadErrorPage(nsIURI *aURI, const char16_t *aURL,
     rv = NS_NewURI(getter_AddRefs(errorPageURI), errorPageUrl);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    return InternalLoad(errorPageURI, nullptr, nullptr,
-                        INTERNAL_LOAD_FLAGS_INHERIT_OWNER, nullptr, nullptr,
+    return InternalLoad(errorPageURI, nullptr, mozilla::net::RP_Default,
+                        nullptr, INTERNAL_LOAD_FLAGS_INHERIT_OWNER, nullptr, nullptr,
                         NullString(), nullptr, nullptr, LOAD_ERROR_PAGE,
                         nullptr, true, NullString(), this, nullptr, nullptr,
                         nullptr);
@@ -5327,6 +5339,7 @@ nsDocShell::Reload(uint32_t aReloadFlags)
         }
         rv = InternalLoad(mCurrentURI,
                           mReferrerURI,
+                          mReferrerPolicy,
                           principal,
                           flags,
                           nullptr,         // No window target
@@ -6585,10 +6598,6 @@ nsDocShell::ForceRefreshURI(nsIURI * aURI,
     }
     else {
         loadInfo->SetLoadType(nsIDocShellLoadInfo::loadRefresh);
-    }
-
-    if (DoAppRedirectIfNeeded(aURI, loadInfo, true)) {
-      return NS_OK;
     }
 
     /*
@@ -9229,7 +9238,8 @@ void CopyFavicon(nsIURI *aOldURI, nsIURI *aNewURI, bool inPrivateBrowsing)
 class InternalLoadEvent : public nsRunnable
 {
 public:
-    InternalLoadEvent(nsDocShell* aDocShell, nsIURI * aURI, nsIURI * aReferrer,
+    InternalLoadEvent(nsDocShell* aDocShell, nsIURI * aURI,
+                      nsIURI * aReferrer, uint32_t aReferrerPolicy,
                       nsISupports * aOwner, uint32_t aFlags,
                       const char* aTypeHint, nsIInputStream * aPostData,
                       nsIInputStream * aHeadersData, uint32_t aLoadType,
@@ -9240,6 +9250,7 @@ public:
         mDocShell(aDocShell),
         mURI(aURI),
         mReferrer(aReferrer),
+        mReferrerPolicy(aReferrerPolicy),
         mOwner(aOwner),
         mPostData(aPostData),
         mHeadersData(aHeadersData),
@@ -9257,7 +9268,9 @@ public:
     }
 
     NS_IMETHOD Run() {
-        return mDocShell->InternalLoad(mURI, mReferrer, mOwner, mFlags,
+        return mDocShell->InternalLoad(mURI, mReferrer,
+                                       mReferrerPolicy,
+                                       mOwner, mFlags,
                                        nullptr, mTypeHint.get(),
                                        NullString(), mPostData, mHeadersData,
                                        mLoadType, mSHEntry, mFirstParty,
@@ -9275,6 +9288,7 @@ private:
     nsRefPtr<nsDocShell> mDocShell;
     nsCOMPtr<nsIURI> mURI;
     nsCOMPtr<nsIURI> mReferrer;
+    uint32_t mReferrerPolicy;
     nsCOMPtr<nsISupports> mOwner;
     nsCOMPtr<nsIInputStream> mPostData;
     nsCOMPtr<nsIInputStream> mHeadersData;
@@ -9329,6 +9343,7 @@ nsDocShell::CreatePrincipalFromReferrer(nsIURI*        aReferrer,
 NS_IMETHODIMP
 nsDocShell::InternalLoad(nsIURI * aURI,
                          nsIURI * aReferrer,
+                         uint32_t aReferrerPolicy,
                          nsISupports * aOwner,
                          uint32_t aFlags,
                          const char16_t *aWindowTarget,
@@ -9585,6 +9600,7 @@ nsDocShell::InternalLoad(nsIURI * aURI,
         if (NS_SUCCEEDED(rv) && targetDocShell) {
             rv = targetDocShell->InternalLoad(aURI,
                                               aReferrer,
+                                              aReferrerPolicy,
                                               owner,
                                               aFlags,
                                               nullptr,         // No window target
@@ -9665,7 +9681,8 @@ nsDocShell::InternalLoad(nsIURI * aURI,
             
             // Do this asynchronously
             nsCOMPtr<nsIRunnable> ev =
-                new InternalLoadEvent(this, aURI, aReferrer, aOwner, aFlags,
+                new InternalLoadEvent(this, aURI, aReferrer,
+                                      aReferrerPolicy, aOwner, aFlags,
                                       aTypeHint, aPostData, aHeadersData,
                                       aLoadType, aSHEntry, aFirstParty, aSrcdoc,
                                       aSourceDocShell, aBaseURI);
@@ -10117,6 +10134,7 @@ nsDocShell::InternalLoad(nsIURI * aURI,
     nsCOMPtr<nsIRequest> req;
     rv = DoURILoad(aURI, aReferrer,
                    !(aFlags & INTERNAL_LOAD_FLAGS_DONT_SEND_REFERRER),
+                   aReferrerPolicy,
                    owner, aTypeHint, aFileName, aPostData, aHeadersData,
                    aFirstParty, aDocShell, getter_AddRefs(req),
                    (aFlags & INTERNAL_LOAD_FLAGS_FIRST_LOAD) != 0,
@@ -10190,6 +10208,7 @@ nsresult
 nsDocShell::DoURILoad(nsIURI * aURI,
                       nsIURI * aReferrerURI,
                       bool aSendReferrer,
+                      uint32_t aReferrerPolicy,
                       nsISupports * aOwner,
                       const char * aTypeHint,
                       const nsAString & aFileName,
@@ -10519,7 +10538,7 @@ nsDocShell::DoURILoad(nsIURI * aURI,
         // Set the referrer explicitly
         if (aReferrerURI && aSendReferrer) {
             // Referrer is currenly only set for link clicks here.
-            httpChannel->SetReferrer(aReferrerURI);
+            httpChannel->SetReferrerWithPolicy(aReferrerURI, aReferrerPolicy);
         }
     }
 
@@ -10855,6 +10874,11 @@ nsDocShell::SetupReferrerFromChannel(nsIChannel * aChannel)
         if (NS_SUCCEEDED(rv)) {
             SetReferrerURI(referrer);
         }
+        uint32_t referrerPolicy;
+        rv = httpChannel->GetReferrerPolicy(&referrerPolicy);
+        if (NS_SUCCEEDED(rv)) {
+            SetReferrerPolicy(referrerPolicy);
+        }
     }
 }
 
@@ -11120,6 +11144,12 @@ void
 nsDocShell::SetReferrerURI(nsIURI * aURI)
 {
     mReferrerURI = aURI;        // This assigment addrefs
+}
+
+void
+nsDocShell::SetReferrerPolicy(uint32_t referrerPolicy)
+{
+    mReferrerPolicy = referrerPolicy;
 }
 
 //*****************************************************************************
@@ -11551,6 +11581,7 @@ nsDocShell::AddToSessionHistory(nsIURI * aURI, nsIChannel * aChannel,
     // Get the post data & referrer
     nsCOMPtr<nsIInputStream> inputStream;
     nsCOMPtr<nsIURI> referrerURI;
+    uint32_t referrerPolicy = mozilla::net::RP_Default;
     nsCOMPtr<nsISupports> cacheKey;
     nsCOMPtr<nsISupports> owner = aOwner;
     bool expired = false;
@@ -11577,6 +11608,7 @@ nsDocShell::AddToSessionHistory(nsIURI * aURI, nsIChannel * aChannel,
                 uploadChannel->GetUploadStream(getter_AddRefs(inputStream));
             }
             httpChannel->GetReferrer(getter_AddRefs(referrerURI));
+            httpChannel->GetReferrerPolicy(&referrerPolicy);
 
             discardLayoutState = ShouldDiscardLayoutState(httpChannel);
         }
@@ -11607,6 +11639,7 @@ nsDocShell::AddToSessionHistory(nsIURI * aURI, nsIChannel * aChannel,
                   mHistoryID,
                   mDynamicallyCreated);
     entry->SetReferrerURI(referrerURI);
+    entry->SetReferrerPolicy(referrerPolicy);
     nsCOMPtr<nsIInputStreamChannel> inStrmChan = do_QueryInterface(aChannel);
     if (inStrmChan) {
         bool isSrcdocChannel;
@@ -11706,6 +11739,7 @@ nsDocShell::LoadHistoryEntry(nsISHEntry * aEntry, uint32_t aLoadType)
     nsCOMPtr<nsIURI> uri;
     nsCOMPtr<nsIInputStream> postData;
     nsCOMPtr<nsIURI> referrerURI;
+    uint32_t referrerPolicy;
     nsAutoCString contentType;
     nsCOMPtr<nsISupports> owner;
 
@@ -11713,6 +11747,8 @@ nsDocShell::LoadHistoryEntry(nsISHEntry * aEntry, uint32_t aLoadType)
 
     NS_ENSURE_SUCCESS(aEntry->GetURI(getter_AddRefs(uri)), NS_ERROR_FAILURE);
     NS_ENSURE_SUCCESS(aEntry->GetReferrerURI(getter_AddRefs(referrerURI)),
+                      NS_ERROR_FAILURE);
+    NS_ENSURE_SUCCESS(aEntry->GetReferrerPolicy(&referrerPolicy),
                       NS_ERROR_FAILURE);
     NS_ENSURE_SUCCESS(aEntry->GetPostData(getter_AddRefs(postData)),
                       NS_ERROR_FAILURE);
@@ -11790,6 +11826,7 @@ nsDocShell::LoadHistoryEntry(nsISHEntry * aEntry, uint32_t aLoadType)
     // first created. bug 947716 has been created to address this issue.
     rv = InternalLoad(uri,
                       referrerURI,
+                      referrerPolicy,
                       owner,
                       flags,
                       nullptr,            // No window target
@@ -13162,12 +13199,15 @@ nsDocShell::OnLinkClickSync(nsIContent *aContent,
   uint32_t flags = INTERNAL_LOAD_FLAGS_NONE;
   if (IsElementAnchor(aContent)) {
     MOZ_ASSERT(aContent->IsHTML());
-    if (aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::rel,
-                              NS_LITERAL_STRING("noreferrer"),
-                              aContent->IsInHTMLDocument() ?
-                              eIgnoreCase : eCaseMatters)) {
+    nsAutoString referrer;
+    aContent->GetAttr(kNameSpaceID_None, nsGkAtoms::rel, referrer);
+    nsWhitespaceTokenizerTemplate<nsContentUtils::IsHTMLWhitespace> tok(referrer);
+    while (tok.hasMoreTokens()) {
+      if (tok.nextToken().LowerCaseEqualsLiteral("noreferrer")) {
         flags |= INTERNAL_LOAD_FLAGS_DONT_SEND_REFERRER |
                  INTERNAL_LOAD_FLAGS_NO_OPENER;
+        break;
+      }
     }
   }
 
@@ -13191,6 +13231,7 @@ nsDocShell::OnLinkClickSync(nsIContent *aContent,
   }
 
   nsCOMPtr<nsIURI> referer = refererDoc->GetDocumentURI();
+  uint32_t refererPolicy = refererDoc->GetReferrerPolicy();
 
   // referer could be null here in some odd cases, but that's ok,
   // we'll just load the link w/o sending a referer in those cases.
@@ -13219,6 +13260,7 @@ nsDocShell::OnLinkClickSync(nsIContent *aContent,
 
   nsresult rv = InternalLoad(clonedURI,                 // New URI
                              referer,                   // Referer URI
+                             refererPolicy,             // Referer policy
                              aContent->NodePrincipal(), // Owner is our node's
                                                         // principal
                              flags,
@@ -13236,7 +13278,7 @@ nsDocShell::OnLinkClickSync(nsIContent *aContent,
                              aDocShell,                 // DocShell out-param
                              aRequest);                 // Request out-param
   if (NS_SUCCEEDED(rv)) {
-    DispatchPings(aContent, aURI, referer);
+    DispatchPings(aContent, aURI, referer, refererPolicy);
   }
   return rv;
 }

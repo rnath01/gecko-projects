@@ -154,15 +154,17 @@ GetValueType(const Value &val)
     return Type::PrimitiveType(val.extractNonDoubleType());
 }
 
+inline bool
+IsUntrackedValue(const Value &val)
+{
+    return val.isMagic() && (val.whyMagic() == JS_OPTIMIZED_OUT ||
+                             val.whyMagic() == JS_UNINITIALIZED_LEXICAL);
+}
+
 inline Type
 GetMaybeUntrackedValueType(const Value &val)
 {
-    if (val.isMagic() && (val.whyMagic() == JS_OPTIMIZED_OUT ||
-                          val.whyMagic() == JS_UNINITIALIZED_LEXICAL))
-    {
-        return Type::UnknownType();
-    }
-    return GetValueType(val);
+    return IsUntrackedValue(val) ? Type::UnknownType() : GetValueType(val);
 }
 
 inline TypeFlags
@@ -309,7 +311,7 @@ GetClassForProtoKey(JSProtoKey key)
 {
     switch (key) {
       case JSProto_Object:
-        return &JSObject::class_;
+        return &PlainObject::class_;
       case JSProto_Array:
         return &ArrayObject::class_;
 
@@ -571,7 +573,7 @@ FixArrayType(ExclusiveContext *cx, ArrayObject *obj)
 }
 
 inline void
-FixObjectType(ExclusiveContext *cx, NativeObject *obj)
+FixObjectType(ExclusiveContext *cx, PlainObject *obj)
 {
     cx->compartment()->types.fixObjectType(cx, obj);
 }
@@ -1206,7 +1208,7 @@ inline TypeObject::TypeObject(const Class *clasp, TaggedProto proto, TypeObjectF
 inline void
 TypeObject::finalize(FreeOp *fop)
 {
-    fop->delete_(newScript_.get());
+    fop->delete_(newScriptDontCheckGeneration());
 }
 
 inline uint32_t
@@ -1296,19 +1298,6 @@ TypeObject::getProperty(unsigned i)
         return (Property *) propertySet;
     }
     return propertySet[i];
-}
-
-inline void
-TypeNewScript::writeBarrierPre(TypeNewScript *newScript)
-{
-#ifdef JSGC_INCREMENTAL
-    if (!newScript || !newScript->fun->runtimeFromAnyThread()->needsIncrementalBarrier())
-        return;
-
-    JS::Zone *zone = newScript->fun->zoneFromAnyThread();
-    if (zone->needsIncrementalBarrier())
-        newScript->trace(zone->barrierTracer());
-#endif
 }
 
 } } /* namespace js::types */

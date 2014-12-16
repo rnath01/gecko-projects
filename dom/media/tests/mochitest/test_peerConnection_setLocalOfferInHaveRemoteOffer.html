@@ -12,6 +12,8 @@
 <body>
 <pre id="test">
 <script type="application/javascript">
+  SimpleTest.requestFlakyTimeout("untriaged");
+
   createHTML({
     bug: "784519",
     title: "setLocalDescription (offer) in 'have-remote-offer'"
@@ -28,7 +30,7 @@
       function (test) {
         test.pcRemote.setLocalDescriptionAndFail(test.pcLocal._latest_offer,
           function(err) {
-            is(err.name, "INVALID_STATE", "Error is INVALID_STATE");
+            is(err.name, "InvalidStateError", "Error is InvalidStateError");
             test.next();
           } );
       }

@@ -43,6 +43,7 @@ registerCleanupFunction(() => gDevTools.testing = false);
 // Clean-up all prefs that might have been changed during a test run
 // (safer here because if the test fails, then the pref is never reverted)
 registerCleanupFunction(() => {
+  Services.prefs.clearUserPref("devtools.inspector.activeSidebar");
   Services.prefs.clearUserPref("devtools.dump.emit");
   Services.prefs.clearUserPref("devtools.defaultColorUnit");
 });
@@ -56,7 +57,7 @@ registerCleanupFunction(() => {
  *
  * All tests should follow the following pattern:
  *
- * let test = asyncTest(function*() {
+ * add_task(function*() {
  *   yield addTab(TEST_URI);
  *   let {toolbox, inspector, view} = yield openComputedView();
  *
@@ -83,16 +84,9 @@ registerCleanupFunction(() => {
  * UTILS
  * *********************************************
  * General test utilities.
- * Define the test case, add new tabs, open the toolbox and switch to the
- * various panels, select nodes, get node references, ...
+ * Add new tabs, open the toolbox and switch to the various panels, select
+ * nodes, get node references, ...
  */
-
-/**
- * Define an async test based on a generator function
- */
-function asyncTest(generator) {
-  return () => Task.spawn(generator).then(null, ok.bind(null, false)).then(finish);
-}
 
 /**
  * Add a new test tab in the browser and load the given url.
@@ -789,6 +783,23 @@ function getComputedViewProperty(view, name) {
     }
   }
   return prop;
+}
+
+/**
+ * Get an instance of PropertyView from the computed-view.
+ * @param {CssHtmlTree} view The instance of the computed view panel
+ * @param {String} name The name of the property to retrieve
+ * @return {PropertyView}
+ */
+function getComputedViewPropertyView(view, name) {
+  let propView;
+  for (let propertyView of view.propertyViews) {
+    if (propertyView._propertyInfo.name === name) {
+      propView = propertyView;
+      break;
+    }
+  }
+  return propView;
 }
 
 /**

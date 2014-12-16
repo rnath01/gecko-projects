@@ -4,8 +4,22 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+dictionary ProfileTimelineLayerRect {
+  long x = 0;
+  long y = 0;
+  long width = 0;
+  long height = 0;
+};
+
 dictionary ProfileTimelineMarker {
   DOMString name = "";
   DOMHighResTimeStamp start = 0;
   DOMHighResTimeStamp end = 0;
+  /* For ConsoleTime markers.  */
+  DOMString causeName;
+  /* For DOMEvent markers.  */
+  DOMString type;
+  unsigned short eventPhase;
+  /* For Paint markers.  */
+  sequence<ProfileTimelineLayerRect> rectangles;
 };

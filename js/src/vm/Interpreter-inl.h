@@ -305,10 +305,14 @@ inline bool
 SetNameOperation(JSContext *cx, JSScript *script, jsbytecode *pc, HandleObject scope,
                  HandleValue val)
 {
-    MOZ_ASSERT(*pc == JSOP_SETNAME || *pc == JSOP_SETGNAME);
+    MOZ_ASSERT(*pc == JSOP_SETNAME ||
+               *pc == JSOP_STRICTSETNAME ||
+               *pc == JSOP_SETGNAME ||
+               *pc == JSOP_STRICTSETGNAME);
     MOZ_ASSERT_IF(*pc == JSOP_SETGNAME, scope == cx->global());
+    MOZ_ASSERT_IF(*pc == JSOP_STRICTSETGNAME, scope == cx->global());
 
-    bool strict = script->strict();
+    bool strict = *pc == JSOP_STRICTSETNAME || *pc == JSOP_STRICTSETGNAME;
     RootedPropertyName name(cx, script->getName(pc));
     RootedValue valCopy(cx, val);
 
@@ -342,8 +346,9 @@ DefVarOrConstOperation(JSContext *cx, HandleObject varobj, HandlePropertyName dn
 
     /* Steps 8c, 8d. */
     if (!prop || (obj2 != varobj && varobj->is<GlobalObject>())) {
-        if (!JSObject::defineProperty(cx, varobj, dn, UndefinedHandleValue, JS_PropertyStub,
-                                      JS_StrictPropertyStub, attrs)) {
+        if (!JSObject::defineProperty(cx, varobj, dn, UndefinedHandleValue, nullptr, nullptr,
+                                      attrs))
+        {
             return false;
         }
     } else if (attrs & JSPROP_READONLY) {
@@ -553,6 +558,8 @@ static MOZ_ALWAYS_INLINE bool
 InitElemOperation(JSContext *cx, HandleObject obj, HandleValue idval, HandleValue val)
 {
     MOZ_ASSERT(!val.isMagic(JS_ELEMENTS_HOLE));
+    MOZ_ASSERT(!obj->getClass()->getProperty);
+    MOZ_ASSERT(!obj->getClass()->setProperty);
 
     RootedId id(cx);
     if (!ValueToId<CanGC>(cx, idval, &id))
@@ -763,7 +770,7 @@ class FastInvokeGuard
     RootedFunction fun_;
     RootedScript script_;
 
-    // Constructing an IonContext is pretty expensive due to the TLS access,
+    // Constructing a JitContext is pretty expensive due to the TLS access,
     // so only do this if we have to.
     bool useIon_;
 
@@ -803,11 +810,11 @@ class FastInvokeGuard
             if (status == jit::Method_Error)
                 return false;
             if (status == jit::Method_Compiled) {
-                jit::IonExecStatus result = jit::FastInvoke(cx, fun_, args_);
+                jit::JitExecStatus result = jit::FastInvoke(cx, fun_, args_);
                 if (IsErrorStatus(result))
                     return false;
 
-                MOZ_ASSERT(result == jit::IonExec_Ok);
+                MOZ_ASSERT(result == jit::JitExec_Ok);
                 return true;
             }
 

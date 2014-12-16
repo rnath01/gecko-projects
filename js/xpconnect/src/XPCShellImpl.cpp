@@ -772,10 +772,8 @@ env_resolve(JSContext *cx, HandleObject obj, HandleId id, bool *resolvedp)
 
 static const JSClass env_class = {
     "environment", JSCLASS_HAS_PRIVATE,
-    JS_PropertyStub,  JS_DeletePropertyStub,
-    JS_PropertyStub,  env_setProperty,
-    env_enumerate, env_resolve,
-    JS_ConvertStub,   nullptr
+    nullptr, nullptr, nullptr, env_setProperty,
+    env_enumerate, env_resolve
 };
 
 /***************************************************************************/
@@ -1066,7 +1064,9 @@ ProcessArgs(JSContext *cx, JS::Handle<JSObject*> obj, char **argv, int argc, XPC
                 return usage();
             }
 
-            JS_EvaluateScript(cx, obj, argv[i], strlen(argv[i]), "-e", 1, &rval);
+            JS::CompileOptions opts(cx);
+            opts.setFileAndLine("-e", 1);
+            JS::Evaluate(cx, obj, opts, argv[i], strlen(argv[i]), &rval);
 
             isInteractive = false;
             break;

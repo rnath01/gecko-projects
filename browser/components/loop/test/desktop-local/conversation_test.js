@@ -11,6 +11,7 @@ describe("loop.conversation", function() {
 
   var sharedModels = loop.shared.models,
       sharedView = loop.shared.views,
+      fakeWindow,
       sandbox;
 
   // XXX refactor to Just Work with "sandbox.stubComponent" or else
@@ -38,9 +39,14 @@ describe("loop.conversation", function() {
       get locale() {
         return "en-US";
       },
-      setLoopCharPref: sinon.stub(),
-      getLoopCharPref: sinon.stub().returns("http://fakeurl"),
-      getLoopBoolPref: sinon.stub(),
+      setLoopPref: sinon.stub(),
+      getLoopPref: function(prefName) {
+        if (prefName == "debug.sdk") {
+          return false;
+        }
+
+        return "http://fake";
+      },
       calls: {
         clearCallInProgress: sinon.stub()
       },
@@ -63,6 +69,12 @@ describe("loop.conversation", function() {
       })
     };
 
+    fakeWindow = {
+      navigator: { mozLoop: navigator.mozLoop },
+      close: sandbox.stub(),
+    };
+    loop.shared.mixins.setRootObject(fakeWindow);
+
     // XXX These stubs should be hoisted in a common file
     // Bug 1040968
     sandbox.stub(document.mozL10n, "get", function(x) {
@@ -72,6 +84,7 @@ describe("loop.conversation", function() {
   });
 
   afterEach(function() {
+    loop.shared.mixins.setRootObject(window);
     delete navigator.mozLoop;
     sandbox.restore();
   });
@@ -155,23 +168,24 @@ describe("loop.conversation", function() {
         sdk: {}
       });
       dispatcher = new loop.Dispatcher();
-      conversationStore = new loop.store.ConversationStore({
-        contact: {
-          name: [ "Mr Smith" ],
-          email: [{
-            type: "home",
-            value: "fakeEmail",
-            pref: true
-          }]
-        }
-      }, {
-        client: client,
-        dispatcher: dispatcher,
-        sdkDriver: {}
-      });
-      roomStore = new loop.store.RoomStore({
+      conversationStore = new loop.store.ConversationStore(
+        dispatcher, {
+          client: client,
+          mozLoop: navigator.mozLoop,
+          sdkDriver: {}
+        });
+
+      conversationStore.setStoreState({contact: {
+        name: [ "Mr Smith" ],
+        email: [{
+          type: "home",
+          value: "fakeEmail",
+          pref: true
+        }]
+      }});
+
+      roomStore = new loop.store.RoomStore(dispatcher, {
         mozLoop: navigator.mozLoop,
-        dispatcher: dispatcher
       });
       conversationAppStore = new loop.store.ConversationAppStore({
         dispatcher: dispatcher,
@@ -229,7 +243,8 @@ describe("loop.conversation", function() {
   });
 
   describe("IncomingConversationView", function() {
-    var conversationAppStore, conversation, client, icView, oldTitle;
+    var conversationAppStore, conversation, client, icView, oldTitle,
+        feedbackStore;
 
     function mountTestComponent() {
       return TestUtils.renderIntoDocument(
@@ -237,7 +252,8 @@ describe("loop.conversation", function() {
           client: client,
           conversation: conversation,
           sdk: {},
-          conversationAppStore: conversationAppStore
+          conversationAppStore: conversationAppStore,
+          feedbackStore: feedbackStore
         }));
     }
 
@@ -252,6 +268,9 @@ describe("loop.conversation", function() {
       conversationAppStore = new loop.store.ConversationAppStore({
         dispatcher: dispatcher,
         mozLoop: navigator.mozLoop
+      });
+      feedbackStore = new loop.store.FeedbackStore(dispatcher, {
+        feedbackClient: {}
       });
       sandbox.stub(conversation, "setOutgoingSessionData");
     });
@@ -397,7 +416,6 @@ describe("loop.conversation", function() {
 
             sandbox.stub(loop.CallConnectionWebSocket.prototype, "promiseConnect").returns(promise);
             sandbox.stub(loop.CallConnectionWebSocket.prototype, "close");
-            sandbox.stub(window, "close");
           });
 
           describe("progress - terminated (previousState = alerting)", function() {
@@ -434,11 +452,12 @@ describe("loop.conversation", function() {
 
                 sandbox.clock.tick(1);
 
-                sinon.assert.calledOnce(window.close);
+                sinon.assert.calledOnce(fakeWindow.close);
                 done();
               });
             });
           });
+
 
           describe("progress - terminated (previousState not init" +
                    " nor alerting)",
@@ -510,7 +529,6 @@ describe("loop.conversation", function() {
         beforeEach(function() {
           icView = mountTestComponent();
 
-          sandbox.stub(window, "close");
           icView._websocket = {
             decline: sinon.stub(),
             close: sinon.stub()
@@ -528,7 +546,7 @@ describe("loop.conversation", function() {
 
           sandbox.clock.tick(1);
 
-          sinon.assert.calledOnce(window.close);
+          sinon.assert.calledOnce(fakeWindow.close);
         });
 
         it("should stop alerting", function() {
@@ -547,7 +565,7 @@ describe("loop.conversation", function() {
       });
 
       describe("#blocked", function() {
-        var mozLoop;
+        var mozLoop, deleteCallUrlStub;
 
         beforeEach(function() {
           icView = mountTestComponent();
@@ -556,7 +574,6 @@ describe("loop.conversation", function() {
             decline: sinon.spy(),
             close: sinon.stub()
           };
-          sandbox.stub(window, "close");
 
           mozLoop = {
             LOOP_SESSION_TYPE: {
@@ -564,6 +581,9 @@ describe("loop.conversation", function() {
               FXA: 2
             }
           };
+
+          deleteCallUrlStub = sandbox.stub(loop.Client.prototype,
+                                           "deleteCallUrl");
         });
 
         it("should call mozLoop.stopAlerting", function() {
@@ -578,12 +598,10 @@ describe("loop.conversation", function() {
                                            .withArgs("sessionType")
                                            .returns(mozLoop.LOOP_SESSION_TYPE.FXA);
 
-          var deleteCallUrl = sandbox.stub(loop.Client.prototype,
-                                           "deleteCallUrl");
           icView.declineAndBlock();
 
-          sinon.assert.calledOnce(deleteCallUrl);
-          sinon.assert.calledWithExactly(deleteCallUrl,
+          sinon.assert.calledOnce(deleteCallUrlStub);
+          sinon.assert.calledWithExactly(deleteCallUrlStub,
             "fakeToken", mozLoop.LOOP_SESSION_TYPE.FXA, sinon.match.func);
         });
 
@@ -602,9 +620,7 @@ describe("loop.conversation", function() {
           var fakeError = {
             error: true
           };
-          sandbox.stub(loop.Client.prototype, "deleteCallUrl", function(_, __, cb) {
-            cb(fakeError);
-          });
+          deleteCallUrlStub.callsArgWith(2, fakeError);
           icView.declineAndBlock();
 
           sinon.assert.calledOnce(log);
@@ -616,7 +632,7 @@ describe("loop.conversation", function() {
 
           sandbox.clock.tick(1);
 
-          sinon.assert.calledOnce(window.close);
+          sinon.assert.calledOnce(fakeWindow.close);
         });
       });
     });
@@ -647,7 +663,6 @@ describe("loop.conversation", function() {
         icView = mountTestComponent();
 
         conversation.set("loopToken", "fakeToken");
-        navigator.mozLoop.getLoopCharPref.returns("http://fake");
         stubComponent(sharedView, "ConversationView");
       });
 

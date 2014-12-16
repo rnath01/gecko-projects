@@ -27,6 +27,7 @@
 #include "DynamicsCompressorNode.h"
 #include "BiquadFilterNode.h"
 #include "ScriptProcessorNode.h"
+#include "StereoPannerNode.h"
 #include "ChannelMergerNode.h"
 #include "ChannelSplitterNode.h"
 #include "MediaStreamAudioDestinationNode.h"
@@ -278,6 +279,13 @@ AudioContext::CreateAnalyser()
   return analyserNode.forget();
 }
 
+already_AddRefed<StereoPannerNode>
+AudioContext::CreateStereoPanner()
+{
+  nsRefPtr<StereoPannerNode> stereoPannerNode = new StereoPannerNode(this);
+  return stereoPannerNode.forget();
+}
+
 already_AddRefed<MediaElementAudioSourceNode>
 AudioContext::CreateMediaElementSource(HTMLMediaElement& aMediaElement,
                                        ErrorResult& aRv)
@@ -466,7 +474,7 @@ AudioContext::DecodeAudioData(const ArrayBuffer& aBuffer,
   uint8_t* data = static_cast<uint8_t*>(JS_StealArrayBufferContents(cx, obj));
 
   // Sniff the content of the media.
-  // Failed type sniffing will be handled by AsyncDecodeMedia.
+  // Failed type sniffing will be handled by AsyncDecodeWebAudio.
   nsAutoCString contentType;
   NS_SniffContent(NS_DATA_SNIFFER_CATEGORY, nullptr, data, length, contentType);
 
@@ -481,7 +489,7 @@ AudioContext::DecodeAudioData(const ArrayBuffer& aBuffer,
   nsRefPtr<WebAudioDecodeJob> job(
     new WebAudioDecodeJob(contentType, this,
                           promise, successCallback, failureCallback));
-  mDecoder.AsyncDecodeMedia(contentType.get(), data, length, *job);
+  AsyncDecodeWebAudio(contentType.get(), data, length, *job);
   // Transfer the ownership to mDecodeJobs
   mDecodeJobs.AppendElement(job.forget());
 
@@ -577,8 +585,6 @@ AudioContext::Shutdown()
     Mute();
   }
 
-  mDecoder.Shutdown();
-
   // Release references to active nodes.
   // Active AudioNodes don't unregister in destructors, at which point the
   // Node is already unregistered.
@@ -632,17 +638,21 @@ AudioContext::GetGlobalJSObject() const
   return parentObject->GetGlobalJSObject();
 }
 
-void
+already_AddRefed<Promise>
 AudioContext::StartRendering(ErrorResult& aRv)
 {
+  nsCOMPtr<nsIGlobalObject> parentObject = do_QueryInterface(GetParentObject());
+
   MOZ_ASSERT(mIsOffline, "This should only be called on OfflineAudioContext");
   if (mIsStarted) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
-    return;
+    return nullptr;
   }
 
   mIsStarted = true;
-  mDestination->StartRendering();
+  nsRefPtr<Promise> promise = Promise::Create(parentObject, aRv);
+  mDestination->StartRendering(promise);
+  return promise.forget();
 }
 
 void
@@ -669,12 +679,6 @@ AudioContext::MozAudioChannelType() const
   return mDestination->MozAudioChannelType();
 }
 
-void
-AudioContext::SetMozAudioChannelType(AudioChannel aValue, ErrorResult& aRv)
-{
-  mDestination->SetMozAudioChannelType(aValue, aRv);
-}
-
 AudioChannel
 AudioContext::TestAudioChannelInAudioNodeStream()
 {
@@ -695,7 +699,6 @@ AudioContext::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
   if (mListener) {
     amount += mListener->SizeOfIncludingThis(aMallocSizeOf);
   }
-  amount += mDecoder.SizeOfExcludingThis(aMallocSizeOf);
   amount += mDecodeJobs.SizeOfExcludingThis(aMallocSizeOf);
   for (uint32_t i = 0; i < mDecodeJobs.Length(); ++i) {
     amount += mDecodeJobs[i]->SizeOfIncludingThis(aMallocSizeOf);

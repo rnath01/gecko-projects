@@ -7,7 +7,7 @@
 #ifndef jit_x64_MacroAssembler_x64_h
 #define jit_x64_MacroAssembler_x64_h
 
-#include "jit/IonFrames.h"
+#include "jit/JitFrames.h"
 #include "jit/MoveResolver.h"
 #include "jit/shared/MacroAssembler-x86-shared.h"
 
@@ -552,8 +552,20 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     // Common interface.
     /////////////////////////////////////////////////////////////////
     void reserveStack(uint32_t amount) {
-        if (amount)
-            subq(Imm32(amount), StackPointer);
+        if (amount) {
+            // On windows, we cannot skip very far down the stack without touching the
+            // memory pages in-between.  This is a corner-case code for situations where the
+            // Ion frame data for a piece of code is very large.  To handle this special case,
+            // for frames over 1k in size we allocate memory on the stack incrementally, touching
+            // it as we go.
+            uint32_t amountLeft = amount;
+            while (amountLeft > 4096) {
+                subq(Imm32(4096), StackPointer);
+                store32(Imm32(0), Address(StackPointer, 0));
+                amountLeft -= 4096;
+            }
+            subq(Imm32(amountLeft), StackPointer);
+        }
         framePushed_ += amount;
     }
     void freeStack(uint32_t amount) {
@@ -1156,7 +1168,10 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         MOZ_ASSERT(dest != ScratchReg);
         if (src.containsReg(dest)) {
             mov(ImmWord(JSVAL_PAYLOAD_MASK), ScratchReg);
-            movq(src, dest);
+            // If src is already a register, then src and dest are the same
+            // thing and we don't need to move anything into dest.
+            if (src.kind() != Operand::REG)
+                movq(src, dest);
             andq(ScratchReg, dest);
         } else {
             mov(ImmWord(JSVAL_PAYLOAD_MASK), dest);
@@ -1421,10 +1436,8 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         storeValue(JSVAL_TYPE_INT32, ScratchReg, Dest);
     }
 
-#ifdef JSGC_GENERATIONAL
     void branchPtrInNurseryRange(Condition cond, Register ptr, Register temp, Label *label);
     void branchValueIsNurseryObject(Condition cond, ValueOperand value, Register temp, Label *label);
-#endif
 };
 
 typedef MacroAssemblerX64 MacroAssemblerSpecific;

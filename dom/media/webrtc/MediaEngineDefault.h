@@ -54,7 +54,7 @@ public:
                           SourceMediaStream *aSource,
                           TrackID aId,
                           StreamTime aDesiredTime,
-                          TrackTicks &aLastEndTime);
+                          StreamTime &aLastEndTime);
   virtual bool SatisfiesConstraintSets(
       const nsTArray<const dom::MediaTrackConstraintSet*>& aConstraintSets)
   {
@@ -123,7 +123,7 @@ public:
                           SourceMediaStream *aSource,
                           TrackID aId,
                           StreamTime aDesiredTime,
-                          TrackTicks &aLastEndTime) {}
+                          StreamTime &aLastEndTime) {}
 
   virtual bool IsFake() {
     return true;
@@ -155,14 +155,18 @@ protected:
 class MediaEngineDefault : public MediaEngine
 {
 public:
-  MediaEngineDefault()
-  : mMutex("mozilla::MediaEngineDefault")
+  explicit MediaEngineDefault(bool aHasFakeTracks = false)
+    : mHasFakeTracks(aHasFakeTracks)
+    , mMutex("mozilla::MediaEngineDefault")
   {}
 
   virtual void EnumerateVideoDevices(MediaSourceType,
                                      nsTArray<nsRefPtr<MediaEngineVideoSource> >*);
   virtual void EnumerateAudioDevices(MediaSourceType,
                                      nsTArray<nsRefPtr<MediaEngineAudioSource> >*);
+
+protected:
+  bool mHasFakeTracks;
 
 private:
   ~MediaEngineDefault() {}

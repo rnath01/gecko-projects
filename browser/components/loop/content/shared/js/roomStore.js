@@ -17,6 +17,20 @@ loop.store = loop.store || {};
   var sharedActions = loop.shared.actions;
 
   /**
+   * Maximum size given to createRoom; only 2 is supported (and is
+   * always passed) because that's what the user-experience is currently
+   * designed and tested to handle.
+   * @type {Number}
+   */
+  var MAX_ROOM_CREATION_SIZE = loop.store.MAX_ROOM_CREATION_SIZE = 2;
+
+  /**
+   * The number of hours for which the room will exist - default 8 weeks
+   * @type {Number}
+   */
+  var DEFAULT_EXPIRES_IN = loop.store.DEFAULT_EXPIRES_IN = 24 * 7 * 8;
+
+  /**
    * Room validation schema. See validate.js.
    * @type {Object}
    */
@@ -47,37 +61,33 @@ loop.store = loop.store || {};
   /**
    * Room store.
    *
-   * Options:
-   * - {loop.Dispatcher} dispatcher       The dispatcher for dispatching actions
+   * @param {loop.Dispatcher} dispatcher  The dispatcher for dispatching actions
    *                                      and registering to consume actions.
+   * @param {Object} options Options object:
    * - {mozLoop}         mozLoop          The MozLoop API object.
    * - {ActiveRoomStore} activeRoomStore  An optional substore for active room
    *                                      state.
-   *
-   * @extends {Backbone.Events}
-   * @param {Object} options Options object.
    */
-  function RoomStore(options) {
-    options = options || {};
+  loop.store.RoomStore = loop.store.createStore({
+    /**
+     * Maximum size given to createRoom; only 2 is supported (and is
+     * always passed) because that's what the user-experience is currently
+     * designed and tested to handle.
+     * @type {Number}
+     */
+    maxRoomCreationSize: MAX_ROOM_CREATION_SIZE,
 
-    if (!options.dispatcher) {
-      throw new Error("Missing option dispatcher");
-    }
-    this._dispatcher = options.dispatcher;
+    /**
+     * The number of hours for which the room will exist - default 8 weeks
+     * @type {Number}
+     */
+    defaultExpiresIn: DEFAULT_EXPIRES_IN,
 
-    if (!options.mozLoop) {
-      throw new Error("Missing option mozLoop");
-    }
-    this._mozLoop = options.mozLoop;
-
-    if (options.activeRoomStore) {
-      this.activeRoomStore = options.activeRoomStore;
-      this.setStoreState({activeRoom: this.activeRoomStore.getStoreState()});
-      this.activeRoomStore.on("change",
-                              this._onActiveRoomStoreChange.bind(this));
-    }
-
-    this._dispatcher.register(this, [
+    /**
+     * Registered actions.
+     * @type {Array}
+     */
+    actions: [
       "createRoom",
       "createRoomError",
       "copyRoomUrl",
@@ -87,78 +97,31 @@ loop.store = loop.store || {};
       "getAllRooms",
       "getAllRoomsError",
       "openRoom",
+      "renameRoom",
       "updateRoomList"
-    ]);
-  }
+    ],
 
-  RoomStore.prototype = _.extend({
-    /**
-     * Maximum size given to createRoom; only 2 is supported (and is
-     * always passed) because that's what the user-experience is currently
-     * designed and tested to handle.
-     * @type {Number}
-     */
-    maxRoomCreationSize: 2,
+    initialize: function(options) {
+      if (!options.mozLoop) {
+        throw new Error("Missing option mozLoop");
+      }
+      this._mozLoop = options.mozLoop;
 
-    /**
-     * The number of hours for which the room will exist - default 8 weeks
-     * @type {Number}
-     */
-    defaultExpiresIn: 24 * 7 * 8,
-
-    /**
-     * Internal store state representation.
-     * @type {Object}
-     * @see  #getStoreState
-     */
-    _storeState: {
-      activeRoom: {},
-      error: null,
-      pendingCreation: false,
-      pendingInitialRetrieval: false,
-      rooms: []
+      if (options.activeRoomStore) {
+        this.activeRoomStore = options.activeRoomStore;
+        this.activeRoomStore.on("change",
+                                this._onActiveRoomStoreChange.bind(this));
+      }
     },
 
-    /**
-     * Retrieves current store state. The returned state object holds the
-     * following properties:
-     *
-     * - {Boolean} pendingCreation         Pending room creation flag.
-     * - {Boolean} pendingInitialRetrieval Pending initial list retrieval flag.
-     * - {Array}   rooms                   The current room list.
-     * - {Error}   error                   Latest error encountered, if any.
-     * - {Object}  activeRoom              Active room data, if any.
-     *
-     * You can request a given state property by providing the `key` argument.
-     *
-     * @param  {String|undefined} key An optional state property name.
-     * @return {Object}
-     */
-    getStoreState: function(key) {
-      if (key) {
-        return this._storeState[key];
-      }
-      return this._storeState;
-    },
-
-    /**
-     * Updates store state and trigger a global "change" event, plus one for
-     * each provided newState property:
-     *
-     * - change:rooms
-     * - change:pendingInitialRetrieval
-     * - change:pendingCreation
-     * - change:error
-     * - change:activeRoom
-     *
-     * @param {Object} newState The new store state object.
-     */
-    setStoreState: function(newState) {
-      for (var key in newState) {
-        this._storeState[key] = newState[key];
-        this.trigger("change:" + key);
-      }
-      this.trigger("change");
+    getInitialStoreState: function() {
+      return {
+        activeRoom: this.activeRoomStore ? this.activeRoomStore.getStoreState() : {},
+        error: null,
+        pendingCreation: false,
+        pendingInitialRetrieval: false,
+        rooms: []
+      };
     },
 
     /**
@@ -179,15 +142,6 @@ loop.store = loop.store || {};
     },
 
     /**
-     * Local proxy helper to dispatch an action.
-     *
-     * @param {Action} action The action to dispatch.
-     */
-    _dispatchAction: function(action) {
-      this._dispatcher.dispatch(action);
-    },
-
-    /**
      * Updates current room list when a new room is available.
      *
      * @param {String} eventName     The event name (unused).
@@ -196,7 +150,7 @@ loop.store = loop.store || {};
     _onRoomAdded: function(eventName, addedRoomData) {
       addedRoomData.participants = [];
       addedRoomData.ctime = new Date().getTime();
-      this._dispatchAction(new sharedActions.UpdateRoomList({
+      this.dispatchAction(new sharedActions.UpdateRoomList({
         roomList: this._storeState.rooms.concat(new Room(addedRoomData))
       }));
     },
@@ -208,7 +162,7 @@ loop.store = loop.store || {};
      * @param {Object} updatedRoomData The updated room data.
      */
     _onRoomUpdated: function(eventName, updatedRoomData) {
-      this._dispatchAction(new sharedActions.UpdateRoomList({
+      this.dispatchAction(new sharedActions.UpdateRoomList({
         roomList: this._storeState.rooms.map(function(room) {
           return room.roomToken === updatedRoomData.roomToken ?
                  updatedRoomData : room;
@@ -223,7 +177,7 @@ loop.store = loop.store || {};
      * @param {Object} removedRoomData The removed room data.
      */
     _onRoomRemoved: function(eventName, removedRoomData) {
-      this._dispatchAction(new sharedActions.UpdateRoomList({
+      this.dispatchAction(new sharedActions.UpdateRoomList({
         roomList: this._storeState.rooms.filter(function(room) {
           return room.roomToken !== removedRoomData.roomToken;
         })
@@ -299,11 +253,16 @@ loop.store = loop.store || {};
         expiresIn: this.defaultExpiresIn
       };
 
-      this._mozLoop.rooms.create(roomCreationData, function(err) {
+      this._mozLoop.rooms.create(roomCreationData, function(err, createdRoom) {
         this.setStoreState({pendingCreation: false});
         if (err) {
-          this._dispatchAction(new sharedActions.CreateRoomError({error: err}));
+          this.dispatchAction(new sharedActions.CreateRoomError({error: err}));
+          return;
         }
+        // Opens the newly created room
+        this.dispatchAction(new sharedActions.OpenRoom({
+          roomToken: createdRoom.roomToken
+        }));
       }.bind(this));
     },
 
@@ -345,7 +304,7 @@ loop.store = loop.store || {};
     deleteRoom: function(actionData) {
       this._mozLoop.rooms.delete(actionData.roomToken, function(err) {
         if (err) {
-         this._dispatchAction(new sharedActions.DeleteRoomError({error: err}));
+         this.dispatchAction(new sharedActions.DeleteRoomError({error: err}));
         }
       }.bind(this));
     },
@@ -375,7 +334,7 @@ loop.store = loop.store || {};
           action = new sharedActions.UpdateRoomList({roomList: rawRoomList});
         }
 
-        this._dispatchAction(action);
+        this.dispatchAction(action);
 
         // We can only start listening to room events after getAll() has been
         // called executed first.
@@ -411,8 +370,21 @@ loop.store = loop.store || {};
      */
     openRoom: function(actionData) {
       this._mozLoop.rooms.open(actionData.roomToken);
-    }
-  }, Backbone.Events);
+    },
 
-  loop.store.RoomStore = RoomStore;
+    /**
+     * Renames a room.
+     *
+     * @param {sharedActions.RenameRoom} actionData
+     */
+    renameRoom: function(actionData) {
+      this._mozLoop.rooms.rename(actionData.roomToken, actionData.newRoomName,
+        function(err) {
+          if (err) {
+            // XXX Give this a proper UI - bug 1100595.
+            console.error("Failed to rename the room", err);
+          }
+        });
+    }
+  });
 })();

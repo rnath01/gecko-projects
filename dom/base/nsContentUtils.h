@@ -30,6 +30,7 @@
 #include "mozilla/dom/AutocompleteInfoBinding.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/FloatingPoint.h"
+#include "mozilla/net/ReferrerPolicy.h"
 #include "nsIContentPolicy.h"
 
 #if defined(XP_WIN)
@@ -72,6 +73,7 @@ class nsIInterfaceRequestor;
 class nsIIOService;
 class nsIJSRuntimeService;
 class nsILineBreaker;
+class nsIMessageBroadcaster;
 class nsNameSpaceManager;
 class nsIObserver;
 class nsIParser;
@@ -120,6 +122,7 @@ class Element;
 class EventTarget;
 class NodeInfo;
 class Selection;
+class TabParent;
 } // namespace dom
 
 namespace layers {
@@ -166,6 +169,9 @@ struct nsShortcutCandidate {
   uint32_t mCharCode;
   bool     mIgnoreShift;
 };
+
+typedef void (*CallOnRemoteChildFunction) (mozilla::dom::TabParent* aTabParent,
+                                           void* aArg);
 
 class nsContentUtils
 {
@@ -619,6 +625,8 @@ public:
    * @param aLoadingDocument the document we belong to
    * @param aLoadingPrincipal the principal doing the load
    * @param aReferrer the referrer URI
+   * @param aReferrerPolicy the referrer-sending policy to use on channel
+   *         creation
    * @param aObserver the observer for the image load
    * @param aLoadFlags the load flags to use.  See nsIRequest
    * @param [aContentPolicyType=nsIContentPolicy::TYPE_IMAGE] (Optional)
@@ -629,6 +637,7 @@ public:
                             nsIDocument* aLoadingDocument,
                             nsIPrincipal* aLoadingPrincipal,
                             nsIURI* aReferrer,
+                            mozilla::net::ReferrerPolicy aReferrerPolicy,
                             imgINotificationObserver* aObserver,
                             int32_t aLoadFlags,
                             const nsAString& initiatorType,
@@ -2207,6 +2216,14 @@ public:
    */
   static void GetHostOrIPv6WithBrackets(nsIURI* aURI, nsAString& aHost);
 
+  /*
+   * Call the given callback on all remote children of the given top-level
+   * window.
+   */
+  static void CallOnAllRemoteChildren(nsIDOMWindow* aWindow,
+                                      CallOnRemoteChildFunction aCallback,
+                                      void* aArg);
+
 private:
   static bool InitializeEventTable();
 
@@ -2241,6 +2258,10 @@ private:
   // Fills in aInfo with the tokens from the supplied autocomplete attribute.
   static AutocompleteAttrState InternalSerializeAutocompleteAttribute(const nsAttrValue* aAttrVal,
                                                                       mozilla::dom::AutocompleteInfo& aInfo);
+
+  static void CallOnAllRemoteChildren(nsIMessageBroadcaster* aManager,
+                                      CallOnRemoteChildFunction aCallback,
+                                      void* aArg);
 
   static nsIXPConnect *sXPConnect;
 

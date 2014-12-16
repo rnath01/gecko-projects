@@ -455,7 +455,7 @@ nsWindow::ReparentNativeWidget(nsIWidget* aNewParent)
 }
 
 NS_IMETHODIMP
-nsWindow::MakeFullScreen(bool aFullScreen)
+nsWindow::MakeFullScreen(bool aFullScreen, nsIScreen*)
 {
     if (mWindowType != eWindowType_toplevel) {
         // Ignore fullscreen request for non-toplevel windows.
@@ -610,13 +610,17 @@ nsWindow::GetLayerManager(PLayerTransactionChild* aShadowManager,
 
     CreateCompositor();
     if (mCompositorParent) {
-        uint64_t rootLayerTreeId = mCompositorParent->RootLayerTreeId();
-        CompositorParent::SetControllerForLayerTree(rootLayerTreeId, new ParentProcessController());
-        CompositorParent::GetAPZCTreeManager(rootLayerTreeId)->SetDPI(GetDPI());
         HwcComposer2D::GetInstance()->SetCompositorParent(mCompositorParent);
     }
     MOZ_ASSERT(mLayerManager);
     return mLayerManager;
+}
+
+already_AddRefed<GeckoContentController>
+nsWindow::CreateRootContentController()
+{
+    nsRefPtr<ParentProcessController> controller = new ParentProcessController();
+    return controller.forget();
 }
 
 void

@@ -293,6 +293,14 @@ MInstruction::moveResumePointAsEntry()
     resumePoint_ = nullptr;
 }
 
+void
+MInstruction::clearResumePoint()
+{
+    resumePoint_->resetInstruction();
+    block()->discardPreAllocatedResumePoint(resumePoint_);
+    resumePoint_ = nullptr;
+}
+
 static bool
 MaybeEmulatesUndefined(MDefinition *op)
 {
@@ -607,14 +615,14 @@ jit::MakeSingletonTypeSet(types::CompilerConstraintList *constraints, JSObject *
     types::TypeObjectKey *objType = types::TypeObjectKey::get(obj);
     objType->hasFlags(constraints, types::OBJECT_FLAG_UNKNOWN_PROPERTIES);
 
-    LifoAlloc *alloc = GetIonContext()->temp->lifoAlloc();
+    LifoAlloc *alloc = GetJitContext()->temp->lifoAlloc();
     return alloc->new_<types::TemporaryTypeSet>(alloc, types::Type::ObjectType(obj));
 }
 
 static types::TemporaryTypeSet *
 MakeUnknownTypeSet()
 {
-    LifoAlloc *alloc = GetIonContext()->temp->lifoAlloc();
+    LifoAlloc *alloc = GetJitContext()->temp->lifoAlloc();
     return alloc->new_<types::TemporaryTypeSet>(alloc, types::Type::UnknownType());
 }
 
@@ -876,7 +884,7 @@ void
 MAssertRange::printOpcode(FILE *fp) const
 {
     MDefinition::printOpcode(fp);
-    Sprinter sp(GetIonContext()->cx);
+    Sprinter sp(GetJitContext()->cx);
     sp.init();
     assertedRange()->print(sp);
     fprintf(fp, " %s", sp.string());
@@ -1199,6 +1207,19 @@ MTypeBarrier::printOpcode(FILE *fp) const
     getOperand(0)->printName(fp);
 }
 
+bool
+MTypeBarrier::congruentTo(const MDefinition *def) const
+{
+    if (!def->isTypeBarrier())
+        return false;
+    const MTypeBarrier *other = def->toTypeBarrier();
+    if (barrierKind() != other->barrierKind() || isGuard() != other->isGuard())
+        return false;
+    if (!resultTypeSet()->equals(other->resultTypeSet()))
+        return false;
+    return congruentIfOperandsEqual(other);
+}
+
 #ifdef DEBUG
 void
 MPhi::assertLoopPhi() const
@@ -1342,7 +1363,7 @@ MPhi::foldsTernary()
     // - fold testArg ? testArg : "" to testArg
     // - fold testArg ? "" : testArg to ""
     if (testArg->type() == MIRType_String &&
-        c->vp()->toString() == GetIonContext()->runtime->emptyString())
+        c->vp()->toString() == GetJitContext()->runtime->emptyString())
     {
         // When folding to the constant we need to hoist it.
         if (trueDef == c && !c->block()->dominates(block()))
@@ -1419,7 +1440,7 @@ MakeMIRTypeSet(MIRType type)
     types::Type ntype = type == MIRType_Object
                         ? types::Type::AnyObjectType()
                         : types::Type::PrimitiveType(ValueTypeFromMIRType(type));
-    LifoAlloc *alloc = GetIonContext()->temp->lifoAlloc();
+    LifoAlloc *alloc = GetJitContext()->temp->lifoAlloc();
     return alloc->new_<types::TemporaryTypeSet>(alloc, ntype);
 }
 
@@ -1444,7 +1465,7 @@ jit::MergeTypes(MIRType *ptype, types::TemporaryTypeSet **ptypeSet,
         }
     }
     if (*ptypeSet) {
-        LifoAlloc *alloc = GetIonContext()->temp->lifoAlloc();
+        LifoAlloc *alloc = GetJitContext()->temp->lifoAlloc();
         if (!newTypeSet && newType != MIRType_Value) {
             newTypeSet = MakeMIRTypeSet(newType);
             if (!newTypeSet)
@@ -2233,7 +2254,7 @@ MBinaryArithInstruction::inferFallback(BaselineInspector *inspector,
     // the lhs or rhs, mark the binary instruction as having no possible types
     // either to avoid degrading subsequent analysis.
     if (getOperand(0)->emptyResultTypeSet() || getOperand(1)->emptyResultTypeSet()) {
-        LifoAlloc *alloc = GetIonContext()->temp->lifoAlloc();
+        LifoAlloc *alloc = GetJitContext()->temp->lifoAlloc();
         types::TemporaryTypeSet *types = alloc->new_<types::TemporaryTypeSet>();
         if (types)
             setResultTypeSet(types);
@@ -2585,7 +2606,7 @@ MTypeOf::foldsTo(TempAllocator &alloc)
         return this;
     }
 
-    return MConstant::New(alloc, StringValue(TypeName(type, GetIonContext()->runtime->names())));
+    return MConstant::New(alloc, StringValue(TypeName(type, GetJitContext()->runtime->names())));
 }
 
 void
@@ -3353,7 +3374,7 @@ MBeta::printOpcode(FILE *fp) const
 {
     MDefinition::printOpcode(fp);
 
-    if (IonContext *context = MaybeGetIonContext()) {
+    if (JitContext *context = MaybeGetJitContext()) {
         Sprinter sp(context->cx);
         sp.init();
         comparison_->print(sp);
@@ -3366,7 +3387,7 @@ MBeta::printOpcode(FILE *fp) const
 bool
 MNewObject::shouldUseVM() const
 {
-    NativeObject *obj = templateObject();
+    PlainObject *obj = templateObject();
     return obj->hasSingletonType() || obj->hasDynamicSlots();
 }
 
@@ -3383,7 +3404,7 @@ MObjectState::MObjectState(MDefinition *obj)
     // This instruction is only used as a summary for bailout paths.
     setResultType(MIRType_Object);
     setRecoveredOnBailout();
-    NativeObject *templateObject = nullptr;
+    PlainObject *templateObject = nullptr;
     if (obj->isNewObject())
         templateObject = obj->toNewObject()->templateObject();
     else
@@ -3710,7 +3731,7 @@ InlinePropertyTable::hasFunction(JSFunction *func) const
 types::TemporaryTypeSet *
 InlinePropertyTable::buildTypeSetForFunction(JSFunction *func) const
 {
-    LifoAlloc *alloc = GetIonContext()->temp->lifoAlloc();
+    LifoAlloc *alloc = GetJitContext()->temp->lifoAlloc();
     types::TemporaryTypeSet *types = alloc->new_<types::TemporaryTypeSet>();
     if (!types)
         return nullptr;
@@ -3731,6 +3752,23 @@ size_t
 MLoadTypedArrayElementStatic::length() const
 {
     return AnyTypedArrayByteLength(someTypedArray_);
+}
+
+bool
+MLoadTypedArrayElementStatic::congruentTo(const MDefinition *ins) const
+{
+    if (!ins->isLoadTypedArrayElementStatic())
+        return false;
+    const MLoadTypedArrayElementStatic *other = ins->toLoadTypedArrayElementStatic();
+    if (offset() != other->offset())
+        return false;
+    if (needsBoundsCheck() != other->needsBoundsCheck())
+        return false;
+    if (viewType() != other->viewType())
+        return false;
+    if (base() != other->base())
+        return false;
+    return congruentIfOperandsEqual(other);
 }
 
 void *
@@ -3969,10 +4007,10 @@ jit::ElementAccessIsAnyTypedArray(MDefinition *obj, MDefinition *id,
         return false;
 
     *arrayType = types->getTypedArrayType();
-    if (*arrayType != Scalar::TypeMax)
+    if (*arrayType != Scalar::MaxTypedArrayViewType)
         return true;
     *arrayType = types->getSharedTypedArrayType();
-    return *arrayType != Scalar::TypeMax;
+    return *arrayType != Scalar::MaxTypedArrayViewType;
 }
 
 bool
@@ -4113,7 +4151,7 @@ jit::PropertyReadNeedsTypeBarrier(JSContext *propertycx,
                         break;
                     if (types.length()) {
                         // Note: the return value here is ignored.
-                        observed->addType(types[0], GetIonContext()->temp->lifoAlloc());
+                        observed->addType(types[0], GetJitContext()->temp->lifoAlloc());
                         break;
                     }
                 }
@@ -4237,7 +4275,7 @@ jit::AddObjectsForPropertyRead(MDefinition *obj, PropertyName *name,
     // Add objects to observed which *could* be observed by reading name from obj,
     // to hopefully avoid unnecessary type barriers and code invalidations.
 
-    LifoAlloc *alloc = GetIonContext()->temp->lifoAlloc();
+    LifoAlloc *alloc = GetJitContext()->temp->lifoAlloc();
 
     types::TemporaryTypeSet *types = obj->resultTypeSet();
     if (!types || types->unknownObject()) {
@@ -4275,9 +4313,29 @@ jit::AddObjectsForPropertyRead(MDefinition *obj, PropertyName *name,
 }
 
 static bool
+PropertyTypeIncludes(TempAllocator &alloc, types::HeapTypeSetKey property,
+                     MDefinition *value, MIRType implicitType)
+{
+    // If implicitType is not MIRType_None, it is an additional type which the
+    // property implicitly includes. In this case, make a new type set which
+    // explicitly contains the type.
+    types::TypeSet *types = property.maybeTypes();
+    if (implicitType != MIRType_None) {
+        types::Type newType = types::Type::PrimitiveType(ValueTypeFromMIRType(implicitType));
+        if (types)
+            types = types->clone(alloc.lifoAlloc());
+        else
+            types = alloc.lifoAlloc()->new_<types::TemporaryTypeSet>();
+        types->addType(newType, alloc.lifoAlloc());
+    }
+
+    return TypeSetIncludes(types, value->type(), value->resultTypeSet());
+}
+
+static bool
 TryAddTypeBarrierForWrite(TempAllocator &alloc, types::CompilerConstraintList *constraints,
                           MBasicBlock *current, types::TemporaryTypeSet *objTypes,
-                          PropertyName *name, MDefinition **pvalue)
+                          PropertyName *name, MDefinition **pvalue, MIRType implicitType)
 {
     // Return whether pvalue was modified to include a type barrier ensuring
     // that writing the value to objTypes/id will not require changing type
@@ -4301,7 +4359,7 @@ TryAddTypeBarrierForWrite(TempAllocator &alloc, types::CompilerConstraintList *c
         if (!property.maybeTypes() || property.couldBeConstant(constraints))
             return false;
 
-        if (TypeSetIncludes(property.maybeTypes(), (*pvalue)->type(), (*pvalue)->resultTypeSet()))
+        if (PropertyTypeIncludes(alloc, property, *pvalue, implicitType))
             return false;
 
         // This freeze is not required for correctness, but ensures that we
@@ -4312,11 +4370,8 @@ TryAddTypeBarrierForWrite(TempAllocator &alloc, types::CompilerConstraintList *c
         if (!aggregateProperty) {
             aggregateProperty.emplace(property);
         } else {
-            if (!aggregateProperty->maybeTypes()->isSubset(property.maybeTypes()) ||
-                !property.maybeTypes()->isSubset(aggregateProperty->maybeTypes()))
-            {
+            if (!aggregateProperty->maybeTypes()->equals(property.maybeTypes()))
                 return false;
-            }
         }
     }
 
@@ -4384,18 +4439,20 @@ AddTypeGuard(TempAllocator &alloc, MBasicBlock *current, MDefinition *obj,
 
 // Whether value can be written to property without changing type information.
 bool
-jit::CanWriteProperty(types::CompilerConstraintList *constraints,
-                      types::HeapTypeSetKey property, MDefinition *value)
+jit::CanWriteProperty(TempAllocator &alloc, types::CompilerConstraintList *constraints,
+                      types::HeapTypeSetKey property, MDefinition *value,
+                      MIRType implicitType /* = MIRType_None */)
 {
     if (property.couldBeConstant(constraints))
         return false;
-    return TypeSetIncludes(property.maybeTypes(), value->type(), value->resultTypeSet());
+    return PropertyTypeIncludes(alloc, property, value, implicitType);
 }
 
 bool
 jit::PropertyWriteNeedsTypeBarrier(TempAllocator &alloc, types::CompilerConstraintList *constraints,
                                    MBasicBlock *current, MDefinition **pobj,
-                                   PropertyName *name, MDefinition **pvalue, bool canModify)
+                                   PropertyName *name, MDefinition **pvalue,
+                                   bool canModify, MIRType implicitType)
 {
     // If any value being written is not reflected in the type information for
     // objects which obj could represent, a type barrier is needed when writing
@@ -4425,14 +4482,15 @@ jit::PropertyWriteNeedsTypeBarrier(TempAllocator &alloc, types::CompilerConstrai
 
         jsid id = name ? NameToId(name) : JSID_VOID;
         types::HeapTypeSetKey property = object->property(id);
-        if (!CanWriteProperty(constraints, property, *pvalue)) {
+        if (!CanWriteProperty(alloc, constraints, property, *pvalue, implicitType)) {
             // Either pobj or pvalue needs to be modified to filter out the
             // types which the value could have but are not in the property,
             // or a VM call is required. A VM call is always required if pobj
             // and pvalue cannot be modified.
             if (!canModify)
                 return true;
-            success = TryAddTypeBarrierForWrite(alloc, constraints, current, types, name, pvalue);
+            success = TryAddTypeBarrierForWrite(alloc, constraints, current, types, name, pvalue,
+                                                implicitType);
             break;
         }
     }
@@ -4457,7 +4515,7 @@ jit::PropertyWriteNeedsTypeBarrier(TempAllocator &alloc, types::CompilerConstrai
 
         jsid id = name ? NameToId(name) : JSID_VOID;
         types::HeapTypeSetKey property = object->property(id);
-        if (CanWriteProperty(constraints, property, *pvalue))
+        if (CanWriteProperty(alloc, constraints, property, *pvalue, implicitType))
             continue;
 
         if ((property.maybeTypes() && !property.maybeTypes()->empty()) || excluded)

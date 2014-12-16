@@ -109,6 +109,7 @@ protected:
   nsresult SetPictureConfiguration(const Configuration& aConfig);
   nsresult SetVideoConfiguration(const Configuration& aConfig);
   nsresult StartInternal(const Configuration* aInitialConfig);
+  nsresult StopInternal();
 
   template<class T> nsresult SetAndPush(uint32_t aKey, const T& aValue);
 
@@ -152,6 +153,8 @@ protected:
   nsresult SetThumbnailSizeImpl(const Size& aSize);
 
   int32_t RationalizeRotation(int32_t aRotation);
+
+  uint32_t                  mCameraId;
 
   android::sp<android::GonkCameraHardware> mCameraHw;
 
@@ -198,7 +201,6 @@ void OnAutoFocusMoving(nsGonkCameraControl* gc, bool aIsMoving);
 void OnFacesDetected(nsGonkCameraControl* gc, camera_frame_metadata_t* aMetaData);
 void OnNewPreviewFrame(nsGonkCameraControl* gc, layers::TextureClient* aBuffer);
 void OnShutter(nsGonkCameraControl* gc);
-void OnClosed(nsGonkCameraControl* gc);
 void OnSystemError(nsGonkCameraControl* gc,
                    CameraControlListener::SystemContext aWhere,
                    int32_t aArg1, int32_t aArg2);

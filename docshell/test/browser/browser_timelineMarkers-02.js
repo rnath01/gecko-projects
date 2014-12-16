@@ -7,6 +7,7 @@
 // restyles, reflows and paints occur
 
 let URL = '<!DOCTYPE html><style>' +
+          'body {margin:0; padding: 0;} ' +
           'div {width:100px;height:100px;background:red;} ' +
           '.resize-change-color {width:50px;height:50px;background:blue;} ' +
           '.change-color {width:50px;height:50px;background:yellow;} ' +
@@ -21,8 +22,15 @@ let TESTS = [{
   check: function(markers) {
     ok(markers.length > 0, "markers were returned");
     console.log(markers);
+    info(JSON.stringify(markers.filter(m => m.name == "Paint")));
     ok(markers.some(m => m.name == "Reflow"), "markers includes Reflow");
     ok(markers.some(m => m.name == "Paint"), "markers includes Paint");
+    for (let marker of markers.filter(m => m.name == "Paint")) {
+      // This change should generate at least one rectangle.
+      ok(marker.rectangles.length >= 1, "marker has one rectangle");
+      // One of the rectangles should contain the div.
+      ok(marker.rectangles.some(r => rectangleContains(r, 0, 0, 100, 100)));
+    }
     ok(markers.some(m => m.name == "Styles"), "markers includes Restyle");
   }
 }, {
@@ -34,6 +42,12 @@ let TESTS = [{
     ok(markers.length > 0, "markers were returned");
     ok(!markers.some(m => m.name == "Reflow"), "markers doesn't include Reflow");
     ok(markers.some(m => m.name == "Paint"), "markers includes Paint");
+    for (let marker of markers.filter(m => m.name == "Paint")) {
+      // This change should generate at least one rectangle.
+      ok(marker.rectangles.length >= 1, "marker has one rectangle");
+      // One of the rectangles should contain the div.
+      ok(marker.rectangles.some(r => rectangleContains(r, 0, 0, 50, 50)));
+    }
     ok(markers.some(m => m.name == "Styles"), "markers includes Restyle");
   }
 }, {
@@ -54,7 +68,8 @@ let TESTS = [{
     content.console.timeEnd("FOOBAR");
     let markers = docShell.popProfileTimelineMarkers();
     is(markers.length, 1, "Got one marker");
-    is(markers[0].name, "ConsoleTime:FOOBAR", "Got ConsoleTime:FOOBAR marker");
+    is(markers[0].name, "ConsoleTime", "Got ConsoleTime marker");
+    is(markers[0].causeName, "FOOBAR", "Got ConsoleTime FOOBAR detail");
     content.console.time("FOO");
     content.setTimeout(() => {
       content.console.time("BAR");
@@ -66,8 +81,10 @@ let TESTS = [{
   },
   check: function(markers) {
     is(markers.length, 2, "Got 2 markers");
-    is(markers[0].name, "ConsoleTime:FOO", "Got ConsoleTime:FOO marker");
-    is(markers[1].name, "ConsoleTime:BAR", "Got ConsoleTime:BARmarker");
+    is(markers[0].name, "ConsoleTime", "Got first ConsoleTime marker");
+    is(markers[0].causeName, "FOO", "Got ConsoleTime FOO detail");
+    is(markers[1].name, "ConsoleTime", "Got second ConsoleTime marker");
+    is(markers[1].causeName, "BAR", "Got ConsoleTime BAR detail");
   }
 }];
 
@@ -141,4 +158,9 @@ function waitForMarkers(docshell) {
       waitIterationCount++;
     }, 200);
   });
+}
+
+function rectangleContains(rect, x, y, width, height) {
+  return rect.x <= x && rect.y <= y && rect.width >= width &&
+    rect.height >= height;
 }

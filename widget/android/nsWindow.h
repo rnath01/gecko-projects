@@ -104,7 +104,7 @@ public:
     NS_IMETHOD DispatchEvent(mozilla::WidgetGUIEvent* aEvent,
                              nsEventStatus& aStatus);
     nsEventStatus DispatchEvent(mozilla::WidgetGUIEvent* aEvent);
-    NS_IMETHOD MakeFullScreen(bool aFullScreen);
+    NS_IMETHOD MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen = nullptr);
     NS_IMETHOD SetWindowClass(const nsAString& xulWinType);
 
 
@@ -173,6 +173,9 @@ protected:
     void RemoveIMEComposition();
     void PostFlushIMEChanges();
     void FlushIMEChanges();
+
+    void ConfigureAPZCTreeManager() MOZ_OVERRIDE;
+    already_AddRefed<GeckoContentController> CreateRootContentController() MOZ_OVERRIDE;
 
     // Call this function when the users activity is the direct cause of an
     // event (like a keypress or mouse click).

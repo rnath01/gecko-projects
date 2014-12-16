@@ -8,9 +8,10 @@
 #include "nsDebug.h"
 #include "NfcGonkMessage.h"
 #include "NfcOptions.h"
+#include "mozilla/unused.h"
 
 #include <android/log.h>
-#define CHROMIUM_LOG(args...)  __android_log_print(ANDROID_LOG_INFO, "NfcMessageHandler", args)
+#define NMH_LOG(args...)  __android_log_print(ANDROID_LOG_INFO, "NfcMessageHandler", args)
 
 using namespace android;
 using namespace mozilla;
@@ -20,6 +21,7 @@ static const char* kChangeRFStateRequest = "changeRFState";
 static const char* kReadNDEFRequest = "readNDEF";
 static const char* kWriteNDEFRequest = "writeNDEF";
 static const char* kMakeReadOnlyRequest = "makeReadOnly";
+static const char* kFormatRequest = "format";
 static const char* kConnectRequest = "connect";
 static const char* kCloseRequest = "close";
 
@@ -27,6 +29,7 @@ static const char* kChangeRFStateResponse = "ChangeRFStateResponse";
 static const char* kReadNDEFResponse = "ReadNDEFResponse";
 static const char* kWriteNDEFResponse = "WriteNDEFResponse";
 static const char* kMakeReadOnlyResponse = "MakeReadOnlyResponse";
+static const char* kFormatResponse = "FormatResponse";
 static const char* kConnectResponse = "ConnectResponse";
 static const char* kCloseResponse = "CloseResponse";
 
@@ -52,6 +55,9 @@ NfcMessageHandler::Marshall(Parcel& aParcel, const CommandOptions& aOptions)
   } else if (!strcmp(type, kMakeReadOnlyRequest)) {
     result = MakeReadOnlyRequest(aParcel, aOptions);
     mPendingReqQueue.AppendElement(NfcRequest::MakeReadOnlyReq);
+  } else if (!strcmp(type, kFormatRequest)) {
+    result = FormatRequest(aParcel, aOptions);
+    mPendingReqQueue.AppendElement(NfcRequest::FormatReq);
   } else if (!strcmp(type, kConnectRequest)) {
     result = ConnectRequest(aParcel, aOptions);
     mPendingReqQueue.AppendElement(NfcRequest::ConnectReq);
@@ -69,7 +75,7 @@ bool
 NfcMessageHandler::Unmarshall(const Parcel& aParcel, EventOptions& aOptions)
 {
   bool result;
-  uint32_t parcelSize = htonl(aParcel.readInt32());
+  mozilla::unused << htonl(aParcel.readInt32());  // parcel size
   int32_t type = aParcel.readInt32();
 
   switch (type) {
@@ -117,6 +123,9 @@ NfcMessageHandler::GeneralResponse(const Parcel& aParcel, EventOptions& aOptions
     case NfcRequest::MakeReadOnlyReq:
       type = kMakeReadOnlyResponse;
       break;
+    case NfcRequest::FormatReq:
+      type = kFormatResponse;
+      break;
     case NfcRequest::ConnectReq:
       type = kConnectResponse;
       break;
@@ -124,7 +133,7 @@ NfcMessageHandler::GeneralResponse(const Parcel& aParcel, EventOptions& aOptions
       type = kCloseResponse;
       break;
     default:
-      CHROMIUM_LOG("Nfcd, unknown general response %d", pendingReq);
+      NMH_LOG("Nfcd, unknown general response %d", pendingReq);
       return false;
   }
 
@@ -208,6 +217,15 @@ NfcMessageHandler::MakeReadOnlyRequest(Parcel& aParcel, const CommandOptions& aO
 }
 
 bool
+NfcMessageHandler::FormatRequest(Parcel& aParcel, const CommandOptions& aOptions)
+{
+  aParcel.writeInt32(NfcRequest::FormatReq);
+  aParcel.writeInt32(aOptions.mSessionId);
+  mRequestIdQueue.AppendElement(aOptions.mRequestId);
+  return true;
+}
+
+bool
 NfcMessageHandler::ConnectRequest(Parcel& aParcel, const CommandOptions& aOptions)
 {
   aParcel.writeInt32(NfcRequest::ConnectReq);
@@ -236,7 +254,7 @@ NfcMessageHandler::InitializeNotification(const Parcel& aParcel, EventOptions& a
 
   if (aOptions.mMajorVersion != NFCD_MAJOR_VERSION ||
       aOptions.mMinorVersion != NFCD_MINOR_VERSION) {
-     CHROMIUM_LOG("NFCD version mismatched. majorVersion: %d, minorVersion: %d",
+     NMH_LOG("NFCD version mismatched. majorVersion: %d, minorVersion: %d",
                   aOptions.mMajorVersion, aOptions.mMinorVersion);
   }
 
@@ -248,7 +266,7 @@ NfcMessageHandler::TechDiscoveredNotification(const Parcel& aParcel, EventOption
 {
   aOptions.mType = NS_ConvertUTF8toUTF16(kTechDiscoveredNotification);
   aOptions.mSessionId = aParcel.readInt32();
-
+  aOptions.mIsP2P = aParcel.readInt32();
   int32_t techCount = aParcel.readInt32();
   aOptions.mTechList.AppendElements(
       static_cast<const uint8_t*>(aParcel.readInplace(techCount)), techCount);

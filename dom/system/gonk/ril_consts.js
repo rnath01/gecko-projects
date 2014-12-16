@@ -427,6 +427,7 @@ this.RIL_PREFERRED_NETWORK_TYPE_TO_GECKO = [
 ];
 
 this.GECKO_SUPPORTED_NETWORK_TYPES_DEFAULT = "gsm,wcdma";
+// Index-item pair must be in sync with nsIMobileConnection.MOBILE_NETWORK_TYPE_*
 this.GECKO_SUPPORTED_NETWORK_TYPES = [
   "gsm",
   "wcdma",
@@ -1062,6 +1063,11 @@ this.STK_LOCAL_INFO_NMR_FOR_MULTIPLE_ACCESS_TECH = 0x10;
 this.STK_TIMER_START = 0x00;
 this.STK_TIMER_DEACTIVATE = 0x01;
 this.STK_TMIER_GET_CURRENT_VALUE = 0x02;
+
+// Browser Launch Mode.
+this.STK_BROWSER_MODE_LAUNCH_IF_NOT_ALREADY_LAUNCHED = 0x00;
+this.STK_BROWSER_MODE_USING_EXISTING_BROWSER         = 0x02;
+this.STK_BROWSER_MODE_USING_NEW_BROWSER              = 0x03;
 
 // Browser Termination Cause.
 this.STK_BROWSER_TERMINATION_CAUSE_USER = 0x00;
@@ -2870,6 +2876,7 @@ this.MMI_KS_SC_PUK = "scPuk";
 this.MMI_KS_SC_PUK2 = "scPuk2";
 this.MMI_KS_SC_IMEI = "scImei";
 this.MMI_KS_SC_USSD = "scUssd";
+this.MMI_KS_SC_CALL = "scCall";
 
 // MMI error messages key strings.
 this.MMI_ERROR_KS_ERROR = "emMmiError";
@@ -2899,6 +2906,7 @@ this.MMI_SM_KS_CLIR_DEFAULT_ON_NEXT_CALL_ON = "smClirDefaultOnNextCallOn";
 this.MMI_SM_KS_CLIR_DEFAULT_ON_NEXT_CALL_OFF = "smClirDefaultOnNextCallOff";
 this.MMI_SM_KS_CLIR_DEFAULT_OFF_NEXT_CALL_ON = "smClirDefaultOffNextCallOn";
 this.MMI_SM_KS_CLIR_DEFAULT_OFF_NEXT_CALL_OFF = "smClirDefaultOffNextCallOff";
+this.MMI_SM_KS_CALL_CONTROL = "smCallControl";
 
 // MMI Service class
 this.MMI_KS_SERVICE_CLASS_VOICE = "serviceClassVoice";

@@ -87,7 +87,7 @@ private:
     }
     return NS_OK;
   }
-};
+}; // MacWakeLockListener
 
 // defined in nsCocoaWindow.mm
 extern int32_t             gXULModalLevel;
@@ -294,10 +294,6 @@ nsAppShell::Init()
   ::CFRunLoopAddSource(mCFRunLoop, mCFRunLoopSource, kCFRunLoopCommonModes);
 
   rv = nsBaseAppShell::Init();
-
-#ifndef __LP64__
-  TextInputHandler::InstallPluginKeyEventsHandler();
-#endif
 
   if (!gAppShellMethodsSwizzled) {
     // We should only replace the original terminate: method if we're not
@@ -671,10 +667,6 @@ nsAppShell::Exit(void)
   }
 
   mTerminated = true;
-
-#ifndef __LP64__
-  TextInputHandler::RemovePluginKeyEventsHandler();
-#endif
 
   // Quoting from Apple's doc on the [NSApplication stop:] method (from their
   // doc on the NSApplication class):  "If this method is invoked during a

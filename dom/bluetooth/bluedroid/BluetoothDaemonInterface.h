@@ -12,6 +12,8 @@
 BEGIN_BLUETOOTH_NAMESPACE
 
 class BluetoothDaemonChannel;
+class BluetoothDaemonA2dpInterface;
+class BluetoothDaemonHandsfreeInterface;
 class BluetoothDaemonProtocol;
 class BluetoothDaemonSocketInterface;
 
@@ -125,6 +127,8 @@ private:
   nsTArray<nsRefPtr<BluetoothResultHandler> > mResultHandlerQ;
 
   nsAutoPtr<BluetoothDaemonSocketInterface> mSocketInterface;
+  nsAutoPtr<BluetoothDaemonHandsfreeInterface> mHandsfreeInterface;
+  nsAutoPtr<BluetoothDaemonA2dpInterface> mA2dpInterface;
 };
 
 END_BLUETOOTH_NAMESPACE

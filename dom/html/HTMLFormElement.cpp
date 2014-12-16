@@ -61,6 +61,8 @@
 #include "nsIDOMHTMLButtonElement.h"
 #include "nsSandboxFlags.h"
 
+#include "nsIContentSecurityPolicy.h"
+
 // images
 #include "mozilla/dom/HTMLImageElement.h"
 
@@ -1625,6 +1627,24 @@ HTMLFormElement::GetActionURL(nsIURI** aActionURL,
                               nsIScriptSecurityManager::STANDARD);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  // Check if CSP allows this form-action
+  nsCOMPtr<nsIContentSecurityPolicy> csp;
+  rv = NodePrincipal()->GetCsp(getter_AddRefs(csp));
+  NS_ENSURE_SUCCESS(rv, rv);
+  if (csp) {
+    bool permitsFormAction = true;
+
+    // form-action is only enforced if explicitly defined in the
+    // policy - do *not* consult default-src, see:
+    // http://www.w3.org/TR/CSP2/#directive-default-src
+    rv = csp->Permits(actionURL, nsIContentSecurityPolicy::FORM_ACTION_DIRECTIVE,
+                      true, &permitsFormAction);
+    NS_ENSURE_SUCCESS(rv, rv);
+    if (!permitsFormAction) {
+      rv = NS_ERROR_CSP_FORM_ACTION_VIOLATION;
+    }
+  }
+
   //
   // Assign to the output
   //
@@ -2181,13 +2201,10 @@ HTMLFormElement::GetRequiredRadioCount(const nsAString& aName) const
 }
 
 void
-HTMLFormElement::RadioRequiredChanged(const nsAString& aName,
-                                      nsIFormControl* aRadio)
+HTMLFormElement::RadioRequiredWillChange(const nsAString& aName,
+                                         bool aRequiredAdded)
 {
-  nsCOMPtr<nsIContent> element = do_QueryInterface(aRadio);
-  NS_ASSERTION(element, "radio controls have to be content elements!");
-
-  if (element->HasAttr(kNameSpaceID_None, nsGkAtoms::required)) {
+  if (aRequiredAdded) {
     mRequiredRadioButtonCounts.Put(aName,
                                    mRequiredRadioButtonCounts.Get(aName)+1);
   } else {

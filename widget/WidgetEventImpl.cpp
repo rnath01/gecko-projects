@@ -140,6 +140,8 @@ WidgetEvent::HasIMEEventMessage() const
     case NS_COMPOSITION_END:
     case NS_COMPOSITION_UPDATE:
     case NS_COMPOSITION_CHANGE:
+    case NS_COMPOSITION_COMMIT_AS_IS:
+    case NS_COMPOSITION_COMMIT:
       return true;
     default:
       return false;
@@ -189,8 +191,7 @@ WidgetEvent::IsUsingCoordinates() const
   return !HasKeyEventMessage() && !IsIMERelatedEvent() &&
          !HasPluginActivationEventMessage() &&
          !IsNativeEventDelivererForPlugin() &&
-         !IsContentCommandEvent() &&
-         message != NS_PLUGIN_RESOLUTION_CHANGED;
+         !IsContentCommandEvent();
 }
 
 bool

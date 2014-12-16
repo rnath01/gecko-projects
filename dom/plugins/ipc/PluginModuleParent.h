@@ -16,6 +16,7 @@
 #include "mozilla/plugins/PPluginModuleParent.h"
 #include "mozilla/plugins/PluginMessageUtils.h"
 #include "mozilla/plugins/PluginTypes.h"
+#include "mozilla/TimeStamp.h"
 #include "npapi.h"
 #include "npfunctions.h"
 #include "nsAutoPtr.h"
@@ -26,6 +27,8 @@
 #ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
 #endif
+
+class nsPluginTag;
 
 namespace mozilla {
 namespace dom {
@@ -105,6 +108,10 @@ public:
 
     void ProcessRemoteNativeEventsInInterruptCall();
 
+    nsCString GetHistogramKey() const {
+        return mPluginName + mPluginVersion;
+    }
+
 protected:
     virtual mozilla::ipc::RacyInterruptPolicy
     MediateInterruptRace(const Message& parent, const Message& child) MOZ_OVERRIDE
@@ -114,14 +121,6 @@ protected:
 
     virtual bool
     RecvBackUpXResources(const FileDescriptor& aXSocketFd) MOZ_OVERRIDE;
-
-    virtual bool
-    AnswerNPN_UserAgent(nsCString* userAgent) MOZ_OVERRIDE;
-
-    virtual bool
-    AnswerNPN_GetValue_WithBoolReturn(const NPNVariable& aVariable,
-                                      NPError* aError,
-                                      bool* aBoolVal) MOZ_OVERRIDE;
 
     virtual bool AnswerProcessSomeEvents() MOZ_OVERRIDE;
 
@@ -153,9 +152,6 @@ protected:
 
     virtual bool
     RecvPopCursor() MOZ_OVERRIDE;
-
-    virtual bool
-    RecvGetNativeCursorsSupported(bool* supported) MOZ_OVERRIDE;
 
     virtual bool
     RecvNPN_SetException(const nsCString& aMessage) MOZ_OVERRIDE;
@@ -242,6 +238,9 @@ protected:
 protected:
     void NotifyPluginCrashed();
 
+    bool GetSetting(NPNVariable aVariable);
+    void GetSettings(PluginSettings* aSettings);
+
     bool mIsChrome;
     bool mShutdown;
     bool mClearSiteDataSupported;
@@ -253,6 +252,7 @@ protected:
     nsString mBrowserDumpID;
     nsString mHangID;
     nsRefPtr<nsIObserver> mProfilerObserver;
+    TimeDuration mTimeBlocked;
     nsCString mPluginName;
     nsCString mPluginVersion;
 
@@ -297,7 +297,8 @@ class PluginModuleChromeParent
      * This may or may not launch a plugin child process,
      * and may or may not be very expensive.
      */
-    static PluginLibrary* LoadModule(const char* aFilePath, uint32_t aPluginId);
+    static PluginLibrary* LoadModule(const char* aFilePath, uint32_t aPluginId,
+                                     nsPluginTag* aPluginTag);
 
     virtual ~PluginModuleChromeParent();
 
@@ -311,6 +312,8 @@ class PluginModuleChromeParent
     void
     OnHangUIContinue();
 #endif // XP_WIN
+
+    void CachedSettingChanged();
 
 private:
     virtual void
@@ -360,7 +363,12 @@ private:
     void ShutdownPluginProfiling();
 #endif
 
+    void RegisterSettingsCallbacks();
+    void UnregisterSettingsCallbacks();
+
     virtual bool RecvNotifyContentModuleDestroyed() MOZ_OVERRIDE;
+
+    static void CachedSettingChanged(const char* aPref, void* aModule);
 
     PluginProcessParent* mSubprocess;
     uint32_t mPluginId;
@@ -422,6 +430,8 @@ private:
     DWORD mFlashProcess1;
     DWORD mFlashProcess2;
 #endif
+
+    nsCOMPtr<nsIObserver> mOfflineObserver;
 };
 
 } // namespace plugins

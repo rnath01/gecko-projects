@@ -65,6 +65,7 @@ public:
     , mViewport(0, 0, 0, 0)
     , mExtraResolution(1)
     , mBackgroundColor(0, 0, 0, 0)
+    , mLineScrollAmount(0, 0)
   {
   }
 
@@ -95,7 +96,8 @@ public:
            mUpdateScrollOffset == aOther.mUpdateScrollOffset &&
            mExtraResolution == aOther.mExtraResolution &&
            mBackgroundColor == aOther.mBackgroundColor &&
-           mDoSmoothScroll == aOther.mDoSmoothScroll;
+           mDoSmoothScroll == aOther.mDoSmoothScroll &&
+           mLineScrollAmount == aOther.mLineScrollAmount;
   }
   bool operator!=(const FrameMetrics& aOther) const
   {
@@ -232,8 +234,8 @@ public:
   // The following metrics are all in widget space/device pixels.
   //
 
-  // This is the area within the widget that we're compositing to. It is relative
-  // to the layer tree origin.
+  // This is the area within the widget that we're compositing to. It is in the
+  // same coordinate space as the reference frame for the scrolled frame.
   //
   // This is useful because, on mobile, the viewport and composition dimensions
   // are not always the same. In this case, we calculate the displayport using
@@ -254,11 +256,8 @@ public:
   // space, so each is explained separately.
   //
 
-  // The area of a frame's contents that has been painted, relative to the
-  // viewport. It is in the same coordinate space as |mViewport|. For example,
-  // if it is at 0,0, then it's at the same place at the viewport, which is at
-  // the top-left in the layer, and at the same place as the scroll offset of
-  // the document.
+  // The area of a frame's contents that has been painted, relative to
+  // mCompositionBounds.
   //
   // Note that this is structured in such a way that it doesn't depend on the
   // method layout uses to scroll content.
@@ -514,11 +513,21 @@ public:
     mMayHaveTouchListeners = aMayHaveTouchListeners;
   }
 
+  const LayoutDeviceIntSize& GetLineScrollAmount() const
+  {
+    return mLineScrollAmount;
+  }
+
+  void SetLineScrollAmount(const LayoutDeviceIntSize& size)
+  {
+    mLineScrollAmount = size;
+  }
+
 private:
   // New fields from now on should be made private and old fields should
   // be refactored to be private.
 
-  // Whether or not this frame may have a touch listeners.
+  // Whether or not this frame may have touch or scroll wheel listeners.
   bool mMayHaveTouchListeners;
 
   // Whether or not this frame may have a touch caret.
@@ -605,6 +614,9 @@ private:
   // This is empty unless this is a scrollable layer and the
   // apz.printtree pref is turned on.
   nsCString mContentDescription;
+
+  // The value of GetLineScrollAmount(), for scroll frames.
+  LayoutDeviceIntSize mLineScrollAmount;
 };
 
 /**

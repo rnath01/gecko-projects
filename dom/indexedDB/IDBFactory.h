@@ -42,6 +42,7 @@ namespace indexedDB {
 class BackgroundFactoryChild;
 class FactoryRequestParams;
 class IDBOpenDBRequest;
+class LoggingInfo;
 
 class IDBFactory MOZ_FINAL
   : public nsISupports
@@ -72,6 +73,8 @@ class IDBFactory MOZ_FINAL
 #ifdef DEBUG
   PRThread* mOwningThread;
 #endif
+
+  uint64_t mInnerWindowID;
 
   bool mBackgroundActorFailed;
   bool mPrivateBrowsingMode;
@@ -110,6 +113,9 @@ public:
     mBackgroundActor = nullptr;
   }
 
+  void
+  IncrementParentLoggingRequestSerialNumber();
+
   nsPIDOMWindow*
   GetParentObject() const
   {
@@ -129,6 +135,17 @@ public:
 
     return mPrincipalInfo;
   }
+
+  uint64_t
+  InnerWindowID() const
+  {
+    AssertIsOnOwningThread();
+
+    return mInnerWindowID;
+  }
+
+  bool
+  IsChrome() const;
 
   already_AddRefed<IDBOpenDBRequest>
   Open(const nsAString& aName,
@@ -195,7 +212,8 @@ private:
                ErrorResult& aRv);
 
   nsresult
-  BackgroundActorCreated(PBackgroundChild* aBackgroundActor);
+  BackgroundActorCreated(PBackgroundChild* aBackgroundActor,
+                         const LoggingInfo& aLoggingInfo);
 
   void
   BackgroundActorFailed();

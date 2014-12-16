@@ -76,6 +76,16 @@ static PRLibrary *sGtkLib = nullptr;
 #endif
 
 #ifdef XP_WIN
+// Hooking CreateFileW for protected-mode magic
+static WindowsDllInterceptor sKernel32Intercept;
+typedef HANDLE (WINAPI *CreateFileWPtr)(LPCWSTR fname, DWORD access,
+                                        DWORD share,
+                                        LPSECURITY_ATTRIBUTES security,
+                                        DWORD creation, DWORD flags,
+                                        HANDLE ftemplate);
+static CreateFileWPtr sCreateFileWStub = nullptr;
+static WCHAR* sReplacementConfigFile;
+
 // Used with fix for flash fullscreen window loosing focus.
 static bool gDelayFlashFocusReplyUntilEval = false;
 // Used to fix GetWindowInfo problems with internal flash settings dialogs
@@ -216,6 +226,18 @@ PluginModuleChild::InitForContent(base::ProcessHandle aParentProcessHandle,
     mQuirks = GetChrome()->mQuirks;
     mFunctions = GetChrome()->mFunctions;
 
+    return true;
+}
+
+bool
+PluginModuleChild::RecvDisableFlashProtectedMode()
+{
+    MOZ_ASSERT(mIsChrome);
+#ifdef XP_WIN
+    HookProtectedMode();
+#else
+    MOZ_ASSERT(false, "Should not be called");
+#endif
     return true;
 }
 
@@ -821,10 +843,7 @@ PluginModuleChild::CleanUp()
 const char*
 PluginModuleChild::GetUserAgent()
 {
-    if (mUserAgent.IsVoid() && !CallNPN_UserAgent(&mUserAgent))
-        return nullptr;
-
-    return NullableStringGet(mUserAgent);
+    return NullableStringGet(Settings().userAgent());
 }
 
 //-----------------------------------------------------------------------------
@@ -1120,18 +1139,21 @@ _getvalue(NPP aNPP,
 #endif
             return NPERR_GENERIC_ERROR;
 
-        case NPNVjavascriptEnabledBool: // Intentional fall-through
-        case NPNVasdEnabledBool: // Intentional fall-through
-        case NPNVisOfflineBool: // Intentional fall-through
-        case NPNVSupportsXEmbedBool: // Intentional fall-through
-        case NPNVSupportsWindowless: { // Intentional fall-through
-            NPError result;
-            bool value;
-            PluginModuleChild::GetChrome()->
-                CallNPN_GetValue_WithBoolReturn(aVariable, &result, &value);
-            *(NPBool*)aValue = value ? true : false;
-            return result;
-        }
+        case NPNVjavascriptEnabledBool:
+            *(NPBool*)aValue = PluginModuleChild::GetChrome()->Settings().javascriptEnabled();
+            return NPERR_NO_ERROR;
+        case NPNVasdEnabledBool:
+            *(NPBool*)aValue = PluginModuleChild::GetChrome()->Settings().asdEnabled();
+            return NPERR_NO_ERROR;
+        case NPNVisOfflineBool:
+            *(NPBool*)aValue = PluginModuleChild::GetChrome()->Settings().isOffline();
+            return NPERR_NO_ERROR;
+        case NPNVSupportsXEmbedBool:
+            *(NPBool*)aValue = PluginModuleChild::GetChrome()->Settings().supportsXembed();
+            return NPERR_NO_ERROR;
+        case NPNVSupportsWindowless:
+            *(NPBool*)aValue = PluginModuleChild::GetChrome()->Settings().supportsWindowless();
+            return NPERR_NO_ERROR;
 #if defined(MOZ_WIDGET_GTK)
         case NPNVxDisplay: {
             if (aNPP) {
@@ -1835,6 +1857,13 @@ _urlredirectresponse(NPP instance, void* notifyData, NPBool allow)
 //-----------------------------------------------------------------------------
 
 bool
+PluginModuleChild::RecvSettingChanged(const PluginSettings& aSettings)
+{
+    mCachedSettings = aSettings;
+    return true;
+}
+
+bool
 PluginModuleChild::AnswerNP_GetEntryPoints(NPError* _retval)
 {
     PLUGIN_LOG_DEBUG_METHOD;
@@ -1852,11 +1881,13 @@ PluginModuleChild::AnswerNP_GetEntryPoints(NPError* _retval)
 }
 
 bool
-PluginModuleChild::AnswerNP_Initialize(NPError* _retval)
+PluginModuleChild::AnswerNP_Initialize(const PluginSettings& aSettings, NPError* _retval)
 {
     PLUGIN_LOG_DEBUG_METHOD;
     AssertPluginThread();
     MOZ_ASSERT(mIsChrome);
+
+    mCachedSettings = aSettings;
 
 #ifdef OS_WIN
     SetEventHooks();
@@ -1878,9 +1909,99 @@ PluginModuleChild::AnswerNP_Initialize(NPError* _retval)
 #else
 #  error Please implement me for your platform
 #endif
+
+#ifdef XP_WIN
+    CleanupProtectedModeHook();
+#endif
 }
 
 #if defined(XP_WIN)
+
+HANDLE WINAPI
+CreateFileHookFn(LPCWSTR fname, DWORD access, DWORD share,
+                 LPSECURITY_ATTRIBUTES security, DWORD creation, DWORD flags,
+                 HANDLE ftemplate)
+{
+    static const WCHAR kConfigFile[] = L"mms.cfg";
+    static const size_t kConfigLength = ArrayLength(kConfigFile) - 1;
+
+    while (true) { // goto out, in sheep's clothing
+        size_t len = wcslen(fname);
+        if (len < kConfigLength) {
+            break;
+        }
+        if (wcscmp(fname + len - kConfigLength, kConfigFile) != 0) {
+            break;
+        }
+
+        // This is the config file we want to rewrite
+        WCHAR tempPath[MAX_PATH+1];
+        if (GetTempPathW(MAX_PATH, tempPath) == 0) {
+            break;
+        }
+        WCHAR tempFile[MAX_PATH+1];
+        if (GetTempFileNameW(tempPath, L"fx", 0, tempFile) == 0) {
+            break;
+        }
+        HANDLE replacement =
+            sCreateFileWStub(tempFile, GENERIC_READ | GENERIC_WRITE, share,
+                             security, TRUNCATE_EXISTING,
+                             FILE_ATTRIBUTE_TEMPORARY,
+                             NULL);
+        if (replacement == INVALID_HANDLE_VALUE) {
+            break;
+        }
+
+        HANDLE original = sCreateFileWStub(fname, access, share, security,
+                                           creation, flags, ftemplate);
+        if (original != INVALID_HANDLE_VALUE) {
+            // copy original to replacement
+            static const size_t kBufferSize = 1024;
+            char buffer[kBufferSize];
+            DWORD bytes;
+            while (ReadFile(original, buffer, kBufferSize, &bytes, NULL)) {
+                if (bytes == 0) {
+                    break;
+                }
+                DWORD wbytes;
+                WriteFile(replacement, buffer, bytes, &wbytes, NULL);
+                if (bytes < kBufferSize) {
+                    break;
+                }
+            }
+            CloseHandle(original);
+        }
+        static const char kSettingString[] = "\nProtectedMode=0\n";
+        DWORD wbytes;
+        WriteFile(replacement, static_cast<const void*>(kSettingString),
+                  sizeof(kSettingString) - 1, &wbytes, NULL);
+        SetFilePointer(replacement, 0, NULL, FILE_BEGIN);
+        sReplacementConfigFile = _wcsdup(tempFile);
+        return replacement;
+    }
+    return sCreateFileWStub(fname, access, share, security, creation, flags,
+                            ftemplate);
+}
+
+void
+PluginModuleChild::HookProtectedMode()
+{
+    sKernel32Intercept.Init("kernel32.dll");
+    sKernel32Intercept.AddHook("CreateFileW",
+                               reinterpret_cast<intptr_t>(CreateFileHookFn),
+                               (void**) &sCreateFileWStub);
+}
+
+void
+PluginModuleChild::CleanupProtectedModeHook()
+{
+    if (sReplacementConfigFile) {
+        DeleteFile(sReplacementConfigFile);
+        free(sReplacementConfigFile);
+        sReplacementConfigFile = nullptr;
+    }
+}
+
 BOOL WINAPI
 PMCGetWindowInfoHook(HWND hWnd, PWINDOWINFO pwi)
 {
@@ -2361,7 +2482,37 @@ PluginModuleChild::ProcessNativeEvents() {
 #endif
 
 bool
-PluginModuleChild::AnswerGeckoGetProfile(nsCString* aProfile) {
+PluginModuleChild::RecvStartProfiler(const uint32_t& aEntries,
+                                     const double& aInterval,
+                                     const nsTArray<nsCString>& aFeatures,
+                                     const nsTArray<nsCString>& aThreadNameFilters)
+{
+    nsTArray<const char*> featureArray;
+    for (size_t i = 0; i < aFeatures.Length(); ++i) {
+        featureArray.AppendElement(aFeatures[i].get());
+    }
+
+    nsTArray<const char*> threadNameFilterArray;
+    for (size_t i = 0; i < aThreadNameFilters.Length(); ++i) {
+        threadNameFilterArray.AppendElement(aThreadNameFilters[i].get());
+    }
+
+    profiler_start(aEntries, aInterval, featureArray.Elements(), featureArray.Length(),
+                   threadNameFilterArray.Elements(), threadNameFilterArray.Length());
+
+    return true;
+}
+
+bool
+PluginModuleChild::RecvStopProfiler()
+{
+    profiler_stop();
+    return true;
+}
+
+bool
+PluginModuleChild::AnswerGetProfile(nsCString* aProfile)
+{
     char* profile = profiler_get_profile();
     if (profile != nullptr) {
         *aProfile = nsCString(profile, strlen(profile));
@@ -2371,4 +2522,3 @@ PluginModuleChild::AnswerGeckoGetProfile(nsCString* aProfile) {
     }
     return true;
 }
-

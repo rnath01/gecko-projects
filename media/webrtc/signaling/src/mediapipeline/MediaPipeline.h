@@ -366,7 +366,6 @@ public:
                         nsCOMPtr<nsIEventTarget> main_thread,
                         nsCOMPtr<nsIEventTarget> sts_thread,
                         DOMMediaStream *domstream,
-                        int pipeline_index, // For PeerConnectionMedia/mPipelines
                         int level,
                         bool is_video,
                         RefPtr<MediaSessionConduit> conduit,
@@ -377,7 +376,6 @@ public:
                     conduit, rtp_transport, rtcp_transport),
       listener_(new PipelineListener(conduit)),
       domstream_(domstream),
-      pipeline_index_(pipeline_index),
       is_video_(is_video)
   {}
 
@@ -387,7 +385,6 @@ public:
   virtual void AttachToTrack(TrackID track_id);
 
   // Index used to refer to this before we know the TrackID
-  virtual TrackID pipeline_index() const { return pipeline_index_; }
   // Note: unlike MediaPipeline::trackid(), this is threadsafe
   // Not set until first media is received
   virtual TrackID const trackid_locked() { return listener_->trackid(); }
@@ -463,23 +460,20 @@ public:
 
     // Implement MediaStreamListener
     virtual void NotifyQueuedTrackChanges(MediaStreamGraph* graph, TrackID tid,
-                                          TrackRate rate,
-                                          TrackTicks offset,
+                                          StreamTime offset,
                                           uint32_t events,
                                           const MediaSegment& queued_media) MOZ_OVERRIDE;
     virtual void NotifyPull(MediaStreamGraph* aGraph, StreamTime aDesiredTime) MOZ_OVERRIDE {}
 
     // Implement MediaStreamDirectListener
     virtual void NotifyRealtimeData(MediaStreamGraph* graph, TrackID tid,
-                                    TrackRate rate,
-                                    TrackTicks offset,
+                                    StreamTime offset,
                                     uint32_t events,
                                     const MediaSegment& media) MOZ_OVERRIDE;
 
    private:
     void NewData(MediaStreamGraph* graph, TrackID tid,
-                 TrackRate rate,
-                 TrackTicks offset,
+                 StreamTime offset,
                  uint32_t events,
                  const MediaSegment& media);
 
@@ -487,7 +481,7 @@ public:
                                    TrackRate rate, AudioChunk& chunk);
 #ifdef MOZILLA_INTERNAL_API
     virtual void ProcessVideoChunk(VideoSessionConduit *conduit,
-                                   TrackRate rate, VideoChunk& chunk);
+                                   VideoChunk& chunk);
 #endif
     RefPtr<MediaSessionConduit> conduit_;
 
@@ -524,7 +518,6 @@ public:
  private:
   RefPtr<PipelineListener> listener_;
   DOMMediaStream *domstream_;
-  int pipeline_index_; // for lookups in LocalSourceStreamInfo::mPipelines;
   bool is_video_;
 };
 
@@ -626,8 +619,7 @@ class MediaPipelineReceiveAudio : public MediaPipelineReceive {
 
     // Implement MediaStreamListener
     virtual void NotifyQueuedTrackChanges(MediaStreamGraph* graph, TrackID tid,
-                                          TrackRate rate,
-                                          TrackTicks offset,
+                                          StreamTime offset,
                                           uint32_t events,
                                           const MediaSegment& queued_media) MOZ_OVERRIDE {}
     virtual void NotifyPull(MediaStreamGraph* graph, StreamTime desired_time) MOZ_OVERRIDE;
@@ -716,8 +708,7 @@ class MediaPipelineReceiveVideo : public MediaPipelineReceive {
 
     // Implement MediaStreamListener
     virtual void NotifyQueuedTrackChanges(MediaStreamGraph* graph, TrackID tid,
-                                          TrackRate rate,
-                                          TrackTicks offset,
+                                          StreamTime offset,
                                           uint32_t events,
                                           const MediaSegment& queued_media) MOZ_OVERRIDE {}
     virtual void NotifyPull(MediaStreamGraph* graph, StreamTime desired_time) MOZ_OVERRIDE;

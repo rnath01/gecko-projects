@@ -83,7 +83,8 @@ public:
       mScriptTextLength(0),
       mJSVersion(aVersion),
       mLineNo(1),
-      mCORSMode(aCORSMode)
+      mCORSMode(aCORSMode),
+      mReferrerPolicy(mozilla::net::RP_Default)
   {
   }
 
@@ -116,6 +117,7 @@ public:
   nsAutoCString mURL;   // Keep the URI's filename alive during off thread parsing.
   int32_t mLineNo;
   const CORSMode mCORSMode;
+  mozilla::net::ReferrerPolicy mReferrerPolicy;
 };
 
 // The nsScriptLoadRequest is passed as the context to necko, and thus
@@ -340,7 +342,8 @@ nsScriptLoader::StartLoad(nsScriptLoadRequest *aRequest, const nsAString &aType,
     httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Accept"),
                                   NS_LITERAL_CSTRING("*/*"),
                                   false);
-    httpChannel->SetReferrer(mDocument->GetDocumentURI());
+    httpChannel->SetReferrerWithPolicy(mDocument->GetDocumentURI(),
+                                       aRequest->mReferrerPolicy);
   }
 
   nsCOMPtr<nsILoadContext> loadContext(do_QueryInterface(docshell));
@@ -435,6 +438,8 @@ static bool
 CSPAllowsInlineScript(nsIScriptElement *aElement, nsIDocument *aDocument)
 {
   nsCOMPtr<nsIContentSecurityPolicy> csp;
+  // Note: For imports NodePrincipal and the principal of the master are
+  // the same.
   nsresult rv = aDocument->NodePrincipal()->GetCsp(getter_AddRefs(csp));
   NS_ENSURE_SUCCESS(rv, false);
 
@@ -594,6 +599,9 @@ nsScriptLoader::ProcessScriptElement(nsIScriptElement *aElement)
                              &nsIScriptElement::FireErrorEvent));
       return false;
     }
+
+    // Double-check that the preload matches what we're asked to load now.
+    mozilla::net::ReferrerPolicy ourRefPolicy = mDocument->GetReferrerPolicy();
     CORSMode ourCORSMode = aElement->GetCORSMode();
     nsTArray<PreloadInfo>::index_type i =
       mPreloads.IndexOf(scriptURI.get(), 0, PreloadURIComparator());
@@ -610,7 +618,8 @@ nsScriptLoader::ProcessScriptElement(nsIScriptElement *aElement)
       nsAutoString elementCharset;
       aElement->GetScriptCharset(elementCharset);
       if (elementCharset.Equals(preloadCharset) &&
-          ourCORSMode == request->mCORSMode) {
+          ourCORSMode == request->mCORSMode &&
+          ourRefPolicy == request->mReferrerPolicy) {
         rv = CheckContentPolicy(mDocument, aElement, request->mURI, type);
         NS_ENSURE_SUCCESS(rv, false);
       } else {
@@ -625,6 +634,7 @@ nsScriptLoader::ProcessScriptElement(nsIScriptElement *aElement)
       request->mURI = scriptURI;
       request->mIsInline = false;
       request->mLoading = true;
+      request->mReferrerPolicy = ourRefPolicy;
 
       // set aScriptFromHead to false so we don't treat non preloaded scripts as
       // blockers for full page load. See bug 792438.
@@ -1040,6 +1050,9 @@ nsScriptLoader::FillCompileOptionsForRequest(const AutoJSAPI &jsapi,
   aOptions->setFileAndLine(aRequest->mURL.get(), aRequest->mLineNo);
   aOptions->setVersion(JSVersion(aRequest->mJSVersion));
   aOptions->setCompileAndGo(JS_IsGlobalObject(aScopeChain));
+  // We only need the setNoScriptRval bit when compiling off-thread here, since
+  // otherwise nsJSUtils::EvaluateString will set it up for us.
+  aOptions->setNoScriptRval(true);
   if (aRequest->mHasSourceMapURL) {
     aOptions->setSourceMapURL(aRequest->mSourceMapURL.get());
   }
@@ -1556,7 +1569,8 @@ void
 nsScriptLoader::PreloadURI(nsIURI *aURI, const nsAString &aCharset,
                            const nsAString &aType,
                            const nsAString &aCrossOrigin,
-                           bool aScriptFromHead)
+                           bool aScriptFromHead,
+                           const mozilla::net::ReferrerPolicy aReferrerPolicy)
 {
   // Check to see if scripts has been turned off.
   if (!mEnabled || !mDocument->IsScriptEnabled()) {
@@ -1569,6 +1583,8 @@ nsScriptLoader::PreloadURI(nsIURI *aURI, const nsAString &aCharset,
   request->mURI = aURI;
   request->mIsInline = false;
   request->mLoading = true;
+  request->mReferrerPolicy = aReferrerPolicy;
+
   nsresult rv = StartLoad(request, aType, aScriptFromHead);
   if (NS_FAILED(rv)) {
     return;

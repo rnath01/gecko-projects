@@ -35,6 +35,19 @@ const {FramerateActor} = require("devtools/server/actors/framerate");
 const DEFAULT_TIMELINE_DATA_PULL_TIMEOUT = 200; // ms
 
 /**
+ * Type representing an array of numbers as strings, serialized fast(er).
+ * http://jsperf.com/json-stringify-parse-vs-array-join-split/3
+ *
+ * XXX: It would be nice if on local connections (only), we could just *give*
+ * the array directly to the front, instead of going through all this
+ * serialization redundancy.
+ */
+protocol.types.addType("array-of-numbers-as-strings", {
+  write: (v) => v.join(","),
+  read: (v) => v.split(",")
+});
+
+/**
  * The timeline actor pops and forwards timeline markers registered in docshells.
  */
 let TimelineActor = exports.TimelineActor = protocol.ActorClass({
@@ -72,7 +85,7 @@ let TimelineActor = exports.TimelineActor = protocol.ActorClass({
     "ticks" : {
       type: "ticks",
       delta: Arg(0, "number"),
-      timestamps: Arg(1, "array:number")
+      timestamps: Arg(1, "array-of-numbers-as-strings")
     }
   },
 
@@ -158,7 +171,6 @@ let TimelineActor = exports.TimelineActor = protocol.ActorClass({
     }
 
     if (markers.length > 0) {
-      this._postProcessMarkers(markers);
       events.emit(this, "markers", markers, endTime);
     }
     if (this._memoryActor) {
@@ -171,25 +183,6 @@ let TimelineActor = exports.TimelineActor = protocol.ActorClass({
     this._dataPullTimeout = setTimeout(() => {
       this._pullTimelineData();
     }, DEFAULT_TIMELINE_DATA_PULL_TIMEOUT);
-  },
-
-  /**
-   * Some markers need post processing.
-   * We will eventually do that platform side: bug 1069661
-   */
-  _postProcessMarkers: function(m) {
-    m.forEach(m => {
-      // A marker named "ConsoleTime:foobar" needs
-      // to be renamed "ConsoleTime".
-      let split = m.name.match(/ConsoleTime:(.*)/);
-      if (split && split.length > 0) {
-        if (!m.detail) {
-          m.detail = {}
-        }
-        m.detail.causeName = split[1];
-        m.name = "ConsoleTime";
-      }
-    });
   },
 
   /**
@@ -261,7 +254,14 @@ let TimelineActor = exports.TimelineActor = protocol.ActorClass({
     }
 
     clearTimeout(this._dataPullTimeout);
-  }, {}),
+    return this.docShells[0].now();
+  }, {
+    response: {
+      // Set as possibly nullable due to the end time possibly being
+      // undefined during destruction
+      value: RetVal("nullable:number")
+    }
+  }),
 
   /**
    * When a new window becomes available in the tabActor, start recording its

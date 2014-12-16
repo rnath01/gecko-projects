@@ -24,6 +24,17 @@ function dumpSdp(test) {
     dump("ERROR: SDP answer: " + test._remote_answer.sdp.replace(/[\r]/g, ''));
   }
 
+  if ((test.pcLocal) && (typeof test.pcLocal._local_ice_candidates !== 'undefined')) {
+    dump("pcLocal._local_ice_candidates: " + JSON.stringify(test.pcLocal._local_ice_candidates) + "\n");
+    dump("pcLocal._remote_ice_candidates: " + JSON.stringify(test.pcLocal._remote_ice_candidates) + "\n");
+    dump("pcLocal._ice_candidates_to_add: " + JSON.stringify(test.pcLocal._ice_candidates_to_add) + "\n");
+  }
+  if ((test.pcRemote) && (typeof test.pcRemote._local_ice_candidates !== 'undefined')) {
+    dump("pcRemote._local_ice_candidates: " + JSON.stringify(test.pcRemote._local_ice_candidates) + "\n");
+    dump("pcRemote._remote_ice_candidates: " + JSON.stringify(test.pcRemote._remote_ice_candidates) + "\n");
+    dump("pcRemote._ice_candidates_to_add: " + JSON.stringify(test.pcRemote._ice_candidates_to_add) + "\n");
+  }
+
   if ((test.pcLocal) && (typeof test.pcLocal.iceConnectionLog !== 'undefined')) {
     dump("pcLocal ICE connection state log: " + test.pcLocal.iceConnectionLog + "\n");
   }
@@ -56,6 +67,7 @@ var commandsPeerConnection = [
     'PC_SETUP_SIGNALING_CLIENT',
     function (test) {
       if (test.steeplechase) {
+        test.setTimeout(30000);
         test.setupSignalingClient();
         test.registerSignalingCallback("ice_candidate", function (message) {
           var pc = test.pcRemote ? test.pcRemote : test.pcLocal;
@@ -99,7 +111,7 @@ var commandsPeerConnection = [
   [
     'PC_LOCAL_GUM',
     function (test) {
-      test.pcLocal.getAllUserMedia(function () {
+      test.pcLocal.getAllUserMedia(test.pcLocal.constraints, function () {
         test.next();
       });
     }
@@ -107,7 +119,7 @@ var commandsPeerConnection = [
   [
     'PC_REMOTE_GUM',
     function (test) {
-      test.pcRemote.getAllUserMedia(function () {
+      test.pcRemote.getAllUserMedia(test.pcRemote.constraints, function () {
         test.next();
       });
     }
@@ -220,7 +232,7 @@ var commandsPeerConnection = [
     'PC_LOCAL_SANE_LOCAL_SDP',
     function (test) {
       test.pcLocal.verifySdp(test._local_offer, "offer",
-        test._offer_constraints, test._answer_constraints, test._offer_options,
+        test._offer_constraints, test._offer_options,
         function(trickle) {
           test.pcLocal.localRequiresTrickleIce = trickle;
         });
@@ -231,7 +243,7 @@ var commandsPeerConnection = [
     'PC_REMOTE_SANE_REMOTE_SDP',
     function (test) {
       test.pcRemote.verifySdp(test._local_offer, "offer",
-        test._offer_constraints, test._answer_constraints, test._offer_options,
+        test._offer_constraints, test._offer_options,
         function (trickle) {
           test.pcRemote.remoteRequiresTrickleIce = trickle;
         });
@@ -344,7 +356,7 @@ var commandsPeerConnection = [
     'PC_REMOTE_SANE_LOCAL_SDP',
     function (test) {
       test.pcRemote.verifySdp(test._remote_answer, "answer",
-        test._offer_constraints, test._answer_constraints, test._offer_options,
+        test._offer_constraints, test._offer_options,
         function (trickle) {
           test.pcRemote.localRequiresTrickleIce = trickle;
         });
@@ -355,7 +367,7 @@ var commandsPeerConnection = [
     'PC_LOCAL_SANE_REMOTE_SDP',
     function (test) {
       test.pcLocal.verifySdp(test._remote_answer, "answer",
-        test._offer_constraints, test._answer_constraints, test._offer_options,
+        test._offer_constraints, test._offer_options,
         function (trickle) {
           test.pcLocal.remoteRequiresTrickleIce = trickle;
         });
@@ -488,6 +500,50 @@ var commandsPeerConnection = [
     function (test) {
       test.pcRemote.getStats(null, function(stats) {
         test.pcRemote.checkStats(stats, test.steeplechase);
+        test.next();
+      });
+    }
+  ],
+  [
+    'PC_LOCAL_CHECK_ICE_CONNECTION_TYPE',
+    function (test) {
+      test.pcLocal.getStats(null, function(stats) {
+        test.pcLocal.checkStatsIceConnectionType(stats);
+        test.next();
+      });
+    }
+  ],
+  [
+    'PC_REMOTE_CHECK_ICE_CONNECTION_TYPE',
+    function (test) {
+      test.pcRemote.getStats(null, function(stats) {
+        test.pcRemote.checkStatsIceConnectionType(stats);
+        test.next();
+      });
+    }
+  ],
+  [
+    'PC_LOCAL_CHECK_ICE_CONNECTIONS',
+    function (test) {
+      test.pcLocal.getStats(null, function(stats) {
+        test.pcLocal.checkStatsIceConnections(stats,
+                                              test._offer_constraints,
+                                              test._offer_options,
+                                              0,
+                                              test.originalAnswer);
+        test.next();
+      });
+    }
+  ],
+  [
+    'PC_REMOTE_CHECK_ICE_CONNECTIONS',
+    function (test) {
+      test.pcRemote.getStats(null, function(stats) {
+        test.pcRemote.checkStatsIceConnections(stats,
+                                               test._offer_constraints,
+                                               test._offer_options,
+                                               0,
+                                               test.originalAnswer);
         test.next();
       });
     }
@@ -698,7 +754,7 @@ var commandsDataChannel = [
   [
     'PC_LOCAL_GUM',
     function (test) {
-      test.pcLocal.getAllUserMedia(function () {
+      test.pcLocal.getAllUserMedia(test.pcLocal.constraints, function () {
         test.next();
       });
     }
@@ -722,7 +778,7 @@ var commandsDataChannel = [
   [
     'PC_REMOTE_GUM',
     function (test) {
-      test.pcRemote.getAllUserMedia(function () {
+      test.pcRemote.getAllUserMedia(test.pcRemote.constraints, function () {
       test.next();
       });
     }
@@ -837,7 +893,7 @@ var commandsDataChannel = [
     'PC_LOCAL_SANE_LOCAL_SDP',
     function (test) {
       test.pcLocal.verifySdp(test._local_offer, "offer",
-        test._offer_constraints, test._answer_constraints, test._offer_options,
+        test._offer_constraints, test._offer_options,
         function(trickle) {
           test.pcLocal.localRequiresTrickleIce = trickle;
         });
@@ -848,7 +904,7 @@ var commandsDataChannel = [
     'PC_REMOTE_SANE_REMOTE_SDP',
     function (test) {
       test.pcRemote.verifySdp(test._local_offer, "offer",
-        test._offer_constraints, test._answer_constraints, test._offer_options,
+        test._offer_constraints, test._offer_options,
         function (trickle) {
           test.pcRemote.remoteRequiresTrickleIce = trickle;
         });
@@ -941,7 +997,7 @@ var commandsDataChannel = [
     'PC_REMOTE_SANE_LOCAL_SDP',
     function (test) {
       test.pcRemote.verifySdp(test._remote_answer, "answer",
-        test._offer_constraints, test._answer_constraints, test._offer_options,
+        test._offer_constraints, test._offer_options,
         function (trickle) {
           test.pcRemote.localRequiresTrickleIce = trickle;
         });
@@ -952,7 +1008,7 @@ var commandsDataChannel = [
     'PC_LOCAL_SANE_REMOTE_SDP',
     function (test) {
       test.pcLocal.verifySdp(test._remote_answer, "answer",
-        test._offer_constraints, test._answer_constraints, test._offer_options,
+        test._offer_constraints, test._offer_options,
         function (trickle) {
           test.pcLocal.remoteRequiresTrickleIce = trickle;
         });
@@ -1095,6 +1151,32 @@ var commandsDataChannel = [
     'PC_REMOTE_CHECK_MEDIA_FLOW_PRESENT',
     function (test) {
       test.pcRemote.checkMediaFlowPresent(function () {
+        test.next();
+      });
+    }
+  ],
+  [
+    'PC_LOCAL_CHECK_ICE_CONNECTIONS',
+    function (test) {
+      test.pcLocal.getStats(null, function(stats) {
+        test.pcLocal.checkStatsIceConnections(stats,
+                                              test._offer_constraints,
+                                              test._offer_options,
+                                              1,
+                                              test.originalAnswer);
+        test.next();
+      });
+    }
+  ],
+  [
+    'PC_REMOTE_CHECK_ICE_CONNECTIONS',
+    function (test) {
+      test.pcRemote.getStats(null, function(stats) {
+        test.pcRemote.checkStatsIceConnections(stats,
+                                               test._offer_constraints,
+                                               test._offer_options,
+                                               1,
+                                               test.originalAnswer);
         test.next();
       });
     }

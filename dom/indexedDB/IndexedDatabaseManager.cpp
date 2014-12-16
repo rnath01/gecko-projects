@@ -32,11 +32,13 @@
 #include "mozilla/storage.h"
 #include "nsContentUtils.h"
 #include "nsThreadUtils.h"
+#include "prlog.h"
 
 #include "IDBEvents.h"
 #include "IDBFactory.h"
 #include "IDBKeyRange.h"
 #include "IDBRequest.h"
+#include "ProfilerHelpers.h"
 
 // Bindings for ResolveConstructors
 #include "mozilla/dom/IDBCursorBinding.h"
@@ -80,7 +82,8 @@ public:
     AssertIsOnIOThread();
 
     return !mPersistentStorageFileManagers.IsEmpty() ||
-           !mTemporaryStorageFileManagers.IsEmpty();
+           !mTemporaryStorageFileManagers.IsEmpty() ||
+           !mDefaultStorageFileManagers.IsEmpty();
   }
 
   void
@@ -105,11 +108,27 @@ private:
 
   nsTArray<nsRefPtr<FileManager> > mPersistentStorageFileManagers;
   nsTArray<nsRefPtr<FileManager> > mTemporaryStorageFileManagers;
+  nsTArray<nsRefPtr<FileManager> > mDefaultStorageFileManagers;
 };
 
 namespace {
 
-const char kTestingPref[] = "dom.indexedDB.testing";
+#define IDB_PREF_BRANCH_ROOT "dom.indexedDB."
+
+const char kTestingPref[] = IDB_PREF_BRANCH_ROOT "testing";
+
+#define IDB_PREF_LOGGING_BRANCH_ROOT IDB_PREF_BRANCH_ROOT "logging."
+
+const char kPrefLoggingEnabled[] = IDB_PREF_LOGGING_BRANCH_ROOT "enabled";
+const char kPrefLoggingDetails[] = IDB_PREF_LOGGING_BRANCH_ROOT "details";
+
+#if defined(DEBUG) || defined(MOZ_ENABLE_PROFILER_SPS)
+const char kPrefLoggingProfiler[] =
+  IDB_PREF_LOGGING_BRANCH_ROOT "profiler-marks";
+#endif
+
+#undef IDB_PREF_LOGGING_BRANCH_ROOT
+#undef IDB_PREF_BRANCH_ROOT
 
 mozilla::StaticRefPtr<IndexedDatabaseManager> gDBManager;
 
@@ -178,16 +197,6 @@ private:
   bool mWaiting;
 };
 
-struct MOZ_STACK_CLASS InvalidateInfo
-{
-  InvalidateInfo(PersistenceType aPersistenceType, const nsACString& aPattern)
-  : persistenceType(aPersistenceType), pattern(aPattern)
-  { }
-
-  PersistenceType persistenceType;
-  const nsACString& pattern;
-};
-
 void
 TestingPrefChangedCallback(const char* aPrefName, void* aClosure)
 {
@@ -213,6 +222,13 @@ IndexedDatabaseManager::~IndexedDatabaseManager()
 
 bool IndexedDatabaseManager::sIsMainProcess = false;
 bool IndexedDatabaseManager::sFullSynchronousMode = false;
+
+PRLogModuleInfo* IndexedDatabaseManager::sLoggingModule;
+
+Atomic<IndexedDatabaseManager::LoggingMode>
+  IndexedDatabaseManager::sLoggingMode(
+    IndexedDatabaseManager::Logging_Disabled);
+
 mozilla::Atomic<bool> IndexedDatabaseManager::sLowDiskSpaceMode(false);
 
 // static
@@ -228,6 +244,10 @@ IndexedDatabaseManager::GetOrCreate()
 
   if (!gDBManager) {
     sIsMainProcess = XRE_GetProcessType() == GeckoProcessType_Default;
+
+    if (!sLoggingModule) {
+      sLoggingModule = PR_NewLogModule("IndexedDB");
+    }
 
     if (sIsMainProcess && Preferences::GetBool("disk_space_watcher.enabled", false)) {
       // See if we're starting up in low disk space conditions.
@@ -308,6 +328,15 @@ IndexedDatabaseManager::Init()
   // hit.
   sFullSynchronousMode = Preferences::GetBool("dom.indexedDB.fullSynchronous");
 
+  Preferences::RegisterCallback(LoggingModePrefChangedCallback,
+                                kPrefLoggingDetails);
+#ifdef MOZ_ENABLE_PROFILER_SPS
+  Preferences::RegisterCallback(LoggingModePrefChangedCallback,
+                                kPrefLoggingProfiler);
+#endif
+  Preferences::RegisterCallbackAndCall(LoggingModePrefChangedCallback,
+                                       kPrefLoggingEnabled);
+
   return NS_OK;
 }
 
@@ -321,6 +350,15 @@ IndexedDatabaseManager::Destroy()
   }
 
   Preferences::UnregisterCallback(TestingPrefChangedCallback, kTestingPref);
+
+  Preferences::UnregisterCallback(LoggingModePrefChangedCallback,
+                                  kPrefLoggingDetails);
+#ifdef MOZ_ENABLE_PROFILER_SPS
+  Preferences::UnregisterCallback(LoggingModePrefChangedCallback,
+                                  kPrefLoggingProfiler);
+#endif
+  Preferences::UnregisterCallback(LoggingModePrefChangedCallback,
+                                  kPrefLoggingEnabled);
 
   delete this;
 }
@@ -366,7 +404,7 @@ IndexedDatabaseManager::FireWindowOnError(nsPIDOMWindow* aOwner,
 
   ThreadsafeAutoJSContext cx;
   RootedDictionary<ErrorEventInit> init(cx);
-  request->FillScriptErrorEvent(init);
+  request->GetCallerLocation(init.mFilename, &init.mLineno);
 
   init.mMessage = errorName;
   init.mCancelable = true;
@@ -464,7 +502,7 @@ IndexedDatabaseManager::DefineIndexedDB(JSContext* aCx,
 
   JS::Rooted<JS::Value> indexedDB(aCx);
   js::AssertSameCompartment(aCx, aGlobal);
-  if (!WrapNewBindingObject(aCx, factory, &indexedDB)) {
+  if (!GetOrCreateDOMReflector(aCx, factory, &indexedDB)) {
     return false;
   }
 
@@ -499,7 +537,30 @@ IndexedDatabaseManager::InLowDiskSpaceMode()
                "initialized!");
   return sLowDiskSpaceMode;
 }
-#endif
+
+// static
+IndexedDatabaseManager::LoggingMode
+IndexedDatabaseManager::GetLoggingMode()
+{
+  MOZ_ASSERT(gDBManager,
+             "GetLoggingMode called before IndexedDatabaseManager has been "
+             "initialized!");
+
+  return sLoggingMode;
+}
+
+// static
+PRLogModuleInfo*
+IndexedDatabaseManager::GetLoggingModule()
+{
+  MOZ_ASSERT(gDBManager,
+             "GetLoggingModule called before IndexedDatabaseManager has been "
+             "initialized!");
+
+  return sLoggingModule;
+}
+
+#endif // DEBUG
 
 // static
 bool
@@ -554,66 +615,49 @@ IndexedDatabaseManager::AddFileManager(FileManager* aFileManager)
   info->AddFileManager(aFileManager);
 }
 
-// static
-PLDHashOperator
-IndexedDatabaseManager::InvalidateAndRemoveFileManagers(
-                                             const nsACString& aKey,
-                                             nsAutoPtr<FileManagerInfo>& aValue,
-                                             void* aUserArg)
-{
-  AssertIsOnIOThread();
-  NS_ASSERTION(!aKey.IsEmpty(), "Empty key!");
-  NS_ASSERTION(aValue, "Null pointer!");
-
-  if (!aUserArg) {
-    aValue->InvalidateAllFileManagers();
-    return PL_DHASH_REMOVE;
-  }
-
-  InvalidateInfo* info = static_cast<InvalidateInfo*>(aUserArg);
-
-  if (PatternMatchesOrigin(info->pattern, aKey)) {
-    aValue->InvalidateAndRemoveFileManagers(info->persistenceType);
-
-    if (!aValue->HasFileManagers()) {
-      return PL_DHASH_REMOVE;
-    }
-  }
-
-  return PL_DHASH_NEXT;
-}
-
 void
 IndexedDatabaseManager::InvalidateAllFileManagers()
 {
   AssertIsOnIOThread();
 
-  mFileManagerInfos.Enumerate(InvalidateAndRemoveFileManagers, nullptr);
+  class MOZ_STACK_CLASS Helper MOZ_FINAL
+  {
+  public:
+    static PLDHashOperator
+    Enumerate(const nsACString& aKey,
+              FileManagerInfo* aValue,
+              void* aUserArg)
+    {
+      AssertIsOnIOThread();
+      MOZ_ASSERT(!aKey.IsEmpty());
+      MOZ_ASSERT(aValue);
+
+      aValue->InvalidateAllFileManagers();
+      return PL_DHASH_NEXT;
+    }
+  };
+
+  mFileManagerInfos.EnumerateRead(Helper::Enumerate, nullptr);
+  mFileManagerInfos.Clear();
 }
 
 void
 IndexedDatabaseManager::InvalidateFileManagers(
                                   PersistenceType aPersistenceType,
-                                  const OriginOrPatternString& aOriginOrPattern)
+                                  const nsACString& aOrigin)
 {
   AssertIsOnIOThread();
-  NS_ASSERTION(!aOriginOrPattern.IsEmpty(), "Empty pattern!");
+  MOZ_ASSERT(!aOrigin.IsEmpty());
 
-  if (aOriginOrPattern.IsOrigin()) {
-    FileManagerInfo* info;
-    if (!mFileManagerInfos.Get(aOriginOrPattern, &info)) {
-      return;
-    }
-
-    info->InvalidateAndRemoveFileManagers(aPersistenceType);
-
-    if (!info->HasFileManagers()) {
-      mFileManagerInfos.Remove(aOriginOrPattern);
-    }
+  FileManagerInfo* info;
+  if (!mFileManagerInfos.Get(aOrigin, &info)) {
+    return;
   }
-  else {
-    InvalidateInfo info(aPersistenceType, aOriginOrPattern);
-    mFileManagerInfos.Enumerate(InvalidateAndRemoveFileManagers, &info);
+
+  info->InvalidateAndRemoveFileManagers(aPersistenceType);
+
+  if (!info->HasFileManagers()) {
+    mFileManagerInfos.Remove(aOrigin);
   }
 }
 
@@ -712,6 +756,44 @@ IndexedDatabaseManager::BlockAndGetFileReferences(
   return NS_OK;
 }
 
+// static
+void
+IndexedDatabaseManager::LoggingModePrefChangedCallback(
+                                                    const char* /* aPrefName */,
+                                                    void* /* aClosure */)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (!Preferences::GetBool(kPrefLoggingEnabled)) {
+    sLoggingMode = Logging_Disabled;
+    return;
+  }
+
+  bool useProfiler = 
+#if defined(DEBUG) || defined(MOZ_ENABLE_PROFILER_SPS)
+    Preferences::GetBool(kPrefLoggingProfiler);
+#if !defined(MOZ_ENABLE_PROFILER_SPS)
+  if (useProfiler) {
+    NS_WARNING("IndexedDB cannot create profiler marks because this build does "
+               "not have profiler extensions enabled!");
+    useProfiler = false;
+  }
+#endif
+#else
+    false;
+#endif
+
+  const bool logDetails = Preferences::GetBool(kPrefLoggingDetails);
+
+  if (useProfiler) {
+    sLoggingMode = logDetails ?
+                   Logging_DetailedProfilerMarks :
+                   Logging_ConciseProfilerMarks;
+  } else {
+    sLoggingMode = logDetails ? Logging_Detailed : Logging_Concise;
+  }
+}
+
 NS_IMPL_ADDREF(IndexedDatabaseManager)
 NS_IMPL_RELEASE_WITH_DESTROY(IndexedDatabaseManager, Destroy())
 NS_IMPL_QUERY_INTERFACE(IndexedDatabaseManager, nsIObserver)
@@ -792,6 +874,10 @@ FileManagerInfo::InvalidateAllFileManagers() const
   for (i = 0; i < mTemporaryStorageFileManagers.Length(); i++) {
     mTemporaryStorageFileManagers[i]->Invalidate();
   }
+
+  for (i = 0; i < mDefaultStorageFileManagers.Length(); i++) {
+    mDefaultStorageFileManagers[i]->Invalidate();
+  }
 }
 
 void
@@ -836,11 +922,12 @@ FileManagerInfo::GetArray(PersistenceType aPersistenceType)
       return mPersistentStorageFileManagers;
     case PERSISTENCE_TYPE_TEMPORARY:
       return mTemporaryStorageFileManagers;
+    case PERSISTENCE_TYPE_DEFAULT:
+      return mDefaultStorageFileManagers;
 
     case PERSISTENCE_TYPE_INVALID:
     default:
       MOZ_CRASH("Bad storage type value!");
-      return mPersistentStorageFileManagers;
   }
 }
 

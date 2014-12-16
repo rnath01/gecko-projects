@@ -13,7 +13,7 @@
 #include "jit/arm/Simulator-arm.h"
 #include "jit/Bailouts.h"
 #include "jit/BaselineFrame.h"
-#include "jit/IonFrames.h"
+#include "jit/JitFrames.h"
 #include "jit/MoveEmitter.h"
 
 using namespace js;
@@ -1766,7 +1766,7 @@ MacroAssemblerARM::ma_vstr(VFPRegister src, Register base, Register index, int32
     return ma_vstr(src, Operand(ScratchRegister, 0), cc);
 }
 
-bool
+void
 MacroAssemblerARMCompat::buildFakeExitFrame(Register scratch, uint32_t *offset)
 {
     DebugOnly<uint32_t> initialDepth = framePushed();
@@ -1785,11 +1785,10 @@ MacroAssemblerARMCompat::buildFakeExitFrame(Register scratch, uint32_t *offset)
     uint32_t pseudoReturnOffset = currentOffset();
     leaveNoPool();
 
-    MOZ_ASSERT(framePushed() == initialDepth + IonExitFrameLayout::Size());
+    MOZ_ASSERT(framePushed() == initialDepth + ExitFrameLayout::Size());
     MOZ_ASSERT(pseudoReturnOffset - offsetBeforePush == 8);
 
     *offset = pseudoReturnOffset;
-    return true;
 }
 
 bool
@@ -1810,7 +1809,7 @@ MacroAssemblerARMCompat::callWithExitFrame(Label *target)
     uint32_t descriptor = MakeFrameDescriptor(framePushed(), JitFrame_IonJS);
     Push(Imm32(descriptor)); // descriptor
 
-    ma_callIonHalfPush(target);
+    ma_callJitHalfPush(target);
 }
 
 void
@@ -1827,7 +1826,7 @@ MacroAssemblerARMCompat::callWithExitFrame(JitCode *target)
         rs = L_LDR;
 
     ma_movPatchable(ImmPtr(target->raw()), ScratchRegister, Always, rs);
-    ma_callIonHalfPush(ScratchRegister);
+    ma_callJitHalfPush(ScratchRegister);
 }
 
 void
@@ -1845,27 +1844,27 @@ MacroAssemblerARMCompat::callWithExitFrame(JitCode *target, Register dynStack)
         rs = L_LDR;
 
     ma_movPatchable(ImmPtr(target->raw()), ScratchRegister, Always, rs);
-    ma_callIonHalfPush(ScratchRegister);
+    ma_callJitHalfPush(ScratchRegister);
 }
 
 void
-MacroAssemblerARMCompat::callIon(Register callee)
+MacroAssemblerARMCompat::callJit(Register callee)
 {
     MOZ_ASSERT((framePushed() & 3) == 0);
     if ((framePushed() & 7) == 4) {
-        ma_callIonHalfPush(callee);
+        ma_callJitHalfPush(callee);
     } else {
         adjustFrame(sizeof(void*));
-        ma_callIon(callee);
+        ma_callJit(callee);
     }
 }
 
 void
-MacroAssemblerARMCompat::callIonFromAsmJS(Register callee)
+MacroAssemblerARMCompat::callJitFromAsmJS(Register callee)
 {
-    ma_callIonNoPush(callee);
+    ma_callJitNoPush(callee);
 
-    // The Ion ABI has the callee pop the return address off the stack.
+    // The JIT ABI has the callee pop the return address off the stack.
     // The asm.js caller assumes that the call leaves sp unchanged, so bump
     // the stack.
     subPtr(Imm32(sizeof(void*)), sp);
@@ -3710,44 +3709,43 @@ MacroAssemblerARMCompat::storeTypeTag(ImmTag tag, const BaseIndex &dest)
 // ION ABI says *sp should be the address that we will return to when leaving
 // this function.
 void
-MacroAssemblerARM::ma_callIon(const Register r)
+MacroAssemblerARM::ma_callJit(const Register r)
 {
     // When the stack is 8 byte aligned, we want to decrement sp by 8, and write
     // pc + 8 into the new sp. When we return from this call, sp will be its
     // present value minus 4.
-    AutoForbidPools afp(this, 2);
-    as_dtr(IsStore, 32, PreIndex, pc, DTRAddr(sp, DtrOffImm(-8)));
+    as_sub(sp, sp, Imm8(4));
     as_blx(r);
 }
 void
-MacroAssemblerARM::ma_callIonNoPush(const Register r)
+MacroAssemblerARM::ma_callJitNoPush(const Register r)
 {
     // Since we just write the return address into the stack, which is popped on
     // return, the net effect is removing 4 bytes from the stack.
-    AutoForbidPools afp(this, 2);
-    as_dtr(IsStore, 32, Offset, pc, DTRAddr(sp, DtrOffImm(0)));
+
+    // Bug 1103108: remove this function, and refactor all uses.
+    as_add(sp, sp, Imm8(4));
     as_blx(r);
 }
 
 void
-MacroAssemblerARM::ma_callIonHalfPush(const Register r)
+MacroAssemblerARM::ma_callJitHalfPush(const Register r)
 {
     // The stack is unaligned by 4 bytes. We push the pc to the stack to align
     // the stack before the call, when we return the pc is poped and the stack
     // is restored to its unaligned state.
-    AutoForbidPools afp(this, 2);
-    ma_push(pc);
     as_blx(r);
 }
 
 void
-MacroAssemblerARM::ma_callIonHalfPush(Label *label)
+MacroAssemblerARM::ma_callJitHalfPush(Label *label)
 {
-    // The stack is unaligned by 4 bytes. We push the pc to the stack to align
-    // the stack before the call, when we return the pc is poped and the stack
+    // The stack is unaligned by 4 bytes. The callee will push the lr to the stack to align
+    // the stack after the call, when we return the pc is poped and the stack
     // is restored to its unaligned state.
-    AutoForbidPools afp(this, 2);
-    ma_push(pc);
+
+    // leave the stack as-is so the callee-side can push when necessary.
+
     as_bl(label, Always);
 }
 
@@ -4220,7 +4218,7 @@ MacroAssemblerARMCompat::handleFailureWithHandler(void *handler)
     passABIArg(r0);
     callWithABI(handler);
 
-    JitCode *excTail = GetIonContext()->runtime->jitRuntime()->getExceptionTail();
+    JitCode *excTail = GetJitContext()->runtime->jitRuntime()->getExceptionTail();
     branch(excTail);
 }
 
@@ -4611,15 +4609,13 @@ MacroAssemblerARMCompat::roundf(FloatRegister input, Register output, Label *bai
     Label handleZero;
     Label handleNeg;
     Label fin;
+
     // Do a compare based on the original value, then do most other things based
     // on the shifted value.
-    ma_vcmpz_f32(input);
-    // Since we already know the sign bit, flip all numbers to be positive,
-    // stored in tmp.
-    ma_vabs_f32(input, tmp);
-    as_vmrs(pc);
+    compareFloat(input, NoVFPRegister);
     ma_b(&handleZero, Assembler::Equal);
     ma_b(&handleNeg, Assembler::Signed);
+
     // NaN is always a bail condition, just bail directly.
     ma_b(bail, Assembler::Overflow);
 
@@ -4632,8 +4628,11 @@ MacroAssemblerARMCompat::roundf(FloatRegister input, Register output, Label *bai
     // the biggest number less than 0.5f would undesirably round up to 1), and
     // store the result into tmp.
     ma_vimm_f32(GetBiggestNumberLessThan(0.5f), ScratchFloat32Reg);
-    ma_vadd_f32(ScratchFloat32Reg, tmp, tmp);
+    ma_vadd_f32(ScratchFloat32Reg, input, tmp);
 
+    // Note: it doesn't matter whether x + .5 === x or not here, as it doesn't
+    // affect the semantics of the float to unsigned conversion (in particular,
+    // we are not applying any fixup after the operation).
     ma_vcvt_F32_U32(tmp, ScratchFloat32Reg.uintOverlay());
     ma_vxfer(VFPRegister(ScratchFloat32Reg).uintOverlay(), output);
     ma_mov(output, output, SetCond);
@@ -4641,6 +4640,7 @@ MacroAssemblerARMCompat::roundf(FloatRegister input, Register output, Label *bai
     ma_b(&fin);
 
     bind(&handleZero);
+
     // Move the whole float32 into the output reg, if it is non-zero, then the
     // original value was -0.0.
     as_vxfer(output, InvalidReg, input, FloatToCore, Always, 0);
@@ -4651,22 +4651,35 @@ MacroAssemblerARMCompat::roundf(FloatRegister input, Register output, Label *bai
     bind(&handleNeg);
 
     // Add 0.5 to negative numbers, storing the result into tmp.
+    ma_vneg_f32(input, tmp);
     ma_vimm_f32(0.5f, ScratchFloat32Reg);
-    ma_vadd_f32(ScratchFloat32Reg, tmp, tmp);
+    ma_vadd_f32(tmp, ScratchFloat32Reg, ScratchFloat32Reg);
+
+    // Adding 0.5 to a float input has chances to yield the wrong result, if
+    // the input is too large. In this case, skip the -1 adjustment made below.
+    compareFloat(ScratchFloat32Reg, tmp);
 
     // Negative case, negate, then start dancing. This number may be positive,
     // since we added 0.5.
-    ma_vcvt_F32_U32(tmp, ScratchFloat32Reg.uintOverlay());
-    ma_vxfer(VFPRegister(ScratchFloat32Reg).uintOverlay(), output);
+    // /!\ The conditional jump afterwards depends on these two instructions
+    //     *not* setting the status flags. They need to not change after the
+    //     comparison above.
+    ma_vcvt_F32_U32(ScratchFloat32Reg, tmp.uintOverlay());
+    ma_vxfer(VFPRegister(tmp).uintOverlay(), output);
+
+    Label flipSign;
+    ma_b(&flipSign, Equal);
 
     // -output is now a correctly rounded value, unless the original value was
     // exactly halfway between two integers, at which point, it has been rounded
     // away from zero, when it should be rounded towards \infty.
-    ma_vcvt_U32_F32(ScratchFloat32Reg.uintOverlay(), ScratchFloat32Reg);
-    compareFloat(ScratchFloat32Reg, tmp);
+    ma_vcvt_U32_F32(tmp.uintOverlay(), tmp);
+    compareFloat(tmp, ScratchFloat32Reg);
     ma_sub(output, Imm32(1), output, NoSetCond, Equal);
+
     // Negate the output. Since INT_MIN < -INT_MAX, even after adding 1, the
     // result will still be a negative number.
+    bind(&flipSign);
     ma_rsb(output, Imm32(0), output, SetCond);
 
     // If the result looks non-negative, then this value didn't actually fit
@@ -4689,8 +4702,6 @@ MacroAssemblerARMCompat::jumpWithPatch(RepatchLabel *label, Condition cond)
     return ret;
 }
 
-#ifdef JSGC_GENERATIONAL
-
 void
 MacroAssemblerARMCompat::branchPtrInNurseryRange(Condition cond, Register ptr, Register temp,
                                                  Label *label)
@@ -4699,7 +4710,7 @@ MacroAssemblerARMCompat::branchPtrInNurseryRange(Condition cond, Register ptr, R
     MOZ_ASSERT(ptr != temp);
     MOZ_ASSERT(ptr != secondScratchReg_);
 
-    const Nursery &nursery = GetIonContext()->runtime->gcNursery();
+    const Nursery &nursery = GetJitContext()->runtime->gcNursery();
     uintptr_t startChunk = nursery.start() >> Nursery::ChunkShift;
 
     ma_mov(Imm32(startChunk), secondScratchReg_);
@@ -4997,5 +5008,3 @@ template void
 js::jit::MacroAssemblerARMCompat::atomicFetchOp(int nbytes, bool signExtend, AtomicOp op,
                                                 const Register &value, const BaseIndex &mem,
                                                 Register temp, Register output);
-
-#endif
