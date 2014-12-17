@@ -41,6 +41,8 @@ libs::
 	rm -f $(XPCSHELLTESTROOT)/data/updater-xpcshell
 	mv $(XPCSHELLTESTROOT)/data/updater-xpcshell.app $(XPCSHELLTESTROOT)/data/updater.app
 	mv $(XPCSHELLTESTROOT)/data/updater.app/Contents/MacOS/updater-xpcshell $(XPCSHELLTESTROOT)/data/updater.app/Contents/MacOS/updater
+else
+	mv $(XPCSHELLTESTROOT)/data/updater-xpcshell $(XPCSHELLTESTROOT)/data/updater
 endif
 
 CXXFLAGS += $(MOZ_BZ2_CFLAGS)

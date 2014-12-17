@@ -1253,9 +1253,9 @@ function getTestDirPath() {
  * @return  The nsIFile for the file in the test data directory.
  * @throws  If the file or directory does not exist.
  */
-function getTestDirFile(aRelPath) {
+function getTestDirFile(aRelPath, allowNonExists) {
   let relpath = getTestDirPath() + (aRelPath ? aRelPath : "");
-  return do_get_file(relpath, false);
+  return do_get_file(relpath, !!allowNonExists);
 }
 
 #ifdef XP_WIN
@@ -1476,7 +1476,7 @@ if (IS_WIN) {
 function runUpdate(aExpectedExitValue, aExpectedStatus, aCallback) {
   // Copy the updater binary to the updates directory.
   let binDir = gGREBinDirOrig.clone();
-  let updater = getTestDirFile("updater.app");
+  let updater = getTestDirFile("updater.app", true);
   if (!updater.exists()) {
     updater = getTestDirFile(FILE_UPDATER_BIN);
     if (!updater.exists()) {
@@ -1787,7 +1787,7 @@ function setupAppFiles() {
   });
 
   // Copy the xpcshell updater binary
-  let updater = getTestDirFile("updater.app");
+  let updater = getTestDirFile("updater.app", true);
   if (!updater.exists()) {
     updater = getTestDirFile(FILE_UPDATER_BIN);
     if (!updater.exists()) {
