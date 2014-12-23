@@ -115,14 +115,20 @@ loop.standaloneRoomViews = (function(mozL10n) {
           );
         }
         case ROOM_STATES.ENDED: {
-          return (
-            <div className="ended-conversation">
-              <sharedViews.FeedbackView
-                feedbackStore={this.props.feedbackStore}
-                onAfterFeedbackReceived={this.onFeedbackSent}
-              />
-            </div>
-          );
+          if (this.props.roomUsed)
+            return (
+              <div className="ended-conversation">
+                <sharedViews.FeedbackView
+                  feedbackStore={this.props.feedbackStore}
+                  onAfterFeedbackReceived={this.onFeedbackSent}
+                />
+              </div>
+            );
+
+          // In case the room was not used (no one was here), we
+          // bypass the feedback form.
+          this.onFeedbackSent();
+          return null;
         }
         case ROOM_STATES.FAILED: {
           return (
@@ -362,11 +368,15 @@ loop.standaloneRoomViews = (function(mozL10n) {
                                   joinRoom={this.joinRoom}
                                   helper={this.props.helper}
                                   activeRoomStore={this.props.activeRoomStore}
-                                  feedbackStore={this.props.feedbackStore} />
+                                  feedbackStore={this.props.feedbackStore}
+                                  roomUsed={this.state.used} />
           <div className="video-layout-wrapper">
             <div className="conversation room-conversation">
               <h2 className="room-name">{this.state.roomName}</h2>
               <div className="media nested">
+                <span className="self-view-hidden-message">
+                  {mozL10n.get("self_view_hidden_message")}
+                </span>
                 <div className="video_wrapper remote_wrapper">
                   <div className="video_inner remote"></div>
                 </div>
