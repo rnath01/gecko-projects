@@ -699,7 +699,7 @@ this.DOMApplicationRegistry = {
           // Fields that we must not update. Confere bug 993011 comment 10.
           let fieldsBlacklist = ["basePath", "id", "installerAppId",
             "installerIsBrowser", "localId", "receipts", "storeId",
-            "storeVersion"];
+            "storeVersion", "metaData"];
           // we fall into this case if the app is present in /system/b2g/webapps/webapps.json
           // and in /data/local/webapps/webapps.json: this happens when updating gaia apps
           // Confere bug 989876

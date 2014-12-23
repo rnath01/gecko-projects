@@ -136,6 +136,9 @@ WebappsRegistry.prototype = {
                       Array.isArray(aParams.categories)) ? aParams.categories
                                                          : [];
 
+    let metaData = (aParams && aParams.installMetaData) ? aParams.installMetaData
+                                                        : null;
+
     let principal = this._window.document.nodePrincipal;
 
     return { app: {
@@ -143,7 +146,8 @@ WebappsRegistry.prototype = {
                     origin: this._getOrigin(aURL),
                     manifestURL: aURL,
                     receipts: receipts,
-                    categories: categories
+                    categories: categories,
+                    installMetaData: metaData
                   },
 
              from: installURL,
@@ -435,6 +439,10 @@ WebappsApplication.prototype = {
 
   get receipts() {
     return this._proxy.receipts || [];
+  },
+
+  get installMetaData() {
+    return Cu.cloneInto(this._proxy.installMetaData, this._window);
   },
 
   get downloadError() {
