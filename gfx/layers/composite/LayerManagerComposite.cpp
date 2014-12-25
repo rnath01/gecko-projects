@@ -627,8 +627,12 @@ LayerManagerComposite::Render()
   LayerScopeAutoFrame frame(PR_Now());
 
   // Dump to console
-  if (gfxPrefs::LayersDump() || profiler_feature_active("layersdump")) {
+  if (gfxPrefs::LayersDump()) {
     this->Dump();
+  } else if (profiler_feature_active("layersdump")) {
+    std::stringstream ss;
+    Dump(ss);
+    profiler_log(ss.str().c_str());
   }
 
   // Dump to LayerScope Viewer
@@ -931,13 +935,13 @@ LayerManagerComposite::ComputeRenderIntegrity()
     }
 
     // Work out how much of the display-port covers the screen
-    if (!metrics.mDisplayPort.IsEmpty()) {
+    if (!metrics.GetDisplayPort().IsEmpty()) {
       if (hasLowPrecision) {
         lowPrecisionMultiplier =
-          GetDisplayportCoverage(metrics.mDisplayPort, transform, screenRect);
+          GetDisplayportCoverage(metrics.GetDisplayPort(), transform, screenRect);
       } else {
         lowPrecisionMultiplier = highPrecisionMultiplier =
-          GetDisplayportCoverage(metrics.mDisplayPort, transform, screenRect);
+          GetDisplayportCoverage(metrics.GetDisplayPort(), transform, screenRect);
       }
     }
   }

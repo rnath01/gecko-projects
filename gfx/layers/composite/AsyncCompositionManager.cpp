@@ -447,6 +447,8 @@ SampleAnimations(Layer* aLayer, TimeStamp aPoint)
 
     activeAnimations = true;
 
+    MOZ_ASSERT(!animation.startTime().IsNull(),
+               "Failed to resolve start time of pending animations");
     TimeDuration elapsedDuration = aPoint - animation.startTime();
     // Skip animations that are yet to start.
     //
@@ -603,7 +605,7 @@ AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer)
     const FrameMetrics& metrics = aLayer->GetFrameMetrics(i);
     CSSToLayerScale paintScale = metrics.LayersPixelsPerCSSPixel();
     CSSRect displayPort(metrics.mCriticalDisplayPort.IsEmpty() ?
-                        metrics.mDisplayPort : metrics.mCriticalDisplayPort);
+                        metrics.GetDisplayPort() : metrics.mCriticalDisplayPort);
     ScreenPoint offset(0, 0);
     // XXX this call to SyncFrameMetrics is not currently being used. It will be cleaned
     // up as part of bug 776030 or one of its dependencies.
@@ -636,7 +638,7 @@ AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer)
     // doesn't have the necessary transform to display correctly. We use the
     // bottom-most scrollable metrics because that should have the most accurate
     // cumulative resolution for aLayer.
-    LayoutDeviceToLayerScale resolution = bottom.mCumulativeResolution;
+    LayoutDeviceToLayerScale resolution = bottom.GetCumulativeResolution();
     oldTransform.PreScale(resolution.scale, resolution.scale, 1);
 
     // For the purpose of aligning fixed and sticky layers, we disregard
@@ -858,7 +860,7 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
   // Calculate the absolute display port to send to Java
   LayerIntRect displayPort = RoundedToInt(
     (metrics.mCriticalDisplayPort.IsEmpty()
-      ? metrics.mDisplayPort
+      ? metrics.GetDisplayPort()
       : metrics.mCriticalDisplayPort
     ) * geckoZoom);
   displayPort += scrollOffsetLayerPixels;
@@ -871,7 +873,7 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
   // appears to be that metrics.mZoom is poorly initialized in some scenarios. In these scenarios,
   // however, we can assume there is no async zooming in progress and so the following statement
   // works fine.
-  CSSToParentLayerScale userZoom(metrics.mDevPixelsPerCSSPixel * metrics.mCumulativeResolution * LayerToParentLayerScale(1));
+  CSSToParentLayerScale userZoom(metrics.GetDevPixelsPerCSSPixel() * metrics.GetCumulativeResolution() * LayerToParentLayerScale(1));
   ParentLayerPoint userScroll = metrics.GetScrollOffset() * userZoom;
   SyncViewportInfo(displayPort, geckoZoom, mLayersUpdated,
                    userScroll, userZoom, fixedLayerMargins,

@@ -154,6 +154,7 @@ JitRuntime::JitRuntime()
   : execAlloc_(nullptr),
     ionAlloc_(nullptr),
     exceptionTail_(nullptr),
+    exceptionTailParallel_(nullptr),
     bailoutTail_(nullptr),
     enterJIT_(nullptr),
     bailoutHandler_(nullptr),
@@ -207,8 +208,16 @@ JitRuntime::initialize(JSContext *cx)
         return false;
 
     JitSpew(JitSpew_Codegen, "# Emitting exception tail stub");
-    exceptionTail_ = generateExceptionTailStub(cx);
+
+    void *handler = JS_FUNC_TO_DATA_PTR(void *, jit::HandleException);
+    void *handlerParallel = JS_FUNC_TO_DATA_PTR(void *, jit::HandleParallelFailure);
+
+    exceptionTail_ = generateExceptionTailStub(cx, handler);
     if (!exceptionTail_)
+        return false;
+
+    exceptionTailParallel_ = generateExceptionTailStub(cx, handlerParallel);
+    if (!exceptionTailParallel_)
         return false;
 
     JitSpew(JitSpew_Codegen, "# Emitting bailout tail stub");
@@ -2006,7 +2015,11 @@ IonCompile(JSContext *cx, JSScript *script,
 
     bool success = codegen->link(cx, builder->constraints());
 
-    return success ? AbortReason_NoAbort : AbortReason_Disable;
+    if (success)
+        return AbortReason_NoAbort;
+    if (cx->isExceptionPending())
+        return AbortReason_Error;
+    return AbortReason_Disable;
 }
 
 static bool
@@ -2499,7 +2512,7 @@ jit::SetEnterJitData(JSContext *cx, EnterJitData &data, RunState &state, AutoVal
         {
             ScriptFrameIter iter(cx);
             if (iter.isFunctionFrame())
-                data.calleeToken = CalleeToToken(iter.callee(), /* constructing = */ false);
+                data.calleeToken = CalleeToToken(iter.callee(cx), /* constructing = */ false);
         }
     }
 

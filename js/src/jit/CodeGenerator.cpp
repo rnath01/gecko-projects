@@ -1792,6 +1792,11 @@ CodeGenerator::visitNop(LNop *lir)
 }
 
 void
+CodeGenerator::visitMop(LMop *lir)
+{
+}
+
+void
 CodeGenerator::visitOsiPoint(LOsiPoint *lir)
 {
     // Note: markOsiPoint ensures enough space exists between the last
@@ -9530,19 +9535,6 @@ CodeGenerator::loadJSScriptForBlock(MBasicBlock *block, Register reg)
 }
 
 void
-CodeGenerator::visitHaveSameClass(LHaveSameClass *ins)
-{
-    Register lhs = ToRegister(ins->lhs());
-    Register rhs = ToRegister(ins->rhs());
-    Register temp = ToRegister(ins->getTemp(0));
-    Register output = ToRegister(ins->output());
-
-    masm.loadObjClass(lhs, temp);
-    masm.loadObjClass(rhs, output);
-    masm.cmpPtrSet(Assembler::Equal, temp, output, output);
-}
-
-void
 CodeGenerator::visitHasClass(LHasClass *ins)
 {
     Register lhs = ToRegister(ins->lhs());
@@ -9766,11 +9758,9 @@ CodeGenerator::visitInterruptCheck(LInterruptCheck *lir)
 void
 CodeGenerator::visitAsmJSInterruptCheck(LAsmJSInterruptCheck *lir)
 {
-    Register scratch = ToRegister(lir->scratch());
-    masm.movePtr(AsmJSImmPtr(AsmJSImm_RuntimeInterruptUint32), scratch);
-    masm.load32(Address(scratch, 0), scratch);
     Label rejoin;
-    masm.branch32(Assembler::Equal, scratch, Imm32(0), &rejoin);
+    masm.branch32(Assembler::Equal, AsmJSAbsoluteAddress(AsmJSImm_RuntimeInterruptUint32),
+                  Imm32(0), &rejoin);
     {
         uint32_t stackFixup = ComputeByteAlignment(masm.framePushed() + sizeof(AsmJSFrame),
                                                    ABIStackAlignment);

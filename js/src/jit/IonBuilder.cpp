@@ -451,7 +451,7 @@ IonBuilder::analyzeNewLoopTypes(MBasicBlock *entry, jsbytecode *start, jsbytecod
             // already discarded their operands.
             if (!oldEntry->isDead()) {
                 MResumePoint *oldEntryRp = oldEntry->entryResumePoint();
-                size_t stackDepth = oldEntryRp->numOperands();
+                size_t stackDepth = oldEntryRp->stackDepth();
                 for (size_t slot = 0; slot < stackDepth; slot++) {
                     MDefinition *oldDef = oldEntryRp->getOperand(slot);
                     if (!oldDef->isPhi()) {
@@ -901,11 +901,11 @@ IonBuilder::buildInline(IonBuilder *callerBuilder, MResumePoint *callerResumePoi
 
     initLocals();
 
-    JitSpew(JitSpew_Inlining, "Inline entry block MResumePoint %p, %u operands",
-            (void *) current->entryResumePoint(), current->entryResumePoint()->numOperands());
+    JitSpew(JitSpew_Inlining, "Inline entry block MResumePoint %p, %u stack slots",
+            (void *) current->entryResumePoint(), current->entryResumePoint()->stackDepth());
 
     // +2 for the scope chain and |this|, maybe another +1 for arguments object slot.
-    MOZ_ASSERT(current->entryResumePoint()->numOperands() == info().totalSlots());
+    MOZ_ASSERT(current->entryResumePoint()->stackDepth() == info().totalSlots());
 
     if (script_->argumentsHasVarBinding()) {
         lazyArguments_ = MConstant::New(alloc(), MagicValue(JS_OPTIMIZED_ARGUMENTS));
@@ -1208,7 +1208,7 @@ IonBuilder::maybeAddOsrTypeBarriers()
     MOZ_ASSERT(preheader->getPredecessor(OSR_PHI_POSITION) == osrBlock);
 
     MResumePoint *headerRp = header->entryResumePoint();
-    size_t stackDepth = headerRp->numOperands();
+    size_t stackDepth = headerRp->stackDepth();
     MOZ_ASSERT(stackDepth == osrBlock->stackDepth());
     for (uint32_t slot = info().startArgSlot(); slot < stackDepth; slot++) {
         // Aliased slots are never accessed, since they need to go through
@@ -2261,9 +2261,8 @@ IonBuilder::processDoWhileCondEnd(CFGState &state)
         return ControlStatus_Error;
 
     // Test for do {} while(false) and don't create a loop in that case.
-    if (vins->isConstant()) {
-        MConstant *cte = vins->toConstant();
-        if (cte->value().isBoolean() && !cte->value().toBoolean()) {
+    if (vins->isConstantValue() && !vins->constantValue().isMagic()) {
+        if (!vins->constantToBoolean()) {
             current->end(MGoto::New(alloc(), successor));
             current = nullptr;
 
@@ -4568,7 +4567,7 @@ IonBuilder::makeInliningDecision(JSObject *targetArg, CallInfo &callInfo)
                 bool hasOpportunities = false;
                 for (size_t i = 0, e = callInfo.argv().length(); !hasOpportunities && i < e; i++) {
                     MDefinition *arg = callInfo.argv()[i];
-                    hasOpportunities = arg->isLambda() || arg->isConstant();
+                    hasOpportunities = arg->isLambda() || arg->isConstantValue();
                 }
 
                 if (!hasOpportunities)
@@ -4910,7 +4909,7 @@ IonBuilder::inlineTypeObjectFallback(CallInfo &callInfo, MBasicBlock *dispatchBl
     if (!preCallResumePoint)
         return false;
 
-    DebugOnly<size_t> preCallFuncIndex = preCallResumePoint->numOperands() - callInfo.numFormals();
+    DebugOnly<size_t> preCallFuncIndex = preCallResumePoint->stackDepth() - callInfo.numFormals();
     MOZ_ASSERT(preCallResumePoint->getOperand(preCallFuncIndex) == fallbackInfo.fun());
 
     // In the dispatch block, replace the function's slot entry with Undefined.
@@ -5075,7 +5074,7 @@ IonBuilder::inlineCalls(CallInfo &callInfo, ObjectVector &targets,
         dispatchBlock->add(funcDef);
 
         // Use the MConstant in the inline resume point and on stack.
-        int funIndex = inlineBlock->entryResumePoint()->numOperands() - callInfo.numFormals();
+        int funIndex = inlineBlock->entryResumePoint()->stackDepth() - callInfo.numFormals();
         inlineBlock->entryResumePoint()->replaceOperand(funIndex, funcDef);
         inlineBlock->rewriteSlot(funIndex, funcDef);
 
@@ -5930,10 +5929,10 @@ IonBuilder::jsop_eval(uint32_t argc)
         // name on the scope chain and the eval is performing a call on that
         // value. Use a dynamic scope chain lookup rather than a full eval.
         if (string->isConcat() &&
-            string->getOperand(1)->isConstant() &&
-            string->getOperand(1)->toConstant()->value().isString())
+            string->getOperand(1)->isConstantValue() &&
+            string->getOperand(1)->constantValue().isString())
         {
-            JSAtom *atom = &string->getOperand(1)->toConstant()->value().toString()->asAtom();
+            JSAtom *atom = &string->getOperand(1)->constantValue().toString()->asAtom();
 
             if (StringEqualsAscii(atom, "()")) {
                 MDefinition *name = string->getOperand(0);
@@ -7846,10 +7845,10 @@ IonBuilder::getElemTryArgumentsInlined(bool *emitted, MDefinition *obj, MDefinit
     MOZ_ASSERT(!info().argsObjAliasesFormals());
 
     // When the id is constant, we can just return the corresponding inlined argument
-    if (index->isConstant() && index->toConstant()->value().isInt32()) {
+    if (index->isConstantValue() && index->constantValue().isInt32()) {
         MOZ_ASSERT(inliningDepth_ > 0);
 
-        int32_t id = index->toConstant()->value().toInt32();
+        int32_t id = index->constantValue().toInt32();
         index->setImplicitlyUsedUnchecked();
 
         if (id < (int32_t)inlineCallInfo_->argc() && id >= 0)
@@ -8065,8 +8064,8 @@ IonBuilder::addTypedArrayLengthAndData(MDefinition *obj,
     MOZ_ASSERT((index != nullptr) == (elements != nullptr));
     JSObject *tarr = nullptr;
 
-    if (obj->isConstant() && obj->toConstant()->value().isObject())
-        tarr = &obj->toConstant()->value().toObject();
+    if (obj->isConstantValue() && obj->constantValue().isObject())
+        tarr = &obj->constantValue().toObject();
     else if (obj->resultTypeSet())
         tarr = obj->resultTypeSet()->getSingleton();
 
@@ -8123,8 +8122,8 @@ IonBuilder::convertShiftToMaskForStaticTypedArray(MDefinition *id,
 
     // If the index is an already shifted constant, undo the shift to get the
     // absolute offset being accessed.
-    if (id->isConstant() && id->toConstant()->value().isInt32()) {
-        int32_t index = id->toConstant()->value().toInt32();
+    if (id->isConstantValue() && id->constantValue().isInt32()) {
+        int32_t index = id->constantValue().toInt32();
         MConstant *offset = MConstant::New(alloc(), Int32Value(index << TypedArrayShift(viewType)));
         current->add(offset);
         return offset;
@@ -8132,9 +8131,9 @@ IonBuilder::convertShiftToMaskForStaticTypedArray(MDefinition *id,
 
     if (!id->isRsh() || id->isEffectful())
         return nullptr;
-    if (!id->getOperand(1)->isConstant())
+    if (!id->getOperand(1)->isConstantValue())
         return nullptr;
-    const Value &value = id->getOperand(1)->toConstant()->value();
+    const Value &value = id->getOperand(1)->constantValue();
     if (!value.isInt32() || uint32_t(value.toInt32()) != TypedArrayShift(viewType))
         return nullptr;
 
@@ -10623,7 +10622,9 @@ IonBuilder::jsop_lambda(JSFunction *fun)
     if (fun->isNative() && IsAsmJSModuleNative(fun->native()))
         return abort("asm.js module function");
 
-    MLambda *ins = MLambda::New(alloc(), constraints(), current->scopeChain(), fun);
+    MConstant *cst = MConstant::NewConstraintlessObject(alloc(), fun);
+    current->add(cst);
+    MLambda *ins = MLambda::New(alloc(), constraints(), current->scopeChain(), cst);
     current->add(ins);
     current->push(ins);
 
@@ -11162,6 +11163,95 @@ IonBuilder::jsop_in_dense()
     return true;
 }
 
+static bool
+HasOnProtoChain(types::CompilerConstraintList *constraints, types::TypeObjectKey *object,
+                JSObject *protoObject, bool *hasOnProto)
+{
+    MOZ_ASSERT(protoObject);
+
+    while (true) {
+        if (object->unknownProperties() ||
+            !object->clasp()->isNative() ||
+            !object->hasTenuredProto())
+        {
+            return false;
+        }
+
+        // Guard against mutating __proto__.
+        object->hasFlags(constraints, types::OBJECT_FLAG_UNKNOWN_PROPERTIES);
+
+        JSObject *proto = object->proto().toObjectOrNull();
+        if (!proto) {
+            *hasOnProto = false;
+            return true;
+        }
+
+        if (proto == protoObject) {
+            *hasOnProto = true;
+            return true;
+        }
+
+        object = types::TypeObjectKey::get(proto);
+    }
+
+    MOZ_CRASH("Unreachable");
+}
+
+bool
+IonBuilder::tryFoldInstanceOf(MDefinition *lhs, JSObject *protoObject)
+{
+    // Try to fold the js::IsDelegate part of the instanceof operation.
+
+    if (!lhs->mightBeType(MIRType_Object)) {
+        // If the lhs is a primitive, the result is false.
+        lhs->setImplicitlyUsedUnchecked();
+        pushConstant(BooleanValue(false));
+        return true;
+    }
+
+    types::TemporaryTypeSet *lhsTypes = lhs->resultTypeSet();
+    if (!lhsTypes || lhsTypes->unknownObject())
+        return false;
+
+    // We can fold if either all objects have protoObject on their proto chain
+    // or none have.
+    bool isFirst = true;
+    bool knownIsInstance = false;
+
+    for (unsigned i = 0; i < lhsTypes->getObjectCount(); i++) {
+        types::TypeObjectKey *object = lhsTypes->getObject(i);
+        if (!object)
+            continue;
+
+        bool isInstance;
+        if (!HasOnProtoChain(constraints(), object, protoObject, &isInstance))
+            return false;
+
+        if (isFirst) {
+            knownIsInstance = isInstance;
+            isFirst = false;
+        } else if (knownIsInstance != isInstance) {
+            // Some of the objects have protoObject on their proto chain and
+            // others don't, so we can't optimize this.
+            return false;
+        }
+    }
+
+    if (knownIsInstance && lhsTypes->getKnownMIRType() != MIRType_Object) {
+        // The result is true for all objects, but the lhs might be a primitive.
+        // We can't fold this completely but we can use a much faster IsObject
+        // test.
+        MIsObject *isObject = MIsObject::New(alloc(), lhs);
+        current->add(isObject);
+        current->push(isObject);
+        return true;
+    }
+
+    lhs->setImplicitlyUsedUnchecked();
+    pushConstant(BooleanValue(knownIsInstance));
+    return true;
+}
+
 bool
 IonBuilder::jsop_instanceof()
 {
@@ -11187,6 +11277,9 @@ IonBuilder::jsop_instanceof()
             break;
 
         rhs->setImplicitlyUsedUnchecked();
+
+        if (tryFoldInstanceOf(obj, protoObject))
+            return true;
 
         MInstanceOf *ins = MInstanceOf::New(alloc(), obj, protoObject);
 

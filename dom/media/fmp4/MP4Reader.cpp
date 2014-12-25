@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "MP4Reader.h"
+#include "MP4Stream.h"
 #include "MediaResource.h"
 #include "nsSize.h"
 #include "VideoUtils.h"
@@ -61,63 +62,6 @@ TrackTypeToStr(TrackType aTrack)
   }
 }
 #endif
-
-class MP4Stream : public Stream {
-public:
-
-  explicit MP4Stream(MediaResource* aResource)
-    : mResource(aResource)
-  {
-    MOZ_COUNT_CTOR(MP4Stream);
-    MOZ_ASSERT(aResource);
-  }
-  virtual ~MP4Stream() {
-    MOZ_COUNT_DTOR(MP4Stream);
-  }
-
-  virtual bool ReadAt(int64_t aOffset, void* aBuffer, size_t aCount,
-                      size_t* aBytesRead) MOZ_OVERRIDE
-  {
-    uint32_t sum = 0;
-    uint32_t bytesRead = 0;
-    do {
-      uint64_t offset = aOffset + sum;
-      char* buffer = reinterpret_cast<char*>(aBuffer) + sum;
-      uint32_t toRead = aCount - sum;
-      nsresult rv = mResource->ReadAt(offset, buffer, toRead, &bytesRead);
-      if (NS_FAILED(rv)) {
-        return false;
-      }
-      sum += bytesRead;
-    } while (sum < aCount && bytesRead > 0);
-    *aBytesRead = sum;
-    return true;
-  }
-
-  virtual bool CachedReadAt(int64_t aOffset, void* aBuffer, size_t aCount,
-                            size_t* aBytesRead) MOZ_OVERRIDE
-  {
-    nsresult rv = mResource->ReadFromCache(reinterpret_cast<char*>(aBuffer),
-                                           aOffset, aCount);
-    if (NS_FAILED(rv)) {
-      *aBytesRead = 0;
-      return false;
-    }
-    *aBytesRead = aCount;
-    return true;
-  }
-
-  virtual bool Length(int64_t* aSize) MOZ_OVERRIDE
-  {
-    if (mResource->GetLength() < 0)
-      return false;
-    *aSize = mResource->GetLength();
-    return true;
-  }
-
-private:
-  RefPtr<MediaResource> mResource;
-};
 
 MP4Reader::MP4Reader(AbstractMediaDecoder* aDecoder)
   : MediaDecoderReader(aDecoder)
@@ -213,7 +157,7 @@ MP4Reader::Init(MediaDecoderReader* aCloneDonor)
 {
   MOZ_ASSERT(NS_IsMainThread(), "Must be on main thread.");
   PlatformDecoderModule::Init();
-  mDemuxer = new MP4Demuxer(new MP4Stream(mDecoder->GetResource()));
+  mDemuxer = new MP4Demuxer(new MP4Stream(mDecoder->GetResource(), &mIndexMonitor), &mIndexMonitor);
 
   InitLayersBackendType();
 
@@ -259,6 +203,14 @@ private:
   nsString mInitDataType;
 };
 #endif
+
+void MP4Reader::RequestCodecResource() {
+#ifdef MOZ_GONK_MEDIACODEC
+  if(mVideo.mDecoder) {
+    mVideo.mDecoder->AllocateMediaResources();
+  }
+#endif
+}
 
 bool MP4Reader::IsWaitingOnCodecResource() {
 #ifdef MOZ_GONK_MEDIACODEC
@@ -329,16 +281,23 @@ MP4Reader::IsSupportedVideoMimeType(const char* aMimeType)
          mPlatform->SupportsVideoMimeType(aMimeType);
 }
 
+void
+MP4Reader::PreReadMetadata()
+{
+  if (mPlatform) {
+    RequestCodecResource();
+  }
+}
+
 nsresult
 MP4Reader::ReadMetadata(MediaInfo* aInfo,
                         MetadataTags** aTags)
 {
   if (!mDemuxerInitialized) {
-    bool ok = mDemuxer->Init();
-    NS_ENSURE_TRUE(ok, NS_ERROR_FAILURE);
-
     {
       MonitorAutoLock mon(mIndexMonitor);
+      bool ok = mDemuxer->Init();
+      NS_ENSURE_TRUE(ok, NS_ERROR_FAILURE);
       mIndexReady = true;
     }
 
@@ -510,19 +469,16 @@ MP4Reader::RequestVideoData(bool aSkipToNextKeyframe,
   MOZ_ASSERT(GetTaskQueue()->IsCurrentThreadIn());
   VLOG("RequestVideoData skip=%d time=%lld", aSkipToNextKeyframe, aTimeThreshold);
 
-  // Record number of frames decoded and parsed. Automatically update the
-  // stats counters using the AutoNotifyDecoded stack-based class.
-  uint32_t parsed = 0, decoded = 0;
-  AbstractMediaDecoder::AutoNotifyDecoded autoNotify(mDecoder, parsed, decoded);
-
   MOZ_ASSERT(HasVideo() && mPlatform && mVideo.mDecoder);
 
   bool eos = false;
   if (aSkipToNextKeyframe) {
+    uint32_t parsed = 0;
     eos = !SkipVideoDemuxToNextKeyFrame(aTimeThreshold, parsed);
     if (!eos && NS_FAILED(mVideo.mDecoder->Flush())) {
       NS_WARNING("Failed to skip/flush video when skipping-to-next-keyframe.");
     }
+    mDecoder->NotifyDecodedFrames(parsed, 0);
   }
 
   MonitorAutoLock lock(mVideo.mMonitor);
@@ -532,12 +488,6 @@ MP4Reader::RequestVideoData(bool aSkipToNextKeyframe,
   } else {
     ScheduleUpdate(kVideo);
   }
-
-  // Report the number of "decoded" frames as the difference in the
-  // mNumSamplesOutput field since the last time we were called.
-  uint64_t delta = mVideo.mNumSamplesOutput - mLastReportedNumDecodedFrames;
-  decoded = static_cast<uint32_t>(delta);
-  mLastReportedNumDecodedFrames = mVideo.mNumSamplesOutput;
 
   return p;
 }
@@ -591,6 +541,11 @@ MP4Reader::Update(TrackType aTrack)
 {
   MOZ_ASSERT(GetTaskQueue()->IsCurrentThreadIn());
 
+  // Record number of frames decoded and parsed. Automatically update the
+  // stats counters using the AutoNotifyDecoded stack-based class.
+  uint32_t parsed = 0, decoded = 0;
+  AbstractMediaDecoder::AutoNotifyDecoded autoNotify(mDecoder, parsed, decoded);
+
   bool needInput = false;
   bool needOutput = false;
   auto& decoder = GetDecoderData(aTrack);
@@ -601,6 +556,11 @@ MP4Reader::Update(TrackType aTrack)
       needInput = true;
       decoder.mInputExhausted = false;
       decoder.mNumSamplesInput++;
+    }
+    if (aTrack == kVideo) {
+      uint64_t delta = decoder.mNumSamplesOutput - mLastReportedNumDecodedFrames;
+      decoded = static_cast<uint32_t>(delta);
+      mLastReportedNumDecodedFrames = decoder.mNumSamplesOutput;
     }
     if (decoder.HasPromise()) {
       needOutput = true;
@@ -625,6 +585,9 @@ MP4Reader::Update(TrackType aTrack)
     MP4Sample* sample = PopSample(aTrack);
     if (sample) {
       decoder.mDecoder->Input(sample);
+      if (aTrack == kVideo) {
+        parsed++;
+      }
     } else {
       {
         MonitorAutoLock lock(decoder.mMonitor);
@@ -668,6 +631,7 @@ MP4Reader::ReturnOutput(MediaData* aData, TrackType aTrack)
 MP4Sample*
 MP4Reader::PopSample(TrackType aTrack)
 {
+  MonitorAutoLock mon(mIndexMonitor);
   switch (aTrack) {
     case kAudio:
       return mDemuxer->DemuxAudioSample();
@@ -683,12 +647,40 @@ MP4Reader::PopSample(TrackType aTrack)
   }
 }
 
+size_t
+MP4Reader::SizeOfVideoQueueInFrames()
+{
+  return SizeOfQueue(kVideo);
+}
+
+size_t
+MP4Reader::SizeOfAudioQueueInFrames()
+{
+  return SizeOfQueue(kAudio);
+}
+
+size_t
+MP4Reader::SizeOfQueue(TrackType aTrack)
+{
+  auto& decoder = GetDecoderData(aTrack);
+  MonitorAutoLock lock(decoder.mMonitor);
+  return decoder.mOutput.Length() + (decoder.mNumSamplesInput - decoder.mNumSamplesOutput);
+}
+
 nsresult
 MP4Reader::ResetDecode()
 {
   MOZ_ASSERT(GetTaskQueue()->IsCurrentThreadIn());
   Flush(kVideo);
+  {
+    MonitorAutoLock mon(mIndexMonitor);
+    mDemuxer->SeekVideo(0);
+  }
   Flush(kAudio);
+  {
+    MonitorAutoLock mon(mIndexMonitor);
+    mDemuxer->SeekAudio(0);
+  }
   return MediaDecoderReader::ResetDecode();
 }
 
@@ -783,6 +775,7 @@ MP4Reader::Flush(TrackType aTrack)
       data.RejectPromise(CANCELED, __func__);
     }
     data.mDiscontinuity = true;
+    data.mUpdateScheduled = false;
   }
   if (aTrack == kVideo) {
     mQueuedVideoSample = nullptr;
@@ -820,7 +813,7 @@ MP4Reader::SkipVideoDemuxToNextKeyFrame(int64_t aTimeThreshold, uint32_t& parsed
   return true;
 }
 
-void
+nsRefPtr<MediaDecoderReader::SeekPromise>
 MP4Reader::Seek(int64_t aTime,
                 int64_t aStartTime,
                 int64_t aEndTime,
@@ -830,8 +823,7 @@ MP4Reader::Seek(int64_t aTime,
   MOZ_ASSERT(GetTaskQueue()->IsCurrentThreadIn());
   if (!mDecoder->GetResource()->IsTransportSeekable() || !mDemuxer->CanSeek()) {
     VLOG("Seek() END (Unseekable)");
-    GetCallback()->OnSeekCompleted(NS_ERROR_FAILURE);
-    return;
+    return SeekPromise::CreateAndReject(NS_ERROR_FAILURE, __func__);
   }
 
   mQueuedVideoSample = nullptr;
@@ -844,7 +836,7 @@ MP4Reader::Seek(int64_t aTime,
       mQueuedVideoSample ? mQueuedVideoSample->composition_timestamp : aTime);
   }
   LOG("MP4Reader::Seek(%lld) exit", aTime);
-  GetCallback()->OnSeekCompleted(NS_OK);
+  return SeekPromise::CreateAndResolve(true, __func__);
 }
 
 void

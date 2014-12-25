@@ -830,8 +830,8 @@ Chunk::init(JSRuntime *rt)
     JS_POISON(this, JS_FRESH_TENURED_PATTERN, ChunkSize);
 
     /*
-     * We clear the bitmap to guard against xpc_IsGrayGCThing being called on
-     * uninitialized data, which would happen before the first GC cycle.
+     * We clear the bitmap to guard against JS::GCThingIsMarkedGray being called
+     * on uninitialized data, which would happen before the first GC cycle.
      */
     bitmap.clear();
 
@@ -2586,8 +2586,10 @@ GCRuntime::updateAllCellPointersParallel(ArenasToUpdate &source)
 {
     AutoDisableProxyCheck noProxyCheck(rt); // These checks assert when run in parallel.
 
+    const size_t minTasks = 2;
     const size_t maxTasks = 8;
-    unsigned taskCount = Min(HelperThreadState().cpuCount, maxTasks);
+    unsigned taskCount = Min(Max(HelperThreadState().cpuCount / 2, minTasks),
+                             maxTasks);
     UpdateCellPointersTask updateTasks[maxTasks];
 
     AutoLockHelperThreadState lock;
@@ -3103,7 +3105,7 @@ GCRuntime::refillFreeListFromAnyThread(ThreadSafeContext *cx, AllocKind thingKin
     if (cx->isJSContext())
         return refillFreeListFromMainThread<allowGC>(cx->asJSContext(), thingKind);
 
-    if (cx->allocator()->zone_->runtimeFromAnyThread()->exclusiveThreadsPresent())
+    if (cx->isExclusiveContext())
         return refillFreeListOffMainThread(cx->asExclusiveContext(), thingKind);
 
     return refillFreeListPJS(cx->asForkJoinContext(), thingKind);
@@ -3491,9 +3493,6 @@ GCHelperState::init()
 {
     if (!(done = PR_NewCondVar(rt->gc.lock)))
         return false;
-
-    if (CanUseExtraThreads())
-        HelperThreadState().ensureInitialized();
 
     return true;
 }
@@ -5501,7 +5500,8 @@ GCRuntime::endSweepPhase(bool lastGC)
         ZoneList zones;
         for (GCZonesIter zone(rt); !zone.done(); zone.next())
             zones.append(zone);
-        sweepBackgroundThings(zones, MainThread);
+        if (!zones.isEmpty())
+            sweepBackgroundThings(zones, MainThread);
 
         /*
          * Destroy arenas after we finished the sweeping so finalizers can
@@ -5594,8 +5594,23 @@ GCRuntime::compactPhase(bool lastGC)
 #ifdef DEBUG
     CheckHashTablesAfterMovingGC(rt);
     for (GCZonesIter zone(rt); !zone.done(); zone.next()) {
-        if (CanRelocateZone(rt, zone) && !zone->isPreservingCode())
+        if (CanRelocateZone(rt, zone)) {
+            MOZ_ASSERT(!zone->isPreservingCode());
             zone->allocator.arenas.checkEmptyFreeLists();
+
+            // Check that we did as much compaction as we should have. There
+            // should always be less than one arena's worth of free cells.
+            for (size_t i = 0; i < FINALIZE_LIMIT; i++) {
+                size_t thingsPerArena = Arena::thingsPerArena(Arena::thingSize(AllocKind(i)));
+                if (CanRelocateAllocKind(AllocKind(i))) {
+                    ArenaList &al = zone->allocator.arenas.arenaLists[i];
+                    size_t freeCells = 0;
+                    for (ArenaHeader *arena = al.arenaAfterCursor(); arena; arena = arena->next)
+                        freeCells += arena->countFreeCells();
+                    MOZ_ASSERT(freeCells < thingsPerArena);
+                }
+            }
+        }
     }
 #endif
 

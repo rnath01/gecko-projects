@@ -108,6 +108,10 @@ class MessageLogger(object):
     VALID_ACTIONS = set(['suite_start', 'suite_end', 'test_start', 'test_end',
                          'test_status', 'log',
                          'buffering_on', 'buffering_off'])
+    TEST_PATH_PREFIXES = ['/tests/',
+                          'chrome://mochitests/content/browser/',
+                          'chrome://mochitests/content/chrome/']
+
 
     def __init__(self, logger, buffering=True):
         self.logger = logger
@@ -124,6 +128,16 @@ class MessageLogger(object):
         """True if the given object is a valid structured message (only does a superficial validation)"""
         return isinstance(obj, dict) and 'action' in obj and obj['action'] in MessageLogger.VALID_ACTIONS
 
+    def _fix_test_name(self, message):
+      """Normalize a logged test path to match the relative path from the sourcedir.
+      """
+      if 'test' in message:
+        test = message['test']
+        for prefix in MessageLogger.TEST_PATH_PREFIXES:
+          if test.startswith(prefix):
+            message['test'] = test[len(prefix):]
+            break
+
     def parse_line(self, line):
         """Takes a given line of input (structured or not) and returns a list of structured messages"""
         line = line.rstrip().decode("UTF-8", "replace")
@@ -138,6 +152,7 @@ class MessageLogger(object):
                     message = dict(action='log', level='info', message=fragment, unstructured=True)
             except ValueError:
                 message = dict(action='log', level='info', message=fragment, unstructured=True)
+            self._fix_test_name(message)
             messages.append(message)
 
         return messages
@@ -771,6 +786,18 @@ class MochitestUtilsMixin(object):
       dir = "file:///" + dir.replace("\\", "/")
     return dir
 
+  def writeChromeManifest(self, options):
+    manifest = os.path.join(options.profilePath, "tests.manifest")
+    with open(manifest, "w") as manifestFile:
+      # Register chrome directory.
+      chrometestDir = self.getChromeTestDir(options)
+      manifestFile.write("content mochitests %s contentaccessible=yes\n" % chrometestDir)
+
+      if options.testingModulesDir is not None:
+        manifestFile.write("resource testing-common file:///%s\n" %
+          options.testingModulesDir)
+    return manifest
+
   def addChromeToProfile(self, options):
     "Adds MochiKit chrome tests to the profile."
 
@@ -792,15 +819,7 @@ toolbar#nav-bar {
     with open(os.path.join(options.profilePath, "userChrome.css"), "a") as chromeFile:
       chromeFile.write(chrome)
 
-    manifest = os.path.join(options.profilePath, "tests.manifest")
-    with open(manifest, "w") as manifestFile:
-      # Register chrome directory.
-      chrometestDir = self.getChromeTestDir(options)
-      manifestFile.write("content mochitests %s contentaccessible=yes\n" % chrometestDir)
-
-      if options.testingModulesDir is not None:
-        manifestFile.write("resource testing-common file:///%s\n" %
-          options.testingModulesDir)
+    manifest = self.writeChromeManifest(options)
 
     # Call installChromeJar().
     if not os.path.isdir(os.path.join(SCRIPT_DIR, self.jarDir)):
@@ -1697,7 +1716,7 @@ class Mochitest(MochitestUtilsMixin):
         testsToRun = bisect.pre_test(options, testsToRun, status)
         # To inform that we are in the process of bisection, and to look for bleedthrough
         if options.bisectChunk != "default" and not bisection_log:
-            log.info("TEST-UNEXPECTED-FAIL | Bisection | Please ignore repeats and look for 'Bleedthrough' (if any) at the end of the failure list")
+            self.log.info("TEST-UNEXPECTED-FAIL | Bisection | Please ignore repeats and look for 'Bleedthrough' (if any) at the end of the failure list")
             bisection_log = 1
 
       result = self.doTests(options, onLaunch, testsToRun)
@@ -1740,6 +1759,7 @@ class Mochitest(MochitestUtilsMixin):
     options.totalChunks = None
     options.thisChunk = None
     options.chunkByDir = 0
+    result = 1 # default value, if no tests are run.
     inputTestPath = self.getTestPath(options)
     for dir in dirs:
       if inputTestPath and not inputTestPath.startswith(dir):
@@ -1786,9 +1806,11 @@ class Mochitest(MochitestUtilsMixin):
     # TODO: use mozrunner.local.debugger_arguments:
     # https://github.com/mozilla/mozbase/blob/master/mozrunner/mozrunner/local.py#L42
 
-    debuggerInfo = mozdebug.get_debugger_info(options.debugger,
-                                              options.debuggerArgs,
-                                              options.debuggerInteractive)
+    debuggerInfo = None
+    if options.debugger:
+        debuggerInfo = mozdebug.get_debugger_info(options.debugger,
+                                                  options.debuggerArgs,
+                                                  options.debuggerInteractive)
 
     if options.useTestMediaDevices:
       devices = findTestMediaDevices(self.log)

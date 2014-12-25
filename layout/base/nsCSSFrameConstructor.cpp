@@ -5691,13 +5691,6 @@ nsCSSFrameConstructor::AddFrameConstructionItemsInternal(nsFrameConstructorState
     aItems.AppendItem(data, aContent, aTag, aNameSpaceID,
                       pendingBinding, styleContext.forget(),
                       aSuppressWhiteSpaceOptimizations, aAnonChildren);
-  if (!item) {
-    if (isGeneratedContent) {
-      aContent->UnbindFromTree();
-    }
-    return;
-  }
-
   item->mIsText = isText;
   item->mIsGeneratedContent = isGeneratedContent;
   item->mIsAnonymousContentCreatorContent =
@@ -11397,6 +11390,9 @@ nsCSSFrameConstructor::ConstructBlock(nsFrameConstructorState& aState,
       ResolveAnonymousBoxStyle(nsCSSAnonBoxes::columnContent, aStyleContext);
     parent = columnSetFrame;
     *aNewFrame = columnSetFrame;
+    if (aPositionedFrameForAbsPosContainer == blockFrame) {
+      aPositionedFrameForAbsPosContainer = columnSetFrame;
+    }
 
     SetInitialSingleChild(columnSetFrame, blockFrame);
   }

@@ -71,7 +71,8 @@ class KeepAlive;
 enum TextureAllocationFlags {
   ALLOC_DEFAULT = 0,
   ALLOC_CLEAR_BUFFER = 1,
-  ALLOC_CLEAR_BUFFER_WHITE = 2
+  ALLOC_CLEAR_BUFFER_WHITE = 2,
+  ALLOC_DISALLOW_BUFFERTEXTURECLIENT = 4
 };
 
 #ifdef XP_WIN
@@ -279,6 +280,10 @@ public:
   {
     return gfx::SurfaceFormat::UNKNOWN;
   }
+
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() { return nullptr; }
+
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
 
   /**
    * Copies a rectangle from this texture client to a position in aTarget.
@@ -582,6 +587,8 @@ public:
   virtual bool AllocateForYCbCr(gfx::IntSize aYSize,
                                 gfx::IntSize aCbCrSize,
                                 StereoMode aStereoMode) MOZ_OVERRIDE;
+
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE;
 
   virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE { return mFormat; }
 

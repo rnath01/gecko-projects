@@ -53,6 +53,36 @@ function setupButtons() {
   });
 }
 
+function setupStorage() {
+  let directory = null;
+
+  // Get the --storage-path argument from the command line.
+  try {
+    let service = Cc['@mozilla.org/commandlinehandler/general-startup;1?type=b2gcmds'].getService(Ci.nsISupports);
+    let args = service.wrappedJSObject.cmdLine;
+    if (args) {
+      let path = args.handleFlagWithParam('storage-path', false);
+      directory = Cc['@mozilla.org/file/local;1'].createInstance(Ci.nsIFile);
+      directory.initWithPath(path);
+    }
+  } catch(e) {
+    directory = null;
+  }
+
+  // Otherwise, default to 'storage' folder within current profile.
+  if (!directory) {
+    directory = Services.dirsvc.get('ProfD', Ci.nsIFile);
+    directory.append('storage');
+    if (!directory.exists()) {
+      directory.create(Ci.nsIFile.DIRECTORY_TYPE, parseInt("755", 8));
+    }
+  }
+  dump("Set storage path to: " + directory.path + "\n");
+
+  // This is the magic, where we override the default location for the storages.
+  Services.prefs.setCharPref('device.storage.overrideRootDir', directory.path);
+}
+
 function checkDebuggerPort() {
   // XXX: To be removed once bug 942756 lands.
   // We are hacking 'unix-domain-socket' pref by setting a tcp port (number).
@@ -94,6 +124,9 @@ function initResponsiveDesign() {
     if (tab.linkedBrowser.contentWindow != window) {
       return;
     }
+
+    // Disable transition as they mess up with screen size handler
+    responsive.transitionsEnabled = false;
 
     responsive.buildPhoneUI();
 
@@ -141,6 +174,7 @@ window.addEventListener('ContentStart', function() {
   }
   setupButtons();
   checkDebuggerPort();
+  setupStorage();
   // On Firefox mulet, we automagically enable the responsive mode
   // and show the devtools
   if (isMulet) {

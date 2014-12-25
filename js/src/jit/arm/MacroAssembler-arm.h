@@ -398,7 +398,8 @@ class MacroAssemblerARM : public Assembler
     BufferOffset ma_vstr(VFPRegister src, VFPAddr addr, Condition cc = Always);
     BufferOffset ma_vstr(VFPRegister src, const Operand &addr, Condition cc = Always);
 
-    BufferOffset ma_vstr(VFPRegister src, Register base, Register index, int32_t shift = defaultShift, Condition cc = Always);
+    BufferOffset ma_vstr(VFPRegister src, Register base, Register index, int32_t shift,
+                         int32_t offset, Condition cc = Always);
     // Calls an Ion function, assumes that the stack is untouched (8 byte
     // aligned).
     void ma_callJit(const Register reg);
@@ -590,6 +591,7 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
         append(desc, currentOffset(), framePushed_);
     }
     void callAndPushReturnAddress(Label *label) {
+        AutoForbidPools afp(this, 2);
         ma_push(pc);
         call(label);
     }
@@ -1098,6 +1100,11 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
         ma_cmp(secondScratchReg_, rhs);
         ma_b(label, cond);
     }
+    void branch32(Condition cond, AsmJSAbsoluteAddress addr, Imm32 imm, Label *label) {
+        loadPtr(addr, ScratchRegister);
+        ma_cmp(ScratchRegister, imm);
+        ma_b(label, cond);
+    }
 
     void loadUnboxedValue(Address address, MIRType type, AnyRegister dest) {
         if (dest.isFloat())
@@ -1217,8 +1224,7 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
         ma_orr(Imm32(type), frameSizeReg);
     }
 
-    void handleFailureWithHandler(void *handler);
-    void handleFailureWithHandlerTail();
+    void handleFailureWithHandlerTail(void *handler);
 
     /////////////////////////////////////////////////////////////////
     // Common interface.
@@ -1413,10 +1419,8 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
         ma_vstr(src, Operand(addr));
     }
     void storeDouble(FloatRegister src, BaseIndex addr) {
-        // Harder cases not handled yet.
-        MOZ_ASSERT(addr.offset == 0);
         uint32_t scale = Imm32::ShiftOf(addr.scale).value;
-        ma_vstr(src, addr.base, addr.index, scale);
+        ma_vstr(src, addr.base, addr.index, scale, addr.offset);
     }
     void moveDouble(FloatRegister src, FloatRegister dest) {
         ma_vmov(src, dest);
@@ -1426,10 +1430,8 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
         ma_vstr(VFPRegister(src).singleOverlay(), Operand(addr));
     }
     void storeFloat32(FloatRegister src, BaseIndex addr) {
-        // Harder cases not handled yet.
-        MOZ_ASSERT(addr.offset == 0);
         uint32_t scale = Imm32::ShiftOf(addr.scale).value;
-        ma_vstr(VFPRegister(src).singleOverlay(), addr.base, addr.index, scale);
+        ma_vstr(VFPRegister(src).singleOverlay(), addr.base, addr.index, scale, addr.offset);
     }
 
   private:

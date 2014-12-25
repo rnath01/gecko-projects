@@ -43,6 +43,12 @@ class LNop : public LInstructionHelper<0, 0, 0>
     LIR_HEADER(Nop)
 };
 
+class LMop : public LInstructionHelper<0, 0, 0>
+{
+  public:
+    LIR_HEADER(Mop)
+};
+
 // An LOsiPoint captures a snapshot after a call and ensures enough space to
 // patch in a call to the invalidation mechanism.
 //
@@ -447,6 +453,9 @@ class LSimdBinaryBitwiseX4 : public LInstructionHelper<1, 2, 0>
     MSimdBinaryBitwise::Operation operation() const {
         return mir_->toSimdBinaryBitwise()->operation();
     }
+    MIRType type() const {
+        return mir_->type();
+    }
 };
 
 class LSimdShift : public LInstructionHelper<1, 2, 0>
@@ -473,7 +482,7 @@ class LSimdShift : public LInstructionHelper<1, 2, 0>
 
 // SIMD selection of lanes from two int32x4 or float32x4 arguments based on a
 // int32x4 argument.
-class LSimdSelect : public LInstructionHelper<1, 3, 0>
+class LSimdSelect : public LInstructionHelper<1, 3, 1>
 {
   public:
     LIR_HEADER(SimdSelect);
@@ -485,6 +494,9 @@ class LSimdSelect : public LInstructionHelper<1, 3, 0>
     }
     const LAllocation *rhs() {
         return getOperand(2);
+    }
+    const LDefinition *temp() {
+        return getTemp(0);
     }
     MSimdTernaryBitwise::Operation operation() const {
         return mir_->toSimdTernaryBitwise()->operation();
@@ -1163,7 +1175,7 @@ class LCheckOverRecursedPar : public LInstructionHelper<0, 1, 1>
     }
 };
 
-class LAsmJSInterruptCheck : public LInstructionHelper<0, 0, 1>
+class LAsmJSInterruptCheck : public LInstructionHelper<0, 0, 0>
 {
     Label *interruptExit_;
     const CallSiteDesc &funcDesc_;
@@ -1171,15 +1183,9 @@ class LAsmJSInterruptCheck : public LInstructionHelper<0, 0, 1>
   public:
     LIR_HEADER(AsmJSInterruptCheck);
 
-    LAsmJSInterruptCheck(const LDefinition &scratch, Label *interruptExit,
-                         const CallSiteDesc &funcDesc)
+    LAsmJSInterruptCheck(Label *interruptExit, const CallSiteDesc &funcDesc)
       : interruptExit_(interruptExit), funcDesc_(funcDesc)
     {
-        setTemp(0, scratch);
-    }
-
-    const LDefinition *scratch() {
-        return getTemp(0);
     }
 
     bool isCall() const {
@@ -6519,28 +6525,6 @@ class LIsObjectAndBranch : public LControlInstructionHelper<2, BOX_PIECES, 0>
     }
     MBasicBlock *ifFalse() const {
         return getSuccessor(1);
-    }
-};
-
-class LHaveSameClass : public LInstructionHelper<1, 2, 1>
-{
-  public:
-    LIR_HEADER(HaveSameClass);
-    LHaveSameClass(const LAllocation &left, const LAllocation &right,
-                   const LDefinition &temp) {
-        setOperand(0, left);
-        setOperand(1, right);
-        setTemp(0, temp);
-    }
-
-    const LAllocation *lhs() {
-        return getOperand(0);
-    }
-    const LAllocation *rhs() {
-        return getOperand(1);
-    }
-    MHaveSameClass *mir() const {
-        return mir_->toHaveSameClass();
     }
 };
 

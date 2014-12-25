@@ -623,7 +623,7 @@ ReorderComparison(JSOp op, MDefinition **lhsp, MDefinition **rhsp)
     MDefinition *lhs = *lhsp;
     MDefinition *rhs = *rhsp;
 
-    if (lhs->isConstant()) {
+    if (lhs->isConstantValue()) {
         *rhsp = lhs;
         *lhsp = rhs;
         return ReverseCompareOp(op);
@@ -643,8 +643,8 @@ LIRGenerator::visitTest(MTest *test)
     MOZ_ASSERT(opd->type() != MIRType_String);
 
     // Testing a constant.
-    if (opd->isConstant()) {
-        bool result = opd->toConstant()->valueToBoolean();
+    if (opd->isConstantValue() && !opd->constantValue().isMagic()) {
+        bool result = opd->constantToBoolean();
         add(new(alloc()) LGoto(result ? ifTrue : ifFalse));
         return;
     }
@@ -1491,7 +1491,7 @@ LIRGenerator::visitMul(MMul *ins)
 
         // If our RHS is a constant -1 and we don't have to worry about
         // overflow, we can optimize to an LNegI.
-        if (!ins->fallible() && rhs->isConstant() && rhs->toConstant()->value() == Int32Value(-1))
+        if (!ins->fallible() && rhs->isConstantValue() && rhs->constantValue() == Int32Value(-1))
             defineReuseInput(new(alloc()) LNegI(useRegisterAtStart(lhs)), ins, 0);
         else
             lowerMulI(ins, lhs, rhs);
@@ -1500,7 +1500,7 @@ LIRGenerator::visitMul(MMul *ins)
         ReorderCommutative(&lhs, &rhs, ins);
 
         // If our RHS is a constant -1.0, we can optimize to an LNegD.
-        if (rhs->isConstant() && rhs->toConstant()->value() == DoubleValue(-1.0))
+        if (rhs->isConstantValue() && rhs->constantValue() == DoubleValue(-1.0))
             defineReuseInput(new(alloc()) LNegD(useRegisterAtStart(lhs)), ins, 0);
         else
             lowerForFPU(new(alloc()) LMathD(JSOP_MUL), ins, lhs, rhs);
@@ -1509,7 +1509,7 @@ LIRGenerator::visitMul(MMul *ins)
         ReorderCommutative(&lhs, &rhs, ins);
 
         // We apply the same optimizations as for doubles
-        if (rhs->isConstant() && rhs->toConstant()->value() == Float32Value(-1.0f))
+        if (rhs->isConstantValue() && rhs->constantValue() == Float32Value(-1.0f))
             defineReuseInput(new(alloc()) LNegF(useRegisterAtStart(lhs)), ins, 0);
         else
             lowerForFPU(new(alloc()) LMathF(JSOP_MUL), ins, lhs, rhs);
@@ -2234,7 +2234,7 @@ LIRGenerator::visitLoadSlot(MLoadSlot *ins)
 {
     switch (ins->type()) {
       case MIRType_Value:
-        defineBox(new(alloc()) LLoadSlotV(useRegister(ins->slots())), ins);
+        defineBox(new(alloc()) LLoadSlotV(useRegisterAtStart(ins->slots())), ins);
         break;
 
       case MIRType_Undefined:
@@ -2242,7 +2242,7 @@ LIRGenerator::visitLoadSlot(MLoadSlot *ins)
         MOZ_CRASH("typed load must have a payload");
 
       default:
-        define(new(alloc()) LLoadSlotT(useRegister(ins->slots())), ins);
+        define(new(alloc()) LLoadSlotT(useRegisterForTypedLoad(ins->slots(), ins->type())), ins);
         break;
     }
 }
@@ -2294,8 +2294,7 @@ LIRGenerator::visitAsmJSInterruptCheck(MAsmJSInterruptCheck *ins)
 {
     gen->setPerformsCall();
 
-    LAsmJSInterruptCheck *lir = new(alloc()) LAsmJSInterruptCheck(temp(),
-                                                                  ins->interruptExit(),
+    LAsmJSInterruptCheck *lir = new(alloc()) LAsmJSInterruptCheck(ins->interruptExit(),
                                                                   ins->funcDesc());
     add(lir, ins);
 }
@@ -3089,13 +3088,16 @@ LIRGenerator::visitStoreTypedArrayElementHole(MStoreTypedArrayElementHole *ins)
 void
 LIRGenerator::visitLoadFixedSlot(MLoadFixedSlot *ins)
 {
-    MOZ_ASSERT(ins->object()->type() == MIRType_Object);
+    MDefinition *obj = ins->object();
+    MOZ_ASSERT(obj->type() == MIRType_Object);
 
-    if (ins->type() == MIRType_Value) {
-        LLoadFixedSlotV *lir = new(alloc()) LLoadFixedSlotV(useRegister(ins->object()));
+    MIRType type = ins->type();
+
+    if (type == MIRType_Value) {
+        LLoadFixedSlotV *lir = new(alloc()) LLoadFixedSlotV(useRegisterAtStart(obj));
         defineBox(lir, ins);
     } else {
-        LLoadFixedSlotT *lir = new(alloc()) LLoadFixedSlotT(useRegister(ins->object()));
+        LLoadFixedSlotT *lir = new(alloc()) LLoadFixedSlotT(useRegisterForTypedLoad(obj, type));
         define(lir, ins);
     }
 }
@@ -3673,18 +3675,6 @@ LIRGenerator::visitIsObject(MIsObject *ins)
 }
 
 void
-LIRGenerator::visitHaveSameClass(MHaveSameClass *ins)
-{
-    MDefinition *lhs = ins->lhs();
-    MDefinition *rhs = ins->rhs();
-
-    MOZ_ASSERT(lhs->type() == MIRType_Object);
-    MOZ_ASSERT(rhs->type() == MIRType_Object);
-
-    define(new(alloc()) LHaveSameClass(useRegister(lhs), useRegister(rhs), temp()), ins);
-}
-
-void
 LIRGenerator::visitHasClass(MHasClass *ins)
 {
     MOZ_ASSERT(ins->object()->type() == MIRType_Object);
@@ -3835,7 +3825,7 @@ LIRGenerator::visitGetDOMMember(MGetDOMMember *ins)
     MOZ_ASSERT(ins->domAliasSet() != JSJitInfo::AliasEverything,
                "Member gets had better not alias the world");
     LGetDOMMember *lir =
-        new(alloc()) LGetDOMMember(useRegister(ins->object()));
+        new(alloc()) LGetDOMMember(useRegisterAtStart(ins->object()));
     defineBox(lir, ins);
 }
 
@@ -4127,9 +4117,19 @@ LIRGenerator::visitInstruction(MInstruction *ins)
     ins->setInWorklistUnchecked();
 #endif
 
+    // If we added a Nop for this instruction, we'll also add a Mop, so that
+    // that live-ranges for fixed register defs, which with LSRA extend through
+    // the Nop so that they can extend through the OsiPoint don't, with their
+    // one-extra extension, extend into a position where they use the input
+    // move group for the following instruction.
+    bool needsMop = !current->instructions().empty() && current->rbegin()->isNop();
+
     // If no safepoint was created, there's no need for an OSI point.
     if (LOsiPoint *osiPoint = popOsiPoint())
         add(osiPoint);
+
+    if (needsMop)
+        add(new(alloc()) LMop);
 
     return !gen->errored();
 }
