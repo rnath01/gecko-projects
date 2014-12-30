@@ -1706,7 +1706,7 @@ class MSimdShuffle : public MBinaryInstruction, public MSimdShuffleBase
     {
         // Swap operands so that new lanes come from LHS in majority.
         // In the balanced case, swap operands if needs be, in order to be able
-        // to do only one shufps on x86.
+        // to do only one vshufps on x86.
         unsigned lanesFromLHS = (laneX < 4) + (laneY < 4) + (laneZ < 4) + (laneW < 4);
         if (lanesFromLHS < 2 || (lanesFromLHS == 2 && laneX >= 4 && laneY >=4)) {
             laneX = (laneX + 4) % 8;
@@ -2021,18 +2021,13 @@ class MSimdShift : public MBinaryInstruction
     ALLOW_CLONE(MSimdShift)
 };
 
-class MSimdTernaryBitwise : public MTernaryInstruction
+class MSimdSelect : public MTernaryInstruction
 {
-  public:
-    enum Operation {
-        select
-    };
+    bool isElementWise_;
 
-  private:
-    Operation operation_;
-
-    MSimdTernaryBitwise(MDefinition *mask, MDefinition *lhs, MDefinition *rhs, Operation op, MIRType type)
-      : MTernaryInstruction(mask, lhs, rhs), operation_(op)
+    MSimdSelect(MDefinition *mask, MDefinition *lhs, MDefinition *rhs, MIRType type,
+                bool isElementWise)
+      : MTernaryInstruction(mask, lhs, rhs), isElementWise_(isElementWise)
     {
         MOZ_ASSERT(IsSimdType(type));
         MOZ_ASSERT(mask->type() == MIRType_Int32x4);
@@ -2043,20 +2038,32 @@ class MSimdTernaryBitwise : public MTernaryInstruction
     }
 
   public:
-    INSTRUCTION_HEADER(SimdTernaryBitwise);
-    static MSimdTernaryBitwise *NewAsmJS(TempAllocator &alloc, MDefinition *mask, MDefinition *lhs,
-                                         MDefinition *rhs, Operation op, MIRType t)
+    INSTRUCTION_HEADER(SimdSelect);
+    static MSimdSelect *NewAsmJS(TempAllocator &alloc, MDefinition *mask, MDefinition *lhs,
+                                 MDefinition *rhs, MIRType t, bool isElementWise)
     {
-        return new(alloc) MSimdTernaryBitwise(mask, lhs, rhs, op, t);
+        return new(alloc) MSimdSelect(mask, lhs, rhs, t, isElementWise);
+    }
+
+    MDefinition *mask() const {
+        return getOperand(0);
     }
 
     AliasSet getAliasSet() const {
         return AliasSet::None();
     }
 
-    Operation operation() const { return operation_; }
+    bool isElementWise() const {
+        return isElementWise_;
+    }
 
-    ALLOW_CLONE(MSimdTernaryBitwise)
+    bool congruentTo(const MDefinition *ins) const {
+        if (!congruentIfOperandsEqual(ins))
+            return false;
+        return isElementWise_ == ins->toSimdSelect()->isElementWise();
+    }
+
+    ALLOW_CLONE(MSimdSelect)
 };
 
 // Deep clone a constant JSObject.

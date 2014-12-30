@@ -411,7 +411,12 @@ function getIsUS() {
     geoSpecificDefaults = Services.prefs.getBoolPref("browser.search.geoSpecificDefaults");
   } catch(e) {}
 
-  if (!geoSpecificDefaults) {
+  let distroID;
+  try {
+    distroID = Services.prefs.getCharPref("distribution.id");
+  } catch (e) {}
+
+  if (!geoSpecificDefaults || distroID) {
     return false;
   }
 
@@ -1902,8 +1907,12 @@ Engine.prototype = {
     let defaultPrefB = Services.prefs.getDefaultBranch(BROWSER_SEARCH_PREF);
     let nsIPLS = Ci.nsIPrefLocalizedString;
     let defaultEngine;
+    let pref = "defaultenginename";
+    if (getIsUS()) {
+      pref += ".US";
+    }
     try {
-      defaultEngine = defaultPrefB.getComplexValue("defaultenginename", nsIPLS).data;
+      defaultEngine = defaultPrefB.getComplexValue(pref, nsIPLS).data;
     } catch (ex) {}
     return this.name == defaultEngine;
   },

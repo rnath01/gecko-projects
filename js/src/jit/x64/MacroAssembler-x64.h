@@ -1104,7 +1104,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
 
     void boxDouble(FloatRegister src, const ValueOperand &dest) {
-        movq(src, dest.valueReg());
+        vmovq(src, dest.valueReg());
     }
     void boxNonDouble(JSValueType type, Register src, const ValueOperand &dest) {
         MOZ_ASSERT(src != dest.valueReg());
@@ -1151,7 +1151,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
 
     void unboxDouble(const ValueOperand &src, FloatRegister dest) {
-        movq(src.valueReg(), dest);
+        vmovq(src.valueReg(), dest);
     }
     void unboxPrivate(const ValueOperand &src, const Register dest) {
         movq(src.valueReg(), dest);
@@ -1201,6 +1201,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     void unboxObject(const ValueOperand &src, Register dest) { unboxNonDouble(src, dest); }
     void unboxObject(const Operand &src, Register dest) { unboxNonDouble(src, dest); }
     void unboxObject(const Address &src, Register dest) { unboxNonDouble(Operand(src), dest); }
+    void unboxObject(const BaseIndex &src, Register dest) { unboxNonDouble(Operand(src), dest); }
 
     // Extended unboxing API. If the payload is already in a register, returns
     // that register. Otherwise, provides a move to the given scratch register,
