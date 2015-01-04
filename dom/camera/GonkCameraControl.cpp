@@ -61,8 +61,7 @@ using namespace android;
 
 // Construct nsGonkCameraControl on the main thread.
 nsGonkCameraControl::nsGonkCameraControl(uint32_t aCameraId)
-  : CameraControlImpl(aCameraId)
-  , mLastPictureSize({0, 0})
+  : mCameraId(aCameraId)
   , mLastThumbnailSize({0, 0})
   , mPreviewFps(30)
   , mResumePreviewAfterTakingPicture(false) // XXXmikeh - see bug 950102
@@ -88,7 +87,8 @@ nsGonkCameraControl::StartImpl(const Configuration* aInitialConfig)
 
   nsresult rv = StartInternal(aInitialConfig);
   if (NS_WARN_IF(NS_FAILED(rv))) {
-    OnHardwareStateChange(CameraControlListener::kHardwareOpenFailed);
+    OnHardwareStateChange(CameraControlListener::kHardwareOpenFailed,
+                          NS_ERROR_NOT_AVAILABLE);
   }
   return rv;
 }
@@ -129,16 +129,22 @@ nsGonkCameraControl::StartInternal(const Configuration* aInitialConfig)
     rv = SetConfigurationInternal(*aInitialConfig);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       // The initial configuration failed, close up the hardware
-      StopImpl();
+      StopInternal();
       return rv;
     }
   }
 
-  OnHardwareStateChange(CameraControlListener::kHardwareOpen);
-  if (aInitialConfig) {
-    return StartPreviewImpl();
-  }
+  OnHardwareStateChange(CameraControlListener::kHardwareOpen, NS_OK);
 
+  if (aInitialConfig) {
+    rv = StartPreviewInternal();
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+
+    OnConfigurationChange();
+    OnPreviewStateChange(CameraControlListener::kPreviewStarted);
+  }
   return NS_OK;
 }
 
@@ -179,7 +185,7 @@ nsGonkCameraControl::Initialize()
   mParams.Get(CAMERA_PARAM_SUPPORTED_MAXFOCUSAREAS, areas);
   mCurrentConfiguration.mMaxFocusAreas = areas != -1 ? areas : 0;
 
-  mParams.Get(CAMERA_PARAM_PICTURE_SIZE, mLastPictureSize);
+  mParams.Get(CAMERA_PARAM_PICTURE_SIZE, mCurrentConfiguration.mPictureSize);
   mParams.Get(CAMERA_PARAM_PREVIEWSIZE, mCurrentConfiguration.mPreviewSize);
 
   nsString luminance; // check for support
@@ -196,7 +202,7 @@ nsGonkCameraControl::Initialize()
   DOM_CAMERA_LOGI(" - maximum metering areas:        %u\n", mCurrentConfiguration.mMaxMeteringAreas);
   DOM_CAMERA_LOGI(" - maximum focus areas:           %u\n", mCurrentConfiguration.mMaxFocusAreas);
   DOM_CAMERA_LOGI(" - default picture size:          %u x %u\n",
-    mLastPictureSize.width, mLastPictureSize.height);
+    mCurrentConfiguration.mPictureSize.width, mCurrentConfiguration.mPictureSize.height);
   DOM_CAMERA_LOGI(" - default picture file format:   %s\n",
     NS_ConvertUTF16toUTF8(mFileFormat).get());
   DOM_CAMERA_LOGI(" - default picture quality:       %f\n", quality);
@@ -221,10 +227,39 @@ nsGonkCameraControl::Initialize()
     mParams.Get(CAMERA_PARAM_VIDEOSIZE, mLastRecorderSize);
     DOM_CAMERA_LOGI(" - default video recorder size:   %u x %u\n",
       mLastRecorderSize.width, mLastRecorderSize.height);
+
+    Size preferred;
+    mParams.Get(CAMERA_PARAM_PREFERRED_PREVIEWSIZE_FOR_VIDEO, preferred);
+    DOM_CAMERA_LOGI(" - preferred video preview size:  %u x %u\n",
+      preferred.width, preferred.height);
   } else {
     mLastRecorderSize = mCurrentConfiguration.mPreviewSize;
   }
 
+  nsAutoTArray<nsString, 8> modes;
+  mParams.Get(CAMERA_PARAM_SUPPORTED_METERINGMODES, modes);
+  if (!modes.IsEmpty()) {
+    nsString mode;
+    const char* kCenterWeighted = "center-weighted";
+
+    mParams.Get(CAMERA_PARAM_METERINGMODE, mode);
+    if (!mode.EqualsASCII(kCenterWeighted)) {
+      nsTArray<nsString>::index_type i = modes.Length();
+      while (i > 0) {
+        --i;
+        if (modes[i].EqualsASCII(kCenterWeighted)) {
+          mParams.Set(CAMERA_PARAM_METERINGMODE, modes[i]);
+          PushParametersImpl();
+          break;
+        }
+      }
+    }
+
+    mParams.Get(CAMERA_PARAM_METERINGMODE, mode);
+    DOM_CAMERA_LOGI(" - metering mode:                 '%s'\n",
+      NS_ConvertUTF16toUTF8(mode).get());
+  }
+      
   return NS_OK;
 }
 
@@ -237,22 +272,65 @@ nsGonkCameraControl::~nsGonkCameraControl()
 }
 
 nsresult
+nsGonkCameraControl::ValidateConfiguration(const Configuration& aConfig, Configuration& aValidatedConfig)
+{
+  nsAutoTArray<Size, 16> supportedSizes;
+  Get(CAMERA_PARAM_SUPPORTED_PICTURESIZES, supportedSizes);
+
+  nsresult rv = GetSupportedSize(aConfig.mPictureSize, supportedSizes,
+                                 aValidatedConfig.mPictureSize);
+  if (NS_FAILED(rv)) {
+    DOM_CAMERA_LOGW("Unable to find a picture size close to %ux%u\n",
+      aConfig.mPictureSize.width, aConfig.mPictureSize.height);
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  rv = LoadRecorderProfiles();
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  nsString profileName = aConfig.mRecorderProfile;
+  if (profileName.IsEmpty()) {
+    profileName.AssignASCII("default");
+  }
+
+  RecorderProfile* profile;
+  if (!mRecorderProfiles.Get(profileName, &profile)) {
+    DOM_CAMERA_LOGE("Recorder profile '%s' is not supported\n",
+      NS_ConvertUTF16toUTF8(aConfig.mRecorderProfile).get());
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  aValidatedConfig.mMode = aConfig.mMode;
+  aValidatedConfig.mPreviewSize = aConfig.mPreviewSize;
+  aValidatedConfig.mRecorderProfile = profile->GetName();
+  return NS_OK;
+}
+
+nsresult
 nsGonkCameraControl::SetConfigurationInternal(const Configuration& aConfig)
 {
   DOM_CAMERA_LOGT("%s:%d\n", __func__, __LINE__);
 
-  nsresult rv;
+  // Ensure sanity of all provided parameters and determine defaults if
+  // none are provided when given a new configuration
+  Configuration config;
+  nsresult rv = ValidateConfiguration(aConfig, config);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
 
   {
     ICameraControlParameterSetAutoEnter set(this);
 
-    switch (aConfig.mMode) {
+    switch (config.mMode) {
       case kPictureMode:
-        rv = SetPictureConfiguration(aConfig);
+        rv = SetPictureConfiguration(config);
         break;
 
       case kVideoMode:
-        rv = SetVideoConfiguration(aConfig);
+        rv = SetVideoConfiguration(config);
         break;
 
       default:
@@ -266,16 +344,15 @@ nsGonkCameraControl::SetConfigurationInternal(const Configuration& aConfig)
       return rv;
     }
 
-    rv = Set(CAMERA_PARAM_RECORDINGHINT, aConfig.mMode == kVideoMode);
+    rv = Set(CAMERA_PARAM_RECORDINGHINT, config.mMode == kVideoMode);
     if (NS_FAILED(rv)) {
       DOM_CAMERA_LOGE("Failed to set recording hint (0x%x)\n", rv);
     }
   }
 
-  mCurrentConfiguration.mMode = aConfig.mMode;
-  mCurrentConfiguration.mRecorderProfile = aConfig.mRecorderProfile;
-
-  OnConfigurationChange();
+  mCurrentConfiguration.mMode = config.mMode;
+  mCurrentConfiguration.mRecorderProfile = config.mRecorderProfile;
+  mCurrentConfiguration.mPictureSize = config.mPictureSize;
   return NS_OK;
 }
 
@@ -310,15 +387,107 @@ nsGonkCameraControl::SetConfigurationImpl(const Configuration& aConfig)
 
   // Restart the preview
   DOM_CAMERA_LOGT("%s:%d\n", __func__, __LINE__);
-  return StartPreviewImpl();
+  rv = StartPreviewInternal();
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    StopPreviewImpl();
+    return rv;
+  }
+
+  // OnConfigurationChange() indicates the success case of this operation.
+  // It must not be fired until all intermediate steps, including starting
+  // the preview, have completed successfully.
+  OnConfigurationChange();
+  OnPreviewStateChange(CameraControlListener::kPreviewStarted);
+  return NS_OK;
+}
+
+nsresult
+nsGonkCameraControl::MaybeAdjustVideoSize()
+{
+  MOZ_ASSERT(NS_GetCurrentThread() == mCameraThread);
+  MOZ_ASSERT(mSeparateVideoAndPreviewSizesSupported);
+
+  const Size& preview = mCurrentConfiguration.mPreviewSize;
+
+  // Some camera drivers will ignore our preview size if it's larger
+  // than the currently set video recording size, so in picture mode, we
+  // give preview size priority, and bump up the video size just in case.
+  // This is done on a best-effort basis.
+
+  if (preview.width <= mLastRecorderSize.width &&
+      preview.height <= mLastRecorderSize.height) {
+    DOM_CAMERA_LOGI("Video size %ux%u is suitable for preview size %ux%u\n",
+      mLastRecorderSize.width, mLastRecorderSize.height,
+      preview.width, preview.height);
+    return NS_OK;
+  }
+
+  nsTArray<Size> sizes;
+  nsresult rv = Get(CAMERA_PARAM_SUPPORTED_VIDEOSIZES, sizes);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  const uint32_t previewArea = preview.width * preview.height;
+  uint32_t bestDelta = UINT32_MAX;
+  bool foundBest = false;
+  SizeIndex best;
+
+  for (SizeIndex i = 0; i < sizes.Length(); ++i) {
+    const Size& s = sizes[i];
+    if (s.width < preview.width || s.height < preview.height) {
+      continue;
+    }
+
+    const uint32_t area = s.width * s.height;
+    const uint32_t delta = area - previewArea;
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = i;
+      foundBest = true;
+    }
+  }
+
+  if (!foundBest) {
+    // If no candidate was found, the driver will be fine with a video size
+    // smaller than the chosen preview size.
+    DOM_CAMERA_LOGI("No video size candidate for preview size %ux%u (0x%x)\n",
+      preview.width, preview.height, rv);
+    return NS_OK;
+  }
+
+  DOM_CAMERA_LOGI("Adjusting video size upwards to %ux%u\n",
+    sizes[best].width, sizes[best].height);
+  rv = Set(CAMERA_PARAM_VIDEOSIZE, sizes[best]);
+  if (NS_FAILED(rv)) {
+    DOM_CAMERA_LOGW("Failed to adjust video size for preview size %ux%u (0x%x)\n",
+      preview.width, preview.height, rv);
+    return rv;
+  }
+
+  mLastRecorderSize = preview;
+  return NS_OK;
 }
 
 nsresult
 nsGonkCameraControl::SetPictureConfiguration(const Configuration& aConfig)
 {
   DOM_CAMERA_LOGT("%s:%d\n", __func__, __LINE__);
+  MOZ_ASSERT(NS_GetCurrentThread() == mCameraThread);
 
-  nsresult rv = SetPreviewSize(aConfig.mPreviewSize);
+  Size max({0, 0});
+  nsresult rv = SelectCaptureAndPreviewSize(aConfig.mPreviewSize,
+                                            aConfig.mPictureSize, max,
+                                            CAMERA_PARAM_PICTURE_SIZE);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  if (mSeparateVideoAndPreviewSizesSupported) {
+    MaybeAdjustVideoSize();
+  }
+
+  rv = UpdateThumbnailSize();
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -326,9 +495,10 @@ nsGonkCameraControl::SetPictureConfiguration(const Configuration& aConfig)
   mParams.Get(CAMERA_PARAM_PREVIEWFRAMERATE, mPreviewFps);
 
   DOM_CAMERA_LOGI("picture mode preview: wanted %ux%u, got %ux%u (%u fps)\n",
-    aConfig.mPreviewSize.width, aConfig.mPreviewSize.height,
-    mCurrentConfiguration.mPreviewSize.width, mCurrentConfiguration.mPreviewSize.height,
-    mPreviewFps);
+                  aConfig.mPreviewSize.width, aConfig.mPreviewSize.height,
+                  mCurrentConfiguration.mPreviewSize.width,
+                  mCurrentConfiguration.mPreviewSize.height,
+                  mPreviewFps);
 
   return NS_OK;
 }
@@ -566,7 +736,7 @@ nsGonkCameraControl::SetLocation(const Position& aLocation)
 }
 
 nsresult
-nsGonkCameraControl::StartPreviewImpl()
+nsGonkCameraControl::StartPreviewInternal()
 {
   MOZ_ASSERT(NS_GetCurrentThread() == mCameraThread);
   RETURN_IF_NO_CAMERA_HW();
@@ -585,8 +755,17 @@ nsGonkCameraControl::StartPreviewImpl()
     return NS_ERROR_FAILURE;
   }
 
-  OnPreviewStateChange(CameraControlListener::kPreviewStarted);
   return NS_OK;
+}
+
+nsresult
+nsGonkCameraControl::StartPreviewImpl()
+{
+  nsresult rv = StartPreviewInternal();
+  if (NS_SUCCEEDED(rv)) {
+    OnPreviewStateChange(CameraControlListener::kPreviewStarted);
+  }
+  return rv;
 }
 
 nsresult
@@ -695,11 +874,10 @@ nsGonkCameraControl::SetThumbnailSizeImpl(const Size& aSize)
     int area = supportedSizes[i].width * supportedSizes[i].height;
     int delta = abs(area - targetArea);
 
-    if (area != 0
-      && delta < smallestDelta
-      && supportedSizes[i].width * mLastPictureSize.height /
-         supportedSizes[i].height == mLastPictureSize.width
-    ) {
+    if (area != 0 &&
+        delta < smallestDelta &&
+        supportedSizes[i].width * mCurrentConfiguration.mPictureSize.height ==
+          mCurrentConfiguration.mPictureSize.width * supportedSizes[i].height) {
       smallestDelta = delta;
       smallestDeltaIndex = i;
     }
@@ -723,6 +901,12 @@ nsGonkCameraControl::SetThumbnailSizeImpl(const Size& aSize)
   }
 
   return SetAndPush(CAMERA_PARAM_THUMBNAILSIZE, size);
+}
+
+android::sp<android::GonkCameraHardware>
+nsGonkCameraControl::GetCameraHw()
+{
+  return mCameraHw;
 }
 
 nsresult
@@ -782,7 +966,8 @@ nsGonkCameraControl::SetPictureSizeImpl(const Size& aSize)
     return NS_ERROR_INVALID_ARG;
   }
 
-  if (aSize.width == mLastPictureSize.width && aSize.height == mLastPictureSize.height) {
+  if (aSize.width == mCurrentConfiguration.mPictureSize.width &&
+      aSize.height == mCurrentConfiguration.mPictureSize.height) {
     DOM_CAMERA_LOGI("Requested picture size %ux%u unchanged\n", aSize.width, aSize.height);
     return NS_OK;
   }
@@ -810,7 +995,7 @@ nsGonkCameraControl::SetPictureSizeImpl(const Size& aSize)
     return rv;
   }
 
-  mLastPictureSize = best;
+  mCurrentConfiguration.mPictureSize = best;
 
   // Finally, update the thumbnail size in case the picture aspect ratio changed.
   // Some drivers will fail to take a picture if the thumbnail size is not the
@@ -1062,7 +1247,9 @@ nsGonkCameraControl::StopRecordingImpl()
   ReentrantMonitorAutoEnter mon(mRecorderMonitor);
 
   // nothing to do if we have no mRecorder
-  NS_ENSURE_TRUE(mRecorder, NS_OK);
+  if (!mRecorder) {
+    return NS_OK;
+  }
 
   mRecorder->stop();
   mRecorder = nullptr;
@@ -1250,70 +1437,8 @@ nsGonkCameraControl::OnTakePictureError()
 }
 
 nsresult
-nsGonkCameraControl::SetPreviewSize(const Size& aSize)
-{
-  MOZ_ASSERT(NS_GetCurrentThread() == mCameraThread);
-
-  nsTArray<Size> previewSizes;
-  nsresult rv = Get(CAMERA_PARAM_SUPPORTED_PREVIEWSIZES, previewSizes);
-  if (NS_FAILED(rv)) {
-    DOM_CAMERA_LOGE("Camera failed to return any preview sizes (0x%x)\n", rv);
-    return rv;
-  }
-
-  Size best;
-  rv = GetSupportedSize(aSize, previewSizes, best);
-  if (NS_FAILED(rv)) {
-    DOM_CAMERA_LOGE("Failed to find a supported preview size, requested size %dx%d",
-        aSize.width, aSize.height);
-    return rv;
-  }
-
-  if (mSeparateVideoAndPreviewSizesSupported) {
-    // Some camera drivers will ignore our preview size if it's larger
-    // than the currently set video recording size, so we need to set
-    // the video size here as well, just in case.
-    if (best.width > mLastRecorderSize.width || best.height > mLastRecorderSize.height) {
-      SetVideoSize(best);
-    }
-  } else {
-    mLastRecorderSize = best;
-  }
-  mCurrentConfiguration.mPreviewSize = best;
-  return Set(CAMERA_PARAM_PREVIEWSIZE, best);
-}
-
-nsresult
-nsGonkCameraControl::SetVideoSize(const Size& aSize)
-{
-  MOZ_ASSERT(NS_GetCurrentThread() == mCameraThread);
-
-  if (!mSeparateVideoAndPreviewSizesSupported) {
-    DOM_CAMERA_LOGE("Camera does not support setting separate video size\n");
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-  
-  nsTArray<Size> videoSizes;
-  nsresult rv = Get(CAMERA_PARAM_SUPPORTED_VIDEOSIZES, videoSizes);
-  if (NS_FAILED(rv)) {
-    DOM_CAMERA_LOGE("Camera failed to return any video sizes (0x%x)\n", rv);
-    return rv;
-  }
-
-  Size best;
-  rv = GetSupportedSize(aSize, videoSizes, best);
-  if (NS_FAILED(rv)) {
-    DOM_CAMERA_LOGE("Failed to find a supported video size, requested size %dx%d",
-        aSize.width, aSize.height);
-    return rv;
-  }
-  mLastRecorderSize = best;
-  return Set(CAMERA_PARAM_VIDEOSIZE, best);
-}
-
-nsresult
 nsGonkCameraControl::GetSupportedSize(const Size& aSize,
-                                      const nsTArray<Size>& supportedSizes,
+                                      const nsTArray<Size>& aSupportedSizes,
                                       Size& best)
 {
   nsresult rv = NS_ERROR_INVALID_ARG;
@@ -1321,26 +1446,32 @@ nsGonkCameraControl::GetSupportedSize(const Size& aSize,
   uint32_t minSizeDelta = UINT32_MAX;
   uint32_t delta;
 
+  if (aSupportedSizes.IsEmpty()) {
+    // no valid sizes
+    return rv;
+  }
+
   if (!aSize.width && !aSize.height) {
     // no size specified, take the first supported size
-    best = supportedSizes[0];
+    best = aSupportedSizes[0];
     return NS_OK;
   } else if (aSize.width && aSize.height) {
     // both height and width specified, find the supported size closest to
     // the requested size, looking for an exact match first
-    for (nsTArray<Size>::index_type i = 0; i < supportedSizes.Length(); i++) {
-      Size size = supportedSizes[i];
+    for (SizeIndex i = 0; i < aSupportedSizes.Length(); ++i) {
+      Size size = aSupportedSizes[i];
       if (size.width == aSize.width && size.height == aSize.height) {
         best = size;
         return NS_OK;
       }
     }
 
-    // no exact matches--look for a match closest in area
-    uint32_t targetArea = aSize.width * aSize.height;
-    for (nsTArray<Size>::index_type i = 0; i < supportedSizes.Length(); i++) {
-      Size size = supportedSizes[i];
-      uint32_t delta = abs((long int)(size.width * size.height - targetArea));
+    // no exact match on dimensions--look for a match closest in area
+    const uint32_t targetArea = aSize.width * aSize.height;
+    for (SizeIndex i = 0; i < aSupportedSizes.Length(); i++) {
+      Size size = aSupportedSizes[i];
+      uint32_t delta =
+        abs(static_cast<long int>(size.width * size.height - targetArea));
       if (delta < minSizeDelta) {
         minSizeDelta = delta;
         best = size;
@@ -1349,9 +1480,9 @@ nsGonkCameraControl::GetSupportedSize(const Size& aSize,
     }
   } else if (!aSize.width) {
     // width not specified, find closest height match
-    for (nsTArray<Size>::index_type i = 0; i < supportedSizes.Length(); i++) {
-      Size size = supportedSizes[i];
-      delta = abs((long int)(size.height - aSize.height));
+    for (SizeIndex i = 0; i < aSupportedSizes.Length(); i++) {
+      Size size = aSupportedSizes[i];
+      delta = abs(static_cast<long int>(size.height - aSize.height));
       if (delta < minSizeDelta) {
         minSizeDelta = delta;
         best = size;
@@ -1360,9 +1491,9 @@ nsGonkCameraControl::GetSupportedSize(const Size& aSize,
     }
   } else if (!aSize.height) {
     // height not specified, find closest width match
-    for (nsTArray<Size>::index_type i = 0; i < supportedSizes.Length(); i++) {
-      Size size = supportedSizes[i];
-      delta = abs((long int)(size.width - aSize.width));
+    for (SizeIndex i = 0; i < aSupportedSizes.Length(); i++) {
+      Size size = aSupportedSizes[i];
+      delta = abs(static_cast<long int>(size.width - aSize.width));
       if (delta < minSizeDelta) {
         minSizeDelta = delta;
         best = size;
@@ -1370,20 +1501,129 @@ nsGonkCameraControl::GetSupportedSize(const Size& aSize,
       }
     }
   }
+
   return rv;
+}
+
+nsresult
+nsGonkCameraControl::SelectCaptureAndPreviewSize(const Size& aPreviewSize,
+                                                 const Size& aCaptureSize,
+                                                 const Size& aMaxSize,
+                                                 uint32_t aCaptureSizeKey)
+{
+  MOZ_ASSERT(NS_GetCurrentThread() == mCameraThread);
+
+  // At this point, we know the capture size has been validated and replaced
+  // if necessary with the best matching supported value.
+  DOM_CAMERA_LOGI("Select capture size %ux%u, preview size %ux%u, maximum size %ux%u\n",
+                  aCaptureSize.width, aCaptureSize.height,
+                  aPreviewSize.width, aPreviewSize.height,
+                  aMaxSize.width, aMaxSize.height);
+
+  nsAutoTArray<Size, 16> sizes;
+  nsresult rv = Get(CAMERA_PARAM_SUPPORTED_PREVIEWSIZES, sizes);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  // May optionally apply a ceiling to the preview size. Any supported preview
+  // size with an area larger than the maximum will be ignored regardless of
+  // aspect ratio or delta to requested preview size.
+  uint32_t maxArea = aMaxSize.width * aMaxSize.height;
+  if (maxArea == 0) {
+    maxArea = UINT32_MAX;
+  }
+
+  const uint32_t previewArea = aPreviewSize.width * aPreviewSize.height;
+
+  // We should select a preview size with the same aspect ratio as the capture
+  // size and minimize the delta with the requested preview size. If we are
+  // unable to find any supported preview sizes which match the aspect ratio
+  // of the capture size, we fallback to only minimizing the delta with the
+  // requested preview size.
+
+  SizeIndex bestSizeMatch = 0; // initializers to keep warnings away
+  SizeIndex bestSizeMatchWithAspectRatio = 0;
+  bool foundSizeMatch = false;
+  bool foundSizeMatchWithAspectRatio = false;
+
+  uint32_t bestAreaDelta = UINT32_MAX;
+  uint32_t bestAreaDeltaWithAspect = UINT32_MAX;
+
+  for (SizeIndex i = 0; i < sizes.Length(); ++i) {
+    const Size& s = sizes[i];
+
+    // preview size must be smaller or equal to the capture size
+    if (aCaptureSize.width < s.width || aCaptureSize.height < s.height) {
+      continue;
+    }
+
+    const uint32_t area = s.width * s.height;
+    if (area > maxArea) {
+      continue;
+    }
+
+    const uint32_t delta = abs(static_cast<long int>(previewArea - area));
+    if (s.width * aCaptureSize.height == aCaptureSize.width * s.height) {
+      if (delta == 0) {
+        // exact match, including aspect ratio--we can stop now
+        bestSizeMatchWithAspectRatio = i;
+        foundSizeMatchWithAspectRatio = true;
+        break;
+      } else if (delta < bestAreaDeltaWithAspect) {
+        // aspect ratio match
+        bestAreaDeltaWithAspect = delta;
+        bestSizeMatchWithAspectRatio = i;
+        foundSizeMatchWithAspectRatio = true;
+      }
+    } else if (delta < bestAreaDelta) {
+      bestAreaDelta = delta;
+      bestSizeMatch = i;
+      foundSizeMatch = true;
+    }
+  }
+
+  Size previewSize;
+  if (foundSizeMatchWithAspectRatio) {
+    previewSize = sizes[bestSizeMatchWithAspectRatio];
+  } else if (foundSizeMatch) {
+    DOM_CAMERA_LOGW("Unable to match a preview size with aspect ratio of capture size %ux%u\n",
+      aCaptureSize.width, aCaptureSize.height);
+    previewSize = sizes[bestSizeMatch];
+  } else {
+    DOM_CAMERA_LOGE("Unable to find a preview size for capture size %ux%u\n",
+      aCaptureSize.width, aCaptureSize.height);
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  DOM_CAMERA_LOGI("Setting capture size to %ux%u, preview size to %ux%u\n",
+                  aCaptureSize.width, aCaptureSize.height,
+                  previewSize.width, previewSize.height);
+
+  Size oldSize;
+  rv = Get(CAMERA_PARAM_PREVIEWSIZE, oldSize);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  rv = Set(CAMERA_PARAM_PREVIEWSIZE, previewSize);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+  rv = Set(aCaptureSizeKey, aCaptureSize);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    Set(CAMERA_PARAM_PREVIEWSIZE, oldSize); // error, try to restore the original preview size
+    return rv;
+  }
+
+  mCurrentConfiguration.mPreviewSize = previewSize;
+  return NS_OK;
 }
 
 nsresult
 nsGonkCameraControl::SetVideoConfiguration(const Configuration& aConfig)
 {
   DOM_CAMERA_LOGT("%s:%d\n", __func__, __LINE__);
-
-  // The application may cache an old configuration and already have
-  // a desired recorder profile without checking the capabilities first
-  nsresult rv = LoadRecorderProfiles();
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
 
   RecorderProfile* profile;
   if (!mRecorderProfiles.Get(aConfig.mRecorderProfile, &profile)) {
@@ -1392,12 +1632,11 @@ nsGonkCameraControl::SetVideoConfiguration(const Configuration& aConfig)
     return NS_ERROR_INVALID_ARG;
   }
 
-  mCurrentConfiguration.mRecorderProfile = aConfig.mRecorderProfile;
   const RecorderProfile::Video& video(profile->GetVideo());
   const Size& size = video.GetSize();
-  int fps = video.GetFramesPerSecond();
-  if (fps <= 0 || size.width <= 0 || size.height <= 0) {
-    DOM_CAMERA_LOGE("Can't configure video with fps=%d, width=%d, height=%d\n",
+  const uint32_t fps = video.GetFramesPerSecond();
+  if (fps == 0 || fps > INT_MAX || size.width == 0 || size.height == 0) {
+    DOM_CAMERA_LOGE("Can't configure video with fps=%u, width=%u, height=%u\n",
       fps, size.width, size.height);
     return NS_ERROR_FAILURE;
   }
@@ -1410,32 +1649,35 @@ nsGonkCameraControl::SetVideoConfiguration(const Configuration& aConfig)
 
     if (mSeparateVideoAndPreviewSizesSupported) {
       // The camera supports two video streams: a low(er) resolution preview
-      // stream and and a potentially high(er) resolution stream for encoding. 
-      rv = SetVideoSize(size);
-      if (NS_FAILED(rv)) {
-        DOM_CAMERA_LOGE("Failed to set video mode video size (0x%x)\n", rv);
+      // stream and and a potentially high(er) resolution stream for encoding.
+      Size preferred;
+      rv = Get(CAMERA_PARAM_PREFERRED_PREVIEWSIZE_FOR_VIDEO, preferred);
+      if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
       }
 
-      // The video size must be set first, before the preview size, because
-      // some platforms have a dependency between the two.
-      rv = SetPreviewSize(aConfig.mPreviewSize);
+      rv = SelectCaptureAndPreviewSize(aConfig.mPreviewSize, size, preferred,
+                                       CAMERA_PARAM_VIDEOSIZE);
       if (NS_FAILED(rv)) {
-        DOM_CAMERA_LOGE("Failed to set video mode preview size (0x%x)\n", rv);
+        DOM_CAMERA_LOGE("Failed to set video and preview sizes (0x%x)\n", rv);
         return rv;
       }
     } else {
       // The camera only supports a single video stream: in this case, we set
       // the preview size to be the desired video recording size, and ignore
       // the specified preview size.
-      rv = SetPreviewSize(size);
+      rv = Set(CAMERA_PARAM_PREVIEWSIZE, size);
       if (NS_FAILED(rv)) {
         DOM_CAMERA_LOGE("Failed to set video mode preview size (0x%x)\n", rv);
         return rv;
       }
+
+      mCurrentConfiguration.mPreviewSize = size;
     }
 
-    rv = Set(CAMERA_PARAM_PREVIEWFRAMERATE, fps);
+    mLastRecorderSize = size;
+
+    rv = Set(CAMERA_PARAM_PREVIEWFRAMERATE, static_cast<int>(fps));
     if (NS_FAILED(rv)) {
       DOM_CAMERA_LOGE("Failed to set video mode frame rate (0x%x)\n", rv);
       return rv;
@@ -1665,7 +1907,7 @@ nsGonkCameraControl::SetupRecording(int aFd, int aRotation,
 }
 
 nsresult
-nsGonkCameraControl::StopImpl()
+nsGonkCameraControl::StopInternal()
 {
   DOM_CAMERA_LOGT("%s:%d : this=%p\n", __func__, __LINE__, this);
 
@@ -1673,7 +1915,7 @@ nsGonkCameraControl::StopImpl()
   StopRecordingImpl();
 
   // stop the preview
-  StopPreviewImpl();
+  nsresult rv = StopPreviewImpl();
 
   // release the hardware handle
   if (mCameraHw.get()){
@@ -1681,8 +1923,22 @@ nsGonkCameraControl::StopImpl()
      mCameraHw.clear();
   }
 
-  OnHardwareStateChange(CameraControlListener::kHardwareClosed);
-  return NS_OK;
+  return rv;
+}
+
+nsresult
+nsGonkCameraControl::StopImpl()
+{
+  DOM_CAMERA_LOGT("%s:%d : this=%p\n", __func__, __LINE__, this);
+
+  nsresult rv = StopInternal();
+  if (rv != NS_ERROR_NOT_INITIALIZED) {
+    rv = NS_OK;
+  }
+  if (NS_SUCCEEDED(rv)) {
+    OnHardwareStateChange(CameraControlListener::kHardwareClosed, NS_OK);
+  }
+  return rv;
 }
 
 nsresult
@@ -1701,9 +1957,12 @@ nsGonkCameraControl::LoadRecorderProfiles()
       return NS_ERROR_NOT_AVAILABLE;
     }
 
+    nsTArray<RecorderProfile>::size_type bestIndexMatch = 0;
+    int bestAreaMatch = 0;
+
     // Limit profiles to those video sizes supported by the camera hardware...
     for (nsTArray<RecorderProfile>::size_type i = 0; i < profiles.Length(); ++i) {
-      int width = profiles[i]->GetVideo().GetSize().width; 
+      int width = profiles[i]->GetVideo().GetSize().width;
       int height = profiles[i]->GetVideo().GetSize().height;
       if (width < 0 || height < 0) {
         DOM_CAMERA_LOGW("Ignoring weird profile '%s' with width and/or height < 0\n",
@@ -1714,9 +1973,21 @@ nsGonkCameraControl::LoadRecorderProfiles()
         if (static_cast<uint32_t>(width) == sizes[n].width &&
             static_cast<uint32_t>(height) == sizes[n].height) {
           mRecorderProfiles.Put(profiles[i]->GetName(), profiles[i]);
+          int area = width * height;
+          if (area > bestAreaMatch) {
+            bestIndexMatch = i;
+            bestAreaMatch = area;
+          }
           break;
         }
       }
+    }
+
+    // Default profile is the one with the largest area.
+    if (bestAreaMatch > 0) {
+      nsAutoString name;
+      name.AssignASCII("default");
+      mRecorderProfiles.Put(name, profiles[bestIndexMatch]);
     }
   }
 
@@ -1785,8 +2056,8 @@ nsGonkCameraControl::OnSystemError(CameraControlListener::SystemContext aWhere,
                                    nsresult aError)
 {
   if (aWhere == CameraControlListener::kSystemService) {
-    OnPreviewStateChange(CameraControlListener::kPreviewStopped);
-    OnHardwareStateChange(CameraControlListener::kHardwareClosed);
+    StopInternal();
+    OnHardwareStateChange(CameraControlListener::kHardwareClosed, NS_ERROR_FAILURE);
   }
 
   CameraControlImpl::OnSystemError(aWhere, aError);
@@ -1841,12 +2112,6 @@ void
 OnShutter(nsGonkCameraControl* gc)
 {
   gc->OnShutter();
-}
-
-void
-OnClosed(nsGonkCameraControl* gc)
-{
-  gc->OnClosed();
 }
 
 void

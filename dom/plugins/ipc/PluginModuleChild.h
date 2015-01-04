@@ -72,9 +72,16 @@ protected:
 
     virtual bool ShouldContinueFromReplyTimeout() MOZ_OVERRIDE;
 
+    virtual bool RecvSettingChanged(const PluginSettings& aSettings) MOZ_OVERRIDE;
+
     // Implement the PPluginModuleChild interface
+    virtual bool RecvDisableFlashProtectedMode() MOZ_OVERRIDE;
     virtual bool AnswerNP_GetEntryPoints(NPError* rv) MOZ_OVERRIDE;
-    virtual bool AnswerNP_Initialize(NPError* rv) MOZ_OVERRIDE;
+    virtual bool AnswerNP_Initialize(const PluginSettings& aSettings, NPError* rv) MOZ_OVERRIDE;
+    virtual bool RecvAsyncNP_Initialize(const PluginSettings& aSettings) MOZ_OVERRIDE;
+    virtual bool AnswerSyncNPP_New(PPluginInstanceChild* aActor, NPError* rv)
+                                   MOZ_OVERRIDE;
+    virtual bool RecvAsyncNPP_New(PPluginInstanceChild* aActor) MOZ_OVERRIDE;
 
     virtual PPluginModuleChild*
     AllocPPluginModuleChild(mozilla::ipc::Transport* aTransport,
@@ -84,19 +91,19 @@ protected:
     AllocPPluginInstanceChild(const nsCString& aMimeType,
                               const uint16_t& aMode,
                               const InfallibleTArray<nsCString>& aNames,
-                              const InfallibleTArray<nsCString>& aValues,
-                              NPError* rv) MOZ_OVERRIDE;
+                              const InfallibleTArray<nsCString>& aValues)
+                              MOZ_OVERRIDE;
 
     virtual bool
     DeallocPPluginInstanceChild(PPluginInstanceChild* aActor) MOZ_OVERRIDE;
 
     virtual bool
-    AnswerPPluginInstanceConstructor(PPluginInstanceChild* aActor,
-                                     const nsCString& aMimeType,
-                                     const uint16_t& aMode,
-                                     const InfallibleTArray<nsCString>& aNames,
-                                     const InfallibleTArray<nsCString>& aValues,
-                                     NPError* rv) MOZ_OVERRIDE;
+    RecvPPluginInstanceConstructor(PPluginInstanceChild* aActor,
+                                   const nsCString& aMimeType,
+                                   const uint16_t& aMode,
+                                   const InfallibleTArray<nsCString>& aNames,
+                                   const InfallibleTArray<nsCString>& aValues)
+                                   MOZ_OVERRIDE;
     virtual bool
     AnswerNP_Shutdown(NPError *rv) MOZ_OVERRIDE;
 
@@ -140,11 +147,15 @@ protected:
     virtual bool
     RecvProcessNativeEventsInInterruptCall() MOZ_OVERRIDE;
 
-    virtual bool
-    AnswerGeckoGetProfile(nsCString* aProfile) MOZ_OVERRIDE;
+    virtual bool RecvStartProfiler(const uint32_t& aEntries,
+                                   const double& aInterval,
+                                   const nsTArray<nsCString>& aFeatures,
+                                   const nsTArray<nsCString>& aThreadNameFilters) MOZ_OVERRIDE;
+    virtual bool RecvStopProfiler() MOZ_OVERRIDE;
+    virtual bool AnswerGetProfile(nsCString* aProfile) MOZ_OVERRIDE;
 
 public:
-    PluginModuleChild(bool aIsChrome);
+    explicit PluginModuleChild(bool aIsChrome);
     virtual ~PluginModuleChild();
 
     bool CommonInit(base::ProcessHandle aParentProcessHandle,
@@ -226,9 +237,7 @@ public:
     }
 
     bool GetNativeCursorsSupported() {
-        bool supported = false;
-        SendGetNativeCursorsSupported(&supported);
-        return supported;
+        return Settings().nativeCursorsSupported();
     }
 #endif
 
@@ -278,7 +287,10 @@ public:
 
     int GetQuirks() { return mQuirks; }
 
+    const PluginSettings& Settings() const { return mCachedSettings; }
+
 private:
+    NPError DoNP_Initialize(const PluginSettings& aSettings);
     void AddQuirk(PluginQuirks quirk) {
       if (mQuirks == QUIRKS_NOT_INITIALIZED)
         mQuirks = 0;
@@ -287,6 +299,12 @@ private:
     void InitQuirksModes(const nsCString& aMimeType);
     bool InitGraphics();
     void DeinitGraphics();
+
+#if defined(OS_WIN)
+    void HookProtectedMode();
+    void CleanupProtectedModeHook();
+#endif
+
 #if defined(MOZ_WIDGET_GTK)
     static gboolean DetectNestedEventLoop(gpointer data);
     static gboolean ProcessBrowserEvents(gpointer data);
@@ -317,6 +335,8 @@ private:
 #endif
 
     NPPluginFuncs mFunctions;
+
+    PluginSettings mCachedSettings;
 
 #if defined(MOZ_WIDGET_GTK)
     // If a plugin spins a nested glib event loop in response to a

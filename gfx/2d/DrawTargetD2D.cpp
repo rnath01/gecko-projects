@@ -76,9 +76,7 @@ public:
 
     HRESULT hr = mDT->mDevice->CreateTexture2D(&desc, nullptr, byRef(tmpTexture));
     if (FAILED(hr)) {
-      gfxCriticalError() << "[D2D] CreateTexture2D failure " << size << " Code: " << hexa(hr);
-      // Crash debug builds but try to recover in release builds.
-      MOZ_ASSERT(false);
+      gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(size))) << "[D2D] 1 CreateTexture2D failure " << size << " Code: " << hexa(hr);
       return;
     }
     mDT->mDevice->CopyResource(tmpTexture, mDT->mTexture);
@@ -94,8 +92,6 @@ public:
 
     if (FAILED(hr)) {
       gfxCriticalError() << "[D2D] CreateSharedBitmap failure " << size << " Code: " << hexa(hr);
-      // Crash debug builds but try to recover in release builds.
-      MOZ_ASSERT(false);
       return;
     }
 
@@ -535,7 +531,7 @@ DrawTargetD2D::DrawSurfaceWithShadow(SourceSurface *aSurface,
     hr = mDevice->CreateTexture2D(&desc, nullptr, byRef(mipTexture));
 
     if (FAILED(hr)) {
-      gfxCriticalError() << "[D2D] CreateTexture2D failure " << aSurface->GetSize() << " Code: " << hexa(hr);
+      gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSurface->GetSize()))) << "[D2D] 2 CreateTexture2D failure " << aSurface->GetSize() << " Code: " << hexa(hr);
       return;
     }
 
@@ -562,7 +558,7 @@ DrawTargetD2D::DrawSurfaceWithShadow(SourceSurface *aSurface,
     hr = mDevice->CreateTexture2D(&desc, nullptr, byRef(tmpDSTexture));
 
     if (FAILED(hr)) {
-      gfxCriticalError() << "[D2D] CreateTexture2D failure " << dsSize << " Code: " << hexa(hr);
+      gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(dsSize))) << "[D2D] 3 CreateTexture2D failure " << dsSize << " Code: " << hexa(hr);
       return;
     }
 
@@ -1365,7 +1361,7 @@ DrawTargetD2D::Init(const IntSize &aSize, SurfaceFormat aFormat)
   hr = mDevice->CreateTexture2D(&desc, nullptr, byRef(mTexture));
 
   if (FAILED(hr)) {
-    gfxCriticalError() << "Failed to init Direct2D DrawTarget. Size: " << mSize << " Code: " << hexa(hr);
+    gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize))) << "Failed to init Direct2D DrawTarget. Size: " << mSize << " Code: " << hexa(hr);
     return false;
   }
 
@@ -1386,7 +1382,7 @@ DrawTargetD2D::Init(ID3D10Texture2D *aTexture, SurfaceFormat aFormat)
   mFormat = aFormat;
 
   if (!mTexture) {
-    gfxDebug() << "No valid texture for Direct2D draw target initialization.";
+    gfxCriticalError() << "No valid texture for Direct2D draw target initialization.";
     return false;
   }
 
@@ -2375,7 +2371,8 @@ DrawTargetD2D::CreateBrushForPattern(const Pattern &aPattern, Float aAlpha)
       RefPtr<DrawTargetD2D> dt = new DrawTargetD2D();
       if (!dt->Init(samplingRect.Size(),
                     source->GetFormat())) {
-        MOZ_ASSERT("Invalid sampling rect size!");
+        // FIXME: Uncomment assertion, bug 1068195
+        // MOZ_ASSERT(false, "Invalid sampling rect size!");
         return nullptr;
       }
 
@@ -2420,7 +2417,9 @@ DrawTargetD2D::CreateBrushForPattern(const Pattern &aPattern, Float aAlpha)
 
         bitmap = CreatePartialBitmapForSurface(dataSurf, mTransform, mSize, pat->mExtendMode, mat, mRT, &sourceRect);
         if (!bitmap) {
-          return nullptr;
+          RefPtr<ID2D1SolidColorBrush> colBrush;
+          mRT->CreateSolidColorBrush(D2D1::ColorF(0, 0), byRef(colBrush));
+          return colBrush.forget();
         }
       }
       break;

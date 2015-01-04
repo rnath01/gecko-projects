@@ -28,7 +28,8 @@
   var UnsupportedBrowserView  = loop.webapp.UnsupportedBrowserView;
   var UnsupportedDeviceView   = loop.webapp.UnsupportedDeviceView;
   var CallUrlExpiredView      = loop.webapp.CallUrlExpiredView;
-  var PendingConversationView = loop.webapp.PendingConversationView;
+  var GumPromptConversationView = loop.webapp.GumPromptConversationView;
+  var WaitingConversationView = loop.webapp.WaitingConversationView;
   var StartConversationView   = loop.webapp.StartConversationView;
   var FailedConversationView  = loop.webapp.FailedConversationView;
   var EndedConversationView   = loop.webapp.EndedConversationView;
@@ -39,8 +40,9 @@
   var ConversationView = loop.shared.views.ConversationView;
   var FeedbackView = loop.shared.views.FeedbackView;
 
-  // Room constants
+  // Store constants
   var ROOM_STATES = loop.store.ROOM_STATES;
+  var FEEDBACK_STATES = loop.store.FEEDBACK_STATES;
 
   // Local helpers
   function returnTrue() {
@@ -62,17 +64,21 @@
   );
 
   var dispatcher = new loop.Dispatcher();
-  var activeRoomStore = new loop.store.ActiveRoomStore({
-    dispatcher: dispatcher,
+  var activeRoomStore = new loop.store.ActiveRoomStore(dispatcher, {
     mozLoop: navigator.mozLoop,
     sdkDriver: {}
   });
-  var roomStore = new loop.store.RoomStore({
-    dispatcher: dispatcher,
+  var roomStore = new loop.store.RoomStore(dispatcher, {
     mozLoop: navigator.mozLoop
+  });
+  var feedbackStore = new loop.store.FeedbackStore(dispatcher, {
+    feedbackClient: stageFeedbackApiClient
   });
 
   // Local mocks
+
+  var mockMozLoopRooms = _.extend({}, navigator.mozLoop);
+  mockMozLoopRooms.roomsEnabled = true;
 
   var mockContact = {
     name: ["Mr Smith"],
@@ -126,7 +132,7 @@
       "audio", "audio-hover", "audio-active", "block",
       "block-red", "block-hover", "block-active", "contacts", "contacts-hover",
       "contacts-active", "copy", "checkmark", "google", "google-hover",
-      "google-active", "history", "history-hover", "history-active",
+      "google-active", "history", "history-hover", "history-active", "leave",
       "precall", "precall-hover", "precall-active", "settings", "settings-hover",
       "settings-active", "tag", "tag-hover", "tag-active", "trash", "unblock",
       "unblock-hover", "unblock-active", "video", "video-hover", "video-active"
@@ -212,6 +218,7 @@
             Example({summary: "Call URL retrieved", dashed: "true", style: {width: "332px"}}, 
               PanelView({client: mockClient, notifications: notifications, 
                          callUrl: "http://invalid.example.url/", 
+                         mozLoop: navigator.mozLoop, 
                          dispatcher: dispatcher, 
                          roomStore: roomStore})
             ), 
@@ -219,34 +226,40 @@
               PanelView({client: mockClient, notifications: notifications, 
                          callUrl: "http://invalid.example.url/", 
                          userProfile: {email: "test@example.com"}, 
+                         mozLoop: navigator.mozLoop, 
                          dispatcher: dispatcher, 
                          roomStore: roomStore})
             ), 
             Example({summary: "Pending call url retrieval", dashed: "true", style: {width: "332px"}}, 
               PanelView({client: mockClient, notifications: notifications, 
+                         mozLoop: navigator.mozLoop, 
                          dispatcher: dispatcher, 
                          roomStore: roomStore})
             ), 
             Example({summary: "Pending call url retrieval - authenticated", dashed: "true", style: {width: "332px"}}, 
               PanelView({client: mockClient, notifications: notifications, 
                          userProfile: {email: "test@example.com"}, 
+                         mozLoop: navigator.mozLoop, 
                          dispatcher: dispatcher, 
                          roomStore: roomStore})
             ), 
             Example({summary: "Error Notification", dashed: "true", style: {width: "332px"}}, 
               PanelView({client: mockClient, notifications: errNotifications, 
+                         mozLoop: navigator.mozLoop, 
                          dispatcher: dispatcher, 
                          roomStore: roomStore})
             ), 
             Example({summary: "Error Notification - authenticated", dashed: "true", style: {width: "332px"}}, 
               PanelView({client: mockClient, notifications: errNotifications, 
                          userProfile: {email: "test@example.com"}, 
+                         mozLoop: navigator.mozLoop, 
                          dispatcher: dispatcher, 
                          roomStore: roomStore})
             ), 
             Example({summary: "Room list tab", dashed: "true", style: {width: "332px"}}, 
               PanelView({client: mockClient, notifications: notifications, 
                          userProfile: {email: "test@example.com"}, 
+                         mozLoop: mockMozLoopRooms, 
                          dispatcher: dispatcher, 
                          roomStore: roomStore, 
                          selectedTab: "rooms"})
@@ -324,16 +337,24 @@
             )
           ), 
 
-          Section({name: "PendingConversationView"}, 
-            Example({summary: "Pending conversation view (connecting)", dashed: "true"}, 
+          Section({name: "GumPromptConversationView"}, 
+            Example({summary: "Gum Prompt conversation view", dashed: "true"}, 
               React.DOM.div({className: "standalone"}, 
-                PendingConversationView({websocket: mockWebSocket, 
+                GumPromptConversationView(null)
+              )
+            )
+          ), 
+
+          Section({name: "WaitingConversationView"}, 
+            Example({summary: "Waiting conversation view (connecting)", dashed: "true"}, 
+              React.DOM.div({className: "standalone"}, 
+                WaitingConversationView({websocket: mockWebSocket, 
                                          dispatcher: dispatcher})
               )
             ), 
-            Example({summary: "Pending conversation view (ringing)", dashed: "true"}, 
+            Example({summary: "Waiting conversation view (ringing)", dashed: "true"}, 
               React.DOM.div({className: "standalone"}, 
-                PendingConversationView({websocket: mockWebSocket, 
+                WaitingConversationView({websocket: mockWebSocket, 
                                          dispatcher: dispatcher, 
                                          callState: "ringing"})
               )
@@ -462,13 +483,13 @@
               React.DOM.a({href: "https://input.allizom.org/"}, "input.allizom.org"), "."
             ), 
             Example({summary: "Default (useable demo)", dashed: "true", style: {width: "260px"}}, 
-              FeedbackView({feedbackApiClient: stageFeedbackApiClient})
+              FeedbackView({feedbackStore: feedbackStore})
             ), 
             Example({summary: "Detailed form", dashed: "true", style: {width: "260px"}}, 
-              FeedbackView({feedbackApiClient: stageFeedbackApiClient, step: "form"})
+              FeedbackView({feedbackStore: feedbackStore, feedbackState: FEEDBACK_STATES.DETAILS})
             ), 
             Example({summary: "Thank you!", dashed: "true", style: {width: "260px"}}, 
-              FeedbackView({feedbackApiClient: stageFeedbackApiClient, step: "finished"})
+              FeedbackView({feedbackStore: feedbackStore, feedbackState: FEEDBACK_STATES.SENT})
             )
           ), 
 
@@ -488,7 +509,7 @@
                                        video: {enabled: true}, 
                                        audio: {enabled: true}, 
                                        conversation: mockConversationModel, 
-                                       feedbackApiClient: stageFeedbackApiClient, 
+                                       feedbackStore: feedbackStore, 
                                        onAfterFeedbackReceived: noop})
               )
             )
@@ -524,7 +545,7 @@
           Section({name: "UnsupportedBrowserView"}, 
             Example({summary: "Standalone Unsupported Browser"}, 
               React.DOM.div({className: "standalone"}, 
-                UnsupportedBrowserView(null)
+                UnsupportedBrowserView({helper: {isFirefox: returnFalse}})
               )
             )
           ), 
@@ -610,6 +631,17 @@
               )
             ), 
 
+            Example({summary: "Standalone room conversation (feedback)"}, 
+              React.DOM.div({className: "standalone"}, 
+                StandaloneRoomView({
+                  dispatcher: dispatcher, 
+                  activeRoomStore: activeRoomStore, 
+                  feedbackStore: feedbackStore, 
+                  roomState: ROOM_STATES.ENDED, 
+                  helper: {isFirefox: returnFalse}})
+              )
+            ), 
+
             Example({summary: "Standalone room conversation (failed)"}, 
               React.DOM.div({className: "standalone"}, 
                 StandaloneRoomView({
@@ -672,7 +704,11 @@
   }
 
   window.addEventListener("DOMContentLoaded", function() {
-    React.renderComponent(App(null), document.body);
+    try {
+      React.renderComponent(App(null), document.body);
+    } catch(err) {
+      console.log(err);
+    }
 
     _renderComponentsInIframes();
 

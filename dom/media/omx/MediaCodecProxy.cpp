@@ -110,10 +110,6 @@ MediaCodecProxy::MediaCodecProxy(sp<ALooper> aLooper,
 MediaCodecProxy::~MediaCodecProxy()
 {
   releaseCodec();
-
-  // Complete all pending Binder ipc transactions
-  IPCThreadState::self()->flushCommands();
-
   cancelResource();
 }
 
@@ -137,6 +133,12 @@ MediaCodecProxy::requestResource()
   }
 
   return true;
+}
+
+void
+MediaCodecProxy::RequestMediaResources()
+{
+  requestResource();
 }
 
 void
@@ -181,6 +183,7 @@ MediaCodecProxy::releaseCodec()
 
     // Release MediaCodec
     if (mCodec != nullptr) {
+      status_t err = mCodec->stop();
       mCodec->release();
       mCodec = nullptr;
     }
@@ -190,6 +193,10 @@ MediaCodecProxy::releaseCodec()
     // this value come from stagefright's AwesomePlayer.
     usleep(1000);
   }
+
+  // Complete all pending Binder ipc transactions
+  IPCThreadState::self()->flushCommands();
+
 }
 
 bool
@@ -504,6 +511,21 @@ bool MediaCodecProxy::Prepare()
   return true;
 }
 
+bool MediaCodecProxy::UpdateOutputBuffers()
+{
+  if (mCodec == nullptr) {
+    ALOG("MediaCodec has not been inited from input!");
+    return false;
+  }
+
+  status_t err = getOutputBuffers(&mOutputBuffers);
+  if (err != OK){
+    ALOG("Couldn't update output buffers from MediaCodec");
+    return false;
+  }
+  return true;
+}
+
 status_t MediaCodecProxy::Input(const uint8_t* aData, uint32_t aDataSize,
                                 int64_t aTimestampUsecs, uint64_t aflags)
 {
@@ -540,7 +562,6 @@ status_t MediaCodecProxy::Input(const uint8_t* aData, uint32_t aDataSize,
 
 status_t MediaCodecProxy::Output(MediaBuffer** aBuffer, int64_t aTimeoutUs)
 {
-
   if (mCodec == nullptr) {
     ALOG("MediaCodec has not been inited from output!");
     return NO_INIT;
@@ -557,7 +578,6 @@ status_t MediaCodecProxy::Output(MediaBuffer** aBuffer, int64_t aTimeoutUs)
   status_t err = dequeueOutputBuffer(&index, &offset, &size,
                                       &timeUs, &flags, aTimeoutUs);
   if (err != OK) {
-    ALOG("Output returned %d", err);
     return err;
   }
 
@@ -583,7 +603,10 @@ status_t MediaCodecProxy::Output(MediaBuffer** aBuffer, int64_t aTimeoutUs)
 
 bool MediaCodecProxy::IsWaitingResources()
 {
-  return mCodec == nullptr;
+  if (mResourceHandler.get()) {
+    return mResourceHandler->IsWaitingResource();
+  }
+  return false;
 }
 
 bool MediaCodecProxy::IsDormantNeeded()
@@ -593,11 +616,8 @@ bool MediaCodecProxy::IsDormantNeeded()
 
 void MediaCodecProxy::ReleaseMediaResources()
 {
-  if (mCodec.get()) {
-    mCodec->stop();
-    mCodec->release();
-    mCodec.clear();
-  }
+  releaseCodec();
+  cancelResource();
 }
 
 void MediaCodecProxy::ReleaseMediaBuffer(MediaBuffer* aBuffer) {

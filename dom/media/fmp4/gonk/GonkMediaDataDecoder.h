@@ -32,8 +32,12 @@ public:
   // MP4Reader.
   virtual nsresult Input(mp4_demuxer::MP4Sample* aSample) = 0;
   virtual nsresult Output(int64_t aStreamOffset,
-                          nsAutoPtr<MediaData>& aOutput) = 0;
+                          nsRefPtr<MediaData>& aOutput) = 0;
+  virtual nsresult Flush() = 0;
 
+  virtual void AllocateMediaResources() {};
+
+  virtual void ReleaseMediaResources() {};
 };
 
 // Samples are decoded using the GonkDecoder (MediaCodec)
@@ -62,6 +66,8 @@ public:
   virtual bool IsWaitingMediaResources() MOZ_OVERRIDE;
 
   virtual bool IsDormantNeeded() MOZ_OVERRIDE;
+
+  virtual void AllocateMediaResources() MOZ_OVERRIDE;
 
   virtual void ReleaseMediaResources() MOZ_OVERRIDE;
 
@@ -92,6 +98,8 @@ private:
   int64_t mLastStreamOffset;
   // Set it ture when there is no input data
   bool mSignaledEOS;
+  // Set if there is no more output data from decoder
+  bool mDrainComplete;
 };
 
 } // namespace mozilla

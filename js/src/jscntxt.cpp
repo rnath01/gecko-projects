@@ -301,12 +301,17 @@ ReportError(JSContext *cx, const char *message, JSErrorReport *reportp,
         reportp->flags |= JSREPORT_EXCEPTION;
     }
 
+    if (cx->options().autoJSAPIOwnsErrorReporting() || JS_IsRunning(cx)) {
+        if (js_ErrorToException(cx, message, reportp, callback, userRef)) {
+            return;
+        }
+    }
+
     /*
      * Call the error reporter only if an exception wasn't raised.
      */
-    if (!JS_IsRunning(cx) || !js_ErrorToException(cx, message, reportp, callback, userRef)) {
-        if (message)
-            CallErrorReporter(cx, message, reportp);
+    if (message) {
+        CallErrorReporter(cx, message, reportp);
     }
 }
 
@@ -416,8 +421,10 @@ js_ReportOverRecursed(JSContext *maybecx)
      */
     fprintf(stderr, "js_ReportOverRecursed called\n");
 #endif
-    if (maybecx)
+    if (maybecx) {
         JS_ReportErrorNumber(maybecx, js_GetErrorMessage, nullptr, JSMSG_OVER_RECURSED);
+        maybecx->overRecursed_ = true;
+    }
 }
 
 void
@@ -463,8 +470,9 @@ checkReportFlags(JSContext *cx, unsigned *flags)
          * otherwise.  We assume that if the top frame is a native, then it is
          * strict if the nearest scripted frame is strict, see bug 536306.
          */
-        JSScript *script = cx->currentScript();
-        if (script && script->strict())
+        jsbytecode *pc;
+        JSScript *script = cx->currentScript(&pc);
+        if (script && IsCheckStrictOp(JSOp(*pc)))
             *flags &= ~JSREPORT_WARNING;
         else if (cx->compartment()->options().extraWarnings(cx))
             *flags |= JSREPORT_WARNING;
@@ -520,16 +528,16 @@ js::ReportUsageError(JSContext *cx, HandleObject callee, const char *msg)
     const char *usageStr = "usage";
     PropertyName *usageAtom = Atomize(cx, usageStr, strlen(usageStr))->asPropertyName();
     RootedId id(cx, NameToId(usageAtom));
-    DebugOnly<Shape *> shape = static_cast<Shape *>(callee->as<NativeObject>().lookup(cx, id));
+    DebugOnly<Shape *> shape = static_cast<Shape *>(callee->as<JSFunction>().lookup(cx, id));
     MOZ_ASSERT(!shape->configurable());
     MOZ_ASSERT(!shape->writable());
     MOZ_ASSERT(shape->hasDefaultGetter());
 
     RootedValue usage(cx);
-    if (!JS_LookupProperty(cx, callee, "usage", &usage))
+    if (!JS_GetProperty(cx, callee, "usage", &usage))
         return;
 
-    if (usage.isUndefined()) {
+    if (!usage.isString()) {
         JS_ReportError(cx, "%s", msg);
     } else {
         JSString *str = usage.toString();
@@ -1010,6 +1018,7 @@ JSContext::JSContext(JSRuntime *rt)
     throwing(false),
     unwrappedException_(UndefinedValue()),
     options_(),
+    overRecursed_(false),
     propagatingForcedReturn_(false),
     liveVolatileJitFrameIterators_(nullptr),
     reportGranularity(JS_DEFAULT_JITREPORT_GRANULARITY),
@@ -1021,9 +1030,6 @@ JSContext::JSContext(JSRuntime *rt)
     data2(nullptr),
     outstandingRequests(0),
     jitIsBroken(false)
-#ifdef MOZ_TRACE_JSCALLS
-  , functionCallback(nullptr)
-#endif
 {
     MOZ_ASSERT(static_cast<ContextFriendFields*>(this) ==
                ContextFriendFields::get(this));
@@ -1042,11 +1048,13 @@ JSContext::getPendingException(MutableHandleValue rval)
     rval.set(unwrappedException_);
     if (IsAtomsCompartment(compartment()))
         return true;
+    bool wasOverRecursed = overRecursed_;
     clearPendingException();
     if (!compartment()->wrap(this, rval))
         return false;
     assertSameCompartment(this, rval);
     setPendingException(rval);
+    overRecursed_ = wasOverRecursed;
     return true;
 }
 
@@ -1196,6 +1204,9 @@ JSContext::mark(JSTracer *trc)
         MarkValueRoot(trc, &unwrappedException_, "unwrapped exception");
 
     TraceCycleDetectionSet(trc, cycleDetectorSet);
+
+    if (compartment_)
+        compartment_->mark();
 }
 
 void *

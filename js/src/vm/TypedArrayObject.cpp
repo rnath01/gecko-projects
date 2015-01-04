@@ -67,7 +67,7 @@ using JS::GenericNaN;
 TypedArrayLayout TypedArrayObject::layout_(false, // shared
                                            true,  // neuterable
                                            &TypedArrayObject::classes[0],
-                                           &TypedArrayObject::classes[Scalar::TypeMax]);
+                                           &TypedArrayObject::classes[Scalar::MaxTypedArrayViewType]);
 
 TypedArrayLayout::TypedArrayLayout(bool isShared, bool isNeuterable, const Class *firstClass,
                                    const Class *maxClass)
@@ -125,13 +125,25 @@ TypedArrayObject::ensureHasBuffer(JSContext *cx, Handle<TypedArrayObject *> tarr
 }
 
 /* static */ void
-TypedArrayObject::ObjectMoved(JSObject *dstArg, const JSObject *srcArg)
+TypedArrayObject::trace(JSTracer *trc, JSObject *objArg)
 {
-    const TypedArrayObject &src = srcArg->as<TypedArrayObject>();
-    TypedArrayObject &dst = dstArg->as<TypedArrayObject>();
-    if (!src.hasBuffer()) {
-        MOZ_ASSERT(src.getPrivate() == src.fixedData(FIXED_DATA_START));
-        dst.setPrivate(dst.fixedData(FIXED_DATA_START));
+    // Handle all tracing required when the object has a buffer.
+    ArrayBufferViewObject::trace(trc, objArg);
+
+    // If the typed array doesn't have a buffer, it must have a lazy buffer and
+    // its data pointer must point to its inline data. Watch for cases where
+    // the GC moved this object and fix up its data pointer.
+    TypedArrayObject &obj = objArg->as<TypedArrayObject>();
+    if (!obj.hasBuffer() && obj.getPrivate() != obj.fixedData(FIXED_DATA_START)) {
+        void *oldData = obj.getPrivate();
+        void *newData = obj.fixedData(FIXED_DATA_START);
+
+        obj.setPrivateUnbarriered(newData);
+
+        // If this is a minor GC, set a forwarding pointer for the array data.
+        // This can always be done inline, as AllocKindForLazyBuffer ensures
+        // there is at least a pointer's worth of inline data.
+        trc->runtime()->gc.nursery.maybeSetForwardingPointer(trc, oldData, newData, true);
     }
 }
 
@@ -230,14 +242,10 @@ class TypedArrayObjectTemplate : public TypedArrayObject
     finishClassInit(JSContext *cx, HandleObject ctor, HandleObject proto)
     {
         RootedValue bytesValue(cx, Int32Value(BYTES_PER_ELEMENT));
-        if (!JSObject::defineProperty(cx, ctor,
-                                      cx->names().BYTES_PER_ELEMENT, bytesValue,
-                                      JS_PropertyStub, JS_StrictPropertyStub,
-                                      JSPROP_PERMANENT | JSPROP_READONLY) ||
-            !JSObject::defineProperty(cx, proto,
-                                      cx->names().BYTES_PER_ELEMENT, bytesValue,
-                                      JS_PropertyStub, JS_StrictPropertyStub,
-                                      JSPROP_PERMANENT | JSPROP_READONLY))
+        if (!JSObject::defineProperty(cx, ctor, cx->names().BYTES_PER_ELEMENT, bytesValue,
+                                      nullptr, nullptr, JSPROP_PERMANENT | JSPROP_READONLY) ||
+            !JSObject::defineProperty(cx, proto, cx->names().BYTES_PER_ELEMENT, bytesValue,
+                                      nullptr, nullptr, JSPROP_PERMANENT | JSPROP_READONLY))
         {
             return false;
         }
@@ -354,6 +362,12 @@ class TypedArrayObjectTemplate : public TypedArrayObject
 
         if (buffer) {
             obj->initPrivate(buffer->dataPointer() + byteOffset);
+
+            // If the buffer is for an inline typed object, the data pointer
+            // may be in the nursery, so include a barrier to make sure this
+            // object is updated if that typed object moves.
+            if (!IsInsideNursery(obj) && cx->runtime()->gc.nursery.isInside(buffer->dataPointer()))
+                cx->runtime()->gc.storeBuffer.putWholeCellFromMainThread(obj);
         } else {
             void *data = obj->fixedData(FIXED_DATA_START);
             obj->initPrivate(data);
@@ -581,9 +595,8 @@ class TypedArrayObjectTemplate : public TypedArrayObject
     static bool
     maybeCreateArrayBuffer(JSContext *cx, uint32_t nelements, MutableHandle<ArrayBufferObject *> buffer)
     {
-        // Make sure that array elements evenly divide into the inline buffer's
-        // size, for the test below.
-        JS_STATIC_ASSERT((INLINE_BUFFER_LIMIT / sizeof(NativeType)) * sizeof(NativeType) == INLINE_BUFFER_LIMIT);
+        static_assert(INLINE_BUFFER_LIMIT % sizeof(NativeType) == 0,
+                      "ArrayBuffer inline storage shouldn't waste any space");
 
         if (nelements <= INLINE_BUFFER_LIMIT / sizeof(NativeType)) {
             // The array's data can be inline, and the buffer created lazily.
@@ -596,8 +609,12 @@ class TypedArrayObjectTemplate : public TypedArrayObject
             return false;
         }
 
-        buffer.set(ArrayBufferObject::create(cx, nelements * sizeof(NativeType)));
-        return !!buffer;
+        ArrayBufferObject *buf = ArrayBufferObject::create(cx, nelements * sizeof(NativeType));
+        if (!buf)
+            return false;
+
+        buffer.set(buf);
+        return true;
     }
 
     static JSObject *
@@ -764,6 +781,16 @@ TypedArrayObject::protoFunctions[] = {
     JS_FN("subarray", TypedArrayObject::subarray, 2, 0),
     JS_FN("set", TypedArrayObject::set, 2, 0),
     JS_FN("copyWithin", TypedArrayObject::copyWithin, 2, 0),
+    JS_SELF_HOSTED_FN("fill", "TypedArrayFill", 3, 0),
+    JS_SELF_HOSTED_FN("find", "TypedArrayFind", 2, 0),
+    JS_SELF_HOSTED_FN("findIndex", "TypedArrayFindIndex", 2, 0),
+    JS_SELF_HOSTED_FN("indexOf", "TypedArrayIndexOf", 2, 0),
+    JS_SELF_HOSTED_FN("join", "TypedArrayJoin", 1, 0),
+    JS_SELF_HOSTED_FN("lastIndexOf", "TypedArrayLastIndexOf", 2, 0),
+    JS_SELF_HOSTED_FN("reverse", "TypedArrayReverse", 0, 0),
+#ifdef NIGHTLY_BUILD
+    JS_SELF_HOSTED_FN("includes", "TypedArrayIncludes", 2, 0),
+#endif
     JS_FS_END
 };
 
@@ -783,13 +810,13 @@ TypedArrayObject::sharedTypedArrayPrototypeClass = {
     // until we implement @@toStringTag.
     "???",
     JSCLASS_HAS_CACHED_PROTO(JSProto_TypedArray),
-    JS_PropertyStub,        /* addProperty */
-    JS_DeletePropertyStub,  /* delProperty */
-    JS_PropertyStub,        /* getProperty */
-    JS_StrictPropertyStub,  /* setProperty */
-    JS_EnumerateStub,
-    JS_ResolveStub,
-    JS_ConvertStub,
+    nullptr,                /* addProperty */
+    nullptr,                /* delProperty */
+    nullptr,                /* getProperty */
+    nullptr,                /* setProperty */
+    nullptr,                /* enumerate */
+    nullptr,                /* resolve */
+    nullptr,                /* convert */
     nullptr,                /* finalize */
     nullptr,                /* call */
     nullptr,                /* hasInstance */
@@ -844,7 +871,9 @@ template<typename NativeType>
 Value
 TypedArrayObjectTemplate<NativeType>::getIndexValue(JSObject *tarray, uint32_t index)
 {
-    JS_STATIC_ASSERT(sizeof(NativeType) < 4);
+    static_assert(sizeof(NativeType) < 4,
+                  "this method must only handle NativeType values that are "
+                  "always exact int32_t values");
 
     return Int32Value(getIndex(tarray, index));
 }
@@ -961,6 +990,11 @@ DataViewObject::create(JSContext *cx, uint32_t byteOffset, uint32_t byteLength,
     dvobj.setFixedSlot(TypedArrayLayout::BUFFER_SLOT, ObjectValue(*arrayBuffer));
     dvobj.initPrivate(arrayBuffer->dataPointer() + byteOffset);
     MOZ_ASSERT(byteOffset + byteLength <= arrayBuffer->byteLength());
+
+    // Include a barrier if the data view's data pointer is in the nursery, as
+    // is done for typed arrays.
+    if (!IsInsideNursery(obj) && cx->runtime()->gc.nursery.isInside(arrayBuffer->dataPointer()))
+        cx->runtime()->gc.storeBuffer.putWholeCellFromMainThread(obj);
 
     // Verify that the private slot is at the expected place
     MOZ_ASSERT(dvobj.numFixedSlots() == TypedArrayLayout::DATA_SLOT);
@@ -1585,7 +1619,9 @@ TypedArrayObject::getElement(uint32_t index)
         return Float64Array::getIndexValue(this, index);
       case Scalar::Uint8Clamped:
         return Uint8ClampedArray::getIndexValue(this, index);
-      case Scalar::TypeMax:
+      case Scalar::Float32x4:
+      case Scalar::Int32x4:
+      case Scalar::MaxTypedArrayViewType:
         break;
     }
 
@@ -1625,7 +1661,9 @@ TypedArrayObject::setElement(TypedArrayObject &obj, uint32_t index, double d)
       case Scalar::Float64:
         Float64Array::setIndexValue(obj, index, d);
         return;
-      case Scalar::TypeMax:
+      case Scalar::Float32x4:
+      case Scalar::Int32x4:
+      case Scalar::MaxTypedArrayViewType:
         break;
     }
 
@@ -1731,29 +1769,22 @@ IMPL_TYPED_ARRAY_COMBINED_UNWRAPPERS(Float64, double, double)
     JSCLASS_HAS_RESERVED_SLOTS(TypedArrayLayout::RESERVED_SLOTS) |             \
     JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS |                        \
     JSCLASS_HAS_CACHED_PROTO(JSProto_##_typedArray),                           \
-    JS_PropertyStub,         /* addProperty */                                 \
-    JS_DeletePropertyStub,   /* delProperty */                                 \
-    JS_PropertyStub,         /* getProperty */                                 \
-    JS_StrictPropertyStub,   /* setProperty */                                 \
-    JS_EnumerateStub,                                                          \
-    JS_ResolveStub,                                                            \
-    JS_ConvertStub,                                                            \
+    nullptr,                 /* addProperty */                                 \
+    nullptr,                 /* delProperty */                                 \
+    nullptr,                 /* getProperty */                                 \
+    nullptr,                 /* setProperty */                                 \
+    nullptr,                 /* enumerate   */                                 \
+    nullptr,                 /* resolve     */                                 \
+    nullptr,                 /* convert     */                                 \
     nullptr,                 /* finalize    */                                 \
     nullptr,                 /* call        */                                 \
     nullptr,                 /* hasInstance */                                 \
     nullptr,                 /* construct   */                                 \
-    ArrayBufferViewObject::trace, /* trace  */                                 \
-    TYPED_ARRAY_CLASS_SPEC(_typedArray),                                       \
-    {                                                                          \
-        nullptr,             /* outerObject */                                 \
-        nullptr,             /* innerObject */                                 \
-        false,               /* isWrappedNative */                             \
-        nullptr,             /* weakmapKeyDelegateOp */                        \
-        TypedArrayObject::ObjectMoved                                          \
-    }                                                                          \
+    TypedArrayObject::trace, /* trace  */                                      \
+    TYPED_ARRAY_CLASS_SPEC(_typedArray)                                        \
 }
 
-const Class TypedArrayObject::classes[Scalar::TypeMax] = {
+const Class TypedArrayObject::classes[Scalar::MaxTypedArrayViewType] = {
     IMPL_TYPED_ARRAY_CLASS(Int8Array),
     IMPL_TYPED_ARRAY_CLASS(Uint8Array),
     IMPL_TYPED_ARRAY_CLASS(Int16Array),
@@ -1783,18 +1814,18 @@ const Class TypedArrayObject::classes[Scalar::TypeMax] = {
      */ \
     #typedArray "Prototype", \
     JSCLASS_HAS_CACHED_PROTO(JSProto_##typedArray), \
-    JS_PropertyStub,        /* addProperty */ \
-    JS_DeletePropertyStub,  /* delProperty */ \
-    JS_PropertyStub,        /* getProperty */ \
-    JS_StrictPropertyStub,  /* setProperty */ \
-    JS_EnumerateStub, \
-    JS_ResolveStub, \
-    JS_ConvertStub, \
-    nullptr,                 /* finalize    */ \
-    nullptr,                 /* call        */ \
-    nullptr,                 /* hasInstance */ \
-    nullptr,                 /* construct   */ \
-    nullptr,                 /* trace  */ \
+    nullptr, /* addProperty */ \
+    nullptr, /* delProperty */ \
+    nullptr, /* getProperty */ \
+    nullptr, /* setProperty */ \
+    nullptr, /* enumerate */ \
+    nullptr, /* resolve */ \
+    nullptr, /* convert */ \
+    nullptr, /* finalize */ \
+    nullptr, /* call */ \
+    nullptr, /* hasInstance */ \
+    nullptr, /* construct */ \
+    nullptr, /* trace  */ \
     { \
         typedArray::createConstructor, \
         typedArray::createPrototype, \
@@ -1806,7 +1837,7 @@ const Class TypedArrayObject::classes[Scalar::TypeMax] = {
     } \
 }
 
-const Class TypedArrayObject::protoClasses[Scalar::TypeMax] = {
+const Class TypedArrayObject::protoClasses[Scalar::MaxTypedArrayViewType] = {
     IMPL_TYPED_ARRAY_PROTO_CLASS(Int8Array),
     IMPL_TYPED_ARRAY_PROTO_CLASS(Uint8Array),
     IMPL_TYPED_ARRAY_PROTO_CLASS(Int16Array),
@@ -1828,14 +1859,7 @@ const Class DataViewObject::protoClass = {
     "DataViewPrototype",
     JSCLASS_HAS_PRIVATE |
     JSCLASS_HAS_RESERVED_SLOTS(TypedArrayLayout::RESERVED_SLOTS) |
-    JSCLASS_HAS_CACHED_PROTO(JSProto_DataView),
-    JS_PropertyStub,         /* addProperty */
-    JS_DeletePropertyStub,   /* delProperty */
-    JS_PropertyStub,         /* getProperty */
-    JS_StrictPropertyStub,   /* setProperty */
-    JS_EnumerateStub,
-    JS_ResolveStub,
-    JS_ConvertStub
+    JSCLASS_HAS_CACHED_PROTO(JSProto_DataView)
 };
 
 const Class DataViewObject::class_ = {
@@ -1844,18 +1868,18 @@ const Class DataViewObject::class_ = {
     JSCLASS_IMPLEMENTS_BARRIERS |
     JSCLASS_HAS_RESERVED_SLOTS(TypedArrayLayout::RESERVED_SLOTS) |
     JSCLASS_HAS_CACHED_PROTO(JSProto_DataView),
-    JS_PropertyStub,         /* addProperty */
-    JS_DeletePropertyStub,   /* delProperty */
-    JS_PropertyStub,         /* getProperty */
-    JS_StrictPropertyStub,   /* setProperty */
-    JS_EnumerateStub,
-    JS_ResolveStub,
-    JS_ConvertStub,
-    nullptr,                 /* finalize */
-    nullptr,                 /* call        */
-    nullptr,                 /* hasInstance */
-    nullptr,                 /* construct   */
-    ArrayBufferViewObject::trace, /* trace       */
+    nullptr, /* addProperty */
+    nullptr, /* delProperty */
+    nullptr, /* getProperty */
+    nullptr, /* setProperty */
+    nullptr, /* enumerate */
+    nullptr, /* resolve */
+    nullptr, /* convert */
+    nullptr, /* finalize */
+    nullptr, /* call */
+    nullptr, /* hasInstance */
+    nullptr, /* construct */
+    ArrayBufferViewObject::trace
 };
 
 const JSFunctionSpec DataViewObject::jsfuncs[] = {
@@ -1998,7 +2022,7 @@ js::IsTypedArrayConstructor(HandleValue v, uint32_t type)
         return IsNativeFunction(v, Float64Array::class_constructor);
       case Scalar::Uint8Clamped:
         return IsNativeFunction(v, Uint8ClampedArray::class_constructor);
-      case Scalar::TypeMax:
+      case Scalar::MaxTypedArrayViewType:
         break;
     }
     MOZ_CRASH("unexpected typed array type");
@@ -2099,12 +2123,12 @@ JS_GetArrayBufferViewType(JSObject *obj)
 {
     obj = CheckedUnwrap(obj);
     if (!obj)
-        return Scalar::TypeMax;
+        return Scalar::MaxTypedArrayViewType;
 
     if (obj->is<TypedArrayObject>())
         return obj->as<TypedArrayObject>().type();
     else if (obj->is<DataViewObject>())
-        return Scalar::TypeMax;
+        return Scalar::MaxTypedArrayViewType;
     MOZ_CRASH("invalid ArrayBufferView type");
 }
 

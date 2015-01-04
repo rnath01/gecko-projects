@@ -83,8 +83,8 @@ WMFAudioMFTManager::WMFAudioMFTManager(
   } else if (!strcmp(aConfig.mime_type, "audio/mp4a-latm")) {
     mStreamType = AAC;
     AACAudioSpecificConfigToUserData(aConfig.aac_profile,
-                                     &aConfig.audio_specific_config[0],
-                                     aConfig.audio_specific_config.length(),
+                                     aConfig.audio_specific_config->Elements(),
+                                     aConfig.audio_specific_config->Length(),
                                      mUserData);
   } else {
     mStreamType = Unknown;
@@ -192,7 +192,7 @@ WMFAudioMFTManager::UpdateOutputType()
 
 HRESULT
 WMFAudioMFTManager::Output(int64_t aStreamOffset,
-                           nsAutoPtr<MediaData>& aOutData)
+                           nsRefPtr<MediaData>& aOutData)
 {
   aOutData = nullptr;
   RefPtr<IMFSample> sample;

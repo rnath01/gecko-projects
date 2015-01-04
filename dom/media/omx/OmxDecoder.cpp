@@ -254,8 +254,18 @@ bool OmxDecoder::AllocateMediaResources()
     NS_ASSERTION(err == OK, "Failed to connect to OMX in mediaserver.");
     sp<IOMX> omx = client.interface();
 
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 21
+    sp<IGraphicBufferProducer> producer;
+    sp<IGonkGraphicBufferConsumer> consumer;
+    GonkBufferQueue::createBufferQueue(&producer, &consumer);
+    mNativeWindow = new GonkNativeWindow(consumer);
+#else
     mNativeWindow = new GonkNativeWindow();
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
+#endif
+
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 21
+    mNativeWindowClient = new GonkNativeWindowClient(producer);
+#elif defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
     mNativeWindowClient = new GonkNativeWindowClient(mNativeWindow->getBufferQueue());
 #else
     mNativeWindowClient = new GonkNativeWindowClient(mNativeWindow);
@@ -574,28 +584,34 @@ bool OmxDecoder::ReadVideo(VideoFrame *aFrame, int64_t aTimeUs,
     while (findNextBuffer) {
       options.setSeekTo(aTimeUs, seekMode);
       findNextBuffer = false;
-      err = mVideoSource->read(&mVideoBuffer, &options);
-      {
+      if (mIsVideoSeeking) {
+        err = mVideoSource->read(&mVideoBuffer, &options);
         Mutex::Autolock autoLock(mSeekLock);
         mIsVideoSeeking = false;
         PostReleaseVideoBuffer(nullptr, FenceHandle());
       }
+      else {
+	err = mVideoSource->read(&mVideoBuffer);
+      }
+
       // If there is no next Keyframe, jump to the previous key frame.
       if (err == ERROR_END_OF_STREAM && seekMode == MediaSource::ReadOptions::SEEK_NEXT_SYNC) {
-         seekMode = MediaSource::ReadOptions::SEEK_PREVIOUS_SYNC;
-	 findNextBuffer = true;
-	 {
-	   Mutex::Autolock autoLock(mSeekLock);
-	   mIsVideoSeeking = true;
-	 }
-	 continue;
+        seekMode = MediaSource::ReadOptions::SEEK_PREVIOUS_SYNC;
+        findNextBuffer = true;
+        {
+          Mutex::Autolock autoLock(mSeekLock);
+          mIsVideoSeeking = true;
+        }
+        continue;
       } else if (err != OK) {
-	ALOG("Unexpected error when seeking to %lld", aTimeUs);
+        ALOG("Unexpected error when seeking to %lld", aTimeUs);
         break;
       }
+      // For some codecs, the length of first decoded frame after seek is 0.
+      // Need to ignore it and continue to find the next one
       if (mVideoBuffer->range_length() == 0) {
         ReleaseVideoBuffer();
-	findNextBuffer = true;
+        findNextBuffer = true;
       }
     }
     aDoSeek = false;

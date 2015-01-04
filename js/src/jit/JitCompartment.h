@@ -13,7 +13,7 @@
 
 #include "jit/CompileInfo.h"
 #include "jit/IonCode.h"
-#include "jit/IonFrames.h"
+#include "jit/JitFrames.h"
 #include "jit/shared/Assembler-shared.h"
 #include "js/Value.h"
 #include "vm/Stack.h"
@@ -152,8 +152,9 @@ class JitRuntime
     // need for explicit interrupt checks.
     ExecutableAllocator *ionAlloc_;
 
-    // Shared post-exception-handler tail
+    // Shared exception-handler tail.
     JitCode *exceptionTail_;
+    JitCode *exceptionTailParallel_;
 
     // Shared post-bailout-handler tail.
     JitCode *bailoutTail_;
@@ -243,7 +244,7 @@ class JitRuntime
 
   private:
     JitCode *generateLazyLinkStub(JSContext *cx);
-    JitCode *generateExceptionTailStub(JSContext *cx);
+    JitCode *generateExceptionTailStub(JSContext *cx, void *handler);
     JitCode *generateBailoutTailStub(JSContext *cx);
     JitCode *generateEnterJIT(JSContext *cx, EnterJitType type);
     JitCode *generateArgumentsRectifier(JSContext *cx, ExecutionMode mode, void **returnAddrOut);
@@ -287,7 +288,7 @@ class JitRuntime
     {
         JitRuntime *jrt_;
       public:
-        AutoMutateBackedges(JitRuntime *jrt) : jrt_(jrt) {
+        explicit AutoMutateBackedges(JitRuntime *jrt) : jrt_(jrt) {
             MOZ_ASSERT(!jrt->mutatingBackedgeList_);
             jrt->mutatingBackedgeList_ = true;
         }
@@ -331,6 +332,9 @@ class JitRuntime
 
     JitCode *getExceptionTail() const {
         return exceptionTail_;
+    }
+    JitCode *getExceptionTailParallel() const {
+        return exceptionTailParallel_;
     }
 
     JitCode *getBailoutTail() const {
@@ -462,7 +466,8 @@ class JitCompartment
     // Set of JSScripts invoked by ForkJoin (i.e. the entry script). These
     // scripts are marked if their respective parallel IonScripts' age is less
     // than a certain amount. See IonScript::parallelAge_.
-    typedef HashSet<PreBarrieredScript> ScriptSet;
+    typedef HashSet<PreBarrieredScript, DefaultHasher<PreBarrieredScript>, SystemAllocPolicy>
+        ScriptSet;
     ScriptSet *activeParallelEntryScripts_;
 
     JitCode *generateStringConcatStub(JSContext *cx, ExecutionMode mode);

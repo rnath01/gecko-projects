@@ -109,21 +109,17 @@ let ContentPolicyParent = {
                .getService(Ci.nsIMessageBroadcaster);
     ppmm.addMessageListener("Addons:ContentPolicy:Run", this);
 
-    this._policies = [];
+    this._policies = new Map();
   },
 
-  addContentPolicy: function(cid) {
-    this._policies.push(cid);
-    NotificationTracker.add(["content-policy"]);
+  addContentPolicy: function(addon, name, cid) {
+    this._policies.set(name, cid);
+    NotificationTracker.add(["content-policy", addon]);
   },
 
-  removeContentPolicy: function(cid) {
-    let index = this._policies.lastIndexOf(cid);
-    if (index > -1) {
-      this._policies.splice(index, 1);
-    }
-
-    NotificationTracker.remove(["content-policy"]);
+  removeContentPolicy: function(addon, name) {
+    this._policies.delete(name);
+    NotificationTracker.remove(["content-policy", addon]);
   },
 
   receiveMessage: function (aMessage) {
@@ -135,8 +131,14 @@ let ContentPolicyParent = {
   },
 
   shouldLoad: function(aData, aObjects) {
-    for (let policyCID of this._policies) {
-      let policy = Cc[policyCID].getService(Ci.nsIContentPolicy);
+    for (let policyCID of this._policies.values()) {
+      let policy;
+      try {
+        policy = Cc[policyCID].getService(Ci.nsIContentPolicy);
+      } catch (e) {
+        // Current Gecko behavior is to ignore entries that don't QI.
+        continue;
+      }
       try {
         let contentLocation = BrowserUtils.makeURI(aData.contentLocation);
         let requestOrigin = aData.requestOrigin ? BrowserUtils.makeURI(aData.requestOrigin) : null;
@@ -167,7 +169,7 @@ let CategoryManagerInterposition = new Interposition("CategoryManagerInterpositi
 CategoryManagerInterposition.methods.addCategoryEntry =
   function(addon, target, category, entry, value, persist, replace) {
     if (category == "content-policy") {
-      ContentPolicyParent.addContentPolicy(entry);
+      ContentPolicyParent.addContentPolicy(addon, entry, value);
     }
 
     target.addCategoryEntry(category, entry, value, persist, replace);
@@ -176,7 +178,7 @@ CategoryManagerInterposition.methods.addCategoryEntry =
 CategoryManagerInterposition.methods.deleteCategoryEntry =
   function(addon, target, category, entry, persist) {
     if (category == "content-policy") {
-      ContentPolicyParent.removeContentPolicy(entry);
+      ContentPolicyParent.removeContentPolicy(addon, entry);
     }
 
     target.deleteCategoryEntry(category, entry, persist);
@@ -194,15 +196,15 @@ let AboutProtocolParent = {
     this._protocols = [];
   },
 
-  registerFactory: function(class_, className, contractID, factory) {
+  registerFactory: function(addon, class_, className, contractID, factory) {
     this._protocols.push({contractID: contractID, factory: factory});
-    NotificationTracker.add(["about-protocol", contractID]);
+    NotificationTracker.add(["about-protocol", contractID, addon]);
   },
 
-  unregisterFactory: function(class_, factory) {
+  unregisterFactory: function(addon, class_, factory) {
     for (let i = 0; i < this._protocols.length; i++) {
       if (this._protocols[i].factory == factory) {
-        NotificationTracker.remove(["about-protocol", this._protocols[i].contractID]);
+        NotificationTracker.remove(["about-protocol", this._protocols[i].contractID, addon]);
         this._protocols.splice(i, 1);
         break;
       }
@@ -239,7 +241,11 @@ let AboutProtocolParent = {
     try {
       let channel = module.newChannel(uri, null);
       channel.notificationCallbacks = msg.objects.notificationCallbacks;
-      channel.loadGroup = {notificationCallbacks: msg.objects.loadGroupNotificationCallbacks};
+      if (msg.objects.loadGroupNotificationCallbacks) {
+        channel.loadGroup = {notificationCallbacks: msg.objects.loadGroupNotificationCallbacks};
+      } else {
+        channel.loadGroup = null;
+      }
       let stream = channel.open();
       let data = NetUtil.readInputStreamToString(stream, stream.available(), {});
       return {
@@ -258,7 +264,7 @@ let ComponentRegistrarInterposition = new Interposition("ComponentRegistrarInter
 ComponentRegistrarInterposition.methods.registerFactory =
   function(addon, target, class_, className, contractID, factory) {
     if (contractID && contractID.startsWith("@mozilla.org/network/protocol/about;1?")) {
-      AboutProtocolParent.registerFactory(class_, className, contractID, factory);
+      AboutProtocolParent.registerFactory(addon, class_, className, contractID, factory);
     }
 
     target.registerFactory(class_, className, contractID, factory);
@@ -266,7 +272,7 @@ ComponentRegistrarInterposition.methods.registerFactory =
 
 ComponentRegistrarInterposition.methods.unregisterFactory =
   function(addon, target, class_, factory) {
-    AboutProtocolParent.unregisterFactory(class_, factory);
+    AboutProtocolParent.unregisterFactory(addon, class_, factory);
     target.unregisterFactory(class_, factory);
   };
 
@@ -286,14 +292,14 @@ let ObserverParent = {
     ppmm.addMessageListener("Addons:Observer:Run", this);
   },
 
-  addObserver: function(observer, topic, ownsWeak) {
+  addObserver: function(addon, observer, topic, ownsWeak) {
     Services.obs.addObserver(observer, "e10s-" + topic, ownsWeak);
-    NotificationTracker.add(["observer", topic]);
+    NotificationTracker.add(["observer", topic, addon]);
   },
 
-  removeObserver: function(observer, topic) {
+  removeObserver: function(addon, observer, topic) {
     Services.obs.removeObserver(observer, "e10s-" + topic);
-    NotificationTracker.remove(["observer", topic]);
+    NotificationTracker.remove(["observer", topic, addon]);
   },
 
   receiveMessage: function(msg) {
@@ -329,7 +335,7 @@ let ObserverInterposition = new Interposition("ObserverInterposition");
 ObserverInterposition.methods.addObserver =
   function(addon, target, observer, topic, ownsWeak) {
     if (TOPIC_WHITELIST.indexOf(topic) >= 0) {
-      ObserverParent.addObserver(observer, topic);
+      ObserverParent.addObserver(addon, observer, topic);
     }
 
     target.addObserver(observer, topic, ownsWeak);
@@ -338,7 +344,7 @@ ObserverInterposition.methods.addObserver =
 ObserverInterposition.methods.removeObserver =
   function(addon, target, observer, topic) {
     if (TOPIC_WHITELIST.indexOf(topic) >= 0) {
-      ObserverParent.removeObserver(observer, topic);
+      ObserverParent.removeObserver(addon, observer, topic);
     }
 
     target.removeObserver(observer, topic);
@@ -382,7 +388,7 @@ let EventTargetParent = {
       // Check if |target| is somewhere on the patch from the
       // <tabbrowser> up to the root element.
       let window = target.ownerDocument.defaultView;
-      if (target.contains(window.gBrowser)) {
+      if (window && target.contains(window.gBrowser)) {
         return window;
       }
     }
@@ -398,7 +404,7 @@ let EventTargetParent = {
     return [browser, window];
   },
 
-  addEventListener: function(target, type, listener, useCapture, wantsUntrusted) {
+  addEventListener: function(addon, target, type, listener, useCapture, wantsUntrusted) {
     let newTarget = this.redirectEventTarget(target);
     if (!newTarget) {
       return;
@@ -407,7 +413,7 @@ let EventTargetParent = {
     useCapture = useCapture || false;
     wantsUntrusted = wantsUntrusted || false;
 
-    NotificationTracker.add(["event", type, useCapture]);
+    NotificationTracker.add(["event", type, useCapture, addon]);
 
     let listeners = this._listeners.get(newTarget);
     if (!listeners) {
@@ -428,7 +434,7 @@ let EventTargetParent = {
     forType.push({listener: listener, wantsUntrusted: wantsUntrusted, useCapture: useCapture});
   },
 
-  removeEventListener: function(target, type, listener, useCapture) {
+  removeEventListener: function(addon, target, type, listener, useCapture) {
     let newTarget = this.redirectEventTarget(target);
     if (!newTarget) {
       return;
@@ -445,7 +451,7 @@ let EventTargetParent = {
     for (let i = 0; i < forType.length; i++) {
       if (forType[i].listener === listener && forType[i].useCapture === useCapture) {
         forType.splice(i, 1);
-        NotificationTracker.remove(["event", type, useCapture]);
+        NotificationTracker.remove(["event", type, useCapture, addon]);
         break;
       }
     }
@@ -535,13 +541,13 @@ let EventTargetInterposition = new Interposition("EventTargetInterposition");
 
 EventTargetInterposition.methods.addEventListener =
   function(addon, target, type, listener, useCapture, wantsUntrusted) {
-    EventTargetParent.addEventListener(target, type, listener, useCapture, wantsUntrusted);
+    EventTargetParent.addEventListener(addon, target, type, listener, useCapture, wantsUntrusted);
     target.addEventListener(type, makeFilteringListener(type, listener), useCapture, wantsUntrusted);
   };
 
 EventTargetInterposition.methods.removeEventListener =
   function(addon, target, type, listener, useCapture) {
-    EventTargetParent.removeEventListener(target, type, listener, useCapture);
+    EventTargetParent.removeEventListener(addon, target, type, listener, useCapture);
     target.removeEventListener(type, makeFilteringListener(type, listener), useCapture);
   };
 

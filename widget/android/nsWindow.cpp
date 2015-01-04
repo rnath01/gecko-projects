@@ -675,7 +675,8 @@ nsWindow::DispatchEvent(WidgetGUIEvent* aEvent)
             MOZ_ASSERT(!mIMEComposing);
             mIMEComposing = true;
             break;
-        case NS_COMPOSITION_END:
+        case NS_COMPOSITION_COMMIT_AS_IS:
+        case NS_COMPOSITION_COMMIT:
             MOZ_ASSERT(mIMEComposing);
             mIMEComposing = false;
             mIMEComposingStart = -1;
@@ -692,7 +693,7 @@ nsWindow::DispatchEvent(WidgetGUIEvent* aEvent)
 }
 
 NS_IMETHODIMP
-nsWindow::MakeFullScreen(bool aFullScreen)
+nsWindow::MakeFullScreen(bool aFullScreen, nsIScreen*)
 {
     mozilla::widget::android::GeckoAppShell::SetFullScreen(aFullScreen);
     return NS_OK;
@@ -1374,7 +1375,6 @@ ConvertAndroidKeyCodeToKeyNameIndex(AndroidGeckoEvent& aAndroidGeckoEvent)
         case AKEYCODE_SOFT_RIGHT:
         case AKEYCODE_CALL:
         case AKEYCODE_ENDCALL:
-        case AKEYCODE_SYM:                // Symbol modifier
         case AKEYCODE_NUM:                // XXX Not sure
         case AKEYCODE_HEADSETHOOK:
         case AKEYCODE_FOCUS:
@@ -1400,15 +1400,7 @@ ConvertAndroidKeyCodeToKeyNameIndex(AndroidGeckoEvent& aAndroidGeckoEvent)
         case AKEYCODE_MUTE: // mutes the microphone
         case AKEYCODE_MEDIA_CLOSE:
 
-        case AKEYCODE_ZOOM_IN:
-        case AKEYCODE_ZOOM_OUT:
         case AKEYCODE_DVR:
-        case AKEYCODE_TV_POWER:
-        case AKEYCODE_TV_INPUT:
-        case AKEYCODE_STB_POWER:
-        case AKEYCODE_STB_INPUT:
-        case AKEYCODE_AVR_POWER:
-        case AKEYCODE_AVR_INPUT:
 
         case AKEYCODE_BUTTON_1:
         case AKEYCODE_BUTTON_2:
@@ -1427,16 +1419,9 @@ ConvertAndroidKeyCodeToKeyNameIndex(AndroidGeckoEvent& aAndroidGeckoEvent)
         case AKEYCODE_BUTTON_15:
         case AKEYCODE_BUTTON_16:
 
-        case AKEYCODE_LANGUAGE_SWITCH:
         case AKEYCODE_MANNER_MODE:
         case AKEYCODE_3D_MODE:
         case AKEYCODE_CONTACTS:
-        case AKEYCODE_CALENDAR:
-        case AKEYCODE_MUSIC:
-        case AKEYCODE_CALCULATOR:
-
-        case AKEYCODE_ZENKAKU_HANKAKU:
-        case AKEYCODE_KATAKANA_HIRAGANA:
             return KEY_NAME_INDEX_Unidentified;
 
         case AKEYCODE_UNKNOWN:
@@ -1718,15 +1703,11 @@ nsWindow::RemoveIMEComposition()
     AutoIMEMask selMask(mIMEMaskSelectionUpdate);
     AutoIMEMask textMask(mIMEMaskTextUpdate);
 
-    WidgetCompositionEvent compositionChangeEvent(true, NS_COMPOSITION_CHANGE,
+    WidgetCompositionEvent compositionCommitEvent(true,
+                                                  NS_COMPOSITION_COMMIT_AS_IS,
                                                   this);
-    InitEvent(compositionChangeEvent, nullptr);
-    compositionChangeEvent.mData = mIMEComposingText;
-    DispatchEvent(&compositionChangeEvent);
-
-    WidgetCompositionEvent compEndEvent(true, NS_COMPOSITION_END, this);
-    InitEvent(compEndEvent, nullptr);
-    DispatchEvent(&compEndEvent);
+    InitEvent(compositionCommitEvent, nullptr);
+    DispatchEvent(&compositionCommitEvent);
 }
 
 void
@@ -1878,10 +1859,11 @@ nsWindow::OnIMEEvent(AndroidGeckoEvent *ae)
             // Don't end composition when composing text.
             if (ae->Action() != AndroidGeckoEvent::IME_COMPOSE_TEXT)
             {
-                WidgetCompositionEvent event(true, NS_COMPOSITION_END, this);
-                InitEvent(event, nullptr);
-                event.mData = ae->Characters();
-                DispatchEvent(&event);
+                WidgetCompositionEvent compositionCommitEvent(
+                                           true, NS_COMPOSITION_COMMIT, this);
+                InitEvent(compositionCommitEvent, nullptr);
+                compositionCommitEvent.mData = ae->Characters();
+                DispatchEvent(&compositionCommitEvent);
             }
 
             FlushIMEChanges();
@@ -2083,15 +2065,12 @@ nsWindow::NotifyIME(const IMENotification& aIMENotification)
             if (mIMEComposing) {
                 nsRefPtr<nsWindow> kungFuDeathGrip(this);
 
-                WidgetCompositionEvent compositionChangeEvent(
-                                         true, NS_COMPOSITION_CHANGE, this);
-                InitEvent(compositionChangeEvent, nullptr);
-                DispatchEvent(&compositionChangeEvent);
-
-                WidgetCompositionEvent compositionEndEvent(
-                                         true, NS_COMPOSITION_END, this);
-                InitEvent(compositionEndEvent, nullptr);
-                DispatchEvent(&compositionEndEvent);
+                WidgetCompositionEvent compositionCommitEvent(
+                                         true, NS_COMPOSITION_COMMIT, this);
+                InitEvent(compositionCommitEvent, nullptr);
+                // Dispatch it with empty mData value for canceling the
+                // composition
+                DispatchEvent(&compositionCommitEvent);
             }
 
             mozilla::widget::android::GeckoAppShell::NotifyIME(REQUEST_TO_CANCEL_COMPOSITION);
@@ -2369,7 +2348,9 @@ nsWindow::DrawWindowUnderlay(LayerManagerComposite* aManager, nsIntRect aRect)
         return;
     }
 
-    gl::GLContext* gl = static_cast<CompositorOGL*>(aManager->GetCompositor())->gl();
+    CompositorOGL *compositor = static_cast<CompositorOGL*>(aManager->GetCompositor());
+    compositor->ResetProgram();
+    gl::GLContext* gl = compositor->gl();
     bool scissorEnabled = gl->fIsEnabled(LOCAL_GL_SCISSOR_TEST);
     GLint scissorRect[4];
     gl->fGetIntegerv(LOCAL_GL_SCISSOR_BOX, scissorRect);
@@ -2398,7 +2379,9 @@ nsWindow::DrawWindowOverlay(LayerManagerComposite* aManager, nsIntRect aRect)
 
     mozilla::widget::android::GeckoLayerClient* client = AndroidBridge::Bridge()->GetLayerClient();
 
-    gl::GLContext* gl = static_cast<CompositorOGL*>(aManager->GetCompositor())->gl();
+    CompositorOGL *compositor = static_cast<CompositorOGL*>(aManager->GetCompositor());
+    compositor->ResetProgram();
+    gl::GLContext* gl = compositor->gl();
     bool scissorEnabled = gl->fIsEnabled(LOCAL_GL_SCISSOR_TEST);
     GLint scissorRect[4];
     gl->fGetIntegerv(LOCAL_GL_SCISSOR_BOX, scissorRect);
@@ -2497,16 +2480,24 @@ nsWindow::NewCompositorParent(int aSurfaceWidth, int aSurfaceHeight)
 mozilla::layers::APZCTreeManager*
 nsWindow::GetAPZCTreeManager()
 {
-    if (!sApzcTreeManager) {
-        CompositorParent* compositor = sCompositorParent;
-        if (!compositor) {
-            return nullptr;
-        }
-        uint64_t rootLayerTreeId = compositor->RootLayerTreeId();
-        CompositorParent::SetControllerForLayerTree(rootLayerTreeId, mozilla::widget::android::APZCCallbackHandler::GetInstance());
-        sApzcTreeManager = CompositorParent::GetAPZCTreeManager(rootLayerTreeId);
-    }
     return sApzcTreeManager;
+}
+
+void
+nsWindow::ConfigureAPZCTreeManager()
+{
+    nsBaseWidget::ConfigureAPZCTreeManager();
+    if (!sApzcTreeManager) {
+        sApzcTreeManager = mAPZC;
+    }
+}
+
+already_AddRefed<GeckoContentController>
+nsWindow::CreateRootContentController()
+{
+    nsRefPtr<widget::android::APZCCallbackHandler> controller =
+        widget::android::APZCCallbackHandler::GetInstance();
+    return controller.forget();
 }
 
 uint64_t

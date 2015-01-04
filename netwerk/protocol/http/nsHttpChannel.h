@@ -121,6 +121,11 @@ public:
     NS_IMETHOD SetupFallbackChannel(const char *aFallbackKey);
     // nsISupportsPriority
     NS_IMETHOD SetPriority(int32_t value);
+    // nsIClassOfService
+    NS_IMETHOD SetClassFlags(uint32_t inFlags);
+    NS_IMETHOD AddClassFlags(uint32_t inFlags);
+    NS_IMETHOD ClearClassFlags(uint32_t inFlags);
+
     // nsIResumableChannel
     NS_IMETHOD ResumeAt(uint64_t startPos, const nsACString& entityID);
 
@@ -142,11 +147,13 @@ public: /* internal necko use only */
     void SetUploadStreamHasHeaders(bool hasHeaders)
       { mUploadStreamHasHeaders = hasHeaders; }
 
-    nsresult SetReferrerInternal(nsIURI *referrer) {
+    nsresult SetReferrerWithPolicyInternal(nsIURI *referrer,
+                                           uint32_t referrerPolicy) {
         nsAutoCString spec;
         nsresult rv = referrer->GetAsciiSpec(spec);
         if (NS_FAILED(rv)) return rv;
         mReferrer = referrer;
+        mReferrerPolicy = referrerPolicy;
         mRequestHead.SetHeader(nsHttp::Referer, spec);
         return NS_OK;
     }
@@ -241,7 +248,6 @@ private:
     nsresult EnsureAssocReq();
     void     ProcessSSLInformation();
     bool     IsHTTPS();
-    void     RetrieveSSLOptions();
 
     nsresult ContinueOnStartRequest1(nsresult);
     nsresult ContinueOnStartRequest2(nsresult);

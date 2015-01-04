@@ -273,6 +273,18 @@ nsSubDocumentFrame::GetSubdocumentSize()
     } else {
       docSizeAppUnits = GetContentRect().Size();
     }
+    // Adjust subdocument size, according to 'object-fit' and the
+    // subdocument's intrinsic size and ratio.
+    nsIFrame* subDocRoot = ObtainIntrinsicSizeFrame();
+    if (subDocRoot) {
+      nsRect destRect =
+        nsLayoutUtils::ComputeObjectDestRect(nsRect(nsPoint(), docSizeAppUnits),
+                                             subDocRoot->GetIntrinsicSize(),
+                                             subDocRoot->GetIntrinsicRatio(),
+                                             StylePosition());
+      docSizeAppUnits = destRect.Size();
+    }
+
     return nsIntSize(presContext->AppUnitsToDevPixels(docSizeAppUnits.width),
                      presContext->AppUnitsToDevPixels(docSizeAppUnits.height));
   }
@@ -401,16 +413,18 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     dirty = dirty.ConvertAppUnitsRoundOut(parentAPD, subdocAPD);
 
     if (nsIFrame* rootScrollFrame = presShell->GetRootScrollFrame()) {
-      // for root content documents we want the base to be the composition bounds
-      nsRect displayportBase = presContext->IsRootContentDocument() ?
-          nsRect(nsPoint(0,0), nsLayoutUtils::CalculateCompositionSizeForFrame(rootScrollFrame)) :
-          dirty.Intersect(nsRect(nsPoint(0,0), subdocRootFrame->GetSize()));
-      nsRect displayPort;
-      if (aBuilder->IsPaintingToWindow() &&
-          nsLayoutUtils::GetOrMaybeCreateDisplayPort(
-            *aBuilder, rootScrollFrame, displayportBase, &displayPort)) {
-        haveDisplayPort = true;
-        dirty = displayPort;
+      if (gfxPrefs::LayoutUseContainersForRootFrames()) {
+        // for root content documents we want the base to be the composition bounds
+        nsRect displayportBase = presContext->IsRootContentDocument() ?
+            nsRect(nsPoint(0,0), nsLayoutUtils::CalculateCompositionSizeForFrame(rootScrollFrame)) :
+            dirty.Intersect(nsRect(nsPoint(0,0), subdocRootFrame->GetSize()));
+        nsRect displayPort;
+        if (aBuilder->IsPaintingToWindow() &&
+            nsLayoutUtils::GetOrMaybeCreateDisplayPort(
+              *aBuilder, rootScrollFrame, displayportBase, &displayPort)) {
+          haveDisplayPort = true;
+          dirty = displayPort;
+        }
       }
 
       ignoreViewportScrolling = presShell->IgnoringViewportScrolling();
@@ -441,9 +455,15 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   bool constructResolutionItem = subdocRootFrame &&
     (presShell->GetXResolution() != 1.0 || presShell->GetYResolution() != 1.0);
   bool constructZoomItem = subdocRootFrame && parentAPD != subdocAPD;
-  bool needsOwnLayer = constructResolutionItem || constructZoomItem ||
-    haveDisplayPort ||
-    presContext->IsRootContentDocument() || (sf && sf->IsScrollingActive(aBuilder));
+  bool needsOwnLayer = false;
+  if (constructResolutionItem ||
+      constructZoomItem ||
+      haveDisplayPort ||
+      presContext->IsRootContentDocument() ||
+      (sf && sf->IsScrollingActive(aBuilder)))
+  {
+    needsOwnLayer = true;
+  }
 
   nsDisplayList childItems;
 
@@ -466,6 +486,7 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
               : aBuilder->GetCurrentScrollParentId());
 
       aBuilder->SetAncestorHasTouchEventHandler(false);
+      aBuilder->SetAncestorHasScrollEventHandler(false);
       subdocRootFrame->
         BuildDisplayListForStackingContext(aBuilder, dirty, &childItems);
     }
@@ -756,14 +777,27 @@ nsSubDocumentFrame::Reflow(nsPresContext*           aPresContext,
   nsPoint offset = nsPoint(aReflowState.ComputedPhysicalBorderPadding().left,
                            aReflowState.ComputedPhysicalBorderPadding().top);
 
-  nsSize innerSize(aDesiredSize.Width(), aDesiredSize.Height());
-  innerSize.width  -= aReflowState.ComputedPhysicalBorderPadding().LeftRight();
-  innerSize.height -= aReflowState.ComputedPhysicalBorderPadding().TopBottom();
-
   if (mInnerView) {
+    const nsMargin& bp = aReflowState.ComputedPhysicalBorderPadding();
+    nsSize innerSize(aDesiredSize.Width() - bp.LeftRight(),
+                     aDesiredSize.Height() - bp.TopBottom());
+
+    // Size & position the view according to 'object-fit' & 'object-position'.
+    nsIFrame* subDocRoot = ObtainIntrinsicSizeFrame();
+    IntrinsicSize intrinsSize;
+    nsSize intrinsRatio;
+    if (subDocRoot) {
+      intrinsSize = subDocRoot->GetIntrinsicSize();
+      intrinsRatio = subDocRoot->GetIntrinsicRatio();
+    }
+    nsRect destRect =
+      nsLayoutUtils::ComputeObjectDestRect(nsRect(offset, innerSize),
+                                           intrinsSize, intrinsRatio,
+                                           StylePosition());
+
     nsViewManager* vm = mInnerView->GetViewManager();
-    vm->MoveViewTo(mInnerView, offset.x, offset.y);
-    vm->ResizeView(mInnerView, nsRect(nsPoint(0, 0), innerSize), true);
+    vm->MoveViewTo(mInnerView, destRect.x, destRect.y);
+    vm->ResizeView(mInnerView, nsRect(nsPoint(0, 0), destRect.Size()), true);
   }
 
   aDesiredSize.SetOverflowAreasToDesiredBounds();
@@ -1232,4 +1266,25 @@ nsSubDocumentFrame::ObtainIntrinsicSizeFrame()
     }
   }
   return nullptr;
+}
+
+nsIntPoint
+nsSubDocumentFrame::GetChromeDisplacement()
+{
+  nsIFrame* nextFrame = nsLayoutUtils::GetCrossDocParentFrame(this);
+  if (!nextFrame) {
+    NS_WARNING("Couldn't find window chrome to calculate displacement to.");
+    return nsIntPoint();
+  }
+
+  nsIFrame* rootFrame = nextFrame;
+  while (nextFrame) {
+    rootFrame = nextFrame;
+    nextFrame = nsLayoutUtils::GetCrossDocParentFrame(rootFrame);
+  }
+
+  nsPoint offset = GetOffsetToCrossDoc(rootFrame);
+  int32_t appUnitsPerDevPixel = rootFrame->PresContext()->AppUnitsPerDevPixel();
+  return nsIntPoint((int)(offset.x/appUnitsPerDevPixel),
+                    (int)(offset.y/appUnitsPerDevPixel));
 }

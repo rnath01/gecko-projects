@@ -7,6 +7,7 @@
 #include "mozilla/dom/Promise.h"
 
 #include "jsfriendapi.h"
+#include "js/Debug.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/DOMError.h"
 #include "mozilla/dom/OwningNonNull.h"
@@ -324,8 +325,8 @@ Promise::CreateWrapper(ErrorResult& aRv)
   }
   JSContext* cx = jsapi.cx();
 
-  JS::Rooted<JS::Value> ignored(cx);
-  if (!WrapNewBindingObject(cx, this, &ignored)) {
+  JS::Rooted<JS::Value> wrapper(cx);
+  if (!GetOrCreateDOMReflector(cx, this, &wrapper)) {
     JS_ClearPendingException(cx);
     aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
     return;
@@ -339,6 +340,9 @@ Promise::CreateWrapper(ErrorResult& aRv)
     aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
     return;
   }
+
+  JS::RootedObject obj(cx, &wrapper.toObject());
+  JS::dbg::onNewPromise(cx, obj);
 }
 
 void
@@ -471,7 +475,7 @@ Promise::CreateFunction(JSContext* aCx, JSObject* aParent, Promise* aPromise,
   JS::Rooted<JSObject*> obj(aCx, JS_GetFunctionObject(func));
 
   JS::Rooted<JS::Value> promiseObj(aCx);
-  if (!dom::WrapNewBindingObject(aCx, aPromise, &promiseObj)) {
+  if (!dom::GetOrCreateDOMReflector(aCx, aPromise, &promiseObj)) {
     return nullptr;
   }
 
@@ -498,7 +502,7 @@ Promise::CreateThenableFunction(JSContext* aCx, Promise* aPromise, uint32_t aTas
   JS::Rooted<JSObject*> obj(aCx, JS_GetFunctionObject(func));
 
   JS::Rooted<JS::Value> promiseObj(aCx);
-  if (!dom::WrapNewBindingObject(aCx, aPromise, &promiseObj)) {
+  if (!dom::GetOrCreateDOMReflector(aCx, aPromise, &promiseObj)) {
     return nullptr;
   }
 
@@ -1113,19 +1117,19 @@ Promise::RejectInternal(JSContext* aCx,
 }
 
 void
-Promise::MaybeSettle(JS::Handle<JS::Value> aValue,
-                     PromiseState aState)
+Promise::Settle(JS::Handle<JS::Value> aValue, PromiseState aState)
 {
-  // Promise.all() or Promise.race() implementations will repeatedly call
-  // Resolve/RejectInternal rather than using the Maybe... forms. Stop SetState
-  // from asserting.
-  if (mState != Pending) {
-    return;
-  }
-
+  mSettlementTimestamp = TimeStamp::Now();
   SetResult(aValue);
   SetState(aState);
-  mSettlementTimestamp = TimeStamp::Now();
+
+  AutoJSAPI jsapi;
+  jsapi.Init();
+  JSContext* cx = jsapi.cx();
+  JS::RootedObject wrapper(cx, GetWrapper());
+  MOZ_ASSERT(wrapper); // We preserved it
+  JSAutoCompartment ac(cx, wrapper);
+  JS::dbg::onPromiseSettled(cx, wrapper);
 
   // If the Promise was rejected, and there is no reject handler already setup,
   // watch for thread shutdown.
@@ -1147,6 +1151,20 @@ Promise::MaybeSettle(JS::Handle<JS::Value> aValue,
   }
 
   EnqueueCallbackTasks();
+}
+
+void
+Promise::MaybeSettle(JS::Handle<JS::Value> aValue,
+                     PromiseState aState)
+{
+  // Promise.all() or Promise.race() implementations will repeatedly call
+  // Resolve/RejectInternal rather than using the Maybe... forms. Stop SetState
+  // from asserting.
+  if (mState != Pending) {
+    return;
+  }
+
+  Settle(aValue, aState);
 }
 
 void
@@ -1228,7 +1246,7 @@ class PromiseWorkerProxyRunnable : public workers::WorkerRunnable
 {
 public:
   PromiseWorkerProxyRunnable(PromiseWorkerProxy* aPromiseWorkerProxy,
-                             JSStructuredCloneCallbacks* aCallbacks,
+                             const JSStructuredCloneCallbacks* aCallbacks,
                              JSAutoStructuredCloneBuffer&& aBuffer,
                              PromiseWorkerProxy::RunCallbackFunc aFunc)
     : WorkerRunnable(aPromiseWorkerProxy->GetWorkerPrivate(),
@@ -1274,32 +1292,48 @@ protected:
 
 private:
   nsRefPtr<PromiseWorkerProxy> mPromiseWorkerProxy;
-  JSStructuredCloneCallbacks* mCallbacks;
+  const JSStructuredCloneCallbacks* mCallbacks;
   JSAutoStructuredCloneBuffer mBuffer;
 
   // Function pointer for calling Promise::{ResolveInternal,RejectInternal}.
   PromiseWorkerProxy::RunCallbackFunc mFunc;
 };
 
+/* static */
+already_AddRefed<PromiseWorkerProxy>
+PromiseWorkerProxy::Create(WorkerPrivate* aWorkerPrivate,
+                           Promise* aWorkerPromise,
+                           const JSStructuredCloneCallbacks* aCb)
+{
+  MOZ_ASSERT(aWorkerPrivate);
+  aWorkerPrivate->AssertIsOnWorkerThread();
+  MOZ_ASSERT(aWorkerPromise);
+
+  nsRefPtr<PromiseWorkerProxy> proxy =
+    new PromiseWorkerProxy(aWorkerPrivate, aWorkerPromise, aCb);
+
+  // We do this to make sure the worker thread won't shut down before the
+  // promise is resolved/rejected on the worker thread.
+  if (!aWorkerPrivate->AddFeature(aWorkerPrivate->GetJSContext(), proxy)) {
+    // Probably the worker is terminating. We cannot complete the operation
+    // and we have to release all the resources.
+    proxy->mCleanedUp = true;
+    proxy->mWorkerPromise = nullptr;
+    return nullptr;
+  }
+
+  return proxy.forget();
+}
+
 PromiseWorkerProxy::PromiseWorkerProxy(WorkerPrivate* aWorkerPrivate,
                                        Promise* aWorkerPromise,
-                                       JSStructuredCloneCallbacks* aCallbacks)
+                                       const JSStructuredCloneCallbacks* aCallbacks)
   : mWorkerPrivate(aWorkerPrivate)
   , mWorkerPromise(aWorkerPromise)
   , mCleanedUp(false)
   , mCallbacks(aCallbacks)
   , mCleanUpLock("cleanUpLock")
 {
-  MOZ_ASSERT(mWorkerPrivate);
-  mWorkerPrivate->AssertIsOnWorkerThread();
-  MOZ_ASSERT(mWorkerPromise);
-
-  // We do this to make sure the worker thread won't shut down before the
-  // promise is resolved/rejected on the worker thread.
-  if (!mWorkerPrivate->AddFeature(mWorkerPrivate->GetJSContext(), this)) {
-    MOZ_ASSERT(false, "cannot add the worker feature!");
-    return;
-  }
 }
 
 PromiseWorkerProxy::~PromiseWorkerProxy()
@@ -1334,6 +1368,36 @@ PromiseWorkerProxy::StoreISupports(nsISupports* aSupports)
   mSupportsArray.AppendElement(supports);
 }
 
+namespace {
+
+class PromiseWorkerProxyControlRunnable MOZ_FINAL
+  : public WorkerControlRunnable
+{
+  nsRefPtr<PromiseWorkerProxy> mProxy;
+
+public:
+  PromiseWorkerProxyControlRunnable(WorkerPrivate* aWorkerPrivate,
+                                    PromiseWorkerProxy* aProxy)
+    : WorkerControlRunnable(aWorkerPrivate, WorkerThreadUnchangedBusyCount)
+    , mProxy(aProxy)
+  {
+    MOZ_ASSERT(aProxy);
+  }
+
+  virtual bool
+  WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) MOZ_OVERRIDE
+  {
+    mProxy->CleanUp(aCx);
+    return true;
+  }
+
+private:
+  ~PromiseWorkerProxyControlRunnable()
+  {}
+};
+
+} // anonymous namespace
+
 void
 PromiseWorkerProxy::RunCallback(JSContext* aCx,
                                 JS::Handle<JS::Value> aValue,
@@ -1362,7 +1426,11 @@ PromiseWorkerProxy::RunCallback(JSContext* aCx,
                                    Move(buffer),
                                    aFunc);
 
-  runnable->Dispatch(aCx);
+  if (!runnable->Dispatch(aCx)) {
+    nsRefPtr<WorkerControlRunnable> runnable =
+      new PromiseWorkerProxyControlRunnable(mWorkerPrivate, this);
+    mWorkerPrivate->DispatchControlRunnable(runnable);
+  }
 }
 
 void

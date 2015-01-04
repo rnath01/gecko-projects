@@ -599,7 +599,6 @@ li {
  */
 hr {
   display: block;
-  height: 2px;
   border: 1px inset;
   margin: 0.5em auto 0.5em auto;
   color: gray;
@@ -718,6 +717,13 @@ audio:not([controls]) > xul|videocontrols {
 
 video {
   object-fit: contain;
+}
+
+video > img:-moz-native-anonymous {
+  /* Video poster images should render with the video element's "object-fit" &
+     "object-position" properties */
+  object-fit: inherit !important;
+  object-position: inherit !important;
 }
 
 audio:not([controls]) {

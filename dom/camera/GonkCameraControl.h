@@ -32,6 +32,7 @@ namespace android {
   class GonkCameraHardware;
   class MediaProfiles;
   class GonkRecorder;
+  class GonkCameraSource;
 }
 
 namespace mozilla {
@@ -98,15 +99,20 @@ protected:
   using CameraControlImpl::OnConfigurationChange;
   using CameraControlImpl::OnUserError;
 
+  typedef nsTArray<Size>::index_type SizeIndex;
+
   virtual void BeginBatchParameterSet() MOZ_OVERRIDE;
   virtual void EndBatchParameterSet() MOZ_OVERRIDE;
 
   nsresult Initialize();
 
+  nsresult ValidateConfiguration(const Configuration& aConfig, Configuration& aValidatedConfig);
   nsresult SetConfigurationInternal(const Configuration& aConfig);
   nsresult SetPictureConfiguration(const Configuration& aConfig);
   nsresult SetVideoConfiguration(const Configuration& aConfig);
   nsresult StartInternal(const Configuration* aInitialConfig);
+  nsresult StartPreviewInternal();
+  nsresult StopInternal();
 
   template<class T> nsresult SetAndPush(uint32_t aKey, const T& aValue);
 
@@ -130,8 +136,9 @@ protected:
   nsresult SetupRecording(int aFd, int aRotation, uint64_t aMaxFileSizeBytes,
                           uint64_t aMaxVideoLengthMs);
   nsresult SetupRecordingFlash(bool aAutoEnableLowLightTorch);
-  nsresult SetPreviewSize(const Size& aSize);
-  nsresult SetVideoSize(const Size& aSize);
+  nsresult SelectCaptureAndPreviewSize(const Size& aPreviewSize, const Size& aCaptureSize,
+                                       const Size& aMaxSize, uint32_t aCaptureSizeKey);
+  nsresult MaybeAdjustVideoSize();
   nsresult PausePreview();
   nsresult GetSupportedSize(const Size& aSize, const nsTArray<Size>& supportedSizes, Size& best);
 
@@ -148,11 +155,15 @@ protected:
   nsresult UpdateThumbnailSize();
   nsresult SetThumbnailSizeImpl(const Size& aSize);
 
+  friend class android::GonkCameraSource;
+  android::sp<android::GonkCameraHardware> GetCameraHw();
+
   int32_t RationalizeRotation(int32_t aRotation);
+
+  uint32_t                  mCameraId;
 
   android::sp<android::GonkCameraHardware> mCameraHw;
 
-  Size                      mLastPictureSize;
   Size                      mLastThumbnailSize;
   Size                      mLastRecorderSize;
   uint32_t                  mPreviewFps;
@@ -195,7 +206,6 @@ void OnAutoFocusMoving(nsGonkCameraControl* gc, bool aIsMoving);
 void OnFacesDetected(nsGonkCameraControl* gc, camera_frame_metadata_t* aMetaData);
 void OnNewPreviewFrame(nsGonkCameraControl* gc, layers::TextureClient* aBuffer);
 void OnShutter(nsGonkCameraControl* gc);
-void OnClosed(nsGonkCameraControl* gc);
 void OnSystemError(nsGonkCameraControl* gc,
                    CameraControlListener::SystemContext aWhere,
                    int32_t aArg1, int32_t aArg2);

@@ -613,16 +613,16 @@ PeerConnectionTest.prototype.close = function PCT_close(onSuccess) {
     }
   }
 
-  function signalingstatechangeLocalClose(state) {
-    info("'onsignalingstatechange' event '" + state + "' received");
-    is(state, "closed", "onsignalingstatechange event is closed");
+  function signalingstatechangeLocalClose(e) {
+    info("'signalingstatechange' event received");
+    is(e.target.signalingState, "closed", "signalingState is closed");
     self.waitingForLocal = false;
     verifyClosed();
   }
 
-  function signalingstatechangeRemoteClose(state) {
-    info("'onsignalingstatechange' event '" + state + "' received");
-    is(state, "closed", "onsignalingstatechange event is closed");
+  function signalingstatechangeRemoteClose(e) {
+    info("'signalingstatechange' event received");
+    is(e.target.signalingState, "closed", "signalingState is closed");
     self.waitingForRemote = false;
     verifyClosed();
   }
@@ -674,6 +674,17 @@ PeerConnectionTest.prototype.setStepTimeout = function(ms) {
   this._stepTimeout = setTimeout(function() {
     ok(false, "Step timed out: " + this.chain.currentStepLabel);
     this.next();
+  }.bind(this), ms);
+};
+
+/**
+ * Set a timeout for the over all PeerConnectionTest
+ * @param {long] ms the number of milliseconds to allow for the test
+ */
+PeerConnectionTest.prototype.setTimeout = function(ms) {
+  this._timeout = setTimeout(function() {
+    ok(false, "PeerConnectionTest timed out");
+    this.teardown();
   }.bind(this), ms);
 };
 
@@ -744,9 +755,10 @@ function PCT_setLocalDescription(peer, desc, stateExpected, onSuccess) {
     }
   }
 
-  peer.onsignalingstatechange = function (state) {
-    info(peer + ": 'onsignalingstatechange' event '" + state + "' received");
-    if(stateExpected === state && eventFired == false) {
+  peer.onsignalingstatechange = function (e) {
+    info(peer + ": 'signalingstatechange' event received");
+    var state = e.target.signalingState;
+    if(stateExpected === state && !eventFired) {
       eventFired = true;
       peer.setLocalDescStableEventDate = new Date();
       check_next_test();
@@ -812,9 +824,10 @@ function PCT_setRemoteDescription(peer, desc, stateExpected, onSuccess) {
     }
   }
 
-  peer.onsignalingstatechange = function (state) {
-    info(peer + ": 'onsignalingstatechange' event '" + state + "' received");
-    if(stateExpected === state && eventFired == false) {
+  peer.onsignalingstatechange = function(e) {
+    info(peer + ": 'signalingstatechange' event received");
+    var state = e.target.signalingState;
+    if(stateExpected === state && !eventFired) {
       eventFired = true;
       peer.setRemoteDescStableEventDate = new Date();
       check_next_test();
@@ -1534,6 +1547,9 @@ function PeerConnectionWrapper(label, configuration, h264) {
   this.onAddStreamFired = false;
   this.addStreamCallbacks = {};
 
+  this._local_ice_candidates = [];
+  this._remote_ice_candidates = [];
+  this._ice_candidates_to_add = [];
   this.holdIceCandidates = true;
   this.endOfTrickleIce = false;
   this.localRequiresTrickleIce = false;
@@ -1618,7 +1634,6 @@ function PeerConnectionWrapper(label, configuration, h264) {
    * failure will be raised if an event of this type is caught.
    *
    * @param {Object} aEvent
-   *        Event data which includes the newly created data channel
    */
   this._pc.onsignalingstatechange = function (anEvent) {
     info(self + ": 'onsignalingstatechange' event fired");
@@ -1740,11 +1755,13 @@ PeerConnectionWrapper.prototype = {
    *
    * @param {function} onSuccess
    *        Callback to execute if all media has been requested successfully
+   * @param {array} constraintsList
+   *        Array of constraints for GUM calls
    */
-  getAllUserMedia : function PCW_GetAllUserMedia(onSuccess) {
+  getAllUserMedia : function PCW_GetAllUserMedia(constraintsList, onSuccess) {
     var self = this;
 
-    function _getAllUserMedia(constraintsList, index) {
+    function _getAllUserMedia(index) {
       if (index < constraintsList.length) {
         var constraints = constraintsList[index];
 
@@ -1761,20 +1778,20 @@ PeerConnectionWrapper.prototype = {
 
           self.attachMedia(stream, type, 'local');
 
-          _getAllUserMedia(constraintsList, index + 1);
+          _getAllUserMedia(index + 1);
         }, generateErrorCallback());
       } else {
         onSuccess();
       }
     }
 
-    if (this.constraints.length === 0) {
+    if (constraintsList.length === 0) {
       info("Skipping GUM: no UserMedia requested");
       onSuccess();
     }
     else {
-      info("Get " + this.constraints.length + " local streams");
-      _getAllUserMedia(this.constraints, 0);
+      info("Get " + constraintsList.length + " local streams");
+      _getAllUserMedia(0);
     }
   },
 
@@ -1930,7 +1947,7 @@ PeerConnectionWrapper.prototype = {
   logSignalingState: function PCW_logSignalingState() {
     var self = this;
 
-    function _logSignalingState(state) {
+    function _logSignalingState(e) {
       var newstate = self._pc.signalingState;
       var oldstate = self.signalingStateLog[self.signalingStateLog.length - 1]
       if (Object.keys(signalingStateTransitions).indexOf(oldstate) != -1) {
@@ -1956,7 +1973,7 @@ PeerConnectionWrapper.prototype = {
     var self = this;
 
     self._remote_ice_candidates.push(candidate);
-    if (self.signalingstate === 'closed') {
+    if (self.signalingState === 'closed') {
       info("Received ICE candidate for closed PeerConnection - discarding");
       return;
     }
@@ -2121,9 +2138,6 @@ PeerConnectionWrapper.prototype = {
   setupIceCandidateHandler : function
     PCW_setupIceCandidateHandler(test, candidateHandler, endHandler) {
     var self = this;
-    self._local_ice_candidates = [];
-    self._remote_ice_candidates = [];
-    self._ice_candidates_to_add = [];
 
     candidateHandler = candidateHandler || test.iceCandidateHandler.bind(test);
     endHandler = endHandler || test.signalEndOfTrickleIce.bind(test);
@@ -2162,13 +2176,13 @@ PeerConnectionWrapper.prototype = {
     if ((!constraints) || (constraints.length === 0)) {
       return 0;
     }
-    var audioTracks = 0;
+    var numAudioTracks = 0;
     for (var i = 0; i < constraints.length; i++) {
       if (constraints[i].audio) {
-        audioTracks++;
+        numAudioTracks++;
       }
     }
-    return audioTracks;
+    return numAudioTracks;
   },
 
   /**
@@ -2211,13 +2225,13 @@ PeerConnectionWrapper.prototype = {
     if ((!constraints) || (constraints.length === 0)) {
       return 0;
     }
-    var videoTracks = 0;
+    var numVideoTracks = 0;
     for (var i = 0; i < constraints.length; i++) {
       if (constraints[i].video) {
-        videoTracks++;
+        numVideoTracks++;
       }
     }
-    return videoTracks;
+    return numVideoTracks;
   },
 
   /**
@@ -2260,11 +2274,11 @@ PeerConnectionWrapper.prototype = {
     if (!streams || (streams.length === 0)) {
       return 0;
     }
-    var audioTracks = 0;
+    var numAudioTracks = 0;
     streams.forEach(function(st) {
-      audioTracks += st.getAudioTracks().length;
+      numAudioTracks += st.getAudioTracks().length;
     });
-    return audioTracks;
+    return numAudioTracks;
   },
 
   /*
@@ -2278,11 +2292,11 @@ PeerConnectionWrapper.prototype = {
     if (!streams || (streams.length === 0)) {
       return 0;
     }
-    var videoTracks = 0;
+    var numVideoTracks = 0;
     streams.forEach(function(st) {
-      videoTracks += st.getVideoTracks().length;
+      numVideoTracks += st.getVideoTracks().length;
     });
-    return videoTracks;
+    return numVideoTracks;
   },
 
   /**
@@ -2355,10 +2369,9 @@ PeerConnectionWrapper.prototype = {
   },
 
   verifySdp : function PCW_verifySdp(desc, expectedType, offerConstraintsList,
-      answerConstraintsList, offerOptions, trickleIceCallback) {
+      offerOptions, trickleIceCallback) {
     info("Examining this SessionDescription: " + JSON.stringify(desc));
     info("offerConstraintsList: " + JSON.stringify(offerConstraintsList));
-    info("answerConstraintsList: " + JSON.stringify(answerConstraintsList));
     info("offerOptions: " + JSON.stringify(offerOptions));
     ok(desc, "SessionDescription is not null");
     is(desc.type, expectedType, "SessionDescription type is " + expectedType);
@@ -2378,8 +2391,7 @@ PeerConnectionWrapper.prototype = {
     //TODO: how can we check for absence/presence of m=application?
 
     var audioTracks =
-      Math.max(this.countAudioTracksInMediaConstraint(offerConstraintsList),
-               this.countAudioTracksInMediaConstraint(answerConstraintsList)) ||
+      this.countAudioTracksInMediaConstraint(offerConstraintsList) ||
       this.audioInOfferOptions(offerOptions);
 
     info("expected audio tracks: " + audioTracks);
@@ -2395,8 +2407,7 @@ PeerConnectionWrapper.prototype = {
     }
 
     var videoTracks =
-      Math.max(this.countVideoTracksInMediaConstraint(offerConstraintsList),
-               this.countVideoTracksInMediaConstraint(answerConstraintsList)) ||
+      this.countVideoTracksInMediaConstraint(offerConstraintsList) ||
       this.videoInOfferOptions(offerOptions);
 
     info("expected video tracks: " + videoTracks);
@@ -2579,6 +2590,88 @@ PeerConnectionWrapper.prototype = {
     } else {
       is(numLocalCandidates, 0, "Have no localcandidate stats");
       is(numRemoteCandidates, 0, "Have no remotecandidate stats");
+    }
+  },
+
+  /**
+   * Compares the Ice server configured for this PeerConnectionWrapper
+   * with the ICE candidates received in the RTCP stats.
+   *
+   * @param {object} stats
+   *        The stats to be verified for relayed vs. direct connection.
+   */
+  checkStatsIceConnectionType : function PCW_checkStatsIceConnectionType(stats)
+  {
+    var lId;
+    var rId;
+    Object.keys(stats).forEach(function(name) {
+      if ((stats[name].type === "candidatepair") &&
+          (stats[name].selected)) {
+        lId = stats[name].localCandidateId;
+        rId = stats[name].remoteCandidateId;
+      }
+    });
+    info("checkStatsIceConnectionType verifying: local=" +
+         JSON.stringify(stats[lId]) + " remote=" + JSON.stringify(stats[rId]));
+    if ((typeof stats[lId] === 'undefined') ||
+        (typeof stats[rId] === 'undefined')) {
+      info("checkStatsIceConnectionType failed to find candidatepair IDs");
+      return;
+    }
+    var lType = stats[lId].candidateType;
+    var rType = stats[rId].candidateType;
+    var lIp = stats[lId].ipAddress;
+    var rIp = stats[rId].ipAddress;
+    if ((this.configuration) && (typeof this.configuration.iceServers !== 'undefined')) {
+      info("Ice Server configured");
+      // Note: the IP comparising is a workaround for bug 1097333
+      //       And this will fail if a TURN server address is a DNS name!
+      var serverIp = this.configuration.iceServers[0].url.split(':')[1];
+      ok((lType === "relayed" || rType === "relayed") ||
+         (lIp === serverIp || rIp === serverIp), "One peer uses a relay");
+    } else {
+      info("P2P configured");
+      ok(((lType !== "relayed") && (rType !== "relayed")), "Pure peer to peer call without a relay");
+    }
+  },
+
+  /**
+   * Compares amount of established ICE connection according to ICE candidate
+   * pairs in the stats reporting with the expected amount of connection based
+   * on the constraints.
+   *
+   * @param {object} stats
+   *        The stats to check for ICE candidate pairs
+   * @param {object} counters
+   *        The counters for media and data tracks based on constraints
+   * @param {object} answer
+   *        The SDP answer to check for SDP bundle support
+   */
+  checkStatsIceConnections : function PCW_checkStatsIceConnections(stats,
+      offerConstraintsList, offerOptions, numDataTracks, answer) {
+    var numIceConnections = 0;
+    Object.keys(stats).forEach(function(key) {
+      if ((stats[key].type === "candidatepair") && stats[key].selected) {
+        numIceConnections += 1;
+      }
+    });
+    info("ICE connections according to stats: " + numIceConnections);
+    if (answer.sdp.contains('a=group:BUNDLE')) {
+      is(numIceConnections, 1, "stats reports exactly 1 ICE connection");
+    } else {
+      // This code assumes that no media sections have been rejected due to
+      // codec mismatch or other unrecoverable negotiation failures.
+      var numAudioTracks =
+        this.countAudioTracksInMediaConstraint(offerConstraintsList) ||
+        this.audioInOfferOptions(offerOptions);
+
+      var numVideoTracks =
+        this.countVideoTracksInMediaConstraint(offerConstraintsList) ||
+        this.videoInOfferOptions(offerOptions);
+
+      var numAudioVideoDataTracks = numAudioTracks + numVideoTracks + numDataTracks;
+      info("expected audio + video + data tracks: " + numAudioVideoDataTracks);
+      is(numAudioVideoDataTracks, numIceConnections, "stats ICE connections matches expected A/V tracks");
     }
   },
 

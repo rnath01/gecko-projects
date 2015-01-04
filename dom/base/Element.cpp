@@ -25,6 +25,7 @@
 #include "nsIDOMDocument.h"
 #include "nsIContentIterator.h"
 #include "nsFocusManager.h"
+#include "nsFrameManager.h"
 #include "nsILinkHandler.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIURL.h"
@@ -137,6 +138,7 @@
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/dom/WindowBinding.h"
 #include "mozilla/dom/ElementBinding.h"
+#include "mozilla/dom/VRDevice.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -976,6 +978,7 @@ Element::CreateShadowRoot(ErrorResult& aError)
     nsIPresShell* shell = doc->GetShell();
     if (shell) {
       shell->DestroyFramesFor(this, &destroyedFramesFor);
+      MOZ_ASSERT(!shell->FrameManager()->GetDisplayContentsStyleFor(this));
     }
   }
   MOZ_ASSERT(!GetPrimaryFrame());
@@ -1458,7 +1461,9 @@ Element::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
     // Being added to a document.
     SetInDocument();
 
-    if (GetCustomElementData()) {
+    // Attached callback must be enqueued whenever custom element is inserted into a
+    // document and this document has a browsing context.
+    if (GetCustomElementData() && aDocument->GetDocShell()) {
       // Enqueue an attached callback for the custom element.
       aDocument->EnqueueLifecycleCallback(nsIDocument::eAttached, this);
     }
@@ -1469,7 +1474,17 @@ Element::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                NODE_NEEDS_FRAME | NODE_DESCENDANTS_NEED_FRAMES |
                // And the restyle bits
                ELEMENT_ALL_RESTYLE_FLAGS);
-  } else if (!IsInShadowTree()) {
+  } else if (IsInShadowTree()) {
+    // We're not in a document, but we did get inserted into a shadow tree.
+    // Since we won't have any restyle data in the document's restyle trackers,
+    // don't let us get inserted with restyle bits set incorrectly.
+    //
+    // Also clear all the other flags that are cleared above when we do get
+    // inserted into a document.
+    UnsetFlags(NODE_FORCE_XBL_BINDINGS |
+               NODE_NEEDS_FRAME | NODE_DESCENDANTS_NEED_FRAMES |
+               ELEMENT_ALL_RESTYLE_FLAGS);
+  } else {
     // If we're not in the doc and not in a shadow tree,
     // update our subtree pointer.
     SetSubtreeRootPointer(aParent->SubtreeRoot());
@@ -1660,7 +1675,9 @@ Element::UnbindFromTree(bool aDeep, bool aNullParent)
 
     document->ClearBoxObjectFor(this);
 
-    if (GetCustomElementData()) {
+    // Detached must be enqueued whenever custom element is removed from
+    // the document and this document has a browsing context.
+    if (GetCustomElementData() && document->GetDocShell()) {
       // Enqueue a detached callback for the custom element.
       document->EnqueueLifecycleCallback(nsIDocument::eDetached, this);
     }
@@ -3061,7 +3078,7 @@ GetFullScreenError(nsIDocument* aDoc)
 }
 
 void
-Element::MozRequestFullScreen()
+Element::MozRequestFullScreen(const RequestFullscreenOptions& aOptions)
 {
   // Only grant full-screen requests if this is called from inside a trusted
   // event handler (i.e. inside an event handler for a user initiated event).
@@ -3085,7 +3102,12 @@ Element::MozRequestFullScreen()
     return;
   }
 
-  OwnerDoc()->AsyncRequestFullScreen(this);
+  FullScreenOptions opts;
+  if (aOptions.mVrDisplay) {
+    opts.mVRHMDDevice = aOptions.mVrDisplay->GetHMD();
+  }
+
+  OwnerDoc()->AsyncRequestFullScreen(this, opts);
 
   return;
 }

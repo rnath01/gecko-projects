@@ -49,6 +49,7 @@ public:
     nsWindow();
     virtual ~nsWindow();
 
+    static void NotifyVsync(mozilla::TimeStamp aVsyncTimestamp);
     static void DoDraw(void);
     static nsEventStatus DispatchInputEvent(mozilla::WidgetGUIEvent& aEvent,
                                             bool* aWasCaptured = nullptr);
@@ -95,7 +96,7 @@ public:
     }
     NS_IMETHOD ReparentNativeWidget(nsIWidget* aNewParent);
 
-    NS_IMETHOD MakeFullScreen(bool aFullScreen) /*MOZ_OVERRIDE*/;
+    NS_IMETHOD MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen = nullptr) /*MOZ_OVERRIDE*/;
 
     virtual mozilla::TemporaryRef<mozilla::gfx::DrawTarget>
         StartRemoteDrawing() MOZ_OVERRIDE;
@@ -119,6 +120,10 @@ public:
     virtual bool NeedsPaint();
 
     virtual Composer2D* GetComposer2D() MOZ_OVERRIDE;
+
+protected:
+    // nsBaseWidget
+    already_AddRefed<GeckoContentController> CreateRootContentController() MOZ_OVERRIDE;
 
 protected:
     nsWindow* mParent;

@@ -18,6 +18,8 @@ devtools.lazyRequireGetter(this, "MemoryOverview",
   "devtools/timeline/memory-overview", true);
 devtools.lazyRequireGetter(this, "Waterfall",
   "devtools/timeline/waterfall", true);
+devtools.lazyRequireGetter(this, "MarkerDetails",
+  "devtools/timeline/marker-details", true);
 
 devtools.lazyImporter(this, "CanvasGraphUtils",
   "resource:///modules/devtools/Graphs.jsm");
@@ -75,6 +77,7 @@ let TimelineController = {
   _endTime: 0,
   _markers: [],
   _memory: [],
+  _frames: [],
 
   /**
    * Initialization function, called when the tool is started.
@@ -83,8 +86,10 @@ let TimelineController = {
     this._onRecordingTick = this._onRecordingTick.bind(this);
     this._onMarkers = this._onMarkers.bind(this);
     this._onMemory = this._onMemory.bind(this);
+    this._onFrames = this._onFrames.bind(this);
     gFront.on("markers", this._onMarkers);
     gFront.on("memory", this._onMemory);
+    gFront.on("frames", this._onFrames);
   },
 
   /**
@@ -93,6 +98,7 @@ let TimelineController = {
   destroy: function() {
     gFront.off("markers", this._onMarkers);
     gFront.off("memory", this._onMemory);
+    gFront.off("frames", this._onFrames);
   },
 
   /**
@@ -117,6 +123,16 @@ let TimelineController = {
    */
   getMemory: function() {
     return this._memory;
+  },
+
+  /**
+   * Gets stack frame array reported by the actor.  The marker "stack"
+   * and "endStack" properties are indices into this array.  See
+   * actors/utils/stack.js for more details.
+   * @return array
+   */
+  getFrames: function() {
+    return this._frames;
   },
 
   /**
@@ -161,6 +177,7 @@ let TimelineController = {
     this._endTime = startTime;
     this._markers = [];
     this._memory = [];
+    this._frames = [];
     this._updateId = setInterval(this._onRecordingTick, OVERVIEW_UPDATE_INTERVAL);
   },
 
@@ -183,7 +200,17 @@ let TimelineController = {
    * updating the UI as needed.
    */
   _stopRecordingAndDiscardData: function*() {
+    // Clear the markers before calling async method _stopRecording to properly
+    // reset the selection if markers were already received. Bug 1092452.
+    this._markers.length = 0;
+    this._memory.length = 0;
+
     yield this._stopRecording();
+
+    // Clear the markers after _stopRecording has finished. It's possible that
+    // server sent new markers before it received the request to stop sending
+    // them and client received them while we were waiting for _stopRecording
+    // to finish. Bug 1067287.
     this._markers.length = 0;
     this._memory.length = 0;
   },
@@ -215,6 +242,18 @@ let TimelineController = {
   },
 
   /**
+   * Callback handling the "frames" event on the timeline front.
+   *
+   * @param number delta
+   *        The number of milliseconds elapsed since epoch.
+   * @param object frames
+   *        Newly generated frame objects.
+   */
+  _onFrames: function(delta, frames) {
+    Array.prototype.push.apply(this._frames, frames);
+  },
+
+  /**
    * Callback invoked at a fixed interval while recording.
    * Updates the current time and the timeline overview.
    */
@@ -239,12 +278,18 @@ let TimelineView = {
    */
   initialize: Task.async(function*() {
     this.markersOverview = new MarkersOverview($("#markers-overview"));
-    this.waterfall = new Waterfall($("#timeline-waterfall"));
+    this.waterfall = new Waterfall($("#timeline-waterfall"), $("#timeline-pane"));
+    this.markerDetails = new MarkerDetails($("#timeline-waterfall-details"), $("#timeline-waterfall-container > splitter"));
 
     this._onSelecting = this._onSelecting.bind(this);
     this._onRefresh = this._onRefresh.bind(this);
     this.markersOverview.on("selecting", this._onSelecting);
     this.markersOverview.on("refresh", this._onRefresh);
+    this.markerDetails.on("resize", this._onRefresh);
+
+    this._onMarkerSelected = this._onMarkerSelected.bind(this);
+    this.waterfall.on("selected", this._onMarkerSelected);
+    this.waterfall.on("unselected", this._onMarkerSelected);
 
     yield this.markersOverview.ready();
     yield this.waterfall.recalculateBounds();
@@ -254,6 +299,11 @@ let TimelineView = {
    * Destruction function, called when the tool is closed.
    */
   destroy: function() {
+    this.markerDetails.off("resize", this._onRefresh);
+    this.markerDetails.destroy();
+    this.waterfall.off("selected", this._onMarkerSelected);
+    this.waterfall.off("unselected", this._onMarkerSelected);
+    this.waterfall.destroy();
     this.markersOverview.off("selecting", this._onSelecting);
     this.markersOverview.off("refresh", this._onRefresh);
     this.markersOverview.destroy();
@@ -291,6 +341,22 @@ let TimelineView = {
   },
 
   /**
+   * A marker has been selected in the waterfall.
+   */
+  _onMarkerSelected: function(event, marker) {
+    if (event == "selected") {
+      this.markerDetails.render({
+        toolbox: gToolbox,
+        marker: marker,
+        frames: TimelineController.getFrames()
+      });
+    }
+    if (event == "unselected") {
+      this.markerDetails.empty();
+    }
+  },
+
+  /**
    * Signals that a recording session has started and triggers the appropriate
    * changes in the UI.
    */
@@ -318,7 +384,7 @@ let TimelineView = {
   handleRecordingEnded: function() {
     $("#record-button").removeAttribute("checked");
     $("#memory-checkbox").removeAttribute("disabled");
-    $("#timeline-pane").selectedPanel = $("#timeline-waterfall");
+    $("#timeline-pane").selectedPanel = $("#timeline-waterfall-container");
 
     this.markersOverview.selectionEnabled = true;
 
@@ -336,9 +402,9 @@ let TimelineView = {
       let end = start + this.markersOverview.width * OVERVIEW_INITIAL_SELECTION_RATIO;
       this.markersOverview.setSelection({ start, end });
     } else {
-      let timeStart = interval.startTime;
-      let timeEnd = interval.endTime;
-      this.waterfall.setData(markers, timeStart, timeStart, timeEnd);
+      let startTime = interval.startTime;
+      let endTime = interval.endTime;
+      this.waterfall.setData(markers, startTime, startTime, endTime);
     }
 
     window.emit(EVENTS.RECORDING_ENDED);
@@ -372,6 +438,14 @@ let TimelineView = {
       this.waterfall.clearView();
       return;
     }
+    this.waterfall.resetSelection();
+    this.updateWaterfall();
+  },
+
+  /**
+   * Rebuild the waterfall.
+   */
+  updateWaterfall: function() {
     let selection = this.markersOverview.getSelection();
     let start = selection.start / this.markersOverview.dataScaleX;
     let end = selection.end / this.markersOverview.dataScaleX;
@@ -379,9 +453,10 @@ let TimelineView = {
     let markers = TimelineController.getMarkers();
     let interval = TimelineController.getInterval();
 
-    let timeStart = interval.startTime + Math.min(start, end);
-    let timeEnd = interval.startTime + Math.max(start, end);
-    this.waterfall.setData(markers, interval.startTime, timeStart, timeEnd);
+    let startTime = interval.startTime + Math.min(start, end);
+    let endTime = interval.startTime + Math.max(start, end);
+
+    this.waterfall.setData(markers, interval.startTime, startTime, endTime);
   },
 
   /**
@@ -389,7 +464,7 @@ let TimelineView = {
    */
   _onRefresh: function() {
     this.waterfall.recalculateBounds();
-    this._onSelecting();
+    this.updateWaterfall();
   }
 };
 

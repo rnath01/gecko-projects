@@ -42,8 +42,12 @@
 #include "mozilla/gfx/2D.h"
 #include "mozilla/MouseEvents.h"
 #include "GLConsts.h"
-#include "LayerScope.h"
 #include "mozilla/unused.h"
+#include "mozilla/VsyncDispatcher.h"
+#include "mozilla/layers/APZCTreeManager.h"
+#include "mozilla/layers/ChromeProcessController.h"
+#include "mozilla/layers/InputAPZContext.h"
+#include "mozilla/dom/TabParent.h"
 
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
@@ -110,6 +114,7 @@ nsBaseWidget::nsBaseWidget()
 : mWidgetListener(nullptr)
 , mAttachedWidgetListener(nullptr)
 , mContext(nullptr)
+, mCompositorVsyncDispatcher(nullptr)
 , mCursor(eCursor_standard)
 , mUpdateCursor(true)
 , mBorderStyle(eBorderStyle_none)
@@ -172,8 +177,6 @@ static void DeferredDestroyCompositor(CompositorParent* aCompositorParent,
 
 void nsBaseWidget::DestroyCompositor()
 {
-  LayerScope::DeInit();
-
   if (mCompositorChild) {
     mCompositorChild->SendWillStop();
     mCompositorChild->Destroy();
@@ -230,8 +233,12 @@ nsBaseWidget::~nsBaseWidget()
 
   NS_IF_RELEASE(mContext);
   delete mOriginalBounds;
-}
 
+  // Can have base widgets that are things like tooltips which don't have CompositorVsyncDispatchers
+  if (mCompositorVsyncDispatcher) {
+    mCompositorVsyncDispatcher->Shutdown();
+  }
+}
 
 //-------------------------------------------------------------------------
 //
@@ -741,7 +748,7 @@ NS_IMETHODIMP nsBaseWidget::HideWindowChrome(bool aShouldHide)
 // Put the window into full-screen mode
 //
 //-------------------------------------------------------------------------
-NS_IMETHODIMP nsBaseWidget::MakeFullScreen(bool aFullScreen)
+NS_IMETHODIMP nsBaseWidget::MakeFullScreen(bool aFullScreen, nsIScreen* aScreen)
 {
   HideWindowChrome(aFullScreen);
 
@@ -761,12 +768,16 @@ NS_IMETHODIMP nsBaseWidget::MakeFullScreen(bool aFullScreen)
     screenManager = do_GetService("@mozilla.org/gfx/screenmanager;1");
     NS_ASSERTION(screenManager, "Unable to grab screenManager.");
     if (screenManager) {
-      nsCOMPtr<nsIScreen> screen;
-      screenManager->ScreenForRect(mOriginalBounds->x,
-                                   mOriginalBounds->y,
-                                   mOriginalBounds->width,
-                                   mOriginalBounds->height,
-                                   getter_AddRefs(screen));
+      nsCOMPtr<nsIScreen> screen = aScreen;
+      if (!screen) {
+        // no screen was passed in, use the one that the window is on
+        screenManager->ScreenForRect(mOriginalBounds->x,
+                                     mOriginalBounds->y,
+                                     mOriginalBounds->width,
+                                     mOriginalBounds->height,
+                                     getter_AddRefs(screen));
+      }
+
       if (screen) {
         int32_t left, top, width, height;
         if (NS_SUCCEEDED(screen->GetRectDisplayPix(&left, &top, &width, &height))) {
@@ -910,6 +921,48 @@ void nsBaseWidget::CreateCompositor()
   CreateCompositor(rect.width, rect.height);
 }
 
+already_AddRefed<GeckoContentController>
+nsBaseWidget::CreateRootContentController()
+{
+  nsRefPtr<GeckoContentController> controller = new ChromeProcessController();
+  return controller.forget();
+}
+
+void nsBaseWidget::ConfigureAPZCTreeManager()
+{
+  uint64_t rootLayerTreeId = mCompositorParent->RootLayerTreeId();
+  mAPZC = CompositorParent::GetAPZCTreeManager(rootLayerTreeId);
+  MOZ_ASSERT(mAPZC);
+
+  mAPZC->SetDPI(GetDPI());
+
+  nsRefPtr<GeckoContentController> controller = CreateRootContentController();
+  if (controller) {
+    CompositorParent::SetControllerForLayerTree(rootLayerTreeId, controller);
+  }
+}
+
+nsEventStatus
+nsBaseWidget::DispatchEventForAPZ(WidgetGUIEvent* aEvent,
+                                  const ScrollableLayerGuid& aGuid,
+                                  uint64_t aInputBlockId)
+{
+  InputAPZContext context(aGuid, aInputBlockId);
+
+  nsEventStatus status;
+  DispatchEvent(aEvent, status);
+
+  if (mAPZC && !context.WasRoutedToChildProcess()) {
+    // APZ did not find a dispatch-to-content region in the child process,
+    // and EventStateManager did not route the event into the child process.
+    // It's safe to communicate to APZ that the event has been processed.
+    mAPZC->SetTargetAPZC(aInputBlockId, aGuid);
+    mAPZC->ContentReceivedInputBlock(aInputBlockId, aEvent->mFlags.mDefaultPrevented);
+  }
+
+  return status;
+}
+
 void
 nsBaseWidget::GetPreferredCompositorBackends(nsTArray<LayersBackend>& aHints)
 {
@@ -918,6 +971,24 @@ nsBaseWidget::GetPreferredCompositorBackends(nsTArray<LayersBackend>& aHints)
   }
 
   aHints.AppendElement(LayersBackend::LAYERS_BASIC);
+}
+
+void nsBaseWidget::CreateCompositorVsyncDispatcher()
+{
+  if (gfxPrefs::HardwareVsyncEnabled()) {
+    // Parent directly listens to the vsync source whereas
+    // child process communicate via IPC
+    // Should be called AFTER gfxPlatform is initialized
+    if (XRE_IsParentProcess()) {
+      mCompositorVsyncDispatcher = new CompositorVsyncDispatcher();
+    }
+  }
+}
+
+CompositorVsyncDispatcher*
+nsBaseWidget::GetCompositorVsyncDispatcher()
+{
+  return mCompositorVsyncDispatcher;
 }
 
 void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
@@ -937,15 +1008,17 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
     return;
   }
 
-  // Initialize LayerScope on the main thread.
-  LayerScope::Init();
-
+  CreateCompositorVsyncDispatcher();
   mCompositorParent = NewCompositorParent(aWidth, aHeight);
   MessageChannel *parentChannel = mCompositorParent->GetIPCChannel();
   nsRefPtr<ClientLayerManager> lm = new ClientLayerManager(this);
   MessageLoop *childMessageLoop = CompositorParent::CompositorLoop();
   mCompositorChild = new CompositorChild(lm);
   mCompositorChild->Open(parentChannel, childMessageLoop, ipc::ChildSide);
+
+  if (gfxPrefs::AsyncPanZoomEnabled()) {
+    ConfigureAPZCTreeManager();
+  }
 
   TextureFactoryIdentifier textureFactoryIdentifier;
   PLayerTransactionChild* shadowManager = nullptr;

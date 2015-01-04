@@ -19,6 +19,7 @@
 #include "jit/IonOptimizationLevels.h"
 #include "jit/IonTypes.h"
 #include "js/UbiNode.h"
+#include "vm/TraceLogging.h"
 
 namespace js {
 
@@ -160,19 +161,6 @@ class IonCache;
 struct PatchableBackedgeInfo;
 struct CacheLocation;
 
-// Describes a single AsmJSModule which jumps (via an FFI exit with the given
-// index) directly into an IonScript.
-struct DependentAsmJSModuleExit
-{
-    const AsmJSModule *module;
-    size_t exitIndex;
-
-    DependentAsmJSModuleExit(const AsmJSModule *module, size_t exitIndex)
-      : module(module),
-        exitIndex(exitIndex)
-    { }
-};
-
 // An IonScript attaches Ion-generated information to a JSScript.
 struct IonScript
 {
@@ -244,7 +232,7 @@ struct IonScript
     uint32_t frameSlots_;
 
     // Frame size is the value that can be added to the StackPointer along
-    // with the frame prefix to get a valid IonJSFrameLayout.
+    // with the frame prefix to get a valid JitFrameLayout.
     uint32_t frameSize_;
 
     // Table mapping bailout IDs to snapshot offsets.
@@ -279,7 +267,7 @@ struct IonScript
     uint32_t backedgeEntries_;
 
     // Number of references from invalidation records.
-    uint32_t refcount_;
+    uint32_t invalidationCount_;
 
     // If this is a parallel script, the number of major GC collections it has
     // been idle, otherwise 0.
@@ -298,9 +286,8 @@ struct IonScript
     // a LOOPENTRY pc other than osrPc_.
     uint32_t osrPcMismatchCounter_;
 
-    // If non-null, the list of AsmJSModules
-    // that contain an optimized call directly into this IonScript.
-    Vector<DependentAsmJSModuleExit> *dependentAsmJSModules;
+    // The tracelogger event used to log the start/stop of this IonScript.
+    TraceLoggerEvent traceLoggerScriptEvent_;
 
     IonBuilder *pendingBuilder_;
 
@@ -352,19 +339,6 @@ struct IonScript
     PatchableBackedge *backedgeList() {
         return (PatchableBackedge *) &bottomBuffer()[backedgeList_];
     }
-    bool addDependentAsmJSModule(JSContext *cx, DependentAsmJSModuleExit exit);
-    void removeDependentAsmJSModule(DependentAsmJSModuleExit exit) {
-        if (!dependentAsmJSModules)
-            return;
-        for (size_t i = 0; i < dependentAsmJSModules->length(); i++) {
-            if (dependentAsmJSModules->begin()[i].module == exit.module &&
-                dependentAsmJSModules->begin()[i].exitIndex == exit.exitIndex)
-            {
-                dependentAsmJSModules->erase(dependentAsmJSModules->begin() + i);
-                break;
-            }
-        }
-    }
 
   private:
     void trace(JSTracer *trc);
@@ -394,8 +368,8 @@ struct IonScript
     static inline size_t offsetOfSkipArgCheckEntryOffset() {
         return offsetof(IonScript, skipArgCheckEntryOffset_);
     }
-    static inline size_t offsetOfRefcount() {
-        return offsetof(IonScript, refcount_);
+    static inline size_t offsetOfInvalidationCount() {
+        return offsetof(IonScript, invalidationCount_);
     }
     static inline size_t offsetOfRecompiling() {
         return offsetof(IonScript, recompiling_);
@@ -492,6 +466,9 @@ struct IonScript
     bool hasSPSInstrumentation() const {
         return hasSPSInstrumentation_;
     }
+    void setTraceLoggerEvent(TraceLoggerEvent &event) {
+        traceLoggerScriptEvent_ = event;
+    }
     const uint8_t *snapshots() const {
         return reinterpret_cast<const uint8_t *>(this) + snapshots_;
     }
@@ -581,22 +558,22 @@ struct IonScript
                                 MacroAssembler &masm);
 
     bool invalidated() const {
-        return refcount_ != 0;
+        return invalidationCount_ != 0;
     }
 
     // Invalidate the current compilation.
     bool invalidate(JSContext *cx, bool resetUses, const char *reason);
 
-    size_t refcount() const {
-        return refcount_;
+    size_t invalidationCount() const {
+        return invalidationCount_;
     }
-    void incref() {
-        refcount_++;
+    void incrementInvalidationCount() {
+        invalidationCount_++;
     }
-    void decref(FreeOp *fop) {
-        MOZ_ASSERT(refcount_);
-        refcount_--;
-        if (!refcount_)
+    void decrementInvalidationCount(FreeOp *fop) {
+        MOZ_ASSERT(invalidationCount_);
+        invalidationCount_--;
+        if (!invalidationCount_)
             Destroy(fop, this);
     }
     const types::RecompileInfo& recompileInfo() const {

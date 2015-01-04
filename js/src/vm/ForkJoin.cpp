@@ -1107,30 +1107,26 @@ ForkJoinOperation::reportBailoutWarnings()
                 sp.printf(" (%s:%u)", script->filename(), PCToLineNumber(script, frame->pc()));
 
                 // Format bindings.
-                BindingVector bindings(cx_);
-                if (!FillBindingVector(script, &bindings))
-                    return false;
-
                 unsigned scopeSlot = 0;
-                for (unsigned i = 0; i < bindings.length(); i++) {
+                for (BindingIter bi(script); bi; bi++) {
                     JSAutoByteString nameBytes;
                     const char *nameChars = nullptr;
-                    RootedPropertyName bindingName(cx_, bindings[i].name());
+                    RootedPropertyName bindingName(cx_, bi->name());
                     nameChars = nameBytes.encodeUtf8(cx_, bindingName);
                     if (!nameChars)
                         return false;
 
                     RootedValue arg(cx_);
-                    if (bindings[i].aliased()) {
+                    if (bi->aliased()) {
                         arg = frame->callObj().getSlot(scopeSlot);
                         scopeSlot++;
-                    } else if (i < frame->numFormalArgs()) {
+                    } else if (bi->kind() == Binding::ARGUMENT) {
                         if (script->argsObjAliasesFormals() && frame->hasArgsObj())
-                            arg = frame->argsObj().arg(i);
+                            arg = frame->argsObj().arg(bi.argIndex());
                         else
-                            arg = frame->unaliasedActual(i, DONT_CHECK_ALIASING);
+                            arg = frame->unaliasedActual(bi.argIndex(), DONT_CHECK_ALIASING);
                     } else {
-                        arg = frame->unaliasedLocal(i - frame->numFormalArgs());
+                        arg = frame->unaliasedLocal(bi.frameIndex());
                     }
 
                     JSAutoByteString valueBytes;
@@ -1139,7 +1135,7 @@ ForkJoinOperation::reportBailoutWarnings()
                         return false;
 
                     sp.printf("\n      %s %s = %s",
-                              bindings[i].kind() == Binding::ARGUMENT ? "arg" : "var",
+                              bi->kind() == Binding::ARGUMENT ? "arg" : "var",
                               nameChars, valueChars);
                 }
             }
@@ -1584,9 +1580,9 @@ ForkJoinShared::executePortion(PerThreadData *perThread, ThreadPoolWorker *worke
 
     Spew(SpewOps, "Up");
 
-    // Make a new IonContext for the slice, which is needed if we need to
+    // Make a new JitContext for the slice, which is needed if we need to
     // re-enter the VM.
-    IonContext icx(CompileRuntime::get(cx_->runtime()),
+    JitContext jcx(CompileRuntime::get(cx_->runtime()),
                    CompileCompartment::get(cx_->compartment()),
                    nullptr);
 
@@ -1877,41 +1873,6 @@ ParallelBailoutRecord::reset()
 {
     RematerializedFrame::FreeInVector(frames());
     cause = ParallelBailoutNone;
-}
-
-void
-ParallelBailoutRecord::rematerializeFrames(ForkJoinContext *cx, JitFrameIterator &frameIter)
-{
-    // This function is infallible. These are only called when we are already
-    // erroring out. If we OOM here, free what we've allocated and return. Error
-    // reporting is then unable to give the user detailed stack information.
-
-    MOZ_ASSERT(frames().empty());
-
-    for (; !frameIter.done(); ++frameIter) {
-        if (!frameIter.isIonJS())
-            continue;
-
-        InlineFrameIterator inlineIter(cx, &frameIter);
-        Vector<RematerializedFrame *> inlineFrames(cx);
-
-        if (!RematerializedFrame::RematerializeInlineFrames(cx, frameIter.fp(),
-                                                            inlineIter, inlineFrames))
-        {
-            RematerializedFrame::FreeInVector(inlineFrames);
-            RematerializedFrame::FreeInVector(frames());
-            return;
-        }
-
-        // Reverse the inline frames into the main vector.
-        while (!inlineFrames.empty()) {
-            if (!frames().append(inlineFrames.popCopy())) {
-                RematerializedFrame::FreeInVector(inlineFrames);
-                RematerializedFrame::FreeInVector(frames());
-                return;
-            }
-        }
-    }
 }
 
 //////////////////////////////////////////////////////////////////////////////

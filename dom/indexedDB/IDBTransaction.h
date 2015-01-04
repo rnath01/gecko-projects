@@ -37,6 +37,7 @@ class BackgroundTransactionChild;
 class BackgroundVersionChangeTransactionChild;
 class IDBDatabase;
 class IDBObjectStore;
+class IDBOpenDBRequest;
 class IDBRequest;
 class IndexMetadata;
 class ObjectStoreSpec;
@@ -48,6 +49,9 @@ class IDBTransaction MOZ_FINAL
   : public IDBWrapperCache
   , public nsIRunnable
 {
+  class WorkerFeature;
+  friend class WorkerFeature;
+
 public:
   enum Mode
   {
@@ -73,6 +77,7 @@ private:
   nsTArray<nsString> mObjectStoreNames;
   nsTArray<nsRefPtr<IDBObjectStore>> mObjectStores;
   nsTArray<nsRefPtr<IDBObjectStore>> mDeletedObjectStores;
+  nsAutoPtr<WorkerFeature> mWorkerFeature;
 
   // Tagged with mMode. If mMode is VERSION_CHANGE then mBackgroundActor will be
   // a BackgroundVersionChangeTransactionChild. Otherwise it will be a
@@ -82,22 +87,23 @@ private:
     BackgroundVersionChangeTransactionChild* mVersionChangeBackgroundActor;
   } mBackgroundActor;
 
+  const int64_t mLoggingSerialNumber;
 
   // Only used for VERSION_CHANGE transactions.
   int64_t mNextObjectStoreId;
   int64_t mNextIndexId;
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
-  uint64_t mSerialNumber;
-#endif
-
   nsresult mAbortCode;
   uint32_t mPendingRequestCount;
+
+  nsString mFilename;
+  uint32_t mLineNo;
 
   ReadyState mReadyState;
   Mode mMode;
 
   bool mCreating;
+  bool mRegistered;
   bool mAbortedByScript;
 
 #ifdef DEBUG
@@ -109,6 +115,7 @@ public:
   static already_AddRefed<IDBTransaction>
   CreateVersionChange(IDBDatabase* aDatabase,
                       BackgroundVersionChangeTransactionChild* aActor,
+                      IDBOpenDBRequest* aOpenRequest,
                       int64_t aNextObjectStoreId,
                       int64_t aNextIndexId);
 
@@ -184,6 +191,16 @@ public:
     return NS_FAILED(mAbortCode);
   }
 
+  nsresult
+  AbortCode() const
+  {
+    AssertIsOnOwningThread();
+    return mAbortCode;
+  }
+
+  void
+  GetCallerLocation(nsAString& aFilename, uint32_t* aLineNo) const;
+
   // 'Get' prefix is to avoid name collisions with the enum
   Mode
   GetMode() const
@@ -230,14 +247,13 @@ public:
   void
   Abort(nsresult aAbortCode);
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
-  uint32_t
-  GetSerialNumber() const
+  int64_t
+  LoggingSerialNumber() const
   {
     AssertIsOnOwningThread();
-    return mSerialNumber;
+
+    return mLoggingSerialNumber;
   }
-#endif
 
   nsPIDOMWindow*
   GetParentObject() const;

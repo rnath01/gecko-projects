@@ -68,7 +68,7 @@ public:
   // Destroys the decoding state. The reader cannot be made usable again.
   // This is different from ReleaseMediaResources() as Shutdown() is
   // irreversible, whereas ReleaseMediaResources() is reversible.
-  virtual void Shutdown();
+  virtual nsRefPtr<ShutdownPromise> Shutdown();
 
   // Used to retrieve some special information that can only be retrieved after
   // all contents have been continuously parsed. (ex. total duration of some
@@ -79,11 +79,12 @@ public:
   virtual nsresult ResetDecode() MOZ_OVERRIDE;
 
   // Disptach a DecodeVideoFrameTask to decode video data.
-  virtual void RequestVideoData(bool aSkipToNextKeyframe,
-                                int64_t aTimeThreshold) MOZ_OVERRIDE;
+  virtual nsRefPtr<VideoDataPromise>
+  RequestVideoData(bool aSkipToNextKeyframe,
+                   int64_t aTimeThreshold) MOZ_OVERRIDE;
 
   // Disptach a DecodeAduioDataTask to decode video data.
-  virtual void RequestAudioData() MOZ_OVERRIDE;
+  virtual nsRefPtr<AudioDataPromise> RequestAudioData() MOZ_OVERRIDE;
 
   virtual bool HasAudio();
   virtual bool HasVideo();
@@ -99,10 +100,11 @@ public:
   // Moves the decode head to aTime microseconds. aStartTime and aEndTime
   // denote the start and end times of the media in usecs, and aCurrentTime
   // is the current playback position in microseconds.
-  virtual void Seek(int64_t aTime,
-                    int64_t aStartTime,
-                    int64_t aEndTime,
-                    int64_t aCurrentTime);
+  virtual nsRefPtr<SeekPromise>
+  Seek(int64_t aTime,
+       int64_t aStartTime,
+       int64_t aEndTime,
+       int64_t aCurrentTime) MOZ_OVERRIDE;
 
   virtual bool IsMediaSeekable() MOZ_OVERRIDE;
 
@@ -137,6 +139,9 @@ protected:
     android::Vector<android::sp<android::ABuffer> > mInputBuffers;
     android::Vector<android::sp<android::ABuffer> > mOutputBuffers;
     android::sp<android::GonkNativeWindow> mNativeWindow;
+#if ANDROID_VERSION >= 21
+    android::sp<android::IGraphicBufferProducer> mGraphicBufferProducer;
+#endif
 
     // pipeline copier
     nsAutoPtr<TrackInputCopier> mInputCopier;
@@ -338,37 +343,6 @@ private:
   };
   friend class ProcessCachedDataTask;
 
-  // This class is used to keep one reference count of T in it. And this class
-  // can make sure the stored reference count will be released on the dispatched
-  // thread. By using this class properly (ex. passing the pointer into this
-  // runnable first, then releasing the original pointer held by ourselves, and
-  // then dispatching this runnable onto the desired thread), we can avoid
-  // running the destructor of the referenced object on any other threads
-  // unexpectedly before this runnable has been executed.
-  template<class T>
-  class ReferenceKeeperRunnable : public nsRunnable
-  {
-  public:
-    ReferenceKeeperRunnable(nsRefPtr<T> aPointer)
-      : mPointer(aPointer)
-    {
-    }
-
-    NS_IMETHOD Run() MOZ_OVERRIDE
-    {
-      mPointer = nullptr;
-      return NS_OK;
-    }
-
-  private:
-    // Forbidden
-    ReferenceKeeperRunnable() MOZ_DELETE;
-    ReferenceKeeperRunnable(const ReferenceKeeperRunnable &rhs) MOZ_DELETE;
-    const ReferenceKeeperRunnable &operator=(const ReferenceKeeperRunnable &rhs) MOZ_DELETE;
-
-    nsRefPtr<T> mPointer;
-  };
-
   // Forbidden
   MediaCodecReader() MOZ_DELETE;
   const MediaCodecReader& operator=(const MediaCodecReader& rhs) MOZ_DELETE;
@@ -461,6 +435,9 @@ private:
   AudioTrack mAudioTrack;
   VideoTrack mVideoTrack;
   AudioTrack mAudioOffloadTrack; // only Track::mSource is valid
+
+  MediaPromiseHolder<AudioDataPromise> mAudioPromise;
+  MediaPromiseHolder<VideoDataPromise> mVideoPromise;
 
   // color converter
   android::I420ColorConverterHelper mColorConverter;

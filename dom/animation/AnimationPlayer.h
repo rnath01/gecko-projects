@@ -13,6 +13,7 @@
 #include "mozilla/dom/Animation.h" // for Animation
 #include "mozilla/dom/AnimationPlayerBinding.h" // for AnimationPlayState
 #include "mozilla/dom/AnimationTimeline.h" // for AnimationTimeline
+#include "mozilla/dom/Promise.h" // for Promise
 #include "nsCSSProperty.h" // for nsCSSProperty
 
 // X11 has a #define for CurrentTime.
@@ -20,19 +21,31 @@
 #undef CurrentTime
 #endif
 
+// GetCurrentTime is defined in winbase.h as zero argument macro forwarding to
+// GetTickCount().
+#ifdef GetCurrentTime
+#undef GetCurrentTime
+#endif
+
 struct JSContext;
 class nsCSSPropertySet;
+class nsIDocument;
+class nsPresContext;
 
 namespace mozilla {
+struct AnimationPlayerCollection;
 namespace css {
 class AnimValuesStyleRule;
+class CommonAnimationManager;
 } // namespace css
 
 class CSSAnimationPlayer;
+class CSSTransitionPlayer;
 
 namespace dom {
 
-class AnimationPlayer : public nsWrapperCache
+class AnimationPlayer : public nsISupports,
+                        public nsWrapperCache
 {
 protected:
   virtual ~AnimationPlayer() { }
@@ -40,54 +53,58 @@ protected:
 public:
   explicit AnimationPlayer(AnimationTimeline* aTimeline)
     : mTimeline(aTimeline)
-    , mIsPaused(false)
+    , mIsPending(false)
     , mIsRunningOnCompositor(false)
     , mIsPreviousStateFinished(false)
   {
   }
 
-  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(AnimationPlayer)
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(AnimationPlayer)
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(AnimationPlayer)
 
   AnimationTimeline* GetParentObject() const { return mTimeline; }
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 
   virtual CSSAnimationPlayer* AsCSSAnimationPlayer() { return nullptr; }
-
-  // Temporary flags to control restyle behavior until bug 1073336
-  // provides a better solution.
-  enum UpdateFlags {
-    eNoUpdate,
-    eUpdateStyle
-  };
+  virtual CSSTransitionPlayer* AsCSSTransitionPlayer() { return nullptr; }
 
   // AnimationPlayer methods
   Animation* GetSource() const { return mSource; }
   AnimationTimeline* Timeline() const { return mTimeline; }
-  Nullable<double> GetStartTime() const;
+  Nullable<TimeDuration> GetStartTime() const { return mStartTime; }
   Nullable<TimeDuration> GetCurrentTime() const;
   AnimationPlayState PlayState() const;
-  virtual void Play(UpdateFlags aUpdateFlags);
-  virtual void Pause(UpdateFlags aUpdateFlags);
+  virtual Promise* GetReady(ErrorResult& aRv);
+  virtual void Play();
+  virtual void Pause();
   bool IsRunningOnCompositor() const { return mIsRunningOnCompositor; }
 
   // Wrapper functions for AnimationPlayer DOM methods when called
   // from script. We often use the same methods internally and from
-  // script but when called from script we perform extra steps such
-  // as flushing style or converting the return type.
+  // script but when called from script we (or one of our subclasses) perform
+  // extra steps such as flushing style or converting the return type.
+  Nullable<double> GetStartTimeAsDouble() const;
   Nullable<double> GetCurrentTimeAsDouble() const;
-  AnimationPlayState PlayStateFromJS() const;
-  void PlayFromJS();
-  void PauseFromJS();
+  virtual AnimationPlayState PlayStateFromJS() const { return PlayState(); }
+  virtual void PlayFromJS() { Play(); }
+  // PauseFromJS is currently only here for symmetry with PlayFromJS but
+  // in future we will likely have to flush style in
+  // CSSAnimationPlayer::PauseFromJS so we leave it for now.
+  void PauseFromJS() { Pause(); }
 
   void SetSource(Animation* aSource);
   void Tick();
+
+  // Sets the start time of a player that is waiting to play to the current
+  // time of its timeline.
+  void StartNow();
+  void Cancel();
 
   const nsString& Name() const {
     return mSource ? mSource->Name() : EmptyString();
   }
 
-  bool IsPaused() const { return mIsPaused; }
+  bool IsPaused() const { return PlayState() == AnimationPlayState::Paused; }
   bool IsRunning() const;
 
   bool HasCurrentSource() const {
@@ -116,18 +133,41 @@ public:
                     nsCSSPropertySet& aSetProperties,
                     bool& aNeedsRefreshes);
 
-  // The beginning of the delay period.
-  Nullable<TimeDuration> mStartTime; // Timeline timescale
-
 protected:
+  void DoPlay();
+  void DoPause();
+
+  void UpdateSourceContent();
   void FlushStyle() const;
-  void MaybePostRestyle() const;
+  void PostUpdate();
+  // Remove this player from the pending player tracker and resets mIsPending
+  // as necessary. The caller is responsible for resolving or aborting the
+  // mReady promise as necessary.
+  void CancelPendingPlay();
   StickyTimeDuration SourceContentEnd() const;
+
+  nsIDocument* GetRenderedDocument() const;
+  nsPresContext* GetPresContext() const;
+  virtual css::CommonAnimationManager* GetAnimationManager() const = 0;
+  AnimationPlayerCollection* GetCollection() const;
 
   nsRefPtr<AnimationTimeline> mTimeline;
   nsRefPtr<Animation> mSource;
+  // The beginning of the delay period.
+  Nullable<TimeDuration> mStartTime; // Timeline timescale
   Nullable<TimeDuration> mHoldTime;  // Player timescale
-  bool mIsPaused;
+
+  // A Promise that is replaced on each call to Play() (and in future Pause())
+  // and fulfilled when Play() is successfully completed.
+  // This object is lazily created by GetReady.
+  nsRefPtr<Promise> mReady;
+
+  // Indicates if the player is in the pending state. We use this rather
+  // than checking if this player is tracked by a PendingPlayerTracker.
+  // This is because the PendingPlayerTracker is associated with the source
+  // content's document but we need to know if we're pending even if the
+  // source content loses association with its document.
+  bool mIsPending;
   bool mIsRunningOnCompositor;
   // Indicates whether we were in the finished state during our
   // most recent unthrottled sample (our last ComposeStyle call).

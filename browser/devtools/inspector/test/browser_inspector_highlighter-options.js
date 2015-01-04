@@ -24,7 +24,7 @@ const TEST_DATA = [
       let hidden = yield getAttribute("box-model-nodeinfobar-container", "hidden", toolbox);
       ok(!hidden, "Node infobar is visible");
 
-      hidden = yield getAttribute("box-model-root", "hidden", toolbox);
+      hidden = yield getAttribute("box-model-elements", "hidden", toolbox);
       ok(!hidden, "SVG container is visible");
 
       for (let side of ["top", "right", "bottom", "left"]) {
@@ -149,8 +149,6 @@ add_task(function*() {
     info("Hide the box-model highlighter");
     yield toolbox.highlighter.hideBoxModel();
   }
-
-  gBrowser.removeCurrentTab();
 });
 
 function* getAttribute(nodeID, name, toolbox) {

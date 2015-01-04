@@ -156,8 +156,31 @@ HasCPUIDBit(unsigned int level, CPUIDRegister reg, unsigned int bit)
 namespace mozilla {
 namespace gfx {
 
-// XXX - Need to define an API to set this.
-GFX2D_API int sGfxLogLevel = LOG_DEBUG;
+// These values we initialize with should match those in
+// PreferenceAccess::RegisterAll method.
+int32_t PreferenceAccess::sGfxLogLevel = LOG_DEFAULT;
+
+PreferenceAccess* PreferenceAccess::sAccess = nullptr;
+PreferenceAccess::~PreferenceAccess()
+{
+}
+
+// Just a placeholder, the derived class will set the variable to default
+// if the preference doesn't exist.
+void PreferenceAccess::LivePref(const char* aName, int32_t* aVar, int32_t aDef)
+{
+  *aVar = aDef;
+}
+
+// This will be called with the derived class, so we will want to register
+// the callbacks with it.
+void PreferenceAccess::SetAccess(PreferenceAccess* aAccess) {
+  sAccess = aAccess;
+  if (sAccess) {
+    RegisterAll();
+  }
+}
+
 
 #ifdef WIN32
 ID3D10Device1 *Factory::mD3D10Device;
@@ -193,11 +216,24 @@ Factory::HasSSE2()
 #endif
 }
 
+// If the size is "reasonable", we want gfxCriticalError to assert, so
+// this is the option set up for it.
+inline int LoggerOptionsBasedOnSize(const IntSize& aSize)
+{
+  return CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize));
+}
+
+bool
+Factory::ReasonableSurfaceSize(const IntSize &aSize)
+{
+  return Factory::CheckSurfaceSize(aSize,8192);
+}
+
 bool
 Factory::CheckSurfaceSize(const IntSize &sz, int32_t limit)
 {
-  if (sz.width < 0 || sz.height < 0) {
-    gfxDebug() << "Surface width or height < 0!";
+  if (sz.width <= 0 || sz.height <= 0) {
+    gfxDebug() << "Surface width or height <= 0!";
     return false;
   }
 
@@ -242,6 +278,7 @@ TemporaryRef<DrawTarget>
 Factory::CreateDrawTarget(BackendType aBackend, const IntSize &aSize, SurfaceFormat aFormat)
 {
   if (!CheckSurfaceSize(aSize)) {
+    gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "Failed to allocate a surface due to invalid size " << aSize;
     return nullptr;
   }
 
@@ -313,9 +350,9 @@ Factory::CreateDrawTarget(BackendType aBackend, const IntSize &aSize, SurfaceFor
 
   if (!retVal) {
     // Failed
-    gfxDebug() << "Failed to create DrawTarget, Type: " << int(aBackend) << " Size: " << aSize;
+    gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "Failed to create DrawTarget, Type: " << int(aBackend) << " Size: " << aSize;
   }
-  
+
   return retVal.forget();
 }
 
@@ -326,13 +363,15 @@ Factory::CreateRecordingDrawTarget(DrawEventRecorder *aRecorder, DrawTarget *aDT
 }
 
 TemporaryRef<DrawTarget>
-Factory::CreateDrawTargetForData(BackendType aBackend, 
-                                 unsigned char *aData, 
-                                 const IntSize &aSize, 
-                                 int32_t aStride, 
+Factory::CreateDrawTargetForData(BackendType aBackend,
+                                 unsigned char *aData,
+                                 const IntSize &aSize,
+                                 int32_t aStride,
                                  SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aData);
   if (!CheckSurfaceSize(aSize)) {
+    gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "Failed to allocate a surface due to invalid size " << aSize;
     return nullptr;
   }
 
@@ -468,6 +507,8 @@ Factory::CreateScaledFontWithCairo(const NativeFont& aNativeFont, Float aSize, c
 TemporaryRef<DrawTarget>
 Factory::CreateDualDrawTarget(DrawTarget *targetA, DrawTarget *targetB)
 {
+  MOZ_ASSERT(targetA && targetB);
+
   RefPtr<DrawTarget> newTarget =
     new DrawTargetDual(targetA, targetB);
 
@@ -485,6 +526,8 @@ Factory::CreateDualDrawTarget(DrawTarget *targetA, DrawTarget *targetB)
 TemporaryRef<DrawTarget>
 Factory::CreateDrawTargetForD3D10Texture(ID3D10Texture2D *aTexture, SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aTexture);
+
   RefPtr<DrawTargetD2D> newTarget;
 
   newTarget = new DrawTargetD2D();
@@ -509,6 +552,7 @@ Factory::CreateDualDrawTargetForD3D10Textures(ID3D10Texture2D *aTextureA,
                                               ID3D10Texture2D *aTextureB,
                                               SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aTextureA && aTextureB);
   RefPtr<DrawTargetD2D> newTargetA;
   RefPtr<DrawTargetD2D> newTargetB;
 
@@ -562,6 +606,8 @@ Factory::GetDirect3D10Device()
 TemporaryRef<DrawTarget>
 Factory::CreateDrawTargetForD3D11Texture(ID3D11Texture2D *aTexture, SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aTexture);
+
   RefPtr<DrawTargetD2D1> newTarget;
 
   newTarget = new DrawTargetD2D1();
@@ -585,6 +631,11 @@ void
 Factory::SetDirect3D11Device(ID3D11Device *aDevice)
 {
   mD3D11Device = aDevice;
+
+  if (mD2D1Device) {
+    mD2D1Device->Release();
+    mD2D1Device = nullptr;
+  }
 
   RefPtr<ID2D1Factory1> factory = D2DFactory1();
 
@@ -633,6 +684,13 @@ Factory::GetD2DVRAMUsageSourceSurface()
 void
 Factory::D2DCleanup()
 {
+#ifdef USE_D2D1_1
+  if (mD2D1Device) {
+    mD2D1Device->Release();
+    mD2D1Device = nullptr;
+  }
+  DrawTargetD2D1::CleanupD2D();
+#endif
   DrawTargetD2D::CleanupD2D();
 }
 
@@ -721,6 +779,7 @@ Factory::CreateWrappingDataSourceSurface(uint8_t *aData, int32_t aStride,
                                          const IntSize &aSize,
                                          SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aData);
   if (aSize.width <= 0 || aSize.height <= 0) {
     return nullptr;
   }
@@ -740,7 +799,7 @@ Factory::CreateDataSourceSurface(const IntSize &aSize,
                                  bool aZero)
 {
   if (!CheckSurfaceSize(aSize)) {
-    gfxWarning() << "CreateDataSourceSurface failed with bad size";
+    gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "Failed to allocate a surface due to invalid size " << aSize;
     return nullptr;
   }
 
@@ -760,7 +819,7 @@ Factory::CreateDataSourceSurfaceWithStride(const IntSize &aSize,
                                            bool aZero)
 {
   if (aStride < aSize.width * BytesPerPixel(aFormat)) {
-    gfxWarning() << "CreateDataSourceSurfaceWithStride failed with bad stride";
+    gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "CreateDataSourceSurfaceWithStride failed with bad stride " << aStride << ", " << aSize << ", " << aFormat;
     return nullptr;
   }
 
@@ -769,7 +828,7 @@ Factory::CreateDataSourceSurfaceWithStride(const IntSize &aSize,
     return newSurf.forget();
   }
 
-  gfxWarning() << "CreateDataSourceSurfaceWithStride failed to initialize";
+  gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "CreateDataSourceSurfaceWithStride failed to initialize " << aSize << ", " << aFormat << ", " << aStride << ", " << aZero;
   return nullptr;
 }
 
@@ -795,13 +854,14 @@ Factory::SetLogForwarder(LogForwarder* aLogFwd) {
 
 // static
 void
-CriticalLogger::OutputMessage(const std::string &aString, int aLevel)
+CriticalLogger::OutputMessage(const std::string &aString,
+                              int aLevel, bool aNoNewline)
 {
   if (Factory::GetLogForwarder()) {
     Factory::GetLogForwarder()->Log(aString);
   }
 
-  BasicLogger::OutputMessage(aString, aLevel);
+  BasicLogger::OutputMessage(aString, aLevel, aNoNewline);
 }
 
 }

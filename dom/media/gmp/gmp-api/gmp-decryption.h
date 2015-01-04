@@ -39,6 +39,8 @@ public:
   virtual const uint16_t* ClearBytes() const = 0;
 
   virtual const uint32_t* CipherBytes() const = 0;
+
+  virtual ~GMPEncryptedBufferMetadata() {}
 };
 
 class GMPBuffer {
@@ -177,6 +179,8 @@ public:
 
   // Returns decrypted buffer to Gecko, or reports failure.
   virtual void Decrypted(GMPBuffer* aBuffer, GMPErr aResult) = 0;
+
+  virtual ~GMPDecryptorCallback() {}
 };
 
 // Host interface, passed to GetAPIFunc(), with "decrypt".
@@ -187,6 +191,8 @@ public:
 
   virtual void GetPluginVoucher(const uint8_t** aVoucher,
                                 uint32_t* aVoucherLength) = 0;
+
+  virtual ~GMPDecryptorHost() {}
 };
 
 enum GMPSessionType {
@@ -195,10 +201,12 @@ enum GMPSessionType {
   kGMPSessionInvalid = 2 // Must always be last.
 };
 
+#define GMP_API_DECRYPTOR "eme-decrypt"
+
 // API exposed by plugin library to manage decryption sessions.
 // When the Host requests this by calling GMPGetAPIFunc().
 //
-// API name: "eme-decrypt".
+// API name macro: GMP_API_DECRYPTOR
 // Host API: GMPDecryptorHost
 class GMPDecryptor {
 public:
@@ -265,6 +273,7 @@ public:
   // Do not call the GMPDecryptorCallback's functions after this is called.
   virtual void DecryptingComplete() = 0;
 
+  virtual ~GMPDecryptor() {}
 };
 
 #endif // GMP_DECRYPTION_h_

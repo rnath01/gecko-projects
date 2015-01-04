@@ -27,6 +27,13 @@ loop.conversationViews = (function(mozL10n) {
     return contact.email.find(e => e.pref) || contact.email[0];
   }
 
+  function _getContactDisplayName(contact) {
+    if (contact.name && contact.name[0]) {
+      return contact.name[0];
+    }
+    return _getPreferredEmail(contact).value;
+  }
+
   /**
    * Displays information about the call
    * Caller avatar, name & conversation creation date
@@ -107,14 +114,7 @@ loop.conversationViews = (function(mozL10n) {
     },
 
     render: function() {
-      var contactName;
-
-      if (this.props.contact.name &&
-          this.props.contact.name[0]) {
-        contactName = this.props.contact.name[0];
-      } else {
-        contactName = _getPreferredEmail(this.props.contact).value;
-      }
+      var contactName = _getContactDisplayName(this.props.contact);
 
       document.title = contactName;
 
@@ -193,7 +193,11 @@ loop.conversationViews = (function(mozL10n) {
    * Call failed view. Displayed when a call fails.
    */
   var CallFailedView = React.createClass({
-    mixins: [Backbone.Events, sharedMixins.AudioMixin],
+    mixins: [
+      Backbone.Events,
+      sharedMixins.AudioMixin,
+      sharedMixins.WindowCloseMixin
+    ],
 
     propTypes: {
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
@@ -224,10 +228,10 @@ loop.conversationViews = (function(mozL10n) {
     },
 
     _onEmailLinkReceived: function() {
-      var emailLink = this.props.store.get("emailLink");
+      var emailLink = this.props.store.getStoreState("emailLink");
       var contactEmail = _getPreferredEmail(this.props.contact).value;
       sharedUtils.composeCallUrlEmail(emailLink, contactEmail);
-      window.close();
+      this.closeWindow();
     },
 
     _onEmailLinkError: function() {
@@ -258,7 +262,10 @@ loop.conversationViews = (function(mozL10n) {
         emailLinkButtonDisabled: true
       });
 
-      this.props.dispatcher.dispatch(new sharedActions.FetchEmailLink());
+      this.props.dispatcher.dispatch(new sharedActions.FetchRoomEmailLink({
+        roomOwner: navigator.mozLoop.userProfile.email,
+        roomName: _getContactDisplayName(this.props.contact)
+      }));
     },
 
     render: function() {
@@ -356,7 +363,7 @@ loop.conversationViews = (function(mozL10n) {
           nameDisplayMode: "off",
           videoDisabledDisplayMode: "off"
         }
-      }
+      };
     },
 
     /**
@@ -428,19 +435,31 @@ loop.conversationViews = (function(mozL10n) {
    * the different views that need displaying.
    */
   var OutgoingConversationView = React.createClass({
+    mixins: [
+      sharedMixins.AudioMixin,
+      Backbone.Events
+    ],
+
     propTypes: {
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
       store: React.PropTypes.instanceOf(
-        loop.store.ConversationStore).isRequired
+        loop.store.ConversationStore).isRequired,
+      feedbackStore: React.PropTypes.instanceOf(loop.store.FeedbackStore)
     },
 
     getInitialState: function() {
-      return this.props.store.attributes;
+      return this.props.store.getStoreState();
     },
 
     componentWillMount: function() {
-      this.props.store.on("change", function() {
-        this.setState(this.props.store.attributes);
+      this.listenTo(this.props.store, "change", function() {
+        this.setState(this.props.store.getStoreState());
+      }, this);
+    },
+
+    componentWillUnmount: function() {
+      this.stopListening(this.props.store, "change", function() {
+        this.setState(this.props.store.getStoreState());
       }, this);
     },
 
@@ -462,22 +481,9 @@ loop.conversationViews = (function(mozL10n) {
     _renderFeedbackView: function() {
       document.title = mozL10n.get("conversation_has_ended");
 
-      // XXX Bug 1076754 Feedback view should be redone in the Flux style.
-      var feebackAPIBaseUrl = navigator.mozLoop.getLoopCharPref(
-        "feedback.baseUrl");
-
-      var appVersionInfo = navigator.mozLoop.appVersionInfo;
-
-      var feedbackClient = new loop.FeedbackAPIClient(feebackAPIBaseUrl, {
-        product: navigator.mozLoop.getLoopCharPref("feedback.product"),
-        platform: appVersionInfo.OS,
-        channel: appVersionInfo.channel,
-        version: appVersionInfo.version
-      });
-
       return (
         <sharedViews.FeedbackView
-          feedbackApiClient={feedbackClient}
+          feedbackStore={this.props.feedbackStore}
           onAfterFeedbackReceived={this._closeWindow.bind(this)}
         />
       );
@@ -505,6 +511,7 @@ loop.conversationViews = (function(mozL10n) {
           );
         }
         case CALL_STATES.FINISHED: {
+          this.play("terminated");
           return this._renderFeedbackView();
         }
         case CALL_STATES.INIT: {

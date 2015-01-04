@@ -97,10 +97,10 @@ HttpChannelParent::Init(const HttpChannelCreationArgs& aArgs)
   {
     const HttpChannelOpenArgs& a = aArgs.get_HttpChannelOpenArgs();
     return DoAsyncOpen(a.uri(), a.original(), a.doc(), a.referrer(),
-                       a.apiRedirectTo(), a.topWindowURI(),
+                       a.referrerPolicy(), a.apiRedirectTo(), a.topWindowURI(),
                        a.loadFlags(), a.requestHeaders(),
                        a.requestMethod(), a.uploadStream(),
-                       a.uploadStreamHasHeaders(), a.priority(),
+                       a.uploadStreamHasHeaders(), a.priority(), a.classOfService(),
                        a.redirectionLimit(), a.allowPipelining(), a.allowSTS(),
                        a.thirdPartyFlags(), a.resumeAt(), a.startPos(),
                        a.entityID(), a.chooseApplicationCache(),
@@ -172,6 +172,7 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
                                  const OptionalURIParams&   aOriginalURI,
                                  const OptionalURIParams&   aDocURI,
                                  const OptionalURIParams&   aReferrerURI,
+                                 const uint32_t&            aReferrerPolicy,
                                  const OptionalURIParams&   aAPIRedirectToURI,
                                  const OptionalURIParams&   aTopWindowURI,
                                  const uint32_t&            aLoadFlags,
@@ -180,6 +181,7 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
                                  const OptionalInputStreamParams& uploadStream,
                                  const bool&                uploadStreamHasHeaders,
                                  const uint16_t&            priority,
+                                 const uint32_t&            classOfService,
                                  const uint8_t&             redirectionLimit,
                                  const bool&                allowPipelining,
                                  const bool&                allowSTS,
@@ -273,7 +275,7 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
   if (docUri)
     mChannel->SetDocumentURI(docUri);
   if (referrerUri)
-    mChannel->SetReferrerInternal(referrerUri);
+    mChannel->SetReferrerWithPolicyInternal(referrerUri, aReferrerPolicy);
   if (apiRedirectToUri)
     mChannel->RedirectTo(apiRedirectToUri);
   if (topWindowUri)
@@ -303,6 +305,9 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
     MOZ_ASSERT(!fds.IsEmpty());
 
     unused << fdSetActor->Send__delete__(fdSetActor);
+  } else if (aFds.type() == OptionalFileDescriptorSet::TArrayOfFileDescriptor) {
+    const_cast<OptionalFileDescriptorSet&>(aFds).
+      get_ArrayOfFileDescriptor().SwapElements(fds);
   }
 
   nsCOMPtr<nsIInputStream> stream = DeserializeInputStream(uploadStream, fds);
@@ -311,8 +316,12 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
     mChannel->SetUploadStreamHasHeaders(uploadStreamHasHeaders);
   }
 
-  if (priority != nsISupportsPriority::PRIORITY_NORMAL)
+  if (priority != nsISupportsPriority::PRIORITY_NORMAL) {
     mChannel->SetPriority(priority);
+  }
+  if (classOfService) {
+    mChannel->SetClassFlags(classOfService);
+  }
   mChannel->SetRedirectionLimit(redirectionLimit);
   mChannel->SetAllowPipelining(allowPipelining);
   mChannel->SetAllowSTS(allowSTS);
@@ -419,6 +428,15 @@ HttpChannelParent::RecvSetPriority(const uint16_t& priority)
   if (priorityRedirectChannel)
     priorityRedirectChannel->SetPriority(priority);
 
+  return true;
+}
+
+bool
+HttpChannelParent::RecvSetClassOfService(const uint32_t& cos)
+{
+  if (mChannel) {
+    mChannel->SetClassFlags(cos);
+  }
   return true;
 }
 
@@ -968,11 +986,6 @@ HttpChannelParent::DivertTo(nsIStreamListener *aListener)
 
   mDivertListener = aListener;
 
-  if (NS_WARN_IF(mIPCClosed || !SendFlushedForDiversion())) {
-    FailDiversion(NS_ERROR_UNEXPECTED);
-    return;
-  }
-
   // Call OnStartRequest and SendDivertMessages asynchronously to avoid
   // reentering client context.
   NS_DispatchToCurrentThread(
@@ -1019,6 +1032,11 @@ HttpChannelParent::StartDiversion()
   DebugOnly<nsresult> rvdbg = mParentListener->DivertTo(mDivertListener);
   MOZ_ASSERT(NS_SUCCEEDED(rvdbg));
   mDivertListener = nullptr;
+
+  if (NS_WARN_IF(mIPCClosed || !SendFlushedForDiversion())) {
+    FailDiversion(NS_ERROR_UNEXPECTED);
+    return;
+  }
 
   // The listener chain should now be setup; tell HttpChannelChild to divert
   // the OnDataAvailables and OnStopRequest to this HttpChannelParent.

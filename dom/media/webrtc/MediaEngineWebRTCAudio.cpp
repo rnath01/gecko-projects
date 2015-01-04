@@ -317,7 +317,7 @@ MediaEngineWebRTCAudioSource::Start(SourceMediaStream* aStream, TrackID aID)
   }
 
   AudioSegment* segment = new AudioSegment();
-  aStream->AddTrack(aID, SAMPLE_FREQUENCY, 0, segment);
+  aStream->AddAudioTrack(aID, SAMPLE_FREQUENCY, 0, segment);
   aStream->AdvanceKnownTracksTime(STREAM_TIME_MAX);
   // XXX Make this based on the pref.
   aStream->RegisterForAudioMixing();
@@ -367,6 +367,9 @@ MediaEngineWebRTCAudioSource::Stop(SourceMediaStream *aSource, TrackID aID)
       // Already stopped - this is allowed
       return NS_OK;
     }
+
+    aSource->EndTrack(aID);
+
     if (!mSources.IsEmpty()) {
       return NS_OK;
     }
@@ -378,7 +381,6 @@ MediaEngineWebRTCAudioSource::Stop(SourceMediaStream *aSource, TrackID aID)
     }
 
     mState = kStopped;
-    aSource->EndTrack(aID);
   }
 
   mVoERender->DeRegisterExternalMediaProcessing(mChannel, webrtc::kRecordingPerChannel);
@@ -396,16 +398,10 @@ void
 MediaEngineWebRTCAudioSource::NotifyPull(MediaStreamGraph* aGraph,
                                          SourceMediaStream *aSource,
                                          TrackID aID,
-                                         StreamTime aDesiredTime,
-                                         TrackTicks &aLastEndTime)
+                                         StreamTime aDesiredTime)
 {
   // Ignore - we push audio data
-#ifdef DEBUG
-  TrackTicks target = aSource->TimeToTicksRoundUp(SAMPLE_FREQUENCY, aDesiredTime);
-  TrackTicks delta = target - aLastEndTime;
-  LOG_FRAMES(("Audio: NotifyPull: aDesiredTime %ld, target %ld, delta %ld",(int64_t) aDesiredTime, (int64_t) target, (int64_t) delta));
-  aLastEndTime = target;
-#endif
+  LOG_FRAMES(("NotifyPull, desired = %ld", (int64_t) aDesiredTime));
 }
 
 void

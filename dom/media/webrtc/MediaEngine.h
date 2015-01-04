@@ -39,12 +39,6 @@ enum MediaEngineState {
   kReleased
 };
 
-// We only support 1 audio and 1 video track for now.
-enum {
-  kVideoTrack = 1,
-  kAudioTrack = 2
-};
-
 // includes everything from dom::MediaSourceEnum (really video sources), plus audio sources
 enum MediaSourceType {
   Camera = (int) dom::MediaSourceEnum::Camera,
@@ -116,8 +110,7 @@ public:
   virtual void NotifyPull(MediaStreamGraph* aGraph,
                           SourceMediaStream *aSource,
                           TrackID aId,
-                          StreamTime aDesiredTime,
-                          TrackTicks &aLastEndTime) = 0;
+                          StreamTime aDesiredTime) = 0;
 
   /* Stop the device and release the corresponding MediaStream */
   virtual nsresult Stop(SourceMediaStream *aSource, TrackID aID) = 0;
@@ -171,10 +164,18 @@ public:
   /* It is an error to call Start() before an Allocate(), and Stop() before
    * a Start(). Only Allocate() may be called after a Deallocate(). */
 
+  void SetHasFakeTracks(bool aHasFakeTracks) {
+    mHasFakeTracks = aHasFakeTracks;
+  }
+
 protected:
   // Only class' own members can be initialized in constructor initializer list.
-  explicit MediaEngineSource(MediaEngineState aState) : mState(aState) {}
+  explicit MediaEngineSource(MediaEngineState aState)
+    : mState(aState)
+    , mHasFakeTracks(false)
+  {}
   MediaEngineState mState;
+  bool mHasFakeTracks;
 };
 
 /**

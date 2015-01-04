@@ -6,12 +6,10 @@
 pref("devtools.webide.showProjectEditor", true);
 pref("devtools.webide.templatesURL", "https://code.cdn.mozilla.net/templates/list.json");
 pref("devtools.webide.autoinstallADBHelper", true);
-#ifdef MOZ_DEV_EDITION
 pref("devtools.webide.autoinstallFxdtAdapters", true);
-#else
-pref("devtools.webide.autoinstallFxdtAdapters", false);
-#endif
+pref("devtools.webide.autoConnectRuntime", true);
 pref("devtools.webide.restoreLastProject", true);
+pref("devtools.webide.enableLocalRuntime", false);
 pref("devtools.webide.addonsURL", "https://ftp.mozilla.org/pub/mozilla.org/labs/fxos-simulator/index.json");
 pref("devtools.webide.simulatorAddonsURL", "https://ftp.mozilla.org/pub/mozilla.org/labs/fxos-simulator/#VERSION#/#OS#/fxos_#SLASHED_VERSION#_simulator-#OS#-latest.xpi");
 pref("devtools.webide.simulatorAddonID", "fxos_#SLASHED_VERSION#_simulator@mozilla.org");
@@ -31,3 +29,4 @@ pref("devtools.webide.widget.enabled", false);
 pref("devtools.webide.widget.inNavbarByDefault", false);
 #endif
 pref("devtools.webide.zoom", "1");
+pref("devtools.webide.busyTimeout", 10000);

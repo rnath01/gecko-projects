@@ -1,7 +1,10 @@
-// test spdy/3
+// test spdy/3.1
 
 var Ci = Components.interfaces;
 var Cc = Components.classes;
+var Cu = Components.utils;
+
+Cu.import("resource://gre/modules/Services.jsm");
 
 // Generate a small and a large post with known pre-calculated md5 sums
 function generateContent(size) {
@@ -25,7 +28,7 @@ var bigListenerMD5 = '8f607cfdd2c87d6a7eedb657dafbd836';
 
 function checkIsSpdy(request) {
   try {
-    if (request.getResponseHeader("X-Firefox-Spdy") == "3") {
+    if (request.getResponseHeader("X-Firefox-Spdy") == "3.1") {
       if (request.getResponseHeader("X-Connection-Spdy") == "yes") {
         return true;
       }
@@ -187,7 +190,14 @@ SpdyPostListener.prototype.onDataAvailable = function(request, ctx, stream, off,
 
 function makeChan(url) {
   var ios = Cc["@mozilla.org/network/io-service;1"].getService(Ci.nsIIOService);
-  var chan = ios.newChannel(url, null, null).QueryInterface(Ci.nsIHttpChannel);
+  var chan = ios.newChannel2(url,
+                             null,
+                             null,
+                             null,      // aLoadingNode
+                             Services.scriptSecurityManager.getSystemPrincipal(),
+                             null,      // aTriggeringPrincipal
+                             Ci.nsILoadInfo.SEC_NORMAL,
+                             Ci.nsIContentPolicy.TYPE_OTHER).QueryInterface(Ci.nsIHttpChannel);
 
   return chan;
 }
@@ -392,7 +402,7 @@ var loadGroup;
 
 function resetPrefs() {
   prefs.setBoolPref("network.http.spdy.enabled", spdypref);
-  prefs.setBoolPref("network.http.spdy.enabled.v3", spdy3pref);
+  prefs.setBoolPref("network.http.spdy.enabled.v3-1", spdy3pref);
   prefs.setBoolPref("network.http.spdy.allow-push", spdypush);
 }
 
@@ -410,12 +420,12 @@ function run_test() {
 
   prefs.setIntPref("network.http.speculative-parallel-limit", oldPref);
 
-  // Enable all versions of spdy to see that we auto negotiate spdy/3
+  // Enable all versions of spdy to see that we auto negotiate spdy/3.1
   spdypref = prefs.getBoolPref("network.http.spdy.enabled");
-  spdy3pref = prefs.getBoolPref("network.http.spdy.enabled.v3");
+  spdy3pref = prefs.getBoolPref("network.http.spdy.enabled.v3-1");
   spdypush = prefs.getBoolPref("network.http.spdy.allow-push");
   prefs.setBoolPref("network.http.spdy.enabled", true);
-  prefs.setBoolPref("network.http.spdy.enabled.v3", true);
+  prefs.setBoolPref("network.http.spdy.enabled.v3-1", true);
   prefs.setBoolPref("network.http.spdy.allow-push", true);
 
   loadGroup = Cc["@mozilla.org/network/load-group;1"].createInstance(Ci.nsILoadGroup);

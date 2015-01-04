@@ -889,7 +889,7 @@ VARIABLES = {
         This is a list of files that define XPCOM interface definitions.
         Entries must be files that exist. Entries are almost certainly ``.idl``
         files.
-        """, 'libs'),
+        """, 'misc'),
 
     'XPIDL_MODULE': (unicode, unicode,
         """XPCOM Interface Definition Module Name.
@@ -989,6 +989,10 @@ VARIABLES = {
 
     'MOCHITEST_MANIFESTS': (StrictOrderingOnAppendList, list,
         """List of manifest files defining mochitest tests.
+        """, None),
+
+    'MOCHITEST_WEBAPPRT_CONTENT_MANIFESTS': (StrictOrderingOnAppendList, list,
+        """List of manifest files defining webapprt mochitest content tests.
         """, None),
 
     'MOCHITEST_WEBAPPRT_CHROME_MANIFESTS': (StrictOrderingOnAppendList, list,
@@ -1157,7 +1161,7 @@ VARIABLES = {
         Files from topsrcdir and the objdir can also be installed by prefixing
         the path(s) with a '/' character and a '!' character, respectively::
            TEST_HARNESS_FILES.path += ['/build/bar.py', '!quux.py']
-        """, None),
+        """, 'libs'),
 }
 
 # Sanity check: we don't want any variable above to have a list as storage type.

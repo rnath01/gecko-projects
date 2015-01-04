@@ -75,6 +75,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/unused.h"
 #include "nsAnonymousTemporaryFile.h"
 #include "nsAppRunner.h"
@@ -100,6 +101,7 @@
 #include "mozilla/dom/WakeLock.h"
 #include "nsIDOMWindow.h"
 #include "nsIExternalProtocolService.h"
+#include "nsIFormProcessor.h"
 #include "nsIGfxInfo.h"
 #include "nsIIdleService.h"
 #include "nsIJSRuntimeService.h"
@@ -122,6 +124,7 @@
 #include "nsServiceManagerUtils.h"
 #include "nsStyleSheetService.h"
 #include "nsThreadUtils.h"
+#include "nsThreadManager.h"
 #include "nsToolkitCompsCID.h"
 #include "nsWidgetsCID.h"
 #include "PreallocatedProcessManager.h"
@@ -194,11 +197,16 @@ using namespace mozilla::system;
 
 
 #if defined(MOZ_CONTENT_SANDBOX) && defined(XP_LINUX)
-#include "mozilla/Sandbox.h"
+#include "mozilla/SandboxInfo.h"
 #endif
 
 #ifdef MOZ_TOOLKIT_SEARCH
 #include "nsIBrowserSearchService.h"
+#endif
+
+#ifdef MOZ_ENABLE_PROFILER_SPS
+#include "nsIProfiler.h"
+#include "nsIProfileSaveEvent.h"
 #endif
 
 static NS_DEFINE_CID(kCClipboardCID, NS_CLIPBOARD_CID);
@@ -206,6 +214,10 @@ static const char* sClipboardTextFlavors[] = { kUnicodeMime };
 
 using base::ChildPrivileges;
 using base::KillProcess;
+
+#ifdef MOZ_CRASHREPORTER
+using namespace CrashReporter;
+#endif
 using namespace mozilla::dom::bluetooth;
 using namespace mozilla::dom::cellbroadcast;
 using namespace mozilla::dom::devicestorage;
@@ -590,6 +602,11 @@ static const char* sObserverTopics[] = {
     "a11y-init-or-shutdown",
 #endif
     "app-theme-changed",
+#ifdef MOZ_ENABLE_PROFILER_SPS
+    "profiler-started",
+    "profiler-stopped",
+    "profiler-subprocess",
+#endif
 };
 
 /* static */ already_AddRefed<ContentParent>
@@ -689,7 +706,7 @@ ContentParent::StartUp()
 #if defined(MOZ_CONTENT_SANDBOX) && defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 19
     // Require sandboxing on B2G >= KitKat.  This condition must stay
     // in sync with ContentChild::RecvSetProcessSandbox.
-    if (ContentProcessSandboxStatus() == kSandboxingWouldFail) {
+    if (!SandboxInfo::Get().CanSandboxContent()) {
         // MOZ_CRASH strings are only for debug builds; make sure the
         // message is clear on non-debug builds as well:
         printf_stderr("Sandboxing support is required on this platform.  "
@@ -914,7 +931,7 @@ ContentParent::RecvCreateChildProcess(const IPCTabContext& aContext,
 }
 
 bool
-ContentParent::AnswerBridgeToChildProcess(const ContentParentId& aCpId)
+ContentParent::RecvBridgeToChildProcess(const ContentParentId& aCpId)
 {
     ContentProcessManager *cpm = ContentProcessManager::GetSingleton();
     ContentParent* cp = cpm->GetContentProcessById(aCpId);
@@ -953,7 +970,7 @@ static nsIDocShell* GetOpenerDocShellHelper(Element* aFrameElement)
 }
 
 bool
-ContentParent::AnswerLoadPlugin(const uint32_t& aPluginId)
+ContentParent::RecvLoadPlugin(const uint32_t& aPluginId)
 {
     return mozilla::plugins::SetupBridge(aPluginId, this);
 }
@@ -1024,6 +1041,7 @@ ContentParent::CreateBrowserOrApp(const TabContext& aContext,
             }
             nsRefPtr<TabParent> tp(new TabParent(constructorSender, tabId,
                                                  aContext, chromeFlags));
+            tp->SetInitedByParent();
             tp->SetOwnerElement(aFrameElement);
 
             PBrowserParent* browser = constructorSender->SendPBrowserConstructor(
@@ -1135,6 +1153,7 @@ ContentParent::CreateBrowserOrApp(const TabContext& aContext,
     uint32_t chromeFlags = 0;
 
     nsRefPtr<TabParent> tp = new TabParent(parent, tabId, aContext, chromeFlags);
+    tp->SetInitedByParent();
     tp->SetOwnerElement(aFrameElement);
     PBrowserParent* browser = parent->SendPBrowserConstructor(
         // DeallocPBrowserParent() releases this ref.
@@ -1204,7 +1223,7 @@ ContentParent::CreateContentBridgeParent(const TabContext& aContext,
     if (cpId == 0) {
         return nullptr;
     }
-    if (!child->CallBridgeToChildProcess(cpId)) {
+    if (!child->SendBridgeToChildProcess(cpId)) {
         return nullptr;
     }
     ContentBridgeParent* parent = child->GetLastBridge();
@@ -1357,6 +1376,28 @@ StaticAutoPtr<LinkedList<SystemMessageHandledListener> >
 
 NS_IMPL_ISUPPORTS(SystemMessageHandledListener,
                   nsITimerCallback)
+
+#ifdef MOZ_NUWA_PROCESS
+class NuwaFreezeListener : public nsThreadManager::AllThreadsWereIdleListener
+{
+public:
+    NuwaFreezeListener(ContentParent* parent)
+        : mParent(parent)
+    {
+    }
+
+    void OnAllThreadsWereIdle()
+    {
+        unused << mParent->SendNuwaFreeze();
+        nsThreadManager::get()->RemoveAllThreadsWereIdleListener(this);
+    }
+private:
+    nsRefPtr<ContentParent> mParent;
+    virtual ~NuwaFreezeListener()
+    {
+    }
+};
+#endif // MOZ_NUWA_PROCESS
 
 } // anonymous namespace
 
@@ -1736,6 +1777,9 @@ ContentParent::ActorDestroy(ActorDestroyReason why)
         props->SetPropertyAsUint64(NS_LITERAL_STRING("childID"), mChildID);
 
         if (AbnormalShutdown == why) {
+            Telemetry::Accumulate(Telemetry::SUBPROCESS_ABNORMAL_ABORT,
+                                  NS_LITERAL_CSTRING("content"), 1);
+
             props->SetPropertyAsBool(NS_LITERAL_STRING("abnormal"), true);
 
 #ifdef MOZ_CRASHREPORTER
@@ -1757,7 +1801,16 @@ ContentParent::ActorDestroy(ActorDestroyReason why)
                                                        NS_ConvertUTF16toUTF8(mAppManifestURL));
                 }
 
-                crashReporter->GenerateCrashReport(this, nullptr);
+                if (mCreatedPairedMinidumps) {
+                    // We killed the child with KillHard, so two minidumps should already
+                    // exist - one for the content process, and one for the browser process.
+                    // The "main" minidump of this crash report is the content processes,
+                    // and we use GenerateChildData to annotate our crash report with
+                    // information about the child process.
+                    crashReporter->GenerateChildData(nullptr);
+                } else {
+                    crashReporter->GenerateCrashReport(this, nullptr);
+                }
 
                 nsAutoString dumpID(crashReporter->ChildDumpID());
                 props->SetPropertyAsAString(NS_LITERAL_STRING("dumpID"), dumpID);
@@ -1893,6 +1946,7 @@ ContentParent::InitializeMembers()
     mCalledClose = false;
     mCalledCloseWithError = false;
     mCalledKillHard = false;
+    mCreatedPairedMinidumps = false;
 }
 
 ContentParent::ContentParent(mozIApplication* aApp,
@@ -1934,6 +1988,13 @@ ContentParent::ContentParent(mozIApplication* aApp,
     // PID along with the warning.
     nsDebugImpl::SetMultiprocessMode("Parent");
 
+#if defined(XP_WIN) && !defined(MOZ_B2G)
+    // Request Windows message deferral behavior on our side of the PContent
+    // channel. Generally only applies to the situation where we get caught in
+    // a deadlock with the plugin process when sending CPOWs.
+    GetIPCChannel()->SetChannelFlags(MessageChannel::REQUIRE_DEFERRED_MESSAGE_PROTECTION);
+#endif
+
     NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
     ChildPrivileges privs = aIsNuwaProcess
         ? base::PRIVILEGES_INHERIT
@@ -1964,6 +2025,9 @@ ContentParent::ContentParent(mozIApplication* aApp,
                  true  /* Send registered chrome */);
 
     ContentProcessManager::GetSingleton()->AddContentProcess(this);
+
+    // Set a reply timeout for CPOWs.
+    SetReplyTimeoutMs(Preferences::GetInt("dom.ipc.cpow.timeout", 0));
 }
 
 #ifdef MOZ_NUWA_PROCESS
@@ -2037,6 +2101,8 @@ ContentParent::ContentParent(ContentParent* aTemplate,
     } else {
         priority = PROCESS_PRIORITY_FOREGROUND;
     }
+
+    mSendPermissionUpdates = aTemplate->mSendPermissionUpdates;
 
     InitInternal(priority,
                  false, /* Setup Off-main thread compositing */
@@ -2195,7 +2261,7 @@ ContentParent::IsForApp()
 
 #ifdef MOZ_NUWA_PROCESS
 bool
-ContentParent::IsNuwaProcess()
+ContentParent::IsNuwaProcess() const
 {
     return mIsNuwaProcess;
 }
@@ -2545,6 +2611,19 @@ ContentParent::RecvNuwaReady()
 }
 
 bool
+ContentParent::RecvNuwaWaitForFreeze()
+{
+#ifdef MOZ_NUWA_PROCESS
+    nsRefPtr<NuwaFreezeListener> listener = new NuwaFreezeListener(this);
+    nsThreadManager::get()->AddAllThreadsWereIdleListener(listener);
+    return true;
+#else // MOZ_NUWA_PROCESS
+    NS_ERROR("ContentParent::RecvNuwaWaitForFreeze() not implemented!");
+    return false;
+#endif // MOZ_NUWA_PROCESS
+}
+
+bool
 ContentParent::RecvAddNewProcess(const uint32_t& aPid,
                                  const InfallibleTArray<ProtocolFdMapping>& aFds)
 {
@@ -2568,8 +2647,8 @@ ContentParent::RecvAddNewProcess(const uint32_t& aPid,
     size_t numNuwaPrefUpdates = sNuwaPrefUpdates ?
                                 sNuwaPrefUpdates->Length() : 0;
     // Resend pref updates to the forked child.
-    for (int i = 0; i < numNuwaPrefUpdates; i++) {
-        content->SendPreferenceUpdate(sNuwaPrefUpdates->ElementAt(i));
+    for (size_t i = 0; i < numNuwaPrefUpdates; i++) {
+        mozilla::unused << content->SendPreferenceUpdate(sNuwaPrefUpdates->ElementAt(i));
     }
 
     // Update offline settings.
@@ -2578,7 +2657,7 @@ ContentParent::RecvAddNewProcess(const uint32_t& aPid,
     ClipboardCapabilities clipboardCaps;
     RecvGetXPCOMProcessAttributes(&isOffline, &unusedDictionaries,
                                   &clipboardCaps);
-    content->SendSetOffline(isOffline);
+    mozilla::unused << content->SendSetOffline(isOffline);
     MOZ_ASSERT(!clipboardCaps.supportsSelectionClipboard() &&
                !clipboardCaps.supportsFindClipboard(),
                "Unexpected values");
@@ -2750,6 +2829,8 @@ ContentParent::Observe(nsISupports* aSubject,
         bool     isFormatting;
         bool     isFake;
         bool     isUnmounting;
+        bool     isRemovable;
+        bool     isHotSwappable;
 
         vol->GetName(volName);
         vol->GetMountPoint(mountPoint);
@@ -2760,6 +2841,8 @@ ContentParent::Observe(nsISupports* aSubject,
         vol->GetIsFormatting(&isFormatting);
         vol->GetIsFake(&isFake);
         vol->GetIsUnmounting(&isUnmounting);
+        vol->GetIsRemovable(&isRemovable);
+        vol->GetIsHotSwappable(&isHotSwappable);
 
 #ifdef MOZ_NUWA_PROCESS
         if (!(IsNuwaReady() && IsNuwaProcess()))
@@ -2768,7 +2851,7 @@ ContentParent::Observe(nsISupports* aSubject,
             unused << SendFileSystemUpdate(volName, mountPoint, state,
                                            mountGeneration, isMediaPresent,
                                            isSharing, isFormatting, isFake,
-                                           isUnmounting);
+                                           isUnmounting, isRemovable, isHotSwappable);
         }
     } else if (!strcmp(aTopic, "phone-state-changed")) {
         nsString state(aData);
@@ -2786,6 +2869,31 @@ ContentParent::Observe(nsISupports* aSubject,
     else if (!strcmp(aTopic, "app-theme-changed")) {
         unused << SendOnAppThemeChanged();
     }
+#ifdef MOZ_ENABLE_PROFILER_SPS
+    else if (!strcmp(aTopic, "profiler-started")) {
+        nsCOMPtr<nsIProfilerStartParams> params(do_QueryInterface(aSubject));
+        uint32_t entries;
+        double interval;
+        params->GetEntries(&entries);
+        params->GetInterval(&interval);
+        const nsTArray<nsCString>& features = params->GetFeatures();
+        const nsTArray<nsCString>& threadFilterNames = params->GetThreadFilterNames();
+        unused << SendStartProfiler(entries, interval, features, threadFilterNames);
+    }
+    else if (!strcmp(aTopic, "profiler-stopped")) {
+        unused << SendStopProfiler();
+    }
+    else if (!strcmp(aTopic, "profiler-subprocess")) {
+        nsCOMPtr<nsIProfileSaveEvent> pse = do_QueryInterface(aSubject);
+        if (pse) {
+            nsCString result;
+            unused << SendGetProfile(&result);
+            if (!result.IsEmpty()) {
+                pse->AddSubProfile(result.get());
+            }
+        }
+    }
+#endif
     return NS_OK;
 }
 
@@ -2819,7 +2927,7 @@ ContentParent::RecvPDocAccessibleConstructor(PDocAccessibleParent* aDoc, PDocAcc
     return parentDoc->AddChildDoc(doc, aParentID);
   } else {
     MOZ_ASSERT(!aParentID);
-    GetAccService()->RemoteDocAdded(doc);
+    a11y::DocManager::RemoteDocAdded(doc);
   }
 #endif
   return true;
@@ -3000,10 +3108,32 @@ ContentParent::KillHard()
     }
     mCalledKillHard = true;
     mForceKillTask = nullptr;
-    // This ensures the process is eventually killed, but doesn't
-    // immediately KILLITWITHFIRE because we want to get a minidump if
-    // possible.  After a timeout though, the process is forceably
-    // killed.
+
+#if defined(MOZ_CRASHREPORTER) && !defined(MOZ_B2G)
+    if (ManagedPCrashReporterParent().Length() > 0) {
+        CrashReporterParent* crashReporter =
+            static_cast<CrashReporterParent*>(ManagedPCrashReporterParent()[0]);
+
+        // We're about to kill the child process associated with this
+        // ContentParent. Something has gone wrong to get us here,
+        // so we generate a minidump to be potentially submitted in
+        // a crash report. ContentParent::ActorDestroy is where the
+        // actual report gets generated, once the child process has
+        // finally died.
+        if (crashReporter->GeneratePairedMinidump(this)) {
+            mCreatedPairedMinidumps = true;
+            // GeneratePairedMinidump created two minidumps for us - the main
+            // one is for the content process we're about to kill, and the other
+            // one is for the main browser process. That second one is the extra
+            // minidump tagging along, so we have to tell the crash reporter that
+            // it exists and is being appended.
+            nsAutoCString additionalDumps("browser");
+            crashReporter->AnnotateCrashReport(
+                NS_LITERAL_CSTRING("additional_minidumps"),
+                additionalDumps);
+        }
+    }
+#endif
     if (!KillProcess(OtherProcess(), 1, false)) {
         NS_WARNING("failed to kill subprocess!");
     }
@@ -3188,7 +3318,11 @@ ContentParent::DeallocPNeckoParent(PNeckoParent* necko)
 PPrintingParent*
 ContentParent::AllocPPrintingParent()
 {
+#ifdef NS_PRINTING
     return new PrintingParent();
+#else
+    return nullptr;
+#endif
 }
 
 bool
@@ -3612,7 +3746,8 @@ ContentParent::RecvShowAlertNotification(const nsString& aImageUrl, const nsStri
                                          const nsString& aCookie, const nsString& aName,
                                          const nsString& aBidi, const nsString& aLang,
                                          const nsString& aData,
-                                         const IPC::Principal& aPrincipal)
+                                         const IPC::Principal& aPrincipal,
+                                         const bool& aInPrivateBrowsing)
 {
 #ifdef MOZ_CHILD_PERMISSIONS
     uint32_t permission = mozilla::CheckPermission(this, aPrincipal,
@@ -3626,7 +3761,7 @@ ContentParent::RecvShowAlertNotification(const nsString& aImageUrl, const nsStri
     if (sysAlerts) {
         sysAlerts->ShowAlertNotification(aImageUrl, aTitle, aText, aTextClickable,
                                          aCookie, this, aName, aBidi, aLang,
-                                         aData, aPrincipal);
+                                         aData, aPrincipal, aInPrivateBrowsing);
     }
     return true;
 }
@@ -4168,6 +4303,42 @@ ContentParent::RecvOpenAnonymousTemporaryFile(FileDescriptor *aFD)
     return true;
 }
 
+static NS_DEFINE_CID(kFormProcessorCID, NS_FORMPROCESSOR_CID);
+
+bool
+ContentParent::RecvKeygenProcessValue(const nsString& oldValue,
+                                      const nsString& challenge,
+                                      const nsString& keytype,
+                                      const nsString& keyparams,
+                                      nsString* newValue)
+{
+    nsCOMPtr<nsIFormProcessor> formProcessor =
+      do_GetService(kFormProcessorCID);
+    if (!formProcessor) {
+        newValue->Truncate();
+        return true;
+    }
+
+    formProcessor->ProcessValueIPC(oldValue, challenge, keytype, keyparams,
+                                   *newValue);
+    return true;
+}
+
+bool
+ContentParent::RecvKeygenProvideContent(nsString* aAttribute,
+                                        nsTArray<nsString>* aContent)
+{
+    nsCOMPtr<nsIFormProcessor> formProcessor =
+      do_GetService(kFormProcessorCID);
+    if (!formProcessor) {
+        return true;
+    }
+
+    formProcessor->ProvideContent(NS_LITERAL_STRING("SELECT"), *aContent,
+                                  *aAttribute);
+    return true;
+}
+
 PFileDescriptorSetParent*
 ContentParent::AllocPFileDescriptorSetParent(const FileDescriptor& aFD)
 {
@@ -4197,7 +4368,8 @@ ContentParent::RecvGetFileReferences(const PersistenceType& aPersistenceType,
     MOZ_ASSERT(aResult);
 
     if (NS_WARN_IF(aPersistenceType != quota::PERSISTENCE_TYPE_PERSISTENT &&
-                   aPersistenceType != quota::PERSISTENCE_TYPE_TEMPORARY)) {
+                   aPersistenceType != quota::PERSISTENCE_TYPE_TEMPORARY &&
+                   aPersistenceType != quota::PERSISTENCE_TYPE_DEFAULT)) {
         return false;
     }
 

@@ -1480,7 +1480,8 @@ nsAccessibilityService::CreateHTMLAccessibleByMarkup(nsIFrame* aFrame,
       tag == nsGkAtoms::h6 ||
       tag == nsGkAtoms::nav ||
       tag == nsGkAtoms::q ||
-      tag == nsGkAtoms::section) {
+      tag == nsGkAtoms::section ||
+      tag == nsGkAtoms::time) {
     nsRefPtr<Accessible> accessible =
       new HyperTextAccessibleWrap(aContent, document);
     return accessible.forget();
@@ -1555,6 +1556,9 @@ nsAccessibilityService::CreateAccessibleByFrameType(nsIFrame* aFrame,
       if (aContext->IsList() &&
           aContext->GetContent() == aContent->GetParent()) {
         newAcc = new HTMLLIAccessible(aContent, document);
+      } else {
+        // Otherwise create a generic text accessible to avoid text jamming.
+        newAcc = new HyperTextAccessibleWrap(aContent, document);
       }
       break;
     case eHTMLSelectListType:

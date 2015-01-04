@@ -15,9 +15,6 @@
 
 #include "harfbuzz/hb.h"
 
-// Chosen this as to resemble DWrite's own oblique face style.
-#define OBLIQUE_SKEW_FACTOR 0.3
-
 using namespace mozilla;
 using namespace mozilla::gfx;
 
@@ -469,7 +466,7 @@ gfxDWriteFont::SetupCairoFont(gfxContext *aContext)
 }
 
 bool
-gfxDWriteFont::IsValid()
+gfxDWriteFont::IsValid() const
 {
     return mFontFace != nullptr;
 }

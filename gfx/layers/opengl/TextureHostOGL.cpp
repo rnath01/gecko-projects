@@ -14,6 +14,7 @@
 #include "gfxReusableSurfaceWrapper.h"  // for gfxReusableSurfaceWrapper
 #include "mozilla/gfx/2D.h"             // for DataSourceSurface
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
+#include "mozilla/gfx/Logging.h"        // for gfxCriticalError
 #ifdef MOZ_WIDGET_GONK
 # include "GrallocImages.h"  // for GrallocImage
 # include "EGLImageHelpers.h"
@@ -68,6 +69,7 @@ CreateTextureHostOGL(const SurfaceDescriptor& aDesc,
       const EGLImageDescriptor& desc = aDesc.get_EGLImageDescriptor();
       result = new EGLImageTextureHost(aFlags,
                                        (EGLImage)desc.image(),
+                                       (EGLSync)desc.fence(),
                                        desc.size());
       break;
     }
@@ -101,8 +103,8 @@ FlagsToGLFlags(TextureFlags aFlags)
 
   if (aFlags & TextureFlags::USE_NEAREST_FILTER)
     result |= TextureImage::UseNearestFilter;
-  if (aFlags & TextureFlags::NEEDS_Y_FLIP)
-    result |= TextureImage::NeedsYFlip;
+  if (aFlags & TextureFlags::ORIGIN_BOTTOM_LEFT)
+    result |= TextureImage::OriginBottomLeft;
   if (aFlags & TextureFlags::DISALLOW_BIGIMAGE)
     result |= TextureImage::DisallowBigImage;
 
@@ -213,6 +215,10 @@ TextureImageTextureSourceOGL::Update(gfx::DataSourceSurface* aSurface,
   MOZ_ASSERT(gl);
   if (!gl) {
     NS_WARNING("trying to update TextureImageTextureSourceOGL without a GLContext");
+    return false;
+  }
+  if (!aSurface) {
+    gfxCriticalError() << "Invalid surface for OGL update";
     return false;
   }
   MOZ_ASSERT(aSurface);
@@ -633,9 +639,11 @@ EGLImageTextureSource::GetTextureTransform()
 
 EGLImageTextureHost::EGLImageTextureHost(TextureFlags aFlags,
                                          EGLImage aImage,
+                                         EGLSync aSync,
                                          gfx::IntSize aSize)
   : TextureHost(aFlags)
   , mImage(aImage)
+  , mSync(aSync)
   , mSize(aSize)
   , mCompositor(nullptr)
 {
@@ -655,6 +663,11 @@ bool
 EGLImageTextureHost::Lock()
 {
   if (!mCompositor) {
+    return false;
+  }
+
+  EGLint status = sEGLLibrary.fClientWaitSync(EGL_DISPLAY(), mSync, 0, LOCAL_EGL_FOREVER);
+  if (status != LOCAL_EGL_CONDITION_SATISFIED) {
     return false;
   }
 

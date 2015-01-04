@@ -87,13 +87,11 @@ public class Tabs implements GeckoEventListener {
 
     private Tabs() {
         EventDispatcher.getInstance().registerGeckoThreadListener(this,
-            "Session:RestoreEnd",
             "Tab:Added",
             "Tab:Close",
             "Tab:Select",
             "Content:LocationChange",
             "Content:SecurityChange",
-            "Content:ReaderEnabled",
             "Content:StateChange",
             "Content:LoadError",
             "Content:PageShow",
@@ -410,11 +408,6 @@ public class Tabs implements GeckoEventListener {
     public void handleMessage(String event, JSONObject message) {
         Log.d(LOGTAG, "handleMessage: " + event);
         try {
-            if (event.equals("Session:RestoreEnd")) {
-                notifyListeners(null, TabEvents.RESTORED);
-                return;
-            }
-
             // All other events handled below should contain a tabID property
             int id = message.getInt("tabID");
             Tab tab = getTab(id);
@@ -461,9 +454,6 @@ public class Tabs implements GeckoEventListener {
             } else if (event.equals("Content:SecurityChange")) {
                 tab.updateIdentityData(message.getJSONObject("identity"));
                 notifyListeners(tab, TabEvents.SECURITY_CHANGE);
-            } else if (event.equals("Content:ReaderEnabled")) {
-                tab.setReaderEnabled(true);
-                notifyListeners(tab, TabEvents.READER_ENABLED);
             } else if (event.equals("Content:StateChange")) {
                 int state = message.getInt("state");
                 if ((state & GeckoAppShell.WPL_STATE_IS_NETWORK) != 0) {
@@ -583,7 +573,6 @@ public class Tabs implements GeckoEventListener {
         PAGE_SHOW,
         LINK_FEED,
         SECURITY_CHANGE,
-        READER_ENABLED,
         DESKTOP_MODE_CHANGE,
         VIEWPORT_CHANGE,
         RECORDING_CHANGE,

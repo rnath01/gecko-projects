@@ -7,6 +7,8 @@ package org.mozilla.gecko;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.lang.Override;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URLEncoder;
 import java.util.EnumSet;
@@ -15,6 +17,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Vector;
 
+import android.support.v4.app.Fragment;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -24,6 +27,7 @@ import org.mozilla.gecko.DynamicToolbar.VisibilityTransition;
 import org.mozilla.gecko.GeckoProfileDirectories.NoMozillaDirectoryException;
 import org.mozilla.gecko.Tabs.TabEvents;
 import org.mozilla.gecko.animation.PropertyAnimator;
+import org.mozilla.gecko.animation.TransitionsTracker;
 import org.mozilla.gecko.animation.ViewHelper;
 import org.mozilla.gecko.db.BrowserContract.Combined;
 import org.mozilla.gecko.db.BrowserContract.SearchHistory;
@@ -88,7 +92,6 @@ import org.mozilla.gecko.widget.GeckoActionProvider;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.KeyguardManager;
 import android.content.BroadcastReceiver;
 import android.content.ContentValues;
 import android.content.Context;
@@ -147,7 +150,6 @@ public class BrowserApp extends GeckoApp
                                    LayerView.OnMetricsChangedListener,
                                    BrowserSearch.OnSearchListener,
                                    BrowserSearch.OnEditSuggestionListener,
-                                   HomePager.OnNewTabsListener,
                                    OnUrlOpenListener,
                                    OnUrlOpenInBackgroundListener,
                                    ActionModeCompat.Presenter,
@@ -529,7 +531,7 @@ public class BrowserApp extends GeckoApp
                     public void run() {
                         final TabHistoryFragment fragment = TabHistoryFragment.newInstance(historyPageList, toIndex);
                         final FragmentManager fragmentManager = getSupportFragmentManager();
-                        GeckoAppShell.vibrateOnHapticFeedbackEnabled(getResources().getInteger(R.integer.long_press_vibrate_msec));
+                        GeckoAppShell.vibrateOnHapticFeedbackEnabled(getResources().getIntArray(R.array.long_press_vibrate_msec));
                         fragment.show(R.id.tab_history_panel, fragmentManager.beginTransaction(), TAB_HISTORY_FRAGMENT_TAG);
                     }
                 });
@@ -651,16 +653,6 @@ public class BrowserApp extends GeckoApp
         // Set the maximum bits-per-pixel the favicon system cares about.
         IconDirectoryEntry.setMaxBPP(GeckoAppShell.getScreenDepth());
 
-        Class<?> mediaManagerClass = getMediaPlayerManager();
-        if (mediaManagerClass != null) {
-            try {
-                Method init = mediaManagerClass.getMethod("init", Context.class);
-                init.invoke(null, this);
-            } catch(Exception ex) {
-                Log.e(LOGTAG, "Error initializing media manager", ex);
-            }
-        }
-
         mTilesRecorder = new TilesRecorder();
     }
 
@@ -765,21 +757,8 @@ public class BrowserApp extends GeckoApp
         final boolean inGuestSession = GeckoProfile.get(this).inGuestMode();
         if (enableGuestSession != inGuestSession) {
             doRestart(getIntent());
-            GeckoAppShell.systemExit();
+            GeckoAppShell.gracefulExit();
             return;
-        }
-
-        final KeyguardManager manager = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
-        // The test machines return null for the KeyguardService, despite running Android 4.2.
-        if (Versions.feature11Plus && manager != null) {
-            // If the keyguard is showing AND we're either in guest mode or the keyguard is insecure,
-            // allow showing this window. We do this in onResume so that we can avoid setting these flags if the keyguard
-            // is not showing since it affects Android's layout of the window.
-            if (manager.isKeyguardLocked() && (GeckoProfile.get(this).inGuestMode() || !manager.isKeyguardSecure())) {
-                GuestSession.configureWindow(getWindow());
-            } else {
-                GuestSession.unconfigureWindow(getWindow());
-            }
         }
 
         EventDispatcher.getInstance().unregisterGeckoThreadListener((GeckoEventListener)this,
@@ -1176,16 +1155,6 @@ public class BrowserApp extends GeckoApp
             }
         }
 
-        Class<?> mediaManagerClass = getMediaPlayerManager();
-        if (mediaManagerClass != null) {
-            try {
-                Method destroy = mediaManagerClass.getMethod("onDestroy",  (Class[]) null);
-                destroy.invoke(null);
-            } catch(Exception ex) {
-                Log.e(LOGTAG, "Error destroying media manager", ex);
-            }
-        }
-
         super.onDestroy();
     }
 
@@ -1542,19 +1511,19 @@ public class BrowserApp extends GeckoApp
             }
 
         } else if ("Telemetry:Gather".equals(event)) {
-            Telemetry.HistogramAdd("PLACES_PAGES_COUNT",
+            Telemetry.addToHistogram("PLACES_PAGES_COUNT",
                     BrowserDB.getCount(getContentResolver(), "history"));
-            Telemetry.HistogramAdd("PLACES_BOOKMARKS_COUNT",
+            Telemetry.addToHistogram("PLACES_BOOKMARKS_COUNT",
                     BrowserDB.getCount(getContentResolver(), "bookmarks"));
-            Telemetry.HistogramAdd("FENNEC_FAVICONS_COUNT",
+            Telemetry.addToHistogram("FENNEC_FAVICONS_COUNT",
                     BrowserDB.getCount(getContentResolver(), "favicons"));
-            Telemetry.HistogramAdd("FENNEC_THUMBNAILS_COUNT",
+            Telemetry.addToHistogram("FENNEC_THUMBNAILS_COUNT",
                     BrowserDB.getCount(getContentResolver(), "thumbnails"));
-            Telemetry.HistogramAdd("FENNEC_READING_LIST_COUNT",
+            Telemetry.addToHistogram("FENNEC_READING_LIST_COUNT",
                     BrowserDB.getCount(getContentResolver(), "readinglist"));
-            Telemetry.HistogramAdd("BROWSER_IS_USER_DEFAULT", (isDefaultBrowser(Intent.ACTION_VIEW) ? 1 : 0));
+            Telemetry.addToHistogram("BROWSER_IS_USER_DEFAULT", (isDefaultBrowser(Intent.ACTION_VIEW) ? 1 : 0));
             if (Versions.feature16Plus) {
-                Telemetry.HistogramAdd("BROWSER_IS_ASSIST_DEFAULT", (isDefaultBrowser(Intent.ACTION_ASSIST) ? 1 : 0));
+                Telemetry.addToHistogram("BROWSER_IS_ASSIST_DEFAULT", (isDefaultBrowser(Intent.ACTION_ASSIST) ? 1 : 0));
             }
         } else if ("Updater:Launch".equals(event)) {
             handleUpdaterLaunch();
@@ -1612,6 +1581,29 @@ public class BrowserApp extends GeckoApp
                     }
                 });
 
+                if (AppConstants.MOZ_MEDIA_PLAYER) {
+                    // Check if the fragment is already added. This should never be true here, but this is
+                    // a nice safety check.
+                    // If casting is disabled, these classes aren't built. We use reflection to initialize them.
+                    final Class<?> mediaManagerClass = getMediaPlayerManager();
+
+                    if (mediaManagerClass != null) {
+                        try {
+                            final String tag = "";
+                            mediaManagerClass.getDeclaredField("MEDIA_PLAYER_TAG").get(tag);
+                            Log.i(LOGTAG, "Found tag " + tag);
+                            final Fragment frag = getSupportFragmentManager().findFragmentByTag(tag);
+                            if (frag == null) {
+                                final Method getInstance = mediaManagerClass.getMethod("newInstance", (Class[]) null);
+                                final Fragment mpm = (Fragment) getInstance.invoke(null);
+                                getSupportFragmentManager().beginTransaction().disallowAddToBackStack().add(mpm, tag).commit();
+                            }
+                        } catch (Exception ex) {
+                            Log.e(LOGTAG, "Error initializing media manager", ex);
+                        }
+                    }
+                }
+
                 if (AppConstants.MOZ_STUMBLER_BUILD_TIME_ENABLED) {
                     // Start (this acts as ping if started already) the stumbler lib; if the stumbler has queued data it will upload it.
                     // Stumbler operates on its own thread, and startup impact is further minimized by delaying work (such as upload) a few seconds.
@@ -1624,6 +1616,7 @@ public class BrowserApp extends GeckoApp
                         }
                     }, oneSecondInMillis);
                 }
+
                 super.handleMessage(event, message);
             } else if (event.equals("Gecko:Ready")) {
                 // Handle this message in GeckoApp, but also enable the Settings
@@ -1769,6 +1762,15 @@ public class BrowserApp extends GeckoApp
 
         if (areTabsShown()) {
             mTabsPanel.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+            // Hide the web content from accessibility tools even though it's visible
+            // so that you can't examine it as long as the tabs are being shown.
+            if (Versions.feature16Plus) {
+                mLayerView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            }
+        } else {
+            if (Versions.feature16Plus) {
+                mLayerView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+            }
         }
 
         mMainLayoutAnimator = new PropertyAnimator(animationLength, sTabsInterpolator);
@@ -1944,12 +1946,12 @@ public class BrowserApp extends GeckoApp
     }
 
     /**
-     * Enters editing mode with the specified URL. This method will
-     * always open the HISTORY page on about:home.
+     * Enters editing mode with the specified URL. If a null
+     * url is given, the empty String will be used instead.
      */
     private void enterEditingMode(String url) {
         if (url == null) {
-            throw new IllegalArgumentException("Cannot handle null URLs in enterEditingMode");
+            url = "";
         }
 
         if (mBrowserToolbar.isEditing() || mBrowserToolbar.isAnimating()) {
@@ -1961,6 +1963,8 @@ public class BrowserApp extends GeckoApp
 
         final PropertyAnimator animator = new PropertyAnimator(250);
         animator.setUseHardwareLayer(false);
+
+        TransitionsTracker.track(animator);
 
         mBrowserToolbar.startEditing(url, animator);
 
@@ -2184,7 +2188,7 @@ public class BrowserApp extends GeckoApp
                         if (locale == null) {
                             return;
                         }
-                        onLocaleChanged(BrowserLocaleManager.getLanguageTag(locale));
+                        onLocaleChanged(Locales.getLanguageTag(locale));
                     }
                 });
                 break;
@@ -2728,7 +2732,7 @@ public class BrowserApp extends GeckoApp
         bookmark.setVisible(!GeckoProfile.get(this).inGuestMode());
         bookmark.setCheckable(true);
         bookmark.setChecked(tab.isBookmark());
-        bookmark.setIcon(tab.isBookmark() ? R.drawable.ic_menu_bookmark_remove : R.drawable.ic_menu_bookmark_add);
+        bookmark.setIcon(resolveBookmarkIconID(tab.isBookmark()));
 
         back.setEnabled(tab.canDoBack());
         forward.setEnabled(tab.canDoForward());
@@ -2827,6 +2831,22 @@ public class BrowserApp extends GeckoApp
         return true;
     }
 
+    private int resolveBookmarkIconID(final boolean isBookmark) {
+        if (NewTabletUI.isEnabled(this) && HardwareUtils.isLargeTablet()) {
+            if (isBookmark) {
+                return R.drawable.new_tablet_ic_menu_bookmark_remove;
+            } else {
+                return R.drawable.new_tablet_ic_menu_bookmark_add;
+            }
+        }
+
+        if (isBookmark) {
+            return R.drawable.ic_menu_bookmark_remove;
+        } else {
+            return R.drawable.ic_menu_bookmark_add;
+        }
+    }
+
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         Tab tab = null;
@@ -2848,11 +2868,11 @@ public class BrowserApp extends GeckoApp
                 if (item.isChecked()) {
                     Telemetry.sendUIEvent(TelemetryContract.Event.UNSAVE, TelemetryContract.Method.MENU, "bookmark");
                     tab.removeBookmark();
-                    item.setIcon(R.drawable.ic_menu_bookmark_add);
+                    item.setIcon(resolveBookmarkIconID(false));
                 } else {
                     Telemetry.sendUIEvent(TelemetryContract.Event.SAVE, TelemetryContract.Method.MENU, "bookmark");
                     tab.addBookmark();
-                    item.setIcon(R.drawable.ic_menu_bookmark_remove);
+                    item.setIcon(resolveBookmarkIconID(true));
                 }
             }
             return true;
@@ -2901,7 +2921,7 @@ public class BrowserApp extends GeckoApp
         if (itemId == R.id.help) {
             final String VERSION = AppConstants.MOZ_APP_VERSION;
             final String OS = AppConstants.OS_TARGET;
-            final String LOCALE = BrowserLocaleManager.getLanguageTag(Locale.getDefault());
+            final String LOCALE = Locales.getLanguageTag(Locale.getDefault());
 
             final String URL = getResources().getString(R.string.help_link, VERSION, OS, LOCALE);
             Tabs.getInstance().loadUrlInTab(URL);
@@ -2995,14 +3015,8 @@ public class BrowserApp extends GeckoApp
                             GuestSession.hideNotification(BrowserApp.this);
                         }
 
-                        if (!GuestSession.isSecureKeyguardLocked(BrowserApp.this)) {
-                            doRestart(args);
-                        } else {
-                            // If the secure keyguard is up, we don't want to restart.
-                            // Just clear the guest profile data.
-                            GeckoProfile.maybeCleanupGuestProfile(BrowserApp.this);
-                        }
-                        GeckoAppShell.systemExit();
+                        doRestart(args);
+                        GeckoAppShell.gracefulExit();
                     }
                 } catch(JSONException ex) {
                     Log.e(LOGTAG, "Exception reading guest mode prompt result", ex);
@@ -3147,18 +3161,6 @@ public class BrowserApp extends GeckoApp
                 callback.sendSuccess(url);
             }
         }).execute();
-    }
-
-    // HomePager.OnNewTabsListener
-    @Override
-    public void onNewTabs(List<String> urls) {
-        final EnumSet<OnUrlOpenListener.Flags> flags = EnumSet.of(OnUrlOpenListener.Flags.ALLOW_SWITCH_TO_TAB);
-
-        for (String url : urls) {
-            if (!maybeSwitchToTab(url, flags)) {
-                openUrlAndStopEditing(url, true);
-            }
-        }
     }
 
     // HomePager.OnUrlOpenListener

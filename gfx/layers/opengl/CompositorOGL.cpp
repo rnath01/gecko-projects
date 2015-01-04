@@ -87,6 +87,7 @@ CompositorOGL::CompositorOGL(nsIWidget *aWidget, int aSurfaceWidth,
   , mFrameInProgress(false)
   , mDestroyed(false)
   , mHeight(0)
+  , mCurrentProgram(nullptr)
 {
   MOZ_COUNT_CTOR(CompositorOGL);
   SetBackend(LayersBackend::LAYERS_OPENGL);
@@ -173,6 +174,8 @@ CompositorOGL::CleanupResources()
     ctx->fDeleteBuffers(1, &mQuadVBO);
     mQuadVBO = 0;
   }
+
+  DestroyVR(ctx);
 
   mGLContext->MakeCurrent();
 
@@ -381,6 +384,13 @@ CompositorOGL::Initialize()
     else
       msg += NS_LITERAL_STRING("TEXTURE_RECTANGLE");
     console->LogStringMessage(msg.get());
+  }
+
+  mVR.mInitialized = false;
+  if (gfxPrefs::VREnabled()) {
+    if (!InitializeVR()) {
+      NS_WARNING("Failed to initialize VR in CompositorOGL");
+    }
   }
 
   reporter.SetSuccessful();
@@ -815,6 +825,23 @@ CompositorOGL::GetShaderProgramFor(const ShaderConfigOGL &aConfig)
   return shader;
 }
 
+void
+CompositorOGL::ActivateProgram(ShaderProgramOGL* aProg)
+{
+  if (mCurrentProgram != aProg) {
+    gl()->fUseProgram(aProg->GetProgram());
+    mCurrentProgram = aProg;
+  }
+}
+
+void
+CompositorOGL::ResetProgram()
+{
+  mCurrentProgram = nullptr;
+}
+
+
+
 static bool SetBlendMode(GLContext* aGL, gfx::CompositionOp aBlendMode, bool aIsPremultiplied = true)
 {
   if (aBlendMode == gfx::CompositionOp::OP_OVER && aIsPremultiplied) {
@@ -870,6 +897,11 @@ CompositorOGL::DrawQuad(const Rect& aRect,
 
   MOZ_ASSERT(mFrameInProgress, "frame not started");
   MOZ_ASSERT(mCurrentRenderTarget, "No destination");
+
+  if (aEffectChain.mPrimaryEffect->mType == EffectTypes::VR_DISTORTION) {
+    DrawVRDistortion(aRect, aClipRect, aEffectChain, aOpacity, aTransform);
+    return;
+  }
 
   Rect clipRect = aClipRect;
   // aClipRect is in destination coordinate space (after all
@@ -957,7 +989,7 @@ CompositorOGL::DrawQuad(const Rect& aRect,
   ShaderConfigOGL config = GetShaderConfigFor(aEffectChain.mPrimaryEffect, maskType, blendMode, colorMatrix);
   config.SetOpacity(aOpacity != 1.f);
   ShaderProgramOGL *program = GetShaderProgramFor(config);
-  program->Activate();
+  ActivateProgram(program);
   program->SetProjectionMatrix(mProjMatrix);
   program->SetLayerTransform(aTransform);
 

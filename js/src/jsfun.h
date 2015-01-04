@@ -55,14 +55,13 @@ class JSFunction : public js::NativeObject
         ASMJS_CTOR = ASMJS | NATIVE_CTOR,
         ASMJS_LAMBDA_CTOR = ASMJS | NATIVE_CTOR | LAMBDA,
         INTERPRETED_LAMBDA = INTERPRETED | LAMBDA,
-        INTERPRETED_LAMBDA_ARROW = INTERPRETED | LAMBDA | ARROW
+        INTERPRETED_LAMBDA_ARROW = INTERPRETED | LAMBDA | ARROW,
+        STABLE_ACROSS_CLONES = NATIVE_CTOR | IS_FUN_PROTO | EXPR_CLOSURE | HAS_GUESSED_ATOM |
+                               LAMBDA | SELF_HOSTED | SELF_HOSTED_CTOR | HAS_REST | ASMJS | ARROW
     };
 
-    static void staticAsserts() {
-        JS_STATIC_ASSERT(INTERPRETED == JS_FUNCTION_INTERPRETED_BIT);
-        static_assert(sizeof(JSFunction) == sizeof(js::shadow::Function),
-                      "shadow interface must match actual interface");
-    }
+    static_assert(INTERPRETED == JS_FUNCTION_INTERPRETED_BIT,
+                  "jsfriendapi.h's JSFunction::INTERPRETED-alike is wrong");
 
   private:
     uint16_t        nargs_;       /* number of formal arguments
@@ -153,7 +152,7 @@ class JSFunction : public js::NativeObject
     }
     bool isInterpretedConstructor() const {
         // Note: the JITs inline this check, so be careful when making changes
-        // here. See IonMacroAssembler::branchIfNotInterpretedConstructor.
+        // here. See MacroAssembler::branchIfNotInterpretedConstructor.
         return isInterpreted() && !isFunctionPrototype() && !isArrow() &&
                (!isSelfHostedBuiltin() || isSelfHostedConstructor());
     }
@@ -423,8 +422,13 @@ class JSFunction : public js::NativeObject
     }
 
     static unsigned offsetOfNativeOrScript() {
-        JS_STATIC_ASSERT(offsetof(U, n.native) == offsetof(U, i.s.script_));
-        JS_STATIC_ASSERT(offsetof(U, n.native) == offsetof(U, nativeOrScript));
+        static_assert(offsetof(U, n.native) == offsetof(U, i.s.script_),
+                      "native and script pointers must be in the same spot "
+                      "for offsetOfNativeOrScript() have any sense");
+        static_assert(offsetof(U, n.native) == offsetof(U, nativeOrScript),
+                      "U::nativeOrScript must be at the same offset as "
+                      "native");
+
         return offsetof(JSFunction, u.nativeOrScript);
     }
 
@@ -460,7 +464,6 @@ class JSFunction : public js::NativeObject
 
   public:
     inline bool isExtended() const {
-        JS_STATIC_ASSERT(FinalizeKind != ExtendedFinalizeKind);
         MOZ_ASSERT_IF(isTenured(), !!(flags() & EXTENDED) == (asTenured().getAllocKind() == ExtendedFinalizeKind));
         return !!(flags() & EXTENDED);
     }
@@ -481,6 +484,10 @@ class JSFunction : public js::NativeObject
 
     /* GC support. */
     js::gc::AllocKind getAllocKind() const {
+        static_assert(FinalizeKind != ExtendedFinalizeKind,
+                      "extended/non-extended AllocKinds have to be different "
+                      "for getAllocKind() to have a reason to exist");
+
         js::gc::AllocKind kind = FinalizeKind;
         if (isExtended())
             kind = ExtendedFinalizeKind;
@@ -488,6 +495,9 @@ class JSFunction : public js::NativeObject
         return kind;
     }
 };
+
+static_assert(sizeof(JSFunction) == sizeof(js::shadow::Function),
+              "shadow interface must match actual interface");
 
 extern JSString *
 fun_toStringHelper(JSContext *cx, js::HandleObject obj, unsigned indent);
@@ -531,7 +541,7 @@ DefineFunction(JSContext *cx, HandleObject obj, HandleId id, JSNative native,
                NewObjectKind newKind = GenericObject);
 
 bool
-FunctionHasResolveHook(const JSAtomState &atomState, PropertyName *name);
+FunctionHasResolveHook(const JSAtomState &atomState, jsid id);
 
 extern bool
 fun_resolve(JSContext *cx, HandleObject obj, HandleId id, bool *resolvedp);
@@ -569,6 +579,9 @@ class FunctionExtended : public JSFunction
     /* Reserved slots available for storage by particular native functions. */
     HeapValue extendedSlots[NUM_EXTENDED_SLOTS];
 };
+
+extern bool
+CloneFunctionObjectUseSameScript(JSCompartment *compartment, HandleFunction fun);
 
 extern JSFunction *
 CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent,

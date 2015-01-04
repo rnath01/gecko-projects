@@ -63,8 +63,8 @@ public class Distribution {
     private static final int STATE_SET = 2;
 
     private static final String FETCH_PROTOCOL = "https";
-    private static final String FETCH_HOSTNAME = "distro-download.cdn.mozilla.net";
-    private static final String FETCH_PATH = "/android/1/";
+    private static final String FETCH_HOSTNAME = "mobile.cdn.mozilla.net";
+    private static final String FETCH_PATH = "/distributions/1/";
     private static final String FETCH_EXTENSION = ".jar";
 
     private static final String EXPECTED_CONTENT_TYPE = "application/java-archive";
@@ -104,6 +104,8 @@ public class Distribution {
     // Corresponds to the high value in Histograms.json.
     private static final long MAX_DOWNLOAD_TIME_MSEC = 40000;    // 40 seconds.
 
+    // Wait just a little while for the system to send a referrer intent after install.
+    private static final long DELAY_WAIT_FOR_REFERRER_MSEC = 400;
 
 
     /**
@@ -297,11 +299,11 @@ public class Distribution {
 
         } catch (IOException e) {
             Log.e(LOGTAG, "Error getting distribution descriptor file.", e);
-            Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
             return null;
         } catch (JSONException e) {
             Log.e(LOGTAG, "Error parsing preferences.json", e);
-            Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
             return null;
         }
     }
@@ -317,11 +319,11 @@ public class Distribution {
             return new JSONArray(FileUtils.getFileContents(bookmarks));
         } catch (IOException e) {
             Log.e(LOGTAG, "Error getting bookmarks", e);
-            Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
             return null;
         } catch (JSONException e) {
             Log.e(LOGTAG, "Error parsing bookmarks.json", e);
-            Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
             return null;
         }
     }
@@ -385,7 +387,16 @@ public class Distribution {
      */
     private boolean checkIntentDistribution() {
         if (referrer == null) {
-            return false;
+            // Wait a predetermined time and try again.
+            // Just block the thread, because it's the simplest solution.
+            try {
+                Thread.sleep(DELAY_WAIT_FOR_REFERRER_MSEC);
+            } catch (InterruptedException e) {
+                // Good enough.
+            }
+            if (referrer == null) {
+                return false;
+            }
         }
 
         URI uri = getReferredDistribution(referrer);
@@ -415,7 +426,7 @@ public class Distribution {
                 long end = SystemClock.uptimeMillis();
                 final long duration = end - start;
                 Log.d(LOGTAG, "Distro fetch took " + duration + "ms; result? " + (distro != null));
-                Telemetry.HistogramAdd(HISTOGRAM_DOWNLOAD_TIME_MS, clamp(MAX_DOWNLOAD_TIME_MSEC, duration));
+                Telemetry.addToHistogram(HISTOGRAM_DOWNLOAD_TIME_MS, clamp(MAX_DOWNLOAD_TIME_MSEC, duration));
 
                 if (distro == null) {
                     // Nothing to do.
@@ -434,10 +445,10 @@ public class Distribution {
                     }
                 } catch (SecurityException e) {
                     Log.e(LOGTAG, "Security exception copying files. Corrupt or malicious?", e);
-                    Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_POST_FETCH_SECURITY_EXCEPTION);
+                    Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_POST_FETCH_SECURITY_EXCEPTION);
                 } catch (Exception e) {
                     Log.e(LOGTAG, "Error copying files from distribution.", e);
-                    Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_POST_FETCH_EXCEPTION);
+                    Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_POST_FETCH_EXCEPTION);
                 } finally {
                     distro.close();
                 }
@@ -479,18 +490,18 @@ public class Distribution {
             value = status / 100;
         }
         
-        Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, value);
+        Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, value);
 
         if (status != 200) {
             Log.w(LOGTAG, "Got status " + status + " fetching distribution.");
-            Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_NON_SUCCESS_RESPONSE);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_NON_SUCCESS_RESPONSE);
             return null;
         }
 
         final String contentType = connection.getContentType();
         if (contentType == null || !contentType.startsWith(EXPECTED_CONTENT_TYPE)) {
             Log.w(LOGTAG, "Malformed response: invalid Content-Type.");
-            Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_INVALID_CONTENT_TYPE);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_INVALID_CONTENT_TYPE);
             return null;
         }
 
@@ -500,28 +511,28 @@ public class Distribution {
     private static void recordFetchTelemetry(final Exception exception) {
         if (exception == null) {
             // Should never happen.
-            Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_EXCEPTION);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_EXCEPTION);
             return;
         }
 
         if (exception instanceof UnknownHostException) {
             // Unknown host => we're offline.
-            Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_OFFLINE);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_OFFLINE);
             return;
         }
 
         if (exception instanceof SSLException) {
-            Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_SSL_ERROR);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_SSL_ERROR);
             return;
         }
 
         if (exception instanceof ProtocolException ||
             exception instanceof SocketException) {
-            Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_SOCKET_ERROR);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_SOCKET_ERROR);
             return;
         }
 
-        Telemetry.HistogramAdd(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_EXCEPTION);
+        Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_FETCH_EXCEPTION);
     }
 
     /**
@@ -696,7 +707,7 @@ public class Distribution {
         // we're downloading a distribution payload based on intent input.
         if (!content.matches("^[a-zA-Z0-9]+$")) {
             Log.e(LOGTAG, "Invalid referrer content: " + content);
-            Telemetry.HistogramAdd(HISTOGRAM_REFERRER_INVALID, 1);
+            Telemetry.addToHistogram(HISTOGRAM_REFERRER_INVALID, 1);
             return null;
         }
 

@@ -66,6 +66,7 @@
 #include "nsIPermissionManager.h"
 #include "nsMimeTypes.h"
 #include "nsIHttpChannelInternal.h"
+#include "nsIClassOfService.h"
 #include "nsCharSeparatedTokenizer.h"
 #include "nsFormData.h"
 #include "nsStreamListenerWrapper.h"
@@ -1014,7 +1015,7 @@ nsXMLHttpRequest::GetResponse(JSContext* aCx,
       return;
     }
 
-    WrapNewBindingObject(aCx, mResponseBlob, aResponse);
+    GetOrCreateDOMReflector(aCx, mResponseBlob, aResponse);
     return;
   }
   case XML_HTTP_RESPONSE_TYPE_DOCUMENT:
@@ -2401,17 +2402,10 @@ GetRequestBody(nsIDOMDocument* aDoc, nsIInputStream** aResult,
                nsACString& aCharset)
 {
   aContentType.AssignLiteral("application/xml");
-  nsAutoString inputEncoding;
-  aDoc->GetInputEncoding(inputEncoding);
-  if (!DOMStringIsNull(inputEncoding)) {
-    CopyUTF16toUTF8(inputEncoding, aCharset);
-  }
-  else {
-    aCharset.AssignLiteral("UTF-8");
-  }
+  nsCOMPtr<nsIDocument> doc(do_QueryInterface(aDoc));
+  NS_ENSURE_STATE(doc);
+  aCharset.AssignLiteral("UTF-8");
 
-  // Serialize to a stream so that the encoding used will
-  // match the document's.
   nsresult rv;
   nsCOMPtr<nsIDOMSerializer> serializer =
     do_CreateInstance(NS_XMLSERIALIZER_CONTRACTID, &rv);
@@ -2722,9 +2716,12 @@ nsXMLHttpRequest::Send(nsIVariant* aVariant, const Nullable<RequestBody>& aBody)
 
       nsCOMPtr<nsIURI> docCurURI;
       nsCOMPtr<nsIURI> docOrigURI;
+      net::ReferrerPolicy referrerPolicy = net::RP_Default;
+
       if (doc) {
         docCurURI = doc->GetDocumentURI();
         docOrigURI = doc->GetOriginalURI();
+        referrerPolicy = doc->GetReferrerPolicy();
       }
 
       nsCOMPtr<nsIURI> referrerURI;
@@ -2740,7 +2737,7 @@ nsXMLHttpRequest::Send(nsIVariant* aVariant, const Nullable<RequestBody>& aBody)
       if (!referrerURI)
         referrerURI = principalURI;
 
-      httpChannel->SetReferrer(referrerURI);
+      httpChannel->SetReferrerWithPolicy(referrerURI, referrerPolicy);
     }
 
     // Some extensions override the http protocol handler and provide their own
@@ -2893,14 +2890,17 @@ nsXMLHttpRequest::Send(nsIVariant* aVariant, const Nullable<RequestBody>& aBody)
   // the channel slow by default for pipeline purposes
   AddLoadFlags(mChannel, nsIRequest::INHIBIT_PIPELINE);
 
-  nsCOMPtr<nsIHttpChannelInternal>
-    internalHttpChannel(do_QueryInterface(mChannel));
-  if (internalHttpChannel) {
+  nsCOMPtr<nsIClassOfService> cos(do_QueryInterface(mChannel));
+  if (cos) {
     // we never let XHR be blocked by head CSS/JS loads to avoid
     // potential deadlock where server generation of CSS/JS requires
     // an XHR signal.
-    internalHttpChannel->SetLoadUnblocked(true);
+    cos->AddClassFlags(nsIClassOfService::Unblocked);
+  }
 
+  nsCOMPtr<nsIHttpChannelInternal>
+    internalHttpChannel(do_QueryInterface(mChannel));
+  if (internalHttpChannel) {
     // Disable Necko-internal response timeouts.
     internalHttpChannel->SetResponseTimeoutEnabled(false);
   }

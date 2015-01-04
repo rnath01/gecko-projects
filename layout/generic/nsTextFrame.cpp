@@ -1861,10 +1861,10 @@ BuildTextRunsScanner::BuildTextRunForFrames(void* aTextBuffer)
 
   uint32_t nextBreakIndex = 0;
   nsTextFrame* nextBreakBeforeFrame = GetNextBreakBeforeFrame(&nextBreakIndex);
+  bool isSVG = mLineContainer->IsSVGText();
   bool enabledJustification = mLineContainer &&
     (mLineContainer->StyleText()->mTextAlign == NS_STYLE_TEXT_ALIGN_JUSTIFY ||
-     mLineContainer->StyleText()->mTextAlignLast == NS_STYLE_TEXT_ALIGN_JUSTIFY) &&
-    !mLineContainer->IsSVGText();
+     mLineContainer->StyleText()->mTextAlignLast == NS_STYLE_TEXT_ALIGN_JUSTIFY);
 
   // for word-break style
   switch (mLineContainer->StyleText()->mWordBreak) {
@@ -1896,7 +1896,8 @@ BuildTextRunsScanner::BuildTextRunForFrames(void* aTextBuffer)
     textFlags |= GetSpacingFlags(WordSpacing(f));
     nsTextFrameUtils::CompressionMode compression =
       CSSWhitespaceToCompressionMode[textStyle->mWhiteSpace];
-    if (enabledJustification && !textStyle->WhiteSpaceIsSignificant()) {
+    if ((enabledJustification || f->StyleContext()->IsInlineDescendantOfRuby()) &&
+        !textStyle->WhiteSpaceIsSignificant() && !isSVG) {
       textFlags |= gfxTextRunFactory::TEXT_ENABLE_SPACING;
     }
     fontStyle = f->StyleFont();
@@ -2059,7 +2060,7 @@ BuildTextRunsScanner::BuildTextRunForFrames(void* aTextBuffer)
   if (textFlags & nsTextFrameUtils::TEXT_HAS_SHY) {
     textFlags |= gfxTextRunFactory::TEXT_ENABLE_HYPHEN_BREAKS;
   }
-  if (mBidiEnabled && (NS_GET_EMBEDDING_LEVEL(firstFrame) & 1)) {
+  if (mBidiEnabled && (IS_LEVEL_RTL(NS_GET_EMBEDDING_LEVEL(firstFrame)))) {
     textFlags |= gfxTextRunFactory::TEXT_IS_RTL;
   }
   if (mNextRunContextInfo & nsTextFrameUtils::INCOMING_WHITESPACE) {
@@ -2760,6 +2761,12 @@ static int32_t FindChar(const nsTextFragment* frag,
 
 static bool IsChineseOrJapanese(nsIFrame* aFrame)
 {
+  if (aFrame->StyleContext()->IsInlineDescendantOfRuby()) {
+    // Always treat ruby as CJ language so that those characters can
+    // be expanded properly even when surrounded by other language.
+    return true;
+  }
+
   nsIAtom* language = aFrame->StyleFont()->mLanguage;
   if (!language) {
     return false;
@@ -3382,13 +3389,16 @@ PropertyProvider::SetupJustificationSpacing(bool aPostReflow)
     return;
   }
 
+  // Remember that textrun measurements are in the run's orientation,
+  // so its advance "width" is actually a height in vertical writing modes,
+  // corresponding to the inline-direction of the frame.
   gfxFloat naturalWidth =
     mTextRun->GetAdvanceWidth(mStart.GetSkippedOffset(),
                               GetSkippedDistance(mStart, realEnd), this);
   if (mFrame->GetStateBits() & TEXT_HYPHEN_BREAK) {
     naturalWidth += GetHyphenWidth();
   }
-  mJustificationSpacing = mFrame->GetSize().width - naturalWidth;
+  mJustificationSpacing = mFrame->ISize() - naturalWidth;
   if (mJustificationSpacing <= 0) {
     // No space available
     return;
@@ -4871,8 +4881,12 @@ nsTextFrame::GetTextDecorations(
 
     // In all modes, if we're on an inline-block or inline-table (or
     // inline-stack, inline-box, inline-grid), we're done.
+    // If we're on a ruby frame other than ruby text container, we
+    // should continue.
     uint8_t display = f->GetDisplay();
     if (display != NS_STYLE_DISPLAY_INLINE &&
+        (!nsStyleDisplay::IsRubyDisplayType(display) ||
+         display == NS_STYLE_DISPLAY_RUBY_TEXT_CONTAINER) &&
         nsStyleDisplay::IsDisplayTypeInlineOutside(display)) {
       break;
     }
@@ -8226,11 +8240,17 @@ nsTextFrame::ReflowText(nsLineLayout& aLineLayout, nscoord aAvailableWidth,
   int32_t unusedOffset;  
   gfxBreakPriority breakPriority;
   aLineLayout.GetLastOptionalBreakPosition(&unusedOffset, &breakPriority);
+  gfxTextRun::SuppressBreak suppressBreak = gfxTextRun::eNoSuppressBreak;
+  if (StyleContext()->IsInlineDescendantOfRuby()) {
+    suppressBreak = gfxTextRun::eSuppressAllBreaks;
+  } else if (!aLineLayout.LineIsBreakable()) {
+    suppressBreak = gfxTextRun::eSuppressInitialBreak;
+  }
   uint32_t transformedCharsFit =
     mTextRun->BreakAndMeasureText(transformedOffset, transformedLength,
                                   (GetStateBits() & TEXT_START_OF_LINE) != 0,
                                   availWidth,
-                                  &provider, !aLineLayout.LineIsBreakable(),
+                                  &provider, suppressBreak,
                                   canTrimTrailingWhitespace ? &trimmedWidth : nullptr,
                                   &textMetrics, boundingBoxType, ctx,
                                   &usedHyphenation, &transformedLastBreak,
@@ -8489,7 +8509,8 @@ nsTextFrame::ReflowText(nsLineLayout& aLineLayout, nscoord aAvailableWidth,
   // Compute space and letter counts for justification, if required
   if (!textStyle->WhiteSpaceIsSignificant() &&
       (lineContainer->StyleText()->mTextAlign == NS_STYLE_TEXT_ALIGN_JUSTIFY ||
-       lineContainer->StyleText()->mTextAlignLast == NS_STYLE_TEXT_ALIGN_JUSTIFY) &&
+       lineContainer->StyleText()->mTextAlignLast == NS_STYLE_TEXT_ALIGN_JUSTIFY ||
+       StyleContext()->IsInlineDescendantOfRuby()) &&
       !lineContainer->IsSVGText()) {
     AddStateBits(TEXT_JUSTIFICATION_ENABLED);
     provider.ComputeJustification(offset, charsFit);

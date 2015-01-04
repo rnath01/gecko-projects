@@ -18,12 +18,12 @@
 #include "nsIContentViewerContainer.h"
 #include "nsIDOMStorageManager.h"
 #include "nsDocLoader.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/WeakPtr.h"
 #include "mozilla/TimeStamp.h"
 #include "GeckoProfiler.h"
-#ifdef MOZ_ENABLE_PROFILER_SPS
-#include "ProfilerMarkers.h"
-#endif
+#include "mozilla/dom/ProfileTimelineMarkerBinding.h"
+#include "jsapi.h"
 
 // Helper Classes
 #include "nsCOMPtr.h"
@@ -31,6 +31,7 @@
 #include "nsString.h"
 #include "nsAutoPtr.h"
 #include "nsThreadUtils.h"
+#include "nsContentUtils.h"
 
 // Threshold value in ms for META refresh based redirects
 #define REFRESH_REDIRECT_TIMER 15000
@@ -259,14 +260,131 @@ public:
     // is no longer applied
     void NotifyAsyncPanZoomStopped(const mozilla::CSSIntPoint aScrollPos);
 
+    // Objects of this type can be added to the timeline.  The class
+    // can also be subclassed to let a given marker creator provide
+    // custom details.
+    class TimelineMarker
+    {
+    public:
+        TimelineMarker(nsDocShell* aDocShell, const char* aName,
+                       TracingMetadata aMetaData)
+            : mName(aName)
+            , mMetaData(aMetaData)
+        {
+            MOZ_COUNT_CTOR(TimelineMarker);
+            MOZ_ASSERT(aName);
+            aDocShell->Now(&mTime);
+            if (aMetaData == TRACING_INTERVAL_START) {
+                CaptureStack();
+            }
+        }
+
+        TimelineMarker(nsDocShell* aDocShell, const char* aName,
+                       TracingMetadata aMetaData,
+                       const nsAString& aCause)
+            : mName(aName)
+            , mMetaData(aMetaData)
+            , mCause(aCause)
+        {
+            MOZ_COUNT_CTOR(TimelineMarker);
+            MOZ_ASSERT(aName);
+            aDocShell->Now(&mTime);
+            if (aMetaData == TRACING_INTERVAL_START) {
+                CaptureStack();
+            }
+        }
+
+        virtual ~TimelineMarker()
+        {
+            MOZ_COUNT_DTOR(TimelineMarker);
+        }
+
+        // Check whether two markers should be considered the same,
+        // for the purpose of pairing start and end markers.  Normally
+        // this definition suffices.
+        virtual bool Equals(const TimelineMarker* other)
+        {
+            return strcmp(mName, other->mName) == 0;
+        }
+
+        // Add details specific to this marker type to aMarker.  The
+        // standard elements have already been set.  This method is
+        // called on both the starting and ending markers of a pair.
+        // Ordinarily the ending marker doesn't need to do anything
+        // here.
+        virtual void AddDetails(mozilla::dom::ProfileTimelineMarker& aMarker)
+        {
+        }
+
+        virtual void AddLayerRectangles(mozilla::dom::Sequence<mozilla::dom::ProfileTimelineLayerRect>&)
+        {
+            MOZ_ASSERT_UNREACHABLE("can only be called on layer markers");
+        }
+
+        const char* GetName() const
+        {
+            return mName;
+        }
+
+        TracingMetadata GetMetaData() const
+        {
+            return mMetaData;
+        }
+
+        DOMHighResTimeStamp GetTime() const
+        {
+            return mTime;
+        }
+
+        const nsString& GetCause() const
+        {
+            return mCause;
+        }
+
+        JSObject* GetStack()
+        {
+            if (mStackTrace) {
+                return mStackTrace->get();
+            }
+            return nullptr;
+        }
+
+    protected:
+
+        void CaptureStack()
+        {
+            JSContext* ctx = nsContentUtils::GetCurrentJSContext();
+            if (ctx) {
+                JS::RootedObject stack(ctx);
+                if (JS::CaptureCurrentStack(ctx, &stack)) {
+                    mStackTrace.emplace(ctx, stack.get());
+                } else {
+                    JS_ClearPendingException(ctx);
+                }
+            }
+        }
+
+    private:
+
+        const char* mName;
+        TracingMetadata mMetaData;
+        DOMHighResTimeStamp mTime;
+        nsString mCause;
+
+        // While normally it is not a good idea to make a persistent
+        // root, in this case changing nsDocShell to participate in
+        // cycle collection was deemed too invasive, the stack trace
+        // can't actually cause a cycle, and the markers are only held
+        // here temporarily to boot.
+        mozilla::Maybe<JS::PersistentRooted<JSObject*>> mStackTrace;
+    };
+
     // Add new profile timeline markers to this docShell. This will only add
     // markers if the docShell is currently recording profile timeline markers.
     // See nsIDocShell::recordProfileTimelineMarkers
     void AddProfileTimelineMarker(const char* aName,
                                   TracingMetadata aMetaData);
-    void AddProfileTimelineMarker(const char* aName,
-                                  ProfilerBacktrace* aCause,
-                                  TracingMetadata aMetaData);
+    void AddProfileTimelineMarker(mozilla::UniquePtr<TimelineMarker> &aMarker);
 
     // Global counter for how many docShells are currently recording profile
     // timeline markers
@@ -310,6 +428,7 @@ protected:
     virtual nsresult DoURILoad(nsIURI * aURI,
                                nsIURI * aReferrer,
                                bool aSendReferrer,
+                               uint32_t aReferrerPolicy,
                                nsISupports * aOwner,
                                const char * aTypeHint,
                                const nsAString & aFileName,
@@ -358,6 +477,7 @@ protected:
                     bool aCloneSHChildren);
 
     virtual void SetReferrerURI(nsIURI * aURI);
+    virtual void SetReferrerPolicy(uint32_t referrerPolicy);
 
     // Session History
     virtual bool ShouldAddToSessionHistory(nsIURI * aURI);
@@ -752,6 +872,7 @@ protected:
     // mCurrentURI should be marked immutable on set if possible.
     nsCOMPtr<nsIURI>           mCurrentURI;
     nsCOMPtr<nsIURI>           mReferrerURI;
+    uint32_t                   mReferrerPolicy;
     nsRefPtr<nsGlobalWindow>   mScriptGlobal;
     nsCOMPtr<nsISHistory>      mSessionHistory;
     nsCOMPtr<nsIGlobalHistory2> mGlobalHistory;
@@ -957,28 +1078,7 @@ private:
     // True if recording profiles.
     bool mProfileTimelineRecording;
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
-    struct InternalProfileTimelineMarker
-    {
-      InternalProfileTimelineMarker(const char* aName,
-                                    ProfilerMarkerTracing* aPayload,
-                                    DOMHighResTimeStamp aTime)
-        : mName(aName)
-        , mPayload(aPayload)
-        , mTime(aTime)
-      {}
-
-      ~InternalProfileTimelineMarker()
-      {
-        delete mPayload;
-      }
-
-      nsCString mName;
-      ProfilerMarkerTracing* mPayload;
-      DOMHighResTimeStamp mTime;
-    };
-    nsTArray<InternalProfileTimelineMarker*> mProfileTimelineMarkers;
-#endif
+    nsTArray<TimelineMarker*> mProfileTimelineMarkers;
 
     // Get rid of all the timeline markers accumulated so far
     void ClearProfileTimelineMarkers();

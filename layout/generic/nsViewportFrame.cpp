@@ -201,7 +201,7 @@ ViewportFrame::Reflow(nsPresContext*           aPresContext,
     // Deal with a non-incremental reflow or an incremental reflow
     // targeted at our one-and-only principal child frame.
     if (aReflowState.ShouldReflowAllKids() ||
-        aReflowState.mFlags.mVResize ||
+        aReflowState.IsVResize() ||
         NS_SUBTREE_DIRTY(mFrames.FirstChild())) {
       // Reflow our one-and-only principal child frame
       nsIFrame*           kidFrame = mFrames.FirstChild();
@@ -212,7 +212,7 @@ ViewportFrame::Reflow(nsPresContext*           aPresContext,
                                          kidFrame, availableSpace);
 
       // Reflow the frame
-      kidReflowState.SetComputedHeight(aReflowState.ComputedHeight());
+      kidReflowState.SetComputedBSize(aReflowState.ComputedBSize());
       ReflowChild(kidFrame, aPresContext, kidDesiredSize, kidReflowState,
                   0, 0, 0, aStatus);
       kidBSize = kidDesiredSize.BSize(wm);
@@ -223,7 +223,7 @@ ViewportFrame::Reflow(nsPresContext*           aPresContext,
     }
   }
 
-  NS_ASSERTION(aReflowState.AvailableWidth() != NS_UNCONSTRAINEDSIZE,
+  NS_ASSERTION(aReflowState.AvailableISize() != NS_UNCONSTRAINEDSIZE,
                "shouldn't happen anymore");
 
   // Return the max size as our desired size

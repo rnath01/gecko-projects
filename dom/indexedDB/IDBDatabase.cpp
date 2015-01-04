@@ -39,9 +39,12 @@
 #include "mozilla/ipc/InputStreamParams.h"
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "nsCOMPtr.h"
+#include "nsContentUtils.h"
+#include "nsIConsoleService.h"
 #include "nsIDocument.h"
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
+#include "nsIScriptError.h"
 #include "nsISupportsPrimitives.h"
 #include "nsThreadUtils.h"
 #include "ProfilerHelpers.h"
@@ -63,6 +66,29 @@ namespace {
 const char kCycleCollectionObserverTopic[] = "cycle-collector-end";
 const char kMemoryPressureObserverTopic[] = "memory-pressure";
 const char kWindowObserverTopic[] = "inner-window-destroyed";
+
+class CancelableRunnableWrapper MOZ_FINAL
+  : public nsICancelableRunnable
+{
+  nsCOMPtr<nsIRunnable> mRunnable;
+
+public:
+  explicit
+  CancelableRunnableWrapper(nsIRunnable* aRunnable)
+    : mRunnable(aRunnable)
+  {
+    MOZ_ASSERT(aRunnable);
+  }
+
+  NS_DECL_ISUPPORTS
+
+private:
+  ~CancelableRunnableWrapper()
+  { }
+
+  NS_DECL_NSIRUNNABLE
+  NS_DECL_NSICANCELABLERUNNABLE
+};
 
 // XXX This should either be ported to PBackground or removed someday.
 class CreateFileHelper MOZ_FINAL
@@ -152,6 +178,46 @@ private:
 };
 
 } // anonymous namespace
+
+class IDBDatabase::LogWarningRunnable MOZ_FINAL
+  : public nsRunnable
+{
+  nsCString mMessageName;
+  nsString mFilename;
+  uint32_t mLineNumber;
+  uint64_t mInnerWindowID;
+  bool mIsChrome;
+
+public:
+  LogWarningRunnable(const char* aMessageName,
+                     const nsAString& aFilename,
+                     uint32_t aLineNumber,
+                     bool aIsChrome,
+                     uint64_t aInnerWindowID)
+    : mMessageName(aMessageName)
+    , mFilename(aFilename)
+    , mLineNumber(aLineNumber)
+    , mInnerWindowID(aInnerWindowID)
+    , mIsChrome(aIsChrome)
+  {
+    MOZ_ASSERT(!NS_IsMainThread());
+  }
+
+  static void
+  LogWarning(const char* aMessageName,
+             const nsAString& aFilename,
+             uint32_t aLineNumber,
+             bool aIsChrome,
+             uint64_t aInnerWindowID);
+
+  NS_DECL_ISUPPORTS_INHERITED
+
+private:
+  ~LogWarningRunnable()
+  { }
+
+  NS_DECL_NSIRUNNABLE
+};
 
 class IDBDatabase::Observer MOZ_FINAL
   : public nsIObserver
@@ -314,7 +380,7 @@ IDBDatabase::InvalidateInternal()
   AssertIsOnOwningThread();
 
   InvalidateMutableFiles();
-  AbortTransactions();
+  AbortTransactions(/* aShouldWarn */ true);
 
   CloseInternal();
 }
@@ -445,7 +511,6 @@ IDBDatabase::GetOwnerDocument() const
 
 already_AddRefed<IDBObjectStore>
 IDBDatabase::CreateObjectStore(
-                            JSContext* aCx,
                             const nsAString& aName,
                             const IDBObjectStoreParameters& aOptionalParameters,
                             ErrorResult& aRv)
@@ -463,7 +528,7 @@ IDBDatabase::CreateObjectStore(
   MOZ_ASSERT(transaction->IsOpen());
 
   KeyPath keyPath(0);
-  if (NS_FAILED(KeyPath::Parse(aCx, aOptionalParameters.mKeyPath, &keyPath))) {
+  if (NS_FAILED(KeyPath::Parse(aOptionalParameters.mKeyPath, &keyPath))) {
     aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
     return nullptr;
   }
@@ -504,12 +569,20 @@ IDBDatabase::CreateObjectStore(
     transaction->CreateObjectStore(*newSpec);
   MOZ_ASSERT(objectStore);
 
-  IDB_PROFILER_MARK("IndexedDB Pseudo-request: "
-                    "database(%s).transaction(%s).createObjectStore(%s)",
-                    "MT IDBDatabase.createObjectStore()",
-                    IDB_PROFILER_STRING(this),
-                    IDB_PROFILER_STRING(aTransaction),
-                    IDB_PROFILER_STRING(objectStore));
+  // Don't do this in the macro because we always need to increment the serial
+  // number to keep in sync with the parent.
+  const uint64_t requestSerialNumber = IDBRequest::NextSerialNumber();
+
+  IDB_LOG_MARK("IndexedDB %s: Child  Transaction[%lld] Request[%llu]: "
+                 "database(%s).transaction(%s).createObjectStore(%s)",
+               "IndexedDB %s: C T[%lld] R[%llu]: "
+                 "IDBDatabase.createObjectStore()",
+               IDB_LOG_ID_STRING(),
+               transaction->LoggingSerialNumber(),
+               requestSerialNumber,
+               IDB_LOG_STRINGIFY(this),
+               IDB_LOG_STRINGIFY(transaction),
+               IDB_LOG_STRINGIFY(objectStore));
 
   return objectStore.forget();
 }
@@ -557,12 +630,20 @@ IDBDatabase::DeleteObjectStore(const nsAString& aName, ErrorResult& aRv)
     return;
   }
 
-  IDB_PROFILER_MARK("IndexedDB Pseudo-request: "
-                    "database(%s).transaction(%s).deleteObjectStore(\"%s\")",
-                    "MT IDBDatabase.deleteObjectStore()",
-                    IDB_PROFILER_STRING(this),
-                    IDB_PROFILER_STRING(transaction),
-                    NS_ConvertUTF16toUTF8(aName).get());
+  // Don't do this in the macro because we always need to increment the serial
+  // number to keep in sync with the parent.
+  const uint64_t requestSerialNumber = IDBRequest::NextSerialNumber();
+
+  IDB_LOG_MARK("IndexedDB %s: Child  Transaction[%lld] Request[%llu]: "
+                 "database(%s).transaction(%s).deleteObjectStore(\"%s\")",
+               "IndexedDB %s: C T[%lld] R[%llu]: "
+                 "IDBDatabase.deleteObjectStore()",
+               IDB_LOG_ID_STRING(),
+               transaction->LoggingSerialNumber(),
+               requestSerialNumber,
+               IDB_LOG_STRINGIFY(this),
+               IDB_LOG_STRINGIFY(transaction),
+               NS_ConvertUTF16toUTF8(aName).get());
 }
 
 already_AddRefed<IDBTransaction>
@@ -662,10 +743,22 @@ IDBDatabase::Transaction(const Sequence<nsString>& aStoreNames,
 
   nsRefPtr<IDBTransaction> transaction =
     IDBTransaction::Create(this, sortedStoreNames, mode);
-  MOZ_ASSERT(transaction);
+  if (NS_WARN_IF(!transaction)) {
+    IDB_REPORT_INTERNAL_ERR();
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+    return nullptr;
+  }
 
   BackgroundTransactionChild* actor =
     new BackgroundTransactionChild(transaction);
+
+  IDB_LOG_MARK("IndexedDB %s: Child  Transaction[%lld]: "
+                 "database(%s).transaction(%s)",
+               "IndexedDB %s: C T[%lld]: IDBDatabase.transaction()",
+               IDB_LOG_ID_STRING(),
+               transaction->LoggingSerialNumber(),
+               IDB_LOG_STRINGIFY(this),
+               IDB_LOG_STRINGIFY(transaction));
 
   MOZ_ALWAYS_TRUE(
     mBackgroundActor->SendPBackgroundIDBTransactionConstructor(actor,
@@ -673,11 +766,6 @@ IDBDatabase::Transaction(const Sequence<nsString>& aStoreNames,
                                                                mode));
 
   transaction->SetBackgroundActor(actor);
-
-  IDB_PROFILER_MARK("IndexedDB Transaction %llu: database(%s).transaction(%s)",
-                    "IDBTransaction[%llu] MT Started",
-                    transaction->GetSerialNumber(), IDB_PROFILER_STRING(this),
-                    IDB_PROFILER_STRING(transaction));
 
   return transaction.forget();
 }
@@ -720,6 +808,8 @@ IDBDatabase::CreateMutableFile(const nsAString& aName,
     type = aType.Value();
   }
 
+  mFactory->IncrementParentLoggingRequestSerialNumber();
+
   aRv = CreateFileHelper::CreateAndDispatch(this, request, aName, type);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
@@ -751,7 +841,7 @@ IDBDatabase::UnregisterTransaction(IDBTransaction* aTransaction)
 }
 
 void
-IDBDatabase::AbortTransactions()
+IDBDatabase::AbortTransactions(bool aShouldWarn)
 {
   AssertIsOnOwningThread();
 
@@ -759,27 +849,31 @@ IDBDatabase::AbortTransactions()
   {
   public:
     static void
-    AbortTransactions(nsTHashtable<nsPtrHashKey<IDBTransaction>>& aTable)
+    AbortTransactions(nsTHashtable<nsPtrHashKey<IDBTransaction>>& aTable,
+                      nsTArray<nsRefPtr<IDBTransaction>>& aAbortedTransactions)
     {
       const uint32_t count = aTable.Count();
       if (!count) {
         return;
       }
 
-      nsTArray<nsRefPtr<IDBTransaction>> transactions;
+      nsAutoTArray<nsRefPtr<IDBTransaction>, 20> transactions;
       transactions.SetCapacity(count);
 
       aTable.EnumerateEntries(Collect, &transactions);
 
       MOZ_ASSERT(transactions.Length() == count);
 
-      IDB_REPORT_INTERNAL_ERR();
-
       for (uint32_t index = 0; index < count; index++) {
-        nsRefPtr<IDBTransaction> transaction = transactions[index].forget();
+        nsRefPtr<IDBTransaction> transaction = Move(transactions[index]);
         MOZ_ASSERT(transaction);
 
         transaction->Abort(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+
+        // We only care about warning for write transactions.
+        if (transaction->GetMode() != IDBTransaction::READ_ONLY) {
+          aAbortedTransactions.AppendElement(Move(transaction));
+        }
       }
     }
 
@@ -798,7 +892,25 @@ IDBDatabase::AbortTransactions()
     }
   };
 
-  Helper::AbortTransactions(mTransactions);
+  nsAutoTArray<nsRefPtr<IDBTransaction>, 5> abortedTransactions;
+  Helper::AbortTransactions(mTransactions, abortedTransactions);
+
+  if (aShouldWarn && !abortedTransactions.IsEmpty()) {
+    static const char kWarningMessage[] = "IndexedDBTransactionAbortNavigation";
+
+    for (uint32_t count = abortedTransactions.Length(), index = 0;
+         index < count;
+         index++) {
+      nsRefPtr<IDBTransaction>& transaction = abortedTransactions[index];
+      MOZ_ASSERT(transaction);
+
+      nsString filename;
+      uint32_t lineNo;
+      transaction->GetCallerLocation(filename, &lineNo);
+
+      LogWarning(kWarningMessage, filename, lineNo);
+    }
+  }
 }
 
 PBackgroundIDBDatabaseFileChild*
@@ -961,6 +1073,12 @@ IDBDatabase::DelayedMaybeExpireFileActors()
                                       /* aExpireAll */ false);
   MOZ_ASSERT(runnable);
 
+  if (!NS_IsMainThread()) {
+    // Wrap as a nsICancelableRunnable to make workers happy.
+    nsCOMPtr<nsIRunnable> cancelable = new CancelableRunnableWrapper(runnable);
+    cancelable.swap(runnable);
+  }
+
   MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_DispatchToCurrentThread(runnable)));
 }
 
@@ -973,10 +1091,8 @@ IDBDatabase::GetQuotaInfo(nsACString& aOrigin,
   MOZ_ASSERT(IndexedDatabaseManager::IsMainProcess());
   MOZ_ASSERT(NS_IsMainThread());
 
-  PersistenceType persistenceType = mSpec->metadata().persistenceType();
-
   if (aPersistenceType) {
-    *aPersistenceType = persistenceType;
+    *aPersistenceType = mSpec->metadata().persistenceType();
     MOZ_ASSERT(*aPersistenceType != PERSISTENCE_TYPE_INVALID);
   }
 
@@ -1000,7 +1116,6 @@ IDBDatabase::GetQuotaInfo(nsACString& aOrigin,
       }
 
       rv = QuotaManager::GetInfoFromPrincipal(principal,
-                                              persistenceType,
                                               nullptr,
                                               &aOrigin,
                                               nullptr,
@@ -1128,10 +1243,9 @@ IDBDatabase::NoteFinishedMutableFile(IDBMutableFile* aMutableFile)
 void
 IDBDatabase::InvalidateMutableFiles()
 {
-  MOZ_ASSERT(NS_IsMainThread());
-
   if (!mLiveMutableFiles.IsEmpty()) {
     MOZ_ASSERT(IndexedDatabaseManager::IsMainProcess());
+    MOZ_ASSERT(NS_IsMainThread());
 
     for (uint32_t count = mLiveMutableFiles.Length(), index = 0;
          index < count;
@@ -1152,6 +1266,31 @@ IDBDatabase::Invalidate()
     mInvalidated = true;
 
     InvalidateInternal();
+  }
+}
+
+void
+IDBDatabase::LogWarning(const char* aMessageName,
+                        const nsAString& aFilename,
+                        uint32_t aLineNumber)
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(aMessageName);
+
+  if (NS_IsMainThread()) {
+    LogWarningRunnable::LogWarning(aMessageName,
+                                   aFilename,
+                                   aLineNumber,
+                                   mFactory->IsChrome(),
+                                   mFactory->InnerWindowID());
+  } else {
+    nsRefPtr<LogWarningRunnable> runnable =
+      new LogWarningRunnable(aMessageName,
+                             aFilename,
+                             aLineNumber,
+                             mFactory->IsChrome(),
+                             mFactory->InnerWindowID());
+    MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_DispatchToMainThread(runnable)));
   }
 }
 
@@ -1194,13 +1333,45 @@ IDBDatabase::LastRelease()
 nsresult
 IDBDatabase::PostHandleEvent(EventChainPostVisitor& aVisitor)
 {
-  return IndexedDatabaseManager::FireWindowOnError(GetOwner(), aVisitor);
+  nsresult rv =
+    IndexedDatabaseManager::CommonPostHandleEvent(this, mFactory, aVisitor);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  return NS_OK;
 }
 
 JSObject*
 IDBDatabase::WrapObject(JSContext* aCx)
 {
   return IDBDatabaseBinding::Wrap(aCx, this);
+}
+
+NS_IMPL_ISUPPORTS(CancelableRunnableWrapper, nsIRunnable, nsICancelableRunnable)
+
+NS_IMETHODIMP
+CancelableRunnableWrapper::Run()
+{
+  nsCOMPtr<nsIRunnable> runnable;
+  mRunnable.swap(runnable);
+
+  if (runnable) {
+    return runnable->Run();
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+CancelableRunnableWrapper::Cancel()
+{
+  if (mRunnable) {
+    mRunnable = nullptr;
+    return NS_OK;
+  }
+
+  return NS_ERROR_UNEXPECTED;
 }
 
 CreateFileHelper::CreateFileHelper(IDBDatabase* aDatabase,
@@ -1381,6 +1552,84 @@ CreateFileHelper::Run()
   }
 
   MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_DispatchToMainThread(this)));
+
+  return NS_OK;
+}
+
+
+// static
+void
+IDBDatabase::
+LogWarningRunnable::LogWarning(const char* aMessageName,
+                               const nsAString& aFilename,
+                               uint32_t aLineNumber,
+                               bool aIsChrome,
+                               uint64_t aInnerWindowID)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aMessageName);
+
+  nsXPIDLString localizedMessage;
+  if (NS_WARN_IF(NS_FAILED(
+    nsContentUtils::GetLocalizedString(nsContentUtils::eDOM_PROPERTIES,
+                                       aMessageName,
+                                       localizedMessage)))) {
+    return;
+  }
+
+  nsAutoCString category;
+  if (aIsChrome) {
+    category.AssignLiteral("chrome ");
+  } else {
+    category.AssignLiteral("content ");
+  }
+  category.AppendLiteral("javascript");
+
+  nsCOMPtr<nsIConsoleService> consoleService =
+    do_GetService(NS_CONSOLESERVICE_CONTRACTID);
+  MOZ_ASSERT(consoleService);
+
+  nsCOMPtr<nsIScriptError> scriptError =
+    do_CreateInstance(NS_SCRIPTERROR_CONTRACTID);
+  MOZ_ASSERT(consoleService);
+
+  if (aInnerWindowID) {
+    MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
+      scriptError->InitWithWindowID(localizedMessage,
+                                    aFilename,
+                                    /* aSourceLine */ EmptyString(),
+                                    aLineNumber,
+                                    /* aColumnNumber */ 0,
+                                    nsIScriptError::warningFlag,
+                                    category,
+                                    aInnerWindowID)));
+  } else {
+    MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
+      scriptError->Init(localizedMessage,
+                        aFilename,
+                        /* aSourceLine */ EmptyString(),
+                        aLineNumber,
+                        /* aColumnNumber */ 0,
+                        nsIScriptError::warningFlag,
+                        category.get())));
+  }
+
+  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(consoleService->LogMessage(scriptError)));
+}
+
+NS_IMPL_ISUPPORTS_INHERITED0(IDBDatabase::LogWarningRunnable, nsRunnable)
+
+NS_IMETHODIMP
+IDBDatabase::
+LogWarningRunnable::Run()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  LogWarning(mMessageName.get(),
+             mFilename,
+             mLineNumber,
+             mIsChrome,
+             mInnerWindowID);
 
   return NS_OK;
 }

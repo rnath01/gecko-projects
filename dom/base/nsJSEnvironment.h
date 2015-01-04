@@ -125,8 +125,6 @@ public:
   // Calling LikelyShortLivingObjectCreated() makes a GC more likely.
   static void LikelyShortLivingObjectCreated();
 
-  virtual void GC(JS::gcreason::Reason aReason) MOZ_OVERRIDE;
-
   static uint32_t CleanupsSinceLastGC();
 
   nsIScriptGlobalObject* GetCachedGlobalObject()
@@ -136,6 +134,8 @@ public:
     JSObject* global = GetWindowProxy();
     return global ? mGlobalObjectRef.get() : nullptr;
   }
+
+  static void NotifyDidPaint();
 protected:
   virtual ~nsJSContext();
 
@@ -145,11 +145,6 @@ protected:
                                    JS::AutoValueVector &aArgsOut);
 
   nsresult AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv);
-
-  // Report the pending exception on our mContext, if any.  This
-  // function will set aside the frame chain on mContext before
-  // reporting.
-  void ReportPendingException();
 
 private:
   void DestroyJSContext();

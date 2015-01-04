@@ -52,6 +52,9 @@ class IDBDatabase MOZ_FINAL
   typedef mozilla::dom::StorageType StorageType;
   typedef mozilla::dom::quota::PersistenceType PersistenceType;
 
+  class LogWarningRunnable;
+  friend class LogWarningRunnable;
+
   class Observer;
   friend class Observer;
 
@@ -171,7 +174,7 @@ public:
   UnregisterTransaction(IDBTransaction* aTransaction);
 
   void
-  AbortTransactions();
+  AbortTransactions(bool aShouldWarn);
 
   PBackgroundIDBDatabaseFileChild*
   GetOrCreateFileActorForBlob(File* aBlob);
@@ -203,8 +206,7 @@ public:
   ObjectStoreNames() const;
 
   already_AddRefed<IDBObjectStore>
-  CreateObjectStore(JSContext* aCx,
-                    const nsAString& aName,
+  CreateObjectStore(const nsAString& aName,
                     const IDBObjectStoreParameters& aOptionalParameters,
                     ErrorResult& aRv);
 
@@ -299,6 +301,11 @@ private:
 
   void
   InvalidateMutableFiles();
+
+  void
+  LogWarning(const char* aMessageName,
+             const nsAString& aFilename,
+             uint32_t aLineNumber);
 };
 
 } // namespace indexedDB

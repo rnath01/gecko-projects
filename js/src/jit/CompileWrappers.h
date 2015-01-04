@@ -37,13 +37,13 @@ class CompileRuntime
     // rt->mainThread.jitStackLimit;
     const void *addressOfJitStackLimit();
 
-    // &mainThread.ionJSContext
+    // &mainThread.jitJSContext
     const void *addressOfJSContext();
 
     // &mainThread.activation_
     const void *addressOfActivation();
 
-    // &GetIonContext()->runtime->nativeIterCache.last
+    // &GetJitContext()->runtime->nativeIterCache.last
     const void *addressOfLastCachedNativeIterator();
 
 #ifdef JS_GC_ZEAL
@@ -70,6 +70,7 @@ class CompileRuntime
     const StaticStrings &staticStrings();
     const Value &NaNValue();
     const Value &positiveInfinityValue();
+    const WellKnownSymbols &wellKnownSymbols();
 
 #ifdef DEBUG
     bool isInsideNursery(gc::Cell *cell);
@@ -80,9 +81,7 @@ class CompileRuntime
 
     const MathCache *maybeGetMathCache();
 
-#ifdef JSGC_GENERATIONAL
     const Nursery &gcNursery();
-#endif
 };
 
 class CompileZone

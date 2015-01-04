@@ -155,6 +155,12 @@ RangeAnalysis::addBetaNodes()
 
         MCompare *compare = test->getOperand(0)->toCompare();
 
+        if (compare->compareType() == MCompare::Compare_Unknown ||
+            compare->compareType() == MCompare::Compare_Value)
+        {
+            continue;
+        }
+
         // TODO: support unsigned comparisons
         if (compare->compareType() == MCompare::Compare_UInt32)
             continue;
@@ -174,12 +180,12 @@ RangeAnalysis::addBetaNodes()
             conservativeUpper = GenericNaN();
         }
 
-        if (left->isConstant() && left->toConstant()->value().isNumber()) {
-            bound = left->toConstant()->value().toNumber();
+        if (left->isConstantValue() && left->constantValue().isNumber()) {
+            bound = left->constantValue().toNumber();
             val = right;
             jsop = ReverseCompareOp(jsop);
-        } else if (right->isConstant() && right->toConstant()->value().isNumber()) {
-            bound = right->toConstant()->value().toNumber();
+        } else if (right->isConstantValue() && right->constantValue().isNumber()) {
+            bound = right->constantValue().toNumber();
             val = left;
         } else if (left->type() == MIRType_Int32 && right->type() == MIRType_Int32) {
             MDefinition *smaller = nullptr;
@@ -323,7 +329,7 @@ SymbolicBound::print(Sprinter &sp) const
 void
 SymbolicBound::dump() const
 {
-    Sprinter sp(GetIonContext()->cx);
+    Sprinter sp(GetJitContext()->cx);
     sp.init();
     print(sp);
     fprintf(stderr, "%s\n", sp.string());
@@ -434,7 +440,7 @@ Range::print(Sprinter &sp) const
 void
 Range::dump(FILE *fp) const
 {
-    Sprinter sp(GetIonContext()->cx);
+    Sprinter sp(GetJitContext()->cx);
     sp.init();
     print(sp);
     fprintf(fp, "%s\n", sp.string());
@@ -1310,14 +1316,14 @@ MLsh::computeRange(TempAllocator &alloc)
     left.wrapAroundToInt32();
 
     MDefinition *rhs = getOperand(1);
-    if (!rhs->isConstant()) {
-        right.wrapAroundToShiftCount();
-        setRange(Range::lsh(alloc, &left, &right));
+    if (rhs->isConstantValue() && rhs->constantValue().isInt32()) {
+        int32_t c = rhs->constantValue().toInt32();
+        setRange(Range::lsh(alloc, &left, c));
         return;
     }
 
-    int32_t c = rhs->toConstant()->value().toInt32();
-    setRange(Range::lsh(alloc, &left, c));
+    right.wrapAroundToShiftCount();
+    setRange(Range::lsh(alloc, &left, &right));
 }
 
 void
@@ -1328,14 +1334,14 @@ MRsh::computeRange(TempAllocator &alloc)
     left.wrapAroundToInt32();
 
     MDefinition *rhs = getOperand(1);
-    if (!rhs->isConstant()) {
-        right.wrapAroundToShiftCount();
-        setRange(Range::rsh(alloc, &left, &right));
+    if (rhs->isConstantValue() && rhs->constantValue().isInt32()) {
+        int32_t c = rhs->constantValue().toInt32();
+        setRange(Range::rsh(alloc, &left, c));
         return;
     }
 
-    int32_t c = rhs->toConstant()->value().toInt32();
-    setRange(Range::rsh(alloc, &left, c));
+    right.wrapAroundToShiftCount();
+    setRange(Range::rsh(alloc, &left, &right));
 }
 
 void
@@ -1353,11 +1359,11 @@ MUrsh::computeRange(TempAllocator &alloc)
     right.wrapAroundToShiftCount();
 
     MDefinition *rhs = getOperand(1);
-    if (!rhs->isConstant()) {
-        setRange(Range::ursh(alloc, &left, &right));
-    } else {
-        int32_t c = rhs->toConstant()->value().toInt32();
+    if (rhs->isConstantValue() && rhs->constantValue().isInt32()) {
+        int32_t c = rhs->constantValue().toInt32();
         setRange(Range::ursh(alloc, &left, c));
+    } else {
+        setRange(Range::ursh(alloc, &left, &right));
     }
 
     MOZ_ASSERT(range()->lower() >= 0);
@@ -1822,7 +1828,7 @@ RangeAnalysis::analyzeLoop(MBasicBlock *header)
 
 #ifdef DEBUG
     if (JitSpewEnabled(JitSpew_Range)) {
-        Sprinter sp(GetIonContext()->cx);
+        Sprinter sp(GetJitContext()->cx);
         sp.init();
         iterationBound->boundSum.print(sp);
         JitSpew(JitSpew_Range, "computed symbolic bound on backedges: %s",
@@ -1839,7 +1845,7 @@ RangeAnalysis::analyzeLoop(MBasicBlock *header)
     if (!mir->compilingAsmJS()) {
         // Try to hoist any bounds checks from the loop using symbolic bounds.
 
-        Vector<MBoundsCheck *, 0, IonAllocPolicy> hoistedChecks(alloc());
+        Vector<MBoundsCheck *, 0, JitAllocPolicy> hoistedChecks(alloc());
 
         for (ReversePostorderIterator iter(graph_.rpoBegin(header)); iter != graph_.rpoEnd(); iter++) {
             MBasicBlock *block = *iter;
@@ -2203,15 +2209,17 @@ RangeAnalysis::analyze()
                 if (iter->isAsmJSLoadHeap()) {
                     MAsmJSLoadHeap *ins = iter->toAsmJSLoadHeap();
                     Range *range = ins->ptr()->range();
+                    uint32_t elemSize = TypedArrayElemSize(ins->viewType());
                     if (range && range->hasInt32LowerBound() && range->lower() >= 0 &&
-                        range->hasInt32UpperBound() && (uint32_t) range->upper() < minHeapLength) {
+                        range->hasInt32UpperBound() && uint32_t(range->upper()) + elemSize < minHeapLength) {
                         ins->removeBoundsCheck();
                     }
                 } else if (iter->isAsmJSStoreHeap()) {
                     MAsmJSStoreHeap *ins = iter->toAsmJSStoreHeap();
                     Range *range = ins->ptr()->range();
+                    uint32_t elemSize = TypedArrayElemSize(ins->viewType());
                     if (range && range->hasInt32LowerBound() && range->lower() >= 0 &&
-                        range->hasInt32UpperBound() && (uint32_t) range->upper() < minHeapLength) {
+                        range->hasInt32UpperBound() && uint32_t(range->upper()) + elemSize < minHeapLength) {
                         ins->removeBoundsCheck();
                     }
                 }
@@ -2263,22 +2271,12 @@ RangeAnalysis::addRangeAssertions()
             // Beta nodes and interrupt checks are required to be located at the
             // beginnings of basic blocks, so we must insert range assertions
             // after any such instructions.
-            MInstructionIterator insertIter = ins->isPhi()
-                                            ? block->begin()
-                                            : block->begin(ins->toInstruction());
-            while (insertIter->isBeta() ||
-                   insertIter->isInterruptCheck() ||
-                   insertIter->isInterruptCheckPar() ||
-                   insertIter->isConstant() ||
-                   insertIter->isRecoveredOnBailout())
-            {
-                insertIter++;
-            }
+            MInstruction *insertAt = block->safeInsertTop(ins);
 
-            if (*insertIter == *iter)
-                block->insertAfter(*insertIter,  guard);
+            if (insertAt == *iter)
+                block->insertAfter(insertAt,  guard);
             else
-                block->insertBefore(*insertIter, guard);
+                block->insertBefore(insertAt, guard);
         }
     }
 
@@ -2744,7 +2742,7 @@ CloneForDeadBranches(TempAllocator &alloc, MInstruction *candidate)
 
     candidate->block()->insertBefore(candidate, clone);
 
-    if (!candidate->isConstant()) {
+    if (!candidate->isConstantValue()) {
         MOZ_ASSERT(clone->canRecoverOnBailout());
         clone->setRecoveredOnBailout();
     }
@@ -3048,6 +3046,36 @@ MLoadElementHole::collectRangeInfoPreTrunc()
     Range indexRange(index());
     if (indexRange.isFiniteNonNegative())
         needsNegativeIntCheck_ = false;
+}
+
+void
+MLoadTypedArrayElementStatic::collectRangeInfoPreTrunc()
+{
+    Range *range = ptr()->range();
+
+    if (range && range->hasInt32LowerBound() && range->hasInt32UpperBound()) {
+        int64_t offset = this->offset();
+        int64_t lower = range->lower() + offset;
+        int64_t upper = range->upper() + offset;
+        int64_t length = this->length();
+        if (lower >= 0 && upper < length)
+            setNeedsBoundsCheck(false);
+    }
+}
+
+void
+MStoreTypedArrayElementStatic::collectRangeInfoPreTrunc()
+{
+    Range *range = ptr()->range();
+
+    if (range && range->hasInt32LowerBound() && range->hasInt32UpperBound()) {
+        int64_t offset = this->offset();
+        int64_t lower = range->lower() + offset;
+        int64_t upper = range->upper() + offset;
+        int64_t length = this->length();
+        if (lower >= 0 && upper < length)
+            setNeedsBoundsCheck(false);
+    }
 }
 
 void

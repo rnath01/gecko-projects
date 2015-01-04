@@ -33,8 +33,10 @@ class   nsIContent;
 class   ViewWrapper;
 class   nsIWidgetListener;
 class   nsIntRegion;
+class   nsIScreen;
 
 namespace mozilla {
+class CompositorVsyncDispatcher;
 namespace dom {
 class TabChild;
 }
@@ -690,6 +692,7 @@ class nsIWidget : public nsISupports {
     typedef mozilla::widget::InputContext InputContext;
     typedef mozilla::widget::InputContextAction InputContextAction;
     typedef mozilla::widget::SizeConstraints SizeConstraints;
+    typedef mozilla::CompositorVsyncDispatcher CompositorVsyncDispatcher;
 
     // Used in UpdateThemeGeometries.
     struct ThemeGeometry {
@@ -867,6 +870,11 @@ class nsIWidget : public nsISupports {
      * the number of device pixels per inch.
      */
     virtual float GetDPI() = 0;
+
+    /**
+     * Returns the CompositorVsyncDispatcher associated with this widget
+     */
+    virtual CompositorVsyncDispatcher* GetCompositorVsyncDispatcher() = 0;
 
     /**
      * Return the default scale factor for the window. This is the
@@ -1405,9 +1413,12 @@ class nsIWidget : public nsISupports {
 
     /**
      * Put the toplevel window into or out of fullscreen mode.
-     *
+     * If aTargetScreen is given, attempt to go fullscreen on that screen,
+     * if possible.  (If not, it behaves as if aTargetScreen is null.)
+     * If !aFullScreen, aTargetScreen is ignored.
+     * aTargetScreen support is currently only implemented on Windows.
      */
-    NS_IMETHOD MakeFullScreen(bool aFullScreen) = 0;
+    NS_IMETHOD MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen = nullptr) = 0;
 
     /**
      * Invalidate a specified rect for a widget so that it will be repainted

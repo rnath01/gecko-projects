@@ -260,7 +260,7 @@ MaybeFoldConditionBlock(MIRGraph &graph, MBasicBlock *initialBlock)
 
     MBasicBlock *trueTarget = trueBranch;
     if (BlockComputesConstant(trueBranch, trueResult)) {
-        trueTarget = trueResult->toConstant()->valueToBoolean()
+        trueTarget = trueResult->constantToBoolean()
                      ? finalTest->ifTrue()
                      : finalTest->ifFalse();
         testBlock->removePredecessor(trueBranch);
@@ -272,7 +272,7 @@ MaybeFoldConditionBlock(MIRGraph &graph, MBasicBlock *initialBlock)
 
     MBasicBlock *falseTarget = falseBranch;
     if (BlockComputesConstant(falseBranch, falseResult)) {
-        falseTarget = falseResult->toConstant()->valueToBoolean()
+        falseTarget = falseResult->constantToBoolean()
                       ? finalTest->ifTrue()
                       : finalTest->ifFalse();
         testBlock->removePredecessor(falseBranch);
@@ -569,10 +569,6 @@ jit::EliminateDeadCode(MIRGenerator *mir, MIRGraph &graph)
             if (js::jit::IsDiscardable(inst))
             {
                 block->discard(inst);
-            } else if (!inst->isRecoveredOnBailout() && !inst->isGuard() &&
-                       !inst->hasLiveDefUses() && inst->canRecoverOnBailout())
-            {
-                inst->setRecoveredOnBailout();
             }
         }
     }
@@ -1654,7 +1650,7 @@ jit::BuildDominatorTree(MIRGraph &graph)
 {
     ComputeImmediateDominators(graph);
 
-    Vector<MBasicBlock *, 4, IonAllocPolicy> worklist(graph.alloc());
+    Vector<MBasicBlock *, 4, JitAllocPolicy> worklist(graph.alloc());
 
     // Traversing through the graph in post-order means that every non-phi use
     // of a definition is visited before the def itself. Since a def
@@ -1776,28 +1772,73 @@ CheckPredecessorImpliesSuccessor(MBasicBlock *A, MBasicBlock *B)
     return false;
 }
 
-static bool
-CheckOperandImpliesUse(MNode *n, MDefinition *operand)
-{
-    MOZ_ASSERT(!operand->isDiscarded());
-    MOZ_ASSERT(operand->block() != nullptr);
+// If you have issues with the usesBalance assertions, then define the macro
+// _DEBUG_CHECK_OPERANDS_USES_BALANCE to spew information on the error output.
+// This output can then be processed with the following awk script to filter and
+// highlight which checks are missing or if there is an unexpected operand /
+// use.
+//
+// define _DEBUG_CHECK_OPERANDS_USES_BALANCE 1
+/*
 
-    for (MUseIterator i = operand->usesBegin(); i != operand->usesEnd(); i++) {
-        if (i->consumer() == n)
-            return true;
+$ ./js 2>stderr.log
+$ gawk '
+    /^==Check/ { context = ""; state = $2; }
+    /^[a-z]/ { context = context "\n\t" $0; }
+    /^==End/ {
+      if (state == "Operand") {
+        list[context] = list[context] - 1;
+      } else if (state == "Use") {
+        list[context] = list[context] + 1;
+      }
     }
-    return false;
+    END {
+      for (ctx in list) {
+        if (list[ctx] > 0) {
+          print "Missing operand check", ctx, "\n"
+        }
+        if (list[ctx] < 0) {
+          print "Missing use check", ctx, "\n"
+        }
+      };
+    }'  < stderr.log
+
+*/
+
+static void
+CheckOperand(const MNode *consumer, const MUse *use, int32_t *usesBalance)
+{
+    MOZ_ASSERT(use->hasProducer());
+    MDefinition *producer = use->producer();
+    MOZ_ASSERT(!producer->isDiscarded());
+    MOZ_ASSERT(producer->block() != nullptr);
+    MOZ_ASSERT(use->consumer() == consumer);
+#ifdef _DEBUG_CHECK_OPERANDS_USES_BALANCE
+    fprintf(stderr, "==Check Operand\n");
+    use->producer()->dump(stderr);
+    fprintf(stderr, "  index: %zu\n", use->consumer()->indexOf(use));
+    use->consumer()->dump(stderr);
+    fprintf(stderr, "==End\n");
+#endif
+    --*usesBalance;
 }
 
-static bool
-CheckUseImpliesOperand(MDefinition *def, MUse *use)
+static void
+CheckUse(const MDefinition *producer, const MUse *use, int32_t *usesBalance)
 {
     MOZ_ASSERT(!use->consumer()->block()->isDead());
     MOZ_ASSERT_IF(use->consumer()->isDefinition(),
                   !use->consumer()->toDefinition()->isDiscarded());
     MOZ_ASSERT(use->consumer()->block() != nullptr);
-
-    return use->consumer()->getOperand(use->index()) == def;
+    MOZ_ASSERT(use->consumer()->getOperand(use->index()) == producer);
+#ifdef _DEBUG_CHECK_OPERANDS_USES_BALANCE
+    fprintf(stderr, "==Check Use\n");
+    use->producer()->dump(stderr);
+    fprintf(stderr, "  index: %zu\n", use->consumer()->indexOf(use));
+    use->consumer()->dump(stderr);
+    fprintf(stderr, "==End\n");
+#endif
+    ++*usesBalance;
 }
 #endif // DEBUG
 
@@ -1821,6 +1862,7 @@ jit::AssertBasicGraphCoherency(MIRGraph &graph)
 
     // Assert successor and predecessor list coherency.
     uint32_t count = 0;
+    int32_t usesBalance = 0;
     for (MBasicBlockIterator block(graph.begin()); block != graph.end(); block++) {
         count++;
 
@@ -1848,10 +1890,8 @@ jit::AssertBasicGraphCoherency(MIRGraph &graph)
             // the entry resume point because we are still storing resume points
             // in the InlinePropertyTable.
             MOZ_ASSERT_IF(iter->instruction(), iter->instruction()->block() == *block);
-            for (uint32_t i = 0, e = iter->numOperands(); i < e; i++) {
-                MOZ_ASSERT(iter->getUseFor(i)->hasProducer());
-                MOZ_ASSERT(CheckOperandImpliesUse(*iter, iter->getOperand(i)));
-            }
+            for (uint32_t i = 0, e = iter->numOperands(); i < e; i++)
+                CheckOperand(*iter, iter->getUseFor(i), &usesBalance);
         }
         for (MPhiIterator phi(block->phisBegin()); phi != block->phisEnd(); phi++) {
             MOZ_ASSERT(phi->numOperands() == block->numPredecessors());
@@ -1872,9 +1912,9 @@ jit::AssertBasicGraphCoherency(MIRGraph &graph)
 
             // Assert that use chains are valid for this instruction.
             for (uint32_t i = 0, end = iter->numOperands(); i < end; i++)
-                MOZ_ASSERT(CheckOperandImpliesUse(*iter, iter->getOperand(i)));
+                CheckOperand(*iter, iter->getUseFor(i), &usesBalance);
             for (MUseIterator use(iter->usesBegin()); use != iter->usesEnd(); use++)
-                MOZ_ASSERT(CheckUseImpliesOperand(*iter, *use));
+                CheckUse(*iter, *use, &usesBalance);
 
             if (iter->isInstruction()) {
                 if (MResumePoint *resume = iter->toInstruction()->resumePoint()) {
@@ -1888,6 +1928,7 @@ jit::AssertBasicGraphCoherency(MIRGraph &graph)
                 MOZ_ASSERT(!iter->hasLiveDefUses());
         }
 
+        // The control instruction is not visited by the MDefinitionIterator.
         MControlInstruction *control = block->lastIns();
         MOZ_ASSERT(control->block() == *block);
         MOZ_ASSERT(!control->hasUses());
@@ -1895,10 +1936,13 @@ jit::AssertBasicGraphCoherency(MIRGraph &graph)
         MOZ_ASSERT(!control->isDiscarded());
         MOZ_ASSERT(!control->isRecoveredOnBailout());
         MOZ_ASSERT(control->resumePoint() == nullptr);
-        for (uint32_t i = 0, end = control->numOperands(); i < end; ++i)
-            MOZ_ASSERT(CheckOperandImpliesUse(control, control->getOperand(i)));
+        for (uint32_t i = 0, end = control->numOperands(); i < end; i++)
+            CheckOperand(control, control->getUseFor(i), &usesBalance);
     }
 
+    // In case issues, see the _DEBUG_CHECK_OPERANDS_USES_BALANCE macro above.
+    MOZ_ASSERT(usesBalance <= 0, "More use checks than operand checks");
+    MOZ_ASSERT(usesBalance >= 0, "More operand checks than use checks");
     MOZ_ASSERT(graph.numBlocks() == count);
 #endif
 }
@@ -1992,6 +2036,64 @@ jit::AssertGraphCoherency(MIRGraph &graph)
 }
 
 #ifdef DEBUG
+static bool
+IsResumableMIRType(MIRType type)
+{
+    // see CodeGeneratorShared::encodeAllocation
+    switch (type) {
+      case MIRType_Undefined:
+      case MIRType_Null:
+      case MIRType_Boolean:
+      case MIRType_Int32:
+      case MIRType_Double:
+      case MIRType_Float32:
+      case MIRType_String:
+      case MIRType_Symbol:
+      case MIRType_Object:
+      case MIRType_MagicOptimizedArguments:
+      case MIRType_MagicOptimizedOut:
+      case MIRType_MagicUninitializedLexical:
+      case MIRType_Value:
+        return true;
+
+      case MIRType_MagicHole:
+      case MIRType_MagicIsConstructing:
+      case MIRType_ObjectOrNull:
+      case MIRType_None:
+      case MIRType_Slots:
+      case MIRType_Elements:
+      case MIRType_Pointer:
+      case MIRType_Shape:
+      case MIRType_TypeObject:
+      case MIRType_ForkJoinContext:
+      case MIRType_Float32x4:
+      case MIRType_Int32x4:
+      case MIRType_Doublex2:
+        return false;
+    }
+    MOZ_CRASH("Unknown MIRType.");
+}
+
+static void
+AssertResumableOperands(MNode *node)
+{
+    for (size_t i = 0, e = node->numOperands(); i < e; ++i) {
+        MDefinition *op = node->getOperand(i);
+        if (op->isRecoveredOnBailout())
+            continue;
+        MOZ_ASSERT(IsResumableMIRType(op->type()),
+                   "Resume point cannot encode its operands");
+    }
+}
+
+static void
+AssertIfResumableInstruction(MDefinition *def)
+{
+    if (!def->isRecoveredOnBailout())
+        return;
+    AssertResumableOperands(def);
+}
+
 static void
 AssertResumePointDominatedByOperands(MResumePoint *resume)
 {
@@ -2089,15 +2191,22 @@ jit::AssertExtendedGraphCoherency(MIRGraph &graph)
                     } while (*opIter != ins);
                 }
             }
-            if (MResumePoint *resume = ins->resumePoint())
+            AssertIfResumableInstruction(ins);
+            if (MResumePoint *resume = ins->resumePoint()) {
                 AssertResumePointDominatedByOperands(resume);
+                AssertResumableOperands(resume);
+            }
         }
 
         // Verify that the block resume points are dominated by their operands.
-        if (MResumePoint *resume = block->entryResumePoint())
+        if (MResumePoint *resume = block->entryResumePoint()) {
             AssertResumePointDominatedByOperands(resume);
-        if (MResumePoint *resume = block->outerResumePoint())
+            AssertResumableOperands(resume);
+        }
+        if (MResumePoint *resume = block->outerResumePoint()) {
             AssertResumePointDominatedByOperands(resume);
+            AssertResumableOperands(resume);
+        }
     }
 #endif
 }
@@ -2112,7 +2221,7 @@ struct BoundsCheckInfo
 typedef HashMap<uint32_t,
                 BoundsCheckInfo,
                 DefaultHasher<uint32_t>,
-                IonAllocPolicy> BoundsCheckMap;
+                JitAllocPolicy> BoundsCheckMap;
 
 // Compute a hash for bounds checks which ignores constant offsets in the index.
 static HashNumber
@@ -2161,8 +2270,8 @@ jit::ExtractLinearSum(MDefinition *ins)
     if (ins->type() != MIRType_Int32)
         return SimpleLinearSum(ins, 0);
 
-    if (ins->isConstant()) {
-        const Value &v = ins->toConstant()->value();
+    if (ins->isConstantValue()) {
+        const Value &v = ins->constantValue();
         MOZ_ASSERT(v.isInt32());
         return SimpleLinearSum(nullptr, v.toInt32());
     } else if (ins->isAdd() || ins->isSub()) {
@@ -2443,7 +2552,7 @@ jit::EliminateRedundantChecks(MIRGraph &graph)
         return false;
 
     // Stack for pre-order CFG traversal.
-    Vector<MBasicBlock *, 1, IonAllocPolicy> worklist(graph.alloc());
+    Vector<MBasicBlock *, 1, JitAllocPolicy> worklist(graph.alloc());
 
     // The index of the current block in the CFG traversal.
     size_t index = 0;
@@ -2508,6 +2617,25 @@ LinearSum::multiply(int32_t scale)
 }
 
 bool
+LinearSum::divide(int32_t scale)
+{
+    MOZ_ASSERT(scale > 0);
+
+    for (size_t i = 0; i < terms_.length(); i++) {
+        if (terms_[i].scale % scale != 0)
+            return false;
+    }
+    if (constant_ % scale != 0)
+        return false;
+
+    for (size_t i = 0; i < terms_.length(); i++)
+        terms_[i].scale /= scale;
+    constant_ /= scale;
+
+    return true;
+}
+
+bool
 LinearSum::add(const LinearSum &other, int32_t scale /* = 1 */)
 {
     for (size_t i = 0; i < other.terms_.length(); i++) {
@@ -2524,6 +2652,19 @@ LinearSum::add(const LinearSum &other, int32_t scale /* = 1 */)
 }
 
 bool
+LinearSum::add(SimpleLinearSum other, int32_t scale)
+{
+    if (other.term && !add(other.term, scale))
+        return false;
+
+    int32_t constant;
+    if (!SafeMul(other.constant, scale, &constant))
+        return false;
+
+    return add(constant);
+}
+
+bool
 LinearSum::add(MDefinition *term, int32_t scale)
 {
     MOZ_ASSERT(term);
@@ -2531,8 +2672,8 @@ LinearSum::add(MDefinition *term, int32_t scale)
     if (scale == 0)
         return true;
 
-    if (term->isConstant()) {
-        int32_t constant = term->toConstant()->value().toInt32();
+    if (term->isConstantValue()) {
+        int32_t constant = term->constantValue().toInt32();
         if (!SafeMul(constant, scale, &constant))
             return false;
         return add(constant);
@@ -2550,7 +2691,9 @@ LinearSum::add(MDefinition *term, int32_t scale)
         }
     }
 
-    terms_.append(LinearTerm(term, scale));
+    if (!terms_.append(LinearTerm(term, scale)))
+        CrashAtUnhandlableOOM("LinearSum::add");
+
     return true;
 }
 
@@ -2589,7 +2732,7 @@ LinearSum::print(Sprinter &sp) const
 void
 LinearSum::dump(FILE *fp) const
 {
-    Sprinter sp(GetIonContext()->cx);
+    Sprinter sp(GetJitContext()->cx);
     sp.init();
     print(sp);
     fprintf(fp, "%s\n", sp.string());
@@ -2602,13 +2745,13 @@ LinearSum::dump() const
 }
 
 MDefinition *
-jit::ConvertLinearSum(TempAllocator &alloc, MBasicBlock *block, const LinearSum &sum)
+jit::ConvertLinearSum(TempAllocator &alloc, MBasicBlock *block, const LinearSum &sum, bool convertConstant)
 {
     MDefinition *def = nullptr;
 
     for (size_t i = 0; i < sum.numTerms(); i++) {
         LinearTerm term = sum.term(i);
-        MOZ_ASSERT(!term.term->isConstant());
+        MOZ_ASSERT(!term.term->isConstantValue());
         if (term.scale == 1) {
             if (def) {
                 def = MAdd::New(alloc, def, term.term);
@@ -2647,7 +2790,20 @@ jit::ConvertLinearSum(TempAllocator &alloc, MBasicBlock *block, const LinearSum 
         }
     }
 
-    // Note: The constant component of the term is not converted.
+    if (convertConstant && sum.constant()) {
+        MConstant *constant = MConstant::New(alloc, Int32Value(sum.constant()));
+        block->insertAtEnd(constant);
+        constant->computeRange(alloc);
+        if (def) {
+            def = MAdd::New(alloc, def, constant);
+            def->toAdd()->setInt32();
+            block->insertAtEnd(def->toInstruction());
+            def->computeRange(alloc);
+        } else {
+            def = constant;
+        }
+    }
+
     if (!def) {
         def = MConstant::New(alloc, Int32Value(0));
         block->insertAtEnd(def->toInstruction());
@@ -2727,7 +2883,7 @@ jit::ConvertLinearInequality(TempAllocator &alloc, MBasicBlock *block, const Lin
 static bool
 AnalyzePoppedThis(JSContext *cx, types::TypeObject *type,
                   MDefinition *thisValue, MInstruction *ins, bool definitelyExecuted,
-                  HandleNativeObject baseobj,
+                  HandlePlainObject baseobj,
                   Vector<types::TypeNewScript::Initializer> *initializerList,
                   Vector<PropertyName *> *accessedProperties,
                   bool *phandled)
@@ -2861,7 +3017,7 @@ CmpInstructions(const void *a, const void *b)
 
 bool
 jit::AnalyzeNewScriptDefiniteProperties(JSContext *cx, JSFunction *fun,
-                                        types::TypeObject *type, HandleNativeObject baseobj,
+                                        types::TypeObject *type, HandlePlainObject baseobj,
                                         Vector<types::TypeNewScript::Initializer> *initializerList)
 {
     MOZ_ASSERT(cx->zone()->types.activeAnalysis);
@@ -2885,7 +3041,7 @@ jit::AnalyzeNewScriptDefiniteProperties(JSContext *cx, JSFunction *fun,
 
     LifoAlloc alloc(TempAllocator::PreferredLifoChunkSize);
     TempAllocator temp(&alloc);
-    IonContext ictx(cx, &temp);
+    JitContext jctx(cx, &temp);
 
     if (!cx->compartment()->ensureJitCompartmentExists(cx))
         return false;
@@ -3124,7 +3280,7 @@ jit::AnalyzeArgumentsUsage(JSContext *cx, JSScript *scriptArg)
 
     LifoAlloc alloc(TempAllocator::PreferredLifoChunkSize);
     TempAllocator temp(&alloc);
-    IonContext ictx(cx, &temp);
+    JitContext jctx(cx, &temp);
 
     if (!cx->compartment()->ensureJitCompartmentExists(cx))
         return false;

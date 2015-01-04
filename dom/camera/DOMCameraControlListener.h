@@ -23,7 +23,7 @@ public:
   virtual void OnFacesDetected(const nsTArray<ICameraControl::Face>& aFaces) MOZ_OVERRIDE;
   virtual void OnTakePictureComplete(uint8_t* aData, uint32_t aLength, const nsAString& aMimeType) MOZ_OVERRIDE;
 
-  virtual void OnHardwareStateChange(HardwareState aState) MOZ_OVERRIDE;
+  virtual void OnHardwareStateChange(HardwareState aState, nsresult aReason) MOZ_OVERRIDE;
   virtual void OnPreviewStateChange(PreviewState aState) MOZ_OVERRIDE;
   virtual void OnRecorderStateChange(RecorderState aState, int32_t aStatus, int32_t aTrackNum) MOZ_OVERRIDE;
   virtual void OnConfigurationChange(const CameraListenerConfiguration& aConfiguration) MOZ_OVERRIDE;
@@ -35,7 +35,7 @@ public:
 protected:
   virtual ~DOMCameraControlListener();
 
-  nsMainThreadPtrHandle<nsDOMCameraControl> mDOMCameraControl;
+  nsMainThreadPtrHandle<nsISupports> mDOMCameraControl;
   CameraPreviewMediaStream* mStream;
 
   class DOMCallback;

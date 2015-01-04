@@ -7,8 +7,8 @@
 #ifndef jit_TypePolicy_h
 #define jit_TypePolicy_h
 
-#include "jit/IonAllocPolicy.h"
 #include "jit/IonTypes.h"
+#include "jit/JitAllocPolicy.h"
 
 namespace js {
 namespace jit {
@@ -139,19 +139,6 @@ class StringPolicy : public BoxInputsPolicy
 // Expect a string for operand Op. Else a ToString instruction is inserted.
 template <unsigned Op>
 class ConvertToStringPolicy : public TypePolicy
-{
-  public:
-    EMPTY_DATA_;
-    static bool staticAdjustInputs(TempAllocator &alloc, MInstruction *def);
-    bool adjustInputs(TempAllocator &alloc, MInstruction *def) {
-        return staticAdjustInputs(alloc, def);
-    }
-};
-
-// Expect an object or null value for operand Op. Else a ToObjectOrNull
-// instruction is inserted.
-template <unsigned Op>
-class ConvertToObjectOrNullPolicy : public TypePolicy
 {
   public:
     EMPTY_DATA_;
@@ -395,6 +382,13 @@ class StoreTypedArrayElementStaticPolicy : public StoreTypedArrayPolicy
   public:
     EMPTY_DATA_;
     bool adjustInputs(TempAllocator &alloc, MInstruction *ins);
+};
+
+class StoreUnboxedObjectOrNullPolicy : public TypePolicy
+{
+  public:
+    EMPTY_DATA_;
+    bool adjustInputs(TempAllocator &alloc, MInstruction *def);
 };
 
 // Accepts integers and doubles. Everything else is boxed.

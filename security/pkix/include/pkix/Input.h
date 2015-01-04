@@ -124,7 +124,7 @@ private:
   const uint8_t* data;
   size_t len;
 
-  void operator=(const Input&) /* = delete */; // Use Init instead.
+  void operator=(const Input&) = delete; // Use Init instead.
 };
 
 inline bool
@@ -250,7 +250,7 @@ public:
     return Success;
   }
 
-  Result Skip(Input::size_type len, Input& skipped)
+  Result Skip(Input::size_type len, /*out*/ Input& skipped)
   {
     Result rv = EnsureLength(len);
     if (rv != Success) {
@@ -267,6 +267,11 @@ public:
   void SkipToEnd()
   {
     input = end;
+  }
+
+  void SkipToEnd(/*out*/ Input& skipped)
+  {
+    (void) Skip(static_cast<size_t>(end - input), skipped);
   }
 
   Result EnsureLength(Input::size_type len)
@@ -286,7 +291,7 @@ public:
     Mark(const Reader& input, const uint8_t* mark) : input(input), mark(mark) { }
     const Reader& input;
     const uint8_t* const mark;
-    void operator=(const Mark&) /* = delete */;
+    void operator=(const Mark&) = delete;
   };
 
   Mark GetMark() const { return Mark(*this, input); }
@@ -315,9 +320,24 @@ private:
   const uint8_t* input;
   const uint8_t* end;
 
-  Reader(const Reader&) /* = delete */;
-  void operator=(const Reader&) /* = delete */;
+  Reader(const Reader&) = delete;
+  void operator=(const Reader&) = delete;
 };
+
+inline bool
+InputContains(const Input& input, uint8_t toFind)
+{
+  Reader reader(input);
+  for (;;) {
+    uint8_t b;
+    if (reader.Read(b) != Success) {
+      return false;
+    }
+    if (b == toFind) {
+      return true;
+    }
+  }
+}
 
 } } // namespace mozilla::pkix
 

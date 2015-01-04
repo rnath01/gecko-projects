@@ -17,7 +17,13 @@ namespace dom {
 class Console;
 class Function;
 class Promise;
-class RequestOrScalarValueString;
+class RequestOrUSVString;
+
+namespace indexedDB {
+
+class IDBFactory;
+
+} // namespace indexedDB
 
 } // namespace dom
 } // namespace mozilla
@@ -33,10 +39,13 @@ class Performance;
 class WorkerGlobalScope : public DOMEventTargetHelper,
                           public nsIGlobalObject
 {
+  typedef mozilla::dom::indexedDB::IDBFactory IDBFactory;
+
   nsRefPtr<Console> mConsole;
   nsRefPtr<WorkerLocation> mLocation;
   nsRefPtr<WorkerNavigator> mNavigator;
   nsRefPtr<Performance> mPerformance;
+  nsRefPtr<IDBFactory> mIndexedDB;
 
 protected:
   WorkerPrivate* mWorkerPrivate;
@@ -126,7 +135,10 @@ public:
   Performance* GetPerformance();
 
   already_AddRefed<Promise>
-  Fetch(const RequestOrScalarValueString& aInput, const RequestInit& aInit, ErrorResult& aRv);
+  Fetch(const RequestOrUSVString& aInput, const RequestInit& aInit, ErrorResult& aRv);
+
+  already_AddRefed<IDBFactory>
+  GetIndexedDB(ErrorResult& aErrorResult);
 };
 
 class DedicatedWorkerGlobalScope MOZ_FINAL : public WorkerGlobalScope
@@ -198,10 +210,7 @@ public:
   }
 
   void
-  Update()
-  {
-    // FIXME(nsm): Bug 982728
-  }
+  Update();
 
   already_AddRefed<Promise>
   Unregister(ErrorResult& aRv);

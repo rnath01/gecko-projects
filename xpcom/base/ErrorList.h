@@ -330,6 +330,7 @@
   ERROR(NS_ERROR_PLUGIN_BLOCKLISTED,               FAILURE(1002)),
   ERROR(NS_ERROR_PLUGIN_TIME_RANGE_NOT_SUPPORTED,  FAILURE(1003)),
   ERROR(NS_ERROR_PLUGIN_CLICKTOPLAY,               FAILURE(1004)),
+  ERROR(NS_PLUGIN_INIT_PENDING,                    SUCCESS(1005)),
 #undef MODULE
 
 
@@ -631,6 +632,7 @@
   /* ======================================================================= */
 #define MODULE NS_ERROR_MODULE_SECURITY
   /* Error code for CSP */
+  ERROR(NS_ERROR_CSP_FORM_ACTION_VIOLATION,        FAILURE(98)),
   ERROR(NS_ERROR_CSP_FRAME_ANCESTOR_VIOLATION,     FAILURE(99)),
 
   /* CMS specific nsresult error codes.  Note: the numbers used here correspond

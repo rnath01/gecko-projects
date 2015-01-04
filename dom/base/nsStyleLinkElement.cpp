@@ -305,6 +305,13 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
   // All instances of nsStyleLinkElement should implement nsIContent.
   NS_ENSURE_TRUE(thisContent, NS_ERROR_FAILURE);
 
+  if (thisContent->IsInAnonymousSubtree() &&
+      thisContent->IsAnonymousContentInSVGUseSubtree()) {
+    // Stylesheets in <use>-cloned subtrees are disabled until we figure out
+    // how they should behave.
+    return NS_OK;
+  }
+
   // Check for a ShadowRoot because link elements are inert in a
   // ShadowRoot.
   ShadowRoot* containingShadow = thisContent->GetContainingShadow();
@@ -426,7 +433,8 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
     NS_ENSURE_TRUE(clonedURI, NS_ERROR_OUT_OF_MEMORY);
     rv = doc->CSSLoader()->
       LoadStyleLink(thisContent, clonedURI, title, media, isAlternate,
-                    GetCORSMode(), aObserver, &isAlternate);
+                    GetCORSMode(), doc->GetReferrerPolicy(),
+                    aObserver, &isAlternate);
     if (NS_FAILED(rv)) {
       // Don't propagate LoadStyleLink() errors further than this, since some
       // consumers (e.g. nsXMLContentSink) will completely abort on innocuous

@@ -129,13 +129,11 @@ public:
 
   virtual void SetCompositor(Compositor* aCompositor) MOZ_OVERRIDE;
 
-#ifdef MOZ_DUMP_PAINTING
   virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE;
 
   virtual void Dump(std::stringstream& aStream,
                     const char* aPrefix="",
                     bool aDumpHtml=false) MOZ_OVERRIDE;
-#endif
 
   virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix) MOZ_OVERRIDE;
 
@@ -173,8 +171,8 @@ public:
   virtual TemporaryRef<TexturedEffect> GenEffect(const gfx::Filter& aFilter) MOZ_OVERRIDE;
 
 protected:
-  RefPtr<TextureHost> mTextureHost;
-  RefPtr<TextureHost> mTextureHostOnWhite;
+  CompositableTextureHostRef mTextureHost;
+  CompositableTextureHostRef mTextureHostOnWhite;
   CompositableTextureSourceRef mTextureSource;
   CompositableTextureSourceRef mTextureSourceOnWhite;
   bool mLocked;
@@ -241,7 +239,7 @@ public:
   explicit ContentHostIncremental(const TextureInfo& aTextureInfo);
   ~ContentHostIncremental();
 
-  virtual CompositableType GetType() { return CompositableType::BUFFER_CONTENT_INC; }
+  virtual CompositableType GetType() { return CompositableType::CONTENT_INC; }
 
   virtual LayerRenderState GetRenderState() MOZ_OVERRIDE { return LayerRenderState(); }
 

@@ -5,9 +5,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "jit/Bailouts.h"
-#include "jit/IonFrames.h"
-#include "jit/IonLinker.h"
 #include "jit/JitCompartment.h"
+#include "jit/JitFrames.h"
+#include "jit/Linker.h"
 #ifdef JS_ION_PERF
 # include "jit/PerfSpewer.h"
 #endif
@@ -67,19 +67,19 @@ JitRuntime::generateEnterJIT(JSContext *cx, EnterJitType type)
     masm.push(rdi);
     masm.push(rsi);
 
-    // 16-byte aligment for movdqa
+    // 16-byte aligment for vmovdqa
     masm.subq(Imm32(16 * 10 + 8), rsp);
 
-    masm.movdqa(xmm6, Operand(rsp, 16 * 0));
-    masm.movdqa(xmm7, Operand(rsp, 16 * 1));
-    masm.movdqa(xmm8, Operand(rsp, 16 * 2));
-    masm.movdqa(xmm9, Operand(rsp, 16 * 3));
-    masm.movdqa(xmm10, Operand(rsp, 16 * 4));
-    masm.movdqa(xmm11, Operand(rsp, 16 * 5));
-    masm.movdqa(xmm12, Operand(rsp, 16 * 6));
-    masm.movdqa(xmm13, Operand(rsp, 16 * 7));
-    masm.movdqa(xmm14, Operand(rsp, 16 * 8));
-    masm.movdqa(xmm15, Operand(rsp, 16 * 9));
+    masm.vmovdqa(xmm6, Operand(rsp, 16 * 0));
+    masm.vmovdqa(xmm7, Operand(rsp, 16 * 1));
+    masm.vmovdqa(xmm8, Operand(rsp, 16 * 2));
+    masm.vmovdqa(xmm9, Operand(rsp, 16 * 3));
+    masm.vmovdqa(xmm10, Operand(rsp, 16 * 4));
+    masm.vmovdqa(xmm11, Operand(rsp, 16 * 5));
+    masm.vmovdqa(xmm12, Operand(rsp, 16 * 6));
+    masm.vmovdqa(xmm13, Operand(rsp, 16 * 7));
+    masm.vmovdqa(xmm14, Operand(rsp, 16 * 8));
+    masm.vmovdqa(xmm15, Operand(rsp, 16 * 9));
 #endif
 
     // Push the EnterJIT sps mark.
@@ -117,7 +117,7 @@ JitRuntime::generateEnterJIT(JSContext *cx, EnterJitType type)
         Label header, footer;
         masm.bind(&header);
 
-        masm.cmpq(r13, reg_argv);
+        masm.cmpPtr(r13, reg_argv);
         masm.j(AssemblerX86Shared::BelowOrEqual, &footer);
 
         masm.subq(Imm32(8), r13);
@@ -209,7 +209,7 @@ JitRuntime::generateEnterJIT(JSContext *cx, EnterJitType type)
         masm.push(valuesSize);
         masm.push(Imm32(0)); // Fake return address.
         // No GC things to mark, push a bare token.
-        masm.enterFakeExitFrame(IonExitFrameLayout::BareToken());
+        masm.enterFakeExitFrame(ExitFrameLayout::BareToken());
 
         regs.add(valuesSize);
 
@@ -228,7 +228,7 @@ JitRuntime::generateEnterJIT(JSContext *cx, EnterJitType type)
         MOZ_ASSERT(reg_code != ReturnReg);
 
         Label error;
-        masm.addPtr(Imm32(IonExitFrameLayout::SizeWithFooter()), rsp);
+        masm.addPtr(Imm32(ExitFrameLayout::SizeWithFooter()), rsp);
         masm.addPtr(Imm32(BaselineFrame::Size()), framePtr);
         masm.branchIfFalseBool(ReturnReg, &error);
 
@@ -253,8 +253,7 @@ JitRuntime::generateEnterJIT(JSContext *cx, EnterJitType type)
     if (type == EnterJitBaseline) {
         // Baseline OSR will return here.
         masm.bind(returnLabel.src());
-        if (!masm.addCodeLabel(returnLabel))
-            return nullptr;
+        masm.addCodeLabel(returnLabel);
     }
 
     // Pop arguments and padding from stack.
@@ -273,16 +272,16 @@ JitRuntime::generateEnterJIT(JSContext *cx, EnterJitType type)
 
     // Restore non-volatile registers.
 #if defined(_WIN64)
-    masm.movdqa(Operand(rsp, 16 * 0), xmm6);
-    masm.movdqa(Operand(rsp, 16 * 1), xmm7);
-    masm.movdqa(Operand(rsp, 16 * 2), xmm8);
-    masm.movdqa(Operand(rsp, 16 * 3), xmm9);
-    masm.movdqa(Operand(rsp, 16 * 4), xmm10);
-    masm.movdqa(Operand(rsp, 16 * 5), xmm11);
-    masm.movdqa(Operand(rsp, 16 * 6), xmm12);
-    masm.movdqa(Operand(rsp, 16 * 7), xmm13);
-    masm.movdqa(Operand(rsp, 16 * 8), xmm14);
-    masm.movdqa(Operand(rsp, 16 * 9), xmm15);
+    masm.vmovdqa(Operand(rsp, 16 * 0), xmm6);
+    masm.vmovdqa(Operand(rsp, 16 * 1), xmm7);
+    masm.vmovdqa(Operand(rsp, 16 * 2), xmm8);
+    masm.vmovdqa(Operand(rsp, 16 * 3), xmm9);
+    masm.vmovdqa(Operand(rsp, 16 * 4), xmm10);
+    masm.vmovdqa(Operand(rsp, 16 * 5), xmm11);
+    masm.vmovdqa(Operand(rsp, 16 * 6), xmm12);
+    masm.vmovdqa(Operand(rsp, 16 * 7), xmm13);
+    masm.vmovdqa(Operand(rsp, 16 * 8), xmm14);
+    masm.vmovdqa(Operand(rsp, 16 * 9), xmm15);
 
     masm.addq(Imm32(16 * 10 + 8), rsp);
 
@@ -312,7 +311,7 @@ JitRuntime::generateEnterJIT(JSContext *cx, EnterJitType type)
 JitCode *
 JitRuntime::generateInvalidator(JSContext *cx)
 {
-    AutoIonContextAlloc aica(cx);
+    AutoJitContextAlloc ajca(cx);
     MacroAssembler masm(cx);
 
     // See explanatory comment in x86's JitRuntime::generateInvalidator.
@@ -370,14 +369,14 @@ JitRuntime::generateArgumentsRectifier(JSContext *cx, ExecutionMode mode, void *
     MOZ_ASSERT(ArgumentsRectifierReg == r8);
 
     // Load the number of |undefined|s to push into %rcx.
-    masm.loadPtr(Address(rsp, IonRectifierFrameLayout::offsetOfCalleeToken()), rax);
+    masm.loadPtr(Address(rsp, RectifierFrameLayout::offsetOfCalleeToken()), rax);
     masm.mov(rax, rcx);
     masm.andq(Imm32(uint32_t(CalleeTokenMask)), rcx);
     masm.movzwl(Operand(rcx, JSFunction::offsetOfNargs()), rcx);
     masm.subq(r8, rcx);
 
     // Copy the number of actual arguments
-    masm.loadPtr(Address(rsp, IonRectifierFrameLayout::offsetOfNumActualArgs()), rdx);
+    masm.loadPtr(Address(rsp, RectifierFrameLayout::offsetOfNumActualArgs()), rdx);
 
     masm.moveValue(UndefinedValue(), r10);
 
@@ -394,7 +393,7 @@ JitRuntime::generateArgumentsRectifier(JSContext *cx, ExecutionMode mode, void *
     }
 
     // Get the topmost argument.
-    BaseIndex b = BaseIndex(r9, r8, TimesEight, sizeof(IonRectifierFrameLayout));
+    BaseIndex b = BaseIndex(r9, r8, TimesEight, sizeof(RectifierFrameLayout));
     masm.lea(Operand(b), rcx);
 
     // Push arguments, |nargs| + 1 times (to include |this|).
@@ -413,7 +412,7 @@ JitRuntime::generateArgumentsRectifier(JSContext *cx, ExecutionMode mode, void *
     masm.subq(rsp, r9);
     masm.makeFrameDescriptor(r9, JitFrame_Rectifier);
 
-    // Construct IonJSFrameLayout.
+    // Construct JitFrameLayout.
     masm.push(rdx); // numActualArgs
     masm.push(rax); // callee token
     masm.push(r9); // descriptor
@@ -588,7 +587,7 @@ JitRuntime::generateVMWrapper(JSContext *cx, const VMFunction &f)
     if (f.explicitArgs) {
         argsBase = r10;
         regs.take(argsBase);
-        masm.lea(Operand(rsp,IonExitFrameLayout::SizeWithFooter()), argsBase);
+        masm.lea(Operand(rsp, ExitFrameLayout::SizeWithFooter()), argsBase);
     }
 
     // Reserve space for the outparameter.
@@ -713,7 +712,7 @@ JitRuntime::generateVMWrapper(JSContext *cx, const VMFunction &f)
         break;
     }
     masm.leaveExitFrame();
-    masm.retn(Imm32(sizeof(IonExitFrameLayout) +
+    masm.retn(Imm32(sizeof(ExitFrameLayout) +
                     f.explicitStackSlots() * sizeof(void *) +
                     f.extraValuesToPop * sizeof(Value)));
 
@@ -824,11 +823,11 @@ JitRuntime::generateDebugTrapHandler(JSContext *cx)
 }
 
 JitCode *
-JitRuntime::generateExceptionTailStub(JSContext *cx)
+JitRuntime::generateExceptionTailStub(JSContext *cx, void *handler)
 {
     MacroAssembler masm;
 
-    masm.handleFailureWithHandlerTail();
+    masm.handleFailureWithHandlerTail(handler);
 
     Linker linker(masm);
     JitCode *code = linker.newCode<NoGC>(cx, OTHER_CODE);

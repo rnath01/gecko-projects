@@ -463,14 +463,7 @@ static const JSFunctionSpec number_functions[] = {
 
 const Class NumberObject::class_ = {
     js_Number_str,
-    JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_HAS_CACHED_PROTO(JSProto_Number),
-    JS_PropertyStub,         /* addProperty */
-    JS_DeletePropertyStub,   /* delProperty */
-    JS_PropertyStub,         /* getProperty */
-    JS_StrictPropertyStub,   /* setProperty */
-    JS_EnumerateStub,
-    JS_ResolveStub,
-    JS_ConvertStub
+    JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_HAS_CACHED_PROTO(JSProto_Number)
 };
 
 static bool
@@ -542,9 +535,11 @@ num_toSource(JSContext *cx, unsigned argc, Value *vp)
 }
 #endif
 
-ToCStringBuf::ToCStringBuf() :dbuf(nullptr)
+ToCStringBuf::ToCStringBuf() : dbuf(nullptr)
 {
-    JS_STATIC_ASSERT(sbufSize >= DTOSTR_STANDARD_BUFFER_SIZE);
+    static_assert(sbufSize >= DTOSTR_STANDARD_BUFFER_SIZE,
+                  "builtin space must be large enough to store even the "
+                  "longest string produced by a conversion");
 }
 
 ToCStringBuf::~ToCStringBuf()
@@ -1213,11 +1208,9 @@ js_InitNumberClass(JSContext *cx, HandleObject obj)
     RootedValue valueInfinity(cx, cx->runtime()->positiveInfinityValue);
 
     /* ES5 15.1.1.1, 15.1.1.2 */
-    if (!DefineNativeProperty(cx, global, cx->names().NaN, valueNaN,
-                              JS_PropertyStub, JS_StrictPropertyStub,
+    if (!DefineNativeProperty(cx, global, cx->names().NaN, valueNaN, nullptr, nullptr,
                               JSPROP_PERMANENT | JSPROP_READONLY) ||
-        !DefineNativeProperty(cx, global, cx->names().Infinity, valueInfinity,
-                              JS_PropertyStub, JS_StrictPropertyStub,
+        !DefineNativeProperty(cx, global, cx->names().Infinity, valueInfinity, nullptr, nullptr,
                               JSPROP_PERMANENT | JSPROP_READONLY))
     {
         return nullptr;

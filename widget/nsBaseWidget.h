@@ -34,7 +34,12 @@ namespace layers {
 class BasicLayerManager;
 class CompositorChild;
 class CompositorParent;
+class APZCTreeManager;
+class GeckoContentController;
+struct ScrollableLayerGuid;
 }
+
+class CompositorVsyncDispatcher;
 }
 
 namespace base {
@@ -82,6 +87,9 @@ protected:
   typedef mozilla::layers::BufferMode BufferMode;
   typedef mozilla::layers::CompositorChild CompositorChild;
   typedef mozilla::layers::CompositorParent CompositorParent;
+  typedef mozilla::layers::APZCTreeManager APZCTreeManager;
+  typedef mozilla::layers::GeckoContentController GeckoContentController;
+  typedef mozilla::layers::ScrollableLayerGuid ScrollableLayerGuid;
   typedef mozilla::ScreenRotation ScreenRotation;
 
   virtual ~nsBaseWidget();
@@ -127,13 +135,15 @@ public:
   virtual void            SetShowsFullScreenButton(bool aShow) {}
   virtual void            SetWindowAnimationType(WindowAnimationType aType) {}
   NS_IMETHOD              HideWindowChrome(bool aShouldHide);
-  NS_IMETHOD              MakeFullScreen(bool aFullScreen);
+  NS_IMETHOD              MakeFullScreen(bool aFullScreen, nsIScreen* aScreen = nullptr);
   virtual nsDeviceContext* GetDeviceContext();
   virtual LayerManager*   GetLayerManager(PLayerTransactionChild* aShadowManager = nullptr,
                                           LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
                                           LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT,
                                           bool* aAllowRetaining = nullptr);
 
+  CompositorVsyncDispatcher* GetCompositorVsyncDispatcher() MOZ_OVERRIDE;
+  virtual void            CreateCompositorVsyncDispatcher();
   virtual CompositorParent* NewCompositorParent(int aSurfaceWidth, int aSurfaceHeight);
   virtual void            CreateCompositor();
   virtual void            CreateCompositor(int aWidth, int aHeight);
@@ -300,6 +310,15 @@ protected:
                                      nsDeviceContext *aContext,
                                      nsWidgetInitData *aInitData);
 
+  virtual void ConfigureAPZCTreeManager();
+  virtual already_AddRefed<GeckoContentController> CreateRootContentController();
+
+  // Dispatch an event that has been routed through APZ directly from the
+  // widget.
+  nsEventStatus DispatchEventForAPZ(mozilla::WidgetGUIEvent* aEvent,
+                                    const ScrollableLayerGuid& aGuid,
+                                    uint64_t aInputBlockId);
+
   const nsIntRegion RegionFromArray(const nsTArray<nsIntRect>& aRects);
   void ArrayFromRegion(const nsIntRegion& aRegion, nsTArray<nsIntRect>& aRects);
 
@@ -407,6 +426,8 @@ protected:
   nsRefPtr<LayerManager> mBasicLayerManager;
   nsRefPtr<CompositorChild> mCompositorChild;
   nsRefPtr<CompositorParent> mCompositorParent;
+  nsRefPtr<mozilla::CompositorVsyncDispatcher> mCompositorVsyncDispatcher;
+  nsRefPtr<APZCTreeManager> mAPZC;
   nsRefPtr<WidgetShutdownObserver> mShutdownObserver;
   nsCursor          mCursor;
   bool              mUpdateCursor;

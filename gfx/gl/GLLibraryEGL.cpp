@@ -123,7 +123,7 @@ GLLibraryEGL::EnsureInitialized()
 
 #ifdef MOZ_B2G
     if (!sCurrentContext.init())
-	    MOZ_CRASH("Tls init failed");
+      MOZ_CRASH("Tls init failed");
 #endif
 
 #ifdef XP_WIN
@@ -328,6 +328,25 @@ GLLibraryEGL::EnsureInitialized()
         }
     }
 
+    //XXX: use correct extension name
+    if (IsExtensionSupported(ANGLE_surface_d3d_texture_2d_share_handle)) {
+        GLLibraryLoader::SymLoadStruct d3dSymbols[] = {
+            { (PRFuncPtr*)&mSymbols.fSurfaceReleaseSyncANGLE, { "eglSurfaceReleaseSyncANGLE", nullptr } },
+            { nullptr, { nullptr } }
+        };
+
+        bool success = GLLibraryLoader::LoadSymbols(mEGLLibrary,
+                                                    &d3dSymbols[0],
+                                                    lookupFunction);
+        if (!success) {
+            NS_ERROR("EGL supports ANGLE_surface_d3d_texture_2d_share_handle without exposing its functions!");
+
+            MarkExtensionUnsupported(ANGLE_surface_d3d_texture_2d_share_handle);
+
+            mSymbols.fSurfaceReleaseSyncANGLE = nullptr;
+        }
+    }
+
     if (IsExtensionSupported(KHR_fence_sync)) {
         GLLibraryLoader::SymLoadStruct syncSymbols[] = {
             { (PRFuncPtr*) &mSymbols.fCreateSync,     { "eglCreateSyncKHR",     nullptr } },
@@ -409,22 +428,8 @@ GLLibraryEGL::InitExtensions()
         return;
     }
 
-    bool debugMode = false;
-#ifdef DEBUG
-    if (PR_GetEnv("MOZ_GL_DEBUG"))
-        debugMode = true;
-
-    static bool firstRun = true;
-#else
-    // Non-DEBUG, so never spew.
-    const bool firstRun = false;
-#endif
-
-    GLContext::InitializeExtensionsBitSet(mAvailableExtensions, extensions, sEGLExtensionNames, firstRun && debugMode);
-
-#ifdef DEBUG
-    firstRun = false;
-#endif
+    GLContext::InitializeExtensionsBitSet(mAvailableExtensions, extensions,
+                                          sEGLExtensionNames);
 }
 
 void

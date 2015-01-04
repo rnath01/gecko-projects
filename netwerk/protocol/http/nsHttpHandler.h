@@ -96,7 +96,6 @@ public:
     bool           AllowExperiments() { return mTelemetryEnabled && mAllowExperiments; }
 
     bool           IsSpdyEnabled() { return mEnableSpdy; }
-    bool           IsSpdyV3Enabled() { return mSpdyV3; }
     bool           IsSpdyV31Enabled() { return mSpdyV31; }
     bool           IsHttp2DraftEnabled() { return mHttp2DraftEnabled; }
     bool           IsHttp2Enabled() { return mHttp2DraftEnabled && mHttp2Enabled; }
@@ -114,6 +113,7 @@ public:
     uint32_t       ConnectTimeout()  { return mConnectTimeout; }
     uint32_t       ParallelSpeculativeConnectLimit() { return mParallelSpeculativeConnectLimit; }
     bool           CriticalRequestPrioritization() { return mCriticalRequestPrioritization; }
+    bool           UseH2Deps() { return mUseH2Deps; }
 
     uint32_t       MaxConnectionsPerOrigin() { return mMaxPersistentConnectionsPerServer; }
     bool           UseRequestTokenBucket() { return mRequestTokenBucketEnabled; }
@@ -468,10 +468,10 @@ private:
     uint32_t           mHandlerActive : 1;
 
     uint32_t           mEnableSpdy : 1;
-    uint32_t           mSpdyV3 : 1;
     uint32_t           mSpdyV31 : 1;
     uint32_t           mHttp2DraftEnabled : 1;
     uint32_t           mHttp2Enabled : 1;
+    uint32_t           mUseH2Deps : 1;
     uint32_t           mEnforceHttp2TlsProfile : 1;
     uint32_t           mCoalesceSpdy : 1;
     uint32_t           mSpdyPersistentSettings : 1;

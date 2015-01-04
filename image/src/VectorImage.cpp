@@ -10,7 +10,6 @@
 #include "gfxDrawable.h"
 #include "gfxPlatform.h"
 #include "gfxUtils.h"
-#include "imgDecoderObserver.h"
 #include "imgFrame.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/MemoryReporting.h"
@@ -251,9 +250,9 @@ public:
     , mImageFlags(aImageFlags)
   {}
   virtual bool operator()(gfxContext* aContext,
-                            const gfxRect& aFillRect,
-                            const GraphicsFilter& aFilter,
-                            const gfxMatrix& aTransform);
+                          const gfxRect& aFillRect,
+                          const GraphicsFilter& aFilter,
+                          const gfxMatrix& aTransform);
 private:
   nsRefPtr<SVGDocumentWrapper> mSVGDocumentWrapper;
   const nsIntRect              mViewport;
@@ -323,7 +322,7 @@ NS_IMPL_ISUPPORTS(VectorImage,
 //------------------------------------------------------------------------------
 // Constructor / Destructor
 
-VectorImage::VectorImage(imgStatusTracker* aStatusTracker,
+VectorImage::VectorImage(ProgressTracker* aProgressTracker,
                          ImageURL* aURI /* = nullptr */) :
   ImageResource(aURI), // invoke superclass's constructor
   mIsInitialized(false),
@@ -332,13 +331,13 @@ VectorImage::VectorImage(imgStatusTracker* aStatusTracker,
   mHaveAnimations(false),
   mHasPendingInvalidation(false)
 {
-  mStatusTrackerInit = new imgStatusTrackerInit(this, aStatusTracker);
+  mProgressTrackerInit = new ProgressTrackerInit(this, aProgressTracker);
 }
 
 VectorImage::~VectorImage()
 {
   CancelAllListeners();
-  SurfaceCache::Discard(this);
+  SurfaceCache::RemoveImage(ImageKey(this));
 }
 
 //------------------------------------------------------------------------------
@@ -367,64 +366,33 @@ VectorImage::FrameRect(uint32_t aWhichFrame)
 }
 
 size_t
-VectorImage::HeapSizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const
-{
-  // We're not storing the source data -- we just feed that directly to
-  // our helper SVG document as we receive it, for it to parse.
-  // So 0 is an appropriate return value here.
-  // If implementing this, we'll need to restructure our callers to make sure
-  // any amount we return is attributed to the vector images measure (i.e.
-  // "explicit/images/{content,chrome}/vector/{used,unused}/...")
-  return 0;
-}
-
-size_t
-VectorImage::HeapSizeOfDecodedWithComputedFallback(MallocSizeOf aMallocSizeOf) const
-{
-  // If implementing this, we'll need to restructure our callers to make sure
-  // any amount we return is attributed to the vector images measure (i.e.
-  // "explicit/images/{content,chrome}/vector/{used,unused}/...")
-  return 0;
-}
-
-size_t
-VectorImage::NonHeapSizeOfDecoded() const
-{
-  // If implementing this, we'll need to restructure our callers to make sure
-  // any amount we return is attributed to the vector images measure (i.e.
-  // "explicit/images/{content,chrome}/vector/{used,unused}/...")
-  return 0;
-}
-
-size_t
-VectorImage::OutOfProcessSizeOfDecoded() const
-{
-  // If implementing this, we'll need to restructure our callers to make sure
-  // any amount we return is attributed to the vector images measure (i.e.
-  // "explicit/images/{content,chrome}/vector/{used,unused}/...")
-  return 0;
-}
-
-MOZ_DEFINE_MALLOC_SIZE_OF(WindowsMallocSizeOf);
-
-size_t
-VectorImage::HeapSizeOfVectorImageDocument(nsACString* aDocURL) const
+VectorImage::SizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const
 {
   nsIDocument* doc = mSVGDocumentWrapper->GetDocument();
   if (!doc) {
-    if (aDocURL) {
-      mURI->GetSpec(*aDocURL);
-    }
-    return 0; // No document, so no memory used for the document
+    return 0; // No document, so no memory used for the document.
   }
 
-  if (aDocURL) {
-    doc->GetDocumentURI()->GetSpec(*aDocURL);
-  }
-
-  nsWindowSizes windowSizes(WindowsMallocSizeOf);
+  nsWindowSizes windowSizes(aMallocSizeOf);
   doc->DocAddSizeOfIncludingThis(&windowSizes);
+
+  if (windowSizes.getTotalSize() == 0) {
+    // MallocSizeOf fails on this platform. Because we also use this method for
+    // determining the size of cache entries, we need to return something
+    // reasonable here. Unfortunately, there's no way to estimate the document's
+    // size accurately, so we just use a constant value of 100KB, which will
+    // generally underestimate the true size.
+    return 100 * 1024;
+  }
+
   return windowSizes.getTotalSize();
+}
+
+size_t
+VectorImage::SizeOfDecoded(gfxMemoryLocation aLocation,
+                           MallocSizeOf aMallocSizeOf) const
+{
+  return SurfaceCache::SizeOfSurfaces(ImageKey(this), aLocation, aMallocSizeOf);
 }
 
 nsresult
@@ -434,7 +402,7 @@ VectorImage::OnImageDataComplete(nsIRequest* aRequest,
                                  bool aLastPart)
 {
   // Call our internal OnStopRequest method, which only talks to our embedded
-  // SVG document. This won't have any effect on our imgStatusTracker.
+  // SVG document. This won't have any effect on our ProgressTracker.
   nsresult finalStatus = OnStopRequest(aRequest, aContext, aStatus);
 
   // Give precedence to Necko failure codes.
@@ -442,14 +410,10 @@ VectorImage::OnImageDataComplete(nsIRequest* aRequest,
     finalStatus = aStatus;
 
   // Actually fire OnStopRequest.
-  if (mStatusTracker) {
-    // XXX(seth): Is this seriously the least insane way to do this?
-    nsRefPtr<imgStatusTracker> clone = mStatusTracker->CloneForRecording();
-    imgDecoderObserver* observer = clone->GetDecoderObserver();
-    observer->OnStopRequest(aLastPart, finalStatus);
-    ImageStatusDiff diff = mStatusTracker->Difference(clone);
-    mStatusTracker->ApplyDifference(diff);
-    mStatusTracker->SyncNotifyDifference(diff);
+  if (mProgressTracker) {
+    mProgressTracker->SyncNotifyProgress(LoadCompleteProgress(aLastPart,
+                                                              mError,
+                                                              finalStatus));
   }
   return finalStatus;
 }
@@ -542,8 +506,9 @@ VectorImage::RequestRefresh(const TimeStamp& aTime)
     return;
   }
 
-  // TODO: Implement for b666446.
   EvaluateAnimation();
+
+  mSVGDocumentWrapper->TickRefreshDriver();
 
   if (mHasPendingInvalidation) {
     SendInvalidationNotifications();
@@ -569,12 +534,10 @@ VectorImage::SendInvalidationNotifications()
   // we would miss the subsequent invalidations if we didn't send out the
   // notifications directly in |InvalidateObservers...|.
 
-  if (mStatusTracker) {
-    SurfaceCache::Discard(this);
-    ImageStatusDiff diff;
-    diff.diffState = FLAG_FRAME_STOPPED;
-    mStatusTracker->ApplyDifference(diff);
-    mStatusTracker->SyncNotifyDifference(diff, nsIntRect::GetMaxSizedIntRect());
+  if (mProgressTracker) {
+    SurfaceCache::RemoveImage(ImageKey(this));
+    mProgressTracker->SyncNotifyProgress(FLAG_FRAME_COMPLETE,
+                                         nsIntRect::GetMaxSizedIntRect());
   }
 }
 
@@ -694,15 +657,9 @@ VectorImage::GetFirstFrameDelay()
   return 0;
 }
 
-
-//******************************************************************************
-/* [notxpcom] boolean frameIsOpaque(in uint32_t aWhichFrame); */
 NS_IMETHODIMP_(bool)
-VectorImage::FrameIsOpaque(uint32_t aWhichFrame)
+VectorImage::IsOpaque()
 {
-  if (aWhichFrame > FRAME_MAX_VALUE)
-    NS_WARNING("aWhichFrame outside valid range!");
-
   return false; // In general, SVG content is not opaque.
 }
 
@@ -799,13 +756,11 @@ struct SVGDrawingParameters
 
 //******************************************************************************
 /* [noscript] void draw(in gfxContext aContext,
- *                      in gfxGraphicsFilter aFilter,
- *                      [const] in gfxMatrix aUserSpaceToImageSpace,
- *                      [const] in gfxRect aFill,
- *                      [const] in nsIntRect aSubimage,
- *                      [const] in nsIntSize aViewportSize,
- *                      [const] in SVGImageContext aSVGContext,
+ *                      [const] in nsIntSize aSize,
+ *                      [const] in ImageRegion aRegion,
  *                      in uint32_t aWhichFrame,
+ *                      in gfxGraphicsFilter aFilter,
+ *                      [const] in MaybeSVGImageContext aSVGContext,
  *                      in uint32_t aFlags); */
 NS_IMETHODIMP
 VectorImage::Draw(gfxContext* aContext,
@@ -828,8 +783,8 @@ VectorImage::Draw(gfxContext* aContext,
     return NS_ERROR_FAILURE;
   }
 
-  if (mAnimationConsumers == 0 && mStatusTracker) {
-    mStatusTracker->OnUnlockedDraw();
+  if (mAnimationConsumers == 0 && mProgressTracker) {
+    mProgressTracker->OnUnlockedDraw();
   }
 
   AutoRestore<bool> autoRestoreIsDrawing(mIsDrawing);
@@ -916,7 +871,8 @@ VectorImage::CreateSurfaceAndShow(const SVGDrawingParameters& aParams)
   SurfaceCache::Insert(frame, ImageKey(this),
                        VectorSurfaceKey(aParams.size,
                                         aParams.svgContext,
-                                        aParams.animationTime));
+                                        aParams.animationTime),
+                       Lifetime::Transient);
 
   // Draw.
   nsRefPtr<gfxDrawable> drawable =
@@ -984,7 +940,7 @@ VectorImage::UnlockImage()
 NS_IMETHODIMP
 VectorImage::RequestDiscard()
 {
-  SurfaceCache::Discard(this);
+  SurfaceCache::RemoveImage(ImageKey(this));
   return NS_OK;
 }
 
@@ -1036,13 +992,9 @@ VectorImage::OnStartRequest(nsIRequest* aRequest, nsISupports* aCtxt)
   // Sending StartDecode will block page load until the document's ready.  (We
   // unblock it by sending StopDecode in OnSVGDocumentLoaded or
   // OnSVGDocumentError.)
-  if (mStatusTracker) {
-    nsRefPtr<imgStatusTracker> clone = mStatusTracker->CloneForRecording();
-    imgDecoderObserver* observer = clone->GetDecoderObserver();
-    observer->OnStartDecode();
-    ImageStatusDiff diff = mStatusTracker->Difference(clone);
-    mStatusTracker->ApplyDifference(diff);
-    mStatusTracker->SyncNotifyDifference(diff);
+  if (mProgressTracker) {
+    mProgressTracker->SyncNotifyProgress(FLAG_DECODE_STARTED |
+                                         FLAG_ONLOAD_BLOCKED);
   }
 
   // Create a listener to wait until the SVG document is fully loaded, which
@@ -1120,12 +1072,13 @@ VectorImage::OnSVGDocumentLoaded()
   mRenderingObserver = new SVGRootRenderingObserver(mSVGDocumentWrapper, this);
 
   // Tell *our* observers that we're done loading.
-  if (mStatusTracker) {
-    ImageStatusDiff diff;
-    diff.diffState = FLAG_HAS_SIZE | FLAG_FRAME_STOPPED | FLAG_DECODE_STOPPED |
-                     FLAG_ONLOAD_UNBLOCKED;
-    mStatusTracker->ApplyDifference(diff);
-    mStatusTracker->SyncNotifyDifference(diff, nsIntRect::GetMaxSizedIntRect());
+  if (mProgressTracker) {
+    mProgressTracker->SyncNotifyProgress(FLAG_SIZE_AVAILABLE |
+                                         FLAG_HAS_TRANSPARENCY |
+                                         FLAG_FRAME_COMPLETE |
+                                         FLAG_DECODE_COMPLETE |
+                                         FLAG_ONLOAD_UNBLOCKED,
+                                         nsIntRect::GetMaxSizedIntRect());
   }
 
   EvaluateAnimation();
@@ -1141,15 +1094,11 @@ VectorImage::OnSVGDocumentError()
   // "broken image" icon.  See bug 594505.
   mError = true;
 
-  if (mStatusTracker) {
-    nsRefPtr<imgStatusTracker> clone = mStatusTracker->CloneForRecording();
-    imgDecoderObserver* observer = clone->GetDecoderObserver();
-
+  if (mProgressTracker) {
     // Unblock page load.
-    observer->OnStopDecode(NS_ERROR_FAILURE);
-    ImageStatusDiff diff = mStatusTracker->Difference(clone);
-    mStatusTracker->ApplyDifference(diff);
-    mStatusTracker->SyncNotifyDifference(diff);
+    mProgressTracker->SyncNotifyProgress(FLAG_DECODE_COMPLETE |
+                                         FLAG_ONLOAD_UNBLOCKED |
+                                         FLAG_HAS_ERROR);
   }
 }
 

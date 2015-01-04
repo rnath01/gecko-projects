@@ -10,6 +10,7 @@
 #define LIR_COMMON_OPCODE_LIST(_)   \
     _(Label)                        \
     _(Nop)                          \
+    _(Mop)                          \
     _(OsiPoint)                     \
     _(MoveGroup)                    \
     _(Integer)                      \
@@ -46,6 +47,7 @@
     _(Goto)                         \
     _(NewArray)                     \
     _(NewArrayCopyOnWrite)          \
+    _(NewArrayDynamicLength)        \
     _(ArraySplice)                  \
     _(NewObject)                    \
     _(NewTypedObject)               \
@@ -187,6 +189,7 @@
     _(RegExpTest)                   \
     _(RegExpReplace)                \
     _(StringReplace)                \
+    _(Substr)                       \
     _(Lambda)                       \
     _(LambdaArrow)                  \
     _(LambdaForSingleton)           \
@@ -283,7 +286,7 @@
     _(SetArrayLength)               \
     _(TypedArrayLength)             \
     _(TypedArrayElements)           \
-    _(TypedObjectProto)             \
+    _(TypedObjectDescr)             \
     _(TypedObjectElements)          \
     _(SetTypedObjectOffset)         \
     _(StringLength)                 \
@@ -319,7 +322,6 @@
     _(IsCallable)                   \
     _(IsObject)                     \
     _(IsObjectAndBranch)            \
-    _(HaveSameClass)                \
     _(HasClass)                     \
     _(AsmJSLoadHeap)                \
     _(AsmJSStoreHeap)               \
@@ -331,6 +333,8 @@
     _(AsmJSVoidReturn)              \
     _(AsmJSPassStackArg)            \
     _(AsmJSCall)                    \
+    _(AsmJSCompareExchangeHeap)     \
+    _(AsmJSAtomicBinopHeap)         \
     _(InterruptCheckPar)            \
     _(RecompileCheck)               \
     _(MemoryBarrier)                \
@@ -339,7 +343,8 @@
     _(AssertRangeF)                 \
     _(AssertRangeV)                 \
     _(LexicalCheck)                 \
-    _(ThrowUninitializedLexical)
+    _(ThrowUninitializedLexical)    \
+    _(Debugger)
 
 #if defined(JS_CODEGEN_X86)
 # include "jit/x86/LOpcodes-x86.h"

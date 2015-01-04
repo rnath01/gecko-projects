@@ -53,6 +53,8 @@ public:
 
   MediaKeys(nsPIDOMWindow* aParentWindow, const nsAString& aKeySystem);
 
+  already_AddRefed<Promise> Init(ErrorResult& aRv);
+
   nsPIDOMWindow* GetParentObject() const;
 
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
@@ -69,19 +71,6 @@ public:
   // JavaScript: MediaKeys.SetServerCertificate()
   already_AddRefed<Promise> SetServerCertificate(const ArrayBufferViewOrArrayBuffer& aServerCertificate,
                                                  ErrorResult& aRv);
-
-  // JavaScript: MediaKeys.create()
-  static
-  already_AddRefed<Promise> Create(const GlobalObject& aGlobal,
-                                   const nsAString& aKeySystem,
-                                   ErrorResult& aRv);
-
-  // JavaScript: MediaKeys.IsTypeSupported()
-  static IsTypeSupportedResult IsTypeSupported(const GlobalObject& aGlobal,
-                                               const nsAString& aKeySystem,
-                                               const Optional<nsAString>& aInitDataType,
-                                               const Optional<nsAString>& aContentType,
-                                               const Optional<nsAString>& aCapability);
 
   already_AddRefed<MediaKeySession> GetSession(const nsAString& aSessionId);
 
@@ -115,6 +104,10 @@ public:
 
   void Shutdown();
 
+  // Called by CDMProxy when CDM crashes or shuts down. It is different from
+  // Shutdown which is called from the script/dom side.
+  void Terminated();
+
   // Returns true if this MediaKeys has been bound to a media element.
   bool IsBoundToMediaElement() const;
 
@@ -122,18 +115,9 @@ public:
   // was created, failure otherwise.
   nsresult CheckPrincipals();
 
-  // Returns a pointer to the bound media element's owner doc.
-  // If we're not bound, this returns null.
-  nsIDocument* GetOwnerDoc() const;
-
 private:
 
-  static bool IsTypeSupported(const nsAString& aKeySystem,
-                              const Optional<nsAString>& aInitDataType = Optional<nsAString>(),
-                              const Optional<nsAString>& aContentType = Optional<nsAString>());
-
   bool IsInPrivateBrowsing();
-  already_AddRefed<Promise> Init(ErrorResult& aRv);
 
   // Removes promise from mPromises, and returns it.
   already_AddRefed<Promise> RetrievePromise(PromiseId aId);

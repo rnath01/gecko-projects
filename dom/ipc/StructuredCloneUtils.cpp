@@ -65,7 +65,7 @@ Read(JSContext* aCx, JSStructuredCloneReader* aReader, uint32_t aTag,
       MOZ_ASSERT(global);
 
       nsRefPtr<File> newBlob = new File(global, blob->Impl());
-      if (!WrapNewBindingObject(aCx, newBlob, &val)) {
+      if (!GetOrCreateDOMReflector(aCx, newBlob, &val)) {
         return nullptr;
       }
     }
@@ -101,7 +101,7 @@ Write(JSContext* aCx, JSStructuredCloneWriter* aWriter,
   return NS_DOMWriteStructuredClone(aCx, aWriter, aObj, nullptr);
 }
 
-JSStructuredCloneCallbacks gCallbacks = {
+const JSStructuredCloneCallbacks gCallbacks = {
   Read,
   Write,
   Error,

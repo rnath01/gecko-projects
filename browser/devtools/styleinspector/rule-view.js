@@ -1450,7 +1450,7 @@ CssRuleView.prototype = {
     if (refreshOnPrefs.indexOf(pref) > -1) {
       let element = this._viewedElement;
       this._viewedElement = null;
-      this.highlight(element);
+      this.selectElement(element);
     }
   },
 
@@ -1460,11 +1460,14 @@ CssRuleView.prototype = {
       this.menuitemSources.setAttribute("checked", isEnabled);
     }
 
-    // update text of source links
-    for (let rule of this._elementStyle.rules) {
-      if (rule.editor) {
-        rule.editor.updateSourceLink();
+    // update text of source links if the rule-view is populated
+    if (this._elementStyle && this._elementStyle.rules) {
+      for (let rule of this._elementStyle.rules) {
+        if (rule.editor) {
+          rule.editor.updateSourceLink();
+        }
       }
+      this.inspector.emit("rule-view-sourcelinks-updated");
     }
   },
 
@@ -1529,12 +1532,12 @@ CssRuleView.prototype = {
   },
 
   /**
-   * Update the highlighted element.
+   * Update the view with a new selected element.
    *
    * @param {NodeActor} aElement
    *        The node whose style rules we'll inspect.
    */
-  highlight: function(aElement) {
+  selectElement: function(aElement) {
     if (this._viewedElement === aElement) {
       return promise.resolve(undefined);
     }
@@ -2819,32 +2822,10 @@ TextPropertyEditor.prototype = {
    * Validate this property. Does it make sense for this value to be assigned
    * to this property name? This does not apply the property value
    *
-   * @param {string} [aValue]
-   *        The property value used for validation.
-   *        Defaults to the current value for this.prop
-   *
    * @return {bool} true if the property value is valid, false otherwise.
    */
-  isValid: function(aValue) {
-    let name = this.prop.name;
-    let value = typeof aValue == "undefined" ? this.prop.value : aValue;
-    let val = parseSingleValue(value);
-
-    let style = this.doc.createElementNS(HTML_NS, "div").style;
-    let prefs = Services.prefs;
-
-    // We toggle output of errors whilst the user is typing a property value.
-    let prefVal = prefs.getBoolPref("layout.css.report_errors");
-    prefs.setBoolPref("layout.css.report_errors", false);
-
-    let validValue = false;
-    try {
-      style.setProperty(name, val.value, val.priority);
-      validValue = style.getPropertyValue(name) !== "" || val.value === "";
-    } finally {
-      prefs.setBoolPref("layout.css.report_errors", prefVal);
-    }
-    return validValue;
+  isValid: function() {
+    return domUtils.cssPropertyIsValid(this.prop.name, this.prop.value);
   }
 };
 

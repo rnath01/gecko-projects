@@ -263,7 +263,6 @@ namespace gc {
 void MergeCompartments(JSCompartment *source, JSCompartment *target);
 }
 
-#ifdef JSGC_GENERATIONAL
 // This class is used to add a post barrier on the AccessorShape's getter/setter
 // objects. It updates the shape's entry in the parent's KidsHash table.
 class ShapeGetterSetterRef : public gc::BufferableRef
@@ -278,28 +277,23 @@ class ShapeGetterSetterRef : public gc::BufferableRef
 
     void mark(JSTracer *trc);
 };
-#endif
 
 static inline void
 GetterSetterWriteBarrierPost(AccessorShape *shape, JSObject **objp)
 {
-#ifdef JSGC_GENERATIONAL
     MOZ_ASSERT(shape);
     MOZ_ASSERT(objp);
     MOZ_ASSERT(*objp);
     gc::Cell **cellp = reinterpret_cast<gc::Cell **>(objp);
     if (gc::StoreBuffer *sb = (*cellp)->storeBuffer())
         sb->putGeneric(ShapeGetterSetterRef(shape, objp));
-#endif
 }
 
 static inline void
 GetterSetterWriteBarrierPostRemove(JSRuntime *rt, JSObject **objp)
 {
-#ifdef JSGC_GENERATIONAL
     JS::shadow::Runtime *shadowRuntime = JS::shadow::Runtime::asShadowRuntime(rt);
     shadowRuntime->gcStoreBufferPtr()->removeRelocatableCellFromAnyThread(reinterpret_cast<gc::Cell **>(objp));
-#endif
 }
 
 class BaseShape : public gc::TenuredCell
@@ -588,7 +582,7 @@ class Shape : public gc::TenuredCell
     HeapPtrBaseShape    base_;
     PreBarrieredId      propid_;
 
-    JS_ENUM_HEADER(SlotInfo, uint32_t)
+    enum SlotInfo : uint32_t
     {
         /* Number of fixed slots in objects with this shape. */
         // FIXED_SLOTS_MAX is the biggest count of fixed slots a Shape can store
@@ -613,7 +607,7 @@ class Shape : public gc::TenuredCell
          * other shapes.
          */
         SLOT_MASK              = JS_BIT(24) - 1
-    } JS_ENUM_FOOTER(SlotInfo);
+    };
 
     uint32_t            slotInfo;       /* mask of above info */
     uint8_t             attrs;          /* attributes, see jsapi.h JSPROP_* */
@@ -1176,7 +1170,6 @@ struct InitialShapeEntry
             nfixed(nfixed), baseFlags(baseFlags)
         {}
 
-#ifdef JSGC_GENERATIONAL
         /*
          * For use by generational GC post barriers. Look up an entry whose
          * parent and metadata fields may have been moved, but was hashed with
@@ -1192,7 +1185,6 @@ struct InitialShapeEntry
             hashMetadata(hashMetadata), matchMetadata(matchMetadata),
             nfixed(nfixed), baseFlags(baseFlags)
         {}
-#endif
     };
 
     inline InitialShapeEntry();

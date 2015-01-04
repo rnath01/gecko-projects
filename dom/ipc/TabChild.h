@@ -268,6 +268,7 @@ public:
      * on the critical path.
      */
     static void PreloadSlowThings();
+    static void PostForkPreload();
 
     /** Return a TabChild with the given attributes. */
     static already_AddRefed<TabChild>
@@ -316,10 +317,16 @@ public:
     virtual bool RecvCacheFileDescriptor(const nsString& aPath,
                                          const FileDescriptor& aFileDescriptor)
                                          MOZ_OVERRIDE;
-    virtual bool RecvShow(const nsIntSize& size) MOZ_OVERRIDE;
+    virtual bool RecvShow(const nsIntSize& aSize,
+                          const ShowInfo& aInfo,
+                          const ScrollingBehavior& aScrolling,
+                          const TextureFactoryIdentifier& aTextureFactoryIdentifier,
+                          const uint64_t& aLayersId,
+                          PRenderFrameChild* aRenderFrame) MOZ_OVERRIDE;
     virtual bool RecvUpdateDimensions(const nsIntRect& rect,
                                       const nsIntSize& size,
-                                      const ScreenOrientation& orientation) MOZ_OVERRIDE;
+                                      const ScreenOrientation& orientation,
+                                      const nsIntPoint& chromeDisp) MOZ_OVERRIDE;
     virtual bool RecvUpdateFrame(const mozilla::layers::FrameMetrics& aFrameMetrics) MOZ_OVERRIDE;
     virtual bool RecvAcknowledgeScrollUpdate(const ViewID& aScrollId,
                                              const uint32_t& aScrollGeneration) MOZ_OVERRIDE;
@@ -347,7 +354,9 @@ public:
     virtual bool RecvRealMouseEvent(const mozilla::WidgetMouseEvent& event) MOZ_OVERRIDE;
     virtual bool RecvRealKeyEvent(const mozilla::WidgetKeyboardEvent& event,
                                   const MaybeNativeKeyBinding& aBindings) MOZ_OVERRIDE;
-    virtual bool RecvMouseWheelEvent(const mozilla::WidgetWheelEvent& event) MOZ_OVERRIDE;
+    virtual bool RecvMouseWheelEvent(const mozilla::WidgetWheelEvent& event,
+                                     const ScrollableLayerGuid& aGuid,
+                                     const uint64_t& aInputBlockId) MOZ_OVERRIDE;
     virtual bool RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
                                     const ScrollableLayerGuid& aGuid,
                                     const uint64_t& aInputBlockId) MOZ_OVERRIDE;
@@ -488,19 +497,20 @@ public:
     bool DeallocPPluginWidgetChild(PPluginWidgetChild* aActor) MOZ_OVERRIDE;
     already_AddRefed<nsIWidget> CreatePluginWidget(nsIWidget* aParent);
 
+    nsIntPoint GetChromeDisplacement() { return mChromeDisp; };
+
 protected:
     virtual ~TabChild();
 
-    virtual PRenderFrameChild* AllocPRenderFrameChild(ScrollingBehavior* aScrolling,
-                                                      TextureFactoryIdentifier* aTextureFactoryIdentifier,
-                                                      uint64_t* aLayersId,
-                                                      bool* aSuccess) MOZ_OVERRIDE;
+    virtual PRenderFrameChild* AllocPRenderFrameChild() MOZ_OVERRIDE;
     virtual bool DeallocPRenderFrameChild(PRenderFrameChild* aFrame) MOZ_OVERRIDE;
     virtual bool RecvDestroy() MOZ_OVERRIDE;
     virtual bool RecvSetUpdateHitRegion(const bool& aEnabled) MOZ_OVERRIDE;
     virtual bool RecvSetIsDocShellActive(const bool& aIsActive) MOZ_OVERRIDE;
 
     virtual bool RecvRequestNotifyAfterRemotePaint();
+
+    virtual bool RecvParentActivated(const bool& aActivated) MOZ_OVERRIDE;
 
 #ifdef MOZ_WIDGET_GONK
     void MaybeRequestPreinitCamera();
@@ -536,12 +546,20 @@ private:
 
     enum FrameScriptLoading { DONT_LOAD_SCRIPTS, DEFAULT_LOAD_SCRIPTS };
     bool InitTabChildGlobal(FrameScriptLoading aScriptLoading = DEFAULT_LOAD_SCRIPTS);
-    bool InitRenderingState();
+    bool InitRenderingState(const ScrollingBehavior& aScrolling,
+                            const TextureFactoryIdentifier& aTextureFactoryIdentifier,
+                            const uint64_t& aLayersId,
+                            PRenderFrameChild* aRenderFrame);
     void DestroyWindow();
     void SetProcessNameToAppName();
 
     // Call RecvShow(nsIntSize(0, 0)) and block future calls to RecvShow().
-    void DoFakeShow();
+    void DoFakeShow(const ScrollingBehavior& aScrolling,
+                    const TextureFactoryIdentifier& aTextureFactoryIdentifier,
+                    const uint64_t& aLayersId,
+                    PRenderFrameChild* aRenderFrame);
+
+    void ApplyShowInfo(const ShowInfo& aInfo);
 
     // These methods are used for tracking synthetic mouse events
     // dispatched for compatibility.  On each touch event, we
@@ -566,6 +584,26 @@ private:
     void SendPendingTouchPreventedResponse(bool aPreventDefault,
                                            const ScrollableLayerGuid& aGuid);
 
+    // Adds the scrollable layer target to the target list, and returns whether
+    // or not the caller should wait for a refresh to send a target
+    // notification.
+    bool PrepareForSetTargetAPZCNotification(const ScrollableLayerGuid& aGuid,
+                                             const uint64_t& aInputBlockId,
+                                             nsIFrame* aRootFrame,
+                                             const nsIntPoint& aRefPoint,
+                                             nsTArray<ScrollableLayerGuid>* aTargets);
+
+    // Sends a SetTarget notification for APZC, given one or more previous
+    // calls to PrepareForAPZCSetTargetNotification().
+    void SendSetTargetAPZCNotification(nsIPresShell* aShell,
+                                       const uint64_t& aInputBlockId,
+                                       const nsTArray<ScrollableLayerGuid>& aTargets,
+                                       bool aWaitForRefresh);
+
+    void SendSetTargetAPZCNotification(const WidgetTouchEvent& aEvent,
+                                       const mozilla::layers::ScrollableLayerGuid& aGuid,
+                                       const uint64_t& aInputBlockId);
+
     void SetTabId(const TabId& aTabId)
     {
       MOZ_ASSERT(mUniqueId == 0);
@@ -576,6 +614,7 @@ private:
 
     class CachedFileDescriptorInfo;
     class CachedFileDescriptorCallbackRunnable;
+    class DelayedDeleteRunnable;
 
     TextureFactoryIdentifier mTextureFactoryIdentifier;
     nsCOMPtr<nsIWebNavigation> mWebNav;
@@ -618,7 +657,11 @@ private:
     nsRefPtr<ActiveElementManager> mActiveElementManager;
     bool mHasValidInnerSize;
     bool mDestroyed;
+    // Position of tab, relative to parent widget (typically the window)
+    nsIntPoint mChromeDisp;
     TabId mUniqueId;
+    float mDPI;
+    double mDefaultScale;
 
     DISALLOW_EVIL_CONSTRUCTORS(TabChild);
 };

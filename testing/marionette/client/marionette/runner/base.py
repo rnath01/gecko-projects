@@ -290,6 +290,10 @@ class BaseMarionetteOptions(OptionParser):
                         dest='device_serial',
                         action='store',
                         help='serial ID of a device to use for adb / fastboot')
+        self.add_option('--adb-host',
+                        help='host to use for adb connection')
+        self.add_option('--adb-port',
+                        help='port to use for adb connection')
         self.add_option('--type',
                         dest='type',
                         action='store',
@@ -332,7 +336,7 @@ class BaseMarionetteOptions(OptionParser):
                         help='xml output')
         self.add_option('--testvars',
                         dest='testvars',
-                        action='store',
+                        action='append',
                         help='path to a json file with any test data required')
         self.add_option('--tree',
                         dest='tree',
@@ -379,13 +383,18 @@ class BaseMarionetteOptions(OptionParser):
                         help="Define the path to store log file. If the path is"
                              " a directory, the real log file will be created"
                              " given the format gecko-(timestamp).log. If it is"
-                             " a file, if will be used directly. Default: 'gecko.log'")
+                             " a file, if will be used directly. '-' may be passed"
+                             " to write to stdout. Default: './gecko.log'")
         self.add_option('--logger-name',
                         dest='logger_name',
                         action='store',
                         default='Marionette-based Tests',
                         help='Define the name to associate with the logger used')
-
+        self.add_option('--jsdebugger',
+                        dest='jsdebugger',
+                        action='store_true',
+                        default=False,
+                        help='Enable the jsdebugger for marionette javascript.')
 
     def parse_args(self, args=None, values=None):
         options, tests = OptionParser.parse_args(self, args, values)
@@ -435,6 +444,9 @@ class BaseMarionetteOptions(OptionParser):
             if not 1 <= options.this_chunk <= options.total_chunks:
                 self.error('Chunk to run must be between 1 and %s.' % options.total_chunks)
 
+        if options.jsdebugger:
+            options.app_args.append('-jsdebugger')
+
         for handler in self.verify_usage_handlers:
             handler(options, tests)
 
@@ -454,7 +466,7 @@ class BaseMarionetteTestRunner(object):
                  shuffle=False, shuffle_seed=random.randint(0, sys.maxint),
                  sdcard=None, this_chunk=1, total_chunks=1, sources=None,
                  server_root=None, gecko_log=None, result_callbacks=None,
-                 **kwargs):
+                 adb_host=None, adb_port=None, **kwargs):
         self.address = address
         self.emulator = emulator
         self.emulator_binary = emulator_binary
@@ -473,7 +485,6 @@ class BaseMarionetteTestRunner(object):
         self.logcat_stdout = logcat_stdout
         self.xml_output = xml_output
         self.repeat = repeat
-        self.testvars = {}
         self.test_kwargs = kwargs
         self.tree = tree
         self.type = type
@@ -495,6 +506,8 @@ class BaseMarionetteTestRunner(object):
         self.manifest_skipped_tests = []
         self.tests = []
         self.result_callbacks = result_callbacks if result_callbacks is not None else []
+        self._adb_host = adb_host
+        self._adb_port = adb_port
 
         def gather_debug(test, status):
             rv = {}
@@ -514,17 +527,29 @@ class BaseMarionetteTestRunner(object):
 
         self.result_callbacks.append(gather_debug)
 
-        if testvars:
-            if not os.path.exists(testvars):
-                raise IOError('--testvars file does not exist')
+        def update(d, u):
+            """ Update a dictionary that may contain nested dictionaries. """
+            for k, v in u.iteritems():
+                o = d.get(k, {})
+                if isinstance(v, dict) and isinstance(o, dict):
+                    d[k] = update(d.get(k, {}), v)
+                else:
+                    d[k] = u[k]
+            return d
 
-            try:
-                with open(testvars) as f:
-                    self.testvars = json.loads(f.read())
-            except ValueError as e:
-                json_path = os.path.abspath(testvars)
-                raise Exception("JSON file (%s) is not properly "
-                                "formatted: %s" % (json_path, e.message))
+        self.testvars = {}
+        if testvars is not None:
+            for path in list(testvars):
+                if not os.path.exists(path):
+                    raise IOError('--testvars file %s does not exist' % path)
+                try:
+                    with open(path) as f:
+                        self.testvars = update(self.testvars,
+                                               json.loads(f.read()))
+                except ValueError as e:
+                    raise Exception("JSON file (%s) is not properly "
+                                    "formatted: %s" % (os.path.abspath(path),
+                                                       e.message))
 
         # set up test handlers
         self.test_handlers = []
@@ -593,6 +618,8 @@ class BaseMarionetteTestRunner(object):
             'device_serial': self.device_serial,
             'symbols_path': self.symbols_path,
             'timeout': self.timeout,
+            'adb_host': self._adb_host,
+            'adb_port': self._adb_port,
         }
         if self.bin:
             kwargs.update({
@@ -655,7 +682,7 @@ if((navigator.mozSettings == undefined) || (navigator.mozSettings == null) || (n
 let setReq = navigator.mozSettings.createLock().set({'lockscreen.enabled': false});
 setReq.onsuccess = function() {
     let appName = 'Test Container';
-    let activeApp = window.wrappedJSObject.System.currentApp;
+    let activeApp = window.wrappedJSObject.Service.currentApp;
 
     // if the Test Container is already open then do nothing
     if(activeApp.name === appName){
@@ -716,7 +743,9 @@ setReq.onerror = function() {
         version_info = mozversion.get_version(binary=self.bin,
                                               sources=self.sources,
                                               dm_type=os.environ.get('DM_TRANS', 'adb'),
-                                              device_serial=self.device_serial)
+                                              device_serial=self.device_serial,
+                                              adb_host=self.marionette.adb_host,
+                                              adb_port=self.marionette.adb_port)
 
         device_info = None
         if self.capabilities['device'] != 'desktop' and self.capabilities['browserName'] == 'B2G':
@@ -910,7 +939,9 @@ setReq.onerror = function() {
                 break
 
     def run_test_sets(self):
-        if self.total_chunks > len(self.tests):
+        if len(self.tests) < 1:
+            raise Exception('There are no tests to run.')
+        elif self.total_chunks > len(self.tests):
             raise ValueError('Total number of chunks must be between 1 and %d.' % len(self.tests))
         if self.total_chunks > 1:
             chunks = [[] for i in range(self.total_chunks)]
@@ -929,6 +960,9 @@ setReq.onerror = function() {
     def cleanup(self):
         if self.httpd:
             self.httpd.stop()
+
+        if self.marionette:
+            self.marionette.cleanup()
 
     __del__ = cleanup
 

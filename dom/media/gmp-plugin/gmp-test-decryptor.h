@@ -14,7 +14,7 @@
 class FakeDecryptor : public GMPDecryptor {
 public:
 
-  FakeDecryptor(GMPDecryptorHost* aHost);
+  explicit FakeDecryptor(GMPDecryptorHost* aHost);
 
   virtual void Init(GMPDecryptorCallback* aCallback) MOZ_OVERRIDE {
     mCallback = aCallback;
@@ -67,6 +67,9 @@ public:
   virtual void DecryptingComplete() MOZ_OVERRIDE;
 
   static void Message(const std::string& aMessage);
+
+  void ProcessRecordNames(GMPRecordIterator* aRecordIterator,
+                          GMPErr aStatus);
 
 private:
 

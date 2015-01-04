@@ -28,6 +28,7 @@
 #include "FrameMetrics.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/gfx/UserData.h"
+#include "gfxVR.h"
 
 #include <stdint.h>
 #include "nsTHashtable.h"
@@ -98,14 +99,9 @@ typedef mozilla::EnumSet<mozilla::gfx::CompositionOp> BlendModeSet;
  */
 
 // All types are defined in nsDisplayItemTypes.h
-#ifdef MOZ_DUMP_PAINTING
 #define NS_DISPLAY_DECL_NAME(n, e) \
   virtual const char* Name() { return n; } \
   virtual Type GetType() { return e; }
-#else
-#define NS_DISPLAY_DECL_NAME(n, e) \
-  virtual Type GetType() { return e; }
-#endif
 
 /**
  * This manages a display list and is passed as a parameter to
@@ -209,7 +205,19 @@ public:
    */
   const nsIFrame* FindReferenceFrameFor(const nsIFrame *aFrame,
                                         nsPoint* aOffset = nullptr);
-  
+
+  /**
+   * Returns whether a frame acts as an animated geometry root, optionally
+   * returning the next ancestor to check.
+   */
+  bool IsAnimatedGeometryRoot(nsIFrame* aFrame, nsIFrame** aParent = nullptr);
+
+  /**
+   * Returns the nearest ancestor frame to aFrame that is considered to have
+   * (or will have) animated geometry. This can return aFrame.
+   */
+  nsIFrame* FindAnimatedGeometryRootFor(nsIFrame* aFrame, const nsIFrame* aStopAtAncestor = nullptr);
+
   /**
    * @return the root of the display list's frame (sub)tree, whose origin
    * establishes the coordinate system for the display list
@@ -311,6 +319,10 @@ public:
   const nsIFrame* GetCurrentFrame() { return mCurrentFrame; }
   const nsIFrame* GetCurrentReferenceFrame() { return mCurrentReferenceFrame; }
   const nsPoint& GetCurrentFrameOffsetToReferenceFrame() { return mCurrentOffsetToReferenceFrame; }
+  const nsIFrame* GetCurrentAnimatedGeometryRoot() {
+    return mCurrentAnimatedGeometryRoot;
+  }
+  void RecomputeCurrentAnimatedGeometryRoot();
 
   /**
    * Returns true if merging and flattening of display lists should be
@@ -333,6 +345,11 @@ public:
   void SetAncestorHasTouchEventHandler(bool aValue)
   {
     mAncestorHasTouchEventHandler = aValue;
+  }
+  bool GetAncestorHasScrollEventHandler() { return mAncestorHasScrollEventHandler; }
+  void SetAncestorHasScrollEventHandler(bool aValue)
+  {
+    mAncestorHasScrollEventHandler = aValue;
   }
 
   bool HaveScrollableDisplayPort() const { return mHaveScrollableDisplayPort; }
@@ -539,11 +556,13 @@ public:
       : mBuilder(aBuilder),
         mPrevFrame(aBuilder->mCurrentFrame),
         mPrevReferenceFrame(aBuilder->mCurrentReferenceFrame),
+        mPrevAnimatedGeometryRoot(mBuilder->mCurrentAnimatedGeometryRoot),
         mPrevLayerEventRegions(aBuilder->mLayerEventRegions),
         mPrevOffset(aBuilder->mCurrentOffsetToReferenceFrame),
         mPrevDirtyRect(aBuilder->mDirtyRect),
         mPrevIsAtRootOfPseudoStackingContext(aBuilder->mIsAtRootOfPseudoStackingContext),
-        mPrevAncestorHasTouchEventHandler(aBuilder->mAncestorHasTouchEventHandler)
+        mPrevAncestorHasTouchEventHandler(aBuilder->mAncestorHasTouchEventHandler),
+        mPrevAncestorHasScrollEventHandler(aBuilder->mAncestorHasScrollEventHandler)
     {
       if (aForChild->IsTransformed()) {
         aBuilder->mCurrentOffsetToReferenceFrame = nsPoint();
@@ -554,6 +573,16 @@ public:
         aBuilder->mCurrentReferenceFrame =
           aBuilder->FindReferenceFrameFor(aForChild,
               &aBuilder->mCurrentOffsetToReferenceFrame);
+      }
+      if (aBuilder->mCurrentFrame == aForChild->GetParent()) {
+        if (aBuilder->IsAnimatedGeometryRoot(aForChild)) {
+          aBuilder->mCurrentAnimatedGeometryRoot = aForChild;
+        }
+      } else {
+        // Stop at the previous animated geometry root to help cases that
+        // aren't immediate descendents.
+        aBuilder->mCurrentAnimatedGeometryRoot =
+          aBuilder->FindAnimatedGeometryRootFor(aForChild, aBuilder->mCurrentAnimatedGeometryRoot);
       }
       aBuilder->mCurrentFrame = aForChild;
       aBuilder->mDirtyRect = aDirtyRect;
@@ -566,6 +595,11 @@ public:
       mBuilder->mCurrentReferenceFrame = aFrame;
       mBuilder->mCurrentOffsetToReferenceFrame = aOffset;
     }
+    // Return the previous frame's animated geometry root, whether or not the
+    // current frame is an immediate descendant.
+    const nsIFrame* GetPrevAnimatedGeometryRoot() const {
+      return mPrevAnimatedGeometryRoot;
+    }
     ~AutoBuildingDisplayList() {
       mBuilder->mCurrentFrame = mPrevFrame;
       mBuilder->mCurrentReferenceFrame = mPrevReferenceFrame;
@@ -574,16 +608,20 @@ public:
       mBuilder->mDirtyRect = mPrevDirtyRect;
       mBuilder->mIsAtRootOfPseudoStackingContext = mPrevIsAtRootOfPseudoStackingContext;
       mBuilder->mAncestorHasTouchEventHandler = mPrevAncestorHasTouchEventHandler;
+      mBuilder->mAncestorHasScrollEventHandler = mPrevAncestorHasScrollEventHandler;
+      mBuilder->mCurrentAnimatedGeometryRoot = mPrevAnimatedGeometryRoot;
     }
   private:
     nsDisplayListBuilder* mBuilder;
     const nsIFrame*       mPrevFrame;
     const nsIFrame*       mPrevReferenceFrame;
+    nsIFrame*             mPrevAnimatedGeometryRoot;
     nsDisplayLayerEventRegions* mPrevLayerEventRegions;
     nsPoint               mPrevOffset;
     nsRect                mPrevDirtyRect;
     bool                  mPrevIsAtRootOfPseudoStackingContext;
     bool                  mPrevAncestorHasTouchEventHandler;
+    bool                  mPrevAncestorHasScrollEventHandler;
   };
 
   /**
@@ -752,6 +790,15 @@ public:
 
   bool IsInWillChangeBudget(nsIFrame* aFrame) const;
 
+  /**
+   * Look up the cached animated geometry root for aFrame subject to
+   * aStopAtAncestor. Store the nsIFrame* result into *aOutResult, and return
+   * true if the cache was hit. Return false if the cache was not hit.
+   */
+  bool GetCachedAnimatedGeometryRoot(const nsIFrame* aFrame,
+                                     const nsIFrame* aStopAtAncestor,
+                                     nsIFrame** aOutResult);
+
 private:
   void MarkOutOfFlowFrameForDisplay(nsIFrame* aDirtyFrame, nsIFrame* aFrame,
                                     const nsRect& aDirtyRect);
@@ -795,6 +842,30 @@ private:
   const nsIFrame*                mCurrentReferenceFrame;
   // The offset from mCurrentFrame to mCurrentReferenceFrame.
   nsPoint                        mCurrentOffsetToReferenceFrame;
+  // The animated geometry root for mCurrentFrame.
+  nsIFrame*                      mCurrentAnimatedGeometryRoot;
+
+  struct AnimatedGeometryRootLookup {
+    const nsIFrame* mFrame;
+    const nsIFrame* mStopAtFrame;
+
+    AnimatedGeometryRootLookup(const nsIFrame* aFrame, const nsIFrame* aStopAtFrame)
+      : mFrame(aFrame)
+      , mStopAtFrame(aStopAtFrame)
+    {
+    }
+
+    PLDHashNumber Hash() const {
+      return mozilla::HashBytes(this, sizeof(this));
+    }
+
+    bool operator==(const AnimatedGeometryRootLookup& aOther) const {
+      return mFrame == aOther.mFrame && mStopAtFrame == aOther.mStopAtFrame;
+    }
+  };
+  // Cache for storing animated geometry roots for arbitrary frames
+  nsDataHashtable<nsGenericHashKey<AnimatedGeometryRootLookup>, nsIFrame*>
+                                 mAnimatedGeometryRootCache;
   // will-change budget tracker
   nsDataHashtable<nsPtrHashKey<nsPresContext>, DocumentWillChangeBudget>
                                  mWillChangeBudget;
@@ -831,6 +902,7 @@ private:
   bool                           mIsCompositingCheap;
   bool                           mContainsPluginItem;
   bool                           mAncestorHasTouchEventHandler;
+  bool                           mAncestorHasScrollEventHandler;
   // True when the first async-scrollable scroll frame for which we build a
   // display list has a display port. An async-scrollable scroll frame is one
   // which WantsAsyncScroll().
@@ -1301,15 +1373,13 @@ public:
                             const DisplayItemClip* aClip) {
     return false;
   }
-  
-#ifdef MOZ_DUMP_PAINTING
+
   /**
    * For debugging and stuff
    */
   virtual const char* Name() = 0;
 
-  virtual void WriteDebugInfo(nsACString& aTo) {}
-#endif
+  virtual void WriteDebugInfo(std::stringstream& aStream) {}
 
   nsDisplayItem* GetAbove() { return mAbove; }
 
@@ -1872,9 +1942,7 @@ public:
   nsDisplayGeneric(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
                    PaintCallback aPaint, const char* aName, Type aType)
     : nsDisplayItem(aBuilder, aFrame), mPaint(aPaint)
-#ifdef MOZ_DUMP_PAINTING
       , mName(aName)
-#endif
       , mType(aType)
   {
     MOZ_COUNT_CTOR(nsDisplayGeneric);
@@ -1901,9 +1969,7 @@ public:
 
 protected:
   PaintCallback mPaint;
-#ifdef MOZ_DUMP_PAINTING
   const char*   mName;
-#endif
   Type mType;
 };
 
@@ -2127,9 +2193,7 @@ public:
     ComputeInvalidationRegionDifference(aBuilder, geometry, aInvalidRegion);
   }
 
-#ifdef MOZ_DUMP_PAINTING
-  virtual void WriteDebugInfo(nsACString& aTo) MOZ_OVERRIDE;
-#endif
+  virtual void WriteDebugInfo(std::stringstream& aStream) MOZ_OVERRIDE;
 
   NS_DISPLAY_DECL_NAME("SolidColor", TYPE_SOLID_COLOR)
 
@@ -2288,9 +2352,7 @@ public:
                                          const nsDisplayItemGeometry* aGeometry,
                                          nsRegion* aInvalidRegion) MOZ_OVERRIDE;
 
-#ifdef MOZ_DUMP_PAINTING
-  virtual void WriteDebugInfo(nsACString& aTo) MOZ_OVERRIDE;
-#endif
+  virtual void WriteDebugInfo(std::stringstream& aStream) MOZ_OVERRIDE;
 protected:
   nsRect GetBoundsInternal();
 
@@ -2351,9 +2413,7 @@ public:
   }
 
   NS_DISPLAY_DECL_NAME("BackgroundColor", TYPE_BACKGROUND_COLOR)
-#ifdef MOZ_DUMP_PAINTING
-  virtual void WriteDebugInfo(nsACString& aTo) MOZ_OVERRIDE;
-#endif
+  virtual void WriteDebugInfo(std::stringstream& aStream) MOZ_OVERRIDE;
 
 protected:
   const nsStyleBackground* mBackgroundStyle;
@@ -2563,12 +2623,12 @@ public:
   nsDisplayLayerEventRegions(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
     : nsDisplayItem(aBuilder, aFrame)
   {
-    MOZ_COUNT_CTOR(nsDisplayEventReceiver);
+    MOZ_COUNT_CTOR(nsDisplayLayerEventRegions);
     AddFrame(aBuilder, aFrame);
   }
 #ifdef NS_BUILD_REFCNT_LOGGING
   virtual ~nsDisplayLayerEventRegions() {
-    MOZ_COUNT_DTOR(nsDisplayEventReceiver);
+    MOZ_COUNT_DTOR(nsDisplayLayerEventRegions);
   }
 #endif
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) MOZ_OVERRIDE
@@ -2583,9 +2643,16 @@ public:
   // this layer. aFrame must have the same reference frame as mFrame.
   void AddFrame(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame);
 
+  // Indicate that an inactive scrollframe's scrollport should be added to the
+  // dispatch-to-content region, to ensure that APZ lets content create a
+  // displayport.
+  void AddInactiveScrollPort(const nsRect& aRect);
+
   const nsRegion& HitRegion() { return mHitRegion; }
   const nsRegion& MaybeHitRegion() { return mMaybeHitRegion; }
   const nsRegion& DispatchToContentHitRegion() { return mDispatchToContentHitRegion; }
+
+  virtual void WriteDebugInfo(std::stringstream& aStream) MOZ_OVERRIDE;
 
 private:
   // Relative to aFrame's reference frame.
@@ -2697,6 +2764,8 @@ public:
 
   void SetVisibleRect(const nsRect& aRect);
 
+  void SetReferenceFrame(const nsIFrame* aFrame);
+
   /**
    * This creates a copy of this item, but wrapping aItem instead of
    * our existing list. Only gets called if this item returned nullptr
@@ -2791,9 +2860,7 @@ public:
   virtual bool ShouldFlattenAway(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE;
   bool NeedsActiveLayer(nsDisplayListBuilder* aBuilder);
   NS_DISPLAY_DECL_NAME("Opacity", TYPE_OPACITY)
-#ifdef MOZ_DUMP_PAINTING
-  virtual void WriteDebugInfo(nsACString& aTo) MOZ_OVERRIDE;
-#endif
+  virtual void WriteDebugInfo(std::stringstream& aStream) MOZ_OVERRIDE;
 
   bool CanUseAsyncAnimations(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE;
 
@@ -3089,9 +3156,7 @@ public:
   virtual nsIFrame* GetScrollFrame() { return mScrollFrame; }
   virtual nsIFrame* GetScrolledFrame() { return mScrolledFrame; }
 
-#ifdef MOZ_DUMP_PAINTING
-  virtual void WriteDebugInfo(nsACString& aTo) MOZ_OVERRIDE;
-#endif
+  virtual void WriteDebugInfo(std::stringstream& aStream) MOZ_OVERRIDE;
 
   bool IsDisplayPortOpaque() { return mDisplayPortContentsOpaque; }
 
@@ -3500,9 +3565,7 @@ public:
    */
   bool ShouldPrerender(nsDisplayListBuilder* aBuilder);
 
-#ifdef MOZ_DUMP_PAINTING
-  virtual void WriteDebugInfo(nsACString& aTo) MOZ_OVERRIDE;
-#endif
+  virtual void WriteDebugInfo(std::stringstream& aStream) MOZ_OVERRIDE;
 
 private:
   void SetReferenceFrameToAncestor(nsDisplayListBuilder* aBuilder);
@@ -3573,6 +3636,31 @@ public:
 
   nscoord mLeftEdge;  // length from the left side
   nscoord mRightEdge; // length from the right side
+};
+
+/**
+ * A wrapper layer that wraps its children in a container, then renders
+ * everything with an appropriate VR effect based on the HMDInfo.
+ */
+
+class nsDisplayVR : public nsDisplayOwnLayer {
+public:
+  nsDisplayVR(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
+              nsDisplayList* aList, mozilla::gfx::VRHMDInfo* aHMD);
+
+  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
+                                   LayerManager* aManager,
+                                   const ContainerLayerParameters& aParameters) MOZ_OVERRIDE
+  {
+    return mozilla::LAYER_ACTIVE;
+  }
+
+  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
+                                             LayerManager* aManager,
+                                             const ContainerLayerParameters& aContainerParameters) MOZ_OVERRIDE;
+
+protected:
+  nsRefPtr<mozilla::gfx::VRHMDInfo> mHMD;
 };
 
 #endif /*NSDISPLAYLIST_H_*/

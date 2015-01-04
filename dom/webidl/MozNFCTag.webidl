@@ -9,8 +9,6 @@
  */
 
 enum NFCTechType {
-  "NDEF",
-  "P2P",
   "NFC_A",
   "NFC_B",
   "NFC_F",
@@ -34,12 +32,17 @@ enum NFCTagType {
   "mifare_classic"
 };
 
-[JSImplementation="@mozilla.org/nfc/NFCTag;1", AvailableIn="CertifiedApps"]
+[JSImplementation="@mozilla.org/nfc/tag;1", AvailableIn="PrivilegedApps"]
 interface MozNFCTag {
   /**
    * The supported technologies of this tag, null if unknown.
    */
   [Cached, Pure] readonly attribute sequence<NFCTechType>? techList;
+
+  /**
+   * The identifier of this tag.
+   */
+  [Pure, Constant] readonly attribute Uint8Array? id;
 
   /**
    * The type of this tag, null if unknown.
@@ -66,14 +69,29 @@ interface MozNFCTag {
    */
   readonly attribute boolean? canBeMadeReadOnly;
 
+  /**
+   * Read current NDEF data on the tag.
+   */
   [Throws]
-  DOMRequest readNDEF();
+  Promise<sequence<MozNDEFRecord>> readNDEF();
 
+  /**
+   * Write NDEF data to the tag.
+   */
   [Throws]
-  DOMRequest writeNDEF(sequence<MozNDEFRecord> records);
+  Promise<void> writeNDEF(sequence<MozNDEFRecord> records);
 
+  /**
+   * Make a tag read-only.
+   */
   [Throws]
-  DOMRequest makeReadOnly();
+  Promise<void> makeReadOnly();
+
+  /**
+   * Format a tag as NDEF.
+   */
+  [Throws]
+  Promise<void> format();
 };
 
 // Mozilla Only

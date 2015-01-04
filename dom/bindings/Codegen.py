@@ -425,8 +425,8 @@ class CGDOMJSClass(CGThing):
             resolveHook = "mozilla::dom::ResolveGlobal"
             enumerateHook = "mozilla::dom::EnumerateGlobal"
         else:
-            resolveHook = "JS_ResolveStub"
-            enumerateHook = "JS_EnumerateStub"
+            resolveHook = "nullptr"
+            enumerateHook = "nullptr"
 
         return fill(
             """
@@ -434,12 +434,12 @@ class CGDOMJSClass(CGThing):
               { "${name}",
                 ${flags},
                 ${addProperty}, /* addProperty */
-                JS_DeletePropertyStub, /* delProperty */
-                JS_PropertyStub,       /* getProperty */
-                JS_StrictPropertyStub, /* setProperty */
+                nullptr,               /* delProperty */
+                nullptr,               /* getProperty */
+                nullptr,               /* setProperty */
                 ${enumerate}, /* enumerate */
                 ${resolve}, /* resolve */
-                JS_ConvertStub,
+                nullptr,               /* convert */
                 ${finalize}, /* finalize */
                 ${call}, /* call */
                 nullptr,               /* hasInstance */
@@ -457,7 +457,7 @@ class CGDOMJSClass(CGThing):
             """,
             name=self.descriptor.interface.identifier.name,
             flags=classFlags,
-            addProperty=ADDPROPERTY_HOOK_NAME if wantsAddProperty(self.descriptor) else 'JS_PropertyStub',
+            addProperty=ADDPROPERTY_HOOK_NAME if wantsAddProperty(self.descriptor) else 'nullptr',
             enumerate=enumerateHook,
             resolve=resolveHook,
             finalize=FINALIZE_HOOK_NAME,
@@ -649,13 +649,13 @@ class CGPrototypeJSClass(CGThing):
               {
                 "${name}Prototype",
                 JSCLASS_IS_DOMIFACEANDPROTOJSCLASS | JSCLASS_HAS_RESERVED_SLOTS(${slotCount}),
-                JS_PropertyStub,       /* addProperty */
-                JS_DeletePropertyStub, /* delProperty */
-                JS_PropertyStub,       /* getProperty */
-                JS_StrictPropertyStub, /* setProperty */
-                JS_EnumerateStub,
-                JS_ResolveStub,
-                JS_ConvertStub,
+                nullptr,               /* addProperty */
+                nullptr,               /* delProperty */
+                nullptr,               /* getProperty */
+                nullptr,               /* setProperty */
+                nullptr,               /* enumerate */
+                nullptr,               /* resolve */
+                nullptr,               /* convert */
                 nullptr,               /* finalize */
                 nullptr,               /* call */
                 nullptr,               /* hasInstance */
@@ -745,13 +745,13 @@ class CGInterfaceObjectJSClass(CGThing):
               {
                 "Function",
                 JSCLASS_IS_DOMIFACEANDPROTOJSCLASS | JSCLASS_HAS_RESERVED_SLOTS(${slotCount}),
-                JS_PropertyStub,       /* addProperty */
-                JS_DeletePropertyStub, /* delProperty */
-                JS_PropertyStub,       /* getProperty */
-                JS_StrictPropertyStub, /* setProperty */
-                JS_EnumerateStub,
-                JS_ResolveStub,
-                JS_ConvertStub,
+                nullptr,               /* addProperty */
+                nullptr,               /* delProperty */
+                nullptr,               /* getProperty */
+                nullptr,               /* setProperty */
+                nullptr,               /* enumerate */
+                nullptr,               /* resolve */
+                nullptr,               /* convert */
                 nullptr,               /* finalize */
                 ${ctorname}, /* call */
                 ${hasInstance}, /* hasInstance */
@@ -1735,7 +1735,7 @@ class CGConstructNavigatorObject(CGAbstractMethod):
                 ThrowMethodFailedWithDetails(aCx, rv, "${descriptorName}", "navigatorConstructor");
                 return nullptr;
               }
-              if (!WrapNewBindingObject(aCx, result, &v)) {
+              if (!GetOrCreateDOMReflector(aCx, result, &v)) {
                 //XXX Assertion disabled for now, see bug 991271.
                 MOZ_ASSERT(true || JS_IsExceptionPending(aCx));
                 return nullptr;
@@ -3012,26 +3012,26 @@ class CGConstructorEnabled(CGAbstractMethod):
         if not iface.isExposedInWindow():
             exposedInWindowCheck = dedent(
                 """
-                if (NS_IsMainThread()) {
-                  return false;
-                }
+                MOZ_ASSERT(!NS_IsMainThread(), "Why did we even get called?");
                 """)
             body.append(CGGeneric(exposedInWindowCheck))
 
-        if iface.isExposedInAnyWorker() and iface.isExposedOnlyInSomeWorkers():
+        if iface.isExposedInSomeButNotAllWorkers():
             workerGlobals = sorted(iface.getWorkerExposureSet())
             workerCondition = CGList((CGGeneric('strcmp(name, "%s")' % workerGlobal)
                                       for workerGlobal in workerGlobals), " && ")
             exposedInWorkerCheck = fill(
                 """
-                if (!NS_IsMainThread()) {
-                  const char* name = js::GetObjectClass(aObj)->name;
-                  if (${workerCondition}) {
-                    return false;
-                  }
+                const char* name = js::GetObjectClass(aObj)->name;
+                if (${workerCondition}) {
+                  return false;
                 }
                 """, workerCondition=workerCondition.define())
-            body.append(CGGeneric(exposedInWorkerCheck))
+            exposedInWorkerCheck = CGGeneric(exposedInWorkerCheck)
+            if iface.isExposedInWindow():
+                exposedInWorkerCheck = CGIfWrapper(exposedInWorkerCheck,
+                                                   "!NS_IsMainThread()")
+            body.append(exposedInWorkerCheck)
 
         pref = iface.getExtendedAttribute("Pref")
         if pref:
@@ -3427,6 +3427,12 @@ class CGUpdateMemberSlotsMethod(CGAbstractStaticMethod):
                 "JSJitGetterCallArgs args(&temp);\n")
         for m in self.descriptor.interface.members:
             if m.isAttr() and m.getExtendedAttribute("StoreInSlot"):
+                # Skip doing this for the "window" attribute on the Window
+                # interface, because that can't be gotten safely until we have
+                # hooked it up correctly to the outer window.
+                if (self.descriptor.interface.identifier.name == "Window" and
+                    m.identifier.name == "window"):
+                    continue
                 body += fill(
                     """
 
@@ -3474,7 +3480,6 @@ class CGClearCachedValueMethod(CGAbstractMethod):
                 JSAutoCompartment ac(aCx, obj);
                 if (!get_${name}(aCx, obj, aObject, args)) {
                   js::SetReservedSlot(obj, ${slotIndex}, oldValue);
-                  nsJSUtils::ReportPendingException(aCx);
                   return false;
                 }
                 return true;
@@ -4838,7 +4843,7 @@ def getJSToNativeConversionInfo(type, descriptorProvider, failureCode=None,
                                         declArgs=declArgs,
                                         holderArgs=holderArgs)
 
-    if type.isDOMString() or type.isScalarValueString():
+    if type.isDOMString() or type.isUSVString():
         assert not isEnforceRange and not isClamp
 
         treatAs = {
@@ -4857,8 +4862,8 @@ def getJSToNativeConversionInfo(type, descriptorProvider, failureCode=None,
 
         def getConversionCode(varName):
             normalizeCode = ""
-            if type.isScalarValueString():
-                normalizeCode = "NormalizeScalarValueString(cx, %s);\n" % varName
+            if type.isUSVString():
+                normalizeCode = "NormalizeUSVString(cx, %s);\n" % varName
 
             conversionCode = (
                 "if (!ConvertJSValueToString(cx, ${val}, %s, %s, %s)) {\n"
@@ -5765,7 +5770,7 @@ def getWrapTemplateForType(type, descriptorProvider, result, successCode,
         if not descriptor.interface.isExternal() and not descriptor.skipGen:
             if descriptor.wrapperCache:
                 assert descriptor.nativeOwnership != 'owned'
-                wrapMethod = "WrapNewBindingObject"
+                wrapMethod = "GetOrCreateDOMReflector"
             else:
                 if not returnsNewObject:
                     raise MethodNotNewObjectError(descriptor.interface.identifier.name)
@@ -5798,7 +5803,7 @@ def getWrapTemplateForType(type, descriptorProvider, result, successCode,
         wrappingCode += wrapAndSetPtr(wrap, failed)
         return (wrappingCode, False)
 
-    if type.isDOMString() or type.isScalarValueString():
+    if type.isDOMString() or type.isUSVString():
         if type.nullable():
             return (wrapAndSetPtr("xpc::StringToJsval(cx, %s, ${jsvalHandle})" % result), False)
         else:
@@ -5855,7 +5860,7 @@ def getWrapTemplateForType(type, descriptorProvider, result, successCode,
         return wrapCode, False
 
     if type.isAny():
-        # See comments in WrapNewBindingObject explaining why we need
+        # See comments in GetOrCreateDOMReflector explaining why we need
         # to wrap here.
         # NB: _setValue(..., type-that-is-any) calls JS_WrapValue(), so is fallible
         head = "JS::ExposeValueToActiveJS(%s);\n" % result
@@ -5863,7 +5868,7 @@ def getWrapTemplateForType(type, descriptorProvider, result, successCode,
 
     if (type.isObject() or (type.isSpiderMonkeyInterface() and
                             not typedArraysAreStructs)):
-        # See comments in WrapNewBindingObject explaining why we need
+        # See comments in GetOrCreateDOMReflector explaining why we need
         # to wrap here.
         if type.nullable():
             toValue = "%s"
@@ -5896,7 +5901,7 @@ def getWrapTemplateForType(type, descriptorProvider, result, successCode,
 
     if type.isSpiderMonkeyInterface():
         assert typedArraysAreStructs
-        # See comments in WrapNewBindingObject explaining why we need
+        # See comments in GetOrCreateDOMReflector explaining why we need
         # to wrap here.
         # NB: setObject(..., some-object-type) calls JS_WrapValue(), so is fallible
         return (setObject("*%s.Obj()" % result,
@@ -6078,7 +6083,7 @@ def getRetvalDeclarationForType(returnType, descriptorProvider,
         if returnType.nullable():
             result = CGTemplatedType("Nullable", result)
         return result, None, None, None, None
-    if returnType.isDOMString() or returnType.isScalarValueString():
+    if returnType.isDOMString() or returnType.isUSVString():
         if isMember:
             return CGGeneric("nsString"), "ref", None, None, None
         return CGGeneric("DOMString"), "ref", None, None, None
@@ -7676,9 +7681,9 @@ class CGEnumerateHook(CGAbstractBindingMethod):
             if (rv.Failed()) {
               return ThrowMethodFailedWithDetails(cx, rv, "%s", "enumerate");
             }
-            JS::Rooted<JS::Value> dummy(cx);
+            bool dummy;
             for (uint32_t i = 0; i < names.Length(); ++i) {
-              if (!JS_LookupUCProperty(cx, obj, names[i].get(), names[i].Length(), &dummy)) {
+              if (!JS_HasUCProperty(cx, obj, names[i].get(), names[i].Length(), &dummy)) {
                 return false;
               }
             }
@@ -8489,7 +8494,7 @@ def getUnionAccessorSignatureType(type, descriptorProvider):
         typeName = CGGeneric(type.name)
         return CGWrapper(typeName, post=" const &")
 
-    if type.isDOMString() or type.isScalarValueString():
+    if type.isDOMString() or type.isUSVString():
         return CGGeneric("const nsAString&")
 
     if type.isByteString():
@@ -11883,6 +11888,7 @@ class CGResolveSystemBinding(CGAbstractMethod):
     def definition_body(self):
         descriptors = self.config.getDescriptors(hasInterfaceObject=True,
                                                  isExposedInSystemGlobals=True,
+                                                 workers=False,
                                                  register=True,
                                                  skipGen=False)
 
@@ -11958,6 +11964,7 @@ class CGRegisterProtos(CGAbstractMethod):
         for desc in self.config.getDescriptors(hasInterfaceObject=True,
                                                isExternal=False,
                                                workers=False,
+                                               isExposedInWindow=True,
                                                register=True):
             lines.append("REGISTER_PROTO(%s, %s);\n" % (desc.name, getCheck(desc)))
             lines.extend("REGISTER_CONSTRUCTOR(%s, %s, %s);\n" % (n.identifier.name, desc.name, getCheck(desc))
@@ -12226,10 +12233,6 @@ class CGBindingRoot(CGThing):
                                                    workers=True)) != 0
         bindingHeaders["WorkerPrivate.h"] = hasWorkerStuff
 
-        def descriptorHasThreadChecks(desc):
-            return ((not desc.workers and not desc.interface.isExposedInWindow()) or
-                    (desc.interface.isExposedInAnyWorker() and desc.interface.isExposedOnlyInSomeWorkers()))
-
         hasThreadChecks = hasWorkerStuff or any(d.hasThreadChecks() for d in descriptors)
         bindingHeaders["nsThreadUtils.h"] = hasThreadChecks
 
@@ -12471,7 +12474,7 @@ class CGNativeMember(ClassMethod):
             return (result.define(),
                     "%s(%s)" % (result.define(), defaultReturnArg),
                     "return ${declName};\n")
-        if type.isDOMString() or type.isScalarValueString():
+        if type.isDOMString() or type.isUSVString():
             if isMember:
                 # No need for a third element in the isMember case
                 return "nsString", None, None
@@ -12591,7 +12594,7 @@ class CGNativeMember(ClassMethod):
     def getArgs(self, returnType, argList):
         args = [self.getArg(arg) for arg in argList]
         # Now the outparams
-        if returnType.isDOMString() or returnType.isScalarValueString():
+        if returnType.isDOMString() or returnType.isUSVString():
             args.append(Argument("nsString&", "aRetVal"))
         elif returnType.isByteString():
             args.append(Argument("nsCString&", "aRetVal"))
@@ -12718,7 +12721,7 @@ class CGNativeMember(ClassMethod):
             # Unroll for the name, in case we're nullable.
             return type.unroll().name, True, True
 
-        if type.isDOMString() or type.isScalarValueString():
+        if type.isDOMString() or type.isUSVString():
             if isMember:
                 declType = "nsString"
             else:
@@ -13258,7 +13261,7 @@ class CGJSImplMethod(CGJSImplMember):
                 JS::Rooted<JSObject*> scopeObj(cx, globalHolder->GetGlobalJSObject());
                 MOZ_ASSERT(js::IsObjectInContextCompartment(scopeObj, cx));
                 JS::Rooted<JS::Value> wrappedVal(cx);
-                if (!WrapNewBindingObject(cx, impl, &wrappedVal)) {
+                if (!GetOrCreateDOMReflector(cx, impl, &wrappedVal)) {
                   //XXX Assertion disabled for now, see bug 991271.
                   MOZ_ASSERT(true || JS_IsExceptionPending(cx));
                   aRv.Throw(NS_ERROR_UNEXPECTED);
@@ -13548,7 +13551,7 @@ class CGJSImplClass(CGBindingImplClass):
             JS::Rooted<JSObject*> arg(cx, &args[1].toObject());
             nsRefPtr<${implName}> impl = new ${implName}(arg, window);
             MOZ_ASSERT(js::IsObjectInContextCompartment(arg, cx));
-            return WrapNewBindingObject(cx, impl, args.rval());
+            return GetOrCreateDOMReflector(cx, impl, args.rval());
             """,
             ifaceName=self.descriptor.interface.identifier.name,
             implName=self.descriptor.name)
@@ -14400,6 +14403,7 @@ class GlobalGenRoots():
         defineIncludes = [CGHeaders.getDeclarationFilename(desc.interface)
                           for desc in config.getDescriptors(hasInterfaceObject=True,
                                                             workers=False,
+                                                            isExposedInWindow=True,
                                                             register=True)]
         defineIncludes.append('nsScriptNameSpaceManager.h')
         defineIncludes.extend([CGHeaders.getDeclarationFilename(desc.interface)
@@ -14590,7 +14594,7 @@ class CGEventGetter(CGNativeMember):
         memberName = CGDictionary.makeMemberName(self.member.identifier.name)
         if (type.isPrimitive() and type.tag() in builtinNames) or type.isEnum() or type.isGeckoInterface():
             return "return " + memberName + ";\n"
-        if type.isDOMString() or type.isByteString() or type.isScalarValueString():
+        if type.isDOMString() or type.isByteString() or type.isUSVString():
             return "aRetVal = " + memberName + ";\n"
         if type.isSpiderMonkeyInterface() or type.isObject():
             return fill(
@@ -14983,7 +14987,7 @@ class CGEventClass(CGBindingImplClass):
             nativeType = CGGeneric(type.unroll().inner.identifier.name)
             if type.nullable():
                 nativeType = CGTemplatedType("Nullable", nativeType)
-        elif type.isDOMString() or type.isScalarValueString():
+        elif type.isDOMString() or type.isUSVString():
             nativeType = CGGeneric("nsString")
         elif type.isByteString():
             nativeType = CGGeneric("nsCString")

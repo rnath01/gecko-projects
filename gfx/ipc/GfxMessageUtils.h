@@ -394,10 +394,10 @@ struct ParamTraits<nsIntPoint>
   }
 };
 
-template<>
-struct ParamTraits<mozilla::gfx::IntSize>
+template<typename T>
+struct ParamTraits<mozilla::gfx::IntSizeTyped<T> >
 {
-  typedef mozilla::gfx::IntSize paramType;
+  typedef mozilla::gfx::IntSizeTyped<T> paramType;
 
   static void Write(Message* msg, const paramType& param)
   {
@@ -756,6 +756,7 @@ struct ParamTraits<mozilla::layers::FrameMetrics>
     WriteParam(aMsg, aParam.mBackgroundColor);
     WriteParam(aMsg, aParam.mDoSmoothScroll);
     WriteParam(aMsg, aParam.mSmoothScrollOffset);
+    WriteParam(aMsg, aParam.GetLineScrollAmount());
     WriteParam(aMsg, aParam.GetContentDescription());
   }
 
@@ -797,6 +798,7 @@ struct ParamTraits<mozilla::layers::FrameMetrics>
             ReadParam(aMsg, aIter, &aResult->mBackgroundColor) &&
             ReadParam(aMsg, aIter, &aResult->mDoSmoothScroll) &&
             ReadParam(aMsg, aIter, &aResult->mSmoothScrollOffset) &&
+            ReadParam(aMsg, aIter, &aResult->mLineScrollAmount) &&
             ReadContentDescription(aMsg, aIter, aResult));
   }
 };
@@ -813,6 +815,7 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
     WriteParam(aMsg, aParam.mMaxTextureSize);
     WriteParam(aMsg, aParam.mSupportsTextureBlitting);
     WriteParam(aMsg, aParam.mSupportsPartialUploads);
+    WriteParam(aMsg, aParam.mSyncHandle);
   }
 
   static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
@@ -822,7 +825,8 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
                   ReadParam(aMsg, aIter, &supportedBlendModes) &&
                   ReadParam(aMsg, aIter, &aResult->mMaxTextureSize) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsTextureBlitting) &&
-                  ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads);
+                  ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads) &&
+                  ReadParam(aMsg, aIter, &aResult->mSyncHandle);
     aResult->mSupportedBlendModes.deserialize(supportedBlendModes);
     return result;
   }
@@ -852,8 +856,8 @@ template <>
 struct ParamTraits<mozilla::layers::CompositableType>
   : public ContiguousTypedEnumSerializer<
              mozilla::layers::CompositableType,
-             mozilla::layers::CompositableType::BUFFER_UNKNOWN,
-             mozilla::layers::CompositableType::BUFFER_COUNT>
+             mozilla::layers::CompositableType::UNKNOWN,
+             mozilla::layers::CompositableType::COUNT>
 {};
 
 template <>

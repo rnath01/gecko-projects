@@ -85,8 +85,8 @@ js::IterateChunks(JSRuntime *rt, void *data, IterateChunkCallback chunkCallback)
 {
     AutoPrepareForTracing prep(rt, SkipAtoms);
 
-    for (js::GCChunkSet::Range r = rt->gc.allChunks(); !r.empty(); r.popFront())
-        chunkCallback(rt, data, r.front());
+    for (auto chunk = rt->gc.allNonEmptyChunks(); !chunk.done(); chunk.next())
+        chunkCallback(rt, data, chunk);
 }
 
 void
@@ -120,7 +120,7 @@ js::IterateGrayObjects(Zone *zone, GCThingCallback cellCallback, void *data)
         for (ZoneCellIterUnderGC i(zone, AllocKind(finalizeKind)); !i.done(); i.next()) {
             JSObject *obj = i.get<JSObject>();
             if (obj->asTenured().isMarked(GRAY))
-                cellCallback(data, obj);
+                cellCallback(data, JS::GCCellPtr(obj));
         }
     }
 }

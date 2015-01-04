@@ -46,7 +46,7 @@
 #include "jsinferinlines.h"
 #include "jsscriptinlines.h"
 
-#include "jit/IonFrames-inl.h"
+#include "jit/JitFrames-inl.h"
 #include "vm/Debugger-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/Probes-inl.h"
@@ -141,9 +141,7 @@ static const uint32_t JSSLOT_SAVED_ID = 1;
 
 static const Class js_NoSuchMethodClass = {
     "NoSuchMethod",
-    JSCLASS_HAS_RESERVED_SLOTS(2) | JSCLASS_IS_ANONYMOUS,
-    JS_PropertyStub, JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub,
+    JSCLASS_HAS_RESERVED_SLOTS(2) | JSCLASS_IS_ANONYMOUS
 };
 
 /*
@@ -299,41 +297,63 @@ NameOperation(JSContext *cx, InterpreterFrame *fp, jsbytecode *pc, MutableHandle
         return false;
 
     /* Kludge to allow (typeof foo == "undefined") tests. */
-    JSOp op2 = JSOp(pc[JSOP_NAME_LENGTH]);
+    JSOp op2 = JSOp(pc[JSOP_GETNAME_LENGTH]);
     if (op2 == JSOP_TYPEOF)
         return FetchName<true>(cx, scopeRoot, pobjRoot, nameRoot, shapeRoot, vp);
     return FetchName<false>(cx, scopeRoot, pobjRoot, nameRoot, shapeRoot, vp);
 }
 
-static inline bool
-SetPropertyOperation(JSContext *cx, HandleScript script, jsbytecode *pc, HandleValue lval,
-                     HandleValue rval)
+static bool
+SetObjectProperty(JSContext *cx, JSOp op, HandleValue lval, HandleId id, MutableHandleValue rref)
 {
-    MOZ_ASSERT(*pc == JSOP_SETPROP);
+    MOZ_ASSERT(lval.isObject());
 
-    RootedObject obj(cx, ToObjectFromStack(cx, lval));
-    if (!obj)
-        return false;
+    RootedObject obj(cx, &lval.toObject());
 
-    RootedValue rref(cx, rval);
-
-    RootedId id(cx, NameToId(script->getName(pc)));
+    bool strict = op == JSOP_STRICTSETPROP;
     if (MOZ_LIKELY(!obj->getOps()->setProperty)) {
         if (!baseops::SetPropertyHelper<SequentialExecution>(cx,
                                                              obj.as<NativeObject>(),
                                                              obj.as<NativeObject>(),
                                                              id,
                                                              baseops::Qualified,
-                                                             &rref, script->strict()))
+                                                             rref, strict))
         {
             return false;
         }
     } else {
-        if (!JSObject::setGeneric(cx, obj, obj, id, &rref, script->strict()))
+        if (!JSObject::setGeneric(cx, obj, obj, id, rref, strict))
             return false;
     }
 
     return true;
+}
+
+static bool
+SetPrimitiveProperty(JSContext *cx, JSOp op, HandleValue lval, HandleId id,
+                     MutableHandleValue rref)
+{
+    MOZ_ASSERT(lval.isPrimitive());
+
+    RootedObject obj(cx, ToObjectFromStack(cx, lval));
+    if (!obj)
+        return false;
+
+    RootedValue receiver(cx, ObjectValue(*obj));
+    return SetObjectProperty(cx, op, receiver, id, rref);
+}
+
+static bool
+SetPropertyOperation(JSContext *cx, JSOp op, HandleValue lval, HandleId id, HandleValue rval)
+{
+    MOZ_ASSERT(op == JSOP_SETPROP || op == JSOP_STRICTSETPROP);
+
+    RootedValue rref(cx, rval);
+
+    if (lval.isPrimitive())
+        return SetPrimitiveProperty(cx, op, lval, id, &rref);
+
+    return SetObjectProperty(cx, op, lval, id, &rref);
 }
 
 bool
@@ -409,7 +429,7 @@ js::RunScript(JSContext *cx, RunState &state)
         if (status == jit::Method_Error)
             return false;
         if (status == jit::Method_Compiled) {
-            jit::IonExecStatus status = jit::IonCannon(cx, state);
+            jit::JitExecStatus status = jit::IonCannon(cx, state);
             return !IsErrorStatus(status);
         }
     }
@@ -419,7 +439,7 @@ js::RunScript(JSContext *cx, RunState &state)
         if (status == jit::Method_Error)
             return false;
         if (status == jit::Method_Compiled) {
-            jit::IonExecStatus status = jit::EnterBaselineMethod(cx, state);
+            jit::JitExecStatus status = jit::EnterBaselineMethod(cx, state);
             return !IsErrorStatus(status);
         }
     }
@@ -1462,10 +1482,10 @@ Interpret(JSContext *cx, RunState &state)
     RootedScript script(cx);
     SET_SCRIPT(REGS.fp()->script());
 
-    TraceLogger *logger = TraceLoggerForMainThread(cx->runtime());
-    uint32_t scriptLogId = TraceLogCreateTextId(logger, script);
-    TraceLogStartEvent(logger, scriptLogId);
-    TraceLogStartEvent(logger, TraceLogger::Interpreter);
+    TraceLoggerThread *logger = TraceLoggerForMainThread(cx->runtime());
+    TraceLoggerEvent scriptEvent(logger, TraceLogger_Scripts, script);
+    TraceLogStartEvent(logger, scriptEvent);
+    TraceLogStartEvent(logger, TraceLogger_Interpreter);
 
     /*
      * Pool of rooters for use in this interpreter frame. References to these
@@ -1588,21 +1608,14 @@ CASE(EnableInterruptsPseudoOpcode)
 /* Various 1-byte no-ops. */
 CASE(JSOP_NOP)
 CASE(JSOP_UNUSED2)
-CASE(JSOP_UNUSED46)
-CASE(JSOP_UNUSED47)
-CASE(JSOP_UNUSED48)
-CASE(JSOP_UNUSED49)
-CASE(JSOP_UNUSED50)
 CASE(JSOP_UNUSED51)
 CASE(JSOP_UNUSED52)
-CASE(JSOP_UNUSED57)
 CASE(JSOP_UNUSED83)
 CASE(JSOP_UNUSED92)
 CASE(JSOP_UNUSED103)
 CASE(JSOP_UNUSED104)
 CASE(JSOP_UNUSED105)
 CASE(JSOP_UNUSED107)
-CASE(JSOP_UNUSED124)
 CASE(JSOP_UNUSED125)
 CASE(JSOP_UNUSED126)
 CASE(JSOP_UNUSED146)
@@ -1610,7 +1623,6 @@ CASE(JSOP_UNUSED147)
 CASE(JSOP_UNUSED148)
 CASE(JSOP_BACKPATCH)
 CASE(JSOP_UNUSED150)
-CASE(JSOP_UNUSED156)
 CASE(JSOP_UNUSED157)
 CASE(JSOP_UNUSED158)
 CASE(JSOP_UNUSED159)
@@ -1676,13 +1688,13 @@ CASE(JSOP_LOOPENTRY)
             goto error;
         if (status == jit::Method_Compiled) {
             bool wasSPS = REGS.fp()->hasPushedSPSFrame();
-            jit::IonExecStatus maybeOsr = jit::EnterBaselineAtBranch(cx, REGS.fp(), REGS.pc);
+            jit::JitExecStatus maybeOsr = jit::EnterBaselineAtBranch(cx, REGS.fp(), REGS.pc);
 
             // We failed to call into baseline at all, so treat as an error.
-            if (maybeOsr == jit::IonExec_Aborted)
+            if (maybeOsr == jit::JitExec_Aborted)
                 goto error;
 
-            interpReturnOK = (maybeOsr == jit::IonExec_Ok);
+            interpReturnOK = (maybeOsr == jit::JitExec_Ok);
 
             // Pop the SPS frame pushed by the interpreter.  (The compiled version of the
             // function popped a copy of the frame pushed by the OSR trampoline.)
@@ -1763,9 +1775,8 @@ CASE(JSOP_RETRVAL)
     if (activation.entryFrame() != REGS.fp()) {
         // Stop the engine. (No details about which engine exactly, could be
         // interpreter, Baseline or IonMonkey.)
-        TraceLogStopEvent(logger);
-        // Stop the script. (Again no details about which script exactly.)
-        TraceLogStopEvent(logger);
+        TraceLogStopEvent(logger, TraceLogger_Engine);
+        TraceLogStopEvent(logger, TraceLogger_Scripts);
 
         interpReturnOK = Debugger::onLeaveFrame(cx, REGS.fp(), interpReturnOK);
 
@@ -2256,9 +2267,6 @@ END_CASE(JSOP_POS)
 
 CASE(JSOP_DELNAME)
 {
-    /* Strict mode code should never contain JSOP_DELNAME opcodes. */
-    MOZ_ASSERT(!script->strict());
-
     RootedPropertyName &name = rootName0;
     name = script->getName(REGS.pc);
 
@@ -2273,7 +2281,10 @@ CASE(JSOP_DELNAME)
 END_CASE(JSOP_DELNAME)
 
 CASE(JSOP_DELPROP)
+CASE(JSOP_STRICTDELPROP)
 {
+    static_assert(JSOP_DELPROP_LENGTH == JSOP_STRICTDELPROP_LENGTH,
+                  "delprop and strictdelprop must be the same size");
     RootedId &id = rootId0;
     id = NameToId(script->getName(REGS.pc));
 
@@ -2283,7 +2294,7 @@ CASE(JSOP_DELPROP)
     bool succeeded;
     if (!JSObject::deleteGeneric(cx, obj, id, &succeeded))
         goto error;
-    if (!succeeded && script->strict()) {
+    if (!succeeded && JSOp(*REGS.pc) == JSOP_STRICTDELPROP) {
         obj->reportNotConfigurable(cx, id);
         goto error;
     }
@@ -2293,7 +2304,10 @@ CASE(JSOP_DELPROP)
 END_CASE(JSOP_DELPROP)
 
 CASE(JSOP_DELELEM)
+CASE(JSOP_STRICTDELELEM)
 {
+    static_assert(JSOP_DELELEM_LENGTH == JSOP_STRICTDELELEM_LENGTH,
+                  "delelem and strictdelelem must be the same size");
     /* Fetch the left part and resolve it to a non-null object. */
     RootedObject &obj = rootObject0;
     FETCH_OBJECT(cx, -2, obj);
@@ -2307,7 +2321,7 @@ CASE(JSOP_DELELEM)
         goto error;
     if (!JSObject::deleteGeneric(cx, obj, id, &succeeded))
         goto error;
-    if (!succeeded && script->strict()) {
+    if (!succeeded && JSOp(*REGS.pc) == JSOP_STRICTDELELEM) {
         obj->reportNotConfigurable(cx, id);
         goto error;
     }
@@ -2380,8 +2394,14 @@ CASE(JSOP_SETINTRINSIC)
 END_CASE(JSOP_SETINTRINSIC)
 
 CASE(JSOP_SETGNAME)
+CASE(JSOP_STRICTSETGNAME)
 CASE(JSOP_SETNAME)
+CASE(JSOP_STRICTSETNAME)
 {
+    static_assert(JSOP_SETNAME_LENGTH == JSOP_STRICTSETNAME_LENGTH,
+                  "setname and strictsetname must be the same size");
+    static_assert(JSOP_SETGNAME_LENGTH == JSOP_STRICTSETGNAME_LENGTH,
+                  "setganem adn strictsetgname must be the same size");
     RootedObject &scope = rootObject0;
     scope = &REGS.sp[-2].toObject();
     HandleValue value = REGS.stackHandleAt(-1);
@@ -2395,11 +2415,16 @@ CASE(JSOP_SETNAME)
 END_CASE(JSOP_SETNAME)
 
 CASE(JSOP_SETPROP)
+CASE(JSOP_STRICTSETPROP)
 {
+    static_assert(JSOP_SETPROP_LENGTH == JSOP_STRICTSETPROP_LENGTH,
+                  "setprop and strictsetprop must be the same size");
     HandleValue lval = REGS.stackHandleAt(-2);
     HandleValue rval = REGS.stackHandleAt(-1);
 
-    if (!SetPropertyOperation(cx, script, REGS.pc, lval, rval))
+    RootedId &id = rootId0;
+    id = NameToId(script->getName(REGS.pc));
+    if (!SetPropertyOperation(cx, JSOp(*REGS.pc), lval, id, rval))
         goto error;
 
     REGS.sp[-2] = REGS.sp[-1];
@@ -2429,13 +2454,16 @@ CASE(JSOP_CALLELEM)
 END_CASE(JSOP_GETELEM)
 
 CASE(JSOP_SETELEM)
+CASE(JSOP_STRICTSETELEM)
 {
+    static_assert(JSOP_SETELEM_LENGTH == JSOP_STRICTSETELEM_LENGTH,
+                  "setelem and strictsetelem must be the same size");
     RootedObject &obj = rootObject0;
     FETCH_OBJECT(cx, -3, obj);
     RootedId &id = rootId0;
     FETCH_ELEMENT_ID(-2, id);
     Value &value = REGS.sp[-1];
-    if (!SetObjectElementOperation(cx, obj, id, value, script->strict()))
+    if (!SetObjectElementOperation(cx, obj, id, value, *REGS.pc == JSOP_STRICTSETELEM))
         goto error;
     REGS.sp[-3] = value;
     REGS.sp -= 2;
@@ -2443,7 +2471,10 @@ CASE(JSOP_SETELEM)
 END_CASE(JSOP_SETELEM)
 
 CASE(JSOP_EVAL)
+CASE(JSOP_STRICTEVAL)
 {
+    static_assert(JSOP_EVAL_LENGTH == JSOP_STRICTEVAL_LENGTH,
+                  "eval and stricteval must be the same size");
     CallArgs args = CallArgsFromSp(GET_ARGC(REGS.pc), REGS.sp);
     if (REGS.fp()->scopeChain()->global().valueIsEval(args.calleev())) {
         if (!DirectEval(cx, args))
@@ -2464,7 +2495,10 @@ CASE(JSOP_SPREADCALL)
     /* FALL THROUGH */
 
 CASE(JSOP_SPREADEVAL)
+CASE(JSOP_STRICTSPREADEVAL)
 {
+    static_assert(JSOP_SPREADEVAL_LENGTH == JSOP_STRICTSPREADEVAL_LENGTH,
+                  "spreadeval and strictspreadeval must be the same size");
     MOZ_ASSERT(REGS.stackDepth() >= 3);
 
     HandleValue callee = REGS.stackHandleAt(-3);
@@ -2547,7 +2581,7 @@ CASE(JSOP_FUNCALL)
             if (status == jit::Method_Error)
                 goto error;
             if (status == jit::Method_Compiled) {
-                jit::IonExecStatus exec = jit::IonCannon(cx, state);
+                jit::JitExecStatus exec = jit::IonCannon(cx, state);
                 CHECK_BRANCH();
                 REGS.sp = args.spAfterCall();
                 interpReturnOK = !IsErrorStatus(exec);
@@ -2560,7 +2594,7 @@ CASE(JSOP_FUNCALL)
             if (status == jit::Method_Error)
                 goto error;
             if (status == jit::Method_Compiled) {
-                jit::IonExecStatus exec = jit::EnterBaselineMethod(cx, state);
+                jit::JitExecStatus exec = jit::EnterBaselineMethod(cx, state);
                 CHECK_BRANCH();
                 REGS.sp = args.spAfterCall();
                 interpReturnOK = !IsErrorStatus(exec);
@@ -2578,9 +2612,11 @@ CASE(JSOP_FUNCALL)
 
     SET_SCRIPT(REGS.fp()->script());
 
-    uint32_t scriptLogId = TraceLogCreateTextId(logger, script);
-    TraceLogStartEvent(logger, scriptLogId);
-    TraceLogStartEvent(logger, TraceLogger::Interpreter);
+    {
+        TraceLoggerEvent event(logger, TraceLogger_Scripts, script);
+        TraceLogStartEvent(logger, event);
+        TraceLogStartEvent(logger, TraceLogger_Interpreter);
+    }
 
     if (!REGS.fp()->prologue(cx))
         goto error;
@@ -2629,7 +2665,7 @@ CASE(JSOP_IMPLICITTHIS)
 END_CASE(JSOP_IMPLICITTHIS)
 
 CASE(JSOP_GETGNAME)
-CASE(JSOP_NAME)
+CASE(JSOP_GETNAME)
 {
     RootedValue &rval = rootValue0;
 
@@ -2639,7 +2675,7 @@ CASE(JSOP_NAME)
     PUSH_COPY(rval);
     TypeScript::Monitor(cx, script, REGS.pc, rval);
 }
-END_CASE(JSOP_NAME)
+END_CASE(JSOP_GETNAME)
 
 CASE(JSOP_GETINTRINSIC)
 {
@@ -3059,8 +3095,8 @@ CASE(JSOP_NEWINIT)
         obj = NewDenseEmptyArray(cx, nullptr, newKind);
     } else {
         gc::AllocKind allocKind = GuessObjectGCKind(0);
-        newKind = UseNewTypeForInitializer(script, REGS.pc, &JSObject::class_);
-        obj = NewBuiltinClassInstance(cx, &JSObject::class_, allocKind, newKind);
+        newKind = UseNewTypeForInitializer(script, REGS.pc, &PlainObject::class_);
+        obj = NewBuiltinClassInstance<PlainObject>(cx, allocKind, newKind);
     }
     if (!obj || !SetInitializerObjectType(cx, script, REGS.pc, obj, newKind))
         goto error;
@@ -3084,13 +3120,13 @@ END_CASE(JSOP_NEWARRAY)
 
 CASE(JSOP_NEWARRAY_COPYONWRITE)
 {
-    RootedNativeObject &baseobj = rootNativeObject0;
+    RootedObject &baseobj = rootObject0;
     baseobj = types::GetOrFixupCopyOnWriteObject(cx, script, REGS.pc);
     if (!baseobj)
         goto error;
 
     RootedObject &obj = rootObject1;
-    obj = NewDenseCopyOnWriteArray(cx, baseobj, gc::DefaultHeap);
+    obj = NewDenseCopyOnWriteArray(cx, baseobj.as<ArrayObject>(), gc::DefaultHeap);
     if (!obj)
         goto error;
 
@@ -3100,12 +3136,12 @@ END_CASE(JSOP_NEWARRAY_COPYONWRITE)
 
 CASE(JSOP_NEWOBJECT)
 {
-    RootedNativeObject &baseobj = rootNativeObject0;
+    RootedObject &baseobj = rootObject0;
     baseobj = script->getObject(REGS.pc);
 
     RootedObject &obj = rootObject1;
     NewObjectKind newKind = UseNewTypeForInitializer(script, REGS.pc, baseobj->getClass());
-    obj = CopyInitializerObject(cx, baseobj, newKind);
+    obj = CopyInitializerObject(cx, baseobj.as<PlainObject>(), newKind);
     if (!obj || !SetInitializerObjectType(cx, script, REGS.pc, obj, newKind))
         goto error;
 
@@ -3123,7 +3159,7 @@ CASE(JSOP_MUTATEPROTO)
 
         RootedObject &obj = rootObject0;
         obj = &REGS.sp[-2].toObject();
-        MOZ_ASSERT(obj->is<JSObject>());
+        MOZ_ASSERT(obj->is<PlainObject>());
 
         bool succeeded;
         if (!JSObject::setProto(cx, obj, newProto, &succeeded))
@@ -3144,8 +3180,7 @@ CASE(JSOP_INITPROP)
 
     /* Load the object being initialized into lval/obj. */
     RootedNativeObject &obj = rootNativeObject0;
-    obj = &REGS.sp[-2].toObject().as<NativeObject>();
-    MOZ_ASSERT(obj->is<JSObject>());
+    obj = &REGS.sp[-2].toObject().as<PlainObject>();
 
     PropertyName *name = script->getName(REGS.pc);
 
@@ -3295,17 +3330,15 @@ END_CASE(JSOP_INSTANCEOF)
 CASE(JSOP_DEBUGGER)
 {
     RootedValue rval(cx);
-    switch (Debugger::onDebuggerStatement(cx, REGS.fp(), &rval)) {
+    switch (Debugger::onDebuggerStatement(cx, REGS.fp())) {
       case JSTRAP_ERROR:
         goto error;
       case JSTRAP_CONTINUE:
         break;
       case JSTRAP_RETURN:
-        REGS.fp()->setReturnValue(rval);
         ForcedReturn(cx, REGS);
         goto successful_return_continuation;
       case JSTRAP_THROW:
-        cx->setPendingException(rval);
         goto error;
       default:;
     }
@@ -3494,8 +3527,8 @@ DEFAULT()
 
     gc::MaybeVerifyBarriers(cx, true);
 
-    TraceLogStopEvent(logger);
-    TraceLogStopEvent(logger, scriptLogId);
+    TraceLogStopEvent(logger, TraceLogger_Engine);
+    TraceLogStopEvent(logger, scriptEvent);
 
     /*
      * This path is used when it's guaranteed the method can be finished
@@ -3688,18 +3721,14 @@ js::DefFunOperation(JSContext *cx, HandleScript script, HandleObject scopeChain,
                      : JSPROP_ENUMERATE | JSPROP_PERMANENT;
 
     /* Steps 5d, 5f. */
-    if (!shape || pobj != parent) {
-        return JSObject::defineProperty(cx, parent, name, rval, JS_PropertyStub,
-                                        JS_StrictPropertyStub, attrs);
-    }
+    if (!shape || pobj != parent)
+        return JSObject::defineProperty(cx, parent, name, rval, nullptr, nullptr, attrs);
 
     /* Step 5e. */
     MOZ_ASSERT(parent->isNative());
     if (parent->is<GlobalObject>()) {
-        if (shape->configurable()) {
-            return JSObject::defineProperty(cx, parent, name, rval, JS_PropertyStub,
-                                            JS_StrictPropertyStub, attrs);
-        }
+        if (shape->configurable())
+            return JSObject::defineProperty(cx, parent, name, rval, nullptr, nullptr, attrs);
 
         if (shape->isAccessorDescriptor() || !shape->writable() || !shape->enumerable()) {
             JSAutoByteString bytes;
@@ -3948,11 +3977,11 @@ js::InitGetterSetterOperation(JSContext *cx, jsbytecode *pc, HandleObject obj, H
 
     if (op == JSOP_INITPROP_GETTER || op == JSOP_INITELEM_GETTER) {
         getter = CastAsPropertyOp(val);
-        setter = JS_StrictPropertyStub;
+        setter = nullptr;
         attrs |= JSPROP_GETTER;
     } else {
         MOZ_ASSERT(op == JSOP_INITPROP_SETTER || op == JSOP_INITELEM_SETTER);
-        getter = JS_PropertyStub;
+        getter = nullptr;
         setter = CastAsStrictPropertyOp(val);
         attrs |= JSPROP_SETTER;
     }
@@ -4025,6 +4054,7 @@ js::SpreadCallOperation(JSContext *cx, HandleScript script, jsbytecode *pc, Hand
             return false;
         break;
       case JSOP_SPREADEVAL:
+      case JSOP_STRICTSPREADEVAL:
         if (cx->global()->valueIsEval(args.calleev())) {
             if (!DirectEval(cx, args))
                 return false;

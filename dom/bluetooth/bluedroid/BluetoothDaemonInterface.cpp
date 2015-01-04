@@ -5,6 +5,8 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "BluetoothDaemonInterface.h"
+#include "BluetoothDaemonA2dpInterface.h"
+#include "BluetoothDaemonHandsfreeInterface.h"
 #include "BluetoothDaemonHelpers.h"
 #include "BluetoothDaemonSetupInterface.h"
 #include "BluetoothDaemonSocketInterface.h"
@@ -14,10 +16,6 @@
 using namespace mozilla::ipc;
 
 BEGIN_BLUETOOTH_NAMESPACE
-
-template<class T>
-struct interface_traits
-{ };
 
 //
 // Protocol initialization and setup
@@ -1363,9 +1361,17 @@ class BluetoothDaemonProtocol MOZ_FINAL
   , public BluetoothDaemonSetupModule
   , public BluetoothDaemonCoreModule
   , public BluetoothDaemonSocketModule
+  , public BluetoothDaemonHandsfreeModule
+  , public BluetoothDaemonA2dpModule
 {
 public:
   BluetoothDaemonProtocol(BluetoothDaemonConnection* aConnection);
+
+  nsresult RegisterModule(uint8_t aId, uint8_t aMode,
+                          BluetoothSetupResultHandler* aRes) MOZ_OVERRIDE;
+
+  nsresult UnregisterModule(uint8_t aId,
+                            BluetoothSetupResultHandler* aRes) MOZ_OVERRIDE;
 
   // Outgoing PDUs
   //
@@ -1388,6 +1394,10 @@ private:
                      BluetoothDaemonPDU& aPDU, void* aUserData);
   void HandleSocketSvc(const BluetoothDaemonPDUHeader& aHeader,
                        BluetoothDaemonPDU& aPDU, void* aUserData);
+  void HandleHandsfreeSvc(const BluetoothDaemonPDUHeader& aHeader,
+                          BluetoothDaemonPDU& aPDU, void* aUserData);
+  void HandleA2dpSvc(const BluetoothDaemonPDUHeader& aHeader,
+                     BluetoothDaemonPDU& aPDU, void* aUserData);
 
   BluetoothDaemonConnection* mConnection;
   nsTArray<void*> mUserDataQ;
@@ -1398,6 +1408,20 @@ BluetoothDaemonProtocol::BluetoothDaemonProtocol(
   : mConnection(aConnection)
 {
   MOZ_ASSERT(mConnection);
+}
+
+nsresult
+BluetoothDaemonProtocol::RegisterModule(uint8_t aId, uint8_t aMode,
+                                        BluetoothSetupResultHandler* aRes)
+{
+  return BluetoothDaemonSetupModule::RegisterModuleCmd(aId, aMode, aRes);
+}
+
+nsresult
+BluetoothDaemonProtocol::UnregisterModule(uint8_t aId,
+                                          BluetoothSetupResultHandler* aRes)
+{
+  return BluetoothDaemonSetupModule::UnregisterModuleCmd(aId, aRes);
 }
 
 nsresult
@@ -1435,13 +1459,35 @@ BluetoothDaemonProtocol::HandleSocketSvc(
 }
 
 void
+BluetoothDaemonProtocol::HandleHandsfreeSvc(
+  const BluetoothDaemonPDUHeader& aHeader, BluetoothDaemonPDU& aPDU,
+  void* aUserData)
+{
+  BluetoothDaemonHandsfreeModule::HandleSvc(aHeader, aPDU, aUserData);
+}
+
+void
+BluetoothDaemonProtocol::HandleA2dpSvc(
+  const BluetoothDaemonPDUHeader& aHeader, BluetoothDaemonPDU& aPDU,
+  void* aUserData)
+{
+  BluetoothDaemonA2dpModule::HandleSvc(aHeader, aPDU, aUserData);
+}
+
+void
 BluetoothDaemonProtocol::Handle(BluetoothDaemonPDU& aPDU)
 {
   static void (BluetoothDaemonProtocol::* const HandleSvc[])(
     const BluetoothDaemonPDUHeader&, BluetoothDaemonPDU&, void*) = {
     INIT_ARRAY_AT(0x00, &BluetoothDaemonProtocol::HandleSetupSvc),
     INIT_ARRAY_AT(0x01, &BluetoothDaemonProtocol::HandleCoreSvc),
-    INIT_ARRAY_AT(0x02, &BluetoothDaemonProtocol::HandleSocketSvc)
+    INIT_ARRAY_AT(0x02, &BluetoothDaemonProtocol::HandleSocketSvc),
+    INIT_ARRAY_AT(0x03, nullptr), // HID host
+    INIT_ARRAY_AT(0x04, nullptr), // PAN
+    INIT_ARRAY_AT(BluetoothDaemonHandsfreeModule::SERVICE_ID,
+      &BluetoothDaemonProtocol::HandleHandsfreeSvc),
+    INIT_ARRAY_AT(BluetoothDaemonA2dpModule::SERVICE_ID,
+      &BluetoothDaemonProtocol::HandleA2dpSvc)
   };
 
   BluetoothDaemonPDUHeader header;
@@ -2009,13 +2055,25 @@ BluetoothDaemonInterface::GetBluetoothSocketInterface()
 BluetoothHandsfreeInterface*
 BluetoothDaemonInterface::GetBluetoothHandsfreeInterface()
 {
-  return nullptr;
+  if (mHandsfreeInterface) {
+    return mHandsfreeInterface;
+  }
+
+  mHandsfreeInterface = new BluetoothDaemonHandsfreeInterface(mProtocol);
+
+  return mHandsfreeInterface;
 }
 
 BluetoothA2dpInterface*
 BluetoothDaemonInterface::GetBluetoothA2dpInterface()
 {
-  return nullptr;
+  if (mA2dpInterface) {
+    return mA2dpInterface;
+  }
+
+  mA2dpInterface = new BluetoothDaemonA2dpInterface(mProtocol);
+
+  return mA2dpInterface;
 }
 
 BluetoothAvrcpInterface*

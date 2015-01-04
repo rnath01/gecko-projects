@@ -14,9 +14,9 @@
 #include "builtin/TypedObject.h"
 #include "jit/BaselineIC.h"
 #include "jit/Ion.h"
-#include "jit/IonLinker.h"
 #include "jit/JitcodeMap.h"
 #include "jit/JitSpewer.h"
+#include "jit/Linker.h"
 #include "jit/Lowering.h"
 #ifdef JS_ION_PERF
 # include "jit/PerfSpewer.h"
@@ -25,7 +25,7 @@
 #include "jit/VMFunctions.h"
 #include "vm/Shape.h"
 
-#include "jit/IonFrames-inl.h"
+#include "jit/JitFrames-inl.h"
 #include "vm/Interpreter-inl.h"
 #include "vm/Shape-inl.h"
 
@@ -542,7 +542,7 @@ IsCacheableNoProperty(JSObject *obj, JSObject *holder, Shape *shape, jsbytecode 
 
     // Just because we didn't find the property on the object doesn't mean it
     // won't magically appear through various engine hacks:
-    if (obj->getClass()->getProperty && obj->getClass()->getProperty != JS_PropertyStub)
+    if (obj->getClass()->getProperty)
         return false;
 
     // Don't generate missing property ICs if we skipped a non-native object, as
@@ -659,6 +659,7 @@ EmitLoadSlot(MacroAssembler &masm, NativeObject *holder, Shape *shape, Register 
              TypedOrValueRegister output, Register scratchReg)
 {
     MOZ_ASSERT(holder);
+    NativeObject::slotsSizeMustNotOverflow();
     if (holder->isFixedSlot(shape->slot())) {
         Address addr(holderReg, NativeObject::getFixedSlotOffset(shape->slot()));
         masm.loadTypedOrValue(addr, output);
@@ -1166,7 +1167,7 @@ CanAttachNativeGetProp(typename GetPropCache::Context cx, const GetPropCache &ca
     // of turn. We don't mind doing this even when purity isn't required, because we
     // only miss out on shape hashification, which is only a temporary perf cost.
     // The limits were arbitrarily set, anyways.
-    if (!LookupPropertyPure(obj, NameToId(name), holder.address(), shape.address()))
+    if (!LookupPropertyPure(cx, obj, NameToId(name), holder.address(), shape.address()))
         return GetPropertyIC::CanAttachNone;
 
     RootedScript script(cx);
@@ -1221,7 +1222,7 @@ GetPropertyIC::allowArrayLength(Context cx, HandleObject obj) const
     uint32_t locationIndex, numLocations;
     getLocationInfo(&locationIndex, &numLocations);
 
-    IonScript *ion = GetTopIonJSScript(cx)->ionScript();
+    IonScript *ion = GetTopJitJSScript(cx)->ionScript();
     CacheLocation *locs = ion->getCacheLocs(locationIndex);
     for (size_t i = 0; i < numLocations; i++) {
         CacheLocation &curLoc = locs[i];
@@ -1721,7 +1722,7 @@ GetPropertyIC::update(JSContext *cx, size_t cacheIndex,
                       HandleObject obj, MutableHandleValue vp)
 {
     void *returnAddr;
-    RootedScript outerScript(cx, GetTopIonJSScript(cx, &returnAddr));
+    RootedScript outerScript(cx, GetTopJitJSScript(cx, &returnAddr));
     IonScript *ion = outerScript->ionScript();
 
     GetPropertyIC &cache = ion->getCache(cacheIndex).toGetProperty();
@@ -1884,7 +1885,7 @@ bool
 GetPropertyParIC::update(ForkJoinContext *cx, size_t cacheIndex,
                          HandleObject obj, MutableHandleValue vp)
 {
-    IonScript *ion = GetTopIonJSScript(cx)->parallelIonScript();
+    IonScript *ion = GetTopJitJSScript(cx)->parallelIonScript();
     GetPropertyParIC &cache = ion->getCache(cacheIndex).toGetPropertyPar();
 
     // Grab the property early, as the pure path is fast anyways and doesn't
@@ -2006,6 +2007,7 @@ GenerateSetSlot(JSContext *cx, MacroAssembler &masm, IonCache::StubAttacher &att
         }
     }
 
+    NativeObject::slotsSizeMustNotOverflow();
     if (obj->isFixedSlot(shape->slot())) {
         Address addr(object, NativeObject::getFixedSlotOffset(shape->slot()));
 
@@ -2594,7 +2596,7 @@ GenerateAddSlot(JSContext *cx, MacroAssembler &masm, IonCache::StubAttacher &att
         masm.push(object);
         masm.loadPtr(Address(object, JSObject::offsetOfType()), object);
         masm.branchPtr(Assembler::Equal,
-                       Address(object, types::TypeObject::offsetOfNewScript()),
+                       Address(object, types::TypeObject::offsetOfAddendum()),
                        ImmWord(0),
                        &noTypeChange);
         masm.pop(object);
@@ -2612,6 +2614,7 @@ GenerateAddSlot(JSContext *cx, MacroAssembler &masm, IonCache::StubAttacher &att
 
     // Set the value on the object. Since this is an add, obj->lastProperty()
     // must be the shape of the property we are adding.
+    NativeObject::slotsSizeMustNotOverflow();
     if (obj->isFixedSlot(newShape->slot())) {
         Address addr(object, NativeObject::getFixedSlotOffset(newShape->slot()));
         masm.storeConstantOrRegister(value, addr);
@@ -2728,13 +2731,12 @@ IsPropertyAddInlineable(NativeObject *obj, HandleId id, ConstantOrRegister val, 
     // the shape must be the one we just added.
     MOZ_ASSERT(shape == obj->lastProperty());
 
-    // If object has a non-default resolve hook, don't inline
-    if (obj->getClass()->resolve != JS_ResolveStub)
+    // If object has a resolve hook, don't inline
+    if (obj->getClass()->resolve)
         return false;
 
-    // Likewise for a non-default addProperty hook, since we'll need
-    // to invoke it.
-    if (obj->getClass()->addProperty != JS_PropertyStub)
+    // Likewise for an addProperty hook, since we'll need to invoke it.
+    if (obj->getClass()->addProperty)
         return false;
 
     if (!obj->nonProxyIsExtensible() || !shape->writable())
@@ -2756,7 +2758,7 @@ IsPropertyAddInlineable(NativeObject *obj, HandleId id, ConstantOrRegister val, 
         // Otherwise, if there's no such property, watch out for a resolve
         // hook that would need to be invoked and thus prevent inlining of
         // property addition.
-        if (proto->getClass()->resolve != JS_ResolveStub)
+        if (proto->getClass()->resolve)
              return false;
     }
 
@@ -2780,7 +2782,7 @@ IsPropertyAddInlineable(NativeObject *obj, HandleId id, ConstantOrRegister val, 
 }
 
 static SetPropertyIC::NativeSetPropCacheability
-CanAttachNativeSetProp(HandleObject obj, HandleId id, ConstantOrRegister val,
+CanAttachNativeSetProp(ThreadSafeContext *cx, HandleObject obj, HandleId id, ConstantOrRegister val,
                        bool needsTypeBarrier, MutableHandleNativeObject holder,
                        MutableHandleShape shape, bool *checkTypeset)
 {
@@ -2793,7 +2795,7 @@ CanAttachNativeSetProp(HandleObject obj, HandleId id, ConstantOrRegister val,
 
     // If we couldn't find the property on the object itself, do a full, but
     // still pure lookup for setters.
-    if (!LookupPropertyPure(obj, id, holder.address(), shape.address()))
+    if (!LookupPropertyPure(cx, obj, id, holder.address(), shape.address()))
         return SetPropertyIC::CanAttachNone;
 
     // If the object doesn't have the property, we don't know if we can attach
@@ -2817,7 +2819,7 @@ SetPropertyIC::update(JSContext *cx, size_t cacheIndex, HandleObject obj,
                       HandleValue value)
 {
     void *returnAddr;
-    RootedScript script(cx, GetTopIonJSScript(cx, &returnAddr));
+    RootedScript script(cx, GetTopJitJSScript(cx, &returnAddr));
     IonScript *ion = script->ionScript();
     SetPropertyIC &cache = ion->getCache(cacheIndex).toSetProperty();
     RootedPropertyName name(cx, cache.name());
@@ -2861,7 +2863,7 @@ SetPropertyIC::update(JSContext *cx, size_t cacheIndex, HandleObject obj,
         RootedShape shape(cx);
         RootedNativeObject holder(cx);
         bool checkTypeset;
-        canCache = CanAttachNativeSetProp(obj, id, cache.value(), cache.needsTypeBarrier(),
+        canCache = CanAttachNativeSetProp(cx, obj, id, cache.value(), cache.needsTypeBarrier(),
                                           &holder, &shape, &checkTypeset);
 
         if (!addedSetterStub && canCache == CanAttachSetSlot) {
@@ -2913,7 +2915,7 @@ SetPropertyParIC::update(ForkJoinContext *cx, size_t cacheIndex, HandleObject ob
 {
     MOZ_ASSERT(cx->isThreadLocal(obj));
 
-    IonScript *ion = GetTopIonJSScript(cx)->parallelIonScript();
+    IonScript *ion = GetTopJitJSScript(cx)->parallelIonScript();
     SetPropertyParIC &cache = ion->getCache(cacheIndex).toSetPropertyPar();
 
     RootedValue v(cx, value);
@@ -2954,7 +2956,7 @@ SetPropertyParIC::update(ForkJoinContext *cx, size_t cacheIndex, HandleObject ob
                 RootedShape shape(cx);
                 RootedNativeObject holder(cx);
                 bool checkTypeset;
-                canCache = CanAttachNativeSetProp(nobj, id, cache.value(), cache.needsTypeBarrier(),
+                canCache = CanAttachNativeSetProp(cx, nobj, id, cache.value(), cache.needsTypeBarrier(),
                                                   &holder, &shape, &checkTypeset);
 
                 if (canCache == SetPropertyIC::CanAttachSetSlot) {
@@ -3182,7 +3184,7 @@ GenerateDenseElement(JSContext *cx, MacroAssembler &masm, IonCache::StubAttacher
     masm.branch32(Assembler::BelowOrEqual, initLength, indexReg, &hole);
 
     // Check for holes & load the value.
-    masm.loadElementTypedOrValue(BaseIndex(object, indexReg, TimesEight),
+    masm.loadElementTypedOrValue(BaseObjectElementIndex(object, indexReg),
                                  output, true, &hole);
 
     masm.pop(object);
@@ -3426,7 +3428,7 @@ GetElementIC::attachArgumentsElement(JSContext *cx, HandleScript outerScript, Io
 
     // Restore original index register value, to use for indexing element.
     masm.pop(indexReg);
-    BaseIndex elemIdx(tmpReg, indexReg, ScaleFromElemWidth(sizeof(Value)));
+    BaseValueIndex elemIdx(tmpReg, indexReg);
 
     // Ensure result is not magic value, and type-check result.
     masm.branchTestMagic(Assembler::Equal, elemIdx, &failureRestoreIndex);
@@ -3477,7 +3479,7 @@ GetElementIC::update(JSContext *cx, size_t cacheIndex, HandleObject obj,
                      HandleValue idval, MutableHandleValue res)
 {
     void *returnAddr;
-    RootedScript outerScript(cx, GetTopIonJSScript(cx, &returnAddr));
+    RootedScript outerScript(cx, GetTopJitJSScript(cx, &returnAddr));
     IonScript *ion = outerScript->ionScript();
     GetElementIC &cache = ion->getCache(cacheIndex).toGetElement();
     RootedScript script(cx);
@@ -3488,7 +3490,7 @@ GetElementIC::update(JSContext *cx, size_t cacheIndex, HandleObject obj,
     AutoDetectInvalidation adi(cx, res, ion);
 
     if (cache.isDisabled()) {
-        if (!GetObjectElementOperation(cx, JSOp(*pc), obj, /* wasObject = */true, idval, res))
+        if (!GetObjectElementOperation(cx, JSOp(*pc), obj, idval, res))
             return false;
         if (!cache.monitoredResult())
             types::TypeScript::Monitor(cx, script, pc, res);
@@ -3530,7 +3532,7 @@ GetElementIC::update(JSContext *cx, size_t cacheIndex, HandleObject obj,
         }
     }
 
-    if (!GetObjectElementOperation(cx, JSOp(*pc), obj, /* wasObject = */true, idval, res))
+    if (!GetObjectElementOperation(cx, JSOp(*pc), obj, idval, res))
         return false;
 
     // Disable cache when we reach max stubs or update failed too much.
@@ -3600,7 +3602,7 @@ IsTypedArrayElementSetInlineable(JSObject *obj, const Value &idval, const Value 
 
 static void
 StoreDenseElement(MacroAssembler &masm, ConstantOrRegister value, Register elements,
-                  BaseIndex target)
+                  BaseObjectElementIndex target)
 {
     // If the ObjectElements::CONVERT_DOUBLE_ELEMENTS flag is set, int32 values
     // have to be converted to double first. If the value is not int32, it can
@@ -3684,7 +3686,7 @@ GenerateSetDenseElement(JSContext *cx, MacroAssembler &masm, IonCache::StubAttac
         masm.loadPtr(Address(object, NativeObject::offsetOfElements()), elements);
 
         // Compute the location of the element.
-        BaseIndex target(elements, index, TimesEight);
+        BaseObjectElementIndex target(elements, index);
 
         // If TI cannot help us deal with HOLES by preventing indexed properties
         // on the prototype chain, we have to be very careful to check for ourselves
@@ -3867,7 +3869,7 @@ bool
 SetElementIC::update(JSContext *cx, size_t cacheIndex, HandleObject obj,
                      HandleValue idval, HandleValue value)
 {
-    RootedScript outerScript(cx, GetTopIonJSScript(cx));
+    RootedScript outerScript(cx, GetTopJitJSScript(cx));
     IonScript *ion = outerScript->ionScript();
     SetElementIC &cache = ion->getCache(cacheIndex).toSetElement();
 
@@ -3937,7 +3939,7 @@ bool
 SetElementParIC::update(ForkJoinContext *cx, size_t cacheIndex, HandleObject obj,
                         HandleValue idval, HandleValue value)
 {
-    IonScript *ion = GetTopIonJSScript(cx)->parallelIonScript();
+    IonScript *ion = GetTopJitJSScript(cx)->parallelIonScript();
     SetElementParIC &cache = ion->getCache(cacheIndex).toSetElementPar();
 
     // Avoid unnecessary locking if cannot attach stubs.
@@ -4016,7 +4018,7 @@ bool
 GetElementParIC::update(ForkJoinContext *cx, size_t cacheIndex, HandleObject obj,
                         HandleValue idval, MutableHandleValue vp)
 {
-    IonScript *ion = GetTopIonJSScript(cx)->parallelIonScript();
+    IonScript *ion = GetTopJitJSScript(cx)->parallelIonScript();
     GetElementParIC &cache = ion->getCache(cacheIndex).toGetElementPar();
 
     // Try to get the element early, as the pure path doesn't need a lock. If
@@ -4220,7 +4222,7 @@ IsCacheableNonGlobalScopeChain(JSObject *scopeChain, JSObject *holder)
 JSObject *
 BindNameIC::update(JSContext *cx, size_t cacheIndex, HandleObject scopeChain)
 {
-    RootedScript outerScript(cx, GetTopIonJSScript(cx));
+    RootedScript outerScript(cx, GetTopJitJSScript(cx));
     IonScript *ion = outerScript->ionScript();
     BindNameIC &cache = ion->getCache(cacheIndex).toBindName();
     HandlePropertyName name = cache.name();
@@ -4371,7 +4373,7 @@ NameIC::update(JSContext *cx, size_t cacheIndex, HandleObject scopeChain,
                MutableHandleValue vp)
 {
     void *returnAddr;
-    RootedScript outerScript(cx, GetTopIonJSScript(cx, &returnAddr));
+    RootedScript outerScript(cx, GetTopJitJSScript(cx, &returnAddr));
     IonScript *ion = outerScript->ionScript();
 
     NameIC &cache = ion->getCache(cacheIndex).toName();
@@ -4441,7 +4443,7 @@ CallsiteCloneIC::update(JSContext *cx, size_t cacheIndex, HandleObject callee)
     if (!fun->hasScript() || !fun->nonLazyScript()->shouldCloneAtCallsite())
         return fun;
 
-    RootedScript outerScript(cx, GetTopIonJSScript(cx));
+    RootedScript outerScript(cx, GetTopJitJSScript(cx));
     IonScript *ion = outerScript->ionScript();
     CallsiteCloneIC &cache = ion->getCache(cacheIndex).toCallsiteClone();
 

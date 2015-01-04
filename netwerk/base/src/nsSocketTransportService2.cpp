@@ -226,7 +226,7 @@ nsSocketTransportService::AddToPollList(SocketContext *sock)
     }
     
     uint32_t newSocketIndex = mActiveCount;
-    if (ChaosMode::isActive()) {
+    if (ChaosMode::isActive(ChaosMode::NetworkScheduling)) {
       newSocketIndex = ChaosMode::randomUint32LessThan(mActiveCount + 1);
       PodMove(mActiveList + newSocketIndex + 1, mActiveList + newSocketIndex,
               mActiveCount - newSocketIndex);
@@ -697,10 +697,9 @@ nsSocketTransportService::Run()
 
 #ifdef MOZ_NUWA_PROCESS
     if (IsNuwaProcess()) {
-        NS_ASSERTION(NuwaMarkCurrentThread != nullptr,
-                     "NuwaMarkCurrentThread is undefined!");
         NuwaMarkCurrentThread(nullptr, nullptr);
     }
+    NS_SetIgnoreStatusOfCurrentThread();
 #endif
 
     SOCKET_LOG(("STS thread init\n"));

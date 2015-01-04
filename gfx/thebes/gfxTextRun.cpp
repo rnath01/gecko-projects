@@ -778,7 +778,7 @@ uint32_t
 gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
                                 bool aLineBreakBefore, gfxFloat aWidth,
                                 PropertyProvider *aProvider,
-                                bool aSuppressInitialBreak,
+                                SuppressBreak aSuppressBreak,
                                 gfxFloat *aTrimWhitespace,
                                 Metrics *aMetrics,
                                 gfxFont::BoundingBoxType aBoundingBoxType,
@@ -847,7 +847,8 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
         // line: if the width is too small for even one character to fit, it 
         // could be the first and last break opportunity on the line, and that
         // would trigger an infinite loop.
-        if (!aSuppressInitialBreak || i > aStart) {
+        if (aSuppressBreak != eSuppressAllBreaks &&
+            (aSuppressBreak != eSuppressInitialBreak || i > aStart)) {
             bool atNaturalBreak = mCharacterGlyphs[i].CanBreakBefore() == 1;
             bool atHyphenationBreak =
                 !atNaturalBreak && haveHyphenation && hyphenBuffer[i - bufferStart];
@@ -1766,7 +1767,7 @@ gfxFontGroup::GetFontAt(int32_t i, uint32_t aCh)
         }
         font = fe->FindOrMakeFont(&mStyle, mFonts[i].NeedsBold(),
                                   unicodeRangeMap);
-        if (font && !font->Valid()) {
+        if (!font || !font->Valid()) {
             ff.SetInvalid();
             return nullptr;
         }
@@ -1973,7 +1974,7 @@ gfxFontGroup::MakeSpaceTextRun(const Parameters *aParams, uint32_t aFlags)
 
     uint16_t orientation = aFlags & TEXT_ORIENT_MASK;
     if (orientation == TEXT_ORIENT_VERTICAL_MIXED) {
-        orientation = TEXT_ORIENT_VERTICAL_UPRIGHT;
+        orientation = TEXT_ORIENT_VERTICAL_SIDEWAYS_RIGHT;
     }
 
     gfxFont *font = GetFirstValidFont();

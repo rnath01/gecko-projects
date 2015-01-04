@@ -27,6 +27,27 @@ XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "FormSubmitObserver",
   "resource:///modules/FormSubmitObserver.jsm");
+XPCOMUtils.defineLazyGetter(this, "SimpleServiceDiscovery", function() {
+  let ssdp = Cu.import("resource://gre/modules/SimpleServiceDiscovery.jsm", {}).SimpleServiceDiscovery;
+  // Register targets
+  ssdp.registerDevice({
+    id: "roku:ecp",
+    target: "roku:ecp",
+    factory: function(aService) {
+      Cu.import("resource://gre/modules/RokuApp.jsm");
+      return new RokuApp(aService);
+    },
+    mirror: true,
+    types: ["video/mp4"],
+    extensions: ["mp4"]
+  });
+  return ssdp;
+});
+XPCOMUtils.defineLazyGetter(this, "PageMenuChild", function() {
+  let tmp = {};
+  Cu.import("resource://gre/modules/PageMenu.jsm", tmp);
+  return new tmp.PageMenuChild();
+});
 
 // TabChildGlobal
 var global = this;
@@ -76,6 +97,20 @@ addMessageListener("MixedContent:ReenableProtection", function() {
   docShell.mixedContentChannel = null;
 });
 
+addMessageListener("SecondScreen:tab-mirror", function(message) {
+  let app = SimpleServiceDiscovery.findAppForService(message.data.service);
+  if (app) {
+    let width = content.innerWidth;
+    let height = content.innerHeight;
+    let viewport = {cssWidth: width, cssHeight: height, width: width, height: height};
+    app.mirror(function() {}, content, viewport, function() {}, content);
+  }
+});
+
+addMessageListener("ContextMenu:DoCustomCommand", function(message) {
+  PageMenuChild.executeMenu(message.data);
+});
+
 addEventListener("DOMFormHasPassword", function(event) {
   InsecurePasswordUtils.checkForInsecurePasswords(event.target);
   LoginManagerContent.onFormPassword(event);
@@ -87,40 +122,61 @@ addEventListener("blur", function(event) {
   LoginManagerContent.onUsernameInput(event);
 });
 
-if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
-  let handleContentContextMenu = function (event) {
-    let defaultPrevented = event.defaultPrevented;
-    if (!Services.prefs.getBoolPref("dom.event.contextmenu.enabled")) {
-      let plugin = null;
-      try {
-        plugin = event.target.QueryInterface(Ci.nsIObjectLoadingContent);
-      } catch (e) {}
-      if (plugin && plugin.displayedType == Ci.nsIObjectLoadingContent.TYPE_PLUGIN) {
-        // Don't open a context menu for plugins.
-        return;
-      }
-
-      defaultPrevented = false;
+let handleContentContextMenu = function (event) {
+  let defaultPrevented = event.defaultPrevented;
+  if (!Services.prefs.getBoolPref("dom.event.contextmenu.enabled")) {
+    let plugin = null;
+    try {
+      plugin = event.target.QueryInterface(Ci.nsIObjectLoadingContent);
+    } catch (e) {}
+    if (plugin && plugin.displayedType == Ci.nsIObjectLoadingContent.TYPE_PLUGIN) {
+      // Don't open a context menu for plugins.
+      return;
     }
 
-    if (!defaultPrevented) {
-      let editFlags = SpellCheckHelper.isEditable(event.target, content);
-      let spellInfo;
-      if (editFlags &
-          (SpellCheckHelper.EDITABLE | SpellCheckHelper.CONTENTEDITABLE)) {
-        spellInfo =
-          InlineSpellCheckerContent.initContextMenu(event, editFlags, this);
-      }
-
-      sendSyncMessage("contextmenu", { editFlags, spellInfo }, { event });
-    }
+    defaultPrevented = false;
   }
 
-  Cc["@mozilla.org/eventlistenerservice;1"]
-    .getService(Ci.nsIEventListenerService)
-    .addSystemEventListener(global, "contextmenu", handleContentContextMenu, true);
+  if (defaultPrevented)
+    return;
 
+  let addonInfo = {};
+  let subject = {
+    event: event,
+    addonInfo: addonInfo,
+  };
+  subject.wrappedJSObject = subject;
+  Services.obs.notifyObservers(subject, "content-contextmenu", null);
+
+  if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
+    let editFlags = SpellCheckHelper.isEditable(event.target, content);
+    let spellInfo;
+    if (editFlags &
+        (SpellCheckHelper.EDITABLE | SpellCheckHelper.CONTENTEDITABLE)) {
+      spellInfo =
+        InlineSpellCheckerContent.initContextMenu(event, editFlags, this);
+    }
+
+    let customMenuItems = PageMenuChild.build(event.target);
+    sendSyncMessage("contextmenu", { editFlags, spellInfo, customMenuItems, addonInfo }, { event, popupNode: event.target });
+  }
+  else {
+    // Break out to the parent window and pass the add-on info along
+    let browser = docShell.chromeEventHandler;
+    let mainWin = browser.ownerDocument.defaultView;
+    mainWin.gContextMenuContentData = {
+      isRemote: false,
+      event: event,
+      popupNode: event.target,
+      browser: browser,
+      addonInfo: addonInfo,
+    };
+  }
 }
+
+Cc["@mozilla.org/eventlistenerservice;1"]
+  .getService(Ci.nsIEventListenerService)
+  .addSystemEventListener(global, "contextmenu", handleContentContextMenu, false);
 
 let AboutNetErrorListener = {
   init: function(chromeGlobal) {
@@ -249,6 +305,9 @@ let AboutHomeListener = {
       case "AboutHomeSearchEvent":
         this.onSearch(aEvent);
         break;
+      case "AboutHomeSearchPanel":
+        this.onOpenSearchPanel(aEvent);
+        break;
       case "click":
         this.onClick(aEvent);
         break;
@@ -300,14 +359,13 @@ let AboutHomeListener = {
     addEventListener("click", this, true);
     addEventListener("pagehide", this, true);
 
-    // XXX bug 738646 - when Marketplace is launched, remove this statement and
-    // the hidden attribute set on the apps button in aboutHome.xhtml
-    if (Services.prefs.getPrefType("browser.aboutHome.apps") == Services.prefs.PREF_BOOL &&
-        Services.prefs.getBoolPref("browser.aboutHome.apps"))
-      doc.getElementById("apps").removeAttribute("hidden");
+    if (!Services.prefs.getBoolPref("browser.search.showOneOffButtons")) {
+      doc.documentElement.setAttribute("searchUIConfiguration", "oldsearchui");
+    }
 
     sendAsyncMessage("AboutHome:RequestUpdate");
     doc.addEventListener("AboutHomeSearchEvent", this, true, true);
+    doc.addEventListener("AboutHomeSearchPanel", this, true, true);
   },
 
   onClick: function(aEvent) {
@@ -358,6 +416,10 @@ let AboutHomeListener = {
       case "settings":
         sendAsyncMessage("AboutHome:Settings");
         break;
+
+      case "searchIcon":
+        sendAsyncMessage("AboutHome:OpenSearchPanel", null, { anchor: originalTarget });
+        break;
     }
   },
 
@@ -375,6 +437,10 @@ let AboutHomeListener = {
 
   onSearch: function(aEvent) {
     sendAsyncMessage("AboutHome:Search", { searchData: aEvent.detail });
+  },
+
+  onOpenSearchPanel: function(aEvent) {
+    sendAsyncMessage("AboutHome:OpenSearchPanel");
   },
 
   onFocusInput: function () {
@@ -523,6 +589,7 @@ let ClickEventHandler = {
             event.preventDefault(); // Need to prevent the pageload.
           }
         }
+        json.noReferrer = BrowserUtils.linkHasNoReferrer(node)
       }
 
       sendAsyncMessage("Content:Click", json);

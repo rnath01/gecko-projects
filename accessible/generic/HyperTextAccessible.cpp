@@ -508,7 +508,7 @@ HyperTextAccessible::FindOffset(uint32_t aOffset, nsDirection aDirection,
   const bool kIsKeyboardSelect = true; // is keyboard selection
   const bool kIsVisualBidi = false; // use visual order for bidi text
   nsPeekOffsetStruct pos(aAmount, aDirection, innerContentOffset,
-                         0, kIsJumpLinesOk, kIsScrollViewAStop,
+                         nsPoint(0, 0), kIsJumpLinesOk, kIsScrollViewAStop,
                          kIsKeyboardSelect, kIsVisualBidi,
                          aWordMovementType);
   nsresult rv = frameAtOffset->PeekOffset(&pos);
@@ -982,6 +982,15 @@ HyperTextAccessible::NativeAttributes()
   } else if (tag == nsGkAtoms::main) {
     nsAccUtils::SetAccAttr(attributes, nsGkAtoms::xmlroles,
                            NS_LITERAL_STRING("main"));
+  } else if (tag == nsGkAtoms::time) {
+    nsAccUtils::SetAccAttr(attributes, nsGkAtoms::xmlroles,
+                           NS_LITERAL_STRING("time"));
+
+    if (mContent->HasAttr(kNameSpaceID_None, nsGkAtoms::datetime)) {
+      nsAutoString datetime;
+      mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::datetime, datetime);
+      nsAccUtils::SetAccAttr(attributes, nsGkAtoms::datetime, datetime);
+    }
   }
 
   return attributes.forget();

@@ -322,8 +322,8 @@ class TestRunnerManager(threading.Thread):
                 self.child_stop_flag.set()
 
         with self.init_lock:
-            # To guard against cases where we fail to connect with marionette for
-            # whatever reason
+	    # Guard against problems initialising the browser or the browser
+	    # remote control method
             self.init_timer = threading.Timer(self.browser.init_timeout, init_failed)
             test_queue = self.test_source.get_queue()
             if test_queue is None:
@@ -348,18 +348,18 @@ class TestRunnerManager(threading.Thread):
             self.init_failed()
 
     def init_succeeded(self):
-        """Callback when we have started the browser, connected via
-        marionette, and we are ready to start testing"""
+	"""Callback when we have started the browser, started the remote
+	control connection, and we are ready to start testing."""
         self.logger.debug("Init succeeded")
         self.init_timer.cancel()
         self.init_fail_count = 0
         self.start_next_test()
 
     def init_failed(self):
-        """Callback when we can't connect to the browser via
-        marionette for some reason"""
+	"""Callback when starting the browser or the remote control connect
+	fails."""
         self.init_fail_count += 1
-        self.logger.error("Init failed %i" % self.init_fail_count)
+        self.logger.warning("Init failed %i" % self.init_fail_count)
         self.init_timer.cancel()
         if self.init_fail_count < self.max_init_fails:
             self.restart_runner()
@@ -537,17 +537,28 @@ class TestQueue(object):
         self.test_type = test_type
         self.tests = tests
         self.kwargs = kwargs
+        self.queue = None
 
     def __enter__(self):
+        if not self.tests[self.test_type]:
+            return None
+
         self.queue = Queue()
-        self.test_source_cls.queue_tests(self.queue,
-                                         self.test_type,
-                                         self.tests,
-                                         **self.kwargs)
+        has_tests = self.test_source_cls.queue_tests(self.queue,
+                                                     self.test_type,
+                                                     self.tests,
+                                                     **self.kwargs)
+        # There is a race condition that means sometimes we continue
+        # before the tests have been written to the underlying pipe.
+        # Polling the pipe for data here avoids that
+        self.queue._reader.poll(10)
+        assert not self.queue.empty()
         return self.queue
 
     def __exit__(self, *args, **kwargs):
-        self.queue.close()
+        if self.queue is not None:
+            self.queue.close()
+            self.queue = None
 
 
 class ManagerGroup(object):
@@ -586,6 +597,9 @@ class ManagerGroup(object):
                                     tests,
                                     **self.test_source_kwargs)
         with self.test_queue as test_queue:
+            if test_queue is None:
+                self.logger.info("No %s tests to run" % test_type)
+                return
             for _ in range(self.size):
                 manager = TestRunnerManager(self.suite_name,
                                             test_queue,

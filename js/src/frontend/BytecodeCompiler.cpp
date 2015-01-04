@@ -55,6 +55,7 @@ static bool
 SetSourceMap(ExclusiveContext *cx, TokenStream &tokenStream, ScriptSource *ss)
 {
     if (tokenStream.hasSourceMapURL()) {
+        MOZ_ASSERT(!ss->hasSourceMapURL());
         if (!ss->setSourceMapURL(cx, tokenStream.sourceMapURL()))
             return false;
     }
@@ -219,14 +220,14 @@ frontend::CompileScript(ExclusiveContext *cx, LifoAlloc *alloc, HandleObject sco
 
     RootedString source(cx, source_);
 
-    js::TraceLogger *logger = nullptr;
+    js::TraceLoggerThread *logger = nullptr;
     if (cx->isJSContext())
         logger = TraceLoggerForMainThread(cx->asJSContext()->runtime());
     else
         logger = TraceLoggerForCurrentThread();
-    uint32_t logId = js::TraceLogCreateTextId(logger, options);
-    js::AutoTraceLog scriptLogger(logger, logId);
-    js::AutoTraceLog typeLogger(logger, TraceLogger::ParserCompileScript);
+    js::TraceLoggerEvent event(logger, TraceLogger_AnnotateScripts, options);
+    js::AutoTraceLog scriptLogger(logger, event);
+    js::AutoTraceLog typeLogger(logger, TraceLogger_ParserCompileScript);
 
     /*
      * The scripted callerFrame can only be given for compile-and-go scripts
@@ -234,6 +235,7 @@ frontend::CompileScript(ExclusiveContext *cx, LifoAlloc *alloc, HandleObject sco
      */
     MOZ_ASSERT_IF(evalCaller, options.compileAndGo);
     MOZ_ASSERT_IF(evalCaller, options.forEval);
+    MOZ_ASSERT_IF(evalCaller && evalCaller->strict(), options.strictOption);
     MOZ_ASSERT_IF(staticLevel != 0, evalCaller);
 
     if (!CheckLength(cx, srcBuf))
@@ -313,10 +315,6 @@ frontend::CompileScript(ExclusiveContext *cx, LifoAlloc *alloc, HandleObject sco
     if (!pc->init(parser.tokenStream))
         return nullptr;
 
-    /* If this is a direct call to eval, inherit the caller's strictness.  */
-    if (evalCaller && evalCaller->strict())
-        globalsc.strict = true;
-
     if (savedCallerFun) {
         /*
          * An eval script in a caller frame needs to have its enclosing
@@ -324,7 +322,8 @@ frontend::CompileScript(ExclusiveContext *cx, LifoAlloc *alloc, HandleObject sco
          * wishes to decompile it while it's running.
          */
         JSFunction *fun = evalCaller->functionOrCallerFunction();
-        Directives directives(/* strict = */ fun->strict());
+        MOZ_ASSERT_IF(fun->strict(), options.strictOption);
+        Directives directives(/* strict = */ options.strictOption);
         ObjectBox *funbox = parser.newFunctionBox(/* fn = */ nullptr, fun, pc.ptr(),
                                                   directives, fun->generatorKind());
         if (!funbox)
@@ -414,6 +413,13 @@ frontend::CompileScript(ExclusiveContext *cx, LifoAlloc *alloc, HandleObject sco
      * header) override any source map urls passed as comment pragmas.
      */
     if (options.sourceMapURL()) {
+        // Warn about the replacement, but use the new one.
+        if (ss->hasSourceMapURL()) {
+            if(!parser.report(ParseWarning, false, nullptr, JSMSG_ALREADY_HAS_PRAGMA,
+                              ss->filename(), "//# sourceMappingURL"))
+                return nullptr;
+        }
+
         if (!ss->setSourceMapURL(cx, options.sourceMapURL()))
             return nullptr;
     }
@@ -467,10 +473,10 @@ frontend::CompileLazyFunction(JSContext *cx, Handle<LazyScript*> lazy, const cha
            .setNoScriptRval(false)
            .setSelfHostingMode(false);
 
-    js::TraceLogger *logger = js::TraceLoggerForMainThread(cx->runtime());
-    uint32_t logId = js::TraceLogCreateTextId(logger, options);
-    js::AutoTraceLog scriptLogger(logger, logId);
-    js::AutoTraceLog typeLogger(logger, TraceLogger::ParserCompileLazy);
+    js::TraceLoggerThread *logger = js::TraceLoggerForMainThread(cx->runtime());
+    js::TraceLoggerEvent event(logger, TraceLogger_AnnotateScripts, options);
+    js::AutoTraceLog scriptLogger(logger, event);
+    js::AutoTraceLog typeLogger(logger, TraceLogger_ParserCompileLazy);
 
     Parser<FullParseHandler> parser(cx, &cx->tempLifoAlloc(), options, chars, length,
                                     /* foldConstants = */ true, nullptr, lazy);
@@ -525,10 +531,10 @@ CompileFunctionBody(JSContext *cx, MutableHandleFunction fun, const ReadOnlyComp
                     const AutoNameVector &formals, SourceBufferHolder &srcBuf,
                     HandleObject enclosingScope, GeneratorKind generatorKind)
 {
-    js::TraceLogger *logger = js::TraceLoggerForMainThread(cx->runtime());
-    uint32_t logId = js::TraceLogCreateTextId(logger, options);
-    js::AutoTraceLog scriptLogger(logger, logId);
-    js::AutoTraceLog typeLogger(logger, TraceLogger::ParserCompileFunction);
+    js::TraceLoggerThread *logger = js::TraceLoggerForMainThread(cx->runtime());
+    js::TraceLoggerEvent event(logger, TraceLogger_AnnotateScripts, options);
+    js::AutoTraceLog scriptLogger(logger, event);
+    js::AutoTraceLog typeLogger(logger, TraceLogger_ParserCompileFunction);
 
     // FIXME: make Function pass in two strings and parse them as arguments and
     // ProgramElements respectively.

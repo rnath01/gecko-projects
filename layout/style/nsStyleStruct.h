@@ -56,9 +56,10 @@ class imgIContainer;
 // See nsStyleContext::AssertStructsNotUsedElsewhere
 // (This bit is currently only used in #ifdef DEBUG code.)
 #define NS_STYLE_IS_GOING_AWAY             0x040000000
+// See nsStyleContext::IsInlineDescendantOfRuby
+#define NS_STYLE_IS_INLINE_DESCENDANT_OF_RUBY 0x080000000
 // See nsStyleContext::GetPseudoEnum
-#define NS_STYLE_CONTEXT_TYPE_MASK         0xf80000000
-#define NS_STYLE_CONTEXT_TYPE_SHIFT        31
+#define NS_STYLE_CONTEXT_TYPE_SHIFT        32
 
 // Additional bits for nsRuleNode's mDependentBits:
 #define NS_RULE_NODE_GC_MARK                0x02000000
@@ -1595,8 +1596,8 @@ struct nsStyleText {
   uint8_t mWordBreak;                   // [inherited] see nsStyleConsts.h
   uint8_t mWordWrap;                    // [inherited] see nsStyleConsts.h
   uint8_t mHyphens;                     // [inherited] see nsStyleConsts.h
+  uint8_t mRubyPosition;                // [inherited] see nsStyleConsts.h
   uint8_t mTextSizeAdjust;              // [inherited] see nsStyleConsts.h
-  uint8_t mTextOrientation;             // [inherited] see nsStyleConsts.h
   uint8_t mTextCombineUpright;          // [inherited] see nsStyleConsts.h
   uint8_t mControlCharacterVisibility;  // [inherited] see nsStyleConsts.h
   int32_t mTabSize;                     // [inherited] see nsStyleConsts.h
@@ -1780,6 +1781,7 @@ struct nsStyleVisibility {
   uint8_t mVisible;                    // [inherited]
   uint8_t mPointerEvents;              // [inherited] see nsStyleConsts.h
   uint8_t mWritingMode;                // [inherited] see nsStyleConsts.h
+  uint8_t mTextOrientation;            // [inherited] see nsStyleConsts.h
 
   bool IsVisible() const {
     return (mVisible == NS_STYLE_VISIBILITY_VISIBLE);
@@ -2074,8 +2076,9 @@ struct nsStyleDisplay {
   bool IsBlockInsideStyle() const {
     return NS_STYLE_DISPLAY_BLOCK == mDisplay ||
            NS_STYLE_DISPLAY_LIST_ITEM == mDisplay ||
-           NS_STYLE_DISPLAY_INLINE_BLOCK == mDisplay;
-    // Should TABLE_CELL and TABLE_CAPTION go here?  They have
+           NS_STYLE_DISPLAY_INLINE_BLOCK == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_CAPTION == mDisplay;
+    // Should TABLE_CELL be included here?  They have
     // block frames nested inside of them.
     // (But please audit all callers before changing.)
   }
@@ -2101,7 +2104,8 @@ struct nsStyleDisplay {
            NS_STYLE_DISPLAY_RUBY_BASE == aDisplay ||
            NS_STYLE_DISPLAY_RUBY_BASE_CONTAINER == aDisplay ||
            NS_STYLE_DISPLAY_RUBY_TEXT == aDisplay ||
-           NS_STYLE_DISPLAY_RUBY_TEXT_CONTAINER == aDisplay;
+           NS_STYLE_DISPLAY_RUBY_TEXT_CONTAINER == aDisplay ||
+           NS_STYLE_DISPLAY_CONTENTS == aDisplay;
   }
 
   bool IsInlineOutsideStyle() const {
@@ -2137,12 +2141,16 @@ struct nsStyleDisplay {
            NS_STYLE_POSITION_STICKY == mPosition;
   }
 
+  static bool IsRubyDisplayType(uint8_t aDisplay) {
+    return NS_STYLE_DISPLAY_RUBY == aDisplay ||
+           NS_STYLE_DISPLAY_RUBY_BASE == aDisplay ||
+           NS_STYLE_DISPLAY_RUBY_BASE_CONTAINER == aDisplay ||
+           NS_STYLE_DISPLAY_RUBY_TEXT == aDisplay ||
+           NS_STYLE_DISPLAY_RUBY_TEXT_CONTAINER == aDisplay;
+  }
+
   bool IsRubyDisplayType() const {
-    return NS_STYLE_DISPLAY_RUBY == mDisplay ||
-           NS_STYLE_DISPLAY_RUBY_BASE == mDisplay ||
-           NS_STYLE_DISPLAY_RUBY_BASE_CONTAINER == mDisplay ||
-           NS_STYLE_DISPLAY_RUBY_TEXT == mDisplay ||
-           NS_STYLE_DISPLAY_RUBY_TEXT_CONTAINER == mDisplay;
+    return IsRubyDisplayType(mDisplay);
   }
 
   bool IsFlexOrGridDisplayType() const {
@@ -2231,7 +2239,7 @@ struct nsStyleTable {
 };
 
 struct nsStyleTableBorder {
-  explicit nsStyleTableBorder(nsPresContext* aContext);
+  nsStyleTableBorder();
   nsStyleTableBorder(const nsStyleTableBorder& aOther);
   ~nsStyleTableBorder(void);
 
@@ -2837,14 +2845,15 @@ struct nsStyleSVG {
 class nsStyleBasicShape MOZ_FINAL {
 public:
   enum Type {
-    // eInset,
+    eInset,
     eCircle,
     eEllipse,
     ePolygon
   };
 
   explicit nsStyleBasicShape(Type type)
-    : mType(type)
+    : mType(type),
+      mFillRule(NS_STYLE_FILL_RULE_NONZERO)
   {
     mPosition.SetInitialPercentValues(0.5f);
   }
@@ -2870,19 +2879,35 @@ public:
     return mPosition;
   }
 
+  bool HasRadius() const {
+    NS_ASSERTION(mType == eInset, "expected inset");
+    nsStyleCoord zero;
+    zero.SetCoordValue(0);
+    NS_FOR_CSS_HALF_CORNERS(corner) {
+      if (mRadius.Get(corner) != zero) {
+        return true;
+      }
+    }
+    return false;
+  }
+  nsStyleCorners& GetRadius() {
+    NS_ASSERTION(mType == eInset, "expected inset");
+    return mRadius;
+  }
+  const nsStyleCorners& GetRadius() const {
+    NS_ASSERTION(mType == eInset, "expected inset");
+    return mRadius;
+  }
+
   // mCoordinates has coordinates for polygon or radii for
   // ellipse and circle.
   nsTArray<nsStyleCoord>& Coordinates()
   {
-    NS_ASSERTION(mType == ePolygon || mType == eCircle || mType == eEllipse,
-                 "expected polygon, circle or ellipse");
     return mCoordinates;
   }
 
   const nsTArray<nsStyleCoord>& Coordinates() const
   {
-    NS_ASSERTION(mType == ePolygon || mType == eCircle || mType == eEllipse,
-                 "expected polygon, circle or ellipse");
     return mCoordinates;
   }
 
@@ -2891,7 +2916,8 @@ public:
     return mType == aOther.mType &&
            mFillRule == aOther.mFillRule &&
            mCoordinates == aOther.mCoordinates &&
-           mPosition == aOther.mPosition;
+           mPosition == aOther.mPosition &&
+           mRadius == aOther.mRadius;
   }
   bool operator!=(const nsStyleBasicShape& aOther) const {
     return !(*this == aOther);
@@ -2904,10 +2930,12 @@ private:
 
   Type mType;
   int32_t mFillRule;
+
   // mCoordinates has coordinates for polygon or radii for
   // ellipse and circle.
   nsTArray<nsStyleCoord> mCoordinates;
   Position mPosition;
+  nsStyleCorners mRadius;
 };
 
 struct nsStyleClipPath

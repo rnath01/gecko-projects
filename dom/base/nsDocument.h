@@ -59,6 +59,7 @@
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/PendingPlayerTracker.h"
 #include "mozilla/dom/DOMImplementation.h"
 #include "mozilla/dom/StyleSheetList.h"
 #include "nsDataHashtable.h"
@@ -120,6 +121,7 @@ class nsIdentifierMapEntry : public nsStringHashKey
 {
 public:
   typedef mozilla::dom::Element Element;
+  typedef mozilla::net::ReferrerPolicy ReferrerPolicy;
 
   explicit nsIdentifierMapEntry(const nsAString& aKey) :
     nsStringHashKey(&aKey), mNameContentList(nullptr)
@@ -929,8 +931,8 @@ public:
   virtual void RemoveFromRadioGroup(const nsAString& aName,
                                     nsIFormControl* aRadio) MOZ_OVERRIDE;
   virtual uint32_t GetRequiredRadioCount(const nsAString& aName) const MOZ_OVERRIDE;
-  virtual void RadioRequiredChanged(const nsAString& aName,
-                                    nsIFormControl* aRadio) MOZ_OVERRIDE;
+  virtual void RadioRequiredWillChange(const nsAString& aName,
+                                       bool aRequiredAdded) MOZ_OVERRIDE;
   virtual bool GetValueMissingState(const nsAString& aName) const MOZ_OVERRIDE;
   virtual void SetValueMissingState(const nsAString& aName, bool aValue) MOZ_OVERRIDE;
 
@@ -1046,6 +1048,15 @@ public:
   // If HasAnimationController is true, this is guaranteed to return non-null.
   nsSMILAnimationController* GetAnimationController() MOZ_OVERRIDE;
 
+  virtual mozilla::PendingPlayerTracker*
+  GetPendingPlayerTracker() MOZ_FINAL
+  {
+    return mPendingPlayerTracker;
+  }
+
+  virtual mozilla::PendingPlayerTracker*
+  GetOrCreatePendingPlayerTracker() MOZ_OVERRIDE;
+
   void SetImagesNeedAnimating(bool aAnimating) MOZ_OVERRIDE;
 
   virtual void SuppressEventHandling(SuppressionType aWhat,
@@ -1091,10 +1102,13 @@ public:
   void MaybeEndOutermostXBLUpdate();
 
   virtual void MaybePreLoadImage(nsIURI* uri,
-                                 const nsAString &aCrossOriginAttr) MOZ_OVERRIDE;
+                                 const nsAString &aCrossOriginAttr,
+                                 ReferrerPolicy aReferrerPolicy) MOZ_OVERRIDE;
+  virtual void ForgetImagePreload(nsIURI* aURI) MOZ_OVERRIDE;
 
   virtual void PreloadStyle(nsIURI* uri, const nsAString& charset,
-                            const nsAString& aCrossOriginAttr) MOZ_OVERRIDE;
+                            const nsAString& aCrossOriginAttr,
+                            ReferrerPolicy aReferrerPolicy) MOZ_OVERRIDE;
 
   virtual nsresult LoadChromeSheetSync(nsIURI* uri, bool isAgentSheet,
                                        mozilla::CSSStyleSheet** sheet) MOZ_OVERRIDE;
@@ -1143,7 +1157,8 @@ public:
   virtual Element* FindImageMap(const nsAString& aNormalizedMapName) MOZ_OVERRIDE;
 
   virtual Element* GetFullScreenElement() MOZ_OVERRIDE;
-  virtual void AsyncRequestFullScreen(Element* aElement) MOZ_OVERRIDE;
+  virtual void AsyncRequestFullScreen(Element* aElement,
+                                      mozilla::dom::FullScreenOptions& aOptions) MOZ_OVERRIDE;
   virtual void RestorePreviousFullScreenState() MOZ_OVERRIDE;
   virtual bool IsFullscreenLeaf() MOZ_OVERRIDE;
   virtual bool IsFullScreenDoc() MOZ_OVERRIDE;
@@ -1194,6 +1209,7 @@ public:
   // need to send the notification with the origin of the document which
   // originally requested fullscreen, not *this* document's origin.
   void RequestFullScreen(Element* aElement,
+                         mozilla::dom::FullScreenOptions& aOptions,
                          bool aWasCallerChrome,
                          bool aNotifyOnOriginChange);
 
@@ -1505,6 +1521,10 @@ protected:
   // Array of observers
   nsTObserverArray<nsIDocumentObserver*> mObservers;
 
+  // Tracker for animation players that are waiting to start.
+  // nullptr until GetOrCreatePendingPlayerTracker is called.
+  nsRefPtr<mozilla::PendingPlayerTracker> mPendingPlayerTracker;
+
   // Weak reference to the scope object (aka the script global object)
   // that, unlike mScriptGlobalObject, is never unset once set. This
   // is a weak reference to avoid leaks due to circular references.
@@ -1537,11 +1557,12 @@ private:
 public:
   static void ProcessBaseElementQueue();
 
-  // Modify the prototype and "is" attribute of newly created custom elements.
-  virtual void SwizzleCustomElement(Element* aElement,
-                                    const nsAString& aTypeExtension,
-                                    uint32_t aNamespaceID,
-                                    mozilla::ErrorResult& rv);
+  // Enqueue created callback or register upgrade candidate for
+  // newly created custom elements, possibly extending an existing type.
+  // ex. <x-button>, <button is="x-button> (type extension)
+  virtual void SetupCustomElement(Element* aElement,
+                                  uint32_t aNamespaceID,
+                                  const nsAString* aTypeExtension);
 
   static bool IsWebComponentsEnabled(JSContext* aCx, JSObject* aObject);
 
@@ -1737,8 +1758,11 @@ private:
 
   nsExternalResourceMap mExternalResourceMap;
 
-  // All images in process of being preloaded
-  nsCOMArray<imgIRequest> mPreloadingImages;
+  // All images in process of being preloaded.  This is a hashtable so
+  // we can remove them as the real image loads start; that way we
+  // make sure to not keep the image load going when no one cares
+  // about it anymore.
+  nsRefPtrHashtable<nsURIHashKey, imgIRequest> mPreloadingImages;
 
   nsRefPtr<mozilla::dom::DOMImplementation> mDOMImplementation;
 

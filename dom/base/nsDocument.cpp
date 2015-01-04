@@ -190,6 +190,7 @@
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/HTMLBodyElement.h"
 #include "mozilla/dom/HTMLInputElement.h"
+#include "mozilla/dom/MediaQueryList.h"
 #include "mozilla/dom/NodeFilterBinding.h"
 #include "mozilla/dom/OwningNonNull.h"
 #include "mozilla/dom/TabChild.h"
@@ -444,13 +445,27 @@ CustomElementCallback::Call()
   ErrorResult rv;
   switch (mType) {
     case nsIDocument::eCreated:
+    {
       // For the duration of this callback invocation, the element is being created
       // flag must be set to true.
       mOwnerData->mElementIsBeingCreated = true;
+
+      // The callback hasn't actually been invoked yet, but we need to flip
+      // this now in order to enqueue the attached callback. This is a spec
+      // bug (w3c bug 27437).
       mOwnerData->mCreatedCallbackInvoked = true;
+
+      // If ELEMENT is in a document and this document has a browsing context,
+      // enqueue attached callback for ELEMENT.
+      nsIDocument* document = mThisObject->GetUncomposedDoc();
+      if (document && document->GetDocShell()) {
+        document->EnqueueLifecycleCallback(nsIDocument::eAttached, mThisObject);
+      }
+
       static_cast<LifecycleCreatedCallback *>(mCallback.get())->Call(mThisObject, rv);
       mOwnerData->mElementIsBeingCreated = false;
       break;
+    }
     case nsIDocument::eAttached:
       static_cast<LifecycleAttachedCallback *>(mCallback.get())->Call(mThisObject, rv);
       break;
@@ -1439,6 +1454,8 @@ nsDOMStyleSheetSetList::nsDOMStyleSheetSetList(nsIDocument* aDocument)
 void
 nsDOMStyleSheetSetList::EnsureFresh()
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   mNames.Clear();
 
   if (!mDocument) {
@@ -1539,6 +1556,8 @@ static already_AddRefed<mozilla::dom::NodeInfo> nullNodeInfo;
 // ==================================================================
 nsIDocument::nsIDocument()
   : nsINode(nullNodeInfo),
+    mReferrerPolicySet(false),
+    mReferrerPolicy(mozilla::net::RP_Default),
     mCharacterSet(NS_LITERAL_CSTRING("ISO-8859-1")),
     mNodeInfoManager(nullptr),
     mCompatMode(eCompatibility_FullStandards),
@@ -1558,6 +1577,8 @@ nsIDocument::nsIDocument()
     mDidFireDOMContentLoaded(true)
 {
   SetInDocument();
+
+  PR_INIT_CLIST(&mDOMMediaQueryLists);  
 }
 
 // NOTE! nsDocument::operator new() zeroes out all members, so don't
@@ -1603,6 +1624,9 @@ ClearAllBoxObjects(nsIContent* aKey, nsPIBoxObject* aBoxObject, void* aUserArg)
 
 nsIDocument::~nsIDocument()
 {
+  NS_ABORT_IF_FALSE(PR_CLIST_IS_EMPTY(&mDOMMediaQueryLists),
+                    "must not have media query lists left");
+
   if (mNodeInfoManager) {
     mNodeInfoManager->DropDocumentReference();
   }
@@ -1985,6 +2009,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsDocument)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mStateObjectCached)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mUndoManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAnimationTimeline)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPendingPlayerTracker)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTemplateContentsOwner)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mChildrenCollection)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRegistry)
@@ -2015,6 +2040,18 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsDocument)
 
   for (uint32_t i = 0; i < tmp->mHostObjectURIs.Length(); ++i) {
     nsHostObjectProtocolHandler::Traverse(tmp->mHostObjectURIs[i], cb);
+  }
+
+  // We own only the items in mDOMMediaQueryLists that have listeners;
+  // this reference is managed by their AddListener and RemoveListener
+  // methods.
+  for (PRCList *l = PR_LIST_HEAD(&tmp->mDOMMediaQueryLists);
+       l != &tmp->mDOMMediaQueryLists; l = PR_NEXT_LINK(l)) {
+    MediaQueryList *mql = static_cast<MediaQueryList*>(l);
+    if (mql->HasListeners()) {
+      NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mDOMMediaQueryLists item");
+      cb.NoteXPCOMChild(mql);
+    }
   }
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -2056,6 +2093,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCachedEncoder)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mUndoManager)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mAnimationTimeline)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mPendingPlayerTracker)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mTemplateContentsOwner)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mChildrenCollection)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mRegistry)
@@ -2116,6 +2154,17 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDocument)
 
   for (uint32_t i = 0; i < tmp->mHostObjectURIs.Length(); ++i) {
     nsHostObjectProtocolHandler::RemoveDataEntry(tmp->mHostObjectURIs[i]);
+  }
+
+  // We own only the items in mDOMMediaQueryLists that have listeners;
+  // this reference is managed by their AddListener and RemoveListener
+  // methods.
+  for (PRCList *l = PR_LIST_HEAD(&tmp->mDOMMediaQueryLists);
+       l != &tmp->mDOMMediaQueryLists; ) {
+    PRCList *next = PR_NEXT_LINK(l);
+    MediaQueryList *mql = static_cast<MediaQueryList*>(l);
+    mql->RemoveAllListeners();
+    l = next;
   }
 
   tmp->mInUnlinkOrDeletion = false;
@@ -2954,6 +3003,33 @@ nsDocument::InitCSP(nsIChannel* aChannel)
     }
   }
 
+  // ----- Set up any Referrer Policy specified by CSP
+  bool hasReferrerPolicy = false;
+  uint32_t referrerPolicy = mozilla::net::RP_Default;
+  rv = csp->GetReferrerPolicy(&referrerPolicy, &hasReferrerPolicy);
+  NS_ENSURE_SUCCESS(rv, rv);
+  if (hasReferrerPolicy) {
+    // Referrer policy spec (section 6.1) says that once the referrer policy
+    // is set, any future attempts to change it result in No-Referrer.
+    if (!mReferrerPolicySet) {
+      mReferrerPolicy = static_cast<ReferrerPolicy>(referrerPolicy);
+      mReferrerPolicySet = true;
+    } else if (mReferrerPolicy != referrerPolicy) {
+      mReferrerPolicy = mozilla::net::RP_No_Referrer;
+#ifdef PR_LOGGING
+      {
+        PR_LOG(gCspPRLog, PR_LOG_DEBUG, ("%s %s",
+                "CSP wants to set referrer, but nsDocument"
+                "already has it set. No referrers will be sent"));
+      }
+#endif
+    }
+
+    // Referrer Policy is set separately for the speculative parser in
+    // nsHTMLDocument::StartDocumentLoad() so there's nothing to do here for
+    // speculative loads.
+  }
+
   rv = principal->SetCsp(csp);
   NS_ENSURE_SUCCESS(rv, rv);
 #ifdef PR_LOGGING
@@ -3534,7 +3610,12 @@ nsDocument::SetBaseURI(nsIURI* aURI)
   NS_ENSURE_SUCCESS(rv, rv);
   if (csp) {
     bool permitsBaseURI = false;
-    rv = csp->PermitsBaseURI(aURI, &permitsBaseURI);
+
+    // base-uri is only enforced if explicitly defined in the
+    // policy - do *not* consult default-src, see:
+    // http://www.w3.org/TR/CSP2/#directive-default-src
+    rv = csp->Permits(aURI, nsIContentSecurityPolicy::BASE_URI_DIRECTIVE,
+                      true, &permitsBaseURI);
     NS_ENSURE_SUCCESS(rv, rv);
     if (!permitsBaseURI) {
       return NS_OK;
@@ -3700,6 +3781,20 @@ nsDocument::SetHeaderData(nsIAtom* aHeaderField, const nsAString& aData)
       aHeaderField == nsGkAtoms::viewport_width ||
       aHeaderField ==  nsGkAtoms::viewport_user_scalable) {
     mViewportType = Unknown;
+  }
+
+  // Referrer policy spec says to ignore any empty referrer policies.
+  if (aHeaderField == nsGkAtoms::referrer && !aData.IsEmpty()) {
+    ReferrerPolicy policy = mozilla::net::ReferrerPolicyFromString(aData);
+
+    // Referrer policy spec (section 6.1) says that once the referrer policy
+    // is set, any future attempts to change it result in No-Referrer.
+    if (!mReferrerPolicySet) {
+      mReferrerPolicy = policy;
+      mReferrerPolicySet = true;
+    } else if (mReferrerPolicy != policy) {
+      mReferrerPolicy = mozilla::net::RP_No_Referrer;
+    }
   }
 }
 
@@ -5187,7 +5282,7 @@ nsIDocument::RemoveAnonymousContent(AnonymousContent& aContent,
                                     ErrorResult& aRv)
 {
   nsIPresShell* shell = GetShell();
-  if (!shell) {
+  if (!shell || !shell->GetCanvasFrame()) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return;
   }
@@ -5343,23 +5438,30 @@ nsIDocument::CreateElement(const nsAString& aTagName, ErrorResult& rv)
 }
 
 void
-nsDocument::SwizzleCustomElement(Element* aElement,
-                                 const nsAString& aTypeExtension,
-                                 uint32_t aNamespaceID,
-                                 ErrorResult& rv)
+nsDocument::SetupCustomElement(Element* aElement,
+                               uint32_t aNamespaceID,
+                               const nsAString* aTypeExtension)
 {
-  nsCOMPtr<nsIAtom> typeAtom(do_GetAtom(aTypeExtension));
-  nsCOMPtr<nsIAtom> tagAtom = aElement->Tag();
-  if (!mRegistry || tagAtom == typeAtom) {
+  if (!mRegistry) {
     return;
+  }
+
+  nsCOMPtr<nsIAtom> tagAtom = aElement->Tag();
+  nsCOMPtr<nsIAtom> typeAtom = aTypeExtension ?
+    do_GetAtom(*aTypeExtension) : tagAtom;
+
+  if (aTypeExtension && !aElement->HasAttr(kNameSpaceID_None, nsGkAtoms::is)) {
+    // Custom element setup in the parser happens after the "is"
+    // attribute is added.
+    aElement->SetAttr(kNameSpaceID_None, nsGkAtoms::is, *aTypeExtension, true);
   }
 
   CustomElementDefinition* data;
   CustomElementHashKey key(aNamespaceID, typeAtom);
   if (!mRegistry->mCustomDefinitions.Get(&key, &data)) {
     // The type extension doesn't exist in the registry,
-    // thus we don't need to swizzle, but it is possibly
-    // an upgrade candidate.
+    // thus we don't need to enqueue callback or adjust
+    // the "is" attribute, but it is possibly an upgrade candidate.
     RegisterUnresolvedElement(aElement, typeAtom);
     return;
   }
@@ -5369,11 +5471,6 @@ nsDocument::SwizzleCustomElement(Element* aElement,
     // definition, thus the element isn't a custom element
     // and we don't need to do anything more.
     return;
-  }
-
-  if (!aElement->HasAttr(kNameSpaceID_None, nsGkAtoms::is)) {
-    // Swizzling in the parser happens after the "is" attribute is added.
-    aElement->SetAttr(kNameSpaceID_None, nsGkAtoms::is, aTypeExtension, true);
   }
 
   // Enqueuing the created callback will set the CustomElementData on the
@@ -5391,10 +5488,9 @@ nsDocument::CreateElement(const nsAString& aTagName,
     return nullptr;
   }
 
-  SwizzleCustomElement(elem, aTypeExtension,
-                       GetDefaultNamespaceID(), rv);
-  if (rv.Failed()) {
-    return nullptr;
+  if (!aTagName.Equals(aTypeExtension)) {
+    // Custom element type can not extend itself.
+    SetupCustomElement(elem, GetDefaultNamespaceID(), &aTypeExtension);
   }
 
   return elem.forget();
@@ -5459,9 +5555,9 @@ nsDocument::CreateElementNS(const nsAString& aNamespaceURI,
     }
   }
 
-  SwizzleCustomElement(elem, aTypeExtension, nameSpaceId, rv);
-  if (rv.Failed()) {
-    return nullptr;
+  if (!aQualifiedName.Equals(aTypeExtension)) {
+    // A custom element type can not extend itself.
+    SetupCustomElement(elem, nameSpaceId, &aTypeExtension);
   }
 
   return elem.forget();
@@ -5688,12 +5784,12 @@ nsDocument::CustomElementConstructor(JSContext* aCx, unsigned aArgc, JS::Value* 
                                      getter_AddRefs(newElement));
   NS_ENSURE_SUCCESS(rv, true);
 
-  ErrorResult errorResult;
   nsCOMPtr<Element> element = do_QueryInterface(newElement);
-  document->SwizzleCustomElement(element, elemName, definition->mNamespaceID,
-                                 errorResult);
-  if (errorResult.Failed()) {
-    return true;
+  if (definition->mLocalName != typeAtom) {
+    // This element is a custom element by extension, thus we need to
+    // do some special setup. For non-extended custom elements, this happens
+    // when the element is created.
+    document->SetupCustomElement(element, definition->mNamespaceID, &elemName);
   }
 
   rv = nsContentUtils::WrapNative(aCx, newElement, newElement, args.rval());
@@ -6012,126 +6108,146 @@ nsDocument::RegisterElement(JSContext* aCx, const nsAString& aType,
     rv.Throw(NS_ERROR_UNEXPECTED);
     return;
   }
+
   JS::Rooted<JSObject*> global(aCx, sgo->GetGlobalJSObject());
-
-  JSAutoCompartment ac(aCx, global);
-
-  JS::Handle<JSObject*> htmlProto(
-    HTMLElementBinding::GetProtoObjectHandle(aCx, global));
-  if (!htmlProto) {
-    rv.Throw(NS_ERROR_OUT_OF_MEMORY);
-    return;
-  }
-
+  nsCOMPtr<nsIAtom> nameAtom;
   int32_t namespaceID = kNameSpaceID_XHTML;
   JS::Rooted<JSObject*> protoObject(aCx);
-  if (!aOptions.mPrototype) {
-    protoObject = JS_NewObject(aCx, nullptr, htmlProto, JS::NullPtr());
-    if (!protoObject) {
-      rv.Throw(NS_ERROR_UNEXPECTED);
-      return;
-    }
-  } else {
-    // If a prototype is provided, we must check to ensure that it is from the
-    // same browsing context as us.
-    protoObject = aOptions.mPrototype;
-    if (JS_GetGlobalForObject(aCx, protoObject) != global) {
-      rv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-      return;
-    }
+  {
+    JSAutoCompartment ac(aCx, global);
 
-    // If PROTOTYPE is already an interface prototype object for any interface
-    // object or PROTOTYPE has a non-configurable property named constructor,
-    // throw a NotSupportedError and stop.
-    const js::Class* clasp = js::GetObjectClass(protoObject);
-    if (IsDOMIfaceAndProtoClass(clasp)) {
-      rv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-      return;
-    }
-
-    JS::Rooted<JSPropertyDescriptor> descRoot(aCx);
-    JS::MutableHandle<JSPropertyDescriptor> desc(&descRoot);
-    if (!JS_GetPropertyDescriptor(aCx, protoObject, "constructor", desc)) {
-      rv.Throw(NS_ERROR_UNEXPECTED);
-      return;
-    }
-
-    // Check if non-configurable
-    if (desc.isPermanent()) {
-      rv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-      return;
-    }
-
-    JS::Handle<JSObject*> svgProto(
-      SVGElementBinding::GetProtoObjectHandle(aCx, global));
-    if (!svgProto) {
+    JS::Handle<JSObject*> htmlProto(
+      HTMLElementBinding::GetProtoObjectHandle(aCx, global));
+    if (!htmlProto) {
       rv.Throw(NS_ERROR_OUT_OF_MEMORY);
       return;
     }
 
-    JS::Rooted<JSObject*> protoProto(aCx, protoObject);
-
-    // If PROTOTYPE's interface inherits from SVGElement, set NAMESPACE to SVG
-    // Namespace.
-    while (protoProto) {
-      if (protoProto == htmlProto) {
-        break;
-      }
-
-      if (protoProto == svgProto) {
-        namespaceID = kNameSpaceID_SVG;
-        break;
-      }
-
-      if (!JS_GetPrototype(aCx, protoProto, &protoProto)) {
+    if (!aOptions.mPrototype) {
+      protoObject = JS_NewObject(aCx, nullptr, htmlProto, JS::NullPtr());
+      if (!protoObject) {
         rv.Throw(NS_ERROR_UNEXPECTED);
         return;
       }
-    }
-  }
-
-  // If name was provided and not null...
-  nsCOMPtr<nsIAtom> nameAtom;
-  if (!lcName.IsEmpty()) {
-    // Let BASE be the element interface for NAME and NAMESPACE.
-    bool known = false;
-    nameAtom = do_GetAtom(lcName);
-    if (namespaceID == kNameSpaceID_XHTML) {
-      nsIParserService* ps = nsContentUtils::GetParserService();
-      if (!ps) {
-        rv.Throw(NS_ERROR_UNEXPECTED);
-        return;
-      }
-
-      known =
-        ps->HTMLCaseSensitiveAtomTagToId(nameAtom) != eHTMLTag_userdefined;
     } else {
-      known = SVGElementFactory::Exists(nameAtom);
+      protoObject = aOptions.mPrototype;
+
+      // We are already operating on the document's (/global's) compartment. Let's
+      // get a view of the passed in proto from this compartment.
+      if (!JS_WrapObject(aCx, &protoObject)) {
+        rv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+        return;
+      }
+
+      // We also need an unwrapped version of it for various checks.
+      JS::Rooted<JSObject*> protoObjectUnwrapped(aCx,
+        js::CheckedUnwrap(protoObject));
+      if (!protoObjectUnwrapped) {
+        // If the documents compartment does not have same origin access
+        // to the compartment of the proto we should just throw.
+        rv.Throw(NS_ERROR_DOM_SECURITY_ERR);
+        return;
+      }
+
+      // If PROTOTYPE is already an interface prototype object for any interface
+      // object or PROTOTYPE has a non-configurable property named constructor,
+      // throw a NotSupportedError and stop.
+      const js::Class* clasp = js::GetObjectClass(protoObjectUnwrapped);
+      if (IsDOMIfaceAndProtoClass(clasp)) {
+        rv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+        return;
+      }
+
+      JS::Rooted<JSPropertyDescriptor> descRoot(aCx);
+      JS::MutableHandle<JSPropertyDescriptor> desc(&descRoot);
+      // This check will go through a wrapper, but as we checked above
+      // it should be transparent or an xray. This should be fine for now,
+      // until the spec is sorted out.
+      if (!JS_GetPropertyDescriptor(aCx, protoObject, "constructor", desc)) {
+        rv.Throw(NS_ERROR_UNEXPECTED);
+        return;
+      }
+
+      // Check if non-configurable
+      if (desc.isPermanent()) {
+        rv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+        return;
+      }
+
+      JS::Handle<JSObject*> svgProto(
+        SVGElementBinding::GetProtoObjectHandle(aCx, global));
+      if (!svgProto) {
+        rv.Throw(NS_ERROR_OUT_OF_MEMORY);
+        return;
+      }
+
+      JS::Rooted<JSObject*> protoProto(aCx, protoObject);
+
+      // If PROTOTYPE's interface inherits from SVGElement, set NAMESPACE to SVG
+      // Namespace.
+      while (protoProto) {
+        if (protoProto == htmlProto) {
+          break;
+        }
+
+        if (protoProto == svgProto) {
+          namespaceID = kNameSpaceID_SVG;
+          break;
+        }
+
+        if (!JS_GetPrototype(aCx, protoProto, &protoProto)) {
+          rv.Throw(NS_ERROR_UNEXPECTED);
+          return;
+        }
+      }
     }
 
-    // If BASE does not exist or is an interface for a custom element, set ERROR
-    // to InvalidName and stop.
-    // If BASE exists, then it cannot be an interface for a custom element.
-    if (!known) {
-      rv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
-      return;
-    }
-  } else {
-    // If NAMESPACE is SVG Namespace, set ERROR to InvalidName and stop.
-    if (namespaceID == kNameSpaceID_SVG) {
-      rv.Throw(NS_ERROR_UNEXPECTED);
-      return;
-    }
+    // If name was provided and not null...
+    if (!lcName.IsEmpty()) {
+      // Let BASE be the element interface for NAME and NAMESPACE.
+      bool known = false;
+      nameAtom = do_GetAtom(lcName);
+      if (namespaceID == kNameSpaceID_XHTML) {
+        nsIParserService* ps = nsContentUtils::GetParserService();
+        if (!ps) {
+          rv.Throw(NS_ERROR_UNEXPECTED);
+          return;
+        }
 
-    nameAtom = typeAtom;
-  }
+        known =
+          ps->HTMLCaseSensitiveAtomTagToId(nameAtom) != eHTMLTag_userdefined;
+      } else {
+        known = SVGElementFactory::Exists(nameAtom);
+      }
 
+      // If BASE does not exist or is an interface for a custom element, set ERROR
+      // to InvalidName and stop.
+      // If BASE exists, then it cannot be an interface for a custom element.
+      if (!known) {
+        rv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+        return;
+      }
+    } else {
+      // If NAMESPACE is SVG Namespace, set ERROR to InvalidName and stop.
+      if (namespaceID == kNameSpaceID_SVG) {
+        rv.Throw(NS_ERROR_UNEXPECTED);
+        return;
+      }
+
+      nameAtom = typeAtom;
+    }
+  } // Leaving the document's compartment for the LifecycleCallbacks init
+
+  // Note: We call the init from the caller compartment here
   nsAutoPtr<LifecycleCallbacks> callbacksHolder(new LifecycleCallbacks());
   JS::RootedValue rootedv(aCx, JS::ObjectValue(*protoObject));
-  if (!callbacksHolder->Init(aCx, rootedv)) {
+  if (!JS_WrapValue(aCx, &rootedv) || !callbacksHolder->Init(aCx, rootedv)) {
     rv.Throw(NS_ERROR_FAILURE);
     return;
   }
+
+  // Entering the global's compartment again
+  JSAutoCompartment ac(aCx, global);
 
   // Associate the definition with the custom element.
   CustomElementHashKey key(namespaceID, typeAtom);
@@ -6172,16 +6288,6 @@ nsDocument::RegisterElement(JSContext* aCx, const nsAString& aType,
       }
 
       EnqueueLifecycleCallback(nsIDocument::eCreated, elem, nullptr, definition);
-      //XXXsmaug It is unclear if we should use GetComposedDoc() here.
-      if (elem->GetUncomposedDoc()) {
-        // Normally callbacks can not be enqueued until the created
-        // callback has been invoked, however, the attached callback
-        // in element upgrade is an exception so pretend the created
-        // callback has been invoked.
-        elem->GetCustomElementData()->mCreatedCallbackInvoked = true;
-
-        EnqueueLifecycleCallback(nsIDocument::eAttached, elem, nullptr, definition);
-      }
     }
   }
 
@@ -6195,7 +6301,13 @@ nsDocument::RegisterElement(JSContext* aCx, const nsAString& aType,
     return;
   }
 
-  aRetval.set(JS_GetFunctionObject(constructor));
+  JS::Rooted<JSObject*> constructorObj(aCx, JS_GetFunctionObject(constructor));
+  if (!JS_LinkConstructorAndPrototype(aCx, constructorObj, protoObject)) {
+    rv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+    return;
+  }
+
+  aRetval.set(constructorObj);
 }
 
 void
@@ -7103,6 +7215,17 @@ nsDocument::ClearBoxObjectFor(nsIContent* aContent)
   }
 }
 
+already_AddRefed<MediaQueryList>
+nsIDocument::MatchMedia(const nsAString& aMediaQueryList)
+{
+  nsRefPtr<MediaQueryList> result = new MediaQueryList(this, aMediaQueryList);
+
+  // Insert the new item at the end of the linked list.
+  PR_INSERT_BEFORE(result, &mDOMMediaQueryLists);
+
+  return result.forget();
+}
+
 void
 nsDocument::FlushSkinBindings()
 {
@@ -7273,6 +7396,16 @@ nsDocument::GetAnimationController()
   }
 
   return mAnimationController;
+}
+
+PendingPlayerTracker*
+nsDocument::GetOrCreatePendingPlayerTracker()
+{
+  if (!mPendingPlayerTracker) {
+    mPendingPlayerTracker = new PendingPlayerTracker(this);
+  }
+
+  return mPendingPlayerTracker;
 }
 
 /**
@@ -7681,6 +7814,13 @@ nsDocument::GetViewportInfo(const ScreenIntSize& aDisplaySize)
 
   CSSToScreenScale defaultScale = layoutDeviceScale
                                 * LayoutDeviceToScreenScale(1.0);
+
+  if (!Preferences::GetBool("dom.meta-viewport.enabled", false)) {
+    return nsViewportInfo(aDisplaySize,
+                          defaultScale,
+                          /*allowZoom*/ false,
+                          /*allowDoubleTapZoom*/ true);
+  }
 
   // In cases where the width of the CSS viewport is less than or equal to the width
   // of the display (i.e. width <= device-width) then we disable double-tap-to-zoom
@@ -8293,13 +8433,11 @@ nsDocument::GetRequiredRadioCount(const nsAString& aName) const
 }
 
 void
-nsDocument::RadioRequiredChanged(const nsAString& aName, nsIFormControl* aRadio)
+nsDocument::RadioRequiredWillChange(const nsAString& aName, bool aRequiredAdded)
 {
   nsRadioGroupStruct* radioGroup = GetOrCreateRadioGroup(aName);
 
-  nsCOMPtr<nsIContent> element = do_QueryInterface(aRadio);
-  NS_ASSERTION(element, "radio controls have to be content elements");
-  if (element->HasAttr(kNameSpaceID_None, nsGkAtoms::required)) {
+  if (aRequiredAdded) {
     radioGroup->mRequiredRadioCount++;
   } else {
     NS_ASSERTION(radioGroup->mRequiredRadioCount != 0,
@@ -9465,7 +9603,8 @@ FireOrClearDelayedEvents(nsTArray<nsCOMPtr<nsIDocument> >& aDocuments,
 }
 
 void
-nsDocument::MaybePreLoadImage(nsIURI* uri, const nsAString &aCrossOriginAttr)
+nsDocument::MaybePreLoadImage(nsIURI* uri, const nsAString &aCrossOriginAttr,
+                              ReferrerPolicy aReferrerPolicy)
 {
   // Early exit if the img is already present in the img-cache
   // which indicates that the "real" load has already started and
@@ -9499,6 +9638,7 @@ nsDocument::MaybePreLoadImage(nsIURI* uri, const nsAString &aCrossOriginAttr)
                               this,
                               NodePrincipal(),
                               mDocumentURI, // uri of document used as referrer
+                              aReferrerPolicy,
                               nullptr,       // no observer
                               loadFlags,
                               NS_LITERAL_STRING("img"),
@@ -9508,7 +9648,22 @@ nsDocument::MaybePreLoadImage(nsIURI* uri, const nsAString &aCrossOriginAttr)
   // the "real" load occurs. Unpinned in DispatchContentLoadedEvents and
   // unlink
   if (NS_SUCCEEDED(rv)) {
-    mPreloadingImages.AppendObject(request);
+    mPreloadingImages.Put(uri, request.forget());
+  }
+}
+
+void
+nsDocument::ForgetImagePreload(nsIURI* aURI)
+{
+  // Checking count is faster than hashing the URI in the common
+  // case of empty table.
+  if (mPreloadingImages.Count() != 0) {
+    nsCOMPtr<imgIRequest> req;
+    mPreloadingImages.Remove(aURI, getter_AddRefs(req));
+    if (req) {
+      // Make sure to cancel the request so imagelib knows it's gone.
+      req->CancelAndForgetObserver(NS_BINDING_ABORTED);
+    }
   }
 }
 
@@ -9554,7 +9709,8 @@ NS_IMPL_ISUPPORTS(StubCSSLoaderObserver, nsICSSLoaderObserver)
 
 void
 nsDocument::PreloadStyle(nsIURI* uri, const nsAString& charset,
-                         const nsAString& aCrossOriginAttr)
+                         const nsAString& aCrossOriginAttr,
+                         const ReferrerPolicy aReferrerPolicy)
 {
   // The CSSLoader will retain this object after we return.
   nsCOMPtr<nsICSSLoaderObserver> obs = new StubCSSLoaderObserver();
@@ -9563,7 +9719,8 @@ nsDocument::PreloadStyle(nsIURI* uri, const nsAString& charset,
   CSSLoader()->LoadSheet(uri, NodePrincipal(),
                          NS_LossyConvertUTF16toASCII(charset),
                          obs,
-                         Element::StringToCORSMode(aCrossOriginAttr));
+                         Element::StringToCORSMode(aCrossOriginAttr),
+                         aReferrerPolicy);
 }
 
 nsresult
@@ -10075,18 +10232,25 @@ nsDocument::FindImageMap(const nsAString& aUseMapValue)
 }
 
 #define DEPRECATED_OPERATION(_op) #_op "Warning",
-static const char* kWarnings[] = {
+static const char* kDeprecationWarnings[] = {
 #include "nsDeprecatedOperationList.h"
   nullptr
 };
 #undef DEPRECATED_OPERATION
+
+#define DOCUMENT_WARNING(_op) #_op "Warning",
+static const char* kDocumentWarnings[] = {
+#include "nsDocumentWarningList.h"
+  nullptr
+};
+#undef DOCUMENT_WARNING
 
 bool
 nsIDocument::HasWarnedAbout(DeprecatedOperations aOperation)
 {
   static_assert(eDeprecatedOperationCount <= 64,
                 "Too many deprecated operations");
-  return mWarnedAbout & (1ull << aOperation);
+  return mDeprecationWarnedAbout & (1ull << aOperation);
 }
 
 void
@@ -10096,13 +10260,41 @@ nsIDocument::WarnOnceAbout(DeprecatedOperations aOperation,
   if (HasWarnedAbout(aOperation)) {
     return;
   }
-  mWarnedAbout |= (1ull << aOperation);
+  mDeprecationWarnedAbout |= (1ull << aOperation);
   uint32_t flags = asError ? nsIScriptError::errorFlag
                            : nsIScriptError::warningFlag;
   nsContentUtils::ReportToConsole(flags,
                                   NS_LITERAL_CSTRING("DOM Core"), this,
                                   nsContentUtils::eDOM_PROPERTIES,
-                                  kWarnings[aOperation]);
+                                  kDeprecationWarnings[aOperation]);
+}
+
+bool
+nsIDocument::HasWarnedAbout(DocumentWarnings aWarning)
+{
+  static_assert(eDocumentWarningCount <= 64,
+                "Too many document warnings");
+  return mDocWarningWarnedAbout & (1ull << aWarning);
+}
+
+void
+nsIDocument::WarnOnceAbout(DocumentWarnings aWarning,
+                           bool asError /* = false */,
+                           const char16_t **aParams /* = nullptr */,
+                           uint32_t aParamsLength /* = 0 */)
+{
+  if (HasWarnedAbout(aWarning)) {
+    return;
+  }
+  mDocWarningWarnedAbout |= (1ull << aWarning);
+  uint32_t flags = asError ? nsIScriptError::errorFlag
+                           : nsIScriptError::warningFlag;
+  nsContentUtils::ReportToConsole(flags,
+                                  NS_LITERAL_CSTRING("DOM Core"), this,
+                                  nsContentUtils::eDOM_PROPERTIES,
+                                  kDocumentWarnings[aWarning],
+                                  aParams,
+                                  aParamsLength);
 }
 
 nsresult
@@ -10650,13 +10842,13 @@ nsIDocument::MozCancelFullScreen()
 // Element::UnbindFromTree().
 class nsSetWindowFullScreen : public nsRunnable {
 public:
-  nsSetWindowFullScreen(nsIDocument* aDoc, bool aValue)
-    : mDoc(aDoc), mValue(aValue) {}
+  nsSetWindowFullScreen(nsIDocument* aDoc, bool aValue, gfx::VRHMDInfo* aHMD = nullptr)
+    : mDoc(aDoc), mValue(aValue), mHMD(aHMD) {}
 
   NS_IMETHOD Run()
   {
     if (mDoc->GetWindow()) {
-      mDoc->GetWindow()->SetFullScreenInternal(mValue, false);
+      mDoc->GetWindow()->SetFullScreenInternal(mValue, false, mHMD);
     }
     return NS_OK;
   }
@@ -10664,6 +10856,7 @@ public:
 private:
   nsCOMPtr<nsIDocument> mDoc;
   bool mValue;
+  nsRefPtr<gfx::VRHMDInfo> mHMD;
 };
 
 static nsIDocument*
@@ -10683,7 +10876,7 @@ GetFullscreenRootDocument(nsIDocument* aDoc)
 }
 
 static void
-SetWindowFullScreen(nsIDocument* aDoc, bool aValue)
+SetWindowFullScreen(nsIDocument* aDoc, bool aValue, gfx::VRHMDInfo *aVRHMD = nullptr)
 {
   // Maintain list of fullscreen root documents.
   nsCOMPtr<nsIDocument> root = GetFullscreenRootDocument(aDoc);
@@ -10693,7 +10886,7 @@ SetWindowFullScreen(nsIDocument* aDoc, bool aValue)
     FullscreenRoots::Remove(root);
   }
   if (!nsContentUtils::IsFullscreenApiContentOnly()) {
-    nsContentUtils::AddScriptRunner(new nsSetWindowFullScreen(aDoc, aValue));
+    nsContentUtils::AddScriptRunner(new nsSetWindowFullScreen(aDoc, aValue, aVRHMD));
   }
 }
 
@@ -11013,12 +11206,13 @@ nsDocument::IsFullScreenDoc()
 class nsCallRequestFullScreen : public nsRunnable
 {
 public:
-  explicit nsCallRequestFullScreen(Element* aElement)
+  explicit nsCallRequestFullScreen(Element* aElement, FullScreenOptions& aOptions)
     : mElement(aElement),
       mDoc(aElement->OwnerDoc()),
       mWasCallerChrome(nsContentUtils::IsCallerChrome()),
       mHadRequestPending(static_cast<nsDocument*>(mDoc.get())->
-                           mAsyncFullscreenPending)
+                         mAsyncFullscreenPending),
+      mOptions(aOptions)
   {
     static_cast<nsDocument*>(mDoc.get())->
       mAsyncFullscreenPending = true;
@@ -11030,6 +11224,7 @@ public:
       mAsyncFullscreenPending = mHadRequestPending;
     nsDocument* doc = static_cast<nsDocument*>(mDoc.get());
     doc->RequestFullScreen(mElement,
+                           mOptions,
                            mWasCallerChrome,
                            /* aNotifyOnOriginChange */ true);
     return NS_OK;
@@ -11039,10 +11234,12 @@ public:
   nsCOMPtr<nsIDocument> mDoc;
   bool mWasCallerChrome;
   bool mHadRequestPending;
+  FullScreenOptions mOptions;
 };
 
 void
-nsDocument::AsyncRequestFullScreen(Element* aElement)
+nsDocument::AsyncRequestFullScreen(Element* aElement,
+                                   FullScreenOptions& aOptions)
 {
   NS_ASSERTION(aElement,
     "Must pass non-null element to nsDocument::AsyncRequestFullScreen");
@@ -11050,7 +11247,7 @@ nsDocument::AsyncRequestFullScreen(Element* aElement)
     return;
   }
   // Request full-screen asynchronously.
-  nsCOMPtr<nsIRunnable> event(new nsCallRequestFullScreen(aElement));
+  nsCOMPtr<nsIRunnable> event(new nsCallRequestFullScreen(aElement, aOptions));
   NS_DispatchToCurrentThread(event);
 }
 
@@ -11118,6 +11315,9 @@ nsDocument::CleanupFullscreenState()
     Element* top = FullScreenStackTop();
     NS_ASSERTION(top, "Should have a top when full-screen stack isn't empty");
     if (top) {
+      // Remove any VR state properties
+      top->DeleteProperty(nsGkAtoms::vr_state);
+
       EventStateManager::SetFullScreenState(top, false);
     }
     mFullScreenStack.Clear();
@@ -11154,8 +11354,12 @@ nsDocument::FullScreenStackPop()
     return;
   }
 
-  // Remove styles from existing top element.
   Element* top = FullScreenStackTop();
+
+  // Remove any VR state properties
+  top->DeleteProperty(nsGkAtoms::vr_state);
+
+  // Remove styles from existing top element.
   EventStateManager::SetFullScreenState(top, false);
 
   // Remove top element. Note the remaining top element in the stack
@@ -11243,7 +11447,9 @@ nsresult nsDocument::RemoteFrameFullscreenChanged(nsIDOMElement* aFrameElement,
   // If the frame element is already the fullscreen element in this document,
   // this has no effect.
   nsCOMPtr<nsIContent> content(do_QueryInterface(aFrameElement));
+  FullScreenOptions opts;
   RequestFullScreen(content->AsElement(),
+                    opts,
                     /* aWasCallerChrome */ false,
                     /* aNotifyOnOriginChange */ false);
 
@@ -11269,8 +11475,17 @@ nsresult nsDocument::RemoteFrameFullscreenReverted()
   return NS_OK;
 }
 
+static void
+ReleaseHMDInfoRef(void *, nsIAtom*, void *aPropertyValue, void *)
+{
+  if (aPropertyValue) {
+    static_cast<gfx::VRHMDInfo*>(aPropertyValue)->Release();
+  }
+}
+
 void
 nsDocument::RequestFullScreen(Element* aElement,
+                              FullScreenOptions& aOptions,
                               bool aWasCallerChrome,
                               bool aNotifyOnOriginChange)
 {
@@ -11357,6 +11572,14 @@ nsDocument::RequestFullScreen(Element* aElement,
     do_QueryReferent(EventStateManager::sPointerLockedElement);
   if (pointerLockedElement) {
     UnlockPointer();
+  }
+
+  // Process options -- in this case, just HMD
+  if (aOptions.mVRHMDDevice) {
+    nsRefPtr<gfx::VRHMDInfo> hmdRef = aOptions.mVRHMDDevice;
+    aElement->SetProperty(nsGkAtoms::vr_state, hmdRef.forget().take(),
+                          ReleaseHMDInfoRef,
+                          true);
   }
 
   // Set the full-screen element. This sets the full-screen style on the
@@ -11463,7 +11686,7 @@ nsDocument::RequestFullScreen(Element* aElement,
   // modes. Also note that nsGlobalWindow::SetFullScreen() (which
   // SetWindowFullScreen() calls) proxies to the root window in its hierarchy,
   // and does not operate on the a per-nsIDOMWindow basis.
-  SetWindowFullScreen(this, true);
+  SetWindowFullScreen(this, true, aOptions.mVRHMDDevice);
 }
 
 NS_IMETHODIMP

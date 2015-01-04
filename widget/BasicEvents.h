@@ -65,11 +65,6 @@
 #define NS_MOZ_USER_IDLE                 (NS_WINDOW_START + 67)
 #define NS_MOZ_USER_ACTIVE               (NS_WINDOW_START + 68)
 
-// The resolution at which a plugin should draw has changed, for
-// example as the result of changing from a HiDPI mode to a non-
-// HiDPI mode.
-#define NS_PLUGIN_RESOLUTION_CHANGED     (NS_WINDOW_START + 69)
-
 #define NS_LANGUAGECHANGE                (NS_WINDOW_START + 70)
 
 #define NS_MOUSE_MESSAGE_START          300
@@ -176,6 +171,9 @@
 // composition events
 #define NS_COMPOSITION_EVENT_START    2200
 #define NS_COMPOSITION_START          (NS_COMPOSITION_EVENT_START)
+// NS_COMPOSITION_END is the message for DOM compositionend event.
+// This event should NOT be dispatched from widget if NS_COMPOSITION_COMMIT
+// is available.
 #define NS_COMPOSITION_END            (NS_COMPOSITION_EVENT_START + 1)
 // NS_COMPOSITION_UPDATE is the message for DOM compositionupdate event.
 // This event should NOT be dispatched from widget since it will be dispatched
@@ -187,6 +185,19 @@
 // composition string isn't changed but the ranges are changed.  This causes
 // a DOM "text" event which is a non-standard DOM event.
 #define NS_COMPOSITION_CHANGE         (NS_COMPOSITION_EVENT_START + 3)
+// NS_COMPOSITION_COMMIT_AS_IS is the message for representing a commit of
+// composition string.  TextComposition will commit composition with the
+// last data.  TextComposition will dispatch this event to the DOM tree as
+// NS_COMPOSITION_CHANGE without clause information.  After that,
+// NS_COMPOSITION_END will be dispatched automatically.
+// Its mData and mRanges should be empty and nullptr.
+#define NS_COMPOSITION_COMMIT_AS_IS   (NS_COMPOSITION_EVENT_START + 4)
+// NS_COMPOSITION_COMMIT is the message for representing a commit of
+// composition string with its mData value.  TextComposition will dispatch this
+// event to the DOM tree as NS_COMPOSITION_CHANGE without clause information.
+// After that, NS_COMPOSITION_END will be dispatched automatically.
+// Its mRanges should be nullptr.
+#define NS_COMPOSITION_COMMIT         (NS_COMPOSITION_EVENT_START + 5)
 
 // UI events
 #define NS_UI_EVENT_START          2500

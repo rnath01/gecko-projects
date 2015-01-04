@@ -186,6 +186,9 @@
 #define SM_CONVERTIBLESLATEMODE 0x2003
 #endif
 
+#include "mozilla/layers/APZCTreeManager.h"
+#include "mozilla/layers/InputAPZContext.h"
+
 using namespace mozilla;
 using namespace mozilla::dom;
 using namespace mozilla::gfx;
@@ -353,6 +356,7 @@ nsWindow::nsWindow() : nsWindowBase()
   mUnicodeWidget        = true;
   mDisplayPanFeedback   = false;
   mTouchWindow          = false;
+  mFutureMarginsToUse   = false;
   mCustomNonClient      = false;
   mHideChrome           = false;
   mFullscreenMode       = false;
@@ -2848,7 +2852,7 @@ NS_METHOD nsWindow::Invalidate(const nsIntRect & aRect)
 }
 
 NS_IMETHODIMP
-nsWindow::MakeFullScreen(bool aFullScreen)
+nsWindow::MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen)
 {
   // taskbarInfo will be nullptr pre Windows 7 until Bug 680227 is resolved.
   nsCOMPtr<nsIWinTaskbar> taskbarInfo =
@@ -2878,7 +2882,7 @@ nsWindow::MakeFullScreen(bool aFullScreen)
   // Will call hide chrome, reposition window. Note this will
   // also cache dimensions for restoration, so it should only
   // be called once per fullscreen request.
-  nsresult rv = nsBaseWidget::MakeFullScreen(aFullScreen);
+  nsresult rv = nsBaseWidget::MakeFullScreen(aFullScreen, aTargetScreen);
 
   if (visible) {
     Show(true);
@@ -3139,20 +3143,19 @@ NS_METHOD nsWindow::EnableDragDrop(bool aEnable)
 
 NS_METHOD nsWindow::CaptureMouse(bool aCapture)
 {
-  TRACKMOUSEEVENT mTrack;
-  mTrack.cbSize = sizeof(TRACKMOUSEEVENT);
-  mTrack.dwFlags = TME_LEAVE;
-  mTrack.dwHoverTime = 0;
+  if (!nsToolkit::gMouseTrailer) {
+    NS_ERROR("nsWindow::CaptureMouse called after nsToolkit destroyed");
+    return NS_OK;
+  }
+
   if (aCapture) {
-    mTrack.hwndTrack = mWnd;
+    nsToolkit::gMouseTrailer->SetCaptureWindow(mWnd);
     ::SetCapture(mWnd);
   } else {
-    mTrack.hwndTrack = nullptr;
+    nsToolkit::gMouseTrailer->SetCaptureWindow(nullptr);
     ::ReleaseCapture();
   }
   sIsInMouseCapture = aCapture;
-  // Requests WM_MOUSELEAVE events for this window.
-  TrackMouseEvent(&mTrack);
   return NS_OK;
 }
 
@@ -3737,10 +3740,22 @@ bool nsWindow::DispatchKeyboardEvent(WidgetGUIEvent* event)
   return ConvertStatus(status);
 }
 
-bool nsWindow::DispatchScrollEvent(WidgetGUIEvent* event)
+bool nsWindow::DispatchScrollEvent(WidgetGUIEvent* aEvent)
 {
   nsEventStatus status;
-  DispatchEvent(event, status);
+
+  if (mAPZC && aEvent->mClass == eWheelEventClass) {
+    uint64_t inputBlockId = 0;
+    ScrollableLayerGuid guid;
+
+    nsEventStatus result = mAPZC->ReceiveInputEvent(*aEvent->AsWheelEvent(), &guid, &inputBlockId);
+    if (result == nsEventStatus_eConsumeNoDefault) {
+      return true;
+    }
+    status = DispatchEventForAPZ(aEvent, guid, inputBlockId);
+  } else {
+    DispatchEvent(aEvent, status);
+  }
   return ConvertStatus(status);
 }
 
@@ -3918,6 +3933,7 @@ bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
     event.message = NS_MOUSE_BUTTON_DOWN;
     event.button = aButton;
     sLastClickCount = 2;
+    sLastMouseDownTime = curMsgTime;
   }
   else if (aEventType == NS_MOUSE_BUTTON_UP) {
     // remember when this happened for the next mouse down
@@ -4018,7 +4034,12 @@ bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
 
   // call the event callback
   if (mWidgetListener) {
+    if (nsToolkit::gMouseTrailer)
+      nsToolkit::gMouseTrailer->Disable();
     if (aEventType == NS_MOUSE_MOVE) {
+      if (nsToolkit::gMouseTrailer && !sIsInMouseCapture) {
+        nsToolkit::gMouseTrailer->SetMouseTrailerWindow(mWnd);
+      }
       nsIntRect rect;
       GetBounds(rect);
       rect.x = 0;
@@ -4048,6 +4069,9 @@ bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
     }
 
     result = DispatchWindowEvent(&event);
+
+    if (nsToolkit::gMouseTrailer)
+      nsToolkit::gMouseTrailer->Enable();
 
     // Release the widget with NS_IF_RELEASE() just in case
     // the context menu key code in EventListenerManager::HandleEvent()
@@ -5098,8 +5122,11 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
       break;
 
     case WM_APPCOMMAND:
-      result = HandleAppCommandMsg(wParam, lParam, aRetValue);
+    {
+      MSG nativeMsg = WinUtils::InitMSG(msg, wParam, lParam, mWnd);
+      result = HandleAppCommandMsg(nativeMsg, aRetValue);
       break;
+    }
 
     // The WM_ACTIVATE event is fired when a window is raised or lowered,
     // and the loword of wParam specifies which. But we don't want to tell
@@ -6584,6 +6611,16 @@ void nsWindow::OnDestroy()
 
   IMEHandler::OnDestroyWindow(this);
 
+  // Turn off mouse trails if enabled.
+  MouseTrailer* mtrailer = nsToolkit::gMouseTrailer;
+  if (mtrailer) {
+    if (mtrailer->GetMouseTrailerWindow() == mWnd)
+      mtrailer->DestroyTimer();
+
+    if (mtrailer->GetCaptureWindow() == mWnd)
+      mtrailer->SetCaptureWindow(nullptr);
+  }
+
   // Free GDI window class objects
   if (mBrush) {
     VERIFY(::DeleteObject(mBrush));
@@ -6712,18 +6749,12 @@ nsWindow::GetPreferredCompositorBackends(nsTArray<LayersBackend>& aHints)
     }
 
     ID3D11Device* device = gfxWindowsPlatform::GetPlatform()->GetD3D11Device();
-    if (device &&
-        device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_10_0 &&
-        !DoesD3D11DeviceWork(device)) {
-      // bug 1083071 - bad things - fall back to basic layers
-      // This should not happen aside from driver bugs, and in particular
-      // should not happen on our test machines, so let's NS_ERROR to ensure
-      // that we would catch it as a test failure.
-      NS_ERROR("Can't use Direct3D 11 because of a driver bug");
-    } else {
-      if (!prefs.mPreferD3D9) {
-        aHints.AppendElement(LayersBackend::LAYERS_D3D11);
-      }
+
+    if (!prefs.mPreferD3D9) {
+      aHints.AppendElement(LayersBackend::LAYERS_D3D11);
+    }
+    if (prefs.mPreferD3D9 || !mozilla::IsVistaOrLater()) {
+      // We don't want D3D9 except on Windows XP
       aHints.AppendElement(LayersBackend::LAYERS_D3D9);
     }
   }

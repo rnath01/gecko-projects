@@ -108,7 +108,6 @@
 #include "FMRadio.h"
 #endif
 
-#include "nsIDOMGlobalObjectConstructor.h"
 #include "nsDebug.h"
 
 #include "mozilla/dom/BindingUtils.h"
@@ -431,9 +430,7 @@ NS_INTERFACE_MAP_END
 
 
 static const JSClass sDOMConstructorProtoClass = {
-  "DOM Constructor.prototype", 0,
-  JS_PropertyStub, JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-  JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, nullptr
+  "DOM Constructor.prototype", 0
 };
 
 
@@ -1006,9 +1003,9 @@ nsDOMClassInfo::Enumerate(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
 }
 
 NS_IMETHODIMP
-nsDOMClassInfo::NewEnumerate(nsIXPConnectWrappedNative *wrapper,
-                             JSContext *cx, JSObject *obj, uint32_t enum_op,
-                             jsval *statep, jsid *idp, bool *_retval)
+nsDOMClassInfo::NewEnumerate(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                             JSObject *obj, JS::AutoIdVector &properties,
+                             bool *_retval)
 {
   NS_WARNING("nsDOMClassInfo::NewEnumerate Don't call me!");
 
@@ -1029,17 +1026,17 @@ nsDOMClassInfo::Resolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
 
   JS::Rooted<JSObject*> global(cx, ::JS_GetGlobalForObject(cx, obj));
 
-  JS::Rooted<JS::Value> val(cx);
-  if (!::JS_LookupProperty(cx, global, mData->mName, &val)) {
+  JS::Rooted<JSPropertyDescriptor> desc(cx);
+  if (!JS_GetPropertyDescriptor(cx, global, mData->mName, &desc)) {
     return NS_ERROR_UNEXPECTED;
   }
 
-  if (!val.isPrimitive()) {
+  if (desc.object() && !desc.hasGetterOrSetter() && desc.value().isObject()) {
     // If val is not an (non-null) object there either is no
     // constructor for this class, or someone messed with
     // window.classname, just fall through and let the JS engine
     // return the Object constructor.
-    if (!::JS_DefinePropertyById(cx, obj, id, val,
+    if (!::JS_DefinePropertyById(cx, obj, id, desc.value(),
                                  JSPROP_ENUMERATE,
                                  JS_STUBGETTER, JS_STUBSETTER)) {
       return NS_ERROR_UNEXPECTED;
@@ -1351,65 +1348,6 @@ BaseStubConstructor(nsIWeakReference* aWeakOwner,
     return rv;
   }
 
-  nsCOMPtr<nsIDOMGlobalObjectConstructor> constructor(do_QueryInterface(native));
-  if (constructor) {
-    // Initialize object using the current inner window, but only if
-    // the caller can access it.
-    nsCOMPtr<nsPIDOMWindow> owner = do_QueryReferent(aWeakOwner);
-    nsPIDOMWindow* outerWindow = owner ? owner->GetOuterWindow() : nullptr;
-    nsPIDOMWindow* currentInner =
-      outerWindow ? outerWindow->GetCurrentInnerWindow() : nullptr;
-    if (!currentInner ||
-        (owner != currentInner &&
-         !nsContentUtils::CanCallerAccess(currentInner))) {
-      return NS_ERROR_DOM_SECURITY_ERR;
-    }
-
-    nsCOMPtr<nsIXPConnectWrappedJS> wrappedJS = do_QueryInterface(native);
-
-    JS::Rooted<JSObject*> thisObject(cx, wrappedJS->GetJSObject());
-    if (!thisObject) {
-      return NS_ERROR_UNEXPECTED;
-    }
-
-    JSAutoCompartment ac(cx, thisObject);
-
-    JS::Rooted<JS::Value> funval(cx);
-    if (!JS_GetProperty(cx, thisObject, "constructor", &funval) ||
-        !funval.isObject()) {
-      return NS_ERROR_UNEXPECTED;
-    }
-
-    // Check if the object is even callable.
-    NS_ENSURE_STATE(JS::IsCallable(&funval.toObject()));
-    {
-      // wrap parameters in the target compartment
-      // we also pass in the calling window as the first argument
-      unsigned argc = args.length() + 1;
-      JS::AutoValueVector argv(cx);
-      if (!argv.resize(argc)) {
-        return NS_ERROR_OUT_OF_MEMORY;
-      }
-
-      nsCOMPtr<nsIDOMWindow> currentWin(do_GetInterface(currentInner));
-      rv = WrapNative(cx, currentWin, &NS_GET_IID(nsIDOMWindow),
-                      true, argv[0]);
-
-      for (size_t i = 1; i < argc; ++i) {
-        argv[i].set(args[i - 1]);
-        if (!JS_WrapValue(cx, argv[i]))
-          return NS_ERROR_FAILURE;
-      }
-
-      JS::Rooted<JS::Value> frval(cx);
-      bool ret = JS_CallFunctionValue(cx, thisObject, funval, argv, &frval);
-
-      if (!ret) {
-        return NS_ERROR_FAILURE;
-      }
-    }
-  }
-
   js::AssertSameCompartment(cx, obj);
   return WrapNative(cx, native, true, args.rval());
 }
@@ -1682,16 +1620,16 @@ nsDOMConstructor::HasInstance(nsIXPConnectWrappedNative *wrapper,
   if (!name_struct) {
     // This isn't a normal DOM object, see if this constructor lives on its
     // prototype chain.
-    JS::Rooted<JS::Value> val(cx);
-    if (!JS_GetProperty(cx, obj, "prototype", &val)) {
+    JS::Rooted<JSPropertyDescriptor> desc(cx);
+    if (!JS_GetPropertyDescriptor(cx, obj, "prototype", &desc)) {
       return NS_ERROR_UNEXPECTED;
     }
 
-    if (val.isPrimitive()) {
+    if (!desc.object() || desc.hasGetterOrSetter() || !desc.value().isObject()) {
       return NS_OK;
     }
 
-    JS::Rooted<JSObject*> dot_prototype(cx, val.toObjectOrNull());
+    JS::Rooted<JSObject*> dot_prototype(cx, &desc.value().toObject());
 
     JS::Rooted<JSObject*> proto(cx, dom_obj);
     for (;;) {
@@ -1995,19 +1933,19 @@ ResolvePrototype(nsIXPConnect *aXPConnect, nsGlobalWindow *aWin, JSContext *cx,
     if (class_parent_name) {
       JSAutoCompartment ac(cx, winobj);
 
-      JS::Rooted<JS::Value> val(cx);
-      if (!JS_LookupProperty(cx, winobj, CutPrefix(class_parent_name), &val)) {
+      JS::Rooted<JSPropertyDescriptor> desc(cx);
+      if (!JS_GetPropertyDescriptor(cx, winobj, CutPrefix(class_parent_name), &desc)) {
         return NS_ERROR_UNEXPECTED;
       }
 
-      if (val.isObject()) {
-        JS::Rooted<JSObject*> obj(cx, &val.toObject());
-        if (!JS_LookupProperty(cx, obj, "prototype", &val)) {
+      if (desc.object() && !desc.hasGetterOrSetter() && desc.value().isObject()) {
+        JS::Rooted<JSObject*> obj(cx, &desc.value().toObject());
+        if (!JS_GetPropertyDescriptor(cx, obj, "prototype", &desc)) {
           return NS_ERROR_UNEXPECTED;
         }
 
-        if (val.isObject()) {
-          proto = &val.toObject();
+        if (desc.object() && !desc.hasGetterOrSetter() && desc.value().isObject()) {
+          proto = &desc.value().toObject();
         }
       }
     }
@@ -2112,9 +2050,7 @@ nsWindowSH::NameStructEnabled(JSContext* aCx, nsGlobalWindow *aWin,
 
 #ifdef USE_CONTROLLERS_SHIM
 static const JSClass ControllersShimClass = {
-    "XULControllers", 0,
-    JS_PropertyStub,   JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
-    JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, nullptr
+    "XULControllers", 0
 };
 #endif
 

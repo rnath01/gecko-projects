@@ -471,7 +471,7 @@ inline void XPCNativeSet::ASSERT_NotMarked()
 inline
 JSObject* XPCWrappedNativeTearOff::GetJSObjectPreserveColor() const
 {
-    return reinterpret_cast<JSObject *>(reinterpret_cast<uintptr_t>(mJSObject) & ~1);
+    return mJSObject.getPtr();
 }
 
 inline
@@ -545,12 +545,9 @@ XPCWrappedNative::SweepTearOffs()
 inline bool
 xpc_ForcePropertyResolve(JSContext* cx, JS::HandleObject obj, jsid idArg)
 {
-    JS::RootedValue prop(cx);
     JS::RootedId id(cx, idArg);
-
-    if (!JS_LookupPropertyById(cx, obj, id, &prop))
-        return false;
-    return true;
+    bool dummy;
+    return JS_HasPropertyById(cx, obj, id, &dummy);
 }
 
 inline jsid

@@ -10,8 +10,8 @@
 #include "frontend/BytecodeCompiler.h"
 #include "jit/arm/Simulator-arm.h"
 #include "jit/BaselineIC.h"
-#include "jit/IonFrames.h"
 #include "jit/JitCompartment.h"
+#include "jit/JitFrames.h"
 #include "jit/mips/Simulator-mips.h"
 #include "vm/ArrayObject.h"
 #include "vm/Debugger.h"
@@ -21,7 +21,7 @@
 #include "jsinferinlines.h"
 
 #include "jit/BaselineFrame-inl.h"
-#include "jit/IonFrames-inl.h"
+#include "jit/JitFrames-inl.h"
 #include "vm/Debugger-inl.h"
 #include "vm/Interpreter-inl.h"
 #include "vm/NativeObject-inl.h"
@@ -40,7 +40,7 @@ namespace jit {
 AutoDetectInvalidation::AutoDetectInvalidation(JSContext *cx, MutableHandleValue rval,
                                                IonScript *ionScript)
   : cx_(cx),
-    ionScript_(ionScript ? ionScript : GetTopIonJSScript(cx)->ionScript()),
+    ionScript_(ionScript ? ionScript : GetTopJitJSScript(cx)->ionScript()),
     rval_(rval),
     disabled_(false)
 { }
@@ -194,9 +194,8 @@ SetConst(JSContext *cx, HandlePropertyName name, HandleObject scopeChain, Handle
 }
 
 bool
-MutatePrototype(JSContext *cx, HandleObject obj, HandleValue value)
+MutatePrototype(JSContext *cx, HandlePlainObject obj, HandleValue value)
 {
-    MOZ_ASSERT(obj->is<JSObject>(), "must only be used with object literals");
     if (!value.isObjectOrNull())
         return true;
 
@@ -283,7 +282,7 @@ template bool StringsEqual<true>(JSContext *cx, HandleString lhs, HandleString r
 template bool StringsEqual<false>(JSContext *cx, HandleString lhs, HandleString rhs, bool *res);
 
 JSObject*
-NewInitObject(JSContext *cx, HandleNativeObject templateObject)
+NewInitObject(JSContext *cx, HandlePlainObject templateObject)
 {
     NewObjectKind newKind = templateObject->hasSingletonType() ? SingletonObject : GenericObject;
     if (!templateObject->hasLazyType() && templateObject->type()->shouldPreTenure())
@@ -300,7 +299,7 @@ NewInitObject(JSContext *cx, HandleNativeObject templateObject)
 }
 
 JSObject *
-NewInitObjectWithClassPrototype(JSContext *cx, HandleObject templateObject)
+NewInitObjectWithClassPrototype(JSContext *cx, HandlePlainObject templateObject)
 {
     MOZ_ASSERT(!templateObject->hasSingletonType());
     MOZ_ASSERT(!templateObject->hasLazyType());
@@ -308,11 +307,10 @@ NewInitObjectWithClassPrototype(JSContext *cx, HandleObject templateObject)
     NewObjectKind newKind = templateObject->type()->shouldPreTenure()
                             ? TenuredObject
                             : GenericObject;
-    JSObject *obj = NewObjectWithGivenProto(cx,
-                                            templateObject->getClass(),
-                                            templateObject->getProto(),
-                                            cx->global(),
-                                            newKind);
+    PlainObject *obj = NewObjectWithGivenProto<PlainObject>(cx,
+                                                            templateObject->getProto(),
+                                                            cx->global(),
+                                                            newKind);
     if (!obj)
         return nullptr;
 
@@ -507,7 +505,8 @@ SetProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, HandleValu
     if (MOZ_LIKELY(!obj->getOps()->setProperty)) {
         return baseops::SetPropertyHelper<SequentialExecution>(
             cx, obj.as<NativeObject>(), obj.as<NativeObject>(), id,
-            (op == JSOP_SETNAME || op == JSOP_SETGNAME)
+            (op == JSOP_SETNAME || op == JSOP_STRICTSETNAME ||
+             op == JSOP_SETGNAME || op == JSOP_STRICTSETGNAME)
             ? baseops::Unqualified
             : baseops::Qualified,
             &v,
@@ -544,13 +543,11 @@ NewCallObject(JSContext *cx, HandleShape shape, HandleTypeObject type, uint32_t 
     if (!obj)
         return nullptr;
 
-#ifdef JSGC_GENERATIONAL
     // The JIT creates call objects in the nursery, so elides barriers for
     // the initializing writes. The interpreter, however, may have allocated
     // the call object tenured, so barrier as needed before re-entering.
     if (!IsInsideNursery(obj))
         cx->runtime()->gc.storeBuffer.putWholeCellFromMainThread(obj);
-#endif
 
     return obj;
 }
@@ -562,14 +559,12 @@ NewSingletonCallObject(JSContext *cx, HandleShape shape, uint32_t lexicalBegin)
     if (!obj)
         return nullptr;
 
-#ifdef JSGC_GENERATIONAL
     // The JIT creates call objects in the nursery, so elides barriers for
     // the initializing writes. The interpreter, however, may have allocated
     // the call object tenured, so barrier as needed before re-entering.
     MOZ_ASSERT(!IsInsideNursery(obj),
                "singletons are created in the tenured heap");
     cx->runtime()->gc.storeBuffer.putWholeCellFromMainThread(obj);
-#endif
 
     return obj;
 }
@@ -705,7 +700,6 @@ FilterArgumentsOrEval(JSContext *cx, JSString *str)
         !StringHasPattern(linear, eval, mozilla::ArrayLength(eval));
 }
 
-#ifdef JSGC_GENERATIONAL
 void
 PostWriteBarrier(JSRuntime *rt, JSObject *obj)
 {
@@ -722,7 +716,6 @@ PostGlobalWriteBarrier(JSRuntime *rt, JSObject *obj)
         obj->compartment()->globalWriteBarriered = true;
     }
 }
-#endif
 
 uint32_t
 GetIndexFromString(JSString *str)
@@ -778,9 +771,9 @@ DebugEpilogueOnBaselineReturn(JSContext *cx, BaselineFrame *frame, jsbytecode *p
     if (!DebugEpilogue(cx, frame, pc, true)) {
         // DebugEpilogue popped the frame by updating jitTop, so run the stop event
         // here before we enter the exception handler.
-        TraceLogger *logger = TraceLoggerForMainThread(cx->runtime());
-        TraceLogStopEvent(logger, TraceLogger::Baseline);
-        TraceLogStopEvent(logger); // Leave script.
+        TraceLoggerThread *logger = TraceLoggerForMainThread(cx->runtime());
+        TraceLogStopEvent(logger, TraceLogger_Baseline);
+        TraceLogStopEvent(logger, TraceLogger_Scripts);
         return false;
     }
 
@@ -822,7 +815,7 @@ DebugEpilogue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool ok)
         // Pop this frame by updating jitTop, so that the exception handling
         // code will start at the previous frame.
 
-        IonJSFrameLayout *prefix = frame->framePrefix();
+        JitFrameLayout *prefix = frame->framePrefix();
         EnsureExitFrame(prefix);
         cx->mainThread().jitTop = (uint8_t *)prefix;
     }
@@ -915,6 +908,14 @@ DebugAfterYield(JSContext *cx, BaselineFrame *frame)
     if (frame->script()->isDebuggee())
         frame->setIsDebuggee();
     return true;
+}
+
+bool
+GeneratorThrowOrClose(JSContext *cx, BaselineFrame *frame, HandleObject obj, HandleValue arg,
+                      uint32_t resumeKind)
+{
+    MOZ_ALWAYS_TRUE(DebugAfterYield(cx, frame));
+    return js::GeneratorThrowOrClose(cx, obj, arg, resumeKind);
 }
 
 bool
@@ -1018,10 +1019,7 @@ OnDebuggerStatement(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool *m
 {
     *mustReturn = false;
 
-    RootedScript script(cx, frame->script());
-    RootedValue rval(cx);
-
-    switch (Debugger::onDebuggerStatement(cx, frame, &rval)) {
+    switch (Debugger::onDebuggerStatement(cx, frame)) {
       case JSTRAP_ERROR:
         return false;
 
@@ -1029,17 +1027,22 @@ OnDebuggerStatement(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool *m
         return true;
 
       case JSTRAP_RETURN:
-        frame->setReturnValue(rval);
         *mustReturn = true;
         return jit::DebugEpilogue(cx, frame, pc, true);
 
       case JSTRAP_THROW:
-        cx->setPendingException(rval);
         return false;
 
       default:
         MOZ_CRASH("Invalid trap status");
     }
+}
+
+bool
+GlobalHasLiveOnDebuggerStatement(JSContext *cx)
+{
+    return cx->compartment()->isDebuggee() &&
+           Debugger::hasLiveHook(cx->global(), Debugger::OnDebuggerStatement);
 }
 
 bool
@@ -1287,15 +1290,6 @@ AssertValidValue(JSContext *cx, Value *v)
         AssertValidSymbolPtr(cx, v->toSymbol());
 }
 #endif
-
-// Definition of the MTypedObjectProto MIR.
-JSObject *
-TypedObjectProto(JSObject *obj)
-{
-    MOZ_ASSERT(obj->is<TypedObject>());
-    TypedObject &typedObj = obj->as<TypedObject>();
-    return &typedObj.typedProto();
-}
 
 bool
 ObjectIsCallable(JSObject *obj)

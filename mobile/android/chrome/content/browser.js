@@ -16,6 +16,8 @@ Cu.import("resource://gre/modules/AddonManager.jsm");
 Cu.import('resource://gre/modules/Payment.jsm');
 Cu.import("resource://gre/modules/NotificationDB.jsm");
 Cu.import("resource://gre/modules/SpatialNavigation.jsm");
+// TODO: Lazy load this based on a message...?
+Cu.import("resource://gre/modules/DownloadNotifications.jsm");
 
 #ifdef ACCESSIBILITY
 Cu.import("resource://gre/modules/accessibility/AccessFu.jsm");
@@ -32,6 +34,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "UITelemetry",
 
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
                                   "resource://gre/modules/PluralForm.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "Downloads",
+                                  "resource://gre/modules/Downloads.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Messaging",
                                   "resource://gre/modules/Messaging.jsm");
@@ -101,11 +106,17 @@ XPCOMUtils.defineLazyModuleGetter(this, "PermissionsUtils",
 XPCOMUtils.defineLazyModuleGetter(this, "SharedPreferences",
                                   "resource://gre/modules/SharedPreferences.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "Notifications",
+                                  "resource://gre/modules/Notifications.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode",
+                                  "resource://gre/modules/ReaderMode.jsm");
+
 // Lazily-loaded browser scripts:
 [
   ["SelectHelper", "chrome://browser/content/SelectHelper.js"],
   ["InputWidgetHelper", "chrome://browser/content/InputWidgetHelper.js"],
-  ["AboutReader", "chrome://browser/content/aboutReader.js"],
+  ["AboutReader", "chrome://global/content/reader/aboutReader.js"],
   ["MasterPassword", "chrome://browser/content/MasterPassword.js"],
   ["PluginHelper", "chrome://browser/content/PluginHelper.js"],
   ["OfflineApps", "chrome://browser/content/OfflineApps.js"],
@@ -135,7 +146,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "SharedPreferences",
   ["FeedHandler", ["Feeds:Subscribe"], "chrome://browser/content/FeedHandler.js"],
   ["Feedback", ["Feedback:Show"], "chrome://browser/content/Feedback.js"],
   ["SelectionHandler", ["TextSelection:Get"], "chrome://browser/content/SelectionHandler.js"],
-  ["Notifications", ["Notification:Event"], "chrome://browser/content/Notifications.jsm"],
   ["EmbedRT", ["GeckoView:ImportScript"], "chrome://browser/content/EmbedRT.js"],
   ["Reader", ["Reader:Removed"], "chrome://browser/content/Reader.js"],
 ].forEach(function (aScript) {
@@ -293,6 +303,7 @@ Strings.init();
 const kFormHelperModeDisabled = 0;
 const kFormHelperModeEnabled = 1;
 const kFormHelperModeDynamic = 2;   // disabled on tablets
+const kMaxHistoryListSize = 50;
 
 var BrowserApp = {
   _tabs: [],
@@ -328,6 +339,7 @@ var BrowserApp = {
         Services.tm.mainThread.dispatch(function() {
           // Init LoginManager
           Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager);
+          CastingApps.init();
         }, Ci.nsIThread.DISPATCH_NORMAL);
 
 #ifdef MOZ_SAFE_BROWSING
@@ -338,6 +350,8 @@ var BrowserApp = {
 #endif
 #ifdef NIGHTLY_BUILD
         WebcompatReporter.init();
+        Telemetry.addData("TRACKING_PROTECTION_ENABLED",
+          Services.prefs.getBoolPref("privacy.trackingprotection.enabled"));
 #endif
       } catch(ex) { console.log(ex); }
     }, false);
@@ -414,7 +428,7 @@ var BrowserApp = {
 
     NativeWindow.init();
     LightWeightThemeWebInstaller.init();
-    Downloads.init();
+    DownloadNotifications.init();
     FormAssistant.init();
     IndexedDB.init();
     HealthReportStatusListener.init();
@@ -427,7 +441,6 @@ var BrowserApp = {
     RemoteDebugger.init();
     UserAgentOverrides.init();
     DesktopUserAgent.init();
-    CastingApps.init();
     Distribution.init();
     Tabs.init();
 #ifdef ACCESSIBILITY
@@ -476,36 +489,6 @@ var BrowserApp = {
       Services.prefs.setIntPref("extensions.enabledScopes", 1);
       Services.prefs.setIntPref("extensions.autoDisableScopes", 1);
       Services.prefs.setBoolPref("xpinstall.enabled", false);
-    }
-
-    // Fix fallout from Bug 1091803.
-    if (Services.prefs.prefHasUserValue("intl.locale.os")) {
-      try {
-        let currentAcceptLang = Services.prefs.getCharPref("intl.accept_languages");
-
-        // The trailing comma is very important. This means we've set it to a
-        // real char pref, and it's something like "chrome://...,en-US,en".
-        if (currentAcceptLang.startsWith("chrome://global/locale/intl.properties,")) {
-          // If general.useragent.locale was set to a plain string, we ought to fix it, too.
-          try {
-            let currentUALocale = Services.prefs.getCharPref("general.useragent.locale");
-            if (currentUALocale.startsWith("chrome://")) {
-              // We're fine. This is what happens when you read a localized string as a char pref.
-            } else {
-              // Turn it into a localized string.
-              this.setLocalizedPref("general.useragent.locale", currentUALocale);
-            }
-          } catch (ee) {
-          }
-
-          // Now compute and save a valid Accept-Languages header from the clean strings.
-          let osLocale = this.getOSLocalePref();
-          let uaLocale = this.getUALocalePref();
-          this.computeAcceptLanguages(osLocale, uaLocale);
-        }
-      } catch (e) {
-        // Phew.
-      }
     }
 
     try {
@@ -900,6 +883,10 @@ var BrowserApp = {
       Services.prefs.setBoolPref("searchActivity.default.migrated", true);
       SearchEngines.migrateSearchActivityDefaultPref();
     }
+
+    if (this._startupStatus === "upgrade") {
+      Reader.migrateCache().catch(e => Cu.reportError("Error migrating Reader cache: " + e));
+    }
   },
 
   // This function returns false during periods where the browser displayed document is
@@ -1151,14 +1138,24 @@ var BrowserApp = {
    * Gets an open tab with the given URL.
    *
    * @param  aURL URL to look for
+   * @param  aOptions Options for the search. Currently supports:
+   **  @option startsWith a Boolean indicating whether to search for a tab who's url starts with the
+   *           requested url. Useful if you want to ignore hash codes on the end of a url. For instance
+   *           to have about:downloads match about:downloads#123.
    * @return the tab with the given URL, or null if no such tab exists
    */
-  getTabWithURL: function getTabWithURL(aURL) {
+  getTabWithURL: function getTabWithURL(aURL, aOptions) {
     let uri = Services.io.newURI(aURL, null, null);
     for (let i = 0; i < this._tabs.length; ++i) {
       let tab = this._tabs[i];
-      if (tab.browser.currentURI.equals(uri)) {
-        return tab;
+      if (aOptions.startsWith) {
+        if (tab.browser.currentURI.spec.startsWith(aURL)) {
+          return tab;
+        }
+      } else {
+        if (tab.browser.currentURI.equals(uri)) {
+          return tab;
+        }
       }
     }
     return null;
@@ -1169,14 +1166,20 @@ var BrowserApp = {
    * Otherwise, a new tab is opened with the given URL.
    *
    * @param aURL URL to open
+   * @param  aFlags Options for the search. Currently supports:
+   **  @option startsWith a Boolean indicating whether to search for a tab who's url starts with the
+   *           requested url. Useful if you want to ignore hash codes on the end of a url. For instance
+   *           to have about:downloads match about:downloads#123.
    */
-  selectOrOpenTab: function selectOrOpenTab(aURL) {
-    let tab = this.getTabWithURL(aURL);
+  selectOrOpenTab: function selectOrOpenTab(aURL, aFlags) {
+    let tab = this.getTabWithURL(aURL, aFlags);
     if (tab == null) {
-      this.addTab(aURL);
+      tab = this.addTab(aURL);
     } else {
       this.selectTab(tab);
     }
+
+    return tab;
   },
 
   // This method updates the state in BrowserApp after a tab has been selected
@@ -1222,54 +1225,29 @@ var BrowserApp = {
   },
 
   saveAsPDF: function saveAsPDF(aBrowser) {
-    // Create the final destination file location
-    let fileName = ContentAreaUtils.getDefaultFileName(aBrowser.contentTitle, aBrowser.currentURI, null, null);
-    fileName = fileName.trim() + ".pdf";
+    Task.spawn(function* () {
+      let fileName = ContentAreaUtils.getDefaultFileName(aBrowser.contentTitle, aBrowser.currentURI, null, null);
+      fileName = fileName.trim() + ".pdf";
 
-    let dm = Cc["@mozilla.org/download-manager;1"].getService(Ci.nsIDownloadManager);
-    let downloadsDir = dm.defaultDownloadsDirectory;
+      let downloadsDir = yield Downloads.getPreferredDownloadsDirectory();
+      let file = OS.Path.join(downloadsDir, fileName);
 
-    let file = downloadsDir.clone();
-    file.append(fileName);
-    file.createUnique(file.NORMAL_FILE_TYPE, parseInt("666", 8));
+      // Force this to have a unique name.
+      let openedFile = yield OS.File.openUnique(file, { humanReadable: true });
+      file = openedFile.path;
+      yield openedFile.file.close();
 
-    let printSettings = Cc["@mozilla.org/gfx/printsettings-service;1"].getService(Ci.nsIPrintSettingsService).newPrintSettings;
-    printSettings.printSilent = true;
-    printSettings.showPrintProgress = false;
-    printSettings.printBGImages = true;
-    printSettings.printBGColors = true;
-    printSettings.printToFile = true;
-    printSettings.toFileName = file.path;
-    printSettings.printFrameType = Ci.nsIPrintSettings.kFramesAsIs;
-    printSettings.outputFormat = Ci.nsIPrintSettings.kOutputFormatPDF;
+      let download = yield Downloads.createDownload({
+        source: aBrowser.contentWindow,
+        target: file,
+        saver: "pdf",
+        startTime: Date.now(),
+      });
 
-    //XXX we probably need a preference here, the header can be useful
-    printSettings.footerStrCenter = "";
-    printSettings.footerStrLeft   = "";
-    printSettings.footerStrRight  = "";
-    printSettings.headerStrCenter = "";
-    printSettings.headerStrLeft   = "";
-    printSettings.headerStrRight  = "";
-
-    // Create a valid mimeInfo for the PDF
-    let ms = Cc["@mozilla.org/mime;1"].getService(Ci.nsIMIMEService);
-    let mimeInfo = ms.getFromTypeAndExtension("application/pdf", "pdf");
-
-    let webBrowserPrint = aBrowser.contentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
-                                                .getInterface(Ci.nsIWebBrowserPrint);
-
-    let cancelable = {
-      cancel: function (aReason) {
-        webBrowserPrint.cancel();
-      }
-    }
-    let isPrivate = PrivateBrowsingUtils.isBrowserPrivate(aBrowser);
-    let download = dm.addDownload(Ci.nsIDownloadManager.DOWNLOAD_TYPE_DOWNLOAD,
-                                  aBrowser.currentURI,
-                                  Services.io.newFileURI(file), "", mimeInfo,
-                                  Date.now() * 1000, null, cancelable, isPrivate);
-
-    webBrowserPrint.print(printSettings, download);
+      let list = yield Downloads.getList(download.source.isPrivate ? Downloads.PRIVATE : Downloads.PUBLIC)
+      yield list.add(download);
+      yield download.start();
+    });
   },
 
   notifyPrefObservers: function(aPref) {
@@ -1360,7 +1338,6 @@ var BrowserApp = {
       // preferences to the correct type.
       switch (prefName) {
         // (string) index for determining which multiple choice value to display.
-        case "browser.chrome.titlebarMode":
         case "network.cookie.cookieBehavior":
         case "font.size.inflation.minTwips":
         case "home.sync.updateMode":
@@ -1411,7 +1388,6 @@ var BrowserApp = {
       // When sending to Java, we normalized special preferences that use
       // integers and strings to represent booleans. Here, we convert them back
       // to their actual types so we can store them.
-      case "browser.chrome.titlebarMode":
       case "network.cookie.cookieBehavior":
       case "font.size.inflation.minTwips":
       case "home.sync.updateMode":
@@ -1570,6 +1546,17 @@ var BrowserApp = {
 
       case "Session:Navigate":
           let index = JSON.parse(aData);
+          let webNav = BrowserApp.selectedTab.window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIWebNavigation);
+          let historySize = webNav.sessionHistory.count;
+
+          if (index < 0) {
+            index = 0;
+            Log.e("Browser", "Negative index truncated to zero");
+          } else if (index >= historySize) {
+            Log.e("Browser", "Incorrect index " + index + " truncated to " + historySize - 1);
+            index = historySize - 1;
+          }
+
           browser.gotoIndex(index);
           break;
 
@@ -1578,14 +1565,34 @@ var BrowserApp = {
 
         // Check to see if this is a message to enable/disable mixed content blocking.
         if (aData) {
-          let allowMixedContent = JSON.parse(aData).allowMixedContent;
-          if (allowMixedContent) {
-            // Set a flag to disable mixed content blocking.
-            flags = Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_MIXED_CONTENT;
-          } else {
-            // Set mixedContentChannel to null to re-enable mixed content blocking.
-            let docShell = browser.webNavigation.QueryInterface(Ci.nsIDocShell);
-            docShell.mixedContentChannel = null;
+          let data = JSON.parse(aData);
+          if (data.contentType === "mixed") {
+            if (data.allowContent) {
+              // Set a flag to disable mixed content blocking.
+              flags = Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_MIXED_CONTENT;
+            } else {
+              // Set mixedContentChannel to null to re-enable mixed content blocking.
+              let docShell = browser.webNavigation.QueryInterface(Ci.nsIDocShell);
+              docShell.mixedContentChannel = null;
+            }
+          } else if (data.contentType === "tracking") {
+            if (data.allowContent) {
+              // Convert document URI into the format used by
+              // nsChannelClassifier::ShouldEnableTrackingProtection
+              // (any scheme turned into https is correct)
+              let normalizedUrl = Services.io.newURI("https://" + browser.currentURI.hostPort, null, null);
+              // Add the current host in the 'trackingprotection' consumer of
+              // the permission manager using a normalized URI. This effectively
+              // places this host on the tracking protection white list.
+              Services.perms.add(normalizedUrl, "trackingprotection", Services.perms.ALLOW_ACTION);
+              Telemetry.addData("TRACKING_PROTECTION_EVENTS", 1);
+            } else {
+              // Remove the current host from the 'trackingprotection' consumer
+              // of the permission manager. This effectively removes this host
+              // from the tracking protection white list (any list actually).
+              Services.perms.remove(browser.currentURI.host, "trackingprotection");
+              Telemetry.addData("TRACKING_PROTECTION_EVENTS", 2);
+            }
           }
         }
 
@@ -1967,15 +1974,52 @@ var BrowserApp = {
     this._prefObservers = newPrefObservers;
   },
 
-  // This method will return a list of history items from fromIndex to toIndex, optionally
-  // selecting selIndex(if fromIndex<=selIndex<=toIndex)
+  // This method will return a list of history items and toIndex based on the action provided from the fromIndex to toIndex,
+  // optionally selecting selIndex (if fromIndex <= selIndex <= toIndex)
   getHistory: function(data) {
-    let fromIndex = data.fromIndex;
-    let toIndex = data.toIndex;
-    let selIndex = data.selIndex;
+    let action = data.action;
+    let webNav = BrowserApp.getTabForId(data.tabId).window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIWebNavigation);
+    let historyIndex = webNav.sessionHistory.index;
+    let historySize = webNav.sessionHistory.count;
+    let canGoBack = webNav.canGoBack;
+    let canGoForward = webNav.canGoForward;
+    let listitems = [];
+    let fromIndex = 0;
+    let toIndex = historySize - 1;
+    let selIndex = historyIndex;
+
+    if (action == "BACK" && canGoBack) {
+      fromIndex = Math.max(historyIndex - kMaxHistoryListSize, 0);
+      toIndex = historyIndex;
+      selIndex = historyIndex;
+    } else if (action == "FORWARD" && canGoForward) {
+      fromIndex = historyIndex;
+      toIndex = Math.min(historySize - 1, historyIndex + kMaxHistoryListSize);
+      selIndex = historyIndex;
+    } else if (action == "ALL" && (canGoBack || canGoForward)){
+      fromIndex = historyIndex - kMaxHistoryListSize / 2;
+      toIndex = historyIndex + kMaxHistoryListSize / 2;
+      if (fromIndex < 0) {
+        toIndex -= fromIndex;
+      }
+
+      if (toIndex > historySize - 1) {
+        fromIndex -= toIndex - (historySize - 1);
+        toIndex = historySize - 1;
+      }
+
+      fromIndex = Math.max(fromIndex, 0);
+      selIndex = historyIndex;
+    } else {
+      // return empty list immediately.
+      return {
+        "historyItems": listitems,
+        "toIndex": toIndex
+      };
+    }
+
     let browser = this.selectedBrowser;
     let hist = browser.sessionHistory;
-    let listitems = [];
     for (let i = toIndex; i >= fromIndex; i--) {
       let entry = hist.getEntryAtIndex(i, false);
       let item = {
@@ -1986,7 +2030,10 @@ var BrowserApp = {
       listitems.push(item);
     }
 
-    return { "historyItems" : listitems };
+    return {
+      "historyItems": listitems,
+      "toIndex": toIndex
+    };
   },
 };
 
@@ -2945,6 +2992,8 @@ var LightWeightThemeWebInstaller = {
 
 var DesktopUserAgent = {
   DESKTOP_UA: null,
+  TCO_DOMAIN: "t.co",
+  TCO_REPLACE: / Gecko.*/,
 
   init: function ua_init() {
     Services.obs.addObserver(this, "DesktopMode:Change", false);
@@ -2958,26 +3007,40 @@ var DesktopUserAgent = {
   },
 
   onRequest: function(channel, defaultUA) {
+#ifdef NIGHTLY_BUILD
+    if (this.TCO_DOMAIN == channel.URI.host) {
+      // Force the referrer
+      channel.referrer = channel.URI;
+
+      // Send a bot-like UA to t.co to get a real redirect. We strip off the
+      // "Gecko/x.y Firefox/x.y" part
+      return defaultUA.replace(this.TCO_REPLACE, "");
+    }
+#endif
+
     let channelWindow = this._getWindowForRequest(channel);
     let tab = BrowserApp.getTabForWindow(channelWindow);
-    if (tab == null)
-      return null;
+    if (tab) {
+      return this.getUserAgentForTab(tab);
+    }
 
-    return this.getUserAgentForTab(tab);
+    return null;
   },
 
   getUserAgentForWindow: function ua_getUserAgentForWindow(aWindow) {
     let tab = BrowserApp.getTabForWindow(aWindow.top);
-    if (tab)
+    if (tab) {
       return this.getUserAgentForTab(tab);
+    }
 
     return null;
   },
 
   getUserAgentForTab: function ua_getUserAgentForTab(aTab) {
     // Send desktop UA if "Request Desktop Site" is enabled.
-    if (aTab.desktopMode)
+    if (aTab.desktopMode) {
       return this.DESKTOP_UA;
+    }
 
     return null;
   },
@@ -3014,8 +3077,9 @@ var DesktopUserAgent = {
     if (aTopic === "DesktopMode:Change") {
       let args = JSON.parse(aData);
       let tab = BrowserApp.getTabForId(args.tabId);
-      if (tab != null)
+      if (tab) {
         tab.reloadWithMode(args.desktopMode);
+      }
     }
   }
 };
@@ -4221,7 +4285,7 @@ Tab.prototype = {
         Reader.updatePageAction(this);
 
         // Once document is fully loaded, parse it
-        Reader.parseDocumentFromTab(this).then(article => {
+        ReaderMode.parseDocumentFromBrowser(this.browser).then(article => {
           // The loaded page may have changed while we were parsing the document. 
           // Make sure we've got the current one.
           let currentURL = this.browser.currentURI.specIgnoringRef;
@@ -4233,11 +4297,6 @@ Tab.prototype = {
 
           this.savedArticle = article;
           Reader.updatePageAction(this);
-
-          Messaging.sendRequest({
-            type: "Content:ReaderEnabled",
-            tabID: this.id
-          });
         }).catch(e => Cu.reportError("Error parsing document from tab: " + e));
       }
     }
@@ -5175,7 +5234,7 @@ var BrowserEventHandler = {
     let win = BrowserApp.selectedBrowser.contentWindow;
     try {
       let cwu = win.top.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
-      cwu.sendMouseEventToWindow(aName, aX, aY, 0, 1, 0, true, 0, Ci.nsIDOMMouseEvent.MOZ_SOURCE_TOUCH);
+      cwu.sendMouseEventToWindow(aName, aX, aY, 0, 1, 0, true, 0, Ci.nsIDOMMouseEvent.MOZ_SOURCE_TOUCH, false);
     } catch(e) {
       Cu.reportError(e);
     }
@@ -6724,15 +6783,18 @@ var IdentityHandler = {
 
   getTrackingMode: function getTrackingMode(aState) {
     if (aState & Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT) {
+      Telemetry.addData("TRACKING_PROTECTION_SHIELD", 2);
       return this.TRACKING_MODE_CONTENT_BLOCKED;
     }
 
     // Only show an indicator for loaded tracking content if the pref to block it is enabled
     if ((aState & Ci.nsIWebProgressListener.STATE_LOADED_TRACKING_CONTENT) &&
          Services.prefs.getBoolPref("privacy.trackingprotection.enabled")) {
+      Telemetry.addData("TRACKING_PROTECTION_SHIELD", 1);
       return this.TRACKING_MODE_CONTENT_LOADED;
     }
 
+    Telemetry.addData("TRACKING_PROTECTION_SHIELD", 0);
     return this.TRACKING_MODE_UNKNOWN;
   },
 
@@ -6803,9 +6865,6 @@ var IdentityHandler = {
 
       return result;
     }
-    
-    // Otherwise, we don't know the cert owner
-    result.owner = Strings.browser.GetStringFromName("identity.ownerUnknown3");
 
     // Cache the override service the first time we need to check it
     if (!this._overrideService)
@@ -7287,7 +7346,7 @@ var RemoteDebugger = {
   _start: function rd_start() {
     try {
       if (!DebuggerServer.initialized) {
-        DebuggerServer.init(this._showConnectionPrompt.bind(this));
+        DebuggerServer.init();
         DebuggerServer.addBrowserActors();
         DebuggerServer.registerModule("resource://gre/modules/dbg-browser-actors.js");
       }
@@ -7295,7 +7354,10 @@ var RemoteDebugger = {
       let pathOrPort = this._getPath();
       if (!pathOrPort)
         pathOrPort = this._getPort();
-      DebuggerServer.openListener(pathOrPort);
+      let listener = DebuggerServer.createListener();
+      listener.portOrPath = pathOrPort;
+      listener.allowConnection = this._showConnectionPrompt.bind(this);
+      listener.open();
       dump("Remote debugger listening at path " + pathOrPort);
     } catch(e) {
       dump("Remote debugger didn't start: " + e);

@@ -32,6 +32,7 @@ struct HttpChannelOpenArgs
   OptionalURIParams           original;
   OptionalURIParams           doc;
   OptionalURIParams           referrer;
+  uint32_t                    referrerPolicy;
   OptionalURIParams           apiRedirectTo;
   OptionalURIParams           topWindowURI;
   uint32_t                    loadFlags;
@@ -40,6 +41,7 @@ struct HttpChannelOpenArgs
   OptionalInputStreamParams   uploadStream;
   bool                        uploadStreamHasHeaders;
   uint16_t                    priority;
+  uint32_t                    classOfService;
   uint8_t                     redirectionLimit;
   bool                        allowPipelining;
   bool                        allowSTS;

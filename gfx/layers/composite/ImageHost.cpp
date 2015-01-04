@@ -29,24 +29,17 @@ class ISurfaceAllocator;
 
 ImageHost::ImageHost(const TextureInfo& aTextureInfo)
   : CompositableHost(aTextureInfo)
-  , mFrontBuffer(nullptr)
   , mHasPictureRect(false)
   , mLocked(false)
 {}
 
 ImageHost::~ImageHost()
 {
-  if (mFrontBuffer) {
-    mFrontBuffer->UnbindTextureSource();
-  }
 }
 
 void
 ImageHost::UseTextureHost(TextureHost* aTexture)
 {
-  if (mFrontBuffer && mFrontBuffer != aTexture) {
-    mFrontBuffer->UnbindTextureSource();
-  }
   CompositableHost::UseTextureHost(aTexture);
   mFrontBuffer = aTexture;
   if (mFrontBuffer) {
@@ -158,7 +151,7 @@ ImageHost::Composite(EffectChain& aEffectChain,
       } else {
         effect->mTextureCoords = Rect(0, 0, 1, 1);
       }
-      if (mFrontBuffer->GetFlags() & TextureFlags::NEEDS_Y_FLIP) {
+      if (mFrontBuffer->GetFlags() & TextureFlags::ORIGIN_BOTTOM_LEFT) {
         effect->mTextureCoords.y = effect->mTextureCoords.YMost();
         effect->mTextureCoords.height = -effect->mTextureCoords.height;
       }
@@ -186,7 +179,7 @@ ImageHost::Composite(EffectChain& aEffectChain,
       rect = gfx::Rect(0, 0, textureSize.width, textureSize.height);
     }
 
-    if (mFrontBuffer->GetFlags() & TextureFlags::NEEDS_Y_FLIP) {
+    if (mFrontBuffer->GetFlags() & TextureFlags::ORIGIN_BOTTOM_LEFT) {
       effect->mTextureCoords.y = effect->mTextureCoords.YMost();
       effect->mTextureCoords.height = -effect->mTextureCoords.height;
     }
@@ -224,7 +217,6 @@ ImageHost::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   }
 }
 
-#ifdef MOZ_DUMP_PAINTING
 void
 ImageHost::Dump(std::stringstream& aStream,
                 const char* aPrefix,
@@ -238,7 +230,6 @@ ImageHost::Dump(std::stringstream& aStream,
     aStream << (aDumpHtml ? " </li></ul> " : " ");
   }
 }
-#endif
 
 LayerRenderState
 ImageHost::GetRenderState()
@@ -249,13 +240,11 @@ ImageHost::GetRenderState()
   return LayerRenderState();
 }
 
-#ifdef MOZ_DUMP_PAINTING
 TemporaryRef<gfx::DataSourceSurface>
 ImageHost::GetAsSurface()
 {
   return mFrontBuffer->GetAsSurface();
 }
-#endif
 
 bool
 ImageHost::Lock()

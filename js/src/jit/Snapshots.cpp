@@ -79,6 +79,11 @@ using namespace js::jit;
 //         RECOVER_INSTRUCTION [INDEX]
 //           Index into the list of recovered instruction results.
 //
+//         RI_WITH_DEFAULT_CST [INDEX] [INDEX]
+//           The first payload is the index into the list of recovered
+//           instruction results.  The second payload is the index in the
+//           constant pool.
+//
 //         TYPED_REG [PACKED_TAG, GPR_REG]:
 //           Value with statically known type, which payload is stored in a
 //           register.
@@ -192,7 +197,8 @@ RValueAllocation::layoutFromMode(Mode mode)
       case UNTYPED_STACK_REG: {
         static const RValueAllocation::Layout layout = {
             PAYLOAD_STACK_OFFSET,
-            PAYLOAD_GPR
+            PAYLOAD_GPR,
+            "value"
         };
         return layout;
       }
@@ -227,6 +233,14 @@ RValueAllocation::layoutFromMode(Mode mode)
             PAYLOAD_INDEX,
             PAYLOAD_NONE,
             "instruction"
+        };
+        return layout;
+      }
+      case RI_WITH_DEFAULT_CST: {
+        static const RValueAllocation::Layout layout = {
+            PAYLOAD_INDEX,
+            PAYLOAD_INDEX,
+            "instruction with default"
         };
         return layout;
       }
@@ -299,7 +313,7 @@ RValueAllocation
 RValueAllocation::read(CompactBufferReader &reader)
 {
     uint8_t mode = reader.readByte();
-    const Layout &layout = layoutFromMode(Mode(mode));
+    const Layout &layout = layoutFromMode(Mode(mode & MODE_MASK));
     Payload arg1, arg2;
 
     readPayload(reader, layout.type1, &mode, &arg1);
@@ -696,13 +710,12 @@ RecoverWriter::startRecover(uint32_t instructionCount, bool resumeAfter)
     return recoverOffset;
 }
 
-bool
+void
 RecoverWriter::writeInstruction(const MNode *rp)
 {
     if (!rp->writeRecoverData(writer_))
-        return false;
+        writer_.setOOM();
     instructionsWritten_++;
-    return true;
 }
 
 void

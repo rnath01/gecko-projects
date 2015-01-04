@@ -1657,7 +1657,7 @@ CSS_PROP_POSITION(
     // its own code to parse each subproperty. It does not depend on the
     // longhand parsing defined here.
     VARIANT_AHKLP | VARIANT_CALC,
-    kFlexBasisKTable,
+    kWidthKTable,
     offsetof(nsStylePosition, mFlexBasis),
     eStyleAnimType_Coord)
 CSS_PROP_POSITION(
@@ -2976,6 +2976,17 @@ CSS_PROP_POSITION(
     nullptr,
     offsetof(nsStylePosition, mOffset),
     eStyleAnimType_Sides_Right)
+CSS_PROP_TEXT(
+    ruby-position,
+    ruby_position,
+    RubyPosition,
+    CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_VALUE_PARSER_FUNCTION,
+    "layout.css.ruby.enabled",
+    0,
+    kRubyPositionKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
 CSS_PROP_DISPLAY(
     scroll-behavior,
     scroll_behavior,
@@ -3045,9 +3056,9 @@ CSS_PROP_TEXT(
     offsetof(nsStyleText, mTextCombineUpright),
     eStyleAnimType_EnumU8)
 CSS_PROP_TEXTRESET(
-    -moz-text-decoration-color,
+    text-decoration-color,
     text_decoration_color,
-    CSS_PROP_DOMPROP_PREFIXED(TextDecorationColor),
+    TextDecorationColor,
     CSS_PROPERTY_PARSE_VALUE |
         CSS_PROPERTY_APPLIES_TO_FIRST_LETTER_AND_FIRST_LINE |
         CSS_PROPERTY_APPLIES_TO_PLACEHOLDER |
@@ -3058,9 +3069,9 @@ CSS_PROP_TEXTRESET(
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Custom)
 CSS_PROP_TEXTRESET(
-    -moz-text-decoration-line,
+    text-decoration-line,
     text_decoration_line,
-    CSS_PROP_DOMPROP_PREFIXED(TextDecorationLine),
+    TextDecorationLine,
     CSS_PROPERTY_PARSE_VALUE |
         CSS_PROPERTY_VALUE_PARSER_FUNCTION |
         CSS_PROPERTY_APPLIES_TO_FIRST_LETTER_AND_FIRST_LINE |
@@ -3071,9 +3082,9 @@ CSS_PROP_TEXTRESET(
     offsetof(nsStyleTextReset, mTextDecorationLine),
     eStyleAnimType_EnumU8)
 CSS_PROP_TEXTRESET(
-    -moz-text-decoration-style,
+    text-decoration-style,
     text_decoration_style,
-    CSS_PROP_DOMPROP_PREFIXED(TextDecorationStyle),
+    TextDecorationStyle,
     CSS_PROPERTY_PARSE_VALUE |
         CSS_PROPERTY_APPLIES_TO_FIRST_LETTER_AND_FIRST_LINE |
         CSS_PROPERTY_APPLIES_TO_PLACEHOLDER,
@@ -3094,7 +3105,7 @@ CSS_PROP_TEXT(
     nullptr,
     offsetof(nsStyleText, mTextIndent),
     eStyleAnimType_Coord)
-CSS_PROP_TEXT(
+CSS_PROP_VISIBILITY(
     text-orientation,
     text_orientation,
     TextOrientation,
@@ -3102,7 +3113,7 @@ CSS_PROP_TEXT(
     "layout.css.vertical-text.enabled",
     VARIANT_HK,
     kTextOrientationKTable,
-    offsetof(nsStyleText, mTextOrientation),
+    offsetof(nsStyleVisibility, mTextOrientation),
     eStyleAnimType_EnumU8)
 CSS_PROP_TEXTRESET(
     text-overflow,

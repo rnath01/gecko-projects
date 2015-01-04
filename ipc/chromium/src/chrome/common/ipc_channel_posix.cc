@@ -26,7 +26,6 @@
 #include "base/singleton.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/file_descriptor_set_posix.h"
-#include "chrome/common/ipc_logging.h"
 #include "chrome/common/ipc_message_utils.h"
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/UniquePtr.h"
@@ -707,11 +706,6 @@ bool Channel::ChannelImpl::ProcessOutgoingMessages() {
       msg->set_fd_cookie(++last_pending_fd_id_);
 #endif
     }
-#ifdef MOZ_TASK_TRACER
-    GetCurTraceInfo(&msg->header()->source_event_id,
-                    &msg->header()->parent_task_id,
-                    &msg->header()->source_event_type);
-#endif
 
     size_t amt_to_write = msg->size() - message_send_bytes_written_;
     DCHECK(amt_to_write != 0);
@@ -778,9 +772,6 @@ bool Channel::ChannelImpl::Send(Message* message) {
              << " (" << output_queue_.size() << " in queue)";
 #endif
 
-#ifdef IPC_MESSAGE_LOG_ENABLED
-  Logging::current()->OnSendMessage(message, L"");
-#endif
 
   // If the channel has been closed, ProcessOutgoingMessages() is never going
   // to pop anything off output_queue; output_queue will only get emptied when
@@ -886,6 +877,12 @@ void Channel::ChannelImpl::CloseDescriptors(uint32_t pending_fd_id)
 
 void Channel::ChannelImpl::OutputQueuePush(Message* msg)
 {
+#ifdef MOZ_TASK_TRACER
+  // Save the current TaskTracer info into the message header.
+  GetCurTraceInfo(&msg->header()->source_event_id,
+                  &msg->header()->parent_task_id,
+                  &msg->header()->source_event_type);
+#endif
   output_queue_.push(msg);
   output_queue_length_++;
 }

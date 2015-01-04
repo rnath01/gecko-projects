@@ -30,6 +30,8 @@ XPCOMUtils.defineLazyServiceGetter(this, "gTextToSubURI",
                                    "@mozilla.org/intl/texttosuburi;1",
                                    "nsITextToSubURI");
 
+Cu.importGlobalProperties(["XMLHttpRequest"]);
+
 // A text encoder to UTF8, used whenever we commit the
 // engine metadata to disk.
 XPCOMUtils.defineLazyGetter(this, "gEncoder",
@@ -401,6 +403,127 @@ loadListener.prototype = {
   onStatus: function (aRequest, aContext, aStatus, aStatusArg) {}
 }
 
+// Hacky method that tries to determine if this user is in a US geography, and
+// using an en-US build.
+function getIsUS() {
+  let geoSpecificDefaults = false;
+  try {
+    geoSpecificDefaults = Services.prefs.getBoolPref("browser.search.geoSpecificDefaults");
+  } catch(e) {}
+
+  let distroID;
+  try {
+    distroID = Services.prefs.getCharPref("distribution.id");
+  } catch (e) {}
+
+  if (!geoSpecificDefaults || distroID) {
+    return false;
+  }
+
+  // If we've set the pref before, just return that result.
+  let cachePref = "browser.search.isUS";
+  try {
+    return Services.prefs.getBoolPref(cachePref);
+  } catch(e) {}
+
+  if (getLocale() != "en-US") {
+    Services.prefs.setBoolPref(cachePref, false);
+    return false;
+  }
+  let isNA = isUSTimezone();
+  Services.prefs.setBoolPref(cachePref, isNA);
+  return isNA;
+}
+
+function isUSTimezone() {
+  // Timezone assumptions! We assume that if the system clock's timezone is
+  // between Newfoundland and Hawaii, that the user is in North America.
+
+  // This includes all of South America as well, but we have relatively few
+  // en-US users there, so that's OK.
+
+  // 150 minutes = 2.5 hours (UTC-2.5), which is
+  // Newfoundland Daylight Time (http://www.timeanddate.com/time/zones/ndt)
+
+  // 600 minutes = 10 hours (UTC-10), which is
+  // Hawaii-Aleutian Standard Time (http://www.timeanddate.com/time/zones/hast)
+
+  let UTCOffset = (new Date()).getTimezoneOffset();
+  return UTCOffset >= 150 && UTCOffset <= 600;
+}
+
+// A less hacky method that tries to determine our country-code via an XHR
+// geoip lookup.
+// If this succeeds and we are using an en-US locale, we set the pref used by
+// the hacky method above, so isUS() can avoid the hacky timezone method.
+// If it fails we don't touch that pref so isUS() does its normal thing.
+let ensureKnownCountryCode = Task.async(function* () {
+  // If we have a country-code already stored in our prefs we trust it.
+  try {
+    Services.prefs.getCharPref("browser.search.countryCode");
+    return; // pref exists, so we've done this before.
+  } catch(e) {}
+  // we don't have it cached, so fetch it.
+  let cc = yield fetchCountryCode();
+  if (cc) {
+    // we got one - stash it away
+    Services.prefs.setCharPref("browser.search.countryCode", cc);
+    // and update our "isUS" cache pref if it is US - that will prevent a
+    // fallback to the timezone check.
+    // However, only do this if the locale also matches.
+    if (getLocale() == "en-US") {
+      Services.prefs.setBoolPref("browser.search.isUS", (cc == "US"));
+    }
+    // and telemetry...
+    let isTimezoneUS = isUSTimezone();
+    if (cc == "US" && !isTimezoneUS) {
+      Services.telemetry.getHistogramById("SEARCH_SERVICE_US_COUNTRY_MISMATCHED_TIMEZONE").add(1);
+    }
+    if (cc != "US" && isTimezoneUS) {
+      Services.telemetry.getHistogramById("SEARCH_SERVICE_US_TIMEZONE_MISMATCHED_COUNTRY").add(1);
+    }
+  }
+});
+
+// Get the country we are in via a XHR geoip request.
+function fetchCountryCode() {
+  let endpoint = Services.urlFormatter.formatURLPref("browser.search.geoip.url");
+  // As an escape hatch, no endpoint means no geoip.
+  if (!endpoint) {
+    return Promise.resolve(null);
+  }
+  let startTime = Date.now();
+  return new Promise(resolve => {
+    let request = new XMLHttpRequest();
+    request.timeout = Services.prefs.getIntPref("browser.search.geoip.timeout");
+    request.onload = function(event) {
+      let took = Date.now() - startTime;
+      let cc = event.target.response && event.target.response.country_code;
+      LOG("_fetchCountryCode got success response in " + took + "ms: " + cc);
+      Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_FETCH_MS").add(took);
+      Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_SUCCESS").add(cc ? 1 : 0);
+      if (!cc) {
+        Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_SUCCESS_WITHOUT_DATA").add(1);
+      }
+      resolve(cc);
+    };
+    request.onerror = function(event) {
+      LOG("_fetchCountryCode: failed to retrieve country information");
+      Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_SUCCESS").add(0);
+      resolve(null);
+    };
+    request.ontimeout = function(event) {
+      LOG("_fetchCountryCode: timeout fetching country information");
+      Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_FETCH_TIMEOUT").add(1);
+      Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_SUCCESS").add(0);
+      resolve(null);
+    }
+    request.open("POST", endpoint, true);
+    request.setRequestHeader("Content-Type", "application/json");
+    request.responseType = "json";
+    request.send("{}");
+  });
+}
 
 /**
  * Used to verify a given DOM node's localName and namespaceURI.
@@ -638,11 +761,9 @@ function setLocalizedPref(aPrefName, aValue) {
  * @returns aDefault if the requested pref doesn't exist.
  */
 function getBoolPref(aName, aDefault) {
-  try {
-    return Services.prefs.getBoolPref(aName);
-  } catch (ex) {
+  if (Services.prefs.getPrefType(aName) != Ci.nsIPrefBranch.PREF_BOOL)
     return aDefault;
-  }
+  return Services.prefs.getBoolPref(aName);
 }
 
 /**
@@ -1786,8 +1907,12 @@ Engine.prototype = {
     let defaultPrefB = Services.prefs.getDefaultBranch(BROWSER_SEARCH_PREF);
     let nsIPLS = Ci.nsIPrefLocalizedString;
     let defaultEngine;
+    let pref = "defaultenginename";
+    if (getIsUS()) {
+      pref += ".US";
+    }
     try {
-      defaultEngine = defaultPrefB.getComplexValue("defaultenginename", nsIPLS).data;
+      defaultEngine = defaultPrefB.getComplexValue(pref, nsIPLS).data;
     } catch (ex) {}
     return this.name == defaultEngine;
   },
@@ -2969,6 +3094,11 @@ SearchService.prototype = {
     return Task.spawn(function() {
       LOG("_asyncInit start");
       try {
+        yield checkForSyncCompletion(ensureKnownCountryCode());
+      } catch (ex if ex.result != Cr.NS_ERROR_ALREADY_INITIALIZED) {
+        LOG("_asyncInit: failure determining country code: " + ex);
+      }
+      try {
         yield checkForSyncCompletion(this._asyncLoadEngines());
       } catch (ex if ex.result != Cr.NS_ERROR_ALREADY_INITIALIZED) {
         this._initRV = Cr.NS_ERROR_FAILURE;
@@ -2999,8 +3129,16 @@ SearchService.prototype = {
     let defaultPrefB = Services.prefs.getDefaultBranch(BROWSER_SEARCH_PREF);
     let nsIPLS = Ci.nsIPrefLocalizedString;
     let defaultEngine;
+
+    let defPref;
+    if (getIsUS()) {
+      defPref = "defaultenginename.US";
+    } else {
+      defPref = "defaultenginename";
+    }
+
     try {
-      defaultEngine = defaultPrefB.getComplexValue("defaultenginename", nsIPLS).data;
+      defaultEngine = defaultPrefB.getComplexValue(defPref, nsIPLS).data;
     } catch (ex) {
       // If the default pref is invalid (e.g. an add-on set it to a bogus value)
       // getEngineByName will just return null, which is the best we can do.
@@ -3780,7 +3918,11 @@ SearchService.prototype = {
       catch (e) { }
 
       while (true) {
-        engineName = getLocalizedPref(BROWSER_SEARCH_PREF + "order." + (++i));
+        prefName = BROWSER_SEARCH_PREF + "order.";
+        if (getIsUS()) {
+          prefName += "US.";
+        }
+        engineName = getLocalizedPref(prefName + (++i));
         if (!engineName)
           break;
 
@@ -3793,16 +3935,23 @@ SearchService.prototype = {
       }
     }
 
-    // Array for the remaining engines, alphabetically sorted
-    var alphaEngines = [];
+    // Array for the remaining engines, alphabetically sorted.
+    let alphaEngines = [];
 
     for each (engine in this._engines) {
       if (!(engine.name in addedEngines))
         alphaEngines.push(this._engines[engine.name]);
     }
-    alphaEngines = alphaEngines.sort(function (a, b) {
-                                       return a.name.localeCompare(b.name);
-                                     });
+
+    let locale = Cc["@mozilla.org/intl/nslocaleservice;1"]
+                   .getService(Ci.nsILocaleService)
+                   .newLocale(getLocale());
+    let collation = Cc["@mozilla.org/intl/collation-factory;1"]
+                      .createInstance(Ci.nsICollationFactory)
+                      .CreateCollation(locale);
+    const strength = Ci.nsICollation.kCollationCaseInsensitiveAscii;
+    let comparator = (a, b) => collation.compareString(strength, a.name, b.name);
+    alphaEngines.sort(comparator);
     return this.__sortedEngines = this.__sortedEngines.concat(alphaEngines);
   },
 
@@ -3935,7 +4084,12 @@ SearchService.prototype = {
 
     // Now look through the "browser.search.order" branch.
     for (var j = 1; ; j++) {
-      engineName = getLocalizedPref(BROWSER_SEARCH_PREF + "order." + j);
+      var prefName = BROWSER_SEARCH_PREF + "order.";
+      if (getIsUS()) {
+        prefName += "US.";
+      }
+      prefName += j;
+      engineName = getLocalizedPref(prefName);
       if (!engineName)
         break;
 

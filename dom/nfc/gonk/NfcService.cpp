@@ -132,6 +132,11 @@ public:
       }
     }
 
+    if (mEvent.mTagId.Length() > 0) {
+      event.mTagId.Construct();
+      event.mTagId.Value().Init(Uint8Array::Create(cx, mEvent.mTagId.Length(), mEvent.mTagId.Elements()));
+    }
+
     if (mEvent.mRecords.Length() > 0) {
       int length = mEvent.mRecords.Length();
       event.mRecords.Construct();
@@ -162,6 +167,8 @@ public:
         }
       }
     }
+
+    COPY_OPT_FIELD(mIsP2P, -1)
 
     if (mEvent.mTagType != -1) {
       event.mTagType.Construct();
