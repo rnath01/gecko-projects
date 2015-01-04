@@ -1422,7 +1422,6 @@ public abstract class GeckoApp
             LayerView layerView = (LayerView) findViewById(R.id.layer_view);
             layerView.initializeView(EventDispatcher.getInstance());
             mLayerView = layerView;
-            GeckoAppShell.setLayerView(layerView);
             GeckoAppShell.sendEventToGecko(GeckoEvent.createObjectEvent(
                 GeckoEvent.ACTION_OBJECT_LAYER_CLIENT, layerView.getLayerClientObject()));
 
@@ -1586,9 +1585,9 @@ public abstract class GeckoApp
 
         mPromptService = new PromptService(this);
 
-        mTextSelection = new TextSelection((TextSelectionHandle) findViewById(R.id.start_handle),
-                                           (TextSelectionHandle) findViewById(R.id.middle_handle),
-                                           (TextSelectionHandle) findViewById(R.id.end_handle),
+        mTextSelection = new TextSelection((TextSelectionHandle) findViewById(R.id.anchor_handle),
+                                           (TextSelectionHandle) findViewById(R.id.caret_handle),
+                                           (TextSelectionHandle) findViewById(R.id.focus_handle),
                                            EventDispatcher.getInstance(),
                                            this);
 
