@@ -4845,7 +4845,7 @@ JS_CopyStringChars(JSContext *cx, mozilla::Range<char16_t> dest, JSString *str)
 }
 
 JS_PUBLIC_API(const Latin1Char *)
-JS_Latin1InternedStringChars(const JS::AutoCheckCannotGC &nogc, JSString *str)
+JS_GetLatin1InternedStringChars(const JS::AutoCheckCannotGC &nogc, JSString *str)
 {
     MOZ_ASSERT(str->isAtom());
     JSFlatString *flat = str->ensureFlat(nullptr);
@@ -5725,6 +5725,12 @@ JS_AbortIfWrongThread(JSRuntime *rt)
 }
 
 #ifdef JS_GC_ZEAL
+JS_PUBLIC_API(void)
+JS_GetGCZeal(JSContext *cx, uint8_t *zeal, uint32_t *frequency)
+{
+    cx->runtime()->gc.getZeal(zeal, frequency);
+}
+
 JS_PUBLIC_API(void)
 JS_SetGCZeal(JSContext *cx, uint8_t zeal, uint32_t frequency)
 {

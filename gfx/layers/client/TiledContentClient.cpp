@@ -257,9 +257,9 @@ SharedFrameMetricsHelper::AboutToCheckerboard(const FrameMetrics& aContentMetric
   // converted to app units and then back to CSS pixels before being put in the FrameMetrics.
   // This process can introduce some rounding error, so we inflate the rect by one app unit
   // to account for that.
-  CSSRect painted = (aContentMetrics.mCriticalDisplayPort.IsEmpty()
+  CSSRect painted = (aContentMetrics.GetCriticalDisplayPort().IsEmpty()
                       ? aContentMetrics.GetDisplayPort()
-                      : aContentMetrics.mCriticalDisplayPort)
+                      : aContentMetrics.GetCriticalDisplayPort())
                     + aContentMetrics.GetScrollOffset();
   painted.Inflate(CSSMargin::FromAppUnits(nsMargin(1, 1, 1, 1)));
 
@@ -273,8 +273,8 @@ SharedFrameMetricsHelper::AboutToCheckerboard(const FrameMetrics& aContentMetric
   // Clamp both rects to the scrollable rect, because having either of those
   // exceed the scrollable rect doesn't make sense, and could lead to false
   // positives.
-  painted = painted.Intersect(aContentMetrics.mScrollableRect);
-  showing = showing.Intersect(aContentMetrics.mScrollableRect);
+  painted = painted.Intersect(aContentMetrics.GetScrollableRect());
+  showing = showing.Intersect(aContentMetrics.GetScrollableRect());
 
   if (!painted.Contains(showing)) {
     TILING_LOG("TILING: About to checkerboard; content %s\n", Stringify(aContentMetrics).c_str());

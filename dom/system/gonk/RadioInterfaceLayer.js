@@ -1993,20 +1993,20 @@ RadioInterface.prototype = {
   matchMvno: function(target, message) {
     if (DEBUG) this.debug("matchMvno: " + JSON.stringify(message));
 
-    if (!message || !message.mvnoData) {
+    if (!message || !message.mvnoType || !message.mvnoData) {
       message.errorMsg = RIL.GECKO_ERROR_INVALID_PARAMETER;
     }
 
     if (!message.errorMsg) {
       switch (message.mvnoType) {
-        case RIL.GECKO_CARDMVNO_TYPE_IMSI:
+        case "imsi":
           if (!this.rilContext.imsi) {
             message.errorMsg = RIL.GECKO_ERROR_GENERIC_FAILURE;
             break;
           }
           message.result = this.isImsiMatches(message.mvnoData);
           break;
-        case RIL.GECKO_CARDMVNO_TYPE_SPN:
+        case "spn":
           let spn = this.rilContext.iccInfo && this.rilContext.iccInfo.spn;
           if (!spn) {
             message.errorMsg = RIL.GECKO_ERROR_GENERIC_FAILURE;
@@ -2014,7 +2014,7 @@ RadioInterface.prototype = {
           }
           message.result = spn == message.mvnoData;
           break;
-        case RIL.GECKO_CARDMVNO_TYPE_GID:
+        case "gid":
           this.workerMessenger.send("getGID1", null, (function(response) {
             let gid = response.gid1;
             let mvnoDataLength = message.mvnoData.length;
@@ -2228,6 +2228,12 @@ RadioInterface.prototype = {
     let oldSpn = this.rilContext.iccInfo ? this.rilContext.iccInfo.spn : null;
 
     if (!message || !message.iccid) {
+      // If iccInfo is already `null`, don't have to clear it and send
+      // RIL:IccInfoChanged.
+      if (!this.rilContext.iccInfo) {
+        return;
+      }
+
       // Card is not detected, clear iccInfo to null.
       this.rilContext.iccInfo = null;
     } else {
@@ -2253,11 +2259,6 @@ RadioInterface.prototype = {
     gMessageManager.sendIccMessage("RIL:IccInfoChanged",
                                    this.clientId,
                                    message.iccid ? message : null);
-
-    // In bug 864489, icc related code will be move to gonk IccProvider, we may
-    // need a better way to notify icc change to MobileConnectionService.
-    gMobileConnectionService.notifyIccChanged(this.clientId,
-                                              message.iccid || null);
 
     // Update lastKnownSimMcc.
     if (message.mcc) {
@@ -3146,16 +3147,7 @@ RILNetworkInterface.prototype = {
       throw Cr.NS_ERROR_UNEXPECTED;
     }
 
-    let mmsc = this.apnSetting.mmsc;
-    if (!mmsc) {
-      try {
-        mmsc = Services.prefs.getCharPref("ril.mms.mmsc");
-      } catch (e) {
-        mmsc = "";
-      }
-    }
-
-    return mmsc;
+    return this.apnSetting.mmsc || "";
   },
 
   get mmsProxy() {
@@ -3164,16 +3156,7 @@ RILNetworkInterface.prototype = {
       throw Cr.NS_ERROR_UNEXPECTED;
     }
 
-    let proxy = this.apnSetting.mmsproxy;
-    if (!proxy) {
-      try {
-        proxy = Services.prefs.getCharPref("ril.mms.mmsproxy");
-      } catch (e) {
-        proxy = "";
-      }
-    }
-
-    return proxy;
+    return this.apnSetting.mmsproxy || "";
   },
 
   get mmsPort() {
@@ -3182,16 +3165,9 @@ RILNetworkInterface.prototype = {
       throw Cr.NS_ERROR_UNEXPECTED;
     }
 
-    let port = this.apnSetting.mmsport;
-    if (!port) {
-      try {
-        port = Services.prefs.getIntPref("ril.mms.mmsport");
-      } catch (e) {
-        port = -1;
-      }
-    }
-
-    return port;
+    // Note: Port 0 is reserved, so we treat it as invalid as well.
+    // See http://www.iana.org/assignments/port-numbers
+    return this.apnSetting.mmsport || -1;
   },
 
   // Helpers

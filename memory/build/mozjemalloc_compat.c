@@ -10,7 +10,6 @@
 
 #include "mozmemory_wrap.h"
 #include "jemalloc_types.h"
-#include "jemalloc/internal/jemalloc_internal_defs.h" // for JEMALLOC_HAS_ALLOCA_H
 #include "mozilla/Types.h"
 
 #include <stdbool.h>
@@ -69,7 +68,7 @@ je_(nallocx)(size_t size, int flags);
 #    include <malloc.h>
 #    define alloca _alloca
 #  else
-#    ifdef JEMALLOC_HAS_ALLOCA_H
+#    ifdef HAVE_ALLOCA_H
 #      include <alloca.h>
 #    else
 #      include <stdlib.h>
@@ -151,6 +150,7 @@ jemalloc_stats_impl(jemalloc_stats_t *stats)
   CTL_GET("stats.allocated", allocated);
   CTL_GET("stats.mapped", mapped);
   CTL_GET("opt.lg_chunk", lg_chunk);
+  CTL_GET("stats.bookkeeping", stats->bookkeeping);
 
   /* get the summation for all arenas, i == narenas */
   CTL_I_GET("stats.arenas.0.pdirty", pdirty, narenas);
@@ -160,12 +160,8 @@ jemalloc_stats_impl(jemalloc_stats_t *stats)
   stats->allocated = allocated;
   stats->waste = active - allocated;
   stats->page_cache = pdirty * page;
-
-  // We could get this value out of base.c::base_pages, but that really should
-  // be an upstream change, so don't worry about it for now.
-  stats->bookkeeping = 0;
-
   stats->bin_unused = compute_bin_unused(narenas);
+  stats->waste -= stats->bin_unused;
 }
 
 MOZ_JEMALLOC_API void
@@ -176,5 +172,12 @@ jemalloc_purge_freed_pages_impl()
 MOZ_JEMALLOC_API void
 jemalloc_free_dirty_pages_impl()
 {
-  je_(mallctl)("arenas.purge", NULL, 0, NULL, 0);
+  unsigned narenas;
+  size_t mib[3];
+  size_t miblen = sizeof(mib) / sizeof(mib[0]);
+
+  CTL_GET("arenas.narenas", narenas);
+  je_(mallctlnametomib)("arena.0.purge", mib, &miblen);
+  mib[1] = narenas;
+  je_(mallctlbymib)(mib, miblen, NULL, NULL, NULL, 0);
 }

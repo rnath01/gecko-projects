@@ -59,6 +59,7 @@ using struct ChromePackage from "mozilla/chrome/RegistryMessageUtils.h";
 using struct ResourceMapping from "mozilla/chrome/RegistryMessageUtils.h";
 using struct OverrideMapping from "mozilla/chrome/RegistryMessageUtils.h";
 using base::ChildPrivileges from "base/process_util.h";
+using base::ProcessId from "base/process.h";
 using struct IPC::Permission from "mozilla/net/NeckoMessageUtils.h";
 using class IPC::Principal from "mozilla/dom/PermissionMessageUtils.h";
 using struct mozilla::null_t from "ipc/IPCMessageUtils.h";
@@ -319,6 +320,8 @@ struct VolumeInfo {
   bool isFormatting;
   bool isFake;
   bool isUnmounting;
+  bool isRemovable;
+  bool isHotSwappable;
 };
 
 struct ClipboardCapabilities {
@@ -489,7 +492,8 @@ child:
     // VolumeInfo above.
     FileSystemUpdate(nsString fsName, nsString mountPoint, int32_t fsState,
                      int32_t mountGeneration, bool isMediaPresent,
-                     bool isSharing, bool isFormatting, bool isFake, bool isUnmounting);
+                     bool isSharing, bool isFormatting, bool isFake,
+                     bool isUnmounting, bool isRemovable, bool isHotSwappable);
 
     // Ask the Nuwa process to create a new child process.
     NuwaFork();
@@ -514,6 +518,19 @@ child:
      * Notify windows in the child to apply a new app style.
      */
     OnAppThemeChanged();
+
+    /**
+     * Called during plugin initialization to map a plugin id to a child process
+     * id.
+     */
+    async AssociatePluginId(uint32_t aPluginId, ProcessId aProcessId);
+
+    /**
+     * This call is used by async plugin initialization to notify the
+     * PluginModuleContentParent that the PluginModuleChromeParent's async
+     * init has completed.
+     */
+    async LoadPluginResult(uint32_t aPluginId, bool aResult);
 
     /**
      * Control the Gecko Profiler in the child process.

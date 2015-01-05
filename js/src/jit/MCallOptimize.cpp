@@ -173,7 +173,15 @@ IonBuilder::inlineNativeCall(CallInfo &callInfo, JSFunction *target)
     if (native == intrinsic_UnsafeSetReservedSlot)
         return inlineUnsafeSetReservedSlot(callInfo);
     if (native == intrinsic_UnsafeGetReservedSlot)
-        return inlineUnsafeGetReservedSlot(callInfo);
+        return inlineUnsafeGetReservedSlot(callInfo, MIRType_Value);
+    if (native == intrinsic_UnsafeGetObjectFromReservedSlot)
+        return inlineUnsafeGetReservedSlot(callInfo, MIRType_Object);
+    if (native == intrinsic_UnsafeGetInt32FromReservedSlot)
+        return inlineUnsafeGetReservedSlot(callInfo, MIRType_Int32);
+    if (native == intrinsic_UnsafeGetStringFromReservedSlot)
+        return inlineUnsafeGetReservedSlot(callInfo, MIRType_String);
+    if (native == intrinsic_UnsafeGetBooleanFromReservedSlot)
+        return inlineUnsafeGetReservedSlot(callInfo, MIRType_Boolean);
 
     // Parallel intrinsics.
     if (native == intrinsic_ShouldForceSequential ||
@@ -201,6 +209,12 @@ IonBuilder::inlineNativeCall(CallInfo &callInfo, JSFunction *target)
         return inlineHasClass(callInfo, &ArrayIteratorObject::class_);
     if (native == intrinsic_IsStringIterator)
         return inlineHasClass(callInfo, &StringIteratorObject::class_);
+
+    // TypedArray intrinsics.
+    if (native == intrinsic_IsTypedArray)
+        return inlineIsTypedArray(callInfo);
+    if (native == intrinsic_TypedArrayLength)
+        return inlineTypedArrayLength(callInfo);
 
     // TypedObject intrinsics.
     if (native == intrinsic_ObjectIsTypedObject)
@@ -1939,6 +1953,63 @@ IonBuilder::inlineHasClass(CallInfo &callInfo,
 }
 
 IonBuilder::InliningStatus
+IonBuilder::inlineIsTypedArray(CallInfo &callInfo)
+{
+    MOZ_ASSERT(!callInfo.constructing());
+    MOZ_ASSERT(callInfo.argc() == 1);
+    if (callInfo.getArg(0)->type() != MIRType_Object)
+        return InliningStatus_NotInlined;
+    if (getInlineReturnType() != MIRType_Boolean)
+        return InliningStatus_NotInlined;
+
+    // The test is elaborate: in-line only if there is exact
+    // information.
+
+    types::TemporaryTypeSet *types = callInfo.getArg(0)->resultTypeSet();
+    if (!types)
+        return InliningStatus_NotInlined;
+
+    bool result = false;
+    switch (types->forAllClasses(IsTypedArrayClass)) {
+      case types::TemporaryTypeSet::ForAllResult::ALL_FALSE:
+      case types::TemporaryTypeSet::ForAllResult::EMPTY:
+        result = false;
+        break;
+      case types::TemporaryTypeSet::ForAllResult::ALL_TRUE:
+        result = true;
+        break;
+      case types::TemporaryTypeSet::ForAllResult::MIXED:
+        return InliningStatus_NotInlined;
+    }
+
+    pushConstant(BooleanValue(result));
+
+    callInfo.setImplicitlyUsedUnchecked();
+    return InliningStatus_Inlined;
+}
+
+IonBuilder::InliningStatus
+IonBuilder::inlineTypedArrayLength(CallInfo &callInfo)
+{
+    MOZ_ASSERT(!callInfo.constructing());
+    MOZ_ASSERT(callInfo.argc() == 1);
+    if (callInfo.getArg(0)->type() != MIRType_Object)
+        return InliningStatus_NotInlined;
+    if (getInlineReturnType() != MIRType_Int32)
+        return InliningStatus_NotInlined;
+
+    // We assume that when calling this function we always
+    // have a TypedArray. The native asserts that as well.
+
+    MInstruction *length = addTypedArrayLength(callInfo.getArg(0));
+    current->push(length);
+
+    callInfo.setImplicitlyUsedUnchecked();
+    return InliningStatus_Inlined;
+}
+
+
+IonBuilder::InliningStatus
 IonBuilder::inlineObjectIsTypeDescr(CallInfo &callInfo)
 {
     if (callInfo.constructing() || callInfo.argc() != 1)
@@ -2048,7 +2119,7 @@ IonBuilder::inlineUnsafeSetReservedSlot(CallInfo &callInfo)
 }
 
 IonBuilder::InliningStatus
-IonBuilder::inlineUnsafeGetReservedSlot(CallInfo &callInfo)
+IonBuilder::inlineUnsafeGetReservedSlot(CallInfo &callInfo, MIRType knownValueType)
 {
     if (callInfo.argc() != 2 || callInfo.constructing())
         return InliningStatus_NotInlined;
@@ -2068,6 +2139,17 @@ IonBuilder::inlineUnsafeGetReservedSlot(CallInfo &callInfo)
     MLoadFixedSlot *load = MLoadFixedSlot::New(alloc(), callInfo.getArg(0), slot);
     current->add(load);
     current->push(load);
+    if (knownValueType != MIRType_Value) {
+        // We know what type we have in this slot.  Assert that this is in fact
+        // what we've seen coming from this slot in the past, then tell the
+        // MLoadFixedSlot about its result type.  That will make us do an
+        // infallible unbox as part of the slot load and then we'll barrier on
+        // the unbox result.  That way the type barrier code won't end up doing
+        // MIRType checks and conditional unboxing.
+        MOZ_ASSERT_IF(!getInlineReturnTypeSet()->empty(),
+                      getInlineReturnType() == knownValueType);
+        load->setResultType(knownValueType);
+    }
 
     // We don't track reserved slot types, so always emit a barrier.
     if (!pushTypeBarrier(load, getInlineReturnTypeSet(), BarrierKind::TypeSet))

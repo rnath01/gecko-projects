@@ -3824,9 +3824,19 @@ LIRGenerator::visitGetDOMMember(MGetDOMMember *ins)
     // value can in fact change as a result of DOM setters and method calls.
     MOZ_ASSERT(ins->domAliasSet() != JSJitInfo::AliasEverything,
                "Member gets had better not alias the world");
-    LGetDOMMember *lir =
-        new(alloc()) LGetDOMMember(useRegisterAtStart(ins->object()));
-    defineBox(lir, ins);
+
+    MDefinition *obj = ins->object();
+    MOZ_ASSERT(obj->type() == MIRType_Object);
+
+    MIRType type = ins->type();
+
+    if (type == MIRType_Value) {
+        LGetDOMMemberV *lir = new(alloc()) LGetDOMMemberV(useRegisterAtStart(obj));
+        defineBox(lir, ins);
+    } else {
+        LGetDOMMemberT *lir = new(alloc()) LGetDOMMemberT(useRegisterForTypedLoad(obj, type));
+        define(lir, ins);
+    }
 }
 
 void
@@ -3966,14 +3976,12 @@ LIRGenerator::visitSimdShuffle(MSimdShuffle *ins)
     bool wFromLHS = ins->laneW() < 4;
     uint32_t lanesFromLHS = (ins->laneX() < 4) + (ins->laneY() < 4) + zFromLHS + wFromLHS;
 
-    LUse lhs = useRegisterAtStart(ins->lhs());
-    LUse rhs = useRegister(ins->rhs());
+    LSimdShuffle *lir = new (alloc()) LSimdShuffle();
+    lowerForFPU(lir, ins, ins->lhs(), ins->rhs());
 
     // See codegen for requirements details.
     LDefinition temp = (lanesFromLHS == 3) ? tempCopy(ins->rhs(), 1) : LDefinition::BogusTemp();
-
-    LSimdShuffle *lir = new (alloc()) LSimdShuffle(lhs, rhs, temp);
-    defineReuseInput(lir, ins, 0);
+    lir->setTemp(0, temp);
 }
 
 void

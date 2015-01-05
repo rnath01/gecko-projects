@@ -951,7 +951,7 @@ mozilla::plugins::PPluginModuleParent*
 ContentChild::AllocPPluginModuleParent(mozilla::ipc::Transport* aTransport,
                                        base::ProcessId aOtherProcess)
 {
-    return plugins::PluginModuleContentParent::Create(aTransport, aOtherProcess);
+    return plugins::PluginModuleContentParent::Initialize(aTransport, aOtherProcess);
 }
 
 PContentBridgeChild*
@@ -2153,13 +2153,15 @@ ContentChild::RecvFileSystemUpdate(const nsString& aFsName,
                                    const bool& aIsSharing,
                                    const bool& aIsFormatting,
                                    const bool& aIsFake,
-                                   const bool& aIsUnmounting)
+                                   const bool& aIsUnmounting,
+                                   const bool& aIsRemovable,
+                                   const bool& aIsHotSwappable)
 {
 #ifdef MOZ_WIDGET_GONK
     nsRefPtr<nsVolume> volume = new nsVolume(aFsName, aVolumeName, aState,
                                              aMountGeneration, aIsMediaPresent,
                                              aIsSharing, aIsFormatting, aIsFake,
-                                             aIsUnmounting);
+                                             aIsUnmounting, aIsRemovable, aIsHotSwappable);
 
     nsRefPtr<nsVolumeService> vs = nsVolumeService::GetSingleton();
     if (vs) {
@@ -2176,6 +2178,8 @@ ContentChild::RecvFileSystemUpdate(const nsString& aFsName,
     unused << aIsFormatting;
     unused << aIsFake;
     unused << aIsUnmounting;
+    unused << aIsRemovable;
+    unused << aIsHotSwappable;
 #endif
     return true;
 }
@@ -2467,6 +2471,21 @@ ContentChild::RecvGetProfile(nsCString* aProfile)
     } else {
         *aProfile = EmptyCString();
     }
+    return true;
+}
+
+bool
+ContentChild::RecvLoadPluginResult(const uint32_t& aPluginId, const bool& aResult)
+{
+    plugins::PluginModuleContentParent::OnLoadPluginResult(aPluginId, aResult);
+    return true;
+}
+
+bool
+ContentChild::RecvAssociatePluginId(const uint32_t& aPluginId,
+                                    const base::ProcessId& aProcessId)
+{
+    plugins::PluginModuleContentParent::AssociatePluginId(aPluginId, aProcessId);
     return true;
 }
 

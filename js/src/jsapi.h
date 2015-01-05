@@ -2256,8 +2256,7 @@ extern JS_PUBLIC_API(bool)
 JS_IsExternalString(JSString *str);
 
 /*
- * Return the 'closure' arg passed to JS_NewExternalStringWithClosure or
- * nullptr if the external string was created via JS_NewExternalString.
+ * Return the 'fin' arg passed to JS_NewExternalString.
  */
 extern JS_PUBLIC_API(const JSStringFinalizer *)
 JS_GetExternalStringFinalizer(JSString *str);
@@ -5044,6 +5043,9 @@ JS_NewObjectForConstructor(JSContext *cx, const JSClass *clasp, const JS::CallAr
 
 #ifdef JS_GC_ZEAL
 #define JS_DEFAULT_ZEAL_FREQ 100
+
+extern JS_PUBLIC_API(void)
+JS_GetGCZeal(JSContext *cx, uint8_t *zeal, uint32_t *frequency);
 
 extern JS_PUBLIC_API(void)
 JS_SetGCZeal(JSContext *cx, uint8_t zeal, uint32_t frequency);

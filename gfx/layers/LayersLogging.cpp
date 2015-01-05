@@ -170,13 +170,13 @@ AppendToString(std::stringstream& aStream, const FrameMetrics& m,
 {
   aStream << pfx;
   AppendToString(aStream, m.mCompositionBounds, "{ [cb=");
-  AppendToString(aStream, m.mScrollableRect, "] [sr=");
+  AppendToString(aStream, m.GetScrollableRect(), "] [sr=");
   AppendToString(aStream, m.GetScrollOffset(), "] [s=");
   if (m.GetDoSmoothScroll()) {
     AppendToString(aStream, m.GetSmoothScrollOffset(), "] [ss=");
   }
   AppendToString(aStream, m.GetDisplayPort(), "] [dp=");
-  AppendToString(aStream, m.mCriticalDisplayPort, "] [cdp=");
+  AppendToString(aStream, m.GetCriticalDisplayPort(), "] [cdp=");
   AppendToString(aStream, m.GetBackgroundColor(), "] [color=");
   if (!detailed) {
     AppendToString(aStream, m.GetScrollId(), "] [scrollId=");
@@ -289,7 +289,7 @@ AppendToString(std::stringstream& aStream, TextureFlags flags,
 }
     bool previous = false;
     AppendFlag(TextureFlags::USE_NEAREST_FILTER);
-    AppendFlag(TextureFlags::NEEDS_Y_FLIP);
+    AppendFlag(TextureFlags::ORIGIN_BOTTOM_LEFT);
     AppendFlag(TextureFlags::DISALLOW_BIGIMAGE);
 
 #undef AppendFlag

@@ -358,6 +358,8 @@ class IonBuilder
 
     // Add a guard which ensure that the set of type which goes through this
     // generated code correspond to the observed types for the bytecode.
+    MDefinition *addTypeBarrier(MDefinition *def, types::TemporaryTypeSet *observed,
+                                BarrierKind kind, MTypeBarrier **pbarrier = nullptr);
     bool pushTypeBarrier(MDefinition *def, types::TemporaryTypeSet *observed, BarrierKind kind);
 
     // As pushTypeBarrier, but will compute the needBarrier boolean itself based
@@ -711,7 +713,10 @@ class IonBuilder
                                BoolVector &choiceSet, uint32_t *numInlineable);
 
     // Native inlining helpers.
+    // The typeset for the return value of our function.  These are
+    // the types it's been observed returning in the past.
     types::TemporaryTypeSet *getInlineReturnTypeSet();
+    // The known MIR type of getInlineReturnTypeSet.
     MIRType getInlineReturnType();
 
     // Array natives.
@@ -771,10 +776,15 @@ class IonBuilder
 
     // Slot intrinsics.
     InliningStatus inlineUnsafeSetReservedSlot(CallInfo &callInfo);
-    InliningStatus inlineUnsafeGetReservedSlot(CallInfo &callInfo);
+    InliningStatus inlineUnsafeGetReservedSlot(CallInfo &callInfo,
+                                               MIRType knownValueType);
 
     // ForkJoin intrinsics
     InliningStatus inlineForkJoinGetSlice(CallInfo &callInfo);
+
+    // TypedArray intrinsics.
+    InliningStatus inlineIsTypedArray(CallInfo &callInfo);
+    InliningStatus inlineTypedArrayLength(CallInfo &callInfo);
 
     // TypedObject intrinsics and natives.
     InliningStatus inlineObjectIsTypeDescr(CallInfo &callInfo);
@@ -837,6 +847,7 @@ class IonBuilder
     MDefinition *patchInlinedReturn(CallInfo &callInfo, MBasicBlock *exit, MBasicBlock *bottom);
     MDefinition *patchInlinedReturns(CallInfo &callInfo, MIRGraphReturns &returns,
                                      MBasicBlock *bottom);
+    MDefinition *specializeInlinedReturn(MDefinition *rdef, MBasicBlock *exit);
 
     bool objectsHaveCommonPrototype(types::TemporaryTypeSet *types, PropertyName *name,
                                     bool isGetter, JSObject *foundProto, bool *guardGlobal);

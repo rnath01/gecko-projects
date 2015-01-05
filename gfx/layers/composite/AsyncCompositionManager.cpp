@@ -604,13 +604,13 @@ AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer)
 
     const FrameMetrics& metrics = aLayer->GetFrameMetrics(i);
     CSSToLayerScale paintScale = metrics.LayersPixelsPerCSSPixel();
-    CSSRect displayPort(metrics.mCriticalDisplayPort.IsEmpty() ?
-                        metrics.GetDisplayPort() : metrics.mCriticalDisplayPort);
+    CSSRect displayPort(metrics.GetCriticalDisplayPort().IsEmpty() ?
+                        metrics.GetDisplayPort() : metrics.GetCriticalDisplayPort());
     ScreenPoint offset(0, 0);
     // XXX this call to SyncFrameMetrics is not currently being used. It will be cleaned
     // up as part of bug 776030 or one of its dependencies.
     SyncFrameMetrics(scrollOffset, asyncTransformWithoutOverscroll.mScale.scale,
-                     metrics.mScrollableRect, mLayersUpdated, displayPort,
+                     metrics.GetScrollableRect(), mLayersUpdated, displayPort,
                      paintScale, mIsFirstPaint, fixedLayerMargins, offset);
 
     mIsFirstPaint = false;
@@ -714,7 +714,7 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
   //   of the scroll amount to the size of the scrollable rect.
   Matrix4x4 scrollbarTransform;
   if (aScrollbar->GetScrollbarDirection() == Layer::VERTICAL) {
-    float scale = metrics.CalculateCompositedSizeInCssPixels().height / metrics.mScrollableRect.height;
+    float scale = metrics.CalculateCompositedSizeInCssPixels().height / metrics.GetScrollableRect().height;
     if (aScrollbarIsDescendant) {
       // In cases where the scrollbar is a descendant of the content, the
       // scrollbar gets painted at the same resolution as the content. Since the
@@ -729,7 +729,7 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
     scrollbarTransform.PostTranslate(0, -transientTransform._42 * scale, 0);
   }
   if (aScrollbar->GetScrollbarDirection() == Layer::HORIZONTAL) {
-    float scale = metrics.CalculateCompositedSizeInCssPixels().width / metrics.mScrollableRect.width;
+    float scale = metrics.CalculateCompositedSizeInCssPixels().width / metrics.GetScrollableRect().width;
     if (aScrollbarIsDescendant) {
       scale *= metrics.mPresShellResolution;
     }
@@ -845,13 +845,13 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
   LayerIntPoint scrollOffsetLayerPixels = RoundedToInt(metrics.GetScrollOffset() * geckoZoom);
 
   if (mIsFirstPaint) {
-    mContentRect = metrics.mScrollableRect;
+    mContentRect = metrics.GetScrollableRect();
     SetFirstPaintViewport(scrollOffsetLayerPixels,
                           geckoZoom,
                           mContentRect);
     mIsFirstPaint = false;
-  } else if (!metrics.mScrollableRect.IsEqualEdges(mContentRect)) {
-    mContentRect = metrics.mScrollableRect;
+  } else if (!metrics.GetScrollableRect().IsEqualEdges(mContentRect)) {
+    mContentRect = metrics.GetScrollableRect();
     SetPageRect(mContentRect);
   }
 
@@ -859,9 +859,9 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
   // notifications, so that Java can take these into account in its response.
   // Calculate the absolute display port to send to Java
   LayerIntRect displayPort = RoundedToInt(
-    (metrics.mCriticalDisplayPort.IsEmpty()
+    (metrics.GetCriticalDisplayPort().IsEmpty()
       ? metrics.GetDisplayPort()
-      : metrics.mCriticalDisplayPort
+      : metrics.GetCriticalDisplayPort()
     ) * geckoZoom);
   displayPort += scrollOffsetLayerPixels;
 

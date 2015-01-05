@@ -1218,7 +1218,7 @@ public abstract class GeckoApp
         if (BrowserLocaleManager.getInstance().systemLocaleDidChange()) {
             Log.i(LOGTAG, "System locale changed. Restarting.");
             doRestart();
-            GeckoAppShell.systemExit();
+            GeckoAppShell.gracefulExit();
             return;
         }
 
@@ -1422,7 +1422,6 @@ public abstract class GeckoApp
             LayerView layerView = (LayerView) findViewById(R.id.layer_view);
             layerView.initializeView(EventDispatcher.getInstance());
             mLayerView = layerView;
-            GeckoAppShell.setLayerView(layerView);
             GeckoAppShell.sendEventToGecko(GeckoEvent.createObjectEvent(
                 GeckoEvent.ACTION_OBJECT_LAYER_CLIENT, layerView.getLayerClientObject()));
 
@@ -1586,9 +1585,9 @@ public abstract class GeckoApp
 
         mPromptService = new PromptService(this);
 
-        mTextSelection = new TextSelection((TextSelectionHandle) findViewById(R.id.start_handle),
-                                           (TextSelectionHandle) findViewById(R.id.middle_handle),
-                                           (TextSelectionHandle) findViewById(R.id.end_handle),
+        mTextSelection = new TextSelection((TextSelectionHandle) findViewById(R.id.anchor_handle),
+                                           (TextSelectionHandle) findViewById(R.id.caret_handle),
+                                           (TextSelectionHandle) findViewById(R.id.focus_handle),
                                            EventDispatcher.getInstance(),
                                            this);
 
@@ -1914,7 +1913,7 @@ public abstract class GeckoApp
         }
 
         if (mAppStateListeners != null) {
-            for (GeckoAppShell.AppStateListener listener: mAppStateListeners) {
+            for (GeckoAppShell.AppStateListener listener : mAppStateListeners) {
                 listener.onResume();
             }
         }
@@ -1946,7 +1945,7 @@ public abstract class GeckoApp
                     Log.w(LOGTAG, "Can't record session: rec is null.");
                 }
             }
-         });
+        });
     }
 
     @Override
@@ -1996,7 +1995,7 @@ public abstract class GeckoApp
         });
 
         if (mAppStateListeners != null) {
-            for(GeckoAppShell.AppStateListener listener: mAppStateListeners) {
+            for (GeckoAppShell.AppStateListener listener : mAppStateListeners) {
                 listener.onPause();
             }
         }

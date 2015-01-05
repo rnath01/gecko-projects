@@ -336,7 +336,9 @@ public:
                                       const bool& aIsSharing,
                                       const bool& aIsFormatting,
                                       const bool& aIsFake,
-                                      const bool& aIsUnmounting) MOZ_OVERRIDE;
+                                      const bool& aIsUnmounting,
+                                      const bool& aIsRemovable,
+                                      const bool& aIsHotSwappable) MOZ_OVERRIDE;
 
     virtual bool RecvNuwaFork() MOZ_OVERRIDE;
 
@@ -359,6 +361,11 @@ public:
                                         const nsString& aData) MOZ_OVERRIDE;
 
     virtual bool RecvOnAppThemeChanged() MOZ_OVERRIDE;
+
+    virtual bool RecvAssociatePluginId(const uint32_t& aPluginId,
+                                       const base::ProcessId& aProcessId) MOZ_OVERRIDE;
+    virtual bool RecvLoadPluginResult(const uint32_t& aPluginId,
+                                      const bool& aResult) MOZ_OVERRIDE;
 
     virtual bool RecvStartProfiler(const uint32_t& aEntries,
                                    const double& aInterval,

@@ -66,6 +66,7 @@ nsLineLayout::nsLineLayout(nsPresContext* aPresContext,
     mForceBreakFrameOffset(-1),
     mMinLineBSize(0),
     mTextIndent(0),
+    mRubyReflowState(nullptr),
     mFirstLetterStyleOK(false),
     mIsTopOfPage(false),
     mImpactedByFloats(false),
@@ -180,8 +181,13 @@ nsLineLayout::BeginLineReflow(nscoord aICoord, nscoord aBCoord,
   mIsTopOfPage = aIsTopOfPage;
   mImpactedByFloats = aImpactedByFloats;
   mTotalPlacedFrames = 0;
-  mLineIsEmpty = true;
-  mLineAtStart = true;
+  if (mBaseLineLayout == this) {
+    mLineIsEmpty = true;
+    mLineAtStart = true;
+  } else {
+    mLineIsEmpty = false;
+    mLineAtStart = false;
+  }
   mLineEndsInBR = false;
   mSpanDepth = 0;
   mMaxStartBoxBSize = mMaxEndBoxBSize = 0;
@@ -437,7 +443,7 @@ nsLineLayout::BeginSpan(nsIFrame* aFrame,
 
   nsIFrame* frame = aSpanReflowState->frame;
   psd->mNoWrap = !frame->StyleText()->WhiteSpaceCanWrap(frame) ||
-                 frame->StyleContext()->IsDirectlyInsideRuby();
+                 frame->StyleContext()->IsInlineDescendantOfRuby();
   psd->mWritingMode = aSpanReflowState->GetWritingMode();
 
   // Switch to new span
@@ -863,6 +869,10 @@ nsLineLayout::ReflowFrame(nsIFrame* aFrame,
                               aFrame, availSize);
     nsHTMLReflowState& reflowState = *reflowStateHolder;
     reflowState.mLineLayout = this;
+    if (mRubyReflowState) {
+      reflowState.mRubyReflowState = mRubyReflowState;
+      mRubyReflowState = nullptr;
+    }
     reflowState.mFlags.mIsTopOfPage = mIsTopOfPage;
     if (reflowState.ComputedISize() == NS_UNCONSTRAINEDSIZE) {
       reflowState.AvailableISize() = availableSpaceOnLine;
@@ -2849,13 +2859,13 @@ nsLineLayout::TextAlignLine(nsLineBox* aLine,
     ComputeFrameJustification(psd, computeState);
     if (mHasRuby && computeState.mFirstParticipant) {
       PerFrameData* firstFrame = computeState.mFirstParticipant;
-      if (firstFrame->mFrame->StyleContext()->IsDirectlyInsideRuby()) {
+      if (firstFrame->mFrame->StyleContext()->IsInlineDescendantOfRuby()) {
         MOZ_ASSERT(!firstFrame->mJustificationAssignment.mGapsAtStart);
         firstFrame->mJustificationAssignment.mGapsAtStart = 1;
         additionalGaps++;
       }
       PerFrameData* lastFrame = computeState.mLastParticipant;
-      if (lastFrame->mFrame->StyleContext()->IsDirectlyInsideRuby()) {
+      if (lastFrame->mFrame->StyleContext()->IsInlineDescendantOfRuby()) {
         MOZ_ASSERT(!lastFrame->mJustificationAssignment.mGapsAtEnd);
         lastFrame->mJustificationAssignment.mGapsAtEnd = 1;
         additionalGaps++;

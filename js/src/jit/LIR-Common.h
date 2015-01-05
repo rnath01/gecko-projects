@@ -299,12 +299,8 @@ class LSimdShuffle : public LInstructionHelper<1, 2, 1>
 {
   public:
     LIR_HEADER(SimdShuffle);
-    LSimdShuffle(const LAllocation &lhs, const LAllocation &rhs, const LDefinition &temp)
-    {
-        setOperand(0, lhs);
-        setOperand(1, rhs);
-        setTemp(0, temp);
-    }
+    LSimdShuffle()
+    {}
 
     const LAllocation *lhs() {
         return getOperand(0);
@@ -498,8 +494,8 @@ class LSimdSelect : public LInstructionHelper<1, 3, 1>
     const LDefinition *temp() {
         return getTemp(0);
     }
-    MSimdTernaryBitwise::Operation operation() const {
-        return mir_->toSimdTernaryBitwise()->operation();
+    MSimdSelect *mir() const {
+        return mir_->toSimdSelect();
     }
 };
 
@@ -1754,11 +1750,28 @@ class LGetDOMProperty : public LDOMPropertyInstructionHelper<BOX_PIECES, 0>
     }
 };
 
-class LGetDOMMember : public LInstructionHelper<BOX_PIECES, 1, 0>
+class LGetDOMMemberV : public LInstructionHelper<BOX_PIECES, 1, 0>
 {
   public:
-    LIR_HEADER(GetDOMMember);
-    explicit LGetDOMMember(const LAllocation &object) {
+    LIR_HEADER(GetDOMMemberV);
+    explicit LGetDOMMemberV(const LAllocation &object) {
+        setOperand(0, object);
+    }
+
+    const LAllocation *object() {
+        return getOperand(0);
+    }
+
+    MGetDOMMember *mir() const {
+        return mir_->toGetDOMMember();
+    }
+};
+
+class LGetDOMMemberT : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(GetDOMMemberT);
+    explicit LGetDOMMemberT(const LAllocation &object) {
         setOperand(0, object);
     }
 

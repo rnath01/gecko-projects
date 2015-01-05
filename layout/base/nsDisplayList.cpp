@@ -721,7 +721,7 @@ nsDisplayScrollLayer::ComputeFrameMetrics(nsIFrame* aForFrame,
           metrics.GetDisplayPort());
     }
     if (nsLayoutUtils::GetCriticalDisplayPort(content, &dp)) {
-      metrics.mCriticalDisplayPort = CSSRect::FromAppUnits(dp);
+      metrics.SetCriticalDisplayPort(CSSRect::FromAppUnits(dp));
     }
     DisplayPortMarginsPropertyData* marginsData =
         static_cast<DisplayPortMarginsPropertyData*>(content->GetProperty(nsGkAtoms::DisplayPortMargins));
@@ -734,8 +734,8 @@ nsDisplayScrollLayer::ComputeFrameMetrics(nsIFrame* aForFrame,
   if (aScrollFrame)
     scrollableFrame = aScrollFrame->GetScrollTargetFrame();
 
-  metrics.mScrollableRect = CSSRect::FromAppUnits(
-    nsLayoutUtils::CalculateScrollableRectForFrame(scrollableFrame, aForFrame));
+  metrics.SetScrollableRect(CSSRect::FromAppUnits(
+    nsLayoutUtils::CalculateScrollableRectForFrame(scrollableFrame, aForFrame)));
 
   if (scrollableFrame) {
     nsPoint scrollPosition = scrollableFrame->GetScrollPosition();
@@ -1182,12 +1182,28 @@ nsDisplayListBuilder::IsAnimatedGeometryRoot(nsIFrame* aFrame, nsIFrame** aParen
   return false;
 }
 
+bool
+nsDisplayListBuilder::GetCachedAnimatedGeometryRoot(const nsIFrame* aFrame,
+                                                    const nsIFrame* aStopAtAncestor,
+                                                    nsIFrame** aOutResult)
+{
+  AnimatedGeometryRootLookup lookup(aFrame, aStopAtAncestor);
+  return mAnimatedGeometryRootCache.Get(lookup, aOutResult);
+}
+
 static nsIFrame*
 ComputeAnimatedGeometryRootFor(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
-                               const nsIFrame* aStopAtAncestor = nullptr)
+                               const nsIFrame* aStopAtAncestor = nullptr,
+                               bool aUseCache = false)
 {
   nsIFrame* cursor = aFrame;
   while (cursor != aStopAtAncestor) {
+    if (aUseCache) {
+      nsIFrame* result;
+      if (aBuilder->GetCachedAnimatedGeometryRoot(cursor, aStopAtAncestor, &result)) {
+        return result;
+      }
+    }
     nsIFrame* next;
     if (aBuilder->IsAnimatedGeometryRoot(cursor, &next))
       return cursor;
@@ -1202,13 +1218,19 @@ nsDisplayListBuilder::FindAnimatedGeometryRootFor(nsIFrame* aFrame, const nsIFra
   if (aFrame == mCurrentFrame) {
     return mCurrentAnimatedGeometryRoot;
   }
-  return ComputeAnimatedGeometryRootFor(this, aFrame, aStopAtAncestor);
+
+  nsIFrame* result = ComputeAnimatedGeometryRootFor(this, aFrame, aStopAtAncestor, true);
+  AnimatedGeometryRootLookup lookup(aFrame, aStopAtAncestor);
+  mAnimatedGeometryRootCache.Put(lookup, result);
+  return result;
 }
 
 void
 nsDisplayListBuilder::RecomputeCurrentAnimatedGeometryRoot()
 {
   mCurrentAnimatedGeometryRoot = ComputeAnimatedGeometryRootFor(this, const_cast<nsIFrame *>(mCurrentFrame));
+  AnimatedGeometryRootLookup lookup(mCurrentFrame, nullptr);
+  mAnimatedGeometryRootCache.Put(lookup, mCurrentAnimatedGeometryRoot);
 }
 
 void
@@ -2030,7 +2052,6 @@ nsDisplaySolidColor::Paint(nsDisplayListBuilder* aBuilder,
   drawTarget->FillRect(rect, ColorPattern(ToDeviceColor(mColor)));
 }
 
-#ifdef MOZ_DUMP_PAINTING
 void
 nsDisplaySolidColor::WriteDebugInfo(std::stringstream& aStream)
 {
@@ -2040,7 +2061,6 @@ nsDisplaySolidColor::WriteDebugInfo(std::stringstream& aStream)
           << (int)NS_GET_B(mColor) << ","
           << (int)NS_GET_A(mColor) << ")";
 }
-#endif
 
 static void
 RegisterThemeGeometry(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
@@ -2746,13 +2766,11 @@ nsDisplayThemedBackground::~nsDisplayThemedBackground()
 #endif
 }
 
-#ifdef MOZ_DUMP_PAINTING
 void
 nsDisplayThemedBackground::WriteDebugInfo(std::stringstream& aStream)
 {
   aStream << " (themed, appearance:" << (int)mAppearance << ")";
 }
-#endif
 
 void
 nsDisplayThemedBackground::HitTest(nsDisplayListBuilder* aBuilder,
@@ -2951,14 +2969,12 @@ nsDisplayBackgroundColor::HitTest(nsDisplayListBuilder* aBuilder,
   aOutFrames->AppendElement(mFrame);
 }
 
-#ifdef MOZ_DUMP_PAINTING
 void
 nsDisplayBackgroundColor::WriteDebugInfo(std::stringstream& aStream)
 {
   aStream << " (rgba " << mColor.r << "," << mColor.g << ","
           << mColor.b << "," << mColor.a << ")";
 }
-#endif
 
 already_AddRefed<Layer>
 nsDisplayClearBackground::BuildLayer(nsDisplayListBuilder* aBuilder,
@@ -3076,7 +3092,6 @@ nsDisplayLayerEventRegions::AddInactiveScrollPort(const nsRect& aRect)
   mDispatchToContentHitRegion.Or(mDispatchToContentHitRegion, aRect);
 }
 
-#ifdef MOZ_DUMP_PAINTING
 void
 nsDisplayLayerEventRegions::WriteDebugInfo(std::stringstream& aStream)
 {
@@ -3090,7 +3105,6 @@ nsDisplayLayerEventRegions::WriteDebugInfo(std::stringstream& aStream)
     AppendToString(aStream, mDispatchToContentHitRegion, " (dispatchToContentRegion ", ")");
   }
 }
-#endif
 
 nsDisplayCaret::nsDisplayCaret(nsDisplayListBuilder* aBuilder,
                                nsIFrame* aCaretFrame)
@@ -3788,13 +3802,11 @@ bool nsDisplayOpacity::TryMerge(nsDisplayListBuilder* aBuilder, nsDisplayItem* a
   return true;
 }
 
-#ifdef MOZ_DUMP_PAINTING
 void
 nsDisplayOpacity::WriteDebugInfo(std::stringstream& aStream)
 {
   aStream << " (opacity " << mOpacity << ")";
 }
-#endif
 
 nsDisplayMixBlendMode::nsDisplayMixBlendMode(nsDisplayListBuilder* aBuilder,
                                              nsIFrame* aFrame, nsDisplayList* aList,
@@ -4553,14 +4565,12 @@ nsDisplayScrollLayer::GetScrollLayerCount()
 #endif
 }
 
-#ifdef MOZ_DUMP_PAINTING
 void
 nsDisplayScrollLayer::WriteDebugInfo(std::stringstream& aStream)
 {
   aStream << " (scrollframe " << mScrollFrame
           << " scrolledFrame " << mScrolledFrame << ")";
 }
-#endif
 
 nsDisplayScrollInfoLayer::nsDisplayScrollInfoLayer(
   nsDisplayListBuilder* aBuilder,
@@ -5741,13 +5751,11 @@ bool nsDisplayTransform::UntransformVisibleRect(nsDisplayListBuilder* aBuilder,
   return true;
 }
 
-#ifdef MOZ_DUMP_PAINTING
 void
 nsDisplayTransform::WriteDebugInfo(std::stringstream& aStream)
 {
   AppendToString(aStream, GetTransform());
 }
-#endif
 
 nsDisplaySVGEffects::nsDisplaySVGEffects(nsDisplayListBuilder* aBuilder,
                                          nsIFrame* aFrame, nsDisplayList* aList)

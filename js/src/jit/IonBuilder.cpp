@@ -21,6 +21,7 @@
 #include "vm/ArgumentsObject.h"
 #include "vm/Opcodes.h"
 #include "vm/RegExpStatics.h"
+#include "vm/TraceLogging.h"
 
 #include "jsinferinlines.h"
 #include "jsobjinlines.h"
@@ -341,6 +342,11 @@ IonBuilder::canInlineTarget(JSFunction *target, CallInfo &callInfo)
 {
     if (!optimizationInfo().inlineInterpreted())
         return InliningDecision_DontInline;
+
+    if (TraceLogTextIdEnabled(TraceLogger_InlinedScripts)) {
+        return DontInline(nullptr, "Tracelogging of inlined scripts is enabled"
+                                   "but Tracelogger cannot do that yet.");
+    }
 
     if (!target->isInterpreted())
         return DontInline(nullptr, "Non-interpreted target");
@@ -4472,10 +4478,54 @@ IonBuilder::patchInlinedReturn(CallInfo &callInfo, MBasicBlock *exit, MBasicBloc
         rdef = callInfo.getArg(0);
     }
 
+    if (!callInfo.isSetter())
+        rdef = specializeInlinedReturn(rdef, exit);
+
     MGoto *replacement = MGoto::New(alloc(), bottom);
     exit->end(replacement);
     if (!bottom->addPredecessorWithoutPhis(exit))
         return nullptr;
+
+    return rdef;
+}
+
+MDefinition *
+IonBuilder::specializeInlinedReturn(MDefinition *rdef, MBasicBlock *exit)
+{
+    // Remove types from the return definition that weren't observed.
+    types::TemporaryTypeSet *types = bytecodeTypes(pc);
+
+    // The observed typeset doesn't contain extra information.
+    if (types->empty() || types->unknown())
+        return rdef;
+
+    // Decide if specializing is needed using the result typeset if available,
+    // else use the result type.
+
+    if (rdef->resultTypeSet()) {
+        // Don't specialize if return typeset is a subset of the
+        // observed typeset. The return typeset is already more specific.
+        if (rdef->resultTypeSet()->isSubset(types))
+            return rdef;
+    } else {
+        // Don't specialize if types are inaccordance, except for MIRType_Value
+        // and MIRType_Object (when not unknown object), since the typeset
+        // contains more specific information.
+        MIRType observedType = types->getKnownMIRType();
+        if (observedType == rdef->type() &&
+            observedType != MIRType_Value &&
+            (observedType != MIRType_Object || types->unknownObject()))
+        {
+            return rdef;
+        }
+    }
+
+    setCurrent(exit);
+
+    MTypeBarrier *barrier = nullptr;
+    rdef = addTypeBarrier(rdef, types, BarrierKind::TypeSet, &barrier);
+    if (barrier)
+        barrier->setNotMovable();
 
     return rdef;
 }
@@ -6818,55 +6868,60 @@ IonBuilder::testSingletonPropertyTypes(MDefinition *obj, JSObject *singleton, Pr
     return false;
 }
 
-// Given an observed type set, annotates the IR as much as possible:
-// (1) If no type information is provided, the value on the top of the stack is
-//     left in place.
-// (2) If a single type definitely exists, and no type barrier is needed,
-//     then an infallible unbox instruction replaces the value on the top of
-//     the stack.
-// (3) If a type barrier is needed, but has an unknown type set, leave the
-//     value at the top of the stack.
-// (4) If a type barrier is needed, and has a single type, an unbox
-//     instruction replaces the top of the stack.
-// (5) Lastly, a type barrier instruction replaces the top of the stack.
 bool
 IonBuilder::pushTypeBarrier(MDefinition *def, types::TemporaryTypeSet *observed, BarrierKind kind)
 {
+    MOZ_ASSERT(def == current->peek(-1));
+
+    MDefinition *replace = addTypeBarrier(current->pop(), observed, kind);
+    if (!replace)
+        return false;
+
+    current->push(replace);
+    return true;
+}
+
+// Given an observed type set, annotates the IR as much as possible:
+// (1) If no type information is provided, the given value is returned.
+// (2) If a single type definitely exists, and no type barrier is needed,
+//     then an infallible unbox instruction is returned.
+// (3) If a type barrier is needed, but has an unknown type set, the given
+//     value is returned.
+// (4) Lastly, a type barrier instruction is added and returned.
+MDefinition *
+IonBuilder::addTypeBarrier(MDefinition *def, types::TemporaryTypeSet *observed, BarrierKind kind,
+                           MTypeBarrier **pbarrier)
+{
     // Barriers are never needed for instructions whose result will not be used.
     if (BytecodeIsPopped(pc))
-        return true;
+        return def;
 
     // If the instruction has no side effects, we'll resume the entire operation.
     // The actual type barrier will occur in the interpreter. If the
     // instruction is effectful, even if it has a singleton type, there
     // must be a resume point capturing the original def, and resuming
     // to that point will explicitly monitor the new type.
-
     if (kind == BarrierKind::NoBarrier) {
         MDefinition *replace = ensureDefiniteType(def, observed->getKnownMIRType());
-        if (replace != def) {
-            current->pop();
-            current->push(replace);
-        }
         replace->setResultTypeSet(observed);
-        return true;
+        return replace;
     }
 
     if (observed->unknown())
-        return true;
+        return def;
 
-    current->pop();
-
-    MInstruction *barrier = MTypeBarrier::New(alloc(), def, observed, kind);
+    MTypeBarrier *barrier = MTypeBarrier::New(alloc(), def, observed, kind);
     current->add(barrier);
 
-    if (barrier->type() == MIRType_Undefined)
-        return pushConstant(UndefinedValue());
-    if (barrier->type() == MIRType_Null)
-        return pushConstant(NullValue());
+    if (pbarrier)
+        *pbarrier = barrier;
 
-    current->push(barrier);
-    return true;
+    if (barrier->type() == MIRType_Undefined)
+        return constant(UndefinedValue());
+    if (barrier->type() == MIRType_Null)
+        return constant(NullValue());
+
+    return barrier;
 }
 
 bool
@@ -10086,16 +10141,14 @@ IonBuilder::getPropTryInnerize(bool *emitted, MDefinition *obj, PropertyName *na
     // Note: the Baseline ICs don't know about this optimization, so it's
     // possible the global property's HeapTypeSet has not been initialized
     // yet. In this case we'll fall back to getPropTryCache for now.
-    //
-    // Also note that we don't call getPropTryCommonGetter below, because
-    // (a) it requires a Baseline getter stub, which we don't have for outer
-    // window proxies and (b) we have to be careful not to pass the inner
-    // object to scripted getters etc. See bug 1007631.
 
     if (!getPropTryConstant(emitted, inner, name, types) || *emitted)
         return *emitted;
 
     if (!getStaticName(&script()->global(), name, emitted) || *emitted)
+        return *emitted;
+
+    if (!getPropTryCommonGetter(emitted, inner, name, types) || *emitted)
         return *emitted;
 
     // Passing the inner object to GetProperty IC is safe, see the
@@ -11286,6 +11339,36 @@ IonBuilder::jsop_instanceof()
         current->add(ins);
         current->push(ins);
 
+        return resumeAfter(ins);
+    } while (false);
+
+    // Try to inline a fast path based on Baseline ICs.
+    do {
+        Shape *shape;
+        uint32_t slot;
+        JSObject *protoObject;
+        if (!inspector->instanceOfData(pc, &shape, &slot, &protoObject))
+            break;
+
+        // Shape guard.
+        rhs = addShapeGuard(rhs, shape, Bailout_ShapeGuard);
+
+        // Guard .prototype == protoObject.
+        MOZ_ASSERT(shape->numFixedSlots() == 0, "Must be a dynamic slot");
+        MSlots *slots = MSlots::New(alloc(), rhs);
+        current->add(slots);
+        MLoadSlot *prototype = MLoadSlot::New(alloc(), slots, slot);
+        current->add(prototype);
+        MGuardObjectIdentity *guard = MGuardObjectIdentity::New(alloc(), prototype, protoObject,
+                                                                /* bailOnEquality = */ false);
+        current->add(guard);
+
+        if (tryFoldInstanceOf(obj, protoObject))
+            return true;
+
+        MInstanceOf *ins = MInstanceOf::New(alloc(), obj, protoObject);
+        current->add(ins);
+        current->push(ins);
         return resumeAfter(ins);
     } while (false);
 

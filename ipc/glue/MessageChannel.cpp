@@ -13,6 +13,7 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Move.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "nsDebug.h"
 #include "nsISupportsImpl.h"
 #include "nsContentUtils.h"
@@ -114,7 +115,6 @@ enum Direction
     IN_MESSAGE,
     OUT_MESSAGE
 };
-
 
 class MessageChannel::InterruptFrame
 {
@@ -298,6 +298,7 @@ MessageChannel::MessageChannel(MessageListener *aListener)
     mRecvdErrors(0),
     mRemoteStackDepthGuess(false),
     mSawInterruptOutMsg(false),
+    mIsWaitingForIncoming(false),
     mAbortOnError(false),
     mBlockScripts(false),
     mFlags(REQUIRE_DEFAULT),
@@ -358,6 +359,9 @@ MessageChannel::Connected() const
 bool
 MessageChannel::CanSend() const
 {
+    if (!mMonitor) {
+        return false;
+    }
     MonitorAutoLock lock(*mMonitor);
     return Connected();
 }
@@ -664,7 +668,8 @@ MessageChannel::OnMessageReceivedFromLink(const Message& aMsg)
     }
 
     bool shouldWakeUp = AwaitingInterruptReply() ||
-                        (AwaitingSyncReply() && !ShouldDeferMessage(aMsg));
+                        (AwaitingSyncReply() && !ShouldDeferMessage(aMsg)) ||
+                        AwaitingIncomingMessage();
 
     // There are three cases we're concerned about, relating to the state of the
     // main thread:
@@ -985,6 +990,35 @@ MessageChannel::Call(Message* aMsg, Message* aReply)
     }
 
     return true;
+}
+
+bool
+MessageChannel::WaitForIncomingMessage()
+{
+#ifdef OS_WIN
+    SyncStackFrame frame(this, true);
+#endif
+
+    { // Scope for lock
+        MonitorAutoLock lock(*mMonitor);
+        AutoEnterWaitForIncoming waitingForIncoming(*this);
+        if (mChannelState != ChannelConnected) {
+            return false;
+        }
+        if (!HasPendingEvents()) {
+            return WaitForInterruptNotify();
+        }
+    }
+
+    return OnMaybeDequeueOne();
+}
+
+bool
+MessageChannel::HasPendingEvents()
+{
+    AssertWorkerThread();
+    mMonitor->AssertCurrentThreadOwns();
+    return Connected() && !mPending.empty();
 }
 
 bool
@@ -1546,7 +1580,7 @@ MessageChannel::OnChannelErrorFromLink()
     if (InterruptStackDepth() > 0)
         NotifyWorkerThread();
 
-    if (AwaitingSyncReply())
+    if (AwaitingSyncReply() || AwaitingIncomingMessage())
         NotifyWorkerThread();
 
     if (ChannelClosing != mChannelState) {
