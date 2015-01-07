@@ -251,9 +251,6 @@ pref("browser.search.param.maxSuggestions", "4");
 pref("browser.ssl_override_behavior", 2);
 pref("browser.xul.error_pages.expert_bad_cert", false);
 
-// disable logging for the search service by default
-pref("browser.search.log", false);
-
 // ordering of search engines in the engine list.
 pref("browser.search.order.1", "chrome://browser/locale/region.properties");
 pref("browser.search.order.2", "chrome://browser/locale/region.properties");
@@ -261,8 +258,6 @@ pref("browser.search.order.3", "chrome://browser/locale/region.properties");
 
 // disable updating
 pref("browser.search.update", false);
-pref("browser.search.update.log", false);
-pref("browser.search.updateinterval", 6);
 
 // disable search suggestions by default
 pref("browser.search.suggest.enabled", false);
@@ -275,10 +270,8 @@ pref("browser.search.jarURIs", "chrome://browser/locale/searchplugins/");
 // tell the search service that we don't really expose the "current engine"
 pref("browser.search.noCurrentEngine", true);
 
-#ifdef MOZ_OFFICIAL_BRANDING
-// {moz:official} expands to "official"
-pref("browser.search.official", true);
-#endif
+// disable the search service geoIP check
+pref("browser.search.geoip.url", "");
 
 // Control media casting & mirroring features
 pref("browser.casting.enabled", true);
@@ -670,6 +663,10 @@ pref("ui.scrolling.negate_wheel_scrollY", true);
 // auto-detect based on reported hardware values
 pref("ui.scrolling.gamepad_dead_zone", 115);
 
+// Prefs for fling acceleration
+pref("ui.scrolling.fling_accel_interval", 500);
+pref("ui.scrolling.fling_accel_base_multiplier", "1.0");
+pref("ui.scrolling.fling_accel_supplemental_multiplier", "1.0");
 
 // Enable accessibility mode if platform accessibility is enabled.
 pref("accessibility.accessfu.activate", 2);
@@ -850,3 +847,6 @@ pref("device.storage.enabled", true);
 
 // Enable meta-viewport support for font inflation code
 pref("dom.meta-viewport.enabled", true);
+
+// Enable the OpenH264 plugin support in the addon manager.
+pref("media.gmp-gmpopenh264.provider.enabled", true);
