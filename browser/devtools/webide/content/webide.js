@@ -28,6 +28,7 @@ const Telemetry = require("devtools/shared/telemetry");
 const {RuntimeScanners, WiFiScanner} = require("devtools/webide/runtimes");
 const {showDoorhanger} = require("devtools/shared/doorhanger");
 const {FileUtils} = Cu.import("resource://gre/modules/FileUtils.jsm");
+const Git = require("devtools/webide/git");
 
 const Strings = Services.strings.createBundle("chrome://browser/locale/devtools/webide.properties");
 
@@ -997,6 +998,16 @@ let UI = {
     } else {
       return Cmds.importHostedApp(project.app.manifestURL);
     }
+  },
+
+  cloneProject: function() {
+    let project = AppManager.selectedProject;
+    return UI.busyUntil(Task.spawn(function* () {
+      let directory = utils.getPackagedDirectory(window);
+      let metadata = AppManager.getProjectInstallMetaData(project);
+      yield Git.clone(directory, metadata.url, metadata.revision);
+      yield UI.importAndSelectApp(directory);
+    }));
   },
 };
 

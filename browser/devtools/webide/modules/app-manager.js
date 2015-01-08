@@ -157,6 +157,11 @@ let AppManager = exports.AppManager = {
     return app && app.running;
   },
 
+  getProjectInstallMetaData: function (project) {
+    let app = this._getProjectFront(project);
+    return app ? app.manifest.installMetaData : null;
+  },
+
   checkIfProjectIsRunning: function() {
     if (this.selectedProject) {
       if (this.isProjectRunning()) {
@@ -478,13 +483,20 @@ let AppManager = exports.AppManager = {
         return promise.reject("Don't know how to install project");
       }
 
+      // TODO: Somehow expose a way to set `receipts`
+      let receipts;
+
+      let installMetaData = yield ProjectBuilding.fetchInstallMetadata(project);
+
       let response;
       if (project.type == "packaged") {
         packageDir = packageDir || project.location;
         console.log("Installing app from " + packageDir);
 
         response = yield self._appsFront.installPackaged(packageDir,
-                                                         project.packagedAppOrigin);
+                                                         project.packagedAppOrigin,
+                                                         receipts,
+                                                         installMetaData);
 
         // If the packaged app specified a custom origin override,
         // we need to update the local project origin
@@ -503,7 +515,9 @@ let AppManager = exports.AppManager = {
         };
         response = yield self._appsFront.installHosted(appId,
                                             metadata,
-                                            project.manifest);
+                                            project.manifest,
+                                            receipts,
+                                            installMetaData);
       }
 
       // Addons don't have any document to load (yet?)

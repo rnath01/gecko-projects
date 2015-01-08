@@ -17,6 +17,7 @@ EXTRA_JS_MODULES.devtools.webide += [
     'modules/addons.js',
     'modules/app-manager.js',
     'modules/build.js',
+    'modules/git.js',
     'modules/remote-resources.js',
     'modules/runtimes.js',
     'modules/tab-store.js',

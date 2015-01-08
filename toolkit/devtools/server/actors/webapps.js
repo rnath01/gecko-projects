@@ -379,7 +379,8 @@ WebappsActor.prototype = {
   },
 
   installHostedApp: function wa_actorInstallHosted(aDir, aId, aReceipts,
-                                                   aManifest, aMetadata) {
+                                                   aManifest, aMetadata,
+                                                   aInstallMetadata) {
     debug("installHostedApp");
     let self = this;
     let deferred = promise.defer();
@@ -441,6 +442,7 @@ WebappsActor.prototype = {
                 manifestURL: manifestURL,
                 appStatus: appType,
                 receipts: aReceipts,
+                installMetaData: aInstallMetaData
               };
 
               return writeManifest(app);
@@ -461,7 +463,7 @@ WebappsActor.prototype = {
     return deferred.promise;
   },
 
-  installPackagedApp: function wa_actorInstallPackaged(aDir, aId, aReceipts) {
+  installPackagedApp: function wa_actorInstallPackaged(aDir, aId, aReceipts, aInstallMetadata) {
     debug("installPackagedApp");
     let self = this;
     let deferred = promise.defer();
@@ -582,6 +584,7 @@ WebappsActor.prototype = {
             appStatus: appType,
             receipts: aReceipts,
             kind: DOMApplicationRegistry.kPackaged,
+            installMetaData: aInstallMetadata
           }
 
           self._registerApp(deferred, app, id, aDir);
@@ -598,10 +601,20 @@ WebappsActor.prototype = {
   },
 
   /**
-    * @param appId   : The id of the app we want to install. We will look for
-    *                  the files for the app in $TMP/b2g/$appId :
-    *                  For packaged apps: application.zip
-    *                  For hosted apps:   metadata.json and manifest.webapp
+    * @param request:
+    *   Request object with the following attributes:
+    *   @attribute appId: (optional)
+    *     The id of the app we want to install. We will look for
+    *     the files for the app in $TMP/b2g/$appId :
+    *     For packaged apps: application.zip
+    *     For hosted apps:   metadata.json and manifest.webapp
+    *   @attribute manifest: (mandatory for hosted apps)
+    *     Object refering to the hosted app manifest
+    *   @attribute metadata: (mandatory for hosted apps)
+    *     Object with various metadata used to describe the hosted app:
+    *     { manifestURL, origin, installOrigin }
+    *   @attribute receipts: (optional)
+    *     Pre install receipts data to simulate in-app payment
     */
   install: function wa_actorInstall(aRequest) {
     debug("install");
@@ -652,8 +665,13 @@ WebappsActor.prototype = {
                     ? aRequest.receipts
                     : [];
 
+    let installMetaData = (aRequest.installMetaData &&
+                           typeof(aRequest.installMetaData) === "object")
+                          ? aRequest.installMetaData
+                          : undefined;
+
     if (testFile.exists()) {
-      return this.installPackagedApp(appDir, appId, receipts);
+      return this.installPackagedApp(appDir, appId, receipts, installMetaData);
     }
 
     let manifest, metadata;
@@ -680,7 +698,7 @@ WebappsActor.prototype = {
       }
     }
 
-    return this.installHostedApp(appDir, appId, receipts, manifest, metadata);
+    return this.installHostedApp(appDir, appId, receipts, manifest, metadata, installMetaData);
   },
 
   getAll: function wa_actorGetAll(aRequest) {

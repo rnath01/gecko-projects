@@ -47,6 +47,8 @@ function resetUI() {
   document.querySelector("#errorslist").innerHTML = "";
   document.querySelector("#warningslist").innerHTML = "";
   document.querySelector("#fetchButton").hidden = true;
+  document.querySelector("#cloneButton").hidden = true;
+  document.querySelector("#cloneInfo").textContent = "";
 }
 
 function updateUI() {
@@ -109,6 +111,17 @@ function updateUI() {
     fetchBtn.onclick = fetchProject;
   }
 
+  let metadata = AppManager.getProjectInstallMetaData(project);
+  if (metadata) {
+    document.querySelector("#cloneInfo").textContent = JSON.stringify(metadata);
+    if (project.type === "runtimeApp") {
+      let cloneBtn = document.querySelector("#cloneButton");
+      cloneBtn.hidden = false;
+      cloneBtn.onclick = cloneProject;
+    }
+  }
+
+
   let errorsNode = document.querySelector("#errorslist");
   let warningsNode = document.querySelector("#warningslist");
 
@@ -135,4 +148,8 @@ function removeProject() {
 
 function fetchProject() {
   window.parent.UI.fetchProject();
+}
+
+function cloneProject() {
+  window.parent.UI.cloneProject();
 }
