@@ -164,7 +164,10 @@ RootActor.prototype = {
     noPrettyPrinting: false,
     // Whether the page style actor implements the getUsedFontFaces method
     // that returns the font faces used on a node
-    getUsedFontFaces: true
+    getUsedFontFaces: true,
+    // Whether the webapps actor implements `fetch` request
+    // that allows retrieving app sources locally
+    fetchPackagedApp: true,
   },
 
   /**
