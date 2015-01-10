@@ -444,7 +444,7 @@ TryNewNurseryObject(JSContext *cx, size_t thingSize, size_t nDynamicSlots)
 static inline bool
 PossiblyFail()
 {
-    JS_OOM_POSSIBLY_FAIL();
+    JS_OOM_POSSIBLY_FAIL_BOOL();
     return true;
 }
 
@@ -473,7 +473,7 @@ CheckAllocatorState(ThreadSafeContext *cx, AllocKind kind)
 
     // For testing out of memory conditions
     if (!PossiblyFail()) {
-        js_ReportOutOfMemory(cx);
+        js_ReportOutOfMemory(cx->asJSContext());
         return false;
     }
 

@@ -3699,8 +3699,8 @@ private:
   }
 
   // No funny business allowed.
-  CachedStatement(const CachedStatement&) MOZ_DELETE;
-  CachedStatement& operator=(const CachedStatement&) MOZ_DELETE;
+  CachedStatement(const CachedStatement&) = delete;
+  CachedStatement& operator=(const CachedStatement&) = delete;
 };
 
 class NormalTransaction MOZ_FINAL
@@ -4898,7 +4898,7 @@ private:
 
   // Must call SendResponseInternal!
   bool
-  SendResponse(const CursorResponse& aResponse) MOZ_DELETE;
+  SendResponse(const CursorResponse& aResponse) = delete;
 
   // IPDL methods.
   virtual void
@@ -5210,7 +5210,7 @@ public:
   void
   NoteBackgroundThread(nsIEventTarget* aBackgroundThread);
 
-  NS_INLINE_DECL_REFCOUNTING(QuotaClient)
+  NS_INLINE_DECL_REFCOUNTING(QuotaClient, MOZ_OVERRIDE)
 
   virtual mozilla::dom::quota::Client::Type
   GetType() MOZ_OVERRIDE;
@@ -10851,6 +10851,14 @@ FactoryOp::CheckPermission(ContentParent* aContentParent,
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
+
+#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+  if (persistenceType == PERSISTENCE_TYPE_PERSISTENT &&
+      !QuotaManager::IsOriginWhitelistedForPersistentStorage(origin) &&
+      !isApp) {
+    return NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR;
+  }
+#endif
 
   PermissionRequestBase::PermissionValue permission;
 
