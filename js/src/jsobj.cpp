@@ -2382,8 +2382,8 @@ JSObject::swap(JSContext *cx, HandleObject a, HandleObject b)
 
     // Swapping the contents of two objects invalidates type sets which contain
     // either of the objects, so mark all such sets as unknown.
-    MarkTypeObjectUnknownProperties(cx, a->type(), !a->hasSingletonType());
-    MarkTypeObjectUnknownProperties(cx, b->type(), !b->hasSingletonType());
+    MarkTypeObjectUnknownProperties(cx, a->type());
+    MarkTypeObjectUnknownProperties(cx, b->type());
 
     /*
      * We need a write barrier here. If |a| was marked and |b| was not, then
@@ -2701,12 +2701,11 @@ js::SetClassAndProto(JSContext *cx, HandleObject obj,
      * Setting __proto__ on an object that has escaped and may be referenced by
      * other heap objects can only be done if the properties of both objects
      * are unknown. Type sets containing this object will contain the original
-     * type but not the new type of the object, so we need to go and scan the
-     * entire compartment for type sets which have these objects and mark them
-     * as containing generic objects.
+     * type but not the new type of the object, so we need to treat all such
+     * type sets as unknown.
      */
-    MarkTypeObjectUnknownProperties(cx, obj->type(), true);
-    MarkTypeObjectUnknownProperties(cx, type, true);
+    MarkTypeObjectUnknownProperties(cx, obj->type());
+    MarkTypeObjectUnknownProperties(cx, type);
 
     obj->setType(type);
 
@@ -3977,7 +3976,7 @@ js_DumpInterpreterFrame(JSContext *cx, InterpreterFrame *start)
         if (jsbytecode *pc = i.pc()) {
             fprintf(stderr, "  pc = %p\n", pc);
             fprintf(stderr, "  current op: %s\n", js_CodeName[*pc]);
-            MaybeDumpObject("staticScope", i.script()->getStaticScope(pc));
+            MaybeDumpObject("staticScope", i.script()->getStaticBlockScope(pc));
         }
         MaybeDumpValue("this", i.thisv(cx));
         if (!i.isJit()) {

@@ -361,7 +361,7 @@ js::StartOffThreadParseScript(JSContext *cx, const ReadOnlyCompileOptions &optio
 
     ScopedJSDeletePtr<ExclusiveContext> helpercx(
         cx->new_<ExclusiveContext>(cx->runtime(), (PerThreadData *) nullptr,
-                                   ThreadSafeContext::Context_Exclusive));
+                                   ExclusiveContext::Context_Exclusive));
     if (!helpercx)
         return false;
 
@@ -1190,7 +1190,7 @@ HelperThread::handleParseWorkload()
         SourceBufferHolder srcBuf(parseTask->chars, parseTask->length,
                                   SourceBufferHolder::NoOwnership);
         parseTask->script = frontend::CompileScript(parseTask->cx, &parseTask->alloc,
-                                                    NullPtr(), NullPtr(),
+                                                    NullPtr(), NullPtr(), NullPtr(),
                                                     parseTask->options,
                                                     srcBuf);
     }

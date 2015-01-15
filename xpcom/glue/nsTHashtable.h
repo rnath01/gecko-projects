@@ -10,6 +10,7 @@
 #include "nscore.h"
 #include "pldhash.h"
 #include "nsDebug.h"
+#include "mozilla/Assertions.h"
 #include "mozilla/MemoryChecking.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Move.h"
@@ -289,6 +290,16 @@ public:
     return SizeOfIncludingThis(BasicSizeOfEntryExcludingThisFun, aMallocSizeOf);
   }
 
+  /**
+   * Swap the elements in this hashtable with the elements in aOther.
+   */
+  void SwapElements(nsTHashtable<EntryType>& aOther)
+  {
+    MOZ_ASSERT_IF(this->mTable.ops && aOther.mTable.ops,
+                  this->mTable.ops == aOther.mTable.ops);
+    mozilla::Swap(this->mTable, aOther.mTable);
+  }
+
 #ifdef DEBUG
   /**
    * Mark the table as constant after initialization.
@@ -414,11 +425,10 @@ nsTHashtable<EntryType>::Init(uint32_t aInitLength)
     s_MatchEntry,
     EntryType::ALLOW_MEMMOVE ? ::PL_DHashMoveEntryStub : s_CopyEntry,
     s_ClearEntry,
-    ::PL_DHashFinalizeStub,
     s_InitEntry
   };
 
-  PL_DHashTableInit(&mTable, &sOps, nullptr, sizeof(EntryType), aInitLength);
+  PL_DHashTableInit(&mTable, &sOps, sizeof(EntryType), aInitLength);
 }
 
 // static

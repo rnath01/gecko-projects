@@ -167,6 +167,30 @@ JS_GetEmptyString(JSRuntime *rt)
     return rt->emptyString;
 }
 
+JS_PUBLIC_API(bool)
+JS_GetCompartmentStats(JSRuntime *rt, CompartmentStatsVector &stats)
+{
+    if (!stats.resizeUninitialized(rt->numCompartments))
+        return false;
+
+    size_t pos = 0;
+    for (CompartmentsIter c(rt, WithAtoms); !c.done(); c.next()) {
+        CompartmentTimeStats *stat = &stats[pos];
+        stat->time = c.get()->totalTime;
+        stat->compartment = c.get();
+        stat->addonId = c.get()->addonId;
+        if (rt->compartmentNameCallback) {
+            (*rt->compartmentNameCallback)(rt, stat->compartment,
+                                           stat->compartmentName,
+                                           MOZ_ARRAY_LENGTH(stat->compartmentName));
+        } else {
+            strcpy(stat->compartmentName, "<unknown>");
+        }
+        pos++;
+    }
+    return true;
+}
+
 namespace js {
 
 void
@@ -564,9 +588,6 @@ JS_Init(void)
     if (!jit::InitializeIon())
         return false;
 
-    if (!ForkJoinContext::initializeTls())
-        return false;
-
 #if EXPOSE_INTL_API
     UErrorCode err = U_ZERO_ERROR;
     u_init(&err);
@@ -597,6 +618,11 @@ JS_ShutDown(void)
 #endif
 
     DestroyHelperThreadsState();
+
+#ifdef JS_TRACE_LOGGING
+    DestroyTraceLoggerThreadState();
+    DestroyTraceLoggerGraphState();
+#endif
 
     PRMJ_NowShutdown();
 
@@ -3450,6 +3476,25 @@ CreateScopeObjectsForScopeChain(JSContext *cx, AutoObjectVector &scopeChain,
     return true;
 }
 
+static bool
+IsFunctionCloneable(HandleFunction fun, HandleObject dynamicScope)
+{
+    if (!fun->isInterpreted())
+        return true;
+
+    // If a function was compiled to be lexically nested inside some other
+    // script, we cannot clone it without breaking the compiler's assumptions.
+    JSObject *scope = fun->nonLazyScript()->enclosingStaticScope();
+    if (scope && (!scope->is<StaticEvalObject>() ||
+                  scope->as<StaticEvalObject>().isDirect() ||
+                  scope->as<StaticEvalObject>().isStrict()))
+    {
+        return false;
+    }
+
+    return !fun->nonLazyScript()->compileAndGo() || dynamicScope->is<GlobalObject>();
+}
+
 static JSObject *
 CloneFunctionObject(JSContext *cx, HandleObject funobj, HandleObject dynamicScope)
 {
@@ -3472,13 +3517,8 @@ CloneFunctionObject(JSContext *cx, HandleObject funobj, HandleObject dynamicScop
         if (!fun->getOrCreateScript(cx))
             return nullptr;
     }
-    /*
-     * If a function was compiled to be lexically nested inside some other
-     * script, we cannot clone it without breaking the compiler's assumptions.
-     */
-    if (fun->isInterpreted() && (fun->nonLazyScript()->enclosingStaticScope() ||
-        (fun->nonLazyScript()->compileAndGo() && !dynamicScope->is<GlobalObject>())))
-    {
+
+    if (!IsFunctionCloneable(fun, dynamicScope)) {
         JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_BAD_CLONE_FUNOBJ_SCOPE);
         return nullptr;
     }
@@ -3993,7 +4033,8 @@ JS::Compile(JSContext *cx, HandleObject obj, const ReadOnlyCompileOptions &optio
     assertSameCompartment(cx, obj);
     AutoLastFrameCheck lfc(cx);
 
-    script.set(frontend::CompileScript(cx, &cx->tempLifoAlloc(), obj, NullPtr(), options, srcBuf));
+    script.set(frontend::CompileScript(cx, &cx->tempLifoAlloc(), obj, NullPtr(), NullPtr(),
+                                       options, srcBuf));
     return !!script;
 }
 
@@ -4393,7 +4434,7 @@ Evaluate(JSContext *cx, HandleObject obj, const ReadOnlyCompileOptions &optionsA
     options.setCompileAndGo(obj->is<GlobalObject>());
     SourceCompressionTask sct(cx);
     RootedScript script(cx, frontend::CompileScript(cx, &cx->tempLifoAlloc(),
-                                                    obj, NullPtr(), options,
+                                                    obj, NullPtr(), NullPtr(), options,
                                                     srcBuf, nullptr, 0, &sct));
     if (!script)
         return false;

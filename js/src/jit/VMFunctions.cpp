@@ -785,8 +785,8 @@ bool
 DebugEpilogue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool ok)
 {
     // Unwind scope chain to stack depth 0.
-    ScopeIter si(frame, pc, cx);
-    UnwindAllScopes(cx, si);
+    ScopeIter si(cx, frame, pc);
+    UnwindAllScopesInFrame(cx, si);
     jsbytecode *unwindPc = frame->script()->main();
     frame->setOverridePc(unwindPc);
 
@@ -928,7 +928,7 @@ GeneratorThrowOrClose(JSContext *cx, BaselineFrame *frame, Handle<GeneratorObjec
     frame->setOverridePc(script->offsetToPC(offset));
 
     MOZ_ALWAYS_TRUE(DebugAfterYield(cx, frame));
-    MOZ_ALWAYS_FALSE(js::GeneratorThrowOrClose(cx, genObj, arg, resumeKind));
+    MOZ_ALWAYS_FALSE(js::GeneratorThrowOrClose(cx, frame, genObj, arg, resumeKind));
     return false;
 }
 
