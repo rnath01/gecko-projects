@@ -43,6 +43,7 @@
 #include "ipc/CompositorBench.h"        // for CompositorBench
 #include "ipc/ShadowLayerUtils.h"
 #include "mozilla/mozalloc.h"           // for operator new, etc
+#include "nsAppRunner.h"
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsDebug.h"                    // for NS_WARNING, NS_RUNTIMEABORT, etc
@@ -166,10 +167,7 @@ LayerManagerComposite::BeginTransaction()
   
   mIsCompositorReady = true;
 
-  if (Compositor::GetBackend() == LayersBackend::LAYERS_OPENGL ||
-      Compositor::GetBackend() == LayersBackend::LAYERS_BASIC) {
-    mClonedLayerTreeProperties = LayerProperties::CloneFrom(GetRoot());
-  }
+  mClonedLayerTreeProperties = LayerProperties::CloneFrom(GetRoot());
 }
 
 void
@@ -335,15 +333,19 @@ LayerManagerComposite::CreateOptimalMaskDrawTarget(const IntSize &aSize)
 already_AddRefed<PaintedLayer>
 LayerManagerComposite::CreatePaintedLayer()
 {
-  NS_RUNTIMEABORT("Should only be called on the drawing side");
-  return nullptr;
+  MOZ_ASSERT(gIsGtest, "Unless you're testing the compositor using GTest,"
+                       "this should only be called on the drawing side");
+  nsRefPtr<PaintedLayer> layer = new PaintedLayerComposite(this);
+  return layer.forget();
 }
 
 already_AddRefed<ContainerLayer>
 LayerManagerComposite::CreateContainerLayer()
 {
-  NS_RUNTIMEABORT("Should only be called on the drawing side");
-  return nullptr;
+  MOZ_ASSERT(gIsGtest, "Unless you're testing the compositor using GTest,"
+                       "this should only be called on the drawing side");
+  nsRefPtr<ContainerLayer> layer = new ContainerLayerComposite(this);
+  return layer.forget();
 }
 
 already_AddRefed<ImageLayer>
@@ -356,8 +358,10 @@ LayerManagerComposite::CreateImageLayer()
 already_AddRefed<ColorLayer>
 LayerManagerComposite::CreateColorLayer()
 {
-  NS_RUNTIMEABORT("Should only be called on the drawing side");
-  return nullptr;
+  MOZ_ASSERT(gIsGtest, "Unless you're testing the compositor using GTest,"
+                       "this should only be called on the drawing side");
+  nsRefPtr<ColorLayer> layer = new ColorLayerComposite(this);
+  return layer.forget();
 }
 
 already_AddRefed<CanvasLayer>
@@ -632,6 +636,10 @@ LayerManagerComposite::Render()
   // Dump to console
   if (gfxPrefs::LayersDump()) {
     this->Dump();
+  } else if (profiler_feature_active("layersdump")) {
+    std::stringstream ss;
+    Dump(ss);
+    profiler_log(ss.str().c_str());
   }
 
   // Dump to LayerScope Viewer
@@ -911,10 +919,10 @@ LayerManagerComposite::ComputeRenderIntegrity()
 
     // Clip the screen rect to the document bounds
     Rect documentBounds =
-      transform.TransformBounds(Rect(metrics.mScrollableRect.x - metrics.GetScrollOffset().x,
-                                     metrics.mScrollableRect.y - metrics.GetScrollOffset().y,
-                                     metrics.mScrollableRect.width,
-                                     metrics.mScrollableRect.height));
+      transform.TransformBounds(Rect(metrics.GetScrollableRect().x - metrics.GetScrollOffset().x,
+                                     metrics.GetScrollableRect().y - metrics.GetScrollOffset().y,
+                                     metrics.GetScrollableRect().width,
+                                     metrics.GetScrollableRect().height));
     documentBounds.RoundOut();
     screenRect = screenRect.Intersect(nsIntRect(documentBounds.x, documentBounds.y,
                                                 documentBounds.width, documentBounds.height));
@@ -927,20 +935,20 @@ LayerManagerComposite::ComputeRenderIntegrity()
 
     // Work out how much of the critical display-port covers the screen
     bool hasLowPrecision = false;
-    if (!metrics.mCriticalDisplayPort.IsEmpty()) {
+    if (!metrics.GetCriticalDisplayPort().IsEmpty()) {
       hasLowPrecision = true;
       highPrecisionMultiplier =
-        GetDisplayportCoverage(metrics.mCriticalDisplayPort, transform, screenRect);
+        GetDisplayportCoverage(metrics.GetCriticalDisplayPort(), transform, screenRect);
     }
 
     // Work out how much of the display-port covers the screen
-    if (!metrics.mDisplayPort.IsEmpty()) {
+    if (!metrics.GetDisplayPort().IsEmpty()) {
       if (hasLowPrecision) {
         lowPrecisionMultiplier =
-          GetDisplayportCoverage(metrics.mDisplayPort, transform, screenRect);
+          GetDisplayportCoverage(metrics.GetDisplayPort(), transform, screenRect);
       } else {
         lowPrecisionMultiplier = highPrecisionMultiplier =
-          GetDisplayportCoverage(metrics.mDisplayPort, transform, screenRect);
+          GetDisplayportCoverage(metrics.GetDisplayPort(), transform, screenRect);
       }
     }
   }

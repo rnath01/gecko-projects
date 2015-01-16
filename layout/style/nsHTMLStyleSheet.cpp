@@ -55,8 +55,11 @@ nsHTMLStyleSheet::HTMLColorRule::MapRuleInfoInto(nsRuleData* aRuleData)
 /* virtual */ void
 nsHTMLStyleSheet::HTMLColorRule::List(FILE* out, int32_t aIndent) const
 {
-  for (int32_t index = aIndent; --index >= 0; ) fputs("  ", out);
-  fputs("[html color rule] {}\n", out);
+  nsAutoCString indentStr;
+  for (int32_t index = aIndent; --index >= 0; ) {
+    indentStr.AppendLiteral("  ");
+  }
+  fprintf_stderr(out, "%s[html color rule] {}\n", indentStr.get());
 }
 #endif
 
@@ -67,8 +70,11 @@ NS_IMPL_ISUPPORTS(nsHTMLStyleSheet::GenericTableRule, nsIStyleRule)
 /* virtual */ void
 nsHTMLStyleSheet::GenericTableRule::List(FILE* out, int32_t aIndent) const
 {
-  for (int32_t index = aIndent; --index >= 0; ) fputs("  ", out);
-  fputs("[generic table rule] {}\n", out);
+  nsAutoCString indentStr;
+  for (int32_t index = aIndent; --index >= 0; ) {
+    indentStr.AppendLiteral("  ");
+  }
+  fprintf_stderr(out, "%s[generic table rule] {}\n", indentStr.get());
 }
 #endif
 
@@ -115,10 +121,14 @@ nsHTMLStyleSheet::LangRule::MapRuleInfoInto(nsRuleData* aRuleData)
 /* virtual */ void
 nsHTMLStyleSheet::LangRule::List(FILE* out, int32_t aIndent) const
 {
-  for (int32_t index = aIndent; --index >= 0; ) fputs("  ", out);
-  fputs("[lang rule] { language: \"", out);
-  fputs(NS_ConvertUTF16toUTF8(mLang).get(), out);
-  fputs("\" }\n", out);
+  nsAutoCString str;
+  for (int32_t index = aIndent; --index >= 0; ) {
+    str.AppendLiteral("  ");
+  }
+  str.AppendLiteral("[lang rule] { language: \"");
+  AppendUTF16toUTF8(mLang, str);
+  str.AppendLiteral("\" }\n");
+  fprintf_stderr(out, "%s", str.get());
 }
 #endif
 
@@ -159,13 +169,10 @@ MappedAttrTable_MatchEntry(PLDHashTable *table, const PLDHashEntryHdr *hdr,
 }
 
 static const PLDHashTableOps MappedAttrTable_Ops = {
-  PL_DHashAllocTable,
-  PL_DHashFreeTable,
   MappedAttrTable_HashKey,
   MappedAttrTable_MatchEntry,
   PL_DHashMoveEntryStub,
   MappedAttrTable_ClearEntry,
-  PL_DHashFinalizeStub,
   nullptr
 };
 
@@ -216,13 +223,10 @@ LangRuleTable_InitEntry(PLDHashTable *table, PLDHashEntryHdr *hdr,
 }
 
 static const PLDHashTableOps LangRuleTable_Ops = {
-  PL_DHashAllocTable,
-  PL_DHashFreeTable,
   LangRuleTable_HashKey,
   LangRuleTable_MatchEntry,
   PL_DHashMoveEntryStub,
   LangRuleTable_ClearEntry,
-  PL_DHashFinalizeStub,
   LangRuleTable_InitEntry
 };
 
@@ -479,10 +483,10 @@ nsHTMLStyleSheet::UniqueMappedAttributes(nsMappedAttributes* aMapped)
 {
   if (!mMappedAttrTable.ops) {
     PL_DHashTableInit(&mMappedAttrTable, &MappedAttrTable_Ops,
-                      nullptr, sizeof(MappedAttrTableEntry));
+                      sizeof(MappedAttrTableEntry));
   }
   MappedAttrTableEntry *entry = static_cast<MappedAttrTableEntry*>
-                                           (PL_DHashTableOperate(&mMappedAttrTable, aMapped, PL_DHASH_ADD));
+                                           (PL_DHashTableAdd(&mMappedAttrTable, aMapped));
   if (!entry)
     return nullptr;
   if (!entry->mAttributes) {
@@ -503,7 +507,7 @@ nsHTMLStyleSheet::DropMappedAttributes(nsMappedAttributes* aMapped)
   uint32_t entryCount = mMappedAttrTable.EntryCount() - 1;
 #endif
 
-  PL_DHashTableOperate(&mMappedAttrTable, aMapped, PL_DHASH_REMOVE);
+  PL_DHashTableRemove(&mMappedAttrTable, aMapped);
 
   NS_ASSERTION(entryCount == mMappedAttrTable.EntryCount(), "not removed");
 }
@@ -513,10 +517,10 @@ nsHTMLStyleSheet::LangRuleFor(const nsString& aLanguage)
 {
   if (!mLangRuleTable.ops) {
     PL_DHashTableInit(&mLangRuleTable, &LangRuleTable_Ops,
-                      nullptr, sizeof(LangRuleTableEntry));
+                      sizeof(LangRuleTableEntry));
   }
   LangRuleTableEntry *entry = static_cast<LangRuleTableEntry*>
-    (PL_DHashTableOperate(&mLangRuleTable, &aLanguage, PL_DHASH_ADD));
+    (PL_DHashTableAdd(&mLangRuleTable, &aLanguage));
   if (!entry) {
     NS_ASSERTION(false, "out of memory");
     return nullptr;

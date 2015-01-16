@@ -13,12 +13,6 @@ namespace image {
 
 NS_IMPL_ISUPPORTS_INHERITED0(FrozenImage, ImageWrapper)
 
-nsIntRect
-FrozenImage::FrameRect(uint32_t /* aWhichFrame - ignored */)
-{
-  return InnerImage()->FrameRect(FRAME_FIRST);
-}
-
 void
 FrozenImage::IncrementAnimationConsumers()
 {
@@ -48,12 +42,6 @@ FrozenImage::GetFrame(uint32_t aWhichFrame,
                       uint32_t aFlags)
 {
   return InnerImage()->GetFrame(FRAME_FIRST, aFlags);
-}
-
-NS_IMETHODIMP_(bool)
-FrozenImage::FrameIsOpaque(uint32_t aWhichFrame)
-{
-  return InnerImage()->FrameIsOpaque(FRAME_FIRST);
 }
 
 NS_IMETHODIMP

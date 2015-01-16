@@ -92,13 +92,10 @@ CompareCacheClearEntry(PLDHashTable *table, PLDHashEntryHdr *hdr)
 }
 
 static const PLDHashTableOps gMapOps = {
-  PL_DHashAllocTable,
-  PL_DHashFreeTable,
   PL_DHashVoidPtrKeyStub,
   CompareCacheMatchEntry,
   PL_DHashMoveEntryStub,
   CompareCacheClearEntry,
-  PL_DHashFinalizeStub,
   CompareCacheInitEntry
 };
 
@@ -186,7 +183,7 @@ void nsCertTree::ClearCompareHash()
 nsresult nsCertTree::InitCompareHash()
 {
   ClearCompareHash();
-  if (!PL_DHashTableInit(&mCompareCache, &gMapOps, nullptr,
+  if (!PL_DHashTableInit(&mCompareCache, &gMapOps,
                          sizeof(CompareCacheHashEntryPtr), fallible_t(), 64)) {
     mCompareCache.ops = nullptr;
     return NS_ERROR_OUT_OF_MEMORY;
@@ -212,13 +209,13 @@ nsCertTree::getCacheEntry(void *cache, void *aCert)
   PLDHashTable &aCompareCache = *reinterpret_cast<PLDHashTable*>(cache);
   CompareCacheHashEntryPtr *entryPtr = 
     static_cast<CompareCacheHashEntryPtr*>
-               (PL_DHashTableOperate(&aCompareCache, aCert, PL_DHASH_ADD));
+               (PL_DHashTableAdd(&aCompareCache, aCert));
   return entryPtr ? entryPtr->entry : nullptr;
 }
 
 void nsCertTree::RemoveCacheEntry(void *key)
 {
-  PL_DHashTableOperate(&mCompareCache, key, PL_DHASH_REMOVE);
+  PL_DHashTableRemove(&mCompareCache, key);
 }
 
 // CountOrganizations

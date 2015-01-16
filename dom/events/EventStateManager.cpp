@@ -742,7 +742,9 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
     break;
   case NS_QUERY_EDITOR_RECT:
     {
-      // XXX remote event
+      if (RemoteQueryContentEvent(aEvent)) {
+        break;
+      }
       ContentEventHandler handler(mPresContext);
       handler.OnQueryEditorRect(aEvent->AsQueryContentEvent());
     }
@@ -819,6 +821,8 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
     // through to compositionend handling
   case NS_COMPOSITION_END:
   case NS_COMPOSITION_CHANGE:
+  case NS_COMPOSITION_COMMIT_AS_IS:
+  case NS_COMPOSITION_COMMIT:
     {
       WidgetCompositionEvent* compositionEvent = aEvent->AsCompositionEvent();
       if (IsTargetCrossProcess(compositionEvent)) {
@@ -5484,10 +5488,18 @@ int32_t EventStateManager::Prefs::sContentAccessModifierMask = 0;
 void
 EventStateManager::Prefs::Init()
 {
-  DebugOnly<nsresult> rv =
-    Preferences::AddBoolVarCache(&sKeyCausesActivation,
-                                 "accessibility.accesskeycausesactivation",
-                                 sKeyCausesActivation);
+  DebugOnly<nsresult> rv = Preferences::RegisterCallback(OnChange, "dom.popup_allowed_events");
+  MOZ_ASSERT(NS_SUCCEEDED(rv),
+             "Failed to observe \"dom.popup_allowed_events\"");
+
+  static bool sPrefsAlreadyCached = false;
+  if (sPrefsAlreadyCached) {
+    return;
+  }
+
+  rv = Preferences::AddBoolVarCache(&sKeyCausesActivation,
+                                    "accessibility.accesskeycausesactivation",
+                                    sKeyCausesActivation);
   MOZ_ASSERT(NS_SUCCEEDED(rv),
              "Failed to observe \"accessibility.accesskeycausesactivation\"");
   rv = Preferences::AddBoolVarCache(&sClickHoldContextMenu,
@@ -5510,10 +5522,7 @@ EventStateManager::Prefs::Init()
                                    sContentAccessModifierMask);
   MOZ_ASSERT(NS_SUCCEEDED(rv),
              "Failed to observe \"ui.key.contentAccess\"");
-
-  rv = Preferences::RegisterCallback(OnChange, "dom.popup_allowed_events");
-  MOZ_ASSERT(NS_SUCCEEDED(rv),
-             "Failed to observe \"dom.popup_allowed_events\"");
+  sPrefsAlreadyCached = true;
 }
 
 // static

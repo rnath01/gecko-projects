@@ -54,15 +54,15 @@ GetPNGDecoderAccountingLog()
 #define BYTES_NEEDED_FOR_DIMENSIONS (HEIGHT_OFFSET + 4)
 
 nsPNGDecoder::AnimFrameInfo::AnimFrameInfo()
- : mDispose(FrameBlender::kDisposeKeep)
- , mBlend(FrameBlender::kBlendOver)
+ : mDispose(DisposalMethod::KEEP)
+ , mBlend(BlendMethod::OVER)
  , mTimeout(0)
 { }
 
 #ifdef PNG_APNG_SUPPORTED
 nsPNGDecoder::AnimFrameInfo::AnimFrameInfo(png_structp aPNG, png_infop aInfo)
- : mDispose(FrameBlender::kDisposeKeep)
- , mBlend(FrameBlender::kBlendOver)
+ : mDispose(DisposalMethod::KEEP)
+ , mBlend(BlendMethod::OVER)
  , mTimeout(0)
 {
   png_uint_16 delay_num, delay_den;
@@ -88,17 +88,17 @@ nsPNGDecoder::AnimFrameInfo::AnimFrameInfo(png_structp aPNG, png_infop aInfo)
   }
 
   if (dispose_op == PNG_DISPOSE_OP_PREVIOUS) {
-    mDispose = FrameBlender::kDisposeRestorePrevious;
+    mDispose = DisposalMethod::RESTORE_PREVIOUS;
   } else if (dispose_op == PNG_DISPOSE_OP_BACKGROUND) {
-    mDispose = FrameBlender::kDisposeClear;
+    mDispose = DisposalMethod::CLEAR;
   } else {
-    mDispose = FrameBlender::kDisposeKeep;
+    mDispose = DisposalMethod::KEEP;
   }
 
   if (blend_op == PNG_BLEND_OP_SOURCE) {
-    mBlend = FrameBlender::kBlendSource;
+    mBlend = BlendMethod::SOURCE;
   } else {
-    mBlend = FrameBlender::kBlendOver;
+    mBlend = BlendMethod::OVER;
   }
 }
 #endif
@@ -107,7 +107,7 @@ nsPNGDecoder::AnimFrameInfo::AnimFrameInfo(png_structp aPNG, png_infop aInfo)
 const uint8_t
 nsPNGDecoder::pngSignatureBytes[] = { 137, 80, 78, 71, 13, 10, 26, 10 };
 
-nsPNGDecoder::nsPNGDecoder(RasterImage& aImage)
+nsPNGDecoder::nsPNGDecoder(RasterImage* aImage)
  : Decoder(aImage),
    mPNG(nullptr), mInfo(nullptr),
    mCMSLine(nullptr), interlacebuf(nullptr),
@@ -155,13 +155,16 @@ void nsPNGDecoder::CreateFrame(png_uint_32 x_offset, png_uint_32 y_offset,
   // infrastructure. Just use it as long as it matches up.
   nsIntRect neededRect(x_offset, y_offset, width, height);
   nsRefPtr<imgFrame> currentFrame = GetCurrentFrame();
-  if (mNumFrames != 0 || !currentFrame->GetRect().IsEqualEdges(neededRect)) {
-    NeedNewFrame(mNumFrames, x_offset, y_offset, width, height, format);
-  } else if (mNumFrames == 0) {
-    // Our preallocated frame matches up, with the possible exception of alpha.
-    if (format == gfx::SurfaceFormat::B8G8R8X8) {
-      currentFrame->SetHasNoAlpha();
+  if (!currentFrame->GetRect().IsEqualEdges(neededRect)) {
+    if (mNumFrames == 0) {
+      // We need padding on the first frame, which means that we don't draw into
+      // part of the image at all. Report that as transparency.
+      PostHasTransparency();
     }
+
+    NeedNewFrame(mNumFrames, x_offset, y_offset, width, height, format);
+  } else if (mNumFrames != 0) {
+    NeedNewFrame(mNumFrames, x_offset, y_offset, width, height, format);
   }
 
   mFrameRect = neededRect;
@@ -176,6 +179,12 @@ void nsPNGDecoder::CreateFrame(png_uint_32 x_offset, png_uint_32 y_offset,
 #ifdef PNG_APNG_SUPPORTED
   if (png_get_valid(mPNG, mInfo, PNG_INFO_acTL)) {
     mAnimInfo = AnimFrameInfo(mPNG, mInfo);
+
+    if (mAnimInfo.mDispose == DisposalMethod::CLEAR) {
+      // We may have to display the background under this image during
+      // animation playback, so we regard it as transparent.
+      PostHasTransparency();
+    }
   }
 #endif
 }
@@ -190,11 +199,9 @@ nsPNGDecoder::EndImageFrame()
 
   mNumFrames++;
 
-  FrameBlender::FrameAlpha alpha;
-  if (mFrameHasNoAlpha) {
-    alpha = FrameBlender::kFrameOpaque;
-  } else {
-    alpha = FrameBlender::kFrameHasAlpha;
+  Opacity opacity = Opacity::SOME_TRANSPARENCY;
+  if (format == gfx::SurfaceFormat::B8G8R8X8 || mFrameHasNoAlpha) {
+    opacity = Opacity::OPAQUE;
   }
 
 #ifdef PNG_APNG_SUPPORTED
@@ -206,7 +213,7 @@ nsPNGDecoder::EndImageFrame()
   }
 #endif
 
-  PostFrameStop(alpha, mAnimInfo.mDispose, mAnimInfo.mTimeout,
+  PostFrameStop(opacity, mAnimInfo.mDispose, mAnimInfo.mTimeout,
                 mAnimInfo.mBlend);
 }
 
@@ -306,8 +313,7 @@ nsPNGDecoder::InitInternal()
 }
 
 void
-nsPNGDecoder::WriteInternal(const char* aBuffer, uint32_t aCount,
-                            DecodeStrategy)
+nsPNGDecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
 {
   NS_ABORT_IF_FALSE(!HasError(), "Shouldn't call WriteInternal after error!");
 

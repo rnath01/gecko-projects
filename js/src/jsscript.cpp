@@ -63,19 +63,14 @@ using mozilla::RotateLeft;
 
 typedef Rooted<GlobalObject *> RootedGlobalObject;
 
-/* static */ uint32_t
-Bindings::argumentsVarIndex(ExclusiveContext *cx, InternalBindingsHandle bindings,
-                            uint32_t *unaliasedSlot)
+/* static */ BindingIter
+Bindings::argumentsBinding(ExclusiveContext *cx, InternalBindingsHandle bindings)
 {
     HandlePropertyName arguments = cx->names().arguments;
     BindingIter bi(bindings);
     while (bi->name() != arguments)
         bi++;
-
-    if (unaliasedSlot)
-        *unaliasedSlot = bi->aliased() ? UINT32_MAX : bi.frameIndex();
-
-    return bi.localIndex();
+    return bi;
 }
 
 bool
@@ -332,17 +327,6 @@ Bindings::trace(JSTracer *trc)
         PropertyName *name = b->name();
         MarkStringUnbarriered(trc, &name, "bindingArray");
     }
-}
-
-bool
-js::FillBindingVector(HandleScript fromScript, BindingVector *vec)
-{
-    for (BindingIter bi(fromScript); bi; bi++) {
-        if (!vec->append(*bi))
-            return false;
-    }
-
-    return true;
 }
 
 template<XDRMode mode>
@@ -932,7 +916,7 @@ js::XDRScript(XDRState<mode> *xdr, HandleObject enclosingScope, HandleScript enc
                 classk = CK_WithObject;
             else if (obj->is<JSFunction>())
                 classk = CK_JSFunction;
-            else if (obj->is<JSObject>() || obj->is<ArrayObject>())
+            else if (obj->is<PlainObject>() || obj->is<ArrayObject>())
                 classk = CK_JSObject;
             else
                 MOZ_CRASH("Cannot encode this class of object.");
@@ -997,10 +981,11 @@ js::XDRScript(XDRState<mode> *xdr, HandleObject enclosingScope, HandleScript enc
                 }
 
                 StaticScopeIter<NoGC> ssi(funEnclosingScope);
-                if (ssi.done() || ssi.type() == StaticScopeIter<NoGC>::FUNCTION) {
+
+                if (ssi.done() || ssi.type() == StaticScopeIter<NoGC>::Function) {
                     MOZ_ASSERT(ssi.done() == !fun);
                     funEnclosingScopeIndex = UINT32_MAX;
-                } else if (ssi.type() == StaticScopeIter<NoGC>::BLOCK) {
+                } else if (ssi.type() == StaticScopeIter<NoGC>::Block) {
                     funEnclosingScopeIndex = FindScopeObjectIndex(script, ssi.block());
                     MOZ_ASSERT(funEnclosingScopeIndex < i);
                 } else {
@@ -1359,17 +1344,17 @@ const Class ScriptSourceObject::class_ = {
     "ScriptSource",
     JSCLASS_HAS_RESERVED_SLOTS(RESERVED_SLOTS) |
     JSCLASS_IMPLEMENTS_BARRIERS | JSCLASS_IS_ANONYMOUS,
-    JS_PropertyStub,        /* addProperty */
-    JS_DeletePropertyStub,  /* delProperty */
-    JS_PropertyStub,        /* getProperty */
-    JS_StrictPropertyStub,  /* setProperty */
-    JS_EnumerateStub,
-    JS_ResolveStub,
-    JS_ConvertStub,
+    nullptr, /* addProperty */
+    nullptr, /* delProperty */
+    nullptr, /* getProperty */
+    nullptr, /* setProperty */
+    nullptr, /* enumerate */
+    nullptr, /* resolve */
+    nullptr, /* convert */
     finalize,
-    nullptr,                /* call        */
-    nullptr,                /* hasInstance */
-    nullptr,                /* construct   */
+    nullptr, /* call */
+    nullptr, /* hasInstance */
+    nullptr, /* construct */
     trace
 };
 
@@ -2103,17 +2088,6 @@ bool
 ScriptSource::setSourceMapURL(ExclusiveContext *cx, const char16_t *sourceMapURL)
 {
     MOZ_ASSERT(sourceMapURL);
-    if (hasSourceMapURL()) {
-        // Warn about the replacement, but use the new one.
-        if (cx->isJSContext()) {
-            JS_ReportErrorFlagsAndNumber(cx->asJSContext(), JSREPORT_WARNING,
-                                         js_GetErrorMessage, nullptr,
-                                         JSMSG_ALREADY_HAS_PRAGMA, filename_.get(),
-                                         "//# sourceMappingURL");
-        }
-
-        sourceMapURL_ = nullptr;
-    }
 
     size_t len = js_strlen(sourceMapURL) + 1;
     if (len == 1)
@@ -2205,7 +2179,6 @@ SaveSharedScriptData(ExclusiveContext *cx, Handle<JSScript *> script, SharedScri
         }
     }
 
-#ifdef JSGC_INCREMENTAL
     /*
      * During the IGC we need to ensure that bytecode is marked whenever it is
      * accessed even if the bytecode was already in the table: at this point
@@ -2217,7 +2190,6 @@ SaveSharedScriptData(ExclusiveContext *cx, Handle<JSScript *> script, SharedScri
         if (JS::IsIncrementalGCInProgress(rt) && rt->gc.isFullGc())
             ssd->marked = true;
     }
-#endif
 
     script->setCode(ssd->data);
     script->atoms = ssd->atoms();
@@ -2734,7 +2706,7 @@ JSScript::finalize(FreeOp *fop)
     if (types_)
         types_->destroy();
 
-    jit::DestroyIonScripts(fop, this);
+    jit::DestroyJitScripts(fop, this);
 
     destroyScriptCounts(fop);
     destroyDebugScript(fop);
@@ -2933,9 +2905,15 @@ js::DescribeScriptedCallerForCompilation(JSContext *cx, MutableHandleScript mayb
     if (opt == CALLED_FROM_JSOP_EVAL) {
         jsbytecode *pc = nullptr;
         maybeScript.set(cx->currentScript(&pc));
-        MOZ_ASSERT(JSOp(*pc) == JSOP_EVAL || JSOp(*pc) == JSOP_SPREADEVAL);
-        MOZ_ASSERT(*(pc + (JSOp(*pc) == JSOP_EVAL ? JSOP_EVAL_LENGTH
-                                                  : JSOP_SPREADEVAL_LENGTH)) == JSOP_LINENO);
+        static_assert(JSOP_SPREADEVAL_LENGTH == JSOP_STRICTSPREADEVAL_LENGTH,
+                    "next op after a spread must be at consistent offset");
+        static_assert(JSOP_EVAL_LENGTH == JSOP_STRICTEVAL_LENGTH,
+                    "next op after a direct eval must be at consistent offset");
+        MOZ_ASSERT(JSOp(*pc) == JSOP_EVAL || JSOp(*pc) == JSOP_STRICTEVAL ||
+                   JSOp(*pc) == JSOP_SPREADEVAL || JSOp(*pc) == JSOP_STRICTSPREADEVAL);
+        mozilla::DebugOnly<bool> isSpread = JSOp(*pc) == JSOP_SPREADEVAL ||
+                                            JSOp(*pc) == JSOP_STRICTSPREADEVAL;
+        MOZ_ASSERT(*(pc + (isSpread ? JSOP_SPREADEVAL_LENGTH : JSOP_EVAL_LENGTH)) == JSOP_LINENO);
         *file = maybeScript->filename();
         *linenop = GET_UINT16(pc + (JSOp(*pc) == JSOP_EVAL ? JSOP_EVAL_LENGTH
                                                            : JSOP_SPREADEVAL_LENGTH));
@@ -3040,9 +3018,9 @@ js::CloneScript(JSContext *cx, HandleObject enclosingScope, HandleFunction fun, 
                     RootedObject staticScope(cx, innerFun->nonLazyScript()->enclosingStaticScope());
                     StaticScopeIter<CanGC> ssi(cx, staticScope);
                     RootedObject enclosingScope(cx);
-                    if (ssi.done() || ssi.type() == StaticScopeIter<CanGC>::FUNCTION)
+                    if (ssi.done() || ssi.type() == StaticScopeIter<CanGC>::Function)
                         enclosingScope = fun;
-                    else if (ssi.type() == StaticScopeIter<CanGC>::BLOCK)
+                    else if (ssi.type() == StaticScopeIter<CanGC>::Block)
                         enclosingScope = objects[FindScopeObjectIndex(src, ssi.block())];
                     else
                         enclosingScope = objects[FindScopeObjectIndex(src, ssi.staticWith())];
@@ -3190,10 +3168,18 @@ js::CloneFunctionScript(JSContext *cx, HandleFunction original, HandleFunction c
     RootedScript script(cx, clone->nonLazyScript());
     MOZ_ASSERT(script);
     MOZ_ASSERT(script->compartment() == original->compartment());
-    MOZ_ASSERT_IF(script->compartment() != cx->compartment(),
-                  !script->enclosingStaticScope());
 
+    // The only scripts with enclosing static scopes that may be cloned across
+    // compartments are non-strict, indirect eval scripts, as their dynamic
+    // scope chains terminate in the global scope immediately.
     RootedObject scope(cx, script->enclosingStaticScope());
+    if (script->compartment() != cx->compartment() && scope) {
+        MOZ_ASSERT(!scope->as<StaticEvalObject>().isDirect() &&
+                   !scope->as<StaticEvalObject>().isStrict());
+        scope = StaticEvalObject::create(cx, NullPtr());
+        if (!scope)
+            return false;
+    }
 
     clone->mutableScript().init(nullptr);
 
@@ -3454,7 +3440,7 @@ JSScript::markChildren(JSTracer *trc)
 
     bindings.trace(trc);
 
-    jit::TraceIonScripts(trc, this);
+    jit::TraceJitScripts(trc, this);
 }
 
 void
@@ -3492,7 +3478,7 @@ LazyScript::finalize(FreeOp *fop)
 }
 
 NestedScopeObject *
-JSScript::getStaticScope(jsbytecode *pc)
+JSScript::getStaticBlockScope(jsbytecode *pc)
 {
     MOZ_ASSERT(containsPC(pc));
 
@@ -3546,6 +3532,22 @@ JSScript::getStaticScope(jsbytecode *pc)
     return blockChain;
 }
 
+JSObject *
+JSScript::innermostStaticScopeInScript(jsbytecode *pc)
+{
+    if (JSObject *scope = getStaticBlockScope(pc))
+        return scope;
+    return functionNonDelazifying();
+}
+
+JSObject *
+JSScript::innermostStaticScope(jsbytecode *pc)
+{
+    if (JSObject *scope = innermostStaticScopeInScript(pc))
+        return scope;
+    return enclosingStaticScope();
+}
+
 void
 JSScript::setArgumentsHasVarBinding()
 {
@@ -3571,10 +3573,9 @@ js::SetFrameArgumentsObject(JSContext *cx, AbstractFramePtr frame,
      */
 
     InternalBindingsHandle bindings(script, &script->bindings);
-    uint32_t unaliasedSlot;
-    const uint32_t var = Bindings::argumentsVarIndex(cx, bindings, &unaliasedSlot);
+    BindingIter bi = Bindings::argumentsBinding(cx, bindings);
 
-    if (script->varIsAliased(var)) {
+    if (script->bindingIsAliased(bi)) {
         /*
          * Scan the script to find the slot in the call object that 'arguments'
          * is assigned to.
@@ -3591,8 +3592,8 @@ js::SetFrameArgumentsObject(JSContext *cx, AbstractFramePtr frame,
         if (IsOptimizedPlaceholderMagicValue(frame.callObj().as<ScopeObject>().aliasedVar(ScopeCoordinate(pc))))
             frame.callObj().as<ScopeObject>().setAliasedVar(cx, ScopeCoordinate(pc), cx->names().arguments, ObjectValue(*argsobj));
     } else {
-        if (IsOptimizedPlaceholderMagicValue(frame.unaliasedLocal(unaliasedSlot)))
-            frame.unaliasedLocal(unaliasedSlot) = ObjectValue(*argsobj);
+        if (IsOptimizedPlaceholderMagicValue(frame.unaliasedLocal(bi.frameIndex())))
+            frame.unaliasedLocal(bi.frameIndex()) = ObjectValue(*argsobj);
     }
 }
 
@@ -3669,21 +3670,22 @@ JSScript::argumentsOptimizationFailed(JSContext *cx, HandleScript script)
 }
 
 bool
-JSScript::varIsAliased(uint32_t varSlot)
+JSScript::bindingIsAliased(const BindingIter &bi)
 {
-    return bodyLevelLocalIsAliased(varSlot);
-}
-
-bool
-JSScript::bodyLevelLocalIsAliased(uint32_t localSlot)
-{
-    return bindings.bindingIsAliased(bindings.numArgs() + localSlot);
+    return bindings.bindingIsAliased(bi.i_);
 }
 
 bool
 JSScript::formalIsAliased(unsigned argSlot)
 {
+    MOZ_ASSERT(argSlot < bindings.numArgs());
     return bindings.bindingIsAliased(argSlot);
+}
+
+bool
+JSScript::cookieIsAliased(const frontend::UpvarCookie &cookie)
+{
+    return bindings.bindingIsAliased(bindings.numArgs() + cookie.slot());
 }
 
 bool
@@ -3788,7 +3790,7 @@ LazyScript::CreateRaw(ExclusiveContext *cx, HandleFunction fun,
     p.bindingsAccessedDynamically = false;
     p.hasDebuggerStatement = false;
     p.directlyInsideEval = false;
-    p.usesArgumentsAndApply = false;
+    p.usesArgumentsApplyAndThis = false;
 
     LazyScript *res = LazyScript::CreateRaw(cx, fun, packedFields, begin, end, lineno, column);
     MOZ_ASSERT_IF(res, res->version() == version);
@@ -3860,7 +3862,7 @@ uint32_t
 LazyScript::staticLevel(JSContext *cx) const
 {
     for (StaticScopeIter<NoGC> ssi(enclosingScope()); !ssi.done(); ssi++) {
-        if (ssi.type() == StaticScopeIter<NoGC>::FUNCTION)
+        if (ssi.type() == StaticScopeIter<NoGC>::Function)
             return ssi.funScript()->staticLevel() + 1;
     }
     return 1;

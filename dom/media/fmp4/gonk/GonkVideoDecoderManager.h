@@ -21,8 +21,8 @@
 using namespace android;
 
 namespace android {
-struct MOZ_EXPORT ALooper;
-class MOZ_EXPORT MediaBuffer;
+struct ALooper;
+class MediaBuffer;
 struct MOZ_EXPORT AString;
 class GonkNativeWindow;
 } // namespace android
@@ -48,9 +48,16 @@ public:
   virtual nsresult Input(mp4_demuxer::MP4Sample* aSample) MOZ_OVERRIDE;
 
   virtual nsresult Output(int64_t aStreamOffset,
-                          nsAutoPtr<MediaData>& aOutput) MOZ_OVERRIDE;
+                          nsRefPtr<MediaData>& aOutput) MOZ_OVERRIDE;
+
+  virtual nsresult Flush() MOZ_OVERRIDE;
+
+  virtual void AllocateMediaResources();
+
+  virtual void ReleaseMediaResources();
 
   static void RecycleCallback(TextureClient* aClient, void* aClosure);
+
 private:
   struct FrameInfo
   {
@@ -74,9 +81,9 @@ private:
 
   private:
     // Forbidden
-    MessageHandler() MOZ_DELETE;
-    MessageHandler(const MessageHandler &rhs) MOZ_DELETE;
-    const MessageHandler &operator=(const MessageHandler &rhs) MOZ_DELETE;
+    MessageHandler() = delete;
+    MessageHandler(const MessageHandler &rhs) = delete;
+    const MessageHandler &operator=(const MessageHandler &rhs) = delete;
 
     GonkVideoDecoderManager *mManager;
   };
@@ -93,13 +100,22 @@ private:
 
   private:
     // Forbidden
-    VideoResourceListener() MOZ_DELETE;
-    VideoResourceListener(const VideoResourceListener &rhs) MOZ_DELETE;
-    const VideoResourceListener &operator=(const VideoResourceListener &rhs) MOZ_DELETE;
+    VideoResourceListener() = delete;
+    VideoResourceListener(const VideoResourceListener &rhs) = delete;
+    const VideoResourceListener &operator=(const VideoResourceListener &rhs) = delete;
 
     GonkVideoDecoderManager *mManager;
   };
   friend class VideoResourceListener;
+
+  // FrameTimeInfo keeps the presentation time stamp (pts) and its duration.
+  // On MediaDecoderStateMachine, it needs pts and duration to display decoded
+  // frame correctly. But OMX can carry one field of time info (kKeyTime) so
+  // we use FrameTimeInfo to keep pts and duration.
+  struct FrameTimeInfo {
+    int64_t pts;       // presentation time stamp of this frame.
+    int64_t duration;  // the playback duration.
+  };
 
   bool SetVideoFormat();
 
@@ -112,8 +128,11 @@ private:
   void codecCanceled();
   void onMessageReceived(const sp<AMessage> &aMessage);
 
-  void ReleaseAllPendingVideoBuffersLocked();
+  void ReleaseAllPendingVideoBuffers();
   void PostReleaseVideoBuffer(android::MediaBuffer *aBuffer);
+
+  void QueueFrameTimeIn(int64_t aPTS, int64_t aDuration);
+  nsresult QueueFrameTimeOut(int64_t aPTS, int64_t& aDuration);
 
   uint32_t mVideoWidth;
   uint32_t mVideoHeight;
@@ -135,6 +154,14 @@ private:
   android::sp<ALooper> mLooper;
   android::sp<ALooper> mManagerLooper;
   FrameInfo mFrameInfo;
+
+  // It protects mFrameTimeInfo.
+  Monitor mMonitor;
+  // Array of FrameTimeInfo whose corresponding frames are sent to OMX.
+  // Ideally, it is a FIFO. Input() adds the entry to the end element and
+  // CreateVideoData() takes the first entry. However, there are exceptions
+  // due to MediaCodec error or seeking.
+  nsTArray<FrameTimeInfo> mFrameTimeInfo;
 
   // color converter
   android::I420ColorConverterHelper mColorConverter;

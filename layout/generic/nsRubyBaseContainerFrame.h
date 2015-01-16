@@ -14,12 +14,18 @@
 #include "nsRubyBaseFrame.h"
 #include "nsRubyTextFrame.h"
 
+#define RTC_ARRAY_SIZE 1
+
 /**
  * Factory function.
  * @return a newly allocated nsRubyBaseContainerFrame (infallible)
  */
 nsContainerFrame* NS_NewRubyBaseContainerFrame(nsIPresShell* aPresShell,
                                                nsStyleContext* aContext);
+
+namespace mozilla {
+struct RubyColumn;
+}
 
 class nsRubyBaseContainerFrame MOZ_FINAL : public nsContainerFrame
 {
@@ -32,30 +38,60 @@ public:
   virtual nsIAtom* GetType() const MOZ_OVERRIDE;
   virtual bool IsFrameOfType(uint32_t aFlags) const MOZ_OVERRIDE;
   virtual bool CanContinueTextRun() const MOZ_OVERRIDE;
+  virtual void AddInlineMinISize(nsRenderingContext *aRenderingContext,
+                                 InlineMinISizeData *aData) MOZ_OVERRIDE;
+  virtual void AddInlinePrefISize(nsRenderingContext *aRenderingContext,
+                                  InlinePrefISizeData *aData) MOZ_OVERRIDE;
+  virtual mozilla::LogicalSize
+    ComputeSize(nsRenderingContext *aRenderingContext,
+                mozilla::WritingMode aWritingMode,
+                const mozilla::LogicalSize& aCBSize,
+                nscoord aAvailableISize,
+                const mozilla::LogicalSize& aMargin,
+                const mozilla::LogicalSize& aBorder,
+                const mozilla::LogicalSize& aPadding,
+                ComputeSizeFlags aFlags) MOZ_OVERRIDE;
   virtual void Reflow(nsPresContext* aPresContext,
                       nsHTMLReflowMetrics& aDesiredSize,
                       const nsHTMLReflowState& aReflowState,
                       nsReflowStatus& aStatus) MOZ_OVERRIDE;
 
+  virtual nscoord
+    GetLogicalBaseline(mozilla::WritingMode aWritingMode) const MOZ_OVERRIDE;
+
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const MOZ_OVERRIDE;
 #endif
-
-  void AppendTextContainer(nsIFrame* aFrame);
-  void ClearTextContainers();
 
 protected:
   friend nsContainerFrame*
     NS_NewRubyBaseContainerFrame(nsIPresShell* aPresShell,
                                  nsStyleContext* aContext);
   explicit nsRubyBaseContainerFrame(nsStyleContext* aContext) : nsContainerFrame(aContext) {}
-  /*
-   * The ruby text containers that belong to the ruby segment defined by
-   * this ruby base container. These text containers are located at the start
-   * of reflow for the ruby frame (parent) and cleared at the end of that
-   * reflow.
-   */
-  nsTArray<nsRubyTextContainerFrame*> mTextContainers;
+
+  typedef nsTArray<nsRubyTextContainerFrame*> TextContainerArray;
+  typedef nsAutoTArray<nsRubyTextContainerFrame*, RTC_ARRAY_SIZE> AutoTextContainerArray;
+  void GetTextContainers(TextContainerArray& aTextContainers);
+
+  struct ReflowState;
+  nscoord ReflowColumns(const ReflowState& aReflowState,
+                        nsReflowStatus& aStatus);
+  nscoord ReflowOneColumn(const ReflowState& aReflowState,
+                          uint32_t aColumnIndex,
+                          const mozilla::RubyColumn& aColumn,
+                          nsReflowStatus& aStatus);
+  nscoord ReflowSpans(const ReflowState& aReflowState);
+
+  struct PullFrameState;
+
+  // Pull ruby base and corresponding ruby text frames from
+  // continuations after them.
+  void PullOneColumn(nsLineLayout* aLineLayout,
+                     PullFrameState& aPullFrameState,
+                     mozilla::RubyColumn& aColumn,
+                     bool& aIsComplete);
+
+  nscoord mBaseline;
 };
 
 #endif /* nsRubyBaseContainerFrame_h___ */

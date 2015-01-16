@@ -205,8 +205,8 @@ let SimulatorScanner = {
 
   _updateRuntimes() {
     this._runtimes = [];
-    for (let version of Simulator.availableVersions()) {
-      this._runtimes.push(new SimulatorRuntime(version));
+    for (let name of Simulator.availableNames()) {
+      this._runtimes.push(new SimulatorRuntime(name));
     }
     this._emitUpdated();
   },
@@ -359,7 +359,13 @@ let StaticScanner = {
   enable() {},
   disable() {},
   scan() { return promise.resolve(); },
-  listRuntimes() { return [gRemoteRuntime, gLocalRuntime]; }
+  listRuntimes() {
+    let runtimes = [gRemoteRuntime];
+    if (Services.prefs.getBoolPref("devtools.webide.enableLocalRuntime")) {
+      runtimes.push(gLocalRuntime);
+    }
+    return runtimes;
+  }
 };
 
 EventEmitter.decorate(StaticScanner);
@@ -395,7 +401,7 @@ DeprecatedUSBRuntime.prototype = {
   },
   connect: function(connection) {
     if (!this.device) {
-      return promise.reject("Can't find device: " + this.name);
+      return promise.reject(new Error("Can't find device: " + this.name));
     }
     return this.device.connect().then((port) => {
       connection.host = "localhost";
@@ -439,10 +445,11 @@ WiFiRuntime.prototype = {
   connect: function(connection) {
     let service = discovery.getRemoteService("devtools", this.deviceName);
     if (!service) {
-      return promise.reject("Can't find device: " + this.name);
+      return promise.reject(new Error("Can't find device: " + this.name));
     }
     connection.host = service.host;
     connection.port = service.port;
+    connection.encryption = service.encryption;
     connection.connect();
     return promise.resolve();
   },
@@ -457,17 +464,17 @@ WiFiRuntime.prototype = {
 // For testing use only
 exports._WiFiRuntime = WiFiRuntime;
 
-function SimulatorRuntime(version) {
-  this.version = version;
+function SimulatorRuntime(name) {
+  this.name = name;
 }
 
 SimulatorRuntime.prototype = {
   type: RuntimeTypes.SIMULATOR,
   connect: function(connection) {
     let port = ConnectionManager.getFreeTCPPort();
-    let simulator = Simulator.getByVersion(this.version);
+    let simulator = Simulator.getByName(this.name);
     if (!simulator || !simulator.launch) {
-      return promise.reject("Can't find simulator: " + this.name);
+      return promise.reject(new Error("Can't find simulator: " + this.name));
     }
     return simulator.launch({port: port}).then(() => {
       connection.host = "localhost";
@@ -478,14 +485,7 @@ SimulatorRuntime.prototype = {
     });
   },
   get id() {
-    return this.version;
-  },
-  get name() {
-    let simulator = Simulator.getByVersion(this.version);
-    if (!simulator) {
-      return "Unknown";
-    }
-    return Simulator.getByVersion(this.version).appinfo.label;
+    return this.name;
   },
 };
 
@@ -520,7 +520,7 @@ let gRemoteRuntime = {
   connect: function(connection) {
     let win = Services.wm.getMostRecentWindow("devtools:webide");
     if (!win) {
-      return promise.reject();
+      return promise.reject(new Error("No WebIDE window found"));
     }
     let ret = {value: connection.host + ":" + connection.port};
     let title = Strings.GetStringFromName("remote_runtime_promptTitle");
@@ -531,7 +531,7 @@ let gRemoteRuntime = {
       return promise.reject({canceled: true});
     }
     if (!host || !port) {
-      return promise.reject();
+      return promise.reject(new Error("Invalid host or port"));
     }
     connection.host = host;
     connection.port = port;

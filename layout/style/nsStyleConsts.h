@@ -79,7 +79,7 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 #define NS_STYLE_BASIC_SHAPE_POLYGON       0
 #define NS_STYLE_BASIC_SHAPE_CIRCLE        1
 #define NS_STYLE_BASIC_SHAPE_ELLIPSE       2
-//#define NS_STYLE_BASIC_SHAPE_INSET       3
+#define NS_STYLE_BASIC_SHAPE_INSET         3
 
 // box-shadow
 #define NS_STYLE_BOX_SHADOW_INSET         0
@@ -443,6 +443,7 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 #define NS_STYLE_DISPLAY_RUBY_BASE_CONTAINER    35
 #define NS_STYLE_DISPLAY_RUBY_TEXT              36
 #define NS_STYLE_DISPLAY_RUBY_TEXT_CONTAINER    37
+#define NS_STYLE_DISPLAY_CONTENTS               38
 
 // See nsStylePosition
 #define NS_STYLE_ALIGN_CONTENT_FLEX_START       0
@@ -573,10 +574,9 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 #define NS_STYLE_FONT_FIELD                     16
 
 // grid-auto-flow keywords
-#define NS_STYLE_GRID_AUTO_FLOW_STACK           (1 << 0)
-#define NS_STYLE_GRID_AUTO_FLOW_ROW             (1 << 1)
-#define NS_STYLE_GRID_AUTO_FLOW_COLUMN          (1 << 2)
-#define NS_STYLE_GRID_AUTO_FLOW_DENSE           (1 << 3)
+#define NS_STYLE_GRID_AUTO_FLOW_ROW             (1 << 0)
+#define NS_STYLE_GRID_AUTO_FLOW_COLUMN          (1 << 1)
+#define NS_STYLE_GRID_AUTO_FLOW_DENSE           (1 << 2)
 
 // 'subgrid' keyword in grid-template-{columns,rows}
 #define NS_STYLE_GRID_TEMPLATE_SUBGRID          0
@@ -620,12 +620,6 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 #define NS_STYLE_WIDTH_MIN_CONTENT              1
 #define NS_STYLE_WIDTH_FIT_CONTENT              2
 #define NS_STYLE_WIDTH_AVAILABLE                3
-// NOTE: The "main-size" keyword here is really for the "flex-basis" property,
-// not for width / min-width / max-width.  I'm listing it here with the "width"
-// keywords' enumerated values, because we need to make sure it doesn't collide
-// with any "width" enumerated values (because "flex-basis" accepts all valid
-// "width" keywords, in addition to accepting "main-size").
-#define NS_STYLE_FLEX_BASIS_MAIN_SIZE           4
 
 // See nsStyleDisplay.mPosition
 #define NS_STYLE_POSITION_STATIC                0
@@ -848,6 +842,15 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 #define NS_STYLE_HYPHENS_MANUAL                 1
 #define NS_STYLE_HYPHENS_AUTO                   2
 
+// ruby-position, see nsStyleText
+#define NS_STYLE_RUBY_POSITION_OVER             0x01
+#define NS_STYLE_RUBY_POSITION_UNDER            0x02
+#define NS_STYLE_RUBY_POSITION_INTER_CHARACTER  0x04 // placeholder, not yet parsed
+#define NS_STYLE_RUBY_POSITION_RIGHT            0x08
+#define NS_STYLE_RUBY_POSITION_LEFT             0x10
+#define NS_STYLE_RUBY_POSITION_INITIAL \
+  (NS_STYLE_RUBY_POSITION_OVER | NS_STYLE_RUBY_POSITION_RIGHT)
+
 // See nsStyleText
 #define NS_STYLE_TEXT_SIZE_ADJUST_NONE          0
 #define NS_STYLE_TEXT_SIZE_ADJUST_AUTO          1
@@ -882,7 +885,6 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 
 #define NS_STYLE_TABLE_EMPTY_CELLS_HIDE            0
 #define NS_STYLE_TABLE_EMPTY_CELLS_SHOW            1
-#define NS_STYLE_TABLE_EMPTY_CELLS_SHOW_BACKGROUND 2
 
 #define NS_STYLE_CAPTION_SIDE_TOP               0
 #define NS_STYLE_CAPTION_SIDE_RIGHT             1

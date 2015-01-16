@@ -25,6 +25,27 @@ namespace mozilla {
  * Note: This must be a different value than MEDIA_STREAM_DEST_TRACK_ID
  */
 
+AudioNodeStream::AudioNodeStream(AudioNodeEngine* aEngine,
+                                 MediaStreamGraph::AudioNodeStreamKind aKind,
+                                 TrackRate aSampleRate)
+  : ProcessedMediaStream(nullptr),
+    mEngine(aEngine),
+    mSampleRate(aSampleRate),
+    mKind(aKind),
+    mNumberOfInputChannels(2),
+    mMarkAsFinishedAfterThisBlock(false),
+    mAudioParamStream(false),
+    mPassThrough(false)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  mChannelCountMode = ChannelCountMode::Max;
+  mChannelInterpretation = ChannelInterpretation::Speakers;
+  // AudioNodes are always producing data
+  mHasCurrentData = true;
+  mLastChunks.SetLength(std::max(uint16_t(1), mEngine->OutputCount()));
+  MOZ_COUNT_CTOR(AudioNodeStream);
+}
+
 AudioNodeStream::~AudioNodeStream()
 {
   MOZ_COUNT_DTOR(AudioNodeStream);
@@ -88,7 +109,6 @@ AudioNodeStream::SetStreamTimeParameter(uint32_t aIndex, AudioContext* aContext,
     uint32_t mIndex;
   };
 
-  MOZ_ASSERT(this);
   GraphImpl()->AppendMessage(new Message(this, aIndex,
       aContext->DestinationStream(),
       aContext->DOMTimeToStreamTime(aStreamTime)));
@@ -98,7 +118,7 @@ void
 AudioNodeStream::SetStreamTimeParameterImpl(uint32_t aIndex, MediaStream* aRelativeToStream,
                                             double aStreamTime)
 {
-  TrackTicks ticks = TicksFromDestinationTime(aRelativeToStream, aStreamTime);
+  StreamTime ticks = TicksFromDestinationTime(aRelativeToStream, aStreamTime);
   mEngine->SetStreamTimeParameter(aIndex, ticks);
 }
 
@@ -118,7 +138,6 @@ AudioNodeStream::SetDoubleParameter(uint32_t aIndex, double aValue)
     uint32_t mIndex;
   };
 
-  MOZ_ASSERT(this);
   GraphImpl()->AppendMessage(new Message(this, aIndex, aValue));
 }
 
@@ -138,7 +157,6 @@ AudioNodeStream::SetInt32Parameter(uint32_t aIndex, int32_t aValue)
     uint32_t mIndex;
   };
 
-  MOZ_ASSERT(this);
   GraphImpl()->AppendMessage(new Message(this, aIndex, aValue));
 }
 
@@ -182,7 +200,6 @@ AudioNodeStream::SetThreeDPointParameter(uint32_t aIndex, const ThreeDPoint& aVa
     uint32_t mIndex;
   };
 
-  MOZ_ASSERT(this);
   GraphImpl()->AppendMessage(new Message(this, aIndex, aValue));
 }
 
@@ -202,7 +219,6 @@ AudioNodeStream::SetBuffer(already_AddRefed<ThreadSharedFloatArrayBufferList>&& 
     nsRefPtr<ThreadSharedFloatArrayBufferList> mBuffer;
   };
 
-  MOZ_ASSERT(this);
   GraphImpl()->AppendMessage(new Message(this, aBuffer));
 }
 
@@ -224,7 +240,6 @@ AudioNodeStream::SetRawArrayData(nsTArray<float>& aData)
     nsTArray<float> mData;
   };
 
-  MOZ_ASSERT(this);
   GraphImpl()->AppendMessage(new Message(this, aData));
 }
 
@@ -255,7 +270,6 @@ AudioNodeStream::SetChannelMixingParameters(uint32_t aNumberOfChannels,
     ChannelInterpretation mChannelInterpretation;
   };
 
-  MOZ_ASSERT(this);
   GraphImpl()->AppendMessage(new Message(this, aNumberOfChannels,
                                          aChannelCountMode,
                                          aChannelInterpretation));
@@ -275,7 +289,6 @@ AudioNodeStream::SetPassThrough(bool aPassThrough)
     bool mPassThrough;
   };
 
-  MOZ_ASSERT(this);
   GraphImpl()->AppendMessage(new Message(this, aPassThrough));
 }
 
@@ -445,13 +458,13 @@ void
 AudioNodeStream::ProcessInput(GraphTime aFrom, GraphTime aTo, uint32_t aFlags)
 {
   if (!mFinished) {
-    EnsureTrack(AUDIO_TRACK, mSampleRate);
+    EnsureTrack(AUDIO_TRACK);
   }
   // No more tracks will be coming
   mBuffer.AdvanceKnownTracksTime(STREAM_TIME_MAX);
 
-  uint16_t outputCount = std::max(uint16_t(1), mEngine->OutputCount());
-  mLastChunks.SetLength(outputCount);
+  uint16_t outputCount = mLastChunks.Length();
+  MOZ_ASSERT(outputCount == std::max(uint16_t(1), mEngine->OutputCount()));
 
   // Consider this stream blocked if it has already finished output. Normally
   // mBlocked would reflect this, but due to rounding errors our audio track may
@@ -475,7 +488,7 @@ AudioNodeStream::ProcessInput(GraphTime aFrom, GraphTime aTo, uint32_t aFlags)
       MOZ_ASSERT(outputCount == 1, "For now, we only support nodes that have one output port");
       mLastChunks[0] = inputChunks[0];
     } else {
-      if (maxInputs <= 1 && mEngine->OutputCount() <= 1) {
+      if (maxInputs <= 1 && outputCount <= 1) {
         mEngine->ProcessBlock(this, inputChunks[0], &mLastChunks[0], &finished);
       } else {
         mEngine->ProcessBlocksOnPorts(this, inputChunks, mLastChunks, &finished);
@@ -515,7 +528,7 @@ AudioNodeStream::ProduceOutputBeforeInput(GraphTime aFrom)
   MOZ_ASSERT(mEngine->OutputCount() == 1,
              "DelayNodeEngine output count should be 1");
   MOZ_ASSERT(!InMutedCycle(), "DelayNodes should break cycles");
-  mLastChunks.SetLength(1);
+  MOZ_ASSERT(mLastChunks.Length() == 1);
 
   // Consider this stream blocked if it has already finished output. Normally
   // mBlocked would reflect this, but due to rounding errors our audio track may
@@ -537,7 +550,7 @@ AudioNodeStream::ProduceOutputBeforeInput(GraphTime aFrom)
 void
 AudioNodeStream::AdvanceOutputSegment()
 {
-  StreamBuffer::Track* track = EnsureTrack(AUDIO_TRACK, mSampleRate);
+  StreamBuffer::Track* track = EnsureTrack(AUDIO_TRACK);
   AudioSegment* segment = track->Get<AudioSegment>();
 
   if (mKind == MediaStreamGraph::EXTERNAL_STREAM) {
@@ -552,16 +565,15 @@ AudioNodeStream::AdvanceOutputSegment()
     AudioSegment tmpSegment;
     tmpSegment.AppendAndConsumeChunk(&copyChunk);
     l->NotifyQueuedTrackChanges(Graph(), AUDIO_TRACK,
-                                mSampleRate, segment->GetDuration(), 0,
-                                tmpSegment);
+                                segment->GetDuration(), 0, tmpSegment);
   }
 }
 
-TrackTicks
+StreamTime
 AudioNodeStream::GetCurrentPosition()
 {
   NS_ASSERTION(!mFinished, "Don't create another track after finishing");
-  return EnsureTrack(AUDIO_TRACK, mSampleRate)->Get<AudioSegment>()->GetDuration();
+  return EnsureTrack(AUDIO_TRACK)->Get<AudioSegment>()->GetDuration();
 }
 
 void
@@ -571,7 +583,7 @@ AudioNodeStream::FinishOutput()
     return;
   }
 
-  StreamBuffer::Track* track = EnsureTrack(AUDIO_TRACK, mSampleRate);
+  StreamBuffer::Track* track = EnsureTrack(AUDIO_TRACK);
   track->SetEnded();
   FinishOnGraphThread();
 
@@ -579,7 +591,6 @@ AudioNodeStream::FinishOutput()
     MediaStreamListener* l = mListeners[j];
     AudioSegment emptySegment;
     l->NotifyQueuedTrackChanges(Graph(), AUDIO_TRACK,
-                                mSampleRate,
                                 track->GetSegment()->GetDuration(),
                                 MediaStreamListener::TRACK_EVENT_ENDED, emptySegment);
   }
@@ -607,7 +618,7 @@ AudioNodeStream::FractionalTicksFromDestinationTime(AudioNodeStream* aDestinatio
   return thisFractionalTicks;
 }
 
-TrackTicks
+StreamTime
 AudioNodeStream::TicksFromDestinationTime(MediaStream* aDestination,
                                           double aSeconds)
 {
@@ -617,17 +628,16 @@ AudioNodeStream::TicksFromDestinationTime(MediaStream* aDestination,
   double thisSeconds =
     FractionalTicksFromDestinationTime(destination, aSeconds);
   // Round to nearest
-  TrackTicks ticks = thisSeconds + 0.5;
+  StreamTime ticks = thisSeconds + 0.5;
   return ticks;
 }
 
 double
 AudioNodeStream::DestinationTimeFromTicks(AudioNodeStream* aDestination,
-                                          TrackTicks aPosition)
+                                          StreamTime aPosition)
 {
   MOZ_ASSERT(SampleRate() == aDestination->SampleRate());
-  StreamTime sourceTime = TicksToTimeRoundDown(SampleRate(), aPosition);
-  GraphTime graphTime = StreamTimeToGraphTime(sourceTime);
+  GraphTime graphTime = StreamTimeToGraphTime(aPosition);
   StreamTime destinationTime = aDestination->GraphTimeToStreamTimeOptimistic(graphTime);
   return StreamTimeToSeconds(destinationTime);
 }

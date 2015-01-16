@@ -184,7 +184,7 @@ function reload(aTarget, aWaitForTargetEvent = "navigate") {
 
 function initServer() {
   if (!DebuggerServer.initialized) {
-    DebuggerServer.init(() => true);
+    DebuggerServer.init();
     DebuggerServer.addBrowserActors();
   }
 }
@@ -235,13 +235,13 @@ function initCanvasDebuggerFrontend(aUrl) {
   });
 }
 
-function teardown(aPanel) {
+function teardown({target}) {
   info("Destroying the specified canvas debugger.");
 
-  return promise.all([
-    once(aPanel, "destroyed"),
-    removeTab(aPanel.target.tab)
-  ]);
+  let {tab} = target;
+  return gDevTools.closeToolbox(target).then(() => {
+    removeTab(tab);
+  });
 }
 
 /**
@@ -269,4 +269,9 @@ function evalInDebuggee (script) {
   }
 
   return deferred.promise;
+}
+
+function getSourceActor(aSources, aURL) {
+  let item = aSources.getItemForAttachment(a => a.source.url === aURL);
+  return item ? item.value : null;
 }

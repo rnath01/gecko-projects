@@ -26,12 +26,14 @@ struct TreeMatchContext;
 
 namespace mozilla {
   class EventStates;
+  struct UndisplayedNode;
 
 namespace dom {
   class Element;
 } // namespace dom
 
-class RestyleManager MOZ_FINAL {
+class RestyleManager MOZ_FINAL
+{
 public:
   friend class ::nsRefreshDriver;
   friend class RestyleTracker;
@@ -138,22 +140,17 @@ public:
   nsresult ReparentStyleContext(nsIFrame* aFrame);
 
 private:
-  void ComputeAndProcessStyleChange(nsIFrame* aFrame,
-                                    nsChangeHint aMinChange,
+  // Used when restyling an element with a frame.
+  void ComputeAndProcessStyleChange(nsIFrame*       aFrame,
+                                    nsChangeHint    aMinChange,
                                     RestyleTracker& aRestyleTracker,
-                                    nsRestyleHint aRestyleHint);
-
-  /**
-   * Re-resolve the style contexts for a frame tree, building
-   * aChangeList based on the resulting style changes, plus aMinChange
-   * applied to aFrame.
-   */
-  void
-    ComputeStyleChangeFor(nsIFrame* aFrame,
-                          nsStyleChangeList* aChangeList,
-                          nsChangeHint aMinChange,
-                          RestyleTracker& aRestyleTracker,
-                          nsRestyleHint aRestyleHint);
+                                    nsRestyleHint   aRestyleHint);
+  // Used when restyling a display:contents element.
+  void ComputeAndProcessStyleChange(nsStyleContext* aNewContext,
+                                    Element*        aElement,
+                                    nsChangeHint    aMinChange,
+                                    RestyleTracker& aRestyleTracker,
+                                    nsRestyleHint   aRestyleHint);
 
 public:
 
@@ -184,8 +181,17 @@ public:
    */
   typedef nsRefPtrHashtable<nsRefPtrHashKey<nsIContent>, nsStyleContext>
             ReframingStyleContextTable;
-  class ReframingStyleContexts {
+  class MOZ_STACK_CLASS ReframingStyleContexts MOZ_FINAL {
   public:
+    /**
+     * Construct a ReframingStyleContexts object.  The caller must
+     * ensure that aRestyleManager lives at least as long as the
+     * object.  (This is generally easy since the caller is typically a
+     * method of RestyleManager.)
+     */
+    explicit ReframingStyleContexts(RestyleManager* aRestyleManager);
+    ~ReframingStyleContexts();
+
     void Put(nsIContent* aContent, nsStyleContext* aStyleContext) {
       MOZ_ASSERT(aContent);
       nsCSSPseudoElements::Type pseudoType = aStyleContext->GetPseudoType();
@@ -218,6 +224,8 @@ public:
       return nullptr;
     }
   private:
+    RestyleManager* mRestyleManager;
+    AutoRestore<ReframingStyleContexts*> mRestorePointer;
     ReframingStyleContextTable mElementContexts;
     ReframingStyleContextTable mBeforePseudoContexts;
     ReframingStyleContextTable mAfterPseudoContexts;
@@ -281,7 +289,7 @@ public:
   // ProcessPendingRestyles calls into one of our RestyleTracker
   // objects.  It then calls back to these functions at the beginning
   // and end of its work.
-  void BeginProcessingRestyles();
+  void BeginProcessingRestyles(RestyleTracker& aRestyleTracker);
   void EndProcessingRestyles();
 
   // Update styles for animations that are running on the compositor and
@@ -329,12 +337,6 @@ public:
   // own reasons.)
   void RebuildAllStyleData(nsChangeHint aExtraHint,
                            nsRestyleHint aRestyleHint);
-
-  // Helper that does part of the work of RebuildAllStyleData, shared by
-  // RestyleElement for 'rem' handling.
-  void DoRebuildAllStyleData(RestyleTracker& aRestyleTracker,
-                             nsChangeHint aExtraHint,
-                             nsRestyleHint aRestyleHint);
 
   // See PostRestyleEventCommon below.
   void PostRestyleEvent(Element* aElement,
@@ -458,6 +460,9 @@ private:
                       RestyleTracker& aRestyleTracker,
                       nsRestyleHint   aRestyleHint);
 
+  void StartRebuildAllStyleData(RestyleTracker& aRestyleTracker);
+  void FinishRebuildAllStyleData();
+
   void StyleChangeReflow(nsIFrame* aFrame, nsChangeHint aHint);
 
   // Recursively add all the given frame and all children to the tracker.
@@ -468,10 +473,29 @@ private:
   // be performed instead.
   bool RecomputePosition(nsIFrame* aFrame);
 
+  bool ShouldStartRebuildAllFor(RestyleTracker& aRestyleTracker) {
+    // When we process our primary restyle tracker and we have a pending
+    // rebuild-all, we need to process it.
+    return mDoRebuildAllStyleData &&
+           &aRestyleTracker == &mPendingRestyles;
+  }
+
+  void ProcessRestyles(RestyleTracker& aRestyleTracker) {
+    // Fast-path the common case (esp. for the animation restyle
+    // tracker) of not having anything to do.
+    if (aRestyleTracker.Count() || ShouldStartRebuildAllFor(aRestyleTracker)) {
+      aRestyleTracker.DoProcessRestyles();
+    }
+  }
+
 private:
   nsPresContext* mPresContext; // weak, disconnected in Disconnect
 
-  bool mRebuildAllStyleData : 1;
+  // True if we need to reconstruct the rule tree the next time we
+  // process restyles.
+  bool mDoRebuildAllStyleData : 1;
+  // True if we're currently in the process of reconstructing the rule tree.
+  bool mInRebuildAllStyleData : 1;
   // True if we're already waiting for a refresh notification
   bool mObservingRefreshDriver : 1;
   // True if we're in the middle of a nsRefreshDriver refresh
@@ -516,7 +540,8 @@ private:
  * An ElementRestyler is created for *each* element in a subtree that we
  * recompute styles for.
  */
-class ElementRestyler MOZ_FINAL {
+class ElementRestyler MOZ_FINAL
+{
 public:
   typedef mozilla::dom::Element Element;
 
@@ -548,6 +573,15 @@ public:
                   const ElementRestyler& aParentFrameRestyler,
                   nsIFrame* aFrame);
 
+  // For restyling undisplayed content only (mFrame==null).
+  ElementRestyler(nsPresContext* aPresContext,
+                  nsIContent* aContent,
+                  nsStyleChangeList* aChangeList,
+                  nsChangeHint aHintsHandledByAncestors,
+                  RestyleTracker& aRestyleTracker,
+                  TreeMatchContext& aTreeMatchContext,
+                  nsTArray<nsIContent*>& aVisibleKidsOfHiddenElement);
+
   /**
    * Restyle our frame's element and its subtree.
    *
@@ -567,6 +601,26 @@ public:
    * hints have been handled for this frame.
    */
   nsChangeHint HintsHandledForFrame() { return mHintsHandled; }
+
+  /**
+   * Called from RestyleManager::ComputeAndProcessStyleChange to restyle
+   * children of a display:contents element.
+   */
+  void RestyleChildrenOfDisplayContentsElement(nsIFrame*       aParentFrame,
+                                               nsStyleContext* aNewContext,
+                                               nsChangeHint    aMinHint,
+                                               RestyleTracker& aRestyleTracker,
+                                               nsRestyleHint   aRestyleHint);
+
+  /**
+   * Re-resolve the style contexts for a frame tree, building aChangeList
+   * based on the resulting style changes, plus aMinChange applied to aFrame.
+   */
+  static void ComputeStyleChangeFor(nsIFrame*          aFrame,
+                                    nsStyleChangeList* aChangeList,
+                                    nsChangeHint       aMinChange,
+                                    RestyleTracker&    aRestyleTracker,
+                                    nsRestyleHint      aRestyleHint);
 
 #ifdef RESTYLE_LOGGING
   bool ShouldLogRestyle() {
@@ -625,12 +679,33 @@ private:
   /**
    * Helpers for RestyleChildren().
    */
-  void RestyleUndisplayedChildren(nsRestyleHint aChildRestyleHint);
+  void RestyleUndisplayedDescendants(nsRestyleHint aChildRestyleHint);
+  /**
+   * In the following two methods, aParentStyleContext is either
+   * mFrame->StyleContext() if we have a frame, or a display:contents
+   * style context if we don't.
+   */
+  void DoRestyleUndisplayedDescendants(nsRestyleHint aChildRestyleHint,
+                                       nsIContent* aParent,
+                                       nsStyleContext* aParentStyleContext);
+  void RestyleUndisplayedNodes(nsRestyleHint    aChildRestyleHint,
+                               UndisplayedNode* aUndisplayed,
+                               nsIContent*      aUndisplayedParent,
+                               nsStyleContext*  aParentStyleContext,
+                               const uint8_t    aDisplay);
   void MaybeReframeForBeforePseudo();
+  void MaybeReframeForBeforePseudo(nsIFrame* aGenConParentFrame,
+                                   nsIFrame* aFrame,
+                                   nsIContent* aContent,
+                                   nsStyleContext* aStyleContext);
   void MaybeReframeForAfterPseudo(nsIFrame* aFrame);
+  void MaybeReframeForAfterPseudo(nsIFrame* aGenConParentFrame,
+                                  nsIFrame* aFrame,
+                                  nsIContent* aContent,
+                                  nsStyleContext* aStyleContext);
   void RestyleContentChildren(nsIFrame* aParent,
                               nsRestyleHint aChildRestyleHint);
-  void InitializeAccessibilityNotifications();
+  void InitializeAccessibilityNotifications(nsStyleContext* aNewContext);
   void SendAccessibilityNotifications();
 
   enum DesiredA11yNotifications {
@@ -686,6 +761,27 @@ private:
 #ifdef RESTYLE_LOGGING
   int32_t mLoggingDepth;
 #endif
+};
+
+/**
+ * This pushes any display:contents nodes onto a TreeMatchContext.
+ * Use it before resolving style for kids of aParent where aParent
+ * (and further ancestors) may be display:contents nodes which have
+ * not yet been pushed onto TreeMatchContext.
+ */
+class MOZ_STACK_CLASS AutoDisplayContentsAncestorPusher MOZ_FINAL
+{
+ public:
+  typedef mozilla::dom::Element Element;
+  AutoDisplayContentsAncestorPusher(TreeMatchContext& aTreeMatchContext,
+                                    nsPresContext*    aPresContext,
+                                    nsIContent*       aParent);
+  ~AutoDisplayContentsAncestorPusher();
+  bool IsEmpty() const { return mAncestors.Length() == 0; }
+private:
+  TreeMatchContext& mTreeMatchContext;
+  nsPresContext* const mPresContext;
+  nsAutoTArray<mozilla::dom::Element*, 4> mAncestors;
 };
 
 } // namespace mozilla

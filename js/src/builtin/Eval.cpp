@@ -191,15 +191,8 @@ ParseEvalStringAsJSON(JSContext *cx, const mozilla::Range<const CharT> chars, Mu
 }
 
 static EvalJSONResult
-TryEvalJSON(JSContext *cx, JSScript *callerScript, JSFlatString *str, MutableHandleValue rval)
+TryEvalJSON(JSContext *cx, JSFlatString *str, MutableHandleValue rval)
 {
-    // Don't use the JSON parser if the caller is strict mode code, because in
-    // strict mode object literals must not have repeated properties, and the
-    // JSON parser cheerfully (and correctly) accepts them.  If you're parsing
-    // JSON with eval and using strict mode, you deserve to be slow.
-    if (callerScript && callerScript->strict())
-        return EvalJSON_NotJSON;
-
     if (str->hasLatin1Chars()) {
         AutoCheckCannotGC nogc;
         if (!EvalStringMightBeJSON(str->latin1Range(nogc)))
@@ -278,7 +271,7 @@ EvalKernel(JSContext *cx, const CallArgs &args, EvalType evalType, AbstractFrame
         staticLevel = 0;
 
         // Use the global as 'this', modulo outerization.
-        JSObject *thisobj = JSObject::thisObject(cx, scopeobj);
+        JSObject *thisobj = GetThisObject(cx, scopeobj);
         if (!thisobj)
             return false;
         thisv = ObjectValue(*thisobj);
@@ -289,7 +282,7 @@ EvalKernel(JSContext *cx, const CallArgs &args, EvalType evalType, AbstractFrame
         return false;
 
     RootedScript callerScript(cx, caller ? caller.script() : nullptr);
-    EvalJSONResult ejr = TryEvalJSON(cx, callerScript, flatStr, args.rval());
+    EvalJSONResult ejr = TryEvalJSON(cx, flatStr, args.rval());
     if (ejr != EvalJSON_NotJSON)
         return ejr == EvalJSON_Success;
 
@@ -314,13 +307,19 @@ EvalKernel(JSContext *cx, const CallArgs &args, EvalType evalType, AbstractFrame
         if (maybeScript && maybeScript->scriptSource()->introducerFilename())
             introducerFilename = maybeScript->scriptSource()->introducerFilename();
 
+        RootedObject enclosing(cx);
+        if (evalType == DIRECT_EVAL)
+            enclosing = callerScript->innermostStaticScope(pc);
+        Rooted<StaticEvalObject *> staticScope(cx, StaticEvalObject::create(cx, enclosing));
+
         CompileOptions options(cx);
         options.setFileAndLine(filename, 1)
                .setCompileAndGo(true)
                .setForEval(true)
                .setNoScriptRval(false)
                .setMutedErrors(mutedErrors)
-               .setIntroductionInfo(introducerFilename, "eval", lineno, maybeScript, pcOffset);
+               .setIntroductionInfo(introducerFilename, "eval", lineno, maybeScript, pcOffset)
+               .maybeMakeStrictMode(evalType == DIRECT_EVAL && IsStrictEvalPC(pc));
 
         AutoStableStringChars flatChars(cx);
         if (!flatChars.initTwoByte(cx, flatStr))
@@ -332,10 +331,13 @@ EvalKernel(JSContext *cx, const CallArgs &args, EvalType evalType, AbstractFrame
                                                   : SourceBufferHolder::NoOwnership;
         SourceBufferHolder srcBuf(chars, flatStr->length(), ownership);
         JSScript *compiled = frontend::CompileScript(cx, &cx->tempLifoAlloc(),
-                                                     scopeobj, callerScript, options,
-                                                     srcBuf, flatStr, staticLevel);
+                                                     scopeobj, callerScript, staticScope,
+                                                     options, srcBuf, flatStr, staticLevel);
         if (!compiled)
             return false;
+
+        if (compiled->strict())
+            staticScope->setStrict();
 
         esg.setNewScript(compiled);
     }
@@ -366,7 +368,7 @@ js::DirectEvalStringFromIon(JSContext *cx,
     if (!flatStr)
         return false;
 
-    EvalJSONResult ejr = TryEvalJSON(cx, callerScript, flatStr, vp);
+    EvalJSONResult ejr = TryEvalJSON(cx, flatStr, vp);
     if (ejr != EvalJSON_NotJSON)
         return ejr == EvalJSON_Success;
 
@@ -387,13 +389,19 @@ js::DirectEvalStringFromIon(JSContext *cx,
         if (maybeScript && maybeScript->scriptSource()->introducerFilename())
             introducerFilename = maybeScript->scriptSource()->introducerFilename();
 
+        RootedObject enclosing(cx, callerScript->innermostStaticScope(pc));
+        Rooted<StaticEvalObject *> staticScope(cx, StaticEvalObject::create(cx, enclosing));
+        if (!staticScope)
+            return false;
+
         CompileOptions options(cx);
         options.setFileAndLine(filename, 1)
                .setCompileAndGo(true)
                .setForEval(true)
                .setNoScriptRval(false)
                .setMutedErrors(mutedErrors)
-               .setIntroductionInfo(introducerFilename, "eval", lineno, maybeScript, pcOffset);
+               .setIntroductionInfo(introducerFilename, "eval", lineno, maybeScript, pcOffset)
+               .maybeMakeStrictMode(IsStrictEvalPC(pc));
 
         AutoStableStringChars flatChars(cx);
         if (!flatChars.initTwoByte(cx, flatStr))
@@ -405,10 +413,13 @@ js::DirectEvalStringFromIon(JSContext *cx,
                                                   : SourceBufferHolder::NoOwnership;
         SourceBufferHolder srcBuf(chars, flatStr->length(), ownership);
         JSScript *compiled = frontend::CompileScript(cx, &cx->tempLifoAlloc(),
-                                                     scopeobj, callerScript, options,
-                                                     srcBuf, flatStr, staticLevel);
+                                                     scopeobj, callerScript, staticScope,
+                                                     options, srcBuf, flatStr, staticLevel);
         if (!compiled)
             return false;
+
+        if (compiled->strict())
+            staticScope->setStrict();
 
         esg.setNewScript(compiled);
     }
@@ -454,7 +465,9 @@ js::DirectEval(JSContext *cx, const CallArgs &args)
 
     MOZ_ASSERT(caller.scopeChain()->global().valueIsEval(args.calleev()));
     MOZ_ASSERT(JSOp(*iter.pc()) == JSOP_EVAL ||
-               JSOp(*iter.pc()) == JSOP_SPREADEVAL);
+               JSOp(*iter.pc()) == JSOP_STRICTEVAL ||
+               JSOp(*iter.pc()) == JSOP_SPREADEVAL ||
+               JSOp(*iter.pc()) == JSOP_STRICTSPREADEVAL);
     MOZ_ASSERT_IF(caller.isFunctionFrame(),
                   caller.compartment() == caller.callee()->compartment());
 
@@ -496,7 +509,7 @@ js::ExecuteInGlobalAndReturnScope(JSContext *cx, HandleObject global, HandleScri
     if (!scope->setUnqualifiedVarObj(cx))
         return false;
 
-    JSObject *thisobj = JSObject::thisObject(cx, global);
+    JSObject *thisobj = GetThisObject(cx, global);
     if (!thisobj)
         return false;
 

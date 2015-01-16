@@ -7,6 +7,7 @@
 #define MOZILLA_GFX_TEXTURECLIENTOGL_H
 
 #include "GLContextTypes.h"             // for SharedTextureHandle, etc
+#include "GLImages.h"
 #include "gfxTypes.h"
 #include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
 #include "mozilla/gfx/Point.h"          // for IntSize
@@ -24,18 +25,16 @@ class CompositableForwarder;
 class EGLImageTextureClient : public TextureClient
 {
 public:
-  EGLImageTextureClient(TextureFlags aFlags,
-                        EGLImage aImage,
-                        gfx::IntSize aSize,
-                        bool aInverted);
-
-  ~EGLImageTextureClient();
+  EGLImageTextureClient(ISurfaceAllocator* aAllocator,
+                        TextureFlags aFlags,
+                        EGLImageImage* aImage,
+                        gfx::IntSize aSize);
 
   virtual bool IsAllocated() const MOZ_OVERRIDE { return true; }
 
   virtual bool HasInternalBuffer() const MOZ_OVERRIDE { return false; }
 
-  virtual gfx::IntSize GetSize() const { return mSize; }
+  virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
 
   virtual bool ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor) MOZ_OVERRIDE;
 
@@ -64,7 +63,7 @@ public:
   }
 
 protected:
-  const EGLImage mImage;
+  RefPtr<EGLImageImage> mImage;
   const gfx::IntSize mSize;
   bool mIsLocked;
 };
@@ -74,10 +73,11 @@ protected:
 class SurfaceTextureClient : public TextureClient
 {
 public:
-  SurfaceTextureClient(TextureFlags aFlags,
+  SurfaceTextureClient(ISurfaceAllocator* aAllocator,
+                       TextureFlags aFlags,
                        gl::AndroidSurfaceTexture* aSurfTex,
                        gfx::IntSize aSize,
-                       bool aInverted);
+                       gl::OriginPos aOriginPos);
 
   ~SurfaceTextureClient();
 

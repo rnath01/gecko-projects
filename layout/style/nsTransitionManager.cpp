@@ -300,6 +300,7 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
                                              currentValue) ||
           currentValue != segment.mToValue) {
         // stop the transition
+        player->Cancel();
         players.RemoveElementAt(i);
         collection->UpdateAnimationGeneration(mPresContext);
       }
@@ -436,7 +437,7 @@ nsTransitionManager::ConsiderStartingTransition(
              "Should have one animation property segment for a transition");
   if (haveCurrentTransition && haveValues &&
       oldPT->Properties()[0].mSegments[0].mToValue == endValue) {
-    // WalkTransitionRule already called RestyleForAnimation.
+    // GetAnimationRule already called RestyleForAnimation.
     return;
   }
 
@@ -451,6 +452,7 @@ nsTransitionManager::ConsiderStartingTransition(
       // currently in the 'transition-delay').  It also might happen because we
       // just got a style change to a value that can't be interpolated.
       AnimationPlayerPtrArray& players = aElementTransitions->mPlayers;
+      players[currentIndex]->Cancel();
       oldPT = nullptr; // Clear pointer so it doesn't dangle
       players.RemoveElementAt(currentIndex);
       aElementTransitions->UpdateAnimationGeneration(mPresContext);
@@ -460,7 +462,7 @@ nsTransitionManager::ConsiderStartingTransition(
         // |aElementTransitions| is now a dangling pointer!
         aElementTransitions = nullptr;
       }
-      // WalkTransitionRule already called RestyleForAnimation.
+      // GetAnimationRule already called RestyleForAnimation.
     }
     return;
   }
@@ -539,8 +541,12 @@ nsTransitionManager::ConsiderStartingTransition(
   segment.mTimingFunction.Init(tf);
 
   nsRefPtr<CSSTransitionPlayer> player = new CSSTransitionPlayer(timeline);
-  player->mStartTime = timeline->GetCurrentTime();
+  // The order of the following two calls is important since PlayFromStyle
+  // will add the player to the PendingPlayerTracker of its source content's
+  // document. When we come to make source writeable (bug 1049975) we should
+  // remove this dependency.
   player->SetSource(pt);
+  player->PlayFromStyle();
 
   if (!aElementTransitions) {
     aElementTransitions =
@@ -579,132 +585,9 @@ nsTransitionManager::ConsiderStartingTransition(
   aWhichStarted->AddProperty(aProperty);
 }
 
-AnimationPlayerCollection*
-nsTransitionManager::GetAnimationPlayers(
-  dom::Element *aElement,
-  nsCSSPseudoElements::Type aPseudoType,
-  bool aCreateIfNeeded)
-{
-  if (!aCreateIfNeeded && PR_CLIST_IS_EMPTY(&mElementCollections)) {
-    // Early return for the most common case.
-    return nullptr;
-  }
-
-  nsIAtom *propName;
-  if (aPseudoType == nsCSSPseudoElements::ePseudo_NotPseudoElement) {
-    propName = nsGkAtoms::transitionsProperty;
-  } else if (aPseudoType == nsCSSPseudoElements::ePseudo_before) {
-    propName = nsGkAtoms::transitionsOfBeforeProperty;
-  } else if (aPseudoType == nsCSSPseudoElements::ePseudo_after) {
-    propName = nsGkAtoms::transitionsOfAfterProperty;
-  } else {
-    NS_ASSERTION(!aCreateIfNeeded,
-                 "should never try to create transitions for pseudo "
-                 "other than :before or :after");
-    return nullptr;
-  }
-  AnimationPlayerCollection* collection =
-    static_cast<AnimationPlayerCollection*>(aElement->GetProperty(propName));
-  if (!collection && aCreateIfNeeded) {
-    // FIXME: Consider arena-allocating?
-    collection = new AnimationPlayerCollection(aElement, propName, this);
-    nsresult rv =
-      aElement->SetProperty(propName, collection,
-                            &AnimationPlayerCollection::PropertyDtor, false);
-    if (NS_FAILED(rv)) {
-      NS_WARNING("SetProperty failed");
-      delete collection;
-      return nullptr;
-    }
-    if (propName == nsGkAtoms::transitionsProperty) {
-      aElement->SetMayHaveAnimations();
-    }
-
-    AddElementCollection(collection);
-  }
-
-  return collection;
-}
-
 /*
  * nsIStyleRuleProcessor implementation
  */
-
-void
-nsTransitionManager::WalkTransitionRule(dom::Element* aElement,
-                                        nsCSSPseudoElements::Type aPseudoType,
-                                        nsRuleWalker* aRuleWalker)
-{
-  AnimationPlayerCollection* collection =
-    GetAnimationPlayers(aElement, aPseudoType, false);
-  if (!collection) {
-    return;
-  }
-
-  if (!mPresContext->IsDynamic()) {
-    // For print or print preview, ignore animations.
-    return;
-  }
-
-  RestyleManager* restyleManager = mPresContext->RestyleManager();
-  if (restyleManager->SkipAnimationRules()) {
-    // If we're processing a normal style change rather than one from
-    // animation, don't add the transition rule.  This allows us to
-    // compute the new style value rather than having the transition
-    // override it, so that we can start transitioning differently.
-
-    if (restyleManager->PostAnimationRestyles()) {
-      // We need to immediately restyle with animation
-      // after doing this.
-      collection->PostRestyleForAnimation(mPresContext);
-    }
-    return;
-  }
-
-  collection->mNeedsRefreshes = true;
-  collection->EnsureStyleRuleFor(
-    mPresContext->RefreshDriver()->MostRecentRefresh(),
-    EnsureStyleRule_IsNotThrottled);
-
-  if (collection->mStyleRule) {
-    aRuleWalker->Forward(collection->mStyleRule);
-  }
-}
-
-/* virtual */ void
-nsTransitionManager::RulesMatching(ElementRuleProcessorData* aData)
-{
-  NS_ABORT_IF_FALSE(aData->mPresContext == mPresContext,
-                    "pres context mismatch");
-  WalkTransitionRule(aData->mElement,
-                     nsCSSPseudoElements::ePseudo_NotPseudoElement,
-                     aData->mRuleWalker);
-}
-
-/* virtual */ void
-nsTransitionManager::RulesMatching(PseudoElementRuleProcessorData* aData)
-{
-  NS_ABORT_IF_FALSE(aData->mPresContext == mPresContext,
-                    "pres context mismatch");
-
-  // Note:  If we're the only thing keeping a pseudo-element frame alive
-  // (per ProbePseudoStyleContext), we still want to keep it alive, so
-  // this is ok.
-  WalkTransitionRule(aData->mElement, aData->mPseudoType,
-                     aData->mRuleWalker);
-}
-
-/* virtual */ void
-nsTransitionManager::RulesMatching(AnonBoxRuleProcessorData* aData)
-{
-}
-
-#ifdef MOZ_XUL
-/* virtual */ void
-nsTransitionManager::RulesMatching(XULTreeRuleProcessorData* aData)
-{
-}
-#endif
 
 /* virtual */ size_t
 nsTransitionManager::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const

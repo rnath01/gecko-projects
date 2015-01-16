@@ -65,6 +65,8 @@ this.EXPORTED_SYMBOLS = [ "History" ];
 const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
+                                  "resource://gre/modules/AsyncShutdown.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                   "resource://gre/modules/Services.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
@@ -75,12 +77,24 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
                                   "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Sqlite",
                                   "resource://gre/modules/Sqlite.jsm");
-XPCOMUtils.defineLazyServiceGetter(this, "gNotifier",
-                                   "@mozilla.org/browser/nav-history-service;1",
-                                   Ci.nsPIPlacesHistoryListenersNotifier);
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
                                   "resource://gre/modules/PlacesUtils.jsm");
 Cu.importGlobalProperties(["URL"]);
+
+/**
+ * Whenever we update or remove numerous pages, it is preferable
+ * to yield time to the main thread every so often to avoid janking.
+ * This constant determines the maximal number of notifications we
+ * may emit before we yield.
+ */
+const NOTIFICATION_CHUNK_SIZE = 300;
+
+/**
+ * Private shutdown barrier blocked by ongoing operations.
+ */
+XPCOMUtils.defineLazyGetter(this, "operationsBarrier", () =>
+  new AsyncShutdown.Barrier("Sqlite.jsm: wait until all connections are closed")
+);
 
 /**
  * Shared connection
@@ -90,8 +104,19 @@ XPCOMUtils.defineLazyGetter(this, "DBConnPromised",
     Sqlite.wrapStorageConnection({ connection: PlacesUtils.history.DBConnection } )
           .then(db => {
       try {
-        Sqlite.shutdown.addBlocker("Places History.jsm: Closing database wrapper",
-                                   () => db.close());
+        Sqlite.shutdown.addBlocker(
+          "Places History.jsm: Closing database wrapper",
+          Task.async(function*() {
+            yield operationsBarrier.wait();
+            gIsClosed = true;
+            yield db.close();
+          }),
+          () => ({
+            fetchState: () => ({
+              isClosed: gIsClosed,
+              operations: operationsBarrier.state,
+            })
+          }));
       } catch (ex) {
         // It's too late to block shutdown of Sqlite, so close the connection
         // immediately.
@@ -102,6 +127,34 @@ XPCOMUtils.defineLazyGetter(this, "DBConnPromised",
     });
   })
 );
+
+/**
+ * `true` once this module has been shutdown.
+ */
+let gIsClosed = false;
+function ensureModuleIsOpen() {
+  if (gIsClosed) {
+    throw new Error("History.jsm has been shutdown");
+  }
+}
+
+/**
+ * Sends a bookmarks notification through the given observers.
+ *
+ * @param observers
+ *        array of nsINavBookmarkObserver objects.
+ * @param notification
+ *        the notification name.
+ * @param args
+ *        array of arguments to pass to the notification.
+ */
+function notify(observers, notification, args = []) {
+  for (let observer of observers) {
+    try {
+      observer[notification](...args);
+    } catch (ex) {}
+  }
+}
 
 this.History = Object.freeze({
   /**
@@ -200,7 +253,7 @@ this.History = Object.freeze({
    *      A callback invoked for each page found.
    *
    * @return (Promise)
-   *      A promise resoled once the operation is complete.
+   *      A promise resolved once the operation is complete.
    * @resolve (bool)
    *      `true` if at least one page was removed, `false` otherwise.
    * @throws (TypeError)
@@ -209,6 +262,8 @@ this.History = Object.freeze({
    *       is an empty array.
    */
   remove: function (pages, onResult = null) {
+    ensureModuleIsOpen();
+
     // Normalize and type-check arguments
     if (Array.isArray(pages)) {
       if (pages.length == 0) {
@@ -230,6 +285,8 @@ this.History = Object.freeze({
         urls.push(normalized.href);
       }
     }
+    let normalizedPages = {guids: guids, urls: urls};
+
     // At this stage, we know that either `guids` is not-empty
     // or `urls` is not-empty.
 
@@ -237,8 +294,29 @@ this.History = Object.freeze({
       throw new TypeError("Invalid function: " + onResult);
     }
 
-    // Now perform queries
-    return remove({guids: guids, urls: urls}, onResult);
+    return Task.spawn(function*() {
+      let promise = remove(normalizedPages, onResult);
+
+      operationsBarrier.client.addBlocker(
+        "History.remove",
+        promise,
+        {
+          // In case of crash, we do not want to upload information on
+          // which urls are being cleared, for privacy reasons. GUIDs
+          // are safe wrt privacy, but useless.
+          fetchState: () => ({
+            guids: guids.length,
+            urls: normalizedPages.urls.map(u => u.protocol),
+          })
+        });
+
+      try {
+        return (yield promise);
+      } finally {
+        // Cleanup the barrier.
+        operationsBarrier.client.removeBlocker(promise);
+      }
+    });
   },
 
   /**
@@ -250,7 +328,7 @@ this.History = Object.freeze({
    *      The full URI of the page or the GUID of the page.
    *
    * @return (Promise)
-   *      A promise resoled once the operation is complete.
+   *      A promise resolved once the operation is complete.
    * @resolve (bool)
    *      `true` if the page has been visited, `false` otherwise.
    * @throws (Error)
@@ -259,6 +337,28 @@ this.History = Object.freeze({
    */
   hasVisits: function(page, onResult) {
     throw new Error("Method not implemented");
+  },
+
+  /**
+   * Clear all history.
+   *
+   * @return (Promise)
+   *      A promise resolved once the operation is complete.
+   */
+  clear() {
+    ensureModuleIsOpen();
+
+    return Task.spawn(function* () {
+      let promise = clear();
+      operationsBarrier.client.addBlocker("History.clear", promise);
+
+      try {
+        return (yield promise);
+      } finally {
+        // Cleanup the barrier.
+        operationsBarrier.client.removeBlocker(promise);
+      }
+    });
   },
 
   /**
@@ -375,6 +475,34 @@ let invalidateFrecencies = Task.async(function*(db, idList) {
   );
 });
 
+// Inner implementation of History.clear().
+let clear = Task.async(function* () {
+  let db = yield DBConnPromised;
+
+  // Remove all history.
+  yield db.execute("DELETE FROM moz_historyvisits");
+
+  // Clear the registered embed visits.
+  PlacesUtils.history.clearEmbedVisits();
+
+  // Expiration will take care of orphans.
+  let observers = PlacesUtils.history.getObservers();
+  notify(observers, "onClearHistory");
+
+  // Invalidate frecencies for the remaining places. This must happen
+  // after the notification to ensure it runs enqueued to expiration.
+  yield db.execute(
+    `UPDATE moz_places SET frecency =
+     (CASE
+      WHEN url BETWEEN 'place:' AND 'place;'
+      THEN 0
+      ELSE -1
+      END)
+     WHERE frecency > 0`);
+
+  // Notify frecency change observers.
+  notify(observers, "onManyFrecenciesChanged");
+});
 
 // Inner implementation of History.remove.
 let remove = Task.async(function*({guids, urls}, onResult = null) {
@@ -448,15 +576,14 @@ let remove = Task.async(function*({guids, urls}, onResult = null) {
     }
 
     // 5. Notify observers.
+    let observers = PlacesUtils.history.getObservers();
+    let reason = Ci.nsINavHistoryObserver.REASON_DELETED;
     for (let {guid, uri, toRemove} of pages) {
-      gNotifier.notifyOnPageExpired(
-        uri, // uri
-        0, // visitTime - There are no more visits
-        toRemove, // wholeEntry
-        guid, // guid
-        Ci.nsINavHistoryObserver.REASON_DELETED, // reason
-        -1 // transition
-      );
+      if (toRemove) {
+        notify(observers, "onDeleteURI", [uri, guid, reason]);
+      } else {
+        notify(observers, "onDeleteVisits", [uri, 0, guid, reason, 0]);
+      }
     }
   });
 

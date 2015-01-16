@@ -9,7 +9,9 @@
 
 #include "jsapi.h"
 #include "jsobj.h"
+
 #include "builtin/TypedObject.h"
+#include "js/Conversions.h"
 #include "vm/GlobalObject.h"
 
 /*
@@ -17,9 +19,6 @@
  * Spec matching polyfill:
  * https://github.com/johnmccutchan/ecmascript_simd/blob/master/src/ecmascript_simd.js
  */
-
-#define FLOAT32X4_NULLARY_FUNCTION_LIST(V)                                          \
-  V(zero, (FuncZero<Float32x4>), 0, 0)
 
 #define FLOAT32X4_UNARY_FUNCTION_LIST(V)                                            \
   V(abs, (UnaryFunc<Float32x4, Abs, Float32x4>), 1, 0)                              \
@@ -41,12 +40,21 @@
   V(greaterThanOrEqual, (CompareFunc<Float32x4, GreaterThanOrEqual>), 2, 0)         \
   V(lessThan, (CompareFunc<Float32x4, LessThan>), 2, 0)                             \
   V(lessThanOrEqual, (CompareFunc<Float32x4, LessThanOrEqual>), 2, 0)               \
+  V(load,    (Load<Float32x4, 4>), 2, 0)                                            \
+  V(loadXYZ, (Load<Float32x4, 3>), 2, 0)                                            \
+  V(loadXY,  (Load<Float32x4, 2>), 2, 0)                                            \
+  V(loadX,   (Load<Float32x4, 1>), 2, 0)                                            \
   V(max, (BinaryFunc<Float32x4, Maximum, Float32x4>), 2, 0)                         \
+  V(maxNum, (BinaryFunc<Float32x4, MaxNum, Float32x4>), 2, 0)                       \
   V(min, (BinaryFunc<Float32x4, Minimum, Float32x4>), 2, 0)                         \
+  V(minNum, (BinaryFunc<Float32x4, MinNum, Float32x4>), 2, 0)                       \
   V(mul, (BinaryFunc<Float32x4, Mul, Float32x4>), 2, 0)                             \
   V(notEqual, (CompareFunc<Float32x4, NotEqual>), 2, 0)                             \
   V(or, (CoercedBinaryFunc<Float32x4, Int32x4, Or, Float32x4>), 2, 0)               \
-  V(scale, (FuncWith<Float32x4, Scale>), 2, 0)                                      \
+  V(store,    (Store<Float32x4, 4>), 3, 0)                                          \
+  V(storeXYZ, (Store<Float32x4, 3>), 3, 0)                                          \
+  V(storeXY,  (Store<Float32x4, 2>), 3, 0)                                          \
+  V(storeX,   (Store<Float32x4, 1>), 3, 0)                                          \
   V(sub, (BinaryFunc<Float32x4, Sub, Float32x4>), 2, 0)                             \
   V(withX, (FuncWith<Float32x4, WithX>), 2, 0)                                      \
   V(withY, (FuncWith<Float32x4, WithY>), 2, 0)                                      \
@@ -55,22 +63,19 @@
   V(xor, (CoercedBinaryFunc<Float32x4, Int32x4, Xor, Float32x4>), 2, 0)
 
 #define FLOAT32X4_TERNARY_FUNCTION_LIST(V)                                          \
+  V(bitselect, BitSelect<Float32x4>, 3, 0)                                          \
   V(clamp, Float32x4Clamp, 3, 0)                                                    \
-  V(select, Float32x4Select, 3, 0)
+  V(select, Select<Float32x4>, 3, 0)
 
 #define FLOAT32X4_SHUFFLE_FUNCTION_LIST(V)                                          \
   V(swizzle, Swizzle<Float32x4>, 2, 0)                                              \
   V(shuffle, Shuffle<Float32x4>, 3, 0)
 
 #define FLOAT32X4_FUNCTION_LIST(V)                                                  \
-  FLOAT32X4_NULLARY_FUNCTION_LIST(V)                                                \
   FLOAT32X4_UNARY_FUNCTION_LIST(V)                                                  \
   FLOAT32X4_BINARY_FUNCTION_LIST(V)                                                 \
   FLOAT32X4_TERNARY_FUNCTION_LIST(V)                                                \
   FLOAT32X4_SHUFFLE_FUNCTION_LIST(V)
-
-#define INT32X4_NULLARY_FUNCTION_LIST(V)                                            \
-  V(zero, (FuncZero<Int32x4>), 0, 0)
 
 #define INT32X4_UNARY_FUNCTION_LIST(V)                                              \
   V(fromFloat32x4, (FuncConvert<Float32x4, Int32x4>), 1, 0)                         \
@@ -84,17 +89,24 @@
   V(and, (BinaryFunc<Int32x4, And, Int32x4>), 2, 0)                                 \
   V(equal, (CompareFunc<Int32x4, Equal>), 2, 0)                                     \
   V(greaterThan, (CompareFunc<Int32x4, GreaterThan>), 2, 0)                         \
+  V(greaterThanOrEqual, (CompareFunc<Int32x4, GreaterThanOrEqual>), 2, 0)           \
   V(lessThan, (CompareFunc<Int32x4, LessThan>), 2, 0)                               \
+  V(lessThanOrEqual, (CompareFunc<Int32x4, LessThanOrEqual>), 2, 0)                 \
+  V(load,    (Load<Int32x4, 4>), 2, 0)                                              \
+  V(loadXYZ, (Load<Int32x4, 3>), 2, 0)                                              \
+  V(loadXY,  (Load<Int32x4, 2>), 2, 0)                                              \
+  V(loadX,   (Load<Int32x4, 1>), 2, 0)                                              \
   V(mul, (BinaryFunc<Int32x4, Mul, Int32x4>), 2, 0)                                 \
+  V(notEqual, (CompareFunc<Int32x4, NotEqual>), 2, 0)                               \
   V(or, (BinaryFunc<Int32x4, Or, Int32x4>), 2, 0)                                   \
   V(sub, (BinaryFunc<Int32x4, Sub, Int32x4>), 2, 0)                                 \
-  V(shiftLeft, (Int32x4BinaryScalar<ShiftLeft>), 2, 0)                              \
-  V(shiftRight, (Int32x4BinaryScalar<ShiftRight>), 2, 0)                            \
-  V(shiftRightLogical, (Int32x4BinaryScalar<ShiftRightLogical>), 2, 0)              \
-  V(withFlagX, (FuncWith<Int32x4, WithFlagX>), 2, 0)                                \
-  V(withFlagY, (FuncWith<Int32x4, WithFlagY>), 2, 0)                                \
-  V(withFlagZ, (FuncWith<Int32x4, WithFlagZ>), 2, 0)                                \
-  V(withFlagW, (FuncWith<Int32x4, WithFlagW>), 2, 0)                                \
+  V(shiftLeftByScalar, (Int32x4BinaryScalar<ShiftLeft>), 2, 0)                      \
+  V(shiftRightArithmeticByScalar, (Int32x4BinaryScalar<ShiftRight>), 2, 0)          \
+  V(shiftRightLogicalByScalar, (Int32x4BinaryScalar<ShiftRightLogical>), 2, 0)      \
+  V(store,    (Store<Int32x4, 4>), 3, 0)                                            \
+  V(storeXYZ, (Store<Int32x4, 3>), 3, 0)                                            \
+  V(storeXY,  (Store<Int32x4, 2>), 3, 0)                                            \
+  V(storeX,   (Store<Int32x4, 1>), 3, 0)                                            \
   V(withX, (FuncWith<Int32x4, WithX>), 2, 0)                                        \
   V(withY, (FuncWith<Int32x4, WithY>), 2, 0)                                        \
   V(withZ, (FuncWith<Int32x4, WithZ>), 2, 0)                                        \
@@ -102,7 +114,8 @@
   V(xor, (BinaryFunc<Int32x4, Xor, Int32x4>), 2, 0)
 
 #define INT32X4_TERNARY_FUNCTION_LIST(V)                                            \
-  V(select, Int32x4Select, 3, 0)                                                    \
+  V(bitselect, BitSelect<Int32x4>, 3, 0)                                            \
+  V(select, Select<Int32x4>, 3, 0)
 
 #define INT32X4_QUARTERNARY_FUNCTION_LIST(V)                                        \
   V(bool, Int32x4Bool, 4, 0)
@@ -112,7 +125,6 @@
   V(shuffle, Shuffle<Int32x4>, 3, 0)
 
 #define INT32X4_FUNCTION_LIST(V)                                                    \
-  INT32X4_NULLARY_FUNCTION_LIST(V)                                                  \
   INT32X4_UNARY_FUNCTION_LIST(V)                                                    \
   INT32X4_BINARY_FUNCTION_LIST(V)                                                   \
   INT32X4_TERNARY_FUNCTION_LIST(V)                                                  \
@@ -122,9 +134,9 @@
 #define FOREACH_INT32X4_SIMD_OP(_)   \
     _(fromFloat32x4)                 \
     _(fromFloat32x4Bits)             \
-    _(shiftLeft)                     \
-    _(shiftRight)                    \
-    _(shiftRightLogical)
+    _(shiftLeftByScalar)             \
+    _(shiftRightArithmeticByScalar)  \
+    _(shiftRightLogicalByScalar)
 #define FOREACH_FLOAT32X4_SIMD_OP(_) \
     _(abs)                           \
     _(sqrt)                          \
@@ -132,22 +144,25 @@
     _(reciprocalSqrt)                \
     _(fromInt32x4)                   \
     _(fromInt32x4Bits)               \
-    _(mul)                           \
     _(div)                           \
     _(max)                           \
     _(min)                           \
-    _(lessThanOrEqual)               \
-    _(notEqual)                      \
-    _(greaterThanOrEqual)
+    _(maxNum)                        \
+    _(minNum)
 #define FOREACH_COMMONX4_SIMD_OP(_)  \
     _(add)                           \
     _(sub)                           \
+    _(mul)                           \
     _(lessThan)                      \
+    _(lessThanOrEqual)               \
     _(equal)                         \
+    _(notEqual)                      \
     _(greaterThan)                   \
+    _(greaterThanOrEqual)            \
     _(and)                           \
     _(or)                            \
     _(xor)                           \
+    _(bitselect)                     \
     _(select)                        \
     _(swizzle)                       \
     _(shuffle)                       \
@@ -157,7 +172,9 @@
     _(withZ)                         \
     _(withW)                         \
     _(not)                           \
-    _(neg)
+    _(neg)                           \
+    _(load)                          \
+    _(store)
 #define FORALL_SIMD_OP(_)            \
     FOREACH_INT32X4_SIMD_OP(_)       \
     FOREACH_FLOAT32X4_SIMD_OP(_)     \
@@ -204,7 +221,7 @@ struct Int32x4 {
         return global.int32x4TypeDescr().as<TypeDescr>();
     }
     static Elem toType(Elem a) {
-        return ToInt32(a);
+        return JS::ToInt32(a);
     }
     static bool toType(JSContext *cx, JS::HandleValue v, Elem *out) {
         return ToInt32(cx, v, out);

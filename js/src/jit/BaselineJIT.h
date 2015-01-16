@@ -15,7 +15,8 @@
 #include "ds/LifoAlloc.h"
 #include "jit/Bailouts.h"
 #include "jit/IonCode.h"
-#include "jit/IonMacroAssembler.h"
+#include "jit/MacroAssembler.h"
+#include "vm/TraceLogging.h"
 
 namespace js {
 namespace jit {
@@ -93,6 +94,19 @@ struct PCMappingIndexEntry
     uint32_t bufferOffset;
 };
 
+// Describes a single AsmJSModule which jumps (via an FFI exit with the given
+// index) directly to a BaselineScript or IonScript.
+struct DependentAsmJSModuleExit
+{
+    const AsmJSModule *module;
+    size_t exitIndex;
+
+    DependentAsmJSModuleExit(const AsmJSModule *module, size_t exitIndex)
+      : module(module),
+        exitIndex(exitIndex)
+    { }
+};
+
 struct BaselineScript
 {
   public:
@@ -114,6 +128,10 @@ struct BaselineScript
     // Allocated space for fallback stubs.
     FallbackICStubSpace fallbackStubSpace_;
 
+    // If non-null, the list of AsmJSModules that contain an optimized call
+    // directly to this script.
+    Vector<DependentAsmJSModuleExit> *dependentAsmJSModules_;
+
     // Native code offset right before the scope chain is initialized.
     uint32_t prologueOffset_;
 
@@ -126,6 +144,17 @@ struct BaselineScript
     mozilla::DebugOnly<bool> spsOn_;
 #endif
     uint32_t spsPushToggleOffset_;
+
+    // The offsets and event used for Tracelogger toggling.
+#ifdef JS_TRACE_LOGGING
+# ifdef DEBUG
+    bool traceLoggerScriptsEnabled_;
+    bool traceLoggerEngineEnabled_;
+# endif
+    uint32_t traceLoggerEnterToggleOffset_;
+    uint32_t traceLoggerExitToggleOffset_;
+    TraceLoggerEvent traceLoggerScriptEvent_;
+#endif
 
     // Native code offsets right after the debug prologue VM call returns, or
     // would have returned. This offset is recorded even when debug mode is
@@ -185,11 +214,13 @@ struct BaselineScript
   public:
     // Do not call directly, use BaselineScript::New. This is public for cx->new_.
     BaselineScript(uint32_t prologueOffset, uint32_t epilogueOffset,
-                   uint32_t spsPushToggleOffset, uint32_t postDebugPrologueOffset);
+                   uint32_t spsPushToggleOffset, uint32_t traceLoggerEnterToggleOffset,
+                   uint32_t traceLoggerExitToggleOffset, uint32_t postDebugPrologueOffset);
 
     static BaselineScript *New(JSScript *jsscript, uint32_t prologueOffset,
                                uint32_t epilogueOffset, uint32_t postDebugPrologueOffset,
-                               uint32_t spsPushToggleOffset, size_t icEntries,
+                               uint32_t spsPushToggleOffset, uint32_t traceLoggerEnterToggleOffset,
+                               uint32_t traceLoggerExitToggleOffset, size_t icEntries,
                                size_t pcMappingIndexEntries, size_t pcMappingSize,
                                size_t bytecodeTypeMapEntries, size_t yieldEntries);
 
@@ -311,12 +342,10 @@ struct BaselineScript
     }
 
     ICEntry &icEntry(size_t index);
-    ICEntry *maybeICEntryFromReturnOffset(CodeOffsetLabel returnOffset);
     ICEntry &icEntryFromReturnOffset(CodeOffsetLabel returnOffset);
     ICEntry &icEntryFromPCOffset(uint32_t pcOffset);
-    ICEntry &icEntryForDebugModeRecompileFromPCOffset(uint32_t pcOffset);
     ICEntry &icEntryFromPCOffset(uint32_t pcOffset, ICEntry *prevLookedUpEntry);
-    ICEntry *maybeICEntryFromReturnAddress(uint8_t *returnAddr);
+    ICEntry &callVMEntryFromPCOffset(uint32_t pcOffset);
     ICEntry &icEntryFromReturnAddress(uint8_t *returnAddr);
     uint8_t *returnAddressForIC(const ICEntry &ent);
 
@@ -337,26 +366,36 @@ struct BaselineScript
     }
 
     void copyPCMappingIndexEntries(const PCMappingIndexEntry *entries);
-
     void copyPCMappingEntries(const CompactBufferWriter &entries);
-    uint8_t *nativeCodeForPC(JSScript *script, jsbytecode *pc, PCMappingSlotInfo *slotInfo = nullptr);
 
-    jsbytecode *pcForReturnOffset(JSScript *script, uint32_t nativeOffset);
-    jsbytecode *pcForReturnAddress(JSScript *script, uint8_t *nativeAddress);
+    uint8_t *nativeCodeForPC(JSScript *script, jsbytecode *pc,
+                             PCMappingSlotInfo *slotInfo = nullptr);
 
-    jsbytecode *pcForNativeAddress(JSScript *script, uint8_t *nativeAddress);
-    jsbytecode *pcForNativeOffset(JSScript *script, uint32_t nativeOffset);
+    // Return the bytecode offset for a given native code address. Be careful
+    // when using this method: we don't emit code for some bytecode ops, so
+    // the result may not be accurate.
+    jsbytecode *approximatePcForNativeAddress(JSScript *script, uint8_t *nativeAddress);
 
-  private:
-    jsbytecode *pcForNativeOffset(JSScript *script, uint32_t nativeOffset, bool isReturn);
+    bool addDependentAsmJSModule(JSContext *cx, DependentAsmJSModuleExit exit);
+    void unlinkDependentAsmJSModules(FreeOp *fop);
+    void removeDependentAsmJSModule(DependentAsmJSModuleExit exit);
 
-  public:
     // Toggle debug traps (used for breakpoints and step mode) in the script.
     // If |pc| is nullptr, toggle traps for all ops in the script. Else, only
     // toggle traps at |pc|.
     void toggleDebugTraps(JSScript *script, jsbytecode *pc);
 
     void toggleSPS(bool enable);
+
+#ifdef JS_TRACE_LOGGING
+    void initTraceLogger(JSRuntime *runtime, JSScript *script);
+    void toggleTraceLoggerScripts(JSRuntime *runtime, JSScript *script, bool enable);
+    void toggleTraceLoggerEngine(bool enable);
+
+    static size_t offsetOfTraceLoggerScriptEvent() {
+        return offsetof(BaselineScript, traceLoggerScriptEvent_);
+    }
+#endif
 
     void noteAccessedGetter(uint32_t pcOffset);
     void noteArrayWriteHole(uint32_t pcOffset);
@@ -394,10 +433,10 @@ CanEnterBaselineMethod(JSContext *cx, RunState &state);
 MethodStatus
 CanEnterBaselineAtBranch(JSContext *cx, InterpreterFrame *fp, bool newType);
 
-IonExecStatus
+JitExecStatus
 EnterBaselineMethod(JSContext *cx, RunState &state);
 
-IonExecStatus
+JitExecStatus
 EnterBaselineAtBranch(JSContext *cx, InterpreterFrame *fp, jsbytecode *pc);
 
 void
@@ -409,6 +448,11 @@ AddSizeOfBaselineData(JSScript *script, mozilla::MallocSizeOf mallocSizeOf, size
 
 void
 ToggleBaselineSPS(JSRuntime *runtime, bool enable);
+
+void
+ToggleBaselineTraceLoggerScripts(JSRuntime *runtime, bool enable);
+void
+ToggleBaselineTraceLoggerEngine(JSRuntime *runtime, bool enable);
 
 struct BaselineBailoutInfo
 {
@@ -433,6 +477,9 @@ struct BaselineBailoutInfo
 
     // The native code address to resume into.
     void *resumeAddr;
+
+    // The bytecode pc where we will resume.
+    jsbytecode *resumePC;
 
     // If resuming into a TypeMonitor IC chain, this field holds the
     // address of the first stub in that chain.  If this field is

@@ -374,19 +374,25 @@ function addNewTabPageTabPromise() {
     }
   }
 
-  // The new tab page might have been preloaded in the background.
-  if (browser.contentDocument.readyState == "complete") {
-    waitForCondition(() => !browser.contentDocument.hidden).then(whenNewTabLoaded);
-    return deferred.promise;
-  }
-
   // Wait for the new tab page to be loaded.
-  browser.addEventListener("load", function onLoad() {
-    browser.removeEventListener("load", onLoad, true);
-    whenNewTabLoaded();
-  }, true);
+  waitForBrowserLoad(browser, function () {
+    // Wait for the document to become visible in case it was preloaded.
+    waitForCondition(() => !browser.contentDocument.hidden).then(whenNewTabLoaded);
+  });
 
   return deferred.promise;
+}
+
+function waitForBrowserLoad(browser, callback = TestRunner.next) {
+  if (browser.contentDocument.readyState == "complete") {
+    executeSoon(callback);
+    return;
+  }
+
+  browser.addEventListener("load", function onLoad() {
+    browser.removeEventListener("load", onLoad, true);
+    executeSoon(callback);
+  }, true);
 }
 
 /**
@@ -677,4 +683,35 @@ function whenSearchInitDone() {
     }
   });
   return deferred.promise;
+}
+
+/**
+ * Changes the newtab customization option and waits for the panel to open and close
+ *
+ * @param {string} aTheme
+ *        Can be any of("blank"|"classic"|"enhanced")
+ */
+function customizeNewTabPage(aTheme) {
+  let document = getContentDocument();
+  let panel = document.getElementById("newtab-customize-panel");
+  let customizeButton = document.getElementById("newtab-customize-button");
+
+  // Attache onShown the listener on panel
+  panel.addEventListener("popupshown", function onShown() {
+    panel.removeEventListener("popupshown", onShown);
+
+    // Get the element for the specific option and click on it,
+    // then trigger an escape to close the panel
+    document.getElementById("newtab-customize-" + aTheme).click();
+    executeSoon(() => { panel.hidePopup(); });
+  });
+
+  // Attache the listener for panel closing, this will resolve the promise
+  panel.addEventListener("popuphidden", function onHidden() {
+    panel.removeEventListener("popuphidden", onHidden);
+    executeSoon(TestRunner.next);
+  });
+
+  // Click on the customize button to display the panel
+  customizeButton.click();
 }

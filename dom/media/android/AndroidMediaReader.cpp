@@ -99,13 +99,16 @@ nsresult AndroidMediaReader::ReadMetadata(MediaInfo* aInfo,
   return NS_OK;
 }
 
-void AndroidMediaReader::Shutdown()
+nsRefPtr<ShutdownPromise>
+AndroidMediaReader::Shutdown()
 {
   ResetDecode();
   if (mPlugin) {
     GetAndroidMediaPluginHost()->DestroyDecoder(mPlugin);
     mPlugin = nullptr;
   }
+
+  return MediaDecoderReader::Shutdown();
 }
 
 // Resets all state related to decoding, emptying all buffers etc.
@@ -144,8 +147,9 @@ bool AndroidMediaReader::DecodeVideoFrame(bool &aKeyframeSkip,
         int64_t durationUs;
         mPlugin->GetDuration(mPlugin, &durationUs);
         durationUs = std::max<int64_t>(durationUs - mLastVideoFrame->mTime, 0);
-        mVideoQueue.Push(VideoData::ShallowCopyUpdateDuration(mLastVideoFrame,
-                                                              durationUs));
+        nsRefPtr<VideoData> data = VideoData::ShallowCopyUpdateDuration(mLastVideoFrame,
+                                                                        durationUs);
+        mVideoQueue.Push(data);
         mLastVideoFrame = nullptr;
       }
       return false;
@@ -172,7 +176,7 @@ bool AndroidMediaReader::DecodeVideoFrame(bool &aKeyframeSkip,
     int64_t pos = mDecoder->GetResource()->Tell();
     IntRect picture = ToIntRect(mPicture);
 
-    nsAutoPtr<VideoData> v;
+    nsRefPtr<VideoData> v;
     if (currentImage) {
       gfx::IntSize frameSize = currentImage->GetSize();
       if (frameSize.width != mInitialFrame.width ||
@@ -273,9 +277,8 @@ bool AndroidMediaReader::DecodeVideoFrame(bool &aKeyframeSkip,
       continue;
     }
 
-    mVideoQueue.Push(mLastVideoFrame.forget());
-
     // Buffer the current frame we just decoded.
+    mVideoQueue.Push(mLastVideoFrame);
     mLastVideoFrame = v;
 
     break;
@@ -316,7 +319,8 @@ bool AndroidMediaReader::DecodeAudioData()
                                      source.mAudioChannels));
 }
 
-void AndroidMediaReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndTime, int64_t aCurrentTime)
+nsRefPtr<MediaDecoderReader::SeekPromise>
+AndroidMediaReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndTime, int64_t aCurrentTime)
 {
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
 
@@ -336,7 +340,7 @@ void AndroidMediaReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndT
     mAudioSeekTimeUs = mVideoSeekTimeUs = aTarget;
   }
 
-  GetCallback()->OnSeekCompleted(NS_OK);
+  return SeekPromise::CreateAndResolve(mAudioSeekTimeUs, __func__);
 }
 
 AndroidMediaReader::ImageBufferCallback::ImageBufferCallback(mozilla::layers::ImageContainer *aImageContainer) :

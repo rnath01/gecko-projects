@@ -61,10 +61,9 @@ public:
     , mMode(RequestMode::No_cors)
     , mCredentialsMode(RequestCredentials::Omit)
     , mResponseTainting(RESPONSETAINT_BASIC)
-    , mRedirectCount(0)
+    , mCacheMode(RequestCache::Default)
     , mAuthenticationFlag(false)
     , mForceOriginHeader(false)
-    , mManualRedirect(false)
     , mPreserveContentCodings(false)
       // FIXME(nsm): This should be false by default, but will lead to the
       // algorithm never loading data: URLs right now. See Bug 1018872 about
@@ -84,17 +83,15 @@ public:
     , mHeaders(aOther.mHeaders)
     , mBodyStream(aOther.mBodyStream)
     , mContext(aOther.mContext)
-    , mOrigin(aOther.mOrigin)
     , mContextFrameType(aOther.mContextFrameType)
     , mReferrerType(aOther.mReferrerType)
     , mReferrerURL(aOther.mReferrerURL)
     , mMode(aOther.mMode)
     , mCredentialsMode(aOther.mCredentialsMode)
     , mResponseTainting(aOther.mResponseTainting)
-    , mRedirectCount(aOther.mRedirectCount)
+    , mCacheMode(aOther.mCacheMode)
     , mAuthenticationFlag(aOther.mAuthenticationFlag)
     , mForceOriginHeader(aOther.mForceOriginHeader)
-    , mManualRedirect(aOther.mManualRedirect)
     , mPreserveContentCodings(aOther.mPreserveContentCodings)
     , mSameOriginDataURL(aOther.mSameOriginDataURL)
     , mSandboxedStorageAreaURLs(aOther.mSandboxedStorageAreaURLs)
@@ -129,6 +126,12 @@ public:
   GetURL(nsCString& aURL) const
   {
     aURL.Assign(mURL);
+  }
+
+  void
+  SetURL(const nsACString& aURL)
+  {
+    mURL.Assign(aURL);
   }
 
   bool
@@ -183,6 +186,12 @@ public:
     mMode = aMode;
   }
 
+  RequestCredentials
+  GetCredentialsMode() const
+  {
+    return mCredentialsMode;
+  }
+
   void
   SetCredentialsMode(RequestCredentials aCredentialsMode)
   {
@@ -201,6 +210,12 @@ public:
     mResponseTainting = aTainting;
   }
 
+  RequestCache
+  GetCacheMode() const
+  {
+    return mCacheMode;
+  }
+
   nsContentPolicyType
   GetContext() const
   {
@@ -211,6 +226,12 @@ public:
   UnsafeRequest() const
   {
     return mUnsafeRequest;
+  }
+
+  void
+  SetUnsafeRequest()
+  {
+    mUnsafeRequest = true;
   }
 
   InternalHeaders*
@@ -225,12 +246,6 @@ public:
     return mForceOriginHeader;
   }
 
-  void
-  GetOrigin(nsCString& aOrigin) const
-  {
-    aOrigin.Assign(mOrigin);
-  }
-
   bool
   SameOriginDataURL() const
   {
@@ -238,8 +253,16 @@ public:
   }
 
   void
+  UnsetSameOriginDataURL()
+  {
+    mSameOriginDataURL = false;
+  }
+
+  void
   SetBody(nsIInputStream* aStream)
   {
+    // A request's body may not be reset once set.
+    MOZ_ASSERT(!mBodyStream);
     mBodyStream = aStream;
   }
 
@@ -259,12 +282,6 @@ public:
 private:
   ~InternalRequest();
 
-  void
-  SetURL(const nsACString& aURL)
-  {
-    mURL.Assign(aURL);
-  }
-
   nsCString mMethod;
   nsCString mURL;
   nsRefPtr<InternalHeaders> mHeaders;
@@ -273,8 +290,6 @@ private:
   // nsContentPolicyType does not cover the complete set defined in the spec,
   // but it is a good start.
   nsContentPolicyType mContext;
-
-  nsCString mOrigin;
 
   ContextFrameType mContextFrameType;
   ReferrerType mReferrerType;
@@ -285,12 +300,10 @@ private:
   RequestMode mMode;
   RequestCredentials mCredentialsMode;
   ResponseTainting mResponseTainting;
-
-  uint32_t mRedirectCount;
+  RequestCache mCacheMode;
 
   bool mAuthenticationFlag;
   bool mForceOriginHeader;
-  bool mManualRedirect;
   bool mPreserveContentCodings;
   bool mSameOriginDataURL;
   bool mSandboxedStorageAreaURLs;

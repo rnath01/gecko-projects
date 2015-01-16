@@ -26,6 +26,8 @@
 #include "Units.h"
 #include "nsExpirationTracker.h"
 #include "nsClassHashtable.h"
+#include "prclist.h"
+#include "gfxVR.h"
 
 class imgIRequest;
 class nsAString;
@@ -84,6 +86,7 @@ namespace mozilla {
 class CSSStyleSheet;
 class ErrorResult;
 class EventStates;
+class PendingPlayerTracker;
 class SVGAttrAnimationRuleProcessor;
 
 namespace css {
@@ -114,6 +117,7 @@ class OverfillCallback;
 class HTMLBodyElement;
 struct LifecycleCallbackArgs;
 class Link;
+class MediaQueryList;
 class GlobalObject;
 class NodeFilter;
 class NodeIterator;
@@ -133,12 +137,18 @@ template<typename> class Sequence;
 
 template<typename, typename> class CallbackObjectHolder;
 typedef CallbackObjectHolder<NodeFilter, nsIDOMNodeFilter> NodeFilterHolder;
+
+struct FullScreenOptions {
+  FullScreenOptions() { }
+  nsRefPtr<gfx::VRHMDInfo> mVRHMDDevice;
+};
+
 } // namespace dom
 } // namespace mozilla
 
 #define NS_IDOCUMENT_IID \
-{ 0x1f343423, 0x957c, 0x4da3, \
-  { 0xaa, 0xa3, 0x07, 0x37, 0x54, 0x3e, 0x79, 0x2a } }
+{ 0xf63d2f6e, 0xd1c1, 0x49b9, \
+ { 0x88, 0x26, 0xd5, 0x9e, 0x5d, 0x72, 0x2a, 0x42 } }
 
 // Enum for requesting a particular type of document when creating a doc
 enum DocumentFlavor {
@@ -162,6 +172,7 @@ already_AddRefed<nsContentList>
 NS_GetContentList(nsINode* aRootNode,
                   int32_t aMatchNameSpaceId,
                   const nsAString& aTagname);
+
 //----------------------------------------------------------------------
 
 // Document interface.  This is implemented by all document objects in
@@ -1062,7 +1073,8 @@ public:
    * the <iframe> or <browser> that contains this document is also mode
    * fullscreen. This happens recursively in all ancestor documents.
    */
-  virtual void AsyncRequestFullScreen(Element* aElement) = 0;
+  virtual void AsyncRequestFullScreen(Element* aElement,
+                                      mozilla::dom::FullScreenOptions& aOptions) = 0;
 
   /**
    * Called when a frame in a child process has entered fullscreen or when a
@@ -1526,6 +1538,17 @@ public:
                     mozilla::ErrorResult& aRv) = 0;
 
   /**
+   * Support for window.matchMedia()
+   */
+
+  already_AddRefed<mozilla::dom::MediaQueryList>
+    MatchMedia(const nsAString& aMediaQueryList);
+
+  const PRCList* MediaQueryLists() const {
+    return &mDOMMediaQueryLists;
+  }
+
+  /**
    * Get the compatibility mode for this document
    */
   nsCompatibility GetCompatibilityMode() const {
@@ -1800,6 +1823,17 @@ public:
   // mAnimationController isn't yet initialized.
   virtual nsSMILAnimationController* GetAnimationController() = 0;
 
+  // Gets the tracker for animation players that are waiting to start.
+  // Returns nullptr if there is no pending player tracker for this document
+  // which will be the case if there have never been any CSS animations or
+  // transitions on elements in the document.
+  virtual mozilla::PendingPlayerTracker* GetPendingPlayerTracker() = 0;
+
+  // Gets the tracker for animation players that are waiting to start and
+  // creates it if it doesn't already exist. As a result, the return value
+  // will never be nullptr.
+  virtual mozilla::PendingPlayerTracker* GetOrCreatePendingPlayerTracker() = 0;
+
   // Makes the images on this document capable of having their animation
   // active or suspended. An Image will animate as long as at least one of its
   // owning Documents needs it to animate; otherwise it can suspend.
@@ -1899,6 +1933,12 @@ public:
   virtual void MaybePreLoadImage(nsIURI* uri,
                                  const nsAString& aCrossOriginAttr,
                                  ReferrerPolicy aReferrerPolicy) = 0;
+
+  /**
+   * Called by images to forget an image preload when they start doing
+   * the real load.
+   */
+  virtual void ForgetImagePreload(nsIURI* aURI) = 0;
 
   /**
    * Called by nsParser to preload style sheets.  Can also be merged into the
@@ -2075,6 +2115,18 @@ public:
   bool HasWarnedAbout(DeprecatedOperations aOperation);
   void WarnOnceAbout(DeprecatedOperations aOperation, bool asError = false);
 
+#define DOCUMENT_WARNING(_op) e##_op,
+  enum DocumentWarnings {
+#include "nsDocumentWarningList.h"
+    eDocumentWarningCount
+  };
+#undef DOCUMENT_WARNING
+  bool HasWarnedAbout(DocumentWarnings aWarning);
+  void WarnOnceAbout(DocumentWarnings aWarning,
+                     bool asError = false,
+                     const char16_t **aParams = nullptr,
+                     uint32_t aParamsLength = 0);
+
   virtual void PostVisibilityUpdateEvent() = 0;
   
   bool IsSyntheticDocument() const { return mIsSyntheticDocument; }
@@ -2185,10 +2237,9 @@ public:
                                         Element* aCustomElement,
                                         mozilla::dom::LifecycleCallbackArgs* aArgs = nullptr,
                                         mozilla::dom::CustomElementDefinition* aDefinition = nullptr) = 0;
-  virtual void SwizzleCustomElement(Element* aElement,
-                                    const nsAString& aTypeExtension,
-                                    uint32_t aNamespaceID,
-                                    mozilla::ErrorResult& rv) = 0;
+  virtual void SetupCustomElement(Element* aElement,
+                                  uint32_t aNamespaceID,
+                                  const nsAString* aTypeExtension = nullptr) = 0;
   virtual void
     RegisterElement(JSContext* aCx, const nsAString& aName,
                     const mozilla::dom::ElementRegistrationOptions& aOptions,
@@ -2431,7 +2482,8 @@ public:
   bool DidFireDOMContentLoaded() const { return mDidFireDOMContentLoaded; }
 
 private:
-  uint64_t mWarnedAbout;
+  uint64_t mDeprecationWarnedAbout;
+  uint64_t mDocWarningWarnedAbout;
   SelectorCache mSelectorCache;
 
 protected:
@@ -2456,7 +2508,7 @@ protected:
   virtual void MutationEventDispatched(nsINode* aTarget) = 0;
   friend class mozAutoSubtreeModified;
 
-  virtual Element* GetNameSpaceElement()
+  virtual Element* GetNameSpaceElement() MOZ_OVERRIDE
   {
     return GetRootElement();
   }
@@ -2777,6 +2829,9 @@ protected:
 
   uint32_t mBlockDOMContentLoaded;
   bool mDidFireDOMContentLoaded:1;
+
+  // Our live MediaQueryLists
+  PRCList mDOMMediaQueryLists;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsIDocument, NS_IDOCUMENT_IID)

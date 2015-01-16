@@ -18,7 +18,7 @@ class AbstractFramePtr;
 class ScriptFrameIter;
 
 namespace jit {
-class IonJSFrameLayout;
+class JitFrameLayout;
 }
 
 /*
@@ -142,7 +142,7 @@ class ArgumentsObject : public NativeObject
      */
     static ArgumentsObject *createUnexpected(JSContext *cx, ScriptFrameIter &iter);
     static ArgumentsObject *createUnexpected(JSContext *cx, AbstractFramePtr frame);
-    static ArgumentsObject *createForIon(JSContext *cx, jit::IonJSFrameLayout *frame,
+    static ArgumentsObject *createForIon(JSContext *cx, jit::JitFrameLayout *frame,
                                          HandleObject scopeChain);
 
     /*
@@ -203,7 +203,7 @@ class ArgumentsObject : public NativeObject
     /*
      * An ArgumentsObject serves two roles:
      *  - a real object, accessed through regular object operations, e.g..,
-     *    JSObject::getElement corresponding to 'arguments[i]';
+     *    GetElement corresponding to 'arguments[i]';
      *  - a VM-internal data structure, storing the value of arguments (formal
      *    and actual) that are accessed directly by the VM when a reading the
      *    value of a formal parameter.
@@ -291,7 +291,7 @@ class ArgumentsObject : public NativeObject
 
     static void MaybeForwardToCallObject(AbstractFramePtr frame, ArgumentsObject *obj,
                                          ArgumentsData *data);
-    static void MaybeForwardToCallObject(jit::IonJSFrameLayout *frame, HandleObject callObj,
+    static void MaybeForwardToCallObject(jit::JitFrameLayout *frame, HandleObject callObj,
                                          ArgumentsObject *obj, ArgumentsData *data);
 };
 

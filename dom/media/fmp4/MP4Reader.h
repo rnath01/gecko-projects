@@ -26,8 +26,10 @@ typedef std::deque<mp4_demuxer::MP4Sample*> MP4SampleQueue;
 
 class MP4Stream;
 
-class MP4Reader : public MediaDecoderReader
+class MP4Reader MOZ_FINAL : public MediaDecoderReader
 {
+  typedef mp4_demuxer::TrackType TrackType;
+
 public:
   explicit MP4Reader(AbstractMediaDecoder* aDecoder);
 
@@ -35,27 +37,34 @@ public:
 
   virtual nsresult Init(MediaDecoderReader* aCloneDonor) MOZ_OVERRIDE;
 
-  virtual bool DecodeAudioData() MOZ_OVERRIDE;
-  virtual bool DecodeVideoFrame(bool &aKeyframeSkip,
-                                int64_t aTimeThreshold) MOZ_OVERRIDE;
+  virtual size_t SizeOfVideoQueueInFrames() MOZ_OVERRIDE;
+  virtual size_t SizeOfAudioQueueInFrames() MOZ_OVERRIDE;
+
+  virtual nsRefPtr<VideoDataPromise>
+  RequestVideoData(bool aSkipToNextKeyframe, int64_t aTimeThreshold) MOZ_OVERRIDE;
+
+  virtual nsRefPtr<AudioDataPromise> RequestAudioData() MOZ_OVERRIDE;
 
   virtual bool HasAudio() MOZ_OVERRIDE;
   virtual bool HasVideo() MOZ_OVERRIDE;
 
+  // PreReadMetadata() is called by MediaDecoderStateMachine::DecodeMetadata()
+  // before checking hardware resource. In Gonk, it requests hardware codec so
+  // MediaDecoderStateMachine could go to DORMANT state if the hardware codec is
+  // not available.
+  virtual void PreReadMetadata() MOZ_OVERRIDE;
   virtual nsresult ReadMetadata(MediaInfo* aInfo,
                                 MetadataTags** aTags) MOZ_OVERRIDE;
 
   virtual void ReadUpdatedMetadata(MediaInfo* aInfo) MOZ_OVERRIDE;
 
-  virtual void Seek(int64_t aTime,
-                    int64_t aStartTime,
-                    int64_t aEndTime,
-                    int64_t aCurrentTime) MOZ_OVERRIDE;
+  virtual nsRefPtr<SeekPromise>
+  Seek(int64_t aTime,
+       int64_t aStartTime,
+       int64_t aEndTime,
+       int64_t aCurrentTime) MOZ_OVERRIDE;
 
   virtual bool IsMediaSeekable() MOZ_OVERRIDE;
-
-  virtual void NotifyDataArrived(const char* aBuffer, uint32_t aLength,
-                                 int64_t aOffset) MOZ_OVERRIDE;
 
   virtual int64_t GetEvictionOffset(double aTime) MOZ_OVERRIDE;
 
@@ -71,9 +80,22 @@ public:
 
   virtual nsresult ResetDecode() MOZ_OVERRIDE;
 
-  virtual void Shutdown() MOZ_OVERRIDE;
+  virtual nsRefPtr<ShutdownPromise> Shutdown() MOZ_OVERRIDE;
+
+  virtual bool IsAsync() const MOZ_OVERRIDE { return true; }
 
 private:
+
+  bool InitDemuxer();
+  void ReturnOutput(MediaData* aData, TrackType aTrack);
+
+  // Sends input to decoder for aTrack, and output to the state machine,
+  // if necessary.
+  void Update(TrackType aTrack);
+
+  // Enqueues a task to call Update(aTrack) on the decoder task queue.
+  // Lock for corresponding track must be held.
+  void ScheduleUpdate(TrackType aTrack);
 
   void ExtractCryptoInitData(nsTArray<uint8_t>& aInitData);
 
@@ -83,23 +105,31 @@ private:
   // Blocks until the demuxer produces an sample of specified type.
   // Returns nullptr on error on EOS. Caller must delete sample.
   mp4_demuxer::MP4Sample* PopSample(mp4_demuxer::TrackType aTrack);
+  mp4_demuxer::MP4Sample* PopSampleLocked(mp4_demuxer::TrackType aTrack);
 
   bool SkipVideoDemuxToNextKeyFrame(int64_t aTimeThreshold, uint32_t& parsed);
 
+  // DecoderCallback proxies the MediaDataDecoderCallback calls to these
+  // functions.
   void Output(mp4_demuxer::TrackType aType, MediaData* aSample);
   void InputExhausted(mp4_demuxer::TrackType aTrack);
   void Error(mp4_demuxer::TrackType aTrack);
-  bool Decode(mp4_demuxer::TrackType aTrack);
   void Flush(mp4_demuxer::TrackType aTrack);
   void DrainComplete(mp4_demuxer::TrackType aTrack);
   void UpdateIndex();
   bool IsSupportedAudioMimeType(const char* aMimeType);
+  bool IsSupportedVideoMimeType(const char* aMimeType);
   void NotifyResourcesStatusChanged();
+  void RequestCodecResource();
   bool IsWaitingOnCodecResource();
   virtual bool IsWaitingOnCDMResource() MOZ_OVERRIDE;
 
+  size_t SizeOfQueue(TrackType aTrack);
+
+  nsRefPtr<MP4Stream> mStream;
+  int64_t mTimestampOffset;
   nsAutoPtr<mp4_demuxer::MP4Demuxer> mDemuxer;
-  nsAutoPtr<PlatformDecoderModule> mPlatform;
+  nsRefPtr<PlatformDecoderModule> mPlatform;
 
   class DecoderCallback : public MediaDataDecoderCallback {
   public:
@@ -133,9 +163,11 @@ private:
   };
 
   struct DecoderData {
-    DecoderData(const char* aMonitorName,
+    DecoderData(MediaData::Type aType,
                 uint32_t aDecodeAhead)
-      : mMonitor(aMonitorName)
+      : mType(aType)
+      , mMonitor(aType == MediaData::AUDIO_DATA ? "MP4 audio decoder data"
+                                                : "MP4 video decoder data")
       , mNumSamplesInput(0)
       , mNumSamplesOutput(0)
       , mDecodeAhead(aDecodeAhead)
@@ -143,8 +175,10 @@ private:
       , mInputExhausted(false)
       , mError(false)
       , mIsFlushing(false)
+      , mUpdateScheduled(false)
+      , mDemuxEOS(false)
       , mDrainComplete(false)
-      , mEOS(false)
+      , mDiscontinuity(false)
     {
     }
 
@@ -155,6 +189,17 @@ private:
     nsRefPtr<MediaTaskQueue> mTaskQueue;
     // Callback that receives output and error notifications from the decoder.
     nsAutoPtr<DecoderCallback> mCallback;
+    // Decoded samples returned my mDecoder awaiting being returned to
+    // state machine upon request.
+    nsTArray<nsRefPtr<MediaData> > mOutput;
+    // Disambiguate Audio vs Video.
+    MediaData::Type mType;
+
+    // These get overriden in the templated concrete class.
+    virtual bool HasPromise() = 0;
+    virtual void RejectPromise(MediaDecoderReader::NotDecodedReason aReason,
+                               const char* aMethodName) = 0;
+
     // Monitor that protects all non-threadsafe state; the primitives
     // that follow.
     Monitor mMonitor;
@@ -166,14 +211,40 @@ private:
     bool mInputExhausted;
     bool mError;
     bool mIsFlushing;
+    bool mUpdateScheduled;
+    bool mDemuxEOS;
     bool mDrainComplete;
-    bool mEOS;
+    bool mDiscontinuity;
   };
-  DecoderData mAudio;
-  DecoderData mVideo;
+
+  template<typename PromiseType>
+  struct DecoderDataWithPromise : public DecoderData {
+    DecoderDataWithPromise(MediaData::Type aType, uint32_t aDecodeAhead) :
+      DecoderData(aType, aDecodeAhead)
+    {
+      mPromise.SetMonitor(&mMonitor);
+    }
+
+    MediaPromiseHolder<PromiseType> mPromise;
+
+    bool HasPromise() MOZ_OVERRIDE { return !mPromise.IsEmpty(); }
+    void RejectPromise(MediaDecoderReader::NotDecodedReason aReason,
+                       const char* aMethodName) MOZ_OVERRIDE
+    {
+      mPromise.Reject(aReason, aMethodName);
+    }
+  };
+
+  DecoderDataWithPromise<AudioDataPromise> mAudio;
+  DecoderDataWithPromise<VideoDataPromise> mVideo;
+
   // Queued samples extracted by the demuxer, but not yet sent to the platform
   // decoder.
   nsAutoPtr<mp4_demuxer::MP4Sample> mQueuedVideoSample;
+
+  // Returns true when the decoder for this track needs input.
+  // aDecoder.mMonitor must be locked.
+  bool NeedInput(DecoderData& aDecoder);
 
   // The last number of decoded output frames that we've reported to
   // MediaDecoder::NotifyDecoded(). We diff the number of output video
@@ -194,7 +265,7 @@ private:
   bool mIsEncrypted;
 
   bool mIndexReady;
-  Monitor mIndexMonitor;
+  Monitor mDemuxerMonitor;
   nsRefPtr<SharedDecoderManager> mSharedDecoderManager;
 };
 

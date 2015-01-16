@@ -73,6 +73,7 @@ class nsIInterfaceRequestor;
 class nsIIOService;
 class nsIJSRuntimeService;
 class nsILineBreaker;
+class nsIMessageBroadcaster;
 class nsNameSpaceManager;
 class nsIObserver;
 class nsIParser;
@@ -121,6 +122,7 @@ class Element;
 class EventTarget;
 class NodeInfo;
 class Selection;
+class TabParent;
 } // namespace dom
 
 namespace layers {
@@ -167,6 +169,9 @@ struct nsShortcutCandidate {
   uint32_t mCharCode;
   bool     mIgnoreShift;
 };
+
+typedef void (*CallOnRemoteChildFunction) (mozilla::dom::TabParent* aTabParent,
+                                           void* aArg);
 
 class nsContentUtils
 {
@@ -1571,6 +1576,8 @@ public:
   static JSContext *GetSafeJSContext();
   static JSContext *GetCurrentJSContextForThread();
   static JSContext *GetDefaultJSContextForThread();
+  inline static JSContext *RootingCx() { return GetSafeJSContext(); }
+  inline static JSContext *RootingCxForThread() { return GetDefaultJSContextForThread(); }
 
   /**
    * Case insensitive comparison between two strings. However it only ignores
@@ -1708,6 +1715,8 @@ public:
    * @param aString the string to convert the newlines inside [in/out]
    */
   static void PlatformToDOMLineBreaks(nsString &aString);
+  static NS_WARN_UNUSED_RESULT bool PlatformToDOMLineBreaks(nsString &aString,
+                                                            const mozilla::fallible_t&);
 
   /**
    * Populates aResultString with the contents of the string-buffer aBuf, up
@@ -1851,6 +1860,15 @@ public:
   static bool IsResourceTimingEnabled()
   {
     return sIsResourceTimingEnabled;
+  }
+
+  /*
+   * Returns true if URL setters should percent encode the Hash/Ref segment
+   * and getters should return the percent decoded value of the segment
+   */
+  static bool EncodeDecodeURLHash()
+  {
+    return sEncodeDecodeURLHash;
   }
 
   /**
@@ -2211,6 +2229,14 @@ public:
    */
   static void GetHostOrIPv6WithBrackets(nsIURI* aURI, nsAString& aHost);
 
+  /*
+   * Call the given callback on all remote children of the given top-level
+   * window.
+   */
+  static void CallOnAllRemoteChildren(nsIDOMWindow* aWindow,
+                                      CallOnRemoteChildFunction aCallback,
+                                      void* aArg);
+
 private:
   static bool InitializeEventTable();
 
@@ -2245,6 +2271,10 @@ private:
   // Fills in aInfo with the tokens from the supplied autocomplete attribute.
   static AutocompleteAttrState InternalSerializeAutocompleteAttribute(const nsAttrValue* aAttrVal,
                                                                       mozilla::dom::AutocompleteInfo& aInfo);
+
+  static void CallOnAllRemoteChildren(nsIMessageBroadcaster* aManager,
+                                      CallOnRemoteChildFunction aCallback,
+                                      void* aArg);
 
   static nsIXPConnect *sXPConnect;
 
@@ -2304,6 +2334,7 @@ private:
   static bool sIsPerformanceTimingEnabled;
   static bool sIsResourceTimingEnabled;
   static bool sIsExperimentalAutocompleteEnabled;
+  static bool sEncodeDecodeURLHash;
 
   static nsHtml5StringParser* sHTMLFragmentParser;
   static nsIParser* sXMLFragmentParser;

@@ -37,13 +37,13 @@ class CompileRuntime
     // rt->mainThread.jitStackLimit;
     const void *addressOfJitStackLimit();
 
-    // &mainThread.ionJSContext
+    // &mainThread.jitJSContext
     const void *addressOfJSContext();
 
     // &mainThread.activation_
     const void *addressOfActivation();
 
-    // &GetIonContext()->runtime->nativeIterCache.last
+    // &GetJitContext()->runtime->nativeIterCache.last
     const void *addressOfLastCachedNativeIterator();
 
 #ifdef JS_GC_ZEAL
@@ -51,9 +51,6 @@ class CompileRuntime
 #endif
 
     const void *addressOfInterruptUint32();
-    const void *addressOfInterruptParUint32();
-
-    const void *addressOfThreadPool();
 
     const JitRuntime *jitRuntime();
 
@@ -70,6 +67,7 @@ class CompileRuntime
     const StaticStrings &staticStrings();
     const Value &NaNValue();
     const Value &positiveInfinityValue();
+    const WellKnownSymbols &wellKnownSymbols();
 
 #ifdef DEBUG
     bool isInsideNursery(gc::Cell *cell);
@@ -80,9 +78,7 @@ class CompileRuntime
 
     const MathCache *maybeGetMathCache();
 
-#ifdef JSGC_GENERATIONAL
     const Nursery &gcNursery();
-#endif
 };
 
 class CompileZone
@@ -94,7 +90,7 @@ class CompileZone
 
     const void *addressOfNeedsIncrementalBarrier();
 
-    // allocator.arenas.getFreeList(allocKind)
+    // arenas.getFreeList(allocKind)
     const void *addressOfFreeListFirst(gc::AllocKind allocKind);
     const void *addressOfFreeListLast(gc::AllocKind allocKind);
 };

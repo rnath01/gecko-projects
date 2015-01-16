@@ -117,94 +117,9 @@ class RootedBase<TaggedProto> : public TaggedProtoOperations<Rooted<TaggedProto>
 
 class CallObject;
 
-/*
- * Execution Mode Overview
- *
- * JavaScript code can execute either sequentially or in parallel, such as in
- * PJS. Functions which behave identically in either execution mode can take a
- * ThreadSafeContext, and functions which have similar but not identical
- * behavior between execution modes can be templated on the mode. Such
- * functions use a context parameter type from ExecutionModeTraits below
- * indicating whether they are only permitted constrained operations (such as
- * thread safety, and side effects limited to being thread-local), or whether
- * they can have arbitrary side effects.
- */
-
-enum ExecutionMode {
-    /* Normal JavaScript execution. */
-    SequentialExecution,
-
-    /*
-     * JavaScript code to be executed in parallel worker threads in PJS in a
-     * fork join fashion.
-     */
-    ParallelExecution,
-
-    /*
-     * Modes after this point are internal and are not counted in
-     * NumExecutionModes below.
-     */
-
-    /*
-     * MIR analysis performed when invoking 'new' on a script, to determine
-     * definite properties. Used by the optimizing JIT.
-     */
-    DefinitePropertiesAnalysis,
-
-    /*
-     * MIR analysis performed when executing a script which uses its arguments,
-     * when it is not known whether a lazy arguments value can be used.
-     */
-    ArgumentsUsageAnalysis
-};
-
-inline const char *
-ExecutionModeString(ExecutionMode mode)
-{
-    switch (mode) {
-      case SequentialExecution:
-        return "SequentialExecution";
-      case ParallelExecution:
-        return "ParallelExecution";
-      case DefinitePropertiesAnalysis:
-        return "DefinitePropertiesAnalysis";
-      case ArgumentsUsageAnalysis:
-        return "ArgumentsUsageAnalysis";
-      default:
-        MOZ_CRASH("Invalid ExecutionMode");
-    }
-}
-
-/*
- * Not as part of the enum so we don't get warnings about unhandled enum
- * values.
- */
-static const unsigned NumExecutionModes = ParallelExecution + 1;
-
-template <ExecutionMode mode>
-struct ExecutionModeTraits
-{
-};
-
-template <> struct ExecutionModeTraits<SequentialExecution>
-{
-    typedef JSContext * ContextType;
-    typedef ExclusiveContext * ExclusiveContextType;
-
-    static inline JSContext *toContextType(ExclusiveContext *cx);
-};
-
-template <> struct ExecutionModeTraits<ParallelExecution>
-{
-    typedef ForkJoinContext * ContextType;
-    typedef ForkJoinContext * ExclusiveContextType;
-
-    static inline ForkJoinContext *toContextType(ForkJoinContext *cx) { return cx; }
-};
-
 namespace jit {
     struct IonScript;
-    class IonAllocPolicy;
+    class JitAllocPolicy;
     class TempAllocator;
 }
 
@@ -447,12 +362,6 @@ enum MOZ_ENUM_TYPE(uint32_t) {
      */
     OBJECT_FLAG_NURSERY_PROTO         = 0x2,
 
-    /*
-     * Whether we have ensured all type sets in the compartment contain
-     * ANYOBJECT instead of this object.
-     */
-    OBJECT_FLAG_SETS_MARKED_UNKNOWN   = 0x4,
-
     /* Mask/shift for the number of properties in propertySet */
     OBJECT_FLAG_PROPERTY_COUNT_MASK   = 0xfff8,
     OBJECT_FLAG_PROPERTY_COUNT_SHIFT  = 3,
@@ -507,15 +416,14 @@ enum MOZ_ENUM_TYPE(uint32_t) {
     /* Flags which indicate dynamic properties of represented objects. */
     OBJECT_FLAG_DYNAMIC_MASK          = 0x03ff0000,
 
-    /* Mask for objects created with unknown properties. */
-    OBJECT_FLAG_UNKNOWN_MASK =
-        OBJECT_FLAG_DYNAMIC_MASK
-      | OBJECT_FLAG_SETS_MARKED_UNKNOWN,
+    // Mask/shift for the kind of addendum attached to this type object.
+    OBJECT_FLAG_ADDENDUM_MASK         = 0x0c000000,
+    OBJECT_FLAG_ADDENDUM_SHIFT        = 26,
 
     // Mask/shift for this type object's generation. If out of sync with the
     // TypeZone's generation, this TypeObject hasn't been swept yet.
-    OBJECT_FLAG_GENERATION_MASK       = 0x04000000,
-    OBJECT_FLAG_GENERATION_SHIFT      = 26,
+    OBJECT_FLAG_GENERATION_MASK       = 0x10000000,
+    OBJECT_FLAG_GENERATION_SHIFT      = 28,
 };
 typedef uint32_t TypeObjectFlags;
 
@@ -537,6 +445,13 @@ class TemporaryTypeSet;
  *
  * - TemporaryTypeSet are created during compilation and do not outlive
  *   that compilation.
+ *
+ * The contents of a type set completely describe the values that a particular
+ * lvalue might have, except in cases where an object's type is mutated. In
+ * such cases, type sets which had the object's old type might not have the
+ * object's new type. Type mutation occurs only in specific circumstances ---
+ * when an object's prototype changes, and when it is swapped with another
+ * object --- and will cause the object's properties to be marked as unknown.
  */
 class TypeSet
 {
@@ -623,20 +538,22 @@ class TypeSet
     /* Whether any values in this set might have the specified type. */
     bool mightBeMIRType(jit::MIRType type);
 
-    /* Whether all objects have JSCLASS_IS_DOMJSCLASS set. */
-    bool isDOMClass();
-
     /*
      * Get whether this type set is known to be a subset of other.
      * This variant doesn't freeze constraints. That variant is called knownSubset
      */
-    bool isSubset(TypeSet *other);
+    bool isSubset(const TypeSet *other) const;
 
     /*
      * Get whether the objects in this TypeSet are a subset of the objects
      * in other.
      */
     bool objectsAreSubset(TypeSet *other);
+
+    /* Whether this TypeSet contains exactly the same types as other. */
+    bool equals(const TypeSet *other) const {
+        return this->isSubset(other) && other->isSubset(this);
+    }
 
     /* Forward all types in this set to the specified constraint. */
     bool addTypesToConstraint(JSContext *cx, TypeConstraint *constraint);
@@ -675,7 +592,7 @@ class AutoClearTypeInferenceStateOnOOM
     bool oom;
 
   public:
-    AutoClearTypeInferenceStateOnOOM(Zone *zone)
+    explicit AutoClearTypeInferenceStateOnOOM(Zone *zone)
       : zone(zone), oom(false)
     {}
 
@@ -778,7 +695,7 @@ class TemporaryTypeSet : public TypeSet
     bool hasObjectFlags(CompilerConstraintList *constraints, TypeObjectFlags flags);
 
     /* Get the class shared by all objects in this set, or nullptr. */
-    const Class *getKnownClass();
+    const Class *getKnownClass(CompilerConstraintList *constraints);
 
     /* Result returned from forAllClasses */
     enum ForAllResult {
@@ -793,22 +710,26 @@ class TemporaryTypeSet : public TypeSet
     /* Apply func to the members of the set and return an appropriate result.
      * The iteration may end early if the result becomes known early.
      */
-    ForAllResult forAllClasses(bool (*func)(const Class *clasp));
+    ForAllResult forAllClasses(CompilerConstraintList *constraints,
+                               bool (*func)(const Class *clasp));
 
     /* Get the prototype shared by all objects in this set, or nullptr. */
-    JSObject *getCommonPrototype();
+    JSObject *getCommonPrototype(CompilerConstraintList *constraints);
 
-    /* Get the typed array type of all objects in this set, or Scalar::TypeMax. */
-    Scalar::Type getTypedArrayType();
+    /* Get the typed array type of all objects in this set, or Scalar::MaxTypedArrayViewType. */
+    Scalar::Type getTypedArrayType(CompilerConstraintList *constraints);
 
-    /* Get the shared typed array type of all objects in this set, or Scalar::TypeMax. */
-    Scalar::Type getSharedTypedArrayType();
+    /* Get the shared typed array type of all objects in this set, or Scalar::MaxTypedArrayViewType. */
+    Scalar::Type getSharedTypedArrayType(CompilerConstraintList *constraints);
+
+    /* Whether all objects have JSCLASS_IS_DOMJSCLASS set. */
+    bool isDOMClass(CompilerConstraintList *constraints);
 
     /* Whether clasp->isCallable() is true for one or more objects in this set. */
-    bool maybeCallable();
+    bool maybeCallable(CompilerConstraintList *constraints);
 
     /* Whether clasp->emulatesUndefined() is true for one or more objects in this set. */
-    bool maybeEmulatesUndefined();
+    bool maybeEmulatesUndefined(CompilerConstraintList *constraints);
 
     /* Get the single value which can appear in this type set, otherwise nullptr. */
     JSObject *getSingleton();
@@ -939,13 +860,14 @@ class TypeNewScript
     // analyses are performed and this array is cleared. The pointers in this
     // array are weak.
     static const uint32_t PRELIMINARY_OBJECT_COUNT = 20;
-    NativeObject **preliminaryObjects;
+    PlainObject **preliminaryObjects;
 
     // After the new script properties analyses have been performed, a template
     // object to use for newly constructed objects. The shape of this object
     // reflects all definite properties the object will have, and the
-    // allocation kind to use.
-    HeapPtrNativeObject templateObject_;
+    // allocation kind to use. Note that this is actually a PlainObject, but is
+    // JSObject here to avoid cyclic include dependencies.
+    HeapPtrPlainObject templateObject_;
 
     // Order in which definite properties become initialized. We need this in
     // case the definite properties are invalidated (such as by adding a setter
@@ -976,7 +898,6 @@ class TypeNewScript
     }
 
     static inline void writeBarrierPre(TypeNewScript *newScript);
-    static void writeBarrierPost(TypeNewScript *newScript, void *addr) {}
 
     bool analyzed() const {
         if (preliminaryObjects) {
@@ -990,7 +911,7 @@ class TypeNewScript
         return true;
     }
 
-    NativeObject *templateObject() const {
+    PlainObject *templateObject() const {
         return templateObject_;
     }
 
@@ -1009,8 +930,8 @@ class TypeNewScript
     void fixupAfterMovingGC();
 #endif
 
-    void registerNewObject(NativeObject *res);
-    void unregisterNewObject(NativeObject *res);
+    void registerNewObject(PlainObject *res);
+    void unregisterNewObject(PlainObject *res);
     bool maybeAnalyze(JSContext *cx, TypeObject *type, bool *regenerate, bool force = false);
 
     void rollbackPartiallyInitializedObjects(JSContext *cx, TypeObject *type);
@@ -1098,12 +1019,38 @@ struct TypeObject : public gc::TenuredCell
     /* Flags for this object. */
     TypeObjectFlags flags_;
 
-    /*
-     * If specified, holds information about properties which are definitely
-     * added to objects of this type after being constructed by a particular
-     * script.
-     */
-    HeapPtrTypeNewScript newScript_;
+    // Kinds of addendums which can be attached to TypeObjects.
+    enum AddendumKind {
+        Addendum_None,
+
+        // When used by interpreted function, the addendum stores the
+        // canonical JSFunction object.
+        Addendum_InterpretedFunction,
+
+        // When used by the 'new' type when constructing an interpreted
+        // function, the addendum stores a TypeNewScript.
+        Addendum_NewScript,
+
+        // When used by typed objects, the addendum stores a TypeDescr.
+        Addendum_TypeDescr
+    };
+
+    // If non-null, holds additional information about this object, whose
+    // format is indicated by the object's addendum kind.
+    void *addendum_;
+
+    void setAddendum(AddendumKind kind, void *addendum);
+
+    AddendumKind addendumKind() const {
+        return (AddendumKind)
+            ((flags_ & OBJECT_FLAG_ADDENDUM_MASK) >> OBJECT_FLAG_ADDENDUM_SHIFT);
+    }
+
+    TypeNewScript *newScriptDontCheckGeneration() const {
+        return addendumKind() == Addendum_NewScript
+               ? reinterpret_cast<TypeNewScript *>(addendum_)
+               : nullptr;
+    }
 
   public:
 
@@ -1124,10 +1071,41 @@ struct TypeObject : public gc::TenuredCell
 
     TypeNewScript *newScript() {
         maybeSweep(nullptr);
-        return newScript_;
+        return newScriptDontCheckGeneration();
     }
 
-    void setNewScript(TypeNewScript *newScript);
+    void setNewScript(TypeNewScript *newScript) {
+        setAddendum(Addendum_NewScript, newScript);
+    }
+
+    TypeDescr *maybeTypeDescr() {
+        // Note: there is no need to sweep when accessing the type descriptor
+        // of an object, as it is strongly held and immutable.
+        if (addendumKind() == Addendum_TypeDescr)
+            return reinterpret_cast<TypeDescr *>(addendum_);
+        return nullptr;
+    }
+
+    TypeDescr &typeDescr() {
+        MOZ_ASSERT(addendumKind() == Addendum_TypeDescr);
+        return *maybeTypeDescr();
+    }
+
+    void setTypeDescr(TypeDescr *descr) {
+        setAddendum(Addendum_TypeDescr, descr);
+    }
+
+    JSFunction *maybeInterpretedFunction() {
+        // Note: as with type descriptors, there is no need to sweep when
+        // accessing the interpreted function associated with an object.
+        if (addendumKind() == Addendum_InterpretedFunction)
+            return reinterpret_cast<JSFunction *>(addendum_);
+        return nullptr;
+    }
+
+    void setInterpretedFunction(JSFunction *fun) {
+        setAddendum(Addendum_InterpretedFunction, fun);
+    }
 
   private:
     /*
@@ -1137,9 +1115,12 @@ struct TypeObject : public gc::TenuredCell
      *
      * The type sets in the properties of a type object describe the possible
      * values that can be read out of that property in actual JS objects.
-     * Properties only account for native properties (those with a slot and no
-     * specialized getter hook) and the elements of dense arrays. For accesses
-     * on such properties, the correspondence is as follows:
+     * In native objects, property types account for plain data properties
+     * (those with a slot and no getter or setter hook) and dense elements.
+     * In typed objects, property types account for object and value properties
+     * and elements in the object.
+     *
+     * For accesses on these properties, the correspondence is as follows:
      *
      * 1. If the type has unknownProperties(), the possible properties and
      *    value types for associated JSObjects are unknown.
@@ -1148,16 +1129,21 @@ struct TypeObject : public gc::TenuredCell
      *    which is a property in obj, before obj->getProperty(id) the property
      *    in type for id must reflect the result of the getProperty.
      *
-     *    There is an exception for properties of global JS objects which
-     *    are undefined at the point where the property was (lazily) generated.
-     *    In such cases the property type set will remain empty, and the
-     *    'undefined' type will only be added after a subsequent assignment or
-     *    deletion. After these properties have been assigned a defined value,
-     *    the only way they can become undefined again is after such an assign
-     *    or deletion.
+     * There are several exceptions to this:
      *
-     *    There is another exception for array lengths, which are special cased
-     *    by the compiler and VM and are not reflected in property types.
+     * 1. For properties of global JS objects which are undefined at the point
+     *    where the property was (lazily) generated, the property type set will
+     *    remain empty, and the 'undefined' type will only be added after a
+     *    subsequent assignment or deletion. After these properties have been
+     *    assigned a defined value, the only way they can become undefined
+     *    again is after such an assign or deletion.
+     *
+     * 2. Array lengths are special cased by the compiler and VM and are not
+     *    reflected in property types.
+     *
+     * 3. In typed objects, the initial values of properties (null pointers and
+     *    undefined values) are not reflected in the property types. These
+     *    values are always possible when reading the property.
      *
      * We establish these by using write barriers on calls to setProperty and
      * defineProperty which are on native properties, and on any jitcode which
@@ -1165,13 +1151,6 @@ struct TypeObject : public gc::TenuredCell
      */
     Property **propertySet;
   public:
-
-    /* If this is an interpreted function, the function object. */
-    HeapPtrFunction interpretedFunction;
-
-#if JS_BITS_PER_WORD == 32
-    uint32_t padding;
-#endif
 
     inline TypeObject(const Class *clasp, TaggedProto proto, TypeObjectFlags initialFlags);
 
@@ -1280,8 +1259,8 @@ struct TypeObject : public gc::TenuredCell
         return offsetof(TypeObject, proto_);
     }
 
-    static inline uint32_t offsetOfNewScript() {
-        return offsetof(TypeObject, newScript_);
+    static inline uint32_t offsetOfAddendum() {
+        return offsetof(TypeObject, addendum_);
     }
 
     static inline uint32_t offsetOfFlags() {
@@ -1298,51 +1277,50 @@ struct TypeObject : public gc::TenuredCell
 };
 
 /*
- * Entries for the per-compartment set of type objects which are 'new' types to
- * use for some prototype and constructed with an optional script. This also
- * includes entries for the set of lazy type objects in the compartment, which
- * use a null script (though there are only a few of these per compartment).
+ * Entries for the per-compartment set of type objects which are the default
+ * types to use for some prototype. An optional associated object is used which
+ * allows multiple type objects to be created with the same prototype. The
+ * associated object may be a function (for types constructed with 'new') or a
+ * type descriptor (for typed objects). These entries are also used for the set
+ * of lazy type objects in the compartment, which use a null associated object
+ * (though there are only a few of these per compartment).
  */
-struct TypeObjectWithNewScriptEntry
+struct NewTypeObjectEntry
 {
     ReadBarrieredTypeObject object;
 
     // Note: This pointer is only used for equality and does not need a read barrier.
-    JSFunction *newFunction;
+    JSObject *associated;
 
-    TypeObjectWithNewScriptEntry(TypeObject *object, JSFunction *newFunction)
-      : object(object), newFunction(newFunction)
+    NewTypeObjectEntry(TypeObject *object, JSObject *associated)
+      : object(object), associated(associated)
     {}
 
     struct Lookup {
         const Class *clasp;
         TaggedProto hashProto;
         TaggedProto matchProto;
-        JSFunction *newFunction;
+        JSObject *associated;
 
-        Lookup(const Class *clasp, TaggedProto proto, JSFunction *newFunction)
-          : clasp(clasp), hashProto(proto), matchProto(proto), newFunction(newFunction)
+        Lookup(const Class *clasp, TaggedProto proto, JSObject *associated)
+          : clasp(clasp), hashProto(proto), matchProto(proto), associated(associated)
         {}
 
-#ifdef JSGC_GENERATIONAL
         /*
          * For use by generational post barriers only.  Look up an entry whose
          * proto has been moved, but was hashed with the original value.
          */
-        Lookup(const Class *clasp, TaggedProto hashProto, TaggedProto matchProto, JSFunction *newFunction)
-            : clasp(clasp), hashProto(hashProto), matchProto(matchProto), newFunction(newFunction)
+        Lookup(const Class *clasp, TaggedProto hashProto, TaggedProto matchProto, JSObject *associated)
+            : clasp(clasp), hashProto(hashProto), matchProto(matchProto), associated(associated)
         {}
-#endif
 
     };
 
     static inline HashNumber hash(const Lookup &lookup);
-    static inline bool match(const TypeObjectWithNewScriptEntry &key, const Lookup &lookup);
-    static void rekey(TypeObjectWithNewScriptEntry &k, const TypeObjectWithNewScriptEntry& newKey) { k = newKey; }
+    static inline bool match(const NewTypeObjectEntry &key, const Lookup &lookup);
+    static void rekey(NewTypeObjectEntry &k, const NewTypeObjectEntry& newKey) { k = newKey; }
 };
-typedef HashSet<TypeObjectWithNewScriptEntry,
-                TypeObjectWithNewScriptEntry,
-                SystemAllocPolicy> TypeObjectWithNewScriptSet;
+typedef HashSet<NewTypeObjectEntry, NewTypeObjectEntry, SystemAllocPolicy> NewTypeObjectTable;
 
 /* Whether to use a new type object when calling 'new' at script/pc. */
 bool
@@ -1461,8 +1439,8 @@ class RecompileInfo;
 // constraints for the compilation. Returns whether the type constraints
 // still hold.
 bool
-FinishCompilation(JSContext *cx, HandleScript script, ExecutionMode executionMode,
-                  CompilerConstraintList *constraints, RecompileInfo *precompileInfo);
+FinishCompilation(JSContext *cx, HandleScript script, CompilerConstraintList *constraints,
+                  RecompileInfo *precompileInfo);
 
 // Update the actual types in any scripts queried by constraints with any
 // speculative types added during the definite properties analysis.
@@ -1523,6 +1501,7 @@ struct TypeObjectKey
 
     bool unknownProperties();
     bool hasFlags(CompilerConstraintList *constraints, TypeObjectFlags flags);
+    bool hasStableClassAndProto(CompilerConstraintList *constraints);
     void watchStateChangeForInlinedCall(CompilerConstraintList *constraints);
     void watchStateChangeForTypedArrayData(CompilerConstraintList *constraints);
     HeapTypeSetKey property(jsid id);
@@ -1584,30 +1563,28 @@ class CompilerOutput
     // If this compilation has not been invalidated, the associated script and
     // kind of compilation being performed.
     JSScript *script_;
-    ExecutionMode mode_ : 2;
 
     // Whether this compilation is about to be invalidated.
     bool pendingInvalidation_ : 1;
 
     // During sweeping, the list of compiler outputs is compacted and invalidated
     // outputs are removed. This gives the new index for a valid compiler output.
-    uint32_t sweepIndex_ : 29;
+    uint32_t sweepIndex_ : 31;
 
   public:
-    static const uint32_t INVALID_SWEEP_INDEX = (1 << 29) - 1;
+    static const uint32_t INVALID_SWEEP_INDEX = static_cast<uint32_t>(1 << 31) - 1;
 
     CompilerOutput()
-      : script_(nullptr), mode_(SequentialExecution),
+      : script_(nullptr),
         pendingInvalidation_(false), sweepIndex_(INVALID_SWEEP_INDEX)
     {}
 
-    CompilerOutput(JSScript *script, ExecutionMode mode)
-      : script_(script), mode_(mode),
+    explicit CompilerOutput(JSScript *script)
+      : script_(script),
         pendingInvalidation_(false), sweepIndex_(INVALID_SWEEP_INDEX)
     {}
 
     JSScript *script() const { return script_; }
-    inline ExecutionMode mode() const { return mode_; }
 
     inline jit::IonScript *ion() const;
 
@@ -1680,7 +1657,7 @@ struct TypeCompartment
 
   public:
     void fixArrayType(ExclusiveContext *cx, ArrayObject *obj);
-    void fixObjectType(ExclusiveContext *cx, NativeObject *obj);
+    void fixObjectType(ExclusiveContext *cx, PlainObject *obj);
     void fixRestArgumentsType(ExclusiveContext *cx, ArrayObject *obj);
 
     JSObject *newTypedObject(JSContext *cx, IdValuePair *properties, size_t nproperties);
@@ -1704,9 +1681,6 @@ struct TypeCompartment
 
     /* Get or make an object for an allocation site, and add to the allocation site table. */
     TypeObject *addAllocationSiteTypeObject(JSContext *cx, AllocationSiteKey key);
-
-    /* Mark any type set containing obj as having a generic object type. */
-    void markSetsUnknown(JSContext *cx, TypeObject *obj);
 
     void clearTables();
     void sweep(FreeOp *fop);

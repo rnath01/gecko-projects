@@ -49,6 +49,10 @@ SourceBuffer::SetMode(SourceBufferAppendMode aMode, ErrorResult& aRv)
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
   }
+  if (aMode == SourceBufferAppendMode::Sequence) {
+    aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+    return;
+  }
   MOZ_ASSERT(mMediaSource->ReadyState() != MediaSourceReadyState::Closed);
   if (mMediaSource->ReadyState() == MediaSourceReadyState::Ended) {
     mMediaSource->SetReadyState(MediaSourceReadyState::Open);
@@ -188,10 +192,19 @@ SourceBuffer::Remove(double aStart, double aEnd, ErrorResult& aRv)
     aRv.Throw(NS_ERROR_DOM_INVALID_ACCESS_ERR);
     return;
   }
-  if (mUpdating || mMediaSource->ReadyState() != MediaSourceReadyState::Open) {
+  if (mUpdating) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
   }
+  if (mMediaSource->ReadyState() == MediaSourceReadyState::Ended) {
+    mMediaSource->SetReadyState(MediaSourceReadyState::Open);
+  }
+  RangeRemoval(aStart, aEnd);
+}
+
+void
+SourceBuffer::RangeRemoval(double aStart, double aEnd)
+{
   StartUpdating();
   /// TODO: Run coded frame removal algorithm.
 
@@ -314,6 +327,16 @@ SourceBuffer::AbortUpdating()
 }
 
 void
+SourceBuffer::CheckEndTime()
+{
+  // Check if we need to update mMediaSource duration
+  double endTime = GetBufferedEnd();
+  if (endTime > mMediaSource->Duration()) {
+    mMediaSource->SetDuration(endTime);
+  }
+}
+
+void
 SourceBuffer::AppendData(const uint8_t* aData, uint32_t aLength, ErrorResult& aRv)
 {
   MSE_DEBUG("SourceBuffer(%p)::AppendData(aLength=%u)", this, aLength);
@@ -322,7 +345,9 @@ SourceBuffer::AppendData(const uint8_t* aData, uint32_t aLength, ErrorResult& aR
   }
   StartUpdating();
 
-  if (!mTrackBuffer->AppendData(aData, aLength)) {
+  MOZ_ASSERT(mAppendMode == SourceBufferAppendMode::Segments,
+             "We don't handle timestampOffset for sequence mode yet");
+  if (!mTrackBuffer->AppendData(aData, aLength, mTimestampOffset * USECS_PER_S)) {
     Optional<MediaSourceEndOfStreamError> decodeError(MediaSourceEndOfStreamError::Decode);
     ErrorResult dummy;
     mMediaSource->EndOfStream(decodeError, dummy);
@@ -333,6 +358,8 @@ SourceBuffer::AppendData(const uint8_t* aData, uint32_t aLength, ErrorResult& aR
   if (mTrackBuffer->HasInitSegment()) {
     mMediaSource->QueueInitializationEvent();
   }
+
+  CheckEndTime();
 
   // Run the final step of the buffer append algorithm asynchronously to
   // ensure the SourceBuffer's updating flag transition behaves as required
@@ -360,14 +387,17 @@ SourceBuffer::PrepareAppend(ErrorResult& aRv)
   // TODO: Make the eviction threshold smaller for audio-only streams.
   // TODO: Drive evictions off memory pressure notifications.
   // TODO: Consider a global eviction threshold  rather than per TrackBuffer.
-  bool evicted = mTrackBuffer->EvictData(mEvictionThreshold);
+  double newBufferStartTime = 0.0;
+  bool evicted =
+    mTrackBuffer->EvictData(mMediaSource->GetDecoder()->GetCurrentTime(),
+                            mEvictionThreshold, &newBufferStartTime);
   if (evicted) {
     MSE_DEBUG("SourceBuffer(%p)::AppendData Evict; current buffered start=%f",
               this, GetBufferedStart());
 
     // We notify that we've evicted from the time range 0 through to
     // the current start point.
-    mMediaSource->NotifyEvicted(0.0, GetBufferedStart());
+    mMediaSource->NotifyEvicted(0.0, newBufferStartTime);
   }
 
   // TODO: Test buffer full flag.

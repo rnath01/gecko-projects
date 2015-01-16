@@ -21,6 +21,7 @@
 #include "prerr.h"
 #include "NetworkActivityMonitor.h"
 #include "NSSErrorsService.h"
+#include "mozilla/net/NeckoChild.h"
 #include "mozilla/VisualEventTracer.h"
 #include "nsThreadUtils.h"
 #include "nsISocketProviderService.h"
@@ -738,12 +739,12 @@ nsSocketTransport::nsSocketTransport()
     , mResolving(false)
     , mNetAddrIsSet(false)
     , mLock("nsSocketTransport.mLock")
-    , mFD(MOZ_THIS_IN_INITIALIZER_LIST())
+    , mFD(this)
     , mFDref(0)
     , mFDconnected(false)
     , mSocketTransportService(gSocketTransportService)
-    , mInput(MOZ_THIS_IN_INITIALIZER_LIST())
-    , mOutput(MOZ_THIS_IN_INITIALIZER_LIST())
+    , mInput(this)
+    , mOutput(this)
     , mQoSBits(0x00)
     , mKeepaliveEnabled(false)
     , mKeepaliveIdleTimeS(-1)
@@ -1199,6 +1200,15 @@ nsSocketTransport::InitiateSocket()
         if (!isLocal)
             return NS_ERROR_OFFLINE;
     } else if (!isLocal) {
+
+#ifdef DEBUG
+        // all IP networking has to be done from the parent
+        if (NS_SUCCEEDED(mCondition) &&
+            ((mNetAddr.raw.family == AF_INET) || (mNetAddr.raw.family == AF_INET6))) {
+            MOZ_ASSERT(!IsNeckoChild());
+        }
+#endif
+
         if (NS_SUCCEEDED(mCondition) &&
             crashOnNonLocalConnections &&
             !(IsIPAddrAny(&mNetAddr) || IsIPAddrLocal(&mNetAddr))) {

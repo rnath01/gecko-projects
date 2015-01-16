@@ -11,7 +11,7 @@
 #include "vm/Debugger.h"
 #include "vm/ScopeObject.h"
 
-#include "jit/IonFrames-inl.h"
+#include "jit/JitFrames-inl.h"
 #include "vm/Stack-inl.h"
 
 using namespace js;
@@ -63,7 +63,7 @@ BaselineFrame::trace(JSTracer *trc, JitFrameIterator &frameIterator)
         jsbytecode *pc;
         frameIterator.baselineScriptAndPc(nullptr, &pc);
 
-        NestedScopeObject *staticScope = script->getStaticScope(pc);
+        NestedScopeObject *staticScope = script->getStaticBlockScope(pc);
         while (staticScope && !staticScope->is<StaticBlockObject>())
             staticScope = staticScope->enclosingNestedScope();
 

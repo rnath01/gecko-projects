@@ -210,13 +210,11 @@ public:
     * @param aNumFramesOnLine  - return the numbers of cells originating in
     *                            this row
     * @param aLineBounds       - rect of the row
-    * @param aLineFlags        - unused set to 0
     */
   NS_IMETHOD GetLine(int32_t aLineNumber,
                      nsIFrame** aFirstFrameOnLine,
                      int32_t* aNumFramesOnLine,
-                     nsRect& aLineBounds,
-                     uint32_t* aLineFlags) MOZ_OVERRIDE;
+                     nsRect& aLineBounds) MOZ_OVERRIDE;
   
   /** Given a frame that's a child of the rowgroup, find which line its on.
     * @param aFrame       - frame, should be a row
@@ -228,21 +226,21 @@ public:
   virtual int32_t FindLineContaining(nsIFrame* aFrame, int32_t aStartLine = 0) MOZ_OVERRIDE;
 
   /** Find the orginating cell frame on a row that is the nearest to the
-    * coordinate X.
+    * inline-dir coordinate of aPos.
     * @param aLineNumber          - the index of the row relative to the row group
-    * @param aX                   - X coordinate in twips relative to the
+    * @param aPos                 - coordinate in twips relative to the
     *                               origin of the row group
     * @param aFrameFound          - pointer to the cellframe
-    * @param aXIsBeforeFirstFrame - the point is before the first originating
+    * @param aPosIsBeforeFirstFrame - the point is before the first originating
     *                               cellframe
-    * @param aXIsAfterLastFrame   - the point is after the last originating
+    * @param aPosIsAfterLastFrame   - the point is after the last originating
     *                               cellframe
     */
   NS_IMETHOD FindFrameAt(int32_t aLineNumber,
-                         nscoord aX,
+                         nsPoint aPos,
                          nsIFrame** aFrameFound,
-                         bool* aXIsBeforeFirstFrame,
-                         bool* aXIsAfterLastFrame) MOZ_OVERRIDE;
+                         bool* aPosIsBeforeFirstFrame,
+                         bool* aPosIsAfterLastFrame) MOZ_OVERRIDE;
 
    /** Check whether visual and logical order of cell frames within a line are
      * identical. As the layout will reorder them this is always the case
@@ -339,6 +337,7 @@ protected:
   void PlaceChild(nsPresContext*         aPresContext,
                   nsRowGroupReflowState& aReflowState,
                   nsIFrame*              aKidFrame,
+                  nsPoint                aKidPosition,
                   nsHTMLReflowMetrics&   aDesiredSize,
                   const nsRect&          aOriginalKidRect,
                   const nsRect&          aOriginalKidVisualOverflow);

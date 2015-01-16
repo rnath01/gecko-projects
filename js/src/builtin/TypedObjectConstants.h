@@ -12,8 +12,7 @@
 ///////////////////////////////////////////////////////////////////////////
 // Slots for typed prototypes
 
-#define JS_TYPROTO_SLOT_DESCR            0
-#define JS_TYPROTO_SLOTS                 1
+#define JS_TYPROTO_SLOTS                 0
 
 ///////////////////////////////////////////////////////////////////////////
 // Slots for type objects
@@ -30,23 +29,23 @@
 #define JS_DESCR_SLOT_SIZE               3  // Size in bytes, else 0
 #define JS_DESCR_SLOT_OPAQUE             4  // Atomized string representation
 #define JS_DESCR_SLOT_TYPROTO            5  // Prototype for instances, if any
+#define JS_DESCR_SLOT_ARRAYPROTO         6  // Lazily created prototype for arrays
+#define JS_DESCR_SLOT_TRACE_LIST         7  // List of references for use in tracing
 
 // Slots on scalars, references, and x4s
-#define JS_DESCR_SLOT_TYPE               6  // Type code
-
-// Slots on all array descriptors
-#define JS_DESCR_SLOT_ARRAY_ELEM_TYPE    6
+#define JS_DESCR_SLOT_TYPE               8  // Type code
 
 // Slots on array descriptors
-#define JS_DESCR_SLOT_ARRAY_LENGTH 7
+#define JS_DESCR_SLOT_ARRAY_ELEM_TYPE    8
+#define JS_DESCR_SLOT_ARRAY_LENGTH       9
 
 // Slots on struct type objects
-#define JS_DESCR_SLOT_STRUCT_FIELD_NAMES 6
-#define JS_DESCR_SLOT_STRUCT_FIELD_TYPES 7
-#define JS_DESCR_SLOT_STRUCT_FIELD_OFFSETS 8
+#define JS_DESCR_SLOT_STRUCT_FIELD_NAMES 8
+#define JS_DESCR_SLOT_STRUCT_FIELD_TYPES 9
+#define JS_DESCR_SLOT_STRUCT_FIELD_OFFSETS 10
 
 // Maximum number of slots for any descriptor
-#define JS_DESCR_SLOTS                   9
+#define JS_DESCR_SLOTS                   11
 
 // These constants are for use exclusively in JS code. In C++ code,
 // prefer TypeRepresentation::Scalar etc, which allows you to
@@ -69,6 +68,8 @@
 #define JS_SCALARTYPEREPR_FLOAT32       6
 #define JS_SCALARTYPEREPR_FLOAT64       7
 #define JS_SCALARTYPEREPR_UINT8_CLAMPED 8
+#define JS_SCALARTYPEREPR_FLOAT32X4     10
+#define JS_SCALARTYPEREPR_INT32X4       11
 
 // These constants are for use exclusively in JS code. In C++ code,
 // prefer ReferenceTypeRepresentation::TYPE_ANY etc, which allows

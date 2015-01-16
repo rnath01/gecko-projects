@@ -9,6 +9,7 @@
 
 #include "nsAutoPtr.h"
 #include "Decoder.h"
+#include "imgFrame.h"
 #include "nsBMPDecoder.h"
 #include "nsPNGDecoder.h"
 #include "ICOFileHeaders.h"
@@ -22,7 +23,7 @@ class nsICODecoder : public Decoder
 {
 public:
 
-  explicit nsICODecoder(RasterImage& aImage);
+  explicit nsICODecoder(RasterImage* aImage);
   virtual ~nsICODecoder();
 
   // Obtains the width of the icon directory entry
@@ -37,17 +38,17 @@ public:
     return mDirEntry.mHeight == 0 ? 256 : mDirEntry.mHeight;
   }
 
-  virtual void WriteInternal(const char* aBuffer, uint32_t aCount,
-                             DecodeStrategy aStrategy) MOZ_OVERRIDE;
-  virtual void FinishInternal();
-  virtual bool NeedsNewFrame() const;
-  virtual nsresult AllocateFrame();
+  virtual void WriteInternal(const char* aBuffer, uint32_t aCount) MOZ_OVERRIDE;
+  virtual void FinishInternal() MOZ_OVERRIDE;
+  virtual nsresult AllocateFrame() MOZ_OVERRIDE;
+
+protected:
+  virtual bool NeedsNewFrame() const MOZ_OVERRIDE;
 
 private:
   // Writes to the contained decoder and sets the appropriate errors
   // Returns true if there are no errors.
-  bool WriteToContainedDecoder(const char* aBuffer, uint32_t aCount,
-                               DecodeStrategy aStrategy);
+  bool WriteToContainedDecoder(const char* aBuffer, uint32_t aCount);
 
   // Processes a single dir entry of the icon resource
   void ProcessDirEntry(IconDirEntry& aTarget);
@@ -82,6 +83,7 @@ private:
   uint32_t mRowBytes; // How many bytes of the row were already received
   int32_t mOldLine;   // Previous index of the line
   nsRefPtr<Decoder> mContainedDecoder; // Contains either a BMP or PNG resource
+  RawAccessFrameRef mRefForContainedDecoder; // Avoid locking off-main-thread
 
   char mDirEntryArray[ICODIRENTRYSIZE]; // Holds the current dir entry buffer
   IconDirEntry mDirEntry; // Holds a decoded dir entry

@@ -18,6 +18,7 @@
 #include "nsRect.h"
 #include "nsStringGlue.h"
 #include "nsTArray.h"
+#include "WritingModes.h"
 
 /******************************************************************************
  * virtual keycode values
@@ -96,6 +97,10 @@ public:
     , mCodeNameIndex(CODE_NAME_INDEX_UNKNOWN)
     , mNativeKeyEvent(nullptr)
     , mUniqueId(0)
+#ifdef XP_MACOSX
+    , mNativeKeyCode(0)
+    , mNativeModifierFlags(0)
+#endif
   {
   }
 
@@ -149,6 +154,14 @@ public:
   // after preventDefault is called on keydown events. It's ok if this wraps
   // over long periods.
   uint32_t mUniqueId;
+
+#ifdef XP_MACOSX
+  // Values given by a native NSEvent, for use with Cocoa NPAPI plugins.
+  uint16_t mNativeKeyCode;
+  uint32_t mNativeModifierFlags;
+  nsString mNativeCharacters;
+  nsString mNativeCharactersIgnoringModifiers;
+#endif
 
   void GetDOMKeyName(nsAString& aKeyName)
   {
@@ -341,6 +354,20 @@ public:
   {
     return mRanges ? mRanges->Length() : 0;
   }
+
+  bool CausesDOMTextEvent() const
+  {
+    return message == NS_COMPOSITION_CHANGE ||
+           message == NS_COMPOSITION_COMMIT ||
+           message == NS_COMPOSITION_COMMIT_AS_IS;
+  }
+
+  bool CausesDOMCompositionEndEvent() const
+  {
+    return message == NS_COMPOSITION_END ||
+           message == NS_COMPOSITION_COMMIT ||
+           message == NS_COMPOSITION_COMMIT_AS_IS;
+  }
 };
 
 /******************************************************************************
@@ -432,6 +459,13 @@ public:
     return mReply.mOffset + (mReply.mReversed ? 0 : mReply.mString.Length());
   }
 
+  mozilla::WritingMode GetWritingMode(void) const
+  {
+    NS_ASSERTION(message == NS_QUERY_SELECTED_TEXT,
+                 "not querying selection");
+    return mReply.mWritingMode;
+  }
+
   bool mSucceeded;
   bool mWasAsync;
   bool mUseNativeLineBreak;
@@ -455,6 +489,8 @@ public:
     bool mHasSelection;
     // true if DOM element under mouse belongs to widget
     bool mWidgetIsHit;
+    // mozilla::WritingMode value at the end (focus) of the selection
+    mozilla::WritingMode mWritingMode;
     // used by NS_QUERY_SELECTION_AS_TRANSFERABLE
     nsCOMPtr<nsITransferable> mTransferable;
   } mReply;

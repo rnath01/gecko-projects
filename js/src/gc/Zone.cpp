@@ -19,9 +19,11 @@
 using namespace js;
 using namespace js::gc;
 
+Zone * const Zone::NotOnList = reinterpret_cast<Zone *>(1);
+
 JS::Zone::Zone(JSRuntime *rt)
   : JS::shadow::Zone(rt, &rt->gc.marker),
-    allocator(this),
+    arenas(rt),
     types(this),
     compartments(),
     gcGrayRoots(),
@@ -37,7 +39,8 @@ JS::Zone::Zone(JSRuntime *rt)
     gcState_(NoGC),
     gcScheduled_(false),
     gcPreserveCode_(false),
-    jitUsingBarriers_(false)
+    jitUsingBarriers_(false),
+    listNext_(NotOnList)
 {
     /* Ensure that there are no vtables to mess us up here. */
     MOZ_ASSERT(reinterpret_cast<JS::shadow::Zone *>(this) ==
@@ -182,8 +185,7 @@ Zone::discardJitCode(FreeOp *fop)
 
         for (ZoneCellIterUnderGC i(this, FINALIZE_SCRIPT); !i.done(); i.next()) {
             JSScript *script = i.get<JSScript>();
-            jit::FinishInvalidation<SequentialExecution>(fop, script);
-            jit::FinishInvalidation<ParallelExecution>(fop, script);
+            jit::FinishInvalidation(fop, script);
 
             /*
              * Discard baseline script if it's not marked as active. Note that
@@ -264,4 +266,103 @@ bool
 js::ZonesIter::atAtomsZone(JSRuntime *rt)
 {
     return rt->isAtomsZone(*it);
+}
+
+bool
+Zone::isOnList() const
+{
+    return listNext_ != NotOnList;
+}
+
+Zone *
+Zone::nextZone() const
+{
+    MOZ_ASSERT(isOnList());
+    return listNext_;
+}
+
+ZoneList::ZoneList()
+  : head(nullptr), tail(nullptr)
+{}
+
+ZoneList::ZoneList(Zone *zone)
+  : head(zone), tail(zone)
+{
+    MOZ_RELEASE_ASSERT(!zone->isOnList());
+    zone->listNext_ = nullptr;
+}
+
+ZoneList::~ZoneList()
+{
+    MOZ_ASSERT(isEmpty());
+}
+
+void
+ZoneList::check() const
+{
+#ifdef DEBUG
+    MOZ_ASSERT((head == nullptr) == (tail == nullptr));
+    if (!head)
+        return;
+
+    Zone *zone = head;
+    for (;;) {
+        MOZ_ASSERT(zone && zone->isOnList());
+        if  (zone == tail)
+            break;
+        zone = zone->listNext_;
+    }
+    MOZ_ASSERT(!zone->listNext_);
+#endif
+}
+
+bool ZoneList::isEmpty() const
+{
+    return head == nullptr;
+}
+
+Zone *
+ZoneList::front() const
+{
+    MOZ_ASSERT(!isEmpty());
+    MOZ_ASSERT(head->isOnList());
+    return head;
+}
+
+void
+ZoneList::append(Zone *zone)
+{
+    ZoneList singleZone(zone);
+    transferFrom(singleZone);
+}
+
+void
+ZoneList::transferFrom(ZoneList &other)
+{
+    check();
+    other.check();
+    MOZ_ASSERT(tail != other.tail);
+
+    if (tail)
+        tail->listNext_ = other.head;
+    else
+        head = other.head;
+    tail = other.tail;
+
+    other.head = nullptr;
+    other.tail = nullptr;
+}
+
+void
+ZoneList::removeFront()
+{
+    MOZ_ASSERT(!isEmpty());
+    check();
+
+    Zone *front = head;
+    head = head->listNext_;
+    if (!head)
+        tail = nullptr;
+
+    front->listNext_ = Zone::NotOnList;
 }

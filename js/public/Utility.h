@@ -11,7 +11,6 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/Compiler.h"
 #include "mozilla/Move.h"
-#include "mozilla/NullPtr.h"
 #include "mozilla/Scoped.h"
 #include "mozilla/TemplateLib.h"
 #include "mozilla/UniquePtr.h"
@@ -47,9 +46,9 @@ namespace js {}
 #define JS_MOVED_TENURED_PATTERN 0x49
 #define JS_SWEPT_TENURED_PATTERN 0x4B
 #define JS_ALLOCATED_TENURED_PATTERN 0x4D
-#define JS_SWEPT_CODE_PATTERN 0x3b
-#define JS_SWEPT_FRAME_PATTERN 0x5b
-#define JS_POISONED_FORKJOIN_CHUNK 0xBD
+#define JS_EMPTY_STOREBUFFER_PATTERN 0x1B
+#define JS_SWEPT_CODE_PATTERN 0x3B
+#define JS_SWEPT_FRAME_PATTERN 0x5B
 
 #define JS_STATIC_ASSERT(cond)           static_assert(cond, "JS_STATIC_ASSERT")
 #define JS_STATIC_ASSERT_IF(cond, expr)  MOZ_STATIC_ASSERT_IF(cond, expr, "JS_STATIC_ASSERT_IF")
@@ -87,9 +86,18 @@ static MOZ_NEVER_INLINE void js_failedAllocBreakpoint() { asm(""); }
             return nullptr; \
         } \
     } while (0)
+#  define JS_OOM_POSSIBLY_FAIL_BOOL() \
+    do \
+    { \
+        if (++OOM_counter > OOM_maxAllocations) { \
+            JS_OOM_CALL_BP_FUNC();\
+            return false; \
+        } \
+    } while (0)
 
 # else
 #  define JS_OOM_POSSIBLY_FAIL() do {} while(0)
+#  define JS_OOM_POSSIBLY_FAIL_BOOL() do {} while(0)
 # endif /* DEBUG || JS_OOM_BREAKPOINT */
 
 static inline void* js_malloc(size_t bytes)

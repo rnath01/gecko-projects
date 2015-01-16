@@ -19,8 +19,6 @@ namespace js {
 class FunctionExtended;
 
 typedef JSNative           Native;
-typedef JSParallelNative   ParallelNative;
-typedef JSThreadSafeNative ThreadSafeNative;
 }
 
 struct JSAtomState;
@@ -49,13 +47,16 @@ class JSFunction : public js::NativeObject
         ASMJS            = 0x0800,  /* function is an asm.js module or exported function */
         INTERPRETED_LAZY = 0x1000,  /* function is interpreted but doesn't have a script yet */
         ARROW            = 0x2000,  /* ES6 '(args) => body' syntax */
+        RESOLVED_LENGTH  = 0x4000,  /* f.length has been resolved (see js::fun_resolve). */
 
         /* Derived Flags values for convenience: */
         NATIVE_FUN = 0,
         ASMJS_CTOR = ASMJS | NATIVE_CTOR,
         ASMJS_LAMBDA_CTOR = ASMJS | NATIVE_CTOR | LAMBDA,
         INTERPRETED_LAMBDA = INTERPRETED | LAMBDA,
-        INTERPRETED_LAMBDA_ARROW = INTERPRETED | LAMBDA | ARROW
+        INTERPRETED_LAMBDA_ARROW = INTERPRETED | LAMBDA | ARROW,
+        STABLE_ACROSS_CLONES = NATIVE_CTOR | IS_FUN_PROTO | EXPR_CLOSURE | HAS_GUESSED_ATOM |
+                               LAMBDA | SELF_HOSTED | SELF_HOSTED_CTOR | HAS_REST | ASMJS | ARROW
     };
 
     static_assert(INTERPRETED == JS_FUNCTION_INTERPRETED_BIT,
@@ -126,13 +127,13 @@ class JSFunction : public js::NativeObject
     bool isSelfHostedBuiltin()      const { return flags() & SELF_HOSTED; }
     bool isSelfHostedConstructor()  const { return flags() & SELF_HOSTED_CTOR; }
     bool hasRest()                  const { return flags() & HAS_REST; }
+    bool isInterpretedLazy()        const { return flags() & INTERPRETED_LAZY; }
+    bool hasScript()                const { return flags() & INTERPRETED; }
 
-    bool isInterpretedLazy()        const {
-        return flags() & INTERPRETED_LAZY;
-    }
-    bool hasScript()                const {
-        return flags() & INTERPRETED;
-    }
+    // Arrow functions store their lexical |this| in the first extended slot.
+    bool isArrow()                  const { return flags() & ARROW; }
+
+    bool hasResolvedLength()        const { return flags() & RESOLVED_LENGTH; }
 
     bool hasJITCode() const {
         if (!hasScript())
@@ -141,24 +142,18 @@ class JSFunction : public js::NativeObject
         return nonLazyScript()->hasBaselineScript() || nonLazyScript()->hasIonScript();
     }
 
-    // Arrow functions store their lexical |this| in the first extended slot.
-    bool isArrow()                  const { return flags() & ARROW; }
-
     /* Compound attributes: */
     bool isBuiltin() const {
         return (isNative() && !isAsmJSNative()) || isSelfHostedBuiltin();
     }
     bool isInterpretedConstructor() const {
         // Note: the JITs inline this check, so be careful when making changes
-        // here. See IonMacroAssembler::branchIfNotInterpretedConstructor.
+        // here. See MacroAssembler::branchIfNotInterpretedConstructor.
         return isInterpreted() && !isFunctionPrototype() && !isArrow() &&
                (!isSelfHostedBuiltin() || isSelfHostedConstructor());
     }
     bool isNamedLambda() const {
         return isLambda() && displayAtom() && !hasGuessedAtom();
-    }
-    bool hasParallelNative() const {
-        return isNative() && jitInfo() && jitInfo()->hasParallelNative();
     }
 
     bool isBuiltinFunctionConstructor();
@@ -207,8 +202,16 @@ class JSFunction : public js::NativeObject
         flags_ |= ARROW;
     }
 
+    void setResolvedLength() {
+        flags_ |= RESOLVED_LENGTH;
+    }
+
     JSAtom *atom() const { return hasGuessedAtom() ? nullptr : atom_.get(); }
-    js::PropertyName *name() const { return hasGuessedAtom() || !atom_ ? nullptr : atom_->asPropertyName(); }
+
+    js::PropertyName *name() const {
+        return hasGuessedAtom() || !atom_ ? nullptr : atom_->asPropertyName();
+    }
+
     void initAtom(JSAtom *atom) { atom_.init(atom); }
 
     JSAtom *displayAtom() const {
@@ -394,15 +397,6 @@ class JSFunction : public js::NativeObject
         return isInterpreted() ? nullptr : native();
     }
 
-    JSParallelNative parallelNative() const {
-        MOZ_ASSERT(hasParallelNative());
-        return jitInfo()->parallelNative;
-    }
-
-    JSParallelNative maybeParallelNative() const {
-        return hasParallelNative() ? parallelNative() : nullptr;
-    }
-
     void initNative(js::Native native, const JSJitInfo *jitinfo) {
         MOZ_ASSERT(native);
         u.n.native = native;
@@ -539,7 +533,7 @@ DefineFunction(JSContext *cx, HandleObject obj, HandleId id, JSNative native,
                NewObjectKind newKind = GenericObject);
 
 bool
-FunctionHasResolveHook(const JSAtomState &atomState, PropertyName *name);
+FunctionHasResolveHook(const JSAtomState &atomState, jsid id);
 
 extern bool
 fun_resolve(JSContext *cx, HandleObject obj, HandleId id, bool *resolvedp);
@@ -577,6 +571,9 @@ class FunctionExtended : public JSFunction
     /* Reserved slots available for storage by particular native functions. */
     HeapValue extendedSlots[NUM_EXTENDED_SLOTS];
 };
+
+extern bool
+CloneFunctionObjectUseSameScript(JSCompartment *compartment, HandleFunction fun);
 
 extern JSFunction *
 CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent,

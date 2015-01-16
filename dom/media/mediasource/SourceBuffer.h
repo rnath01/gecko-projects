@@ -108,6 +108,9 @@ public:
   double GetBufferedStart();
   double GetBufferedEnd();
 
+  // Runs the range removal algorithm as defined by the MSE spec.
+  void RangeRemoval(double aStart, double aEnd);
+
 #if defined(DEBUG)
   void Dump(const char* aPath);
 #endif
@@ -123,6 +126,11 @@ private:
   void StartUpdating();
   void StopUpdating();
   void AbortUpdating();
+
+  // If the media segment contains data beyond the current duration,
+  // then run the duration change algorithm with new duration set to the
+  // maximum of the current duration and the group end timestamp.
+  void CheckEndTime();
 
   // Shared implementation of AppendBuffer overloads.
   void AppendData(const uint8_t* aData, uint32_t aLength, ErrorResult& aRv);

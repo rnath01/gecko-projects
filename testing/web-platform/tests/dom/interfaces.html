@@ -39,12 +39,6 @@ exception DOMException {
   unsigned short code;
 };
 
-[Constructor(DOMString name, optional DOMString message = "")]
-interface DOMError {
-  readonly attribute DOMString name;
-  readonly attribute DOMString message;
-};
-
 [Constructor(DOMString type, optional EventInit eventInitDict),
  Exposed=Window,Worker]
 interface Event {
@@ -258,6 +252,7 @@ interface Document : Node {
   readonly attribute DOMString origin;
   readonly attribute DOMString compatMode;
   readonly attribute DOMString characterSet;
+  readonly attribute DOMString inputEncoding; // legacy alias of .characterSet
   readonly attribute DOMString contentType;
 
   readonly attribute DocumentType? doctype;
@@ -360,7 +355,8 @@ interface Attr {
   readonly attribute DOMString localName;
   readonly attribute DOMString name;
            attribute DOMString value;
-           attribute DOMString textContent; // alias of .value
+           attribute DOMString nodeValue; // legacy alias of .value
+           attribute DOMString textContent; // legacy alias of .value
 
   readonly attribute Element? ownerElement;
 

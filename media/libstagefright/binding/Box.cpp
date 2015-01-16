@@ -13,7 +13,7 @@ using namespace mozilla;
 namespace mp4_demuxer {
 
 Box::Box(BoxContext* aContext, uint64_t aOffset, const Box* aParent)
-  : mContext(aContext), mType(0), mParent(aParent)
+  : mContext(aContext), mParent(aParent)
 {
   uint8_t header[8];
   MediaByteRange headerRange(aOffset, aOffset + sizeof(header));
@@ -59,14 +59,18 @@ Box::Box(BoxContext* aContext, uint64_t aOffset, const Box* aParent)
   }
 
   MediaByteRange boxRange(aOffset, aOffset + size);
-  if (mChildOffset >= boxRange.mEnd ||
+  if (mChildOffset > boxRange.mEnd ||
       (mParent && !mParent->mRange.Contains(boxRange)) ||
       !byteRange->Contains(boxRange)) {
     return;
   }
-  mRange = MediaByteRange(aOffset, aOffset + size);
+  mRange = boxRange;
   mType = BigEndian::readUint32(&header[4]);
 }
+
+Box::Box()
+  : mContext(nullptr)
+{}
 
 Box
 Box::Next() const
@@ -79,6 +83,9 @@ Box
 Box::FirstChild() const
 {
   MOZ_ASSERT(IsAvailable());
+  if (mChildOffset == mRange.mEnd) {
+    return Box();
+  }
   return Box(mContext, mChildOffset, this);
 }
 
@@ -91,7 +98,7 @@ Box::Read(nsTArray<uint8_t>* aDest)
                                        aDest->Length(), &bytes) ||
       bytes != aDest->Length()) {
     // Byte ranges are being reported incorrectly
-    MOZ_ASSERT(false);
+    NS_WARNING("Read failed in mp4_demuxer::Box::Read()");
     aDest->Clear();
   }
 }

@@ -19,7 +19,20 @@ loop.standaloneRoomViews = (function(mozL10n) {
 
   var StandaloneRoomInfoArea = React.createClass({
     propTypes: {
-      helper: React.PropTypes.instanceOf(loop.shared.utils.Helper).isRequired
+      helper: React.PropTypes.instanceOf(loop.shared.utils.Helper).isRequired,
+      activeRoomStore: React.PropTypes.oneOfType([
+        React.PropTypes.instanceOf(loop.store.ActiveRoomStore),
+        React.PropTypes.instanceOf(loop.store.FxOSActiveRoomStore)
+      ]).isRequired,
+      feedbackStore:
+        React.PropTypes.instanceOf(loop.store.FeedbackStore).isRequired
+    },
+
+    onFeedbackSent: function() {
+      // We pass a tick to prevent React warnings regarding nested updates.
+      setTimeout(function() {
+        this.props.activeRoomStore.dispatchAction(new sharedActions.FeedbackComplete());
+      }.bind(this));
     },
 
     _renderCallToActionLink: function() {
@@ -52,54 +65,89 @@ loop.standaloneRoomViews = (function(mozL10n) {
           return mozL10n.get("rooms_unavailable_notification_message");
         default:
           return mozL10n.get("status_error");
-      };
+      }
     },
 
-    _renderContent: function() {
+    render: function() {
       switch(this.props.roomState) {
         case ROOM_STATES.INIT:
         case ROOM_STATES.READY: {
+          // XXX: In ENDED state, we should rather display the feedback form.
           return (
-            <button className="btn btn-join btn-info"
-                    onClick={this.props.joinRoom}>
-              {mozL10n.get("rooms_room_join_label")}
-            </button>
+            <div className="room-inner-info-area">
+              <button className="btn btn-join btn-info"
+                      onClick={this.props.joinRoom}>
+                {mozL10n.get("rooms_room_join_label")}
+              </button>
+            </div>
           );
         }
+        case ROOM_STATES.MEDIA_WAIT: {
+          var msg = mozL10n.get("call_progress_getting_media_description",
+                                {clientShortname: mozL10n.get("clientShortname2")});
+          // XXX Bug 1047040 will add images to help prompt the user.
+          return (
+            <div className="room-inner-info-area">
+              <p className="prompt-media-message">
+                {msg}
+              </p>
+            </div>
+          );
+        }
+        case ROOM_STATES.JOINING:
         case ROOM_STATES.JOINED:
         case ROOM_STATES.SESSION_CONNECTED: {
           return (
-            <p className="empty-room-message">
-              {mozL10n.get("rooms_only_occupant_label")}
-            </p>
+            <div className="room-inner-info-area">
+              <p className="empty-room-message">
+                {mozL10n.get("rooms_only_occupant_label")}
+              </p>
+            </div>
           );
         }
-        case ROOM_STATES.FULL:
+        case ROOM_STATES.FULL: {
           return (
-            <div>
+            <div className="room-inner-info-area">
               <p className="full-room-message">
                 {mozL10n.get("rooms_room_full_label")}
               </p>
               <p>{this._renderCallToActionLink()}</p>
             </div>
           );
-        case ROOM_STATES.FAILED:
-          return (
-            <p className="failed-room-message">
-              {this._getFailureString()}
-            </p>
-          );
-        default:
-          return null;
-      }
-    },
+        }
+        case ROOM_STATES.ENDED: {
+          if (this.props.roomUsed)
+            return (
+              <div className="ended-conversation">
+                <sharedViews.FeedbackView
+                  feedbackStore={this.props.feedbackStore}
+                  onAfterFeedbackReceived={this.onFeedbackSent}
+                />
+              </div>
+            );
 
-    render: function() {
-      return (
-        <div className="room-inner-info-area">
-          {this._renderContent()}
-        </div>
-      );
+          // In case the room was not used (no one was here), we
+          // bypass the feedback form.
+          this.onFeedbackSent();
+          return null;
+        }
+        case ROOM_STATES.FAILED: {
+          return (
+            <div className="room-inner-info-area">
+              <p className="failed-room-message">
+                {this._getFailureString()}
+              </p>
+              <button className="btn btn-join btn-info"
+                      onClick={this.props.joinRoom}>
+                {mozL10n.get("retry_call_button")}
+              </button>
+            </div>
+          );
+        }
+        default: {
+          return null;
+        }
+      }
     }
   });
 
@@ -108,6 +156,9 @@ loop.standaloneRoomViews = (function(mozL10n) {
       return (
         <header>
           <h1>{mozL10n.get("clientShortname2")}</h1>
+          <a target="_blank" href={loop.config.generalSupportUrl}>
+            <i className="icon icon-help"></i>
+          </a>
         </header>
       );
     }
@@ -117,12 +168,12 @@ loop.standaloneRoomViews = (function(mozL10n) {
     _getContent: function() {
       return mozL10n.get("legal_text_and_links", {
         "clientShortname": mozL10n.get("clientShortname2"),
-        "terms_of_use_url": React.renderComponentToStaticMarkup(
+        "terms_of_use_url": React.renderToStaticMarkup(
           <a href={loop.config.legalWebsiteUrl} target="_blank">
             {mozL10n.get("terms_of_use_link_text")}
           </a>
         ),
-        "privacy_notice_url": React.renderComponentToStaticMarkup(
+        "privacy_notice_url": React.renderToStaticMarkup(
           <a href={loop.config.privacyWebsiteUrl} target="_blank">
             {mozL10n.get("privacy_notice_link_text")}
           </a>
@@ -147,8 +198,12 @@ loop.standaloneRoomViews = (function(mozL10n) {
     ],
 
     propTypes: {
-      activeRoomStore:
-        React.PropTypes.instanceOf(loop.store.ActiveRoomStore).isRequired,
+      activeRoomStore: React.PropTypes.oneOfType([
+        React.PropTypes.instanceOf(loop.store.ActiveRoomStore),
+        React.PropTypes.instanceOf(loop.store.FxOSActiveRoomStore)
+      ]).isRequired,
+      feedbackStore:
+        React.PropTypes.instanceOf(loop.store.FeedbackStore).isRequired,
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
       helper: React.PropTypes.instanceOf(loop.shared.utils.Helper).isRequired
     },
@@ -206,7 +261,31 @@ loop.standaloneRoomViews = (function(mozL10n) {
       };
     },
 
+    /**
+     * Used to update the video container whenever the orientation or size of the
+     * display area changes.
+     */
+    updateVideoContainer: function() {
+      var localStreamParent = this._getElement('.local .OT_publisher');
+      var remoteStreamParent = this._getElement('.remote .OT_subscriber');
+      if (localStreamParent) {
+        localStreamParent.style.width = "100%";
+      }
+      if (remoteStreamParent) {
+        remoteStreamParent.style.height = "100%";
+      }
+    },
+
     componentDidMount: function() {
+      /**
+       * OT inserts inline styles into the markup. Using a listener for
+       * resize events helps us trigger a full width/height on the element
+       * so that they update to the correct dimensions.
+       * XXX: this should be factored as a mixin, bug 1104930
+       */
+      window.addEventListener('orientationchange', this.updateVideoContainer);
+      window.addEventListener('resize', this.updateVideoContainer);
+
       // Adding a class to the document body element from here to ease styling it.
       document.body.classList.add("is-standalone-room");
     },
@@ -216,19 +295,28 @@ loop.standaloneRoomViews = (function(mozL10n) {
     },
 
     /**
-     * Watches for when we transition from READY to JOINED room state, so we can
-     * request user media access.
+     * Watches for when we transition to MEDIA_WAIT room state, so we can request
+     * user media access.
+     *
      * @param  {Object} nextProps (Unused)
      * @param  {Object} nextState Next state object.
      */
     componentWillUpdate: function(nextProps, nextState) {
-      if (this.state.roomState === ROOM_STATES.READY &&
-          nextState.roomState === ROOM_STATES.JOINED) {
+      if (this.state.roomState !== ROOM_STATES.MEDIA_WAIT &&
+          nextState.roomState === ROOM_STATES.MEDIA_WAIT) {
         this.props.dispatcher.dispatch(new sharedActions.SetupStreamElements({
           publisherConfig: this._getPublisherConfig(),
           getLocalElementFunc: this._getElement.bind(this, ".local"),
           getRemoteElementFunc: this._getElement.bind(this, ".remote")
         }));
+      }
+
+      if (this.state.roomState !== ROOM_STATES.JOINED &&
+          nextState.roomState === ROOM_STATES.JOINED) {
+        // This forces the video size to update - creating the publisher
+        // first, and then connecting to the session doesn't seem to set the
+        // initial size correctly.
+        this.updateVideoContainer();
       }
     },
 
@@ -269,20 +357,27 @@ loop.standaloneRoomViews = (function(mozL10n) {
         hide: !this._roomIsActive(),
         local: true,
         "local-stream": true,
-        "local-stream-audio": false
+        "local-stream-audio": this.state.videoMuted
       });
 
       return (
         <div className="room-conversation-wrapper">
+          <div className="beta-logo" />
           <StandaloneRoomHeader />
           <StandaloneRoomInfoArea roomState={this.state.roomState}
                                   failureReason={this.state.failureReason}
                                   joinRoom={this.joinRoom}
-                                  helper={this.props.helper} />
+                                  helper={this.props.helper}
+                                  activeRoomStore={this.props.activeRoomStore}
+                                  feedbackStore={this.props.feedbackStore}
+                                  roomUsed={this.state.used} />
           <div className="video-layout-wrapper">
             <div className="conversation room-conversation">
               <h2 className="room-name">{this.state.roomName}</h2>
               <div className="media nested">
+                <span className="self-view-hidden-message">
+                  {mozL10n.get("self_view_hidden_message")}
+                </span>
                 <div className="video_wrapper remote_wrapper">
                   <div className="video_inner remote"></div>
                 </div>
@@ -299,6 +394,9 @@ loop.standaloneRoomViews = (function(mozL10n) {
                 enableHangup={this._roomIsActive()} />
             </div>
           </div>
+          <loop.fxOSMarketplaceViews.FxOSHiddenMarketplaceView
+            marketplaceSrc={this.state.marketplaceSrc}
+            onMarketplaceMessage={this.state.onMarketplaceMessage} />
           <StandaloneRoomFooter />
         </div>
       );

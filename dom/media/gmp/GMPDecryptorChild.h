@@ -25,14 +25,15 @@ public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(GMPDecryptorChild);
 
   explicit GMPDecryptorChild(GMPChild* aPlugin,
-                             const nsTArray<uint8_t>& aPluginVoucher);
+                             const nsTArray<uint8_t>& aPluginVoucher,
+                             const nsTArray<uint8_t>& aSandboxVoucher);
 
   void Init(GMPDecryptor* aSession);
 
   // GMPDecryptorCallback
-  virtual void ResolveNewSessionPromise(uint32_t aPromiseId,
-                                        const char* aSessionId,
-                                        uint32_t aSessionIdLength) MOZ_OVERRIDE;
+  virtual void SetSessionId(uint32_t aCreateSessionToken,
+                            const char* aSessionId,
+                            uint32_t aSessionIdLength) MOZ_OVERRIDE;
   virtual void ResolveLoadSessionPromise(uint32_t aPromiseId,
                                          bool aSuccess) MOZ_OVERRIDE;
   virtual void ResolvePromise(uint32_t aPromiseId) MOZ_OVERRIDE;
@@ -44,10 +45,9 @@ public:
 
   virtual void SessionMessage(const char* aSessionId,
                               uint32_t aSessionIdLength,
+                              GMPSessionMessageType aMessageType,
                               const uint8_t* aMessage,
-                              uint32_t aMessageLength,
-                              const char* aDestinationURL,
-                              uint32_t aDestinationURLLength) MOZ_OVERRIDE;
+                              uint32_t aMessageLength) MOZ_OVERRIDE;
 
   virtual void ExpirationChange(const char* aSessionId,
                                  uint32_t aSessionIdLength,
@@ -89,7 +89,8 @@ private:
   // GMPDecryptorChild
   virtual bool RecvInit() MOZ_OVERRIDE;
 
-  virtual bool RecvCreateSession(const uint32_t& aPromiseId,
+  virtual bool RecvCreateSession(const uint32_t& aCreateSessionToken,
+                                 const uint32_t& aPromiseId,
                                  const nsCString& aInitDataType,
                                  const nsTArray<uint8_t>& aInitData,
                                  const GMPSessionType& aSessionType) MOZ_OVERRIDE;
@@ -109,7 +110,7 @@ private:
 
   virtual bool RecvDecrypt(const uint32_t& aId,
                            const nsTArray<uint8_t>& aBuffer,
-                           const GMPDecryptionData& aMetadata);
+                           const GMPDecryptionData& aMetadata) MOZ_OVERRIDE;
 
   // Resolve/reject promise on completion.
   virtual bool RecvSetServerCertificate(const uint32_t& aPromiseId,
@@ -122,8 +123,9 @@ private:
   GMPDecryptor* mSession;
   GMPChild* mPlugin;
 
-  // Reference to the voucher owned by the GMPChild.
+  // Reference to the vouchers owned by the GMPChild.
   const nsTArray<uint8_t>& mPluginVoucher;
+  const nsTArray<uint8_t>& mSandboxVoucher;
 };
 
 } // namespace gmp

@@ -46,25 +46,25 @@ describe("loop.StandaloneMozLoop", function() {
     });
   });
 
-  describe("#setLoopCharPref", function() {
+  describe("#setLoopPref", function() {
     afterEach(function() {
       localStorage.removeItem("fakePref");
     });
 
     it("should store the value of the preference", function() {
-      mozLoop.setLoopCharPref("fakePref", "fakeValue");
+      mozLoop.setLoopPref("fakePref", "fakeValue");
 
       expect(localStorage.getItem("fakePref")).eql("fakeValue");
     });
 
     it("should not store the value of seenToS", function() {
-      mozLoop.setLoopCharPref("seenToS", "fakeValue1");
+      mozLoop.setLoopPref("seenToS", "fakeValue1");
 
       expect(localStorage.getItem("seenToS")).eql(null);
     });
   });
 
-  describe("#getLoopCharPref", function() {
+  describe("#getLoopPref", function() {
     afterEach(function() {
       localStorage.removeItem("fakePref");
     });
@@ -72,7 +72,43 @@ describe("loop.StandaloneMozLoop", function() {
     it("should return the value of the preference", function() {
       localStorage.setItem("fakePref", "fakeValue");
 
-      expect(mozLoop.getLoopCharPref("fakePref")).eql("fakeValue");
+      expect(mozLoop.getLoopPref("fakePref")).eql("fakeValue");
+    });
+  });
+
+  describe("#rooms.get", function() {
+    it("should GET to the server", function() {
+      mozLoop.rooms.get("fakeToken", callback);
+
+      expect(requests).to.have.length.of(1);
+      expect(requests[0].url).eql(fakeBaseServerUrl + "/rooms/fakeToken");
+      expect(requests[0].method).eql("GET");
+    });
+
+    it("should call the callback with success parameters", function() {
+      mozLoop.rooms.get("fakeToken", callback);
+
+      var roomDetails = {
+        roomName: "fakeName",
+        roomUrl: "http://invalid",
+        roomOwner: "gavin"
+      };
+
+      requests[0].respond(200, {"Content-Type": "application/json"},
+        JSON.stringify(roomDetails));
+
+      sinon.assert.calledOnce(callback);
+      sinon.assert.calledWithExactly(callback, null, roomDetails);
+    });
+
+    it("should call the callback with failure parameters", function() {
+      mozLoop.rooms.get("fakeToken", callback);
+
+      requests[0].respond(401, {"Content-Type": "application/json"},
+                          JSON.stringify(fakeServerErrorDescription));
+      sinon.assert.calledWithMatch(callback, sinon.match(function(err) {
+        return /HTTP 401 Unauthorized/.test(err.message);
+      }));
     });
   });
 
@@ -177,6 +213,7 @@ describe("loop.StandaloneMozLoop", function() {
       mozLoop.rooms.leave("fakeToken", "fakeSessionToken", callback);
 
       expect(requests).to.have.length.of(1);
+      expect(requests[0].async).eql(false);
       expect(requests[0].url).eql(fakeBaseServerUrl + "/rooms/fakeToken");
       expect(requests[0].method).eql("POST");
       expect(requests[0].requestHeaders.Authorization)

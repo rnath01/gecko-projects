@@ -6,7 +6,7 @@
  * loads the correct node inside the inspector.
  */
 
-function spawnTest() {
+add_task(function*() {
   let { target, panel } = yield initWebAudioEditor(SIMPLE_CONTEXT_URL);
   let { panelWin } = panel;
   let { gFront, $, $$, EVENTS, InspectorView } = panelWin;
@@ -30,12 +30,13 @@ function spawnTest() {
   is($("#web-audio-inspector-title").value, "AudioNode Inspector",
     "Inspector should have default title when empty.");
 
-  click(panelWin, findGraphNode(panelWin, nodeIds[1]));
   // Wait for the node to be set as well as the inspector to come fully into the view
-  yield Promise.all([
+  let nodeSet = Promise.all([
     once(panelWin, EVENTS.UI_INSPECTOR_NODE_SET),
     once(panelWin, EVENTS.UI_INSPECTOR_TOGGLED)
   ]);
+  click(panelWin, findGraphNode(panelWin, nodeIds[1]));
+  yield nodeSet;
 
   ok(InspectorView.isVisible(), "InspectorView shown once node selected.");
   ok(!isVisible($("#web-audio-editor-details-pane-empty")),
@@ -49,12 +50,12 @@ function spawnTest() {
   is($("#web-audio-editor-tabs").selectedIndex, 0,
     "default tab selected should be the parameters tab.");
 
+  nodeSet = once(panelWin, EVENTS.UI_INSPECTOR_NODE_SET);
   click(panelWin, findGraphNode(panelWin, nodeIds[2]));
-  yield once(panelWin, EVENTS.UI_INSPECTOR_NODE_SET);
+  yield nodeSet;
 
   is($("#web-audio-inspector-title").value, "Gain",
     "Inspector title updates when a new node is selected.");
 
-  yield teardown(panel);
-  finish();
-}
+  yield teardown(target);
+});

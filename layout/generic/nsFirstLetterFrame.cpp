@@ -166,7 +166,6 @@ nsFirstLetterFrame::Reflow(nsPresContext*          aPresContext,
 {
   DO_GLOBAL_REFLOW_COUNT("nsFirstLetterFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aMetrics, aReflowStatus);
-  nsresult rv = NS_OK;
 
   // Grab overflow list
   DrainOverflowFrames(aPresContext);
@@ -195,7 +194,7 @@ nsFirstLetterFrame::Reflow(nsPresContext*          aPresContext,
     WritingMode kidWritingMode = GetWritingMode(kid);
     LogicalSize kidAvailSize = availSize.ConvertTo(kidWritingMode, wm);
     nsHTMLReflowState rs(aPresContext, aReflowState, kid, kidAvailSize);
-    nsLineLayout ll(aPresContext, nullptr, &aReflowState, nullptr);
+    nsLineLayout ll(aPresContext, nullptr, &aReflowState, nullptr, nullptr);
 
     ll.BeginLineReflow(bp.IStart(wm), bp.BStart(wm),
                        availSize.ISize(wm), NS_UNCONSTRAINEDSIZE,
@@ -245,8 +244,7 @@ nsFirstLetterFrame::Reflow(nsPresContext*          aPresContext,
     aMetrics.ISize(lineWM) = ll->EndSpan(this) + bp.IStartEnd(wm);
     ll->SetInFirstLetter(false);
 
-    nsLayoutUtils::SetBSizeFromFontMetrics(this, aMetrics, aReflowState,
-                                           bp, lineWM, wm);
+    nsLayoutUtils::SetBSizeFromFontMetrics(this, aMetrics, bp, lineWM, wm);
   }
 
   // Ensure that the overflow rect contains the child textframe's overflow rect.
@@ -272,12 +270,7 @@ nsFirstLetterFrame::Reflow(nsPresContext*          aPresContext,
       // Create a continuation for the child frame if it doesn't already
       // have one.
       if (!IsFloating()) {
-        nsIFrame* nextInFlow;
-        rv = CreateNextInFlow(kid, nextInFlow);
-        if (NS_FAILED(rv)) {
-          return;
-        }
-    
+        CreateNextInFlow(kid);
         // And then push it to our overflow list
         const nsFrameList& overflow = mFrames.RemoveFramesAfter(kid);
         if (overflow.NotEmpty()) {

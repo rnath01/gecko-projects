@@ -38,10 +38,10 @@
 #include "gc/Barrier.h"
 #include "gc/Marking.h"
 #include "gc/Memory.h"
+#include "js/Conversions.h"
 #include "js/MemoryMetrics.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
-#include "vm/NumericConversions.h"
 #include "vm/WrapperObject.h"
 
 #include "jsatominlines.h"
@@ -50,6 +50,8 @@
 
 #include "vm/NativeObject-inl.h"
 #include "vm/Shape-inl.h"
+
+using JS::ToInt32;
 
 using mozilla::DebugOnly;
 using mozilla::UniquePtr;
@@ -94,14 +96,7 @@ js::ToClampedIndex(JSContext *cx, HandleValue v, uint32_t length, uint32_t *out)
 
 const Class ArrayBufferObject::protoClass = {
     "ArrayBufferPrototype",
-    JSCLASS_HAS_CACHED_PROTO(JSProto_ArrayBuffer),
-    JS_PropertyStub,         /* addProperty */
-    JS_DeletePropertyStub,   /* delProperty */
-    JS_PropertyStub,         /* getProperty */
-    JS_StrictPropertyStub,   /* setProperty */
-    JS_EnumerateStub,
-    JS_ResolveStub,
-    JS_ConvertStub
+    JSCLASS_HAS_CACHED_PROTO(JSProto_ArrayBuffer)
 };
 
 const Class ArrayBufferObject::class_ = {
@@ -110,13 +105,13 @@ const Class ArrayBufferObject::class_ = {
     JSCLASS_HAS_RESERVED_SLOTS(RESERVED_SLOTS) |
     JSCLASS_HAS_CACHED_PROTO(JSProto_ArrayBuffer) |
     JSCLASS_BACKGROUND_FINALIZE,
-    JS_PropertyStub,         /* addProperty */
-    JS_DeletePropertyStub,   /* delProperty */
-    JS_PropertyStub,         /* getProperty */
-    JS_StrictPropertyStub,   /* setProperty */
-    JS_EnumerateStub,
-    JS_ResolveStub,
-    JS_ConvertStub,
+    nullptr,                 /* addProperty */
+    nullptr,                 /* delProperty */
+    nullptr,                 /* getProperty */
+    nullptr,                 /* setProperty */
+    nullptr,                 /* enumerate */
+    nullptr,                 /* resolve */
+    nullptr,                 /* convert */
     ArrayBufferObject::finalize,
     nullptr,        /* call        */
     nullptr,        /* hasInstance */
@@ -529,6 +524,7 @@ ArrayBufferObject::neuter(JSContext *cx, Handle<ArrayBufferObject*> buffer,
         if (!cx->global()->getType(cx))
             CrashAtUnhandlableOOM("ArrayBufferObject::neuter");
         types::MarkTypeObjectFlags(cx, cx->global(), types::OBJECT_FLAG_TYPED_OBJECT_NEUTERED);
+        cx->compartment()->neuteredTypedObjects = 1;
     }
 
     // Neuter all views on the buffer, clear out the list of views and the
@@ -1187,13 +1183,36 @@ ArrayBufferViewObject::trace(JSTracer *trc, JSObject *objArg)
     HeapSlot &bufSlot = obj->getReservedSlotRef(TypedArrayLayout::BUFFER_SLOT);
     MarkSlot(trc, &bufSlot, "typedarray.buffer");
 
-    // Update obj's data pointer if the array buffer moved. Note that during
-    // initialization, bufSlot may still contain |undefined|.
+    // Update obj's data pointer if it moved.
     if (bufSlot.isObject()) {
         ArrayBufferObject &buf = AsArrayBuffer(MaybeForwarded(&bufSlot.toObject()));
         int32_t offset = obj->getReservedSlot(TypedArrayLayout::BYTEOFFSET_SLOT).toInt32();
         MOZ_ASSERT(buf.dataPointer() != nullptr);
-        obj->initPrivate(buf.dataPointer() + offset);
+
+        if (buf.forInlineTypedObject()) {
+            // The data is inline with an InlineTypedObject associated with the
+            // buffer. Get a new address for the typed object if it moved.
+            JSObject *view = buf.firstView();
+
+            // Mark the object to move it into the tenured space.
+            MarkObjectUnbarriered(trc, &view, "typed array nursery owner");
+            MOZ_ASSERT(view->is<InlineTypedObject>() && view != obj);
+
+            void *srcData = obj->getPrivate();
+            void *dstData = view->as<InlineTypedObject>().inlineTypedMem() + offset;
+            obj->setPrivateUnbarriered(dstData);
+
+            // We can't use a direct forwarding pointer here, as there might
+            // not be enough bytes available, and other views might have data
+            // pointers whose forwarding pointers would overlap this one.
+            trc->runtime()->gc.nursery.maybeSetForwardingPointer(trc, srcData, dstData,
+                                                                 /* direct = */ false);
+        } else {
+            // The data may or may not be inline with the buffer. The buffer
+            // can only move during a compacting GC, in which case its
+            // objectMoved hook has already updated the buffer's data pointer.
+           obj->initPrivate(buf.dataPointer() + offset);
+        }
     }
 }
 
@@ -1537,7 +1556,7 @@ js_InitArrayBufferClass(JSContext *cx, HandleObject obj)
     if (!getter)
         return nullptr;
 
-    if (!DefineNativeProperty(cx, arrayBufferProto, byteLengthId, UndefinedHandleValue,
+    if (!NativeDefineProperty(cx, arrayBufferProto, byteLengthId, UndefinedHandleValue,
                               JS_DATA_TO_FUNC_PTR(PropertyOp, getter), nullptr, attrs))
         return nullptr;
 

@@ -30,8 +30,8 @@ using mozilla::PodCopy;
 /*****************************************************************************/
 
 void
-InterpreterFrame::initExecuteFrame(JSContext *cx, JSScript *script, AbstractFramePtr evalInFramePrev,
-                                   const Value &thisv, JSObject &scopeChain, ExecuteType type)
+InterpreterFrame::initExecuteFrame(JSContext *cx, HandleScript script, AbstractFramePtr evalInFramePrev,
+                                   const Value &thisv, HandleObject scopeChain, ExecuteType type)
 {
     /*
      * See encoding of ExecuteType. When GLOBAL isn't set, we are executing a
@@ -55,7 +55,7 @@ InterpreterFrame::initExecuteFrame(JSContext *cx, JSScript *script, AbstractFram
             MOZ_ASSERT(iter.isFunctionFrame() || iter.isGlobalFrame());
             MOZ_ASSERT(!iter.isAsmJS());
             if (iter.isFunctionFrame()) {
-                callee = iter.callee();
+                callee = iter.callee(cx);
                 flags_ |= FUNCTION;
             } else {
                 flags_ |= GLOBAL;
@@ -79,7 +79,7 @@ InterpreterFrame::initExecuteFrame(JSContext *cx, JSScript *script, AbstractFram
 #endif
     }
 
-    scopeChain_ = &scopeChain;
+    scopeChain_ = scopeChain.get();
     prev_ = nullptr;
     prevpc_ = nullptr;
     prevsp_ = nullptr;
@@ -146,30 +146,33 @@ AssertDynamicScopeMatchesStaticScope(JSContext *cx, JSScript *script, JSObject *
     for (StaticScopeIter<NoGC> i(enclosingScope); !i.done(); i++) {
         if (i.hasDynamicScopeObject()) {
             switch (i.type()) {
-              case StaticScopeIter<NoGC>::BLOCK:
-                MOZ_ASSERT(&i.block() == scope->as<ClonedBlockObject>().staticScope());
-                scope = &scope->as<ClonedBlockObject>().enclosingScope();
-                break;
-              case StaticScopeIter<NoGC>::WITH:
-                MOZ_ASSERT(&i.staticWith() == scope->as<DynamicWithObject>().staticScope());
-                scope = &scope->as<DynamicWithObject>().enclosingScope();
-                break;
-              case StaticScopeIter<NoGC>::FUNCTION:
+              case StaticScopeIter<NoGC>::Function:
                 MOZ_ASSERT(scope->as<CallObject>().callee().nonLazyScript() == i.funScript());
                 scope = &scope->as<CallObject>().enclosingScope();
                 break;
-              case StaticScopeIter<NoGC>::NAMED_LAMBDA:
+              case StaticScopeIter<NoGC>::Block:
+                MOZ_ASSERT(&i.block() == scope->as<ClonedBlockObject>().staticScope());
+                scope = &scope->as<ClonedBlockObject>().enclosingScope();
+                break;
+              case StaticScopeIter<NoGC>::With:
+                MOZ_ASSERT(&i.staticWith() == scope->as<DynamicWithObject>().staticScope());
+                scope = &scope->as<DynamicWithObject>().enclosingScope();
+                break;
+              case StaticScopeIter<NoGC>::NamedLambda:
                 scope = &scope->as<DeclEnvObject>().enclosingScope();
+                break;
+              case StaticScopeIter<NoGC>::Eval:
+                scope = &scope->as<CallObject>().enclosingScope();
                 break;
             }
         }
     }
 
-    /*
-     * Ideally, we'd MOZ_ASSERT(!scope->is<ScopeObject>()) but the enclosing
-     * lexical scope chain stops at eval() boundaries. See StaticScopeIter
-     * comment.
-     */
+    // The scope chain is always ended by one or more non-syntactic
+    // ScopeObjects (viz. GlobalObject or a non-syntactic WithObject).
+    MOZ_ASSERT(!scope->is<ScopeObject>() ||
+               (scope->is<DynamicWithObject>() &&
+                !scope->as<DynamicWithObject>().isSyntactic()));
 #endif
 }
 
@@ -352,7 +355,7 @@ InterpreterFrame::markValues(JSTracer *trc, Value *sp, jsbytecode *pc)
     size_t nlivefixed = script->nbodyfixed();
 
     if (nfixed != nlivefixed) {
-        NestedScopeObject *staticScope = script->getStaticScope(pc);
+        NestedScopeObject *staticScope = script->getStaticBlockScope(pc);
         while (staticScope && !staticScope->is<StaticBlockObject>())
             staticScope = staticScope->enclosingNestedScope();
 
@@ -458,7 +461,7 @@ InterpreterStack::pushExecuteFrame(JSContext *cx, HandleScript script, const Val
 
     InterpreterFrame *fp = reinterpret_cast<InterpreterFrame *>(buffer + 2 * sizeof(Value));
     fp->mark_ = mark;
-    fp->initExecuteFrame(cx, script, evalInFrame, thisv, *scopeChain, type);
+    fp->initExecuteFrame(cx, script, evalInFrame, thisv, scopeChain, type);
     fp->initLocals();
 
     return fp;
@@ -555,12 +558,6 @@ FrameIter::settleOnActivation()
             return;
         }
 
-        // ForkJoin activations don't contain iterable frames, so skip them.
-        if (activation->isForkJoin()) {
-            ++data_.activations_;
-            continue;
-        }
-
         MOZ_ASSERT(activation->isInterpreter());
 
         InterpreterActivation *interpAct = activation->asInterpreter();
@@ -583,7 +580,7 @@ FrameIter::settleOnActivation()
     }
 }
 
-FrameIter::Data::Data(ThreadSafeContext *cx, SavedOption savedOption,
+FrameIter::Data::Data(JSContext *cx, SavedOption savedOption,
                       ContextOption contextOption, JSPrincipals *principals)
   : cx_(cx),
     savedOption_(savedOption),
@@ -613,7 +610,7 @@ FrameIter::Data::Data(const FrameIter::Data &other)
 {
 }
 
-FrameIter::FrameIter(ThreadSafeContext *cx, SavedOption savedOption)
+FrameIter::FrameIter(JSContext *cx, SavedOption savedOption)
   : data_(cx, savedOption, CURRENT_CONTEXT, nullptr),
     ionInlineFrames_(cx, (js::jit::JitFrameIterator*) nullptr)
 {
@@ -622,7 +619,7 @@ FrameIter::FrameIter(ThreadSafeContext *cx, SavedOption savedOption)
     settleOnActivation();
 }
 
-FrameIter::FrameIter(ThreadSafeContext *cx, ContextOption contextOption,
+FrameIter::FrameIter(JSContext *cx, ContextOption contextOption,
                      SavedOption savedOption)
   : data_(cx, savedOption, contextOption, nullptr),
     ionInlineFrames_(cx, (js::jit::JitFrameIterator*) nullptr)
@@ -864,7 +861,7 @@ FrameIter::functionDisplayAtom() const
         break;
       case INTERP:
       case JIT:
-        return callee()->displayAtom();
+        return calleeTemplate()->displayAtom();
       case ASMJS:
         return data_.asmJSFrames_.functionDisplayAtom();
     }
@@ -963,7 +960,7 @@ FrameIter::isConstructing() const
 }
 
 bool
-FrameIter::ensureHasRematerializedFrame(ThreadSafeContext *cx)
+FrameIter::ensureHasRematerializedFrame(JSContext *cx)
 {
     MOZ_ASSERT(isIon());
     return !!activation()->asJit()->getRematerializedFrame(cx, data_.jitFrames_);
@@ -1062,7 +1059,7 @@ FrameIter::updatePcQuadratic()
 }
 
 JSFunction *
-FrameIter::callee() const
+FrameIter::calleeTemplate() const
 {
     switch (data_.state_) {
       case DONE:
@@ -1075,25 +1072,65 @@ FrameIter::callee() const
         if (data_.jitFrames_.isBaselineJS())
             return data_.jitFrames_.callee();
         MOZ_ASSERT(data_.jitFrames_.isIonScripted());
-        return ionInlineFrames_.callee();
+        return ionInlineFrames_.calleeTemplate();
     }
     MOZ_CRASH("Unexpected state");
 }
 
-Value
-FrameIter::calleev() const
+JSFunction *
+FrameIter::callee(JSContext *cx) const
 {
     switch (data_.state_) {
       case DONE:
       case ASMJS:
         break;
       case INTERP:
-        MOZ_ASSERT(isFunctionFrame());
-        return interpFrame()->calleev();
+        return calleeTemplate();
       case JIT:
-        return ObjectValue(*callee());
+        if (data_.jitFrames_.isIonScripted()) {
+            jit::MaybeReadFallback recover(cx, activation()->asJit(), &data_.jitFrames_);
+            return ionInlineFrames_.callee(recover);
+        }
+        MOZ_ASSERT(data_.jitFrames_.isBaselineJS());
+        return calleeTemplate();
     }
     MOZ_CRASH("Unexpected state");
+}
+
+bool
+FrameIter::matchCallee(JSContext *cx, HandleFunction fun) const
+{
+    RootedFunction currentCallee(cx, calleeTemplate());
+
+    // As we do not know if the calleeTemplate is the real function, or the
+    // template from which it would be cloned, we compare properties which are
+    // stable across the cloning of JSFunctions.
+    if (((currentCallee->flags() ^ fun->flags()) & JSFunction::STABLE_ACROSS_CLONES) != 0 ||
+        currentCallee->nargs() != fun->nargs())
+    {
+        return false;
+    }
+
+    // Only some lambdas are optimized in a way which cannot be recovered without
+    // invalidating the frame. Thus, if one of the function is not a lambda we can just
+    // compare it against the calleeTemplate.
+    if (!fun->isLambda() || !currentCallee->isLambda())
+        return currentCallee == fun;
+
+    // Use the same condition as |js::CloneFunctionObject|, to know if we should
+    // expect both functions to have the same JSScript. If so, and if they are
+    // different, then they cannot be equal.
+    bool useSameScript = CloneFunctionObjectUseSameScript(fun->compartment(), currentCallee);
+    if (useSameScript &&
+        (currentCallee->hasScript() != fun->hasScript() ||
+         currentCallee->nonLazyScript() != fun->nonLazyScript()))
+    {
+        return false;
+    }
+
+    // If none of the previous filters worked, then take the risk of
+    // invalidating the frame to identify the JSFunction.
+    return callee(cx) == fun;
 }
 
 unsigned
@@ -1129,15 +1166,17 @@ FrameIter::unaliasedActual(unsigned i, MaybeCheckAliasing checkAliasing) const
 }
 
 JSObject *
-FrameIter::scopeChain() const
+FrameIter::scopeChain(JSContext *cx) const
 {
     switch (data_.state_) {
       case DONE:
       case ASMJS:
         break;
       case JIT:
-        if (data_.jitFrames_.isIonScripted())
-            return ionInlineFrames_.scopeChain();
+        if (data_.jitFrames_.isIonScripted()) {
+            jit::MaybeReadFallback recover(cx, activation()->asJit(), &data_.jitFrames_);
+            return ionInlineFrames_.scopeChain(recover);
+        }
         return data_.jitFrames_.baselineFrame()->scopeChain();
       case INTERP:
         return interpFrame()->scopeChain();
@@ -1146,11 +1185,11 @@ FrameIter::scopeChain() const
 }
 
 CallObject &
-FrameIter::callObj() const
+FrameIter::callObj(JSContext *cx) const
 {
-    MOZ_ASSERT(callee()->isHeavyweight());
+    MOZ_ASSERT(calleeTemplate()->isHeavyweight());
 
-    JSObject *pobj = scopeChain();
+    JSObject *pobj = scopeChain(cx);
     while (!pobj->is<CallObject>())
         pobj = pobj->enclosingScope();
     return pobj->as<CallObject>();
@@ -1173,7 +1212,7 @@ bool
 FrameIter::computeThis(JSContext *cx) const
 {
     MOZ_ASSERT(!done() && !isAsmJS());
-    assertSameCompartment(cx, scopeChain());
+    assertSameCompartment(cx, scopeChain(cx));
     return ComputeThis(cx, abstractFramePtr());
 }
 
@@ -1184,7 +1223,7 @@ FrameIter::computedThisValue() const
 }
 
 Value
-FrameIter::thisv(JSContext *cx)
+FrameIter::thisv(JSContext *cx) const
 {
     switch (data_.state_) {
       case DONE:
@@ -1326,7 +1365,7 @@ AbstractFramePtr::evalPrevScopeChain(JSContext *cx) const
     while (iter.isIon() || iter.abstractFramePtr() != *this)
         ++iter;
     ++iter;
-    return iter.scopeChain();
+    return iter.scopeChain(cx);
 }
 
 bool
@@ -1352,18 +1391,6 @@ jit::JitActivation::JitActivation(JSContext *cx, bool active)
         prevJitTop_ = nullptr;
         prevJitJSContext_ = nullptr;
     }
-}
-
-jit::JitActivation::JitActivation(ForkJoinContext *cx)
-  : Activation(cx, Jit),
-    active_(true),
-    rematerializedFrames_(nullptr),
-    ionRecovery_(cx),
-    bailoutData_(nullptr)
-{
-    prevJitTop_ = cx->perThreadData->jitTop;
-    prevJitJSContext_ = cx->perThreadData->jitJSContext;
-    cx->perThreadData->jitJSContext = nullptr;
 }
 
 jit::JitActivation::~JitActivation()
@@ -1445,10 +1472,8 @@ jit::JitActivation::clearRematerializedFrames()
 }
 
 jit::RematerializedFrame *
-jit::JitActivation::getRematerializedFrame(ThreadSafeContext *cx, const JitFrameIterator &iter, size_t inlineDepth)
+jit::JitActivation::getRematerializedFrame(JSContext *cx, const JitFrameIterator &iter, size_t inlineDepth)
 {
-    // Only allow rematerializing from the same thread.
-    MOZ_ASSERT(cx->perThreadData == cx_->perThreadData);
     MOZ_ASSERT(iter.activation() == this);
     MOZ_ASSERT(iter.isIonScripted());
 
@@ -1473,8 +1498,22 @@ jit::JitActivation::getRematerializedFrame(ThreadSafeContext *cx, const JitFrame
         // preserve identity. Therefore, we always rematerialize an uninlined
         // frame and all its inlined frames at once.
         InlineFrameIterator inlineIter(cx, &iter);
-        if (!RematerializedFrame::RematerializeInlineFrames(cx, top, inlineIter, p->value()))
+        MaybeReadFallback recover(cx, this, &iter);
+
+        // Frames are often rematerialized with the cx inside a Debugger's
+        // compartment. To recover slots and to create CallObjects, we need to
+        // be in the activation's compartment.
+        AutoCompartment ac(cx, compartment_);
+
+        if (!RematerializedFrame::RematerializeInlineFrames(cx, top, inlineIter, recover,
+                                                            p->value()))
+        {
             return nullptr;
+        }
+
+        // All frames younger than the rematerialized frame need to have their
+        // prevUpToDate flag cleared.
+        DebugScopes::unsetPrevUpToDateUntil(cx, p->value()[inlineDepth]);
     }
 
     return p->value()[inlineDepth];
@@ -1511,7 +1550,7 @@ jit::JitActivation::registerIonFrameRecovery(RInstructionResults&& results)
 }
 
 jit::RInstructionResults *
-jit::JitActivation::maybeIonFrameRecovery(IonJSFrameLayout *fp)
+jit::JitActivation::maybeIonFrameRecovery(JitFrameLayout *fp)
 {
     for (RInstructionResults *it = ionRecovery_.begin(); it != ionRecovery_.end(); ) {
         if (it->frame() == fp)
@@ -1522,7 +1561,7 @@ jit::JitActivation::maybeIonFrameRecovery(IonJSFrameLayout *fp)
 }
 
 void
-jit::JitActivation::removeIonFrameRecovery(IonJSFrameLayout *fp)
+jit::JitActivation::removeIonFrameRecovery(JitFrameLayout *fp)
 {
     RInstructionResults *elem = maybeIonFrameRecovery(fp);
     if (!elem)

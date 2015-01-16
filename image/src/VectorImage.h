@@ -39,15 +39,11 @@ public:
 
   // Methods inherited from Image
   nsresult Init(const char* aMimeType,
-                uint32_t aFlags);
-  virtual nsIntRect FrameRect(uint32_t aWhichFrame) MOZ_OVERRIDE;
+                uint32_t aFlags) MOZ_OVERRIDE;
 
-  virtual size_t HeapSizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const;
-  virtual size_t HeapSizeOfDecodedWithComputedFallback(MallocSizeOf aMallocSizeOf) const;
-  virtual size_t NonHeapSizeOfDecoded() const;
-  virtual size_t OutOfProcessSizeOfDecoded() const;
-
-  virtual size_t HeapSizeOfVectorImageDocument(nsACString* aDocURL = nullptr) const MOZ_OVERRIDE;
+  virtual size_t SizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
+  virtual size_t SizeOfDecoded(gfxMemoryLocation aLocation,
+                               MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
 
   virtual nsresult OnImageDataAvailable(nsIRequest* aRequest,
                                         nsISupports* aContext,
@@ -58,7 +54,6 @@ public:
                                        nsISupports* aContext,
                                        nsresult aResult,
                                        bool aLastPart) MOZ_OVERRIDE;
-  virtual nsresult OnNewSourceData() MOZ_OVERRIDE;
 
   /**
    * Callback for SVGRootRenderingObserver.
@@ -82,9 +77,9 @@ protected:
                        ImageURL* aURI = nullptr);
   virtual ~VectorImage();
 
-  virtual nsresult StartAnimation();
-  virtual nsresult StopAnimation();
-  virtual bool     ShouldAnimate();
+  virtual nsresult StartAnimation() MOZ_OVERRIDE;
+  virtual nsresult StopAnimation() MOZ_OVERRIDE;
+  virtual bool     ShouldAnimate() MOZ_OVERRIDE;
 
   void CreateSurfaceAndShow(const SVGDrawingParameters& aParams);
   void Show(gfxDrawable* aDrawable, const SVGDrawingParameters& aParams);

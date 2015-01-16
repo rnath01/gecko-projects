@@ -66,8 +66,7 @@ MediaSourceDecoder::Load(nsIStreamListener**, MediaDecoder*)
   NS_ENSURE_SUCCESS(rv, rv);
 
   SetStateMachineParameters();
-
-  return NS_OK;
+  return ScheduleStateMachineThread();
 }
 
 nsresult
@@ -130,10 +129,10 @@ MediaSourceDecoder::DetachMediaSource()
 }
 
 already_AddRefed<SourceBufferDecoder>
-MediaSourceDecoder::CreateSubDecoder(const nsACString& aType)
+MediaSourceDecoder::CreateSubDecoder(const nsACString& aType, int64_t aTimestampOffset)
 {
   MOZ_ASSERT(mReader);
-  return mReader->CreateSubDecoder(aType);
+  return mReader->CreateSubDecoder(aType, aTimestampOffset);
 }
 
 void
@@ -268,5 +267,11 @@ MediaSourceDecoder::SetCDMProxy(CDMProxy* aProxy)
   return NS_OK;
 }
 #endif
+
+bool
+MediaSourceDecoder::IsActiveReader(MediaDecoderReader* aReader)
+{
+  return mReader->IsActiveReader(aReader);
+}
 
 } // namespace mozilla

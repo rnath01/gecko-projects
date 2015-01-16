@@ -118,8 +118,8 @@ public:
 private:
   mutable bool mURIResolved;
 
-  URLValue(const URLValue& aOther) MOZ_DELETE;
-  URLValue& operator=(const URLValue& aOther) MOZ_DELETE;
+  URLValue(const URLValue& aOther) = delete;
+  URLValue& operator=(const URLValue& aOther) = delete;
 };
 
 struct ImageValue : public URLValue {
@@ -195,9 +195,9 @@ private:
   {
   }
 
-  GridTemplateAreasValue(const GridTemplateAreasValue& aOther) MOZ_DELETE;
+  GridTemplateAreasValue(const GridTemplateAreasValue& aOther) = delete;
   GridTemplateAreasValue&
-  operator=(const GridTemplateAreasValue& aOther) MOZ_DELETE;
+  operator=(const GridTemplateAreasValue& aOther) = delete;
 };
 
 class FontFamilyListRefCnt MOZ_FINAL : public FontFamilyList {
@@ -714,6 +714,16 @@ public:
 
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
+  static void
+  AppendSidesShorthandToString(const nsCSSProperty aProperties[],
+                               const nsCSSValue* aValues[],
+                               nsAString& aString,
+                               Serialization aSerialization);
+  static void
+  AppendBasicShapeRadiusToString(const nsCSSProperty aProperties[],
+                                 const nsCSSValue* aValues[],
+                                 nsAString& aResult,
+                                 Serialization aValueSerialization);
 private:
   static const char16_t* GetBufferValue(nsStringBuffer* aBuffer) {
     return static_cast<char16_t*>(aBuffer->Data());
@@ -729,6 +739,8 @@ private:
            nsCSSKeyword aFunctionId,
            nsCSSProperty aProperty, nsAString& aResult,
            Serialization aValueSerialization) const;
+  void AppendInsetToString(nsCSSProperty aProperty, nsAString& aResult,
+                           Serialization aValueSerialization) const;
 protected:
   nsCSSUnit mUnit;
   union {
@@ -778,6 +790,11 @@ struct nsCSSValue::Array MOZ_FINAL {
   const nsCSSValue& Item(size_t aIndex) const { return (*this)[aIndex]; }
 
   size_t Count() const { return mCount; }
+
+  // callers depend on the items being contiguous
+  nsCSSValue* ItemStorage() {
+    return this->First();
+  }
 
   bool operator==(const Array& aOther) const
   {
@@ -857,8 +874,8 @@ private:
 #undef CSSVALUE_LIST_FOR_EXTRA_VALUES
 
 private:
-  Array(const Array& aOther) MOZ_DELETE;
-  Array& operator=(const Array& aOther) MOZ_DELETE;
+  Array(const Array& aOther) = delete;
+  Array& operator=(const Array& aOther) = delete;
 };
 
 // Prefer nsCSSValue::Array for lists of fixed size.
@@ -889,8 +906,8 @@ private:
   // We don't want operator== or operator!= because they wouldn't be
   // null-safe, which is generally what we need.  Use |Equal| method
   // above instead.
-  bool operator==(nsCSSValueList const& aOther) const MOZ_DELETE;
-  bool operator!=(const nsCSSValueList& aOther) const MOZ_DELETE;
+  bool operator==(nsCSSValueList const& aOther) const = delete;
+  bool operator!=(const nsCSSValueList& aOther) const = delete;
 };
 
 // nsCSSValueList_heap differs from nsCSSValueList only in being
@@ -1288,8 +1305,8 @@ private:
   // We don't want operator== or operator!= because they wouldn't be
   // null-safe, which is generally what we need.  Use |Equal| method
   // above instead.
-  bool operator==(const nsCSSValuePairList& aOther) const MOZ_DELETE;
-  bool operator!=(const nsCSSValuePairList& aOther) const MOZ_DELETE;
+  bool operator==(const nsCSSValuePairList& aOther) const = delete;
+  bool operator!=(const nsCSSValuePairList& aOther) const = delete;
 };
 
 // nsCSSValuePairList_heap differs from nsCSSValuePairList only in being
@@ -1457,8 +1474,8 @@ private:
   {
   }
 
-  nsCSSValueGradient(const nsCSSValueGradient& aOther) MOZ_DELETE;
-  nsCSSValueGradient& operator=(const nsCSSValueGradient& aOther) MOZ_DELETE;
+  nsCSSValueGradient(const nsCSSValueGradient& aOther) = delete;
+  nsCSSValueGradient& operator=(const nsCSSValueGradient& aOther) = delete;
 };
 
 struct nsCSSValueTokenStream MOZ_FINAL {
@@ -1536,8 +1553,8 @@ public:
   nsTHashtable<nsRefPtrHashKey<mozilla::css::ImageValue> > mImageValues;
 
 private:
-  nsCSSValueTokenStream(const nsCSSValueTokenStream& aOther) MOZ_DELETE;
-  nsCSSValueTokenStream& operator=(const nsCSSValueTokenStream& aOther) MOZ_DELETE;
+  nsCSSValueTokenStream(const nsCSSValueTokenStream& aOther) = delete;
+  nsCSSValueTokenStream& operator=(const nsCSSValueTokenStream& aOther) = delete;
 };
 
 class nsCSSValueFloatColor MOZ_FINAL {
@@ -1578,9 +1595,9 @@ private:
   float mComponent3;  // 0..1
   float mAlpha;       // 0..1
 
-  nsCSSValueFloatColor(const nsCSSValueFloatColor& aOther) MOZ_DELETE;
+  nsCSSValueFloatColor(const nsCSSValueFloatColor& aOther) = delete;
   nsCSSValueFloatColor& operator=(const nsCSSValueFloatColor& aOther)
-                                                                   MOZ_DELETE;
+                                                                   = delete;
 };
 
 struct nsCSSCornerSizes {

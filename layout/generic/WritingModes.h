@@ -8,15 +8,7 @@
 
 #include "nsRect.h"
 #include "nsStyleContext.h"
-
-// If WRITING_MODE_VERTICAL_ENABLED is defined, we will attempt to support
-// the vertical writing-mode values; if it is not defined, then
-// WritingMode.IsVertical() will be hard-coded to return false, allowing
-// many conditional branches to be optimized away while we're in the process
-// of transitioning layout to use writing-mode and logical directions, but
-// not yet ready to ship vertical support.
-
-/* #define WRITING_MODE_VERTICAL_ENABLED 1 */
+#include "nsBidiUtils.h"
 
 // It is the caller's responsibility to operate on logical-coordinate objects
 // with matched writing modes. Failure to do so will be a runtime bug; the
@@ -184,11 +176,7 @@ public:
    * True if vertical writing mode, i.e. when
    * writing-mode: vertical-lr | vertical-rl.
    */
-#ifdef WRITING_MODE_VERTICAL_ENABLED
   bool IsVertical() const { return !!(mWritingMode & eOrientationMask); }
-#else
-  bool IsVertical() const { return false; }
-#endif
 
   /**
    * True if line-over/line-under are inverted from block-start/block-end.
@@ -196,11 +184,7 @@ public:
    *   - writing-mode is vertical-rl && text-orientation is sideways-left
    *   - writing-mode is vertical-lr && text-orientation is not sideways-left
    */
-#ifdef WRITING_MODE_VERTICAL_ENABLED
   bool IsLineInverted() const { return !!(mWritingMode & eLineOrientMask); }
-#else
-  bool IsLineInverted() const { return false; }
-#endif
 
   /**
    * Block-axis flow-relative to line-relative factor.
@@ -221,11 +205,7 @@ public:
    * due to text-orientation:mixed resolution, but in that case the dominant
    * baseline remains centered.
    */
-#ifdef WRITING_MODE_VERTICAL_ENABLED
   bool IsSideways() const { return !!(mWritingMode & eSidewaysMask); }
-#else
-  bool IsSideways() const { return false; }
-#endif
 
   /**
    * Default constructor gives us a horizontal, LTR writing mode.
@@ -245,7 +225,6 @@ public:
 
     const nsStyleVisibility* styleVisibility = aStyleContext->StyleVisibility();
 
-#ifdef WRITING_MODE_VERTICAL_ENABLED
     switch (styleVisibility->mWritingMode) {
       case NS_STYLE_WRITING_MODE_HORIZONTAL_TB:
         mWritingMode = 0;
@@ -256,7 +235,7 @@ public:
         mWritingMode = eBlockFlowMask |
                        eLineOrientMask |
                        eOrientationMask;
-        uint8_t textOrientation = aStyleContext->StyleText()->mTextOrientation;
+        uint8_t textOrientation = aStyleContext->StyleVisibility()->mTextOrientation;
 #if 0 // not yet implemented
         if (textOrientation == NS_STYLE_TEXT_ORIENTATION_SIDEWAYS_LEFT) {
           mWritingMode &= ~eLineOrientMask;
@@ -271,7 +250,7 @@ public:
       case NS_STYLE_WRITING_MODE_VERTICAL_RL:
       {
         mWritingMode = eOrientationMask;
-        uint8_t textOrientation = aStyleContext->StyleText()->mTextOrientation;
+        uint8_t textOrientation = aStyleContext->StyleVisibility()->mTextOrientation;
 #if 0 // not yet implemented
         if (textOrientation == NS_STYLE_TEXT_ORIENTATION_SIDEWAYS_LEFT) {
           mWritingMode |= eLineOrientMask;
@@ -288,9 +267,6 @@ public:
         mWritingMode = 0;
         break;
     }
-#else
-    mWritingMode = 0;
-#endif
 
     if (NS_STYLE_DIRECTION_RTL == styleVisibility->mDirection) {
       mWritingMode |= eInlineFlowMask | //XXX needs update when text-orientation added
@@ -304,11 +280,11 @@ public:
   //XXX change uint8_t to UBiDiLevel after bug 924851
   void SetDirectionFromBidiLevel(uint8_t level)
   {
-    if (level & 1) {
-      // odd level, set RTL
+    if (IS_LEVEL_RTL(level)) {
+      // set RTL
       mWritingMode |= eBidiMask;
     } else {
-      // even level, set LTR
+      // set LTR
       mWritingMode &= ~eBidiMask;
     }
   }
@@ -339,6 +315,8 @@ private:
   friend class LogicalSize;
   friend class LogicalMargin;
   friend class LogicalRect;
+
+  friend struct IPC::ParamTraits<WritingMode>;
 
   /**
    * Return a WritingMode representing an unknown value.
@@ -554,10 +532,16 @@ public:
                            aContainerWidth);
   }
 
-  bool operator==(LogicalPoint aOther) const
+  bool operator==(const LogicalPoint& aOther) const
   {
     CHECK_WRITING_MODE(aOther.GetWritingMode());
     return mPoint == aOther.mPoint;
+  }
+
+  bool operator!=(const LogicalPoint& aOther) const
+  {
+    CHECK_WRITING_MODE(aOther.GetWritingMode());
+    return mPoint != aOther.mPoint;
   }
 
   LogicalPoint operator+(const LogicalPoint& aOther) const
@@ -620,7 +604,7 @@ private:
 #endif
 
   // We don't allow construction of a LogicalPoint with no writing mode.
-  LogicalPoint() MOZ_DELETE;
+  LogicalPoint() = delete;
 
   // Accessors that don't take or check a WritingMode value.
   // These are for internal use only; they are called by methods that have
@@ -760,9 +744,18 @@ public:
    */
   LogicalSize ConvertTo(WritingMode aToMode, WritingMode aFromMode) const
   {
+#ifdef DEBUG
+    // In DEBUG builds make sure to return a LogicalSize with the
+    // expected writing mode
     CHECK_WRITING_MODE(aFromMode);
     return aToMode == aFromMode ?
       *this : LogicalSize(aToMode, GetPhysicalSize(aFromMode));
+#else
+    // optimization for non-DEBUG builds where LogicalSize doesn't store
+    // the writing mode
+    return (aToMode == aFromMode || !aToMode.IsOrthogonalTo(aFromMode))
+             ? *this : LogicalSize(aToMode, BSize(), ISize());
+#endif
   }
 
   /**
@@ -820,7 +813,7 @@ public:
 private:
   friend class LogicalRect;
 
-  LogicalSize() MOZ_DELETE;
+  LogicalSize() = delete;
 
 #ifdef DEBUG
   WritingMode GetWritingMode() const { return mWritingMode; }
@@ -1024,6 +1017,36 @@ public:
     mMargin.SizeTo(aBStart, aIEnd, aBEnd, aIStart);
   }
 
+  nscoord& Top(WritingMode aWritingMode)
+  {
+    CHECK_WRITING_MODE(aWritingMode);
+    return aWritingMode.IsVertical() ?
+      (aWritingMode.IsBidiLTR() ? IStart() : IEnd()) : BStart();
+  }
+
+  nscoord& Bottom(WritingMode aWritingMode)
+  {
+    CHECK_WRITING_MODE(aWritingMode);
+    return aWritingMode.IsVertical() ?
+      (aWritingMode.IsBidiLTR() ? IEnd() : IStart()) : BEnd();
+  }
+
+  nscoord& Left(WritingMode aWritingMode)
+  {
+    CHECK_WRITING_MODE(aWritingMode);
+    return aWritingMode.IsVertical() ?
+      (aWritingMode.IsVerticalLR() ? BStart() : BEnd()) :
+      (aWritingMode.IsBidiLTR() ? IStart() : IEnd());
+  }
+
+  nscoord& Right(WritingMode aWritingMode)
+  {
+    CHECK_WRITING_MODE(aWritingMode);
+    return aWritingMode.IsVertical() ?
+      (aWritingMode.IsVerticalLR() ? BEnd() : BStart()) :
+      (aWritingMode.IsBidiLTR() ? IEnd() : IStart());
+  }
+
   /**
    * Return an nsMargin containing our physical coordinates
    */
@@ -1072,7 +1095,7 @@ public:
             mMargin.right == 0 && mMargin.bottom == 0);
   }
 
-  LogicalMargin operator+(const LogicalMargin& aMargin) {
+  LogicalMargin operator+(const LogicalMargin& aMargin) const {
     CHECK_WRITING_MODE(aMargin.GetWritingMode());
     return LogicalMargin(GetWritingMode(),
                          BStart() + aMargin.BStart(),
@@ -1081,7 +1104,7 @@ public:
                          IStart() + aMargin.IStart());
   }
 
-  LogicalMargin operator-(const LogicalMargin& aMargin) {
+  LogicalMargin operator-(const LogicalMargin& aMargin) const {
     CHECK_WRITING_MODE(aMargin.GetWritingMode());
     return LogicalMargin(GetWritingMode(),
                          BStart() - aMargin.BStart(),
@@ -1093,7 +1116,7 @@ public:
 private:
   friend class LogicalRect;
 
-  LogicalMargin() MOZ_DELETE;
+  LogicalMargin() = delete;
 
 #ifdef DEBUG
   WritingMode GetWritingMode() const { return mWritingMode; }
@@ -1505,19 +1528,6 @@ public:
     }
   }
 
-  nsPoint GetPhysicalPosition(WritingMode aWritingMode,
-                              nscoord aContainerWidth) const
-  {
-    CHECK_WRITING_MODE(aWritingMode);
-    if (aWritingMode.IsVertical()) {
-      return nsPoint(aWritingMode.IsVerticalLR() ? BStart() : aContainerWidth - BEnd(),
-                     IStart());
-    } else {
-      return nsPoint(aWritingMode.IsBidiLTR() ? IStart() : aContainerWidth - IEnd(),
-                     BStart());
-    }
-  }
-
   /**
    * Return a LogicalRect representing this rect in a different writing mode
    */
@@ -1531,7 +1541,7 @@ public:
   }
 
 private:
-  LogicalRect() MOZ_DELETE;
+  LogicalRect() = delete;
 
 #ifdef DEBUG
   WritingMode GetWritingMode() const { return mWritingMode; }

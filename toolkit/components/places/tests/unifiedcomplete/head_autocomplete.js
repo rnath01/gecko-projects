@@ -171,7 +171,7 @@ function* check_autocomplete(test) {
         // Got a match on both uri and title?
         if (stripPrefix(uri.spec) == stripPrefix(value) && title == comment) {
           do_log_info("Got a match at index " + j + "!");
-          let actualStyle = controller.getStyleAt(i).split(/\W+/).sort();
+          let actualStyle = controller.getStyleAt(i).split(/\s+/).sort();
           if (style)
             Assert.equal(actualStyle.toString(), style.toString(), "Match should have expected style");
 
@@ -296,3 +296,12 @@ function makeActionURI(action, params) {
   let url = "moz-action:" + action + "," + JSON.stringify(params);
   return NetUtil.newURI(url);
 }
+
+// Hide all the search engines so they don't influence tests results.
+add_task(function ensure_no_search_engines() {
+  let count = {};
+  let engines = Services.search.getEngines(count);
+  for (let i = 0; i < count.value; i++) {
+    engines[i].hidden = true;
+  }
+});

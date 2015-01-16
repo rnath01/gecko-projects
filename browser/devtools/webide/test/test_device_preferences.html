@@ -21,7 +21,7 @@
           Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
 
           if (!DebuggerServer.initialized) {
-            DebuggerServer.init(function () { return true; });
+            DebuggerServer.init();
             DebuggerServer.addBrowserActors();
           }
 
@@ -46,6 +46,7 @@
           win.Cmds.showDevicePrefs();
           is(deck.selectedPanel, prefIframe, "device preferences iframe selected");
 
+          yield prefIframe.contentWindow.getAllPrefs;
           yield nextTick();
 
           let doc = prefIframe.contentWindow.document;

@@ -213,8 +213,9 @@ function unwrapPrivileged(x) {
   if (!isWrapper(x))
     throw "Trying to unwrap a non-wrapped object!";
 
-  // Unwrap.
-  return x.SpecialPowers_wrappedObject;
+  var obj = x.SpecialPowers_wrappedObject;
+  // unwrapped.
+  return obj;
 };
 
 function crawlProtoChain(obj, fn) {
@@ -662,10 +663,10 @@ SpecialPowersAPI.prototype = {
    * we don't SpecialPowers-wrap Components.interfaces, because it's available
    * to untrusted content, and wrapping it confuses QI and identity checks.
    */
-  get Cc() { return wrapPrivileged(this.getFullComponents()).classes; },
+  get Cc() { return wrapPrivileged(this.getFullComponents().classes); },
   get Ci() { return this.Components.interfaces; },
-  get Cu() { return wrapPrivileged(this.getFullComponents()).utils; },
-  get Cr() { return wrapPrivileged(this.Components).results; },
+  get Cu() { return wrapPrivileged(this.getFullComponents().utils); },
+  get Cr() { return wrapPrivileged(this.Components.results); },
 
   /*
    * SpecialPowers.getRawComponents() allows content to get a reference to a
@@ -1099,6 +1100,13 @@ SpecialPowersAPI.prototype = {
     });
   },
 
+  // Allow tests to install addons without signing the package, for convenience.
+  allowUnsignedAddons: function() {
+    this._sendSyncMessage("SPWebAppService", {
+      op: "allow-unsigned-addons"
+    });
+  },
+
   // Restore the launchable property to its default value.
   flushAllAppsLaunchable: function() {
     this._sendSyncMessage("SPWebAppService", {
@@ -1405,7 +1413,7 @@ SpecialPowersAPI.prototype = {
         self.getDOMWindowUtils(win).cycleCollect();
         if (++count < 2) {
           Cu.schedulePreciseGC(genGCCallback(cb));
-        } else {
+        } else if (cb) {
           cb();
         }
       }

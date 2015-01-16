@@ -34,9 +34,7 @@
 
 #ifdef WIN32
 #include "DrawTargetD2D.h"
-#ifdef USE_D2D1_1
 #include "DrawTargetD2D1.h"
-#endif
 #include "ScaledFontDWrite.h"
 #include <d3d10_1.h>
 #include "HelpersD2D.h"
@@ -184,10 +182,8 @@ void PreferenceAccess::SetAccess(PreferenceAccess* aAccess) {
 
 #ifdef WIN32
 ID3D10Device1 *Factory::mD3D10Device;
-#ifdef USE_D2D1_1
 ID3D11Device *Factory::mD3D11Device;
 ID2D1Device *Factory::mD2D1Device;
-#endif
 #endif
 
 DrawEventRecorder *Factory::mRecorder;
@@ -216,11 +212,24 @@ Factory::HasSSE2()
 #endif
 }
 
+// If the size is "reasonable", we want gfxCriticalError to assert, so
+// this is the option set up for it.
+inline int LoggerOptionsBasedOnSize(const IntSize& aSize)
+{
+  return CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize));
+}
+
+bool
+Factory::ReasonableSurfaceSize(const IntSize &aSize)
+{
+  return Factory::CheckSurfaceSize(aSize,8192);
+}
+
 bool
 Factory::CheckSurfaceSize(const IntSize &sz, int32_t limit)
 {
-  if (sz.width < 0 || sz.height < 0) {
-    gfxDebug() << "Surface width or height < 0!";
+  if (sz.width <= 0 || sz.height <= 0) {
+    gfxDebug() << "Surface width or height <= 0!";
     return false;
   }
 
@@ -265,6 +274,7 @@ TemporaryRef<DrawTarget>
 Factory::CreateDrawTarget(BackendType aBackend, const IntSize &aSize, SurfaceFormat aFormat)
 {
   if (!CheckSurfaceSize(aSize)) {
+    gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "Failed to allocate a surface due to invalid size " << aSize;
     return nullptr;
   }
 
@@ -280,7 +290,6 @@ Factory::CreateDrawTarget(BackendType aBackend, const IntSize &aSize, SurfaceFor
       }
       break;
     }
-#ifdef USE_D2D1_1
   case BackendType::DIRECT2D1_1:
     {
       RefPtr<DrawTargetD2D1> newTarget;
@@ -290,7 +299,6 @@ Factory::CreateDrawTarget(BackendType aBackend, const IntSize &aSize, SurfaceFor
       }
       break;
     }
-#endif
 #elif defined XP_MACOSX
   case BackendType::COREGRAPHICS:
   case BackendType::COREGRAPHICS_ACCELERATED:
@@ -336,9 +344,9 @@ Factory::CreateDrawTarget(BackendType aBackend, const IntSize &aSize, SurfaceFor
 
   if (!retVal) {
     // Failed
-    gfxDebug() << "Failed to create DrawTarget, Type: " << int(aBackend) << " Size: " << aSize;
+    gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "Failed to create DrawTarget, Type: " << int(aBackend) << " Size: " << aSize;
   }
-  
+
   return retVal.forget();
 }
 
@@ -349,13 +357,15 @@ Factory::CreateRecordingDrawTarget(DrawEventRecorder *aRecorder, DrawTarget *aDT
 }
 
 TemporaryRef<DrawTarget>
-Factory::CreateDrawTargetForData(BackendType aBackend, 
-                                 unsigned char *aData, 
-                                 const IntSize &aSize, 
-                                 int32_t aStride, 
+Factory::CreateDrawTargetForData(BackendType aBackend,
+                                 unsigned char *aData,
+                                 const IntSize &aSize,
+                                 int32_t aStride,
                                  SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aData);
   if (!CheckSurfaceSize(aSize)) {
+    gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "Failed to allocate a surface due to invalid size " << aSize;
     return nullptr;
   }
 
@@ -418,6 +428,25 @@ Factory::CreateTiledDrawTarget(const TileSet& aTileSet)
   }
 
   return dt.forget();
+}
+
+bool
+Factory::DoesBackendSupportDataDrawtarget(BackendType aType)
+{
+  switch (aType) {
+  case BackendType::DIRECT2D:
+  case BackendType::DIRECT2D1_1:
+  case BackendType::RECORDING:
+  case BackendType::NONE:
+  case BackendType::COREGRAPHICS_ACCELERATED:
+    return false;
+  case BackendType::CAIRO:
+  case BackendType::COREGRAPHICS:
+  case BackendType::SKIA:
+    return true;
+  }
+
+  return false;
 }
 
 TemporaryRef<ScaledFont>
@@ -491,6 +520,8 @@ Factory::CreateScaledFontWithCairo(const NativeFont& aNativeFont, Float aSize, c
 TemporaryRef<DrawTarget>
 Factory::CreateDualDrawTarget(DrawTarget *targetA, DrawTarget *targetB)
 {
+  MOZ_ASSERT(targetA && targetB);
+
   RefPtr<DrawTarget> newTarget =
     new DrawTargetDual(targetA, targetB);
 
@@ -508,6 +539,8 @@ Factory::CreateDualDrawTarget(DrawTarget *targetA, DrawTarget *targetB)
 TemporaryRef<DrawTarget>
 Factory::CreateDrawTargetForD3D10Texture(ID3D10Texture2D *aTexture, SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aTexture);
+
   RefPtr<DrawTargetD2D> newTarget;
 
   newTarget = new DrawTargetD2D();
@@ -532,6 +565,7 @@ Factory::CreateDualDrawTargetForD3D10Textures(ID3D10Texture2D *aTextureA,
                                               ID3D10Texture2D *aTextureB,
                                               SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aTextureA && aTextureB);
   RefPtr<DrawTargetD2D> newTargetA;
   RefPtr<DrawTargetD2D> newTargetB;
 
@@ -581,10 +615,11 @@ Factory::GetDirect3D10Device()
   return mD3D10Device;
 }
 
-#ifdef USE_D2D1_1
 TemporaryRef<DrawTarget>
 Factory::CreateDrawTargetForD3D11Texture(ID3D11Texture2D *aTexture, SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aTexture);
+
   RefPtr<DrawTargetD2D1> newTarget;
 
   newTarget = new DrawTargetD2D1();
@@ -608,6 +643,15 @@ void
 Factory::SetDirect3D11Device(ID3D11Device *aDevice)
 {
   mD3D11Device = aDevice;
+
+  if (mD2D1Device) {
+    mD2D1Device->Release();
+    mD2D1Device = nullptr;
+  }
+
+  if (!aDevice) {
+    return;
+  }
 
   RefPtr<ID2D1Factory1> factory = D2DFactory1();
 
@@ -633,7 +677,6 @@ Factory::SupportsD2D1()
 {
   return !!D2DFactory1();
 }
-#endif
 
 TemporaryRef<GlyphRenderingOptions>
 Factory::CreateDWriteGlyphRenderingOptions(IDWriteRenderingParams *aParams)
@@ -656,6 +699,11 @@ Factory::GetD2DVRAMUsageSourceSurface()
 void
 Factory::D2DCleanup()
 {
+  if (mD2D1Device) {
+    mD2D1Device->Release();
+    mD2D1Device = nullptr;
+  }
+  DrawTargetD2D1::CleanupD2D();
   DrawTargetD2D::CleanupD2D();
 }
 
@@ -744,6 +792,7 @@ Factory::CreateWrappingDataSourceSurface(uint8_t *aData, int32_t aStride,
                                          const IntSize &aSize,
                                          SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aData);
   if (aSize.width <= 0 || aSize.height <= 0) {
     return nullptr;
   }
@@ -763,7 +812,7 @@ Factory::CreateDataSourceSurface(const IntSize &aSize,
                                  bool aZero)
 {
   if (!CheckSurfaceSize(aSize)) {
-    gfxWarning() << "CreateDataSourceSurface failed with bad size";
+    gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "Failed to allocate a surface due to invalid size " << aSize;
     return nullptr;
   }
 
@@ -783,7 +832,7 @@ Factory::CreateDataSourceSurfaceWithStride(const IntSize &aSize,
                                            bool aZero)
 {
   if (aStride < aSize.width * BytesPerPixel(aFormat)) {
-    gfxWarning() << "CreateDataSourceSurfaceWithStride failed with bad stride";
+    gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "CreateDataSourceSurfaceWithStride failed with bad stride " << aStride << ", " << aSize << ", " << aFormat;
     return nullptr;
   }
 
@@ -792,7 +841,7 @@ Factory::CreateDataSourceSurfaceWithStride(const IntSize &aSize,
     return newSurf.forget();
   }
 
-  gfxWarning() << "CreateDataSourceSurfaceWithStride failed to initialize";
+  gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "CreateDataSourceSurfaceWithStride failed to initialize " << aSize << ", " << aFormat << ", " << aStride << ", " << aZero;
   return nullptr;
 }
 

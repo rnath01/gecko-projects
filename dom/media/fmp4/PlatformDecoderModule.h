@@ -54,6 +54,8 @@ typedef int64_t Microseconds;
 // "media.fragmented-mp4.use-blank-decoder" is true.
 class PlatformDecoderModule {
 public:
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(PlatformDecoderModule)
+
   // Call on the main thread to initialize the static state
   // needed by Create().
   static void Init();
@@ -64,7 +66,13 @@ public:
   // PlatformDecoderModules alive at the same time. There is one
   // PlatformDecoderModule created per MP4Reader.
   // This is called on the decode task queue.
-  static PlatformDecoderModule* Create();
+  static already_AddRefed<PlatformDecoderModule> Create();
+  // As Create() but do not initialize the created PlatformDecoderModule.
+  static already_AddRefed<PlatformDecoderModule> CreatePDM();
+
+  // Perform any per-instance initialization.
+  // This is called on the decode task queue.
+  virtual nsresult Startup() { return NS_OK; };
 
 #ifdef MOZ_EME
   // Creates a PlatformDecoderModule that uses a CDMProxy to decrypt or
@@ -72,10 +80,11 @@ public:
   // does not decode, we create a PDM and use that to create MediaDataDecoders
   // that we use on on aTaskQueue to decode the decrypted stream.
   // This is called on the decode task queue.
-  static PlatformDecoderModule* CreateCDMWrapper(CDMProxy* aProxy,
-                                                 bool aHasAudio,
-                                                 bool aHasVideo,
-                                                 MediaTaskQueue* aTaskQueue);
+  static already_AddRefed<PlatformDecoderModule>
+  CreateCDMWrapper(CDMProxy* aProxy,
+                   bool aHasAudio,
+                   bool aHasVideo,
+                   MediaTaskQueue* aTaskQueue);
 #endif
 
   // Called to shutdown the decoder module and cleanup state. The PDM
@@ -97,7 +106,7 @@ public:
   // It is safe to store a reference to aConfig.
   // This is called on the decode task queue.
   virtual already_AddRefed<MediaDataDecoder>
-  CreateH264Decoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
+  CreateVideoDecoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
                     layers::LayersBackend aLayersBackend,
                     layers::ImageContainer* aImageContainer,
                     MediaTaskQueue* aVideoTaskQueue,
@@ -122,11 +131,14 @@ public:
   // If more audio codec is to be supported, SupportsAudioMimeType will have
   // to be extended
   virtual bool SupportsAudioMimeType(const char* aMimeType);
+  virtual bool SupportsVideoMimeType(const char* aMimeType);
 
-  virtual ~PlatformDecoderModule() {}
+  // Indicates if the video decoder requires AVCC format.
+  virtual bool DecoderNeedsAVCC(const mp4_demuxer::VideoDecoderConfig& aConfig);
 
 protected:
   PlatformDecoderModule() {}
+  virtual ~PlatformDecoderModule() {}
   // Caches pref media.fragmented-mp4.use-blank-decoder
   static bool sUseBlankDecoder;
   static bool sFFmpegDecoderEnabled;
@@ -141,8 +153,7 @@ class MediaDataDecoderCallback {
 public:
   virtual ~MediaDataDecoderCallback() {}
 
-  // Called by MediaDataDecoder when a sample has been decoded. Callee is
-  // responsibile for deleting aData.
+  // Called by MediaDataDecoder when a sample has been decoded.
   virtual void Output(MediaData* aData) = 0;
 
   // Denotes an error in the decoding process. The reader will stop calling
@@ -165,8 +176,9 @@ public:
 // media data that the decoder accepts as valid input and produces as
 // output is determined when the MediaDataDecoder is created.
 //
-// All functions must be threadsafe, and be able to be called on an
-// arbitrary thread.
+// All functions are only called on the decode task queue. Don't block
+// inside these functions, unless it's explicitly noted that you should
+// (like in Flush() and Drain()).
 //
 // Decoding is done asynchronously. Any async work can be done on the
 // MediaTaskQueue passed into the PlatformDecoderModules's Create*Decoder()
@@ -230,6 +242,7 @@ public:
   virtual bool IsDormantNeeded() {
     return false;
   };
+  virtual void AllocateMediaResources() {}
   virtual void ReleaseMediaResources() {}
   virtual void ReleaseDecoder() {}
 };

@@ -21,12 +21,12 @@ class nsILoadContext;
 namespace mozilla {
 namespace net {
 
-class FTPChannelParent : public PFTPChannelParent
-                       , public nsIParentChannel
-                       , public nsIInterfaceRequestor
-                       , public ADivertableParentChannel
-                       , public nsIChannelEventSink
-                       , public DisconnectableParent
+class FTPChannelParent MOZ_FINAL : public PFTPChannelParent
+                                 , public nsIParentChannel
+                                 , public nsIInterfaceRequestor
+                                 , public ADivertableParentChannel
+                                 , public nsIChannelEventSink
+                                 , public DisconnectableParent
 {
 public:
   NS_DECL_ISUPPORTS
@@ -68,7 +68,8 @@ protected:
                    const ipc::PrincipalInfo& aRequestingPrincipalInfo,
                    const ipc::PrincipalInfo& aTriggeringPrincipalInfo,
                    const uint32_t& aSecurityFlags,
-                   const uint32_t& aContentPolicyType);
+                   const uint32_t& aContentPolicyType,
+                   const uint32_t& aInnerWindowID);
 
   // used to connect redirected-to channel in parent with just created
   // ChildChannel.  Used during HTTP->FTP redirects.

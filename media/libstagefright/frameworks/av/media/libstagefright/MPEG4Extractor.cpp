@@ -111,7 +111,8 @@ private:
     status_t parseTrackFragmentRun(off64_t offset, off64_t size);
     status_t parseSampleAuxiliaryInformationSizes(off64_t offset, off64_t size);
     status_t parseSampleAuxiliaryInformationOffsets(off64_t offset, off64_t size);
-    void lookForMoof();
+    status_t lookForMoof();
+    status_t moveToNextFragment();
 
     struct TrackFragmentHeaderInfo {
         enum Flags {
@@ -139,7 +140,7 @@ private:
         off64_t offset;
         uint32_t size;
         uint32_t duration;
-        int64_t ctsOffset;
+        int32_t ctsOffset;
         uint32_t flags;
         uint8_t iv[16];
         Vector<uint16_t> clearsizes;
@@ -320,6 +321,9 @@ static const char *FourCC2MIME(uint32_t fourcc) {
         case FOURCC('s', 'a', 'w', 'b'):
             return MEDIA_MIMETYPE_AUDIO_AMR_WB;
 
+        case FOURCC('.', 'm', 'p', '3'):
+            return MEDIA_MIMETYPE_AUDIO_MPEG;
+
         case FOURCC('m', 'p', '4', 'v'):
             return MEDIA_MIMETYPE_VIDEO_MPEG4;
 
@@ -331,6 +335,9 @@ static const char *FourCC2MIME(uint32_t fourcc) {
         case FOURCC('a', 'v', 'c', '1'):
         case FOURCC('a', 'v', 'c', '3'):
             return MEDIA_MIMETYPE_VIDEO_AVC;
+
+        case FOURCC('V', 'P', '6', 'F'):
+            return MEDIA_MIMETYPE_VIDEO_VP6;
 
         default:
             CHECK(!"should not be here.");
@@ -464,6 +471,14 @@ status_t MPEG4Extractor::readMetaData() {
     status_t err;
     while (!mFirstTrack) {
         err = parseChunk(&offset, 0);
+        // The parseChunk function returns UNKNOWN_ERROR to skip
+        // some boxes we don't want to handle. Filter that error
+        // code but return others so e.g. I/O errors propagate.
+        if (err != OK && err != (status_t) UNKNOWN_ERROR) {
+          ALOGW("Error %d parsing chuck at offset %lld looking for first track",
+              err, (long long)offset);
+          break;
+        }
     }
 
     if (mInitCheck == OK) {
@@ -830,6 +845,8 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
                 track->includes_expensive_metadata = false;
                 track->skipTrack = false;
                 track->timescale = 0;
+                track->segment_duration = 0;
+                track->media_time = 0;
                 track->meta->setCString(kKeyMIMEType, "application/octet-stream");
             }
 
@@ -902,12 +919,10 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
                 ALOGW("ignoring edit list because timescale is 0");
             } else {
                 off64_t entriesoffset = data_offset + 8;
-                uint64_t segment_duration;
-                int64_t media_time;
 
                 if (version == 1) {
-                    if (!mDataSource->getUInt64(entriesoffset, &segment_duration) ||
-                            !mDataSource->getUInt64(entriesoffset + 8, (uint64_t*)&media_time)) {
+                    if (!mDataSource->getUInt64(entriesoffset, &mLastTrack->segment_duration) ||
+                            !mDataSource->getUInt64(entriesoffset + 8, (uint64_t*)&mLastTrack->media_time)) {
                         return ERROR_IO;
                     }
                 } else if (version == 0) {
@@ -917,28 +932,14 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
                             !mDataSource->getUInt32(entriesoffset + 4, (uint32_t*)&mt)) {
                         return ERROR_IO;
                     }
-                    segment_duration = sd;
-                    media_time = mt;
+                    mLastTrack->segment_duration = sd;
+                    mLastTrack->media_time = mt;
                 } else {
                     return ERROR_IO;
                 }
 
-                uint64_t halfscale = mHeaderTimescale / 2;
-                segment_duration = (segment_duration * 1000000 + halfscale)/ mHeaderTimescale;
-                media_time = (media_time * 1000000 + halfscale) / mHeaderTimescale;
+                storeEditList();
 
-                int64_t duration;
-                int32_t samplerate;
-                if (mLastTrack->meta->findInt64(kKeyDuration, &duration) &&
-                        mLastTrack->meta->findInt32(kKeySampleRate, &samplerate)) {
-
-                    int64_t delay = (media_time  * samplerate + 500000) / 1000000;
-                    mLastTrack->meta->setInt32(kKeyEncoderDelay, delay);
-
-                    int64_t paddingus = duration - (segment_duration + media_time);
-                    int64_t paddingsamples = (paddingus * samplerate + 500000) / 1000000;
-                    mLastTrack->meta->setInt32(kKeyEncoderPadding, paddingsamples);
-                }
             }
             *offset += chunk_size;
             break;
@@ -1107,6 +1108,10 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
 
             mLastTrack->timescale = ntohl(timescale);
 
+            // Now that we've parsed the media timescale, we can interpret
+            // the edit list data.
+            storeEditList();
+
             int64_t duration = 0;
             if (version == 1) {
                 if (mDataSource->readAt(
@@ -1218,6 +1223,7 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
         }
 
         case FOURCC('m', 'p', '4', 'a'):
+        case FOURCC('.', 'm', 'p', '3'):
         case FOURCC('e', 'n', 'c', 'a'):
         case FOURCC('s', 'a', 'm', 'r'):
         case FOURCC('s', 'a', 'w', 'b'):
@@ -1272,6 +1278,7 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
         case FOURCC('h', '2', '6', '3'):
         case FOURCC('a', 'v', 'c', '1'):
         case FOURCC('a', 'v', 'c', '3'):
+        case FOURCC('V', 'P', '6', 'F'):
         {
             mHasVideo = true;
 
@@ -1802,6 +1809,35 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
     }
 
     return OK;
+}
+
+void MPEG4Extractor::storeEditList()
+{
+  if (mHeaderTimescale == 0 ||
+      mLastTrack->timescale == 0) {
+    return;
+  }
+
+  uint64_t segment_duration = (mLastTrack->segment_duration * 1000000)/ mHeaderTimescale;
+  // media_time is measured in media time scale units.
+  int64_t media_time = (mLastTrack->media_time * 1000000) / mLastTrack->timescale;
+
+  if (segment_duration == 0) {
+    mLastTrack->meta->setInt64(kKeyMediaTime, media_time);
+  }
+
+  int64_t duration;
+  int32_t samplerate;
+  if (mLastTrack->meta->findInt64(kKeyDuration, &duration) &&
+      mLastTrack->meta->findInt32(kKeySampleRate, &samplerate)) {
+
+    int64_t delay = (media_time  * samplerate + 500000) / 1000000;
+    mLastTrack->meta->setInt32(kKeyEncoderDelay, delay);
+
+    int64_t paddingus = duration - (segment_duration + media_time);
+    int64_t paddingsamples = (paddingus * samplerate + 500000) / 1000000;
+    mLastTrack->meta->setInt32(kKeyEncoderPadding, paddingsamples);
+  }
 }
 
 status_t MPEG4Extractor::parseSegmentIndex(off64_t offset, size_t size) {
@@ -2476,7 +2512,7 @@ static bool ValidInputSize(int32_t size) {
   // Reject compressed samples larger than an uncompressed UHD
   // frame. This is a reasonable cut-off for a lossy codec,
   // combined with the current Firefox limit to 5k video.
-  return (size > 0 && size < 4 * (1920 * 1080) * 3 / 2);
+  return (size > 0 && size <= 4 * (1920 * 1080) * 3 / 2);
 }
 
 status_t MPEG4Source::start(MetaData *params) {
@@ -3125,11 +3161,7 @@ status_t MPEG4Source::parseTrackFragmentRun(off64_t offset, off64_t size) {
         tmp.offset = dataOffset;
         tmp.size = sampleSize;
         tmp.duration = sampleDuration;
-        if (version == 0) {
-          tmp.ctsOffset = sampleCtsOffset;
-        } else {
-          tmp.ctsOffset = (int32_t)sampleCtsOffset;
-        }
+        tmp.ctsOffset = (int32_t)sampleCtsOffset;
         mCurrentSamples.add(tmp);
 
         dataOffset += sampleSize;
@@ -3172,14 +3204,14 @@ size_t MPEG4Source::parseNALSize(const uint8_t *data) const {
     return 0;
 }
 
-void MPEG4Source::lookForMoof() {
+status_t MPEG4Source::lookForMoof() {
     off64_t offset = 0;
     off64_t size;
     while (true) {
         uint32_t hdr[2];
         auto x = mDataSource->readAt(offset, hdr, 8);
         if (x < 8) {
-            break;
+            return NOT_ENOUGH_DATA;
         }
         uint32_t chunk_size = ntohl(hdr[0]);
         uint32_t chunk_type = ntohl(hdr[1]);
@@ -3188,10 +3220,10 @@ void MPEG4Source::lookForMoof() {
         if (chunk_type == FOURCC('m', 'o', 'o', 'f')) {
             mFirstMoofOffset = mCurrentMoofOffset = offset;
             parseChunk(&offset);
-            break;
+            return OK;
         }
         if (chunk_type == FOURCC('m', 'd', 'a', 't')) {
-            break;
+            return OK;
         }
         offset += chunk_size;
     }
@@ -3205,8 +3237,7 @@ status_t MPEG4Source::read(
     CHECK(mStarted);
 
     if (!mLookedForMoof) {
-      mLookedForMoof = true;
-      lookForMoof();
+        mLookedForMoof = lookForMoof() == OK;
     }
 
     if (mFirstMoofOffset > 0) {
@@ -3548,6 +3579,34 @@ status_t MPEG4Source::read(
     }
 }
 
+status_t MPEG4Source::moveToNextFragment() {
+    off64_t nextMoof = mNextMoofOffset;
+    mCurrentSamples.clear();
+    mDeferredSaio.clear();
+    mDeferredSaiz.clear();
+    mCurrentSampleIndex = 0;
+    uint32_t hdr[2];
+    do {
+        if (mDataSource->readAt(nextMoof, hdr, 8) < 8) {
+            return ERROR_END_OF_STREAM;
+        }
+        uint64_t chunk_size = ntohl(hdr[0]);
+        uint32_t chunk_type = ntohl(hdr[1]);
+
+        // Skip over anything that isn't a moof
+        if (chunk_type != FOURCC('m', 'o', 'o', 'f')) {
+            nextMoof += chunk_size;
+            continue;
+        }
+        mCurrentMoofOffset = nextMoof;
+        status_t ret = parseChunk(&nextMoof);
+        if (ret != OK) {
+            return ret;
+        }
+    } while (mCurrentSamples.size() == 0);
+    return OK;
+}
+
 status_t MPEG4Source::fragmentedRead(
         MediaBuffer **out, const ReadOptions *options) {
 
@@ -3563,10 +3622,6 @@ status_t MPEG4Source::fragmentedRead(
     ReadOptions::SeekMode mode;
     if (options && options->getSeekTo(&seekTimeUs, &mode)) {
 
-        mCurrentSamples.clear();
-        mDeferredSaio.clear();
-        mDeferredSaiz.clear();
-        mCurrentSampleIndex = 0;
         int numSidxEntries = mSegments.size();
         if (numSidxEntries != 0) {
             int64_t totalTime = 0;
@@ -3589,37 +3644,21 @@ status_t MPEG4Source::fragmentedRead(
                 totalOffset += se->mSize;
             }
             mCurrentMoofOffset = totalOffset;
-            mNextMoofOffset = totalOffset;
+            mCurrentSamples.clear();
+            mDeferredSaio.clear();
+            mDeferredSaiz.clear();
+            mCurrentSampleIndex = 0;
             mCurrentTime = totalTime * mTimescale / 1000000ll;
+            mNextMoofOffset = totalOffset;
         }
         else {
             mNextMoofOffset = mFirstMoofOffset;
             uint32_t seekTime = (int32_t) ((seekTimeUs * mTimescale) / 1000000ll);
             while (true) {
-
-                uint32_t hdr[2];
-                do {
-                    off64_t moofOffset = mNextMoofOffset; // lastSample.offset + lastSample.size;
-                    if (mDataSource->readAt(moofOffset, hdr, 8) < 8) {
-                        ALOGV("Seek ERROR_END_OF_STREAM\n");
-                        return ERROR_END_OF_STREAM;
-                    }
-                    uint64_t chunk_size = ntohl(hdr[0]);
-                    uint32_t chunk_type = ntohl(hdr[1]);
-                    char chunk[5];
-                    MakeFourCCString(chunk_type, chunk);
-
-                    // If we're pointing to a segment type or sidx box then we skip them.
-                    if (chunk_type != FOURCC('m', 'o', 'o', 'f')) {
-                        mNextMoofOffset += chunk_size;
-                        continue;
-                    }
-                    mCurrentMoofOffset = moofOffset;
-                    status_t ret = parseChunk(&moofOffset);
-                    if (ret != OK) {
-                        return ret;
-                    }
-                } while (mCurrentSamples.size() == 0);
+                status_t ret = moveToNextFragment();
+                if (ret != OK) {
+                    return ret;
+                }
                 uint32_t time = mCurrentTime;
                 int i;
                 for (i = 0; i < mCurrentSamples.size() && time <= seekTime; i++) {
@@ -3633,11 +3672,6 @@ status_t MPEG4Source::fragmentedRead(
                 if (i != mCurrentSamples.size()) {
                     break;
                 }
-
-                mCurrentSamples.clear();
-                mDeferredSaio.clear();
-                mDeferredSaiz.clear();
-                mCurrentSampleIndex = 0;
             }
             ALOGV("Seeking offset %d; %ldus\n", mCurrentTime - seekTime,
                     (((int64_t) mCurrentTime - seekTime) * 1000000ll) / mTimescale);
@@ -3662,32 +3696,10 @@ status_t MPEG4Source::fragmentedRead(
         newBuffer = true;
 
         if (mCurrentSampleIndex >= mCurrentSamples.size()) {
-            // move to next fragment
-            off64_t nextMoof = mNextMoofOffset; // lastSample.offset + lastSample.size;
-            mCurrentSamples.clear();
-            mDeferredSaio.clear();
-            mDeferredSaiz.clear();
-            mCurrentSampleIndex = 0;
-            uint32_t hdr[2];
-            do {
-                if (mDataSource->readAt(nextMoof, hdr, 8) < 8) {
-                    return ERROR_END_OF_STREAM;
-                }
-                uint64_t chunk_size = ntohl(hdr[0]);
-                uint32_t chunk_type = ntohl(hdr[1]);
-
-                // If we're pointing to a segment type or sidx box then we skip them.
-                if (chunk_type == FOURCC('s', 't', 'y', 'p') ||
-                    chunk_type == FOURCC('s', 'i', 'd', 'x')) {
-                    nextMoof += chunk_size;
-                    continue;
-                }
-                mCurrentMoofOffset = nextMoof;
-                status_t ret = parseChunk(&nextMoof);
-                if (ret != OK) {
-                    return ret;
-                }
-            } while (mCurrentSamples.size() == 0);
+            status_t ret = moveToNextFragment();
+            if (ret != OK) {
+                return ret;
+            }
         }
 
         const Sample *smpl = &mCurrentSamples[mCurrentSampleIndex];

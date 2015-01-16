@@ -11,7 +11,7 @@
 // containing MIR.
 
 #include "jit/FixedList.h"
-#include "jit/IonAllocPolicy.h"
+#include "jit/JitAllocPolicy.h"
 #include "jit/MIR.h"
 
 namespace js {
@@ -231,8 +231,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     bool initEntrySlots(TempAllocator &alloc);
 
     // Replaces an edge for a given block with a new block. This is
-    // used for critical edge splitting and also for inserting
-    // bailouts during ParallelSafetyAnalysis.
+    // used for critical edge splitting.
     //
     // Note: If successorWithPhis is set, you must not be replacing it.
     void replacePredecessor(MBasicBlock *old, MBasicBlock *split);
@@ -285,6 +284,15 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
 
     // Move an instruction. Movement may cross block boundaries.
     void moveBefore(MInstruction *at, MInstruction *ins);
+
+    enum IgnoreTop {
+        IgnoreNone = 0,
+        IgnoreRecover = 1 << 0
+    };
+
+    // Locate the top of the |block|, where it is safe to insert a new
+    // instruction.
+    MInstruction *safeInsertTop(MDefinition *ins = nullptr, IgnoreTop ignore = IgnoreNone);
 
     // Removes an instruction with the intention to discard it.
     void discard(MInstruction *ins);
@@ -544,7 +552,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
         entryResumePoint()->setCaller(caller);
     }
     size_t numEntrySlots() const {
-        return entryResumePoint()->numOperands();
+        return entryResumePoint()->stackDepth();
     }
     MDefinition *getEntrySlot(size_t i) const {
         MOZ_ASSERT(i < numEntrySlots());
@@ -614,7 +622,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     MIRGraph &graph_;
     CompileInfo &info_; // Each block originates from a particular script.
     InlineList<MInstruction> instructions_;
-    Vector<MBasicBlock *, 1, IonAllocPolicy> predecessors_;
+    Vector<MBasicBlock *, 1, JitAllocPolicy> predecessors_;
     InlineList<MPhi> phis_;
     FixedList<MDefinition *> slots_;
     uint32_t stackPosition_;
@@ -646,7 +654,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     // Utility mark for traversal algorithms.
     bool mark_;
 
-    Vector<MBasicBlock *, 1, IonAllocPolicy> immediatelyDominated_;
+    Vector<MBasicBlock *, 1, JitAllocPolicy> immediatelyDominated_;
     MBasicBlock *immediateDominator_;
 
     const BytecodeSite *trackedSite_;
@@ -667,7 +675,7 @@ typedef InlineListIterator<MBasicBlock> MBasicBlockIterator;
 typedef InlineListIterator<MBasicBlock> ReversePostorderIterator;
 typedef InlineListReverseIterator<MBasicBlock> PostorderIterator;
 
-typedef Vector<MBasicBlock *, 1, IonAllocPolicy> MIRGraphReturns;
+typedef Vector<MBasicBlock *, 1, JitAllocPolicy> MIRGraphReturns;
 
 class MIRGraph
 {
@@ -797,12 +805,6 @@ class MIRGraph
     void setHasTryBlock() {
         hasTryBlock_ = true;
     }
-
-    // The per-thread context. So as not to modify the calling convention for
-    // parallel code, we obtain the current ForkJoinContext from thread-local
-    // storage.  This helper method will lazilly insert an MForkJoinContext
-    // instruction in the entry block and return the definition.
-    MDefinition *forkJoinContext();
 
     void dump(FILE *fp);
     void dump();

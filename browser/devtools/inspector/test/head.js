@@ -32,15 +32,11 @@ let testDir = gTestPath.substr(0, gTestPath.lastIndexOf("/"));
 Services.scriptloader.loadSubScript(testDir + "../../../commandline/test/helpers.js", this);
 
 gDevTools.testing = true;
-SimpleTest.registerCleanupFunction(() => {
+registerCleanupFunction(() => {
   gDevTools.testing = false;
 });
 
-SimpleTest.registerCleanupFunction(() => {
-  console.error("Here we are\n");
-  let {DebuggerServer} = Cu.import("resource://gre/modules/devtools/dbg-server.jsm", {});
-  console.error("DebuggerServer open connections: " + Object.getOwnPropertyNames(DebuggerServer._connections).length);
-
+registerCleanupFunction(() => {
   Services.prefs.clearUserPref("devtools.dump.emit");
   Services.prefs.clearUserPref("devtools.inspector.activeSidebar");
 });
@@ -58,7 +54,6 @@ registerCleanupFunction(function*() {
   while (gBrowser.tabs.length > 1) {
     gBrowser.removeCurrentTab();
   }
-
 });
 
 /**
@@ -257,8 +252,8 @@ function getNodeFront(selector, {walker}) {
  * to highlight the node upon selection
  * @return {Promise} Resolves when the inspector is updated with the new node
  */
-let getNodeFrontInFrame = Task.async(function*(selector, frameSelector, inspector,
-                                             reason="test") {
+let getNodeFrontInFrame = Task.async(function*(selector, frameSelector,
+                                               inspector, reason="test") {
   let iframe = yield getNodeFront(frameSelector, inspector);
   let {nodes} = yield inspector.walker.children(iframe);
   return inspector.walker.querySelector(nodes[0], selector);
@@ -395,7 +390,7 @@ let isRegionHidden = Task.async(function*(region, toolbox) {
  */
 let isHighlighting = Task.async(function*(toolbox) {
   let {data: value} = yield executeInContent("Test:GetHighlighterAttribute", {
-    nodeID: "box-model-root",
+    nodeID: "box-model-elements",
     name: "hidden",
     actorID: getHighlighterActorID(toolbox)
   });
@@ -556,6 +551,19 @@ let clickContainer = Task.async(function*(selector, inspector) {
 });
 
 /**
+ * Zoom the current page to a given level.
+ * @param {Number} level The new zoom level.
+ * @param {String} actorID Optional highlighter actor ID. If provided, the
+ * returned promise will only resolve when the highlighter has updated to the
+ * new zoom level.
+ * @return {Promise}
+ */
+let zoomPageTo = Task.async(function*(level, actorID) {
+  yield executeInContent("Test:ChangeZoomLevel",
+                         {level, actorID});
+});
+
+/**
  * Simulate the mouse leaving the markup-view area
  * @param {InspectorPanel} inspector The instance of InspectorPanel currently loaded in the toolbox
  * @return a promise when done
@@ -613,7 +621,7 @@ function once(target, eventName, useCapture=false) {
  * message has been received
  */
 function waitForContentMessage(name) {
-  let mm = gBrowser.selectedTab.linkedBrowser.messageManager;
+  let mm = gBrowser.selectedBrowser.messageManager;
 
   let def = promise.defer();
   mm.addMessageListener(name, function onMessage(msg) {
@@ -642,7 +650,7 @@ function wait(ms) {
  * immediately resolves otherwise
  */
 function executeInContent(name, data={}, objects={}, expectResponse=true) {
-  let mm = gBrowser.selectedTab.linkedBrowser.messageManager;
+  let mm = gBrowser.selectedBrowser.messageManager;
 
   mm.sendAsyncMessage(name, data, objects);
   if (expectResponse) {
@@ -650,4 +658,44 @@ function executeInContent(name, data={}, objects={}, expectResponse=true) {
   } else {
     return promise.resolve();
   }
+}
+
+/**
+ * Undo the last markup-view action and wait for the corresponding mutation to
+ * occur
+ * @param {InspectorPanel} inspector The instance of InspectorPanel currently
+ * loaded in the toolbox
+ * @return a promise that resolves when the markup-mutation has been treated or
+ * rejects if no undo action is possible
+ */
+function undoChange(inspector) {
+  let canUndo = inspector.markup.undo.canUndo();
+  ok(canUndo, "The last change in the markup-view can be undone");
+  if (!canUndo) {
+    return promise.reject();
+  }
+
+  let mutated = inspector.once("markupmutation");
+  inspector.markup.undo.undo();
+  return mutated;
+}
+
+/**
+ * Redo the last markup-view action and wait for the corresponding mutation to
+ * occur
+ * @param {InspectorPanel} inspector The instance of InspectorPanel currently
+ * loaded in the toolbox
+ * @return a promise that resolves when the markup-mutation has been treated or
+ * rejects if no redo action is possible
+ */
+function redoChange(inspector) {
+  let canRedo = inspector.markup.undo.canRedo();
+  ok(canRedo, "The last change in the markup-view can be redone");
+  if (!canRedo) {
+    return promise.reject();
+  }
+
+  let mutated = inspector.once("markupmutation");
+  inspector.markup.undo.redo();
+  return mutated;
 }

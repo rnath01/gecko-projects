@@ -27,8 +27,6 @@ const MOBILECELLINFO_CID =
   Components.ID("{0635d9ab-997e-4cdf-84e7-c1883752dff3}");
 const MOBILECALLFORWARDINGOPTIONS_CID =
   Components.ID("{e0cf4463-ee63-4b05-ab2e-d94bf764836c}");
-const TELEPHONYDIALCALLBACK_CID =
-  Components.ID("{c2af1a5d-3649-44ef-a1ff-18e9ac1dec51}");
 const NEIGHBORINGCELLINFO_CID =
   Components.ID("{6078cbf1-f34c-44fa-96f8-11a88d4bfdd3}");
 const GSMCELLINFO_CID =
@@ -50,9 +48,9 @@ const kPrefRilDebuggingEnabled = "ril.debugging.enabled";
 const INT32_MAX = 2147483647;
 const UNKNOWN_RSSI = 99;
 
-XPCOMUtils.defineLazyServiceGetter(this, "gSystemMessenger",
-                                   "@mozilla.org/system-message-internal;1",
-                                   "nsISystemMessagesInternal");
+XPCOMUtils.defineLazyServiceGetter(this, "gMobileConnectionMessenger",
+                                   "@mozilla.org/ril/system-messenger-helper;1",
+                                   "nsIMobileConnectionMessenger");
 
 XPCOMUtils.defineLazyServiceGetter(this, "gNetworkManager",
                                    "@mozilla.org/network/manager;1",
@@ -280,62 +278,6 @@ CdmaCellInfo.prototype = {
   evdoSnr: INT32_MAX
 };
 
-/**
- * Wrap a MobileConnectionCallback to a TelephonyDialCallback.
- */
-function TelephonyDialCallback(aCallback) {
-  this.callback = aCallback;
-}
-TelephonyDialCallback.prototype = {
-  QueryInterface:   XPCOMUtils.generateQI([Ci.nsITelephonyDialCallback]),
-  classID:          TELEPHONYDIALCALLBACK_CID,
-
-  notifyDialMMI: function(mmiServiceCode) {
-    this.serviceCode = mmiServiceCode;
-  },
-
-  notifyDialMMISuccess: function(statusMessage) {
-    this.callback.notifySendCancelMmiSuccess(this.serviceCode, statusMessage);
-  },
-
-  notifyDialMMISuccessWithInteger: function(statusMessage, additionalInfo) {
-    this.callback.notifySendCancelMmiSuccessWithInteger(this.serviceCode,
-                                                        statusMessage,
-                                                        additionalInfo);
-  },
-
-  notifyDialMMISuccessWithStrings: function(statusMessage, count, additionalInfo) {
-    this.callback.notifySendCancelMmiSuccessWithStrings(this.serviceCode,
-                                                        statusMessage,
-                                                        count,
-                                                        additionalInfo);
-  },
-
-  notifyDialMMISuccessWithCallForwardingOptions: function(statusMessage, count, additionalInfo) {
-    this.callback.notifySendCancelMmiSuccessWithCallForwardingOptions(
-                                                        this.serviceCode,
-                                                        statusMessage,
-                                                        count,
-                                                        additionalInfo);
-  },
-
-  notifyDialMMIError: function(error) {
-    this.callback.notifyError(error, "", this.serviceCode);
-  },
-
-  notifyDialMMIErrorWithInfo: function(error, info) {
-    this.callback.notifyError(error, "", this.serviceCode, info);
-  },
-
-  notifyDialError: function() {
-    throw Cr.NS_ERROR_UNEXPECTED;
-  },
-
-  notifyDialSuccess: function() {
-    throw Cr.NS_ERROR_UNEXPECTED;
-  },
-};
-
 function MobileConnectionProvider(aClientId, aRadioInterface) {
   this._clientId = aClientId;
   this._radioInterface = aRadioInterface;
@@ -363,7 +305,6 @@ MobileConnectionProvider.prototype = {
 
   voice: null,
   data: null,
-  iccId: null,
   networkSelectionMode: Ci.nsIMobileConnection.NETWORK_SELECTION_MODE_UNKNOWN,
   radioState: Ci.nsIMobileConnection.MOBILE_RADIO_STATE_UNKNOWN,
   lastKnownNetwork: null,
@@ -558,7 +499,7 @@ MobileConnectionProvider.prototype = {
   deliverListenerEvent: function(aName, aArgs) {
     let listeners = this._listeners.slice();
     for (let listener of listeners) {
-      if (listeners.indexOf(listener) === -1) {
+      if (this._listeners.indexOf(listener) === -1) {
         continue;
       }
       let handler = listener[aName];
@@ -642,15 +583,6 @@ MobileConnectionProvider.prototype = {
         this.deliverListenerEvent("notifyDataChanged");
       }
     }
-  },
-
-  updateIccId: function(aIccId) {
-    if (this.iccId === aIccId) {
-      return;
-    }
-
-    this.iccId = aIccId;
-    this.deliverListenerEvent("notifyIccChanged");
   },
 
   updateRadioState: function(aRadioState) {
@@ -829,24 +761,6 @@ MobileConnectionProvider.prototype = {
       }
 
       aCallback.notifySuccessWithBoolean(aResponse.enabled);
-      return false;
-    }).bind(this));
-  },
-
-  sendMMI: function(aMmi, aCallback) {
-    let callback = new TelephonyDialCallback(aCallback);
-    gGonkTelephonyService.dialMMI(this._clientId, aMmi, callback);
-  },
-
-  cancelMMI: function(aCallback) {
-    this._radioInterface.sendWorkerMessage("cancelUSSD", null,
-                                           (function(aResponse) {
-      if (aResponse.errorMsg) {
-        aCallback.notifyError(aResponse.errorMsg);
-        return false;
-      }
-
-      aCallback.notifySuccess();
       return false;
     }).bind(this));
   },
@@ -1153,11 +1067,6 @@ MobileConnectionService.prototype = {
     } catch (e) {}
   },
 
-  _broadcastCdmaInfoRecordSystemMessage: function(aMessage) {
-    // TODO: Bug 1072808, Broadcast System Message with proxy.
-    gSystemMessenger.broadcastMessage("cdma-info-rec-received", aMessage);
-  },
-
   /**
    * nsIMobileConnectionService interface.
    */
@@ -1195,16 +1104,6 @@ MobileConnectionService.prototype = {
     this.getItemByServiceId(aClientId).updateDataInfo(aDataInfo);
   },
 
-  notifyUssdReceived: function(aClientId, aMessage, aSessionEnded) {
-    if (DEBUG) {
-      debug("notifyUssdReceived for " + aClientId + ": " +
-            aMessage + " (sessionEnded : " + aSessionEnded + ")");
-    }
-
-    this.getItemByServiceId(aClientId)
-        .deliverListenerEvent("notifyUssdReceived", [aMessage, aSessionEnded]);
-  },
-
   notifyDataError: function(aClientId, aMessage) {
     if (DEBUG) {
       debug("notifyDataError for " + aClientId + ": " + aMessage);
@@ -1232,14 +1131,6 @@ MobileConnectionService.prototype = {
 
     this.getItemByServiceId(aClientId)
         .deliverListenerEvent("notifyOtaStatusChanged", [aStatus]);
-  },
-
-  notifyIccChanged: function(aClientId, aIccId) {
-    if (DEBUG) {
-      debug("notifyIccChanged for " + aClientId + ": " + aIccId);
-    }
-
-    this.getItemByServiceId(aClientId).updateIccId(aIccId);
   },
 
   notifyRadioStateChanged: function(aClientId, aRadioState) {
@@ -1368,108 +1259,56 @@ MobileConnectionService.prototype = {
   },
 
   notifyCdmaInfoRecDisplay: function(aClientId, aDisplay) {
-    this._broadcastCdmaInfoRecordSystemMessage({
-      clientId: aClientId,
-      display: aDisplay
-    });
+    gMobileConnectionMessenger.notifyCdmaInfoRecDisplay(aClientId, aDisplay);
   },
 
   notifyCdmaInfoRecCalledPartyNumber: function(aClientId, aType, aPlan, aNumber,
                                                aPi, aSi) {
-    this._broadcastCdmaInfoRecordSystemMessage({
-      clientId: aClientId,
-      calledNumber: {
-        type: aType,
-        plan: aPlan,
-        number: aNumber,
-        pi: aPi,
-        si: aSi
-      }
-    });
+    gMobileConnectionMessenger
+      .notifyCdmaInfoRecCalledPartyNumber(aClientId, aType, aPlan, aNumber,
+                                          aPi, aSi);
   },
 
   notifyCdmaInfoRecCallingPartyNumber: function(aClientId, aType, aPlan, aNumber,
                                                 aPi, aSi) {
-    this._broadcastCdmaInfoRecordSystemMessage({
-      clientId: aClientId,
-      callingNumber: {
-        type: aType,
-        plan: aPlan,
-        number: aNumber,
-        pi: aPi,
-        si: aSi
-      }
-    });
+    gMobileConnectionMessenger
+      .notifyCdmaInfoRecCallingPartyNumber(aClientId, aType, aPlan, aNumber,
+                                           aPi, aSi);
   },
 
   notifyCdmaInfoRecConnectedPartyNumber: function(aClientId, aType, aPlan, aNumber,
                                                   aPi, aSi) {
-    this._broadcastCdmaInfoRecordSystemMessage({
-      clientId: aClientId,
-      connectedNumber: {
-        type: aType,
-        plan: aPlan,
-        number: aNumber,
-        pi: aPi,
-        si: aSi
-      }
-    });
+    gMobileConnectionMessenger
+      .notifyCdmaInfoRecConnectedPartyNumber(aClientId, aType, aPlan, aNumber,
+                                             aPi, aSi);
   },
 
   notifyCdmaInfoRecSignal: function(aClientId, aType, aAlertPitch, aSignal){
-    this._broadcastCdmaInfoRecordSystemMessage({
-      clientId: aClientId,
-      signal: {
-        type: aType,
-        alertPitch: aAlertPitch,
-        signal: aSignal
-      }
-    });
+    gMobileConnectionMessenger
+      .notifyCdmaInfoRecSignal(aClientId, aType, aAlertPitch, aSignal);
   },
 
   notifyCdmaInfoRecRedirectingNumber: function(aClientId, aType, aPlan, aNumber,
                                                aPi, aSi, aReason) {
-    this._broadcastCdmaInfoRecordSystemMessage({
-      clientId: aClientId,
-      redirect: {
-        type: aType,
-        plan: aPlan,
-        number: aNumber,
-        pi: aPi,
-        si: aSi,
-        reason: aReason
-      }
-    });
+    gMobileConnectionMessenger
+      .notifyCdmaInfoRecRedirectingNumber(aClientId, aType, aPlan, aNumber,
+                                          aPi, aSi, aReason);
   },
 
   notifyCdmaInfoRecLineControl: function(aClientId, aPolarityIncluded, aToggle,
                                          aReverse, aPowerDenial) {
-    this._broadcastCdmaInfoRecordSystemMessage({
-      clientId: aClientId,
-      lineControl: {
-        polarityIncluded: aPolarityIncluded,
-        toggle: aToggle,
-        reverse: aReverse,
-        powerDenial: aPowerDenial
-      }
-    });
+    gMobileConnectionMessenger
+      .notifyCdmaInfoRecLineControl(aClientId, aPolarityIncluded, aToggle,
+                                    aReverse, aPowerDenial);
   },
 
   notifyCdmaInfoRecClir: function(aClientId, aCause) {
-    this._broadcastCdmaInfoRecordSystemMessage({
-      clientId: aClientId,
-      clirCause: aCause
-    });
+    gMobileConnectionMessenger.notifyCdmaInfoRecClir(aClientId, aCause);
   },
 
-  notifyCdmaInfoRecAudioControl: function(aClientId, aUplink, aDownLink) {
-    this._broadcastCdmaInfoRecordSystemMessage({
-      clientId: aClientId,
-      audioControl: {
-        upLink: aUplink,
-        downLink: aDownLink
-      }
-    });
+  notifyCdmaInfoRecAudioControl: function(aClientId, aUpLink, aDownLink) {
+    gMobileConnectionMessenger
+      .notifyCdmaInfoRecAudioControl(aClientId, aUpLink, aDownLink);
   },
 
   /**

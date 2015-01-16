@@ -11,6 +11,10 @@ let { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
 let gEnableLogging = Services.prefs.getBoolPref("devtools.debugger.log");
 Services.prefs.setBoolPref("devtools.debugger.log", false);
 
+// Enable the new performance panel for all tests. Remove this after
+// bug 1075567 is resolved.
+let gToolEnabled = Services.prefs.getBoolPref("devtools.performance_dev.enabled");
+
 let { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
 let { Promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
 let { gDevTools } = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
@@ -29,9 +33,6 @@ const SIMPLE_URL = EXAMPLE_URL + "doc_simple-test.html";
 // All tests are asynchronous.
 waitForExplicitFinish();
 
-let gToolEnabled = Services.prefs.getBoolPref("devtools.performance_dev.enabled");
-let gShowTimelineMemory = Services.prefs.getBoolPref("devtools.performance.ui.show-timeline-memory");
-
 gDevTools.testing = true;
 
 /**
@@ -49,9 +50,9 @@ registerCleanupFunction(() => {
   gDevTools.testing = false;
   info("finish() was called, cleaning up...");
 
-  Services.prefs.setBoolPref("devtools.performance.ui.show-timeline-memory", gShowTimelineMemory);
   Services.prefs.setBoolPref("devtools.debugger.log", gEnableLogging);
   Services.prefs.setBoolPref("devtools.performance_dev.enabled", gToolEnabled);
+
   // Make sure the profiler module is stopped when the test finishes.
   nsIProfilerModule.StopProfiler();
 
@@ -101,7 +102,7 @@ function handleError(aError) {
   finish();
 }
 
-function once(aTarget, aEventName, aUseCapture = false) {
+function once(aTarget, aEventName, aUseCapture = false, spread = false) {
   info("Waiting for event: '" + aEventName + "' on " + aTarget + ".");
 
   let deferred = Promise.defer();
@@ -114,13 +115,21 @@ function once(aTarget, aEventName, aUseCapture = false) {
     if ((add in aTarget) && (remove in aTarget)) {
       aTarget[add](aEventName, function onEvent(...aArgs) {
         aTarget[remove](aEventName, onEvent, aUseCapture);
-        deferred.resolve(...aArgs);
+        deferred.resolve(spread ? aArgs : aArgs[0]);
       }, aUseCapture);
       break;
     }
   }
 
   return deferred.promise;
+}
+
+/**
+ * Like `once`, except returns an array so we can
+ * access all arguments fired by the event.
+ */
+function onceSpread(aTarget, aEventName, aUseCapture) {
+  return once(aTarget, aEventName, aUseCapture, true);
 }
 
 function test () {
@@ -131,7 +140,7 @@ function initBackend(aUrl) {
   info("Initializing a performance front.");
 
   if (!DebuggerServer.initialized) {
-    DebuggerServer.init(() => true);
+    DebuggerServer.init();
     DebuggerServer.addBrowserActors();
   }
 
@@ -150,7 +159,7 @@ function initBackend(aUrl) {
   });
 }
 
-function initPerformance(aUrl) {
+function initPerformance(aUrl, selectedTool="performance") {
   info("Initializing a performance pane.");
 
   return Task.spawn(function*() {
@@ -160,7 +169,7 @@ function initPerformance(aUrl) {
     yield target.makeRemote();
 
     Services.prefs.setBoolPref("devtools.performance_dev.enabled", true);
-    let toolbox = yield gDevTools.showToolbox(target, "performance");
+    let toolbox = yield gDevTools.showToolbox(target, selectedTool);
     let panel = toolbox.getCurrentPanel();
     return { target, panel, toolbox };
   });
@@ -176,6 +185,12 @@ function* teardown(panel) {
 
 function idleWait(time) {
   return DevToolsUtils.waitForTime(time);
+}
+
+function busyWait(time) {
+  let start = Date.now();
+  let stack;
+  while (Date.now() - start < time) { stack = Components.stack; }
 }
 
 function consoleMethod (...args) {
@@ -197,14 +212,14 @@ function* consoleProfileEnd(connection) {
   yield notified;
 }
 
-function busyWait(time) {
-  let start = Date.now();
-  let stack;
-  while (Date.now() - start < time) { stack = Components.stack; }
+function command (button) {
+  let ev = button.ownerDocument.createEvent("XULCommandEvent");
+  ev.initCommandEvent("command", true, true, button.ownerDocument.defaultView, 0, false, false, false, false, null);
+  button.dispatchEvent(ev);
 }
 
-function idleWait(time) {
-  return DevToolsUtils.waitForTime(time);
+function click (win, button) {
+  EventUtils.sendMouseEvent({ type: "click" }, button, win);
 }
 
 function* startRecording(panel) {
@@ -219,7 +234,7 @@ function* startRecording(panel) {
   ok(!button.hasAttribute("locked"),
     "The record button should not be locked yet.");
 
-  EventUtils.sendMouseEvent({ type: "click" }, button, win);
+  click(win, button);
 
   yield clicked;
 
@@ -247,7 +262,7 @@ function* stopRecording(panel) {
   ok(!button.hasAttribute("locked"),
     "The record button should not be locked yet.");
 
-  EventUtils.sendMouseEvent({ type: "click" }, button, win);
+  click(win, button);
 
   yield clicked;
 
@@ -262,6 +277,19 @@ function* stopRecording(panel) {
     "The record button should not be checked.");
   ok(!button.hasAttribute("locked"),
     "The record button should not be locked.");
+}
+
+function waitForWidgetsRendered(panel) {
+  let { EVENTS, OverviewView, CallTreeView, WaterfallView } = panel.panelWin;
+
+  return Promise.all([
+    once(OverviewView, EVENTS.FRAMERATE_GRAPH_RENDERED),
+    once(OverviewView, EVENTS.MARKERS_GRAPH_RENDERED),
+    once(OverviewView, EVENTS.MEMORY_GRAPH_RENDERED),
+    once(OverviewView, EVENTS.OVERVIEW_RENDERED),
+    once(CallTreeView, EVENTS.CALL_TREE_RENDERED),
+    once(WaterfallView, EVENTS.WATERFALL_RENDERED)
+  ]);
 }
 
 /**
@@ -281,4 +309,30 @@ function waitUntil(predicate, interval = 10) {
     waitUntil(predicate).then(() => deferred.resolve(true));
   }, interval);
   return deferred.promise;
+}
+
+// EventUtils just doesn't work!
+
+function dragStart(graph, x, y = 1) {
+  x /= window.devicePixelRatio;
+  y /= window.devicePixelRatio;
+  graph._onMouseMove({ clientX: x, clientY: y });
+  graph._onMouseDown({ clientX: x, clientY: y });
+}
+
+function dragStop(graph, x, y = 1) {
+  x /= window.devicePixelRatio;
+  y /= window.devicePixelRatio;
+  graph._onMouseMove({ clientX: x, clientY: y });
+  graph._onMouseUp({ clientX: x, clientY: y });
+}
+
+function dropSelection(graph) {
+  graph.dropSelection();
+  graph.emit("mouseup");
+}
+
+function getSourceActor(aSources, aURL) {
+  let item = aSources.getItemForAttachment(a => a.source.url === aURL);
+  return item && item.value;
 }

@@ -10,12 +10,14 @@
 #define LIR_COMMON_OPCODE_LIST(_)   \
     _(Label)                        \
     _(Nop)                          \
+    _(Mop)                          \
     _(OsiPoint)                     \
     _(MoveGroup)                    \
     _(Integer)                      \
     _(Pointer)                      \
     _(Double)                       \
     _(Float32)                      \
+    _(SimdBox)                      \
     _(SimdSplatX4)                  \
     _(Int32x4)                      \
     _(Float32x4)                    \
@@ -46,6 +48,7 @@
     _(Goto)                         \
     _(NewArray)                     \
     _(NewArrayCopyOnWrite)          \
+    _(NewArrayDynamicLength)        \
     _(ArraySplice)                  \
     _(NewObject)                    \
     _(NewTypedObject)               \
@@ -53,9 +56,6 @@
     _(NewCallObject)                \
     _(NewSingletonCallObject)       \
     _(NewStringObject)              \
-    _(NewPar)                       \
-    _(NewDenseArrayPar)             \
-    _(NewCallObjectPar)             \
     _(NewDerivedTypedObject)        \
     _(InitElem)                     \
     _(InitElemGetterSetter)         \
@@ -63,7 +63,6 @@
     _(InitProp)                     \
     _(InitPropGetterSetter)         \
     _(CheckOverRecursed)            \
-    _(CheckOverRecursedPar)         \
     _(DefVar)                       \
     _(DefFun)                       \
     _(CallKnown)                    \
@@ -154,7 +153,6 @@
     _(ModD)                         \
     _(BinaryV)                      \
     _(Concat)                       \
-    _(ConcatPar)                    \
     _(CharCodeAt)                   \
     _(FromCharCode)                 \
     _(StringSplit)                  \
@@ -191,7 +189,6 @@
     _(Lambda)                       \
     _(LambdaArrow)                  \
     _(LambdaForSingleton)           \
-    _(LambdaPar)                    \
     _(Slots)                        \
     _(Elements)                     \
     _(ConvertElementsToDoubles)     \
@@ -206,7 +203,6 @@
     _(GuardObjectType)              \
     _(GuardObjectIdentity)          \
     _(GuardClass)                   \
-    _(GuardThreadExclusive)         \
     _(TypeBarrierV)                 \
     _(TypeBarrierO)                 \
     _(MonitorTypes)                 \
@@ -250,8 +246,6 @@
     _(StoreFixedSlotV)              \
     _(StoreFixedSlotT)              \
     _(FunctionEnvironment)          \
-    _(ForkJoinContext)              \
-    _(ForkJoinGetSlice)             \
     _(GetPropertyCacheV)            \
     _(GetPropertyCacheT)            \
     _(GetPropertyPolymorphicV)      \
@@ -284,7 +278,7 @@
     _(SetArrayLength)               \
     _(TypedArrayLength)             \
     _(TypedArrayElements)           \
-    _(TypedObjectProto)             \
+    _(TypedObjectDescr)             \
     _(TypedObjectElements)          \
     _(SetTypedObjectOffset)         \
     _(StringLength)                 \
@@ -295,7 +289,6 @@
     _(SetFrameArgumentV)            \
     _(RunOncePrologue)              \
     _(Rest)                         \
-    _(RestPar)                      \
     _(TypeOfV)                      \
     _(ToIdV)                        \
     _(Floor)                        \
@@ -314,13 +307,13 @@
     _(InterruptCheckImplicit)       \
     _(ProfilerStackOp)              \
     _(GetDOMProperty)               \
-    _(GetDOMMember)                 \
+    _(GetDOMMemberV)                \
+    _(GetDOMMemberT)                \
     _(SetDOMProperty)               \
     _(CallDOMNative)                \
     _(IsCallable)                   \
     _(IsObject)                     \
     _(IsObjectAndBranch)            \
-    _(HaveSameClass)                \
     _(HasClass)                     \
     _(AsmJSLoadHeap)                \
     _(AsmJSStoreHeap)               \
@@ -332,7 +325,8 @@
     _(AsmJSVoidReturn)              \
     _(AsmJSPassStackArg)            \
     _(AsmJSCall)                    \
-    _(InterruptCheckPar)            \
+    _(AsmJSCompareExchangeHeap)     \
+    _(AsmJSAtomicBinopHeap)         \
     _(RecompileCheck)               \
     _(MemoryBarrier)                \
     _(AssertRangeI)                 \

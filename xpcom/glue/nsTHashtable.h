@@ -10,6 +10,7 @@
 #include "nscore.h"
 #include "pldhash.h"
 #include "nsDebug.h"
+#include "mozilla/Assertions.h"
 #include "mozilla/MemoryChecking.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Move.h"
@@ -128,8 +129,8 @@ public:
     NS_ASSERTION(mTable.ops, "nsTHashtable was not initialized properly.");
 
     EntryType* entry = reinterpret_cast<EntryType*>(
-      PL_DHashTableOperate(const_cast<PLDHashTable*>(&mTable),
-                           EntryType::KeyToPointer(aKey), PL_DHASH_LOOKUP));
+      PL_DHashTableLookup(const_cast<PLDHashTable*>(&mTable),
+                          EntryType::KeyToPointer(aKey)));
     return PL_DHASH_ENTRY_IS_BUSY(entry) ? entry : nullptr;
   }
 
@@ -158,8 +159,8 @@ public:
   EntryType* PutEntry(KeyType aKey, const fallible_t&) NS_WARN_UNUSED_RESULT {
     NS_ASSERTION(mTable.ops, "nsTHashtable was not initialized properly.");
 
-    return static_cast<EntryType*>(PL_DHashTableOperate(
-      &mTable, EntryType::KeyToPointer(aKey), PL_DHASH_ADD));
+    return static_cast<EntryType*>(PL_DHashTableAdd(
+      &mTable, EntryType::KeyToPointer(aKey)));
   }
 
   /**
@@ -170,9 +171,8 @@ public:
   {
     NS_ASSERTION(mTable.ops, "nsTHashtable was not initialized properly.");
 
-    PL_DHashTableOperate(&mTable,
-                         EntryType::KeyToPointer(aKey),
-                         PL_DHASH_REMOVE);
+    PL_DHashTableRemove(&mTable,
+                        EntryType::KeyToPointer(aKey));
   }
 
   /**
@@ -290,6 +290,16 @@ public:
     return SizeOfIncludingThis(BasicSizeOfEntryExcludingThisFun, aMallocSizeOf);
   }
 
+  /**
+   * Swap the elements in this hashtable with the elements in aOther.
+   */
+  void SwapElements(nsTHashtable<EntryType>& aOther)
+  {
+    MOZ_ASSERT_IF(this->mTable.ops && aOther.mTable.ops,
+                  this->mTable.ops == aOther.mTable.ops);
+    mozilla::Swap(this->mTable, aOther.mTable);
+  }
+
 #ifdef DEBUG
   /**
    * Mark the table as constant after initialization.
@@ -358,7 +368,7 @@ protected:
 
 private:
   // copy constructor, not implemented
-  nsTHashtable(nsTHashtable<EntryType>& aToCopy) MOZ_DELETE;
+  nsTHashtable(nsTHashtable<EntryType>& aToCopy) = delete;
 
   /**
    * Initialize the table.
@@ -375,7 +385,7 @@ private:
                                                  void*);
 
   // assignment operator, not implemented
-  nsTHashtable<EntryType>& operator=(nsTHashtable<EntryType>& aToEqual) MOZ_DELETE;
+  nsTHashtable<EntryType>& operator=(nsTHashtable<EntryType>& aToEqual) = delete;
 };
 
 //
@@ -409,17 +419,14 @@ nsTHashtable<EntryType>::Init(uint32_t aInitLength)
 {
   static const PLDHashTableOps sOps =
   {
-    ::PL_DHashAllocTable,
-    ::PL_DHashFreeTable,
     s_HashKey,
     s_MatchEntry,
     EntryType::ALLOW_MEMMOVE ? ::PL_DHashMoveEntryStub : s_CopyEntry,
     s_ClearEntry,
-    ::PL_DHashFinalizeStub,
     s_InitEntry
   };
 
-  PL_DHashTableInit(&mTable, &sOps, nullptr, sizeof(EntryType), aInitLength);
+  PL_DHashTableInit(&mTable, &sOps, sizeof(EntryType), aInitLength);
 }
 
 // static

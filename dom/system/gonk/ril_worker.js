@@ -222,10 +222,9 @@ const TELEPHONY_REQUESTS = [
   REQUEST_UDUB
 ];
 
-function TelephonyRequestEntry(request, action, options) {
+function TelephonyRequestEntry(request, callback) {
   this.request = request;
-  this.action = action;
-  this.options = options;
+  this.callback = callback;
 }
 
 function TelephonyRequestQueue(ril) {
@@ -274,7 +273,7 @@ TelephonyRequestQueue.prototype = {
 
   _executeEntry: function(entry) {
     if (DEBUG) this.debug("execute " + this._getRequestName(entry.request));
-    entry.action.call(this.ril, entry.options);
+    entry.callback();
   },
 
   _getRequestName: function(request) {
@@ -290,7 +289,7 @@ TelephonyRequestQueue.prototype = {
     return TELEPHONY_REQUESTS.indexOf(request) !== -1;
   },
 
-  push: function(request, action, options) {
+  push: function(request, callback) {
     if (!this.isValidRequest(request)) {
       if (DEBUG) {
         this.debug("Error: " + this._getRequestName(request) +
@@ -300,7 +299,7 @@ TelephonyRequestQueue.prototype = {
     }
 
     if (DEBUG) this.debug("push " + this._getRequestName(request));
-    let entry = new TelephonyRequestEntry(request, action, options);
+    let entry = new TelephonyRequestEntry(request, callback);
     let queue = this._getQueue(request);
     queue.push(entry);
 
@@ -547,6 +546,12 @@ RilObject.prototype = {
      * { options: options of the corresponding dialing request }
      */
     this.pendingMO = null;
+
+    /**
+     * True when the request to report SMS Memory Status is pending.
+     */
+    this.pendingToReportSmsMemoryStatus = false;
+    this.smsStorageAvailable = true;
   },
 
   /**
@@ -611,32 +616,29 @@ RilObject.prototype = {
         this.enterICCPUK2(options);
         break;
       case GECKO_CARDLOCK_NCK:
+      case GECKO_CARDLOCK_NSCK:
       case GECKO_CARDLOCK_NCK1:
       case GECKO_CARDLOCK_NCK2:
       case GECKO_CARDLOCK_HNCK:
       case GECKO_CARDLOCK_CCK:
       case GECKO_CARDLOCK_SPCK:
-      case GECKO_CARDLOCK_RCCK: // Fall through.
-      case GECKO_CARDLOCK_RSPCK: {
-        let type = GECKO_PERSO_LOCK_TO_CARD_PERSO_LOCK[options.lockType];
-        this.enterDepersonalization(type, options.pin, options);
-        break;
-      }
+      case GECKO_CARDLOCK_PCK:
+      case GECKO_CARDLOCK_RCCK:
+      case GECKO_CARDLOCK_RSPCK:
       case GECKO_CARDLOCK_NCK_PUK:
+      case GECKO_CARDLOCK_NSCK_PUK:
       case GECKO_CARDLOCK_NCK1_PUK:
       case GECKO_CARDLOCK_NCK2_PUK:
       case GECKO_CARDLOCK_HNCK_PUK:
       case GECKO_CARDLOCK_CCK_PUK:
       case GECKO_CARDLOCK_SPCK_PUK:
+      case GECKO_CARDLOCK_PCK_PUK:
       case GECKO_CARDLOCK_RCCK_PUK: // Fall through.
-      case GECKO_CARDLOCK_RSPCK_PUK: {
-        let type = GECKO_PERSO_LOCK_TO_CARD_PERSO_LOCK[options.lockType];
-        this.enterDepersonalization(type, options.puk, options);
+      case GECKO_CARDLOCK_RSPCK_PUK:
+        this.enterDepersonalization(options);
         break;
-      }
       default:
-        options.errorMsg = "Unsupported Card Lock.";
-        options.success = false;
+        options.errorMsg = GECKO_ERROR_REQUEST_NOT_SUPPORTED;
         this.sendChromeMessage(options);
     }
   },
@@ -644,7 +646,7 @@ RilObject.prototype = {
   /**
    * Enter a PIN to unlock the ICC.
    *
-   * @param pin
+   * @param password
    *        String containing the PIN.
    * @param [optional] aid
    *        AID value.
@@ -653,7 +655,7 @@ RilObject.prototype = {
     let Buf = this.context.Buf;
     Buf.newParcel(REQUEST_ENTER_SIM_PIN, options);
     Buf.writeInt32(this.v5Legacy ? 1 : 2);
-    Buf.writeString(options.pin);
+    Buf.writeString(options.password);
     if (!this.v5Legacy) {
       Buf.writeString(options.aid || this.aid);
     }
@@ -663,7 +665,7 @@ RilObject.prototype = {
   /**
    * Enter a PIN2 to unlock the ICC.
    *
-   * @param pin
+   * @param password
    *        String containing the PIN2.
    * @param [optional] aid
    *        AID value.
@@ -672,7 +674,7 @@ RilObject.prototype = {
     let Buf = this.context.Buf;
     Buf.newParcel(REQUEST_ENTER_SIM_PIN2, options);
     Buf.writeInt32(this.v5Legacy ? 1 : 2);
-    Buf.writeString(options.pin);
+    Buf.writeString(options.password);
     if (!this.v5Legacy) {
       Buf.writeString(options.aid || this.aid);
     }
@@ -682,66 +684,25 @@ RilObject.prototype = {
   /**
    * Requests a network personalization be deactivated.
    *
-   * @param type
-   *        Integer indicating the network personalization be deactivated.
+   * @param personlization
+   *        One of CARD_PERSOSUBSTATE_*
    * @param password
    *        String containing the password.
    */
-  enterDepersonalization: function(type, password, options) {
+  enterDepersonalization: function(options) {
     let Buf = this.context.Buf;
     Buf.newParcel(REQUEST_ENTER_NETWORK_DEPERSONALIZATION_CODE, options);
-    Buf.writeInt32(type);
-    Buf.writeString(password);
+    Buf.writeInt32(1);
+    Buf.writeString(options.password);
     Buf.sendParcel();
-  },
-
-  /**
-   * Helper function for changing ICC locks.
-   */
-  iccSetCardLock: function(options) {
-    if (options.newPin !== undefined) { // Change PIN lock.
-      switch (options.lockType) {
-        case GECKO_CARDLOCK_PIN:
-          this.changeICCPIN(options);
-          break;
-        case GECKO_CARDLOCK_PIN2:
-          this.changeICCPIN2(options);
-          break;
-        default:
-          options.errorMsg = "Unsupported Card Lock.";
-          options.success = false;
-          this.sendChromeMessage(options);
-      }
-    } else { // Enable/Disable lock.
-      switch (options.lockType) {
-        case GECKO_CARDLOCK_PIN:
-          options.facility = ICC_CB_FACILITY_SIM;
-          options.password = options.pin;
-          break;
-        case GECKO_CARDLOCK_FDN:
-          options.facility = ICC_CB_FACILITY_FDN;
-          options.password = options.pin2;
-          break;
-        default:
-          options.errorMsg = "Unsupported Card Lock.";
-          options.success = false;
-          this.sendChromeMessage(options);
-          return;
-      }
-      options.enabled = options.enabled;
-      options.serviceClass = ICC_SERVICE_CLASS_VOICE |
-                             ICC_SERVICE_CLASS_DATA  |
-                             ICC_SERVICE_CLASS_FAX;
-      this.setICCFacilityLock(options);
-    }
   },
 
   /**
    * Change the current ICC PIN number.
    *
-   * @param pin
+   * @param password
    *        String containing the old PIN value
-   * @param newPin
+   * @param newPassword
    *        String containing the new PIN value
    * @param [optional] aid
    *        AID value.
@@ -750,8 +711,8 @@ RilObject.prototype = {
     let Buf = this.context.Buf;
     Buf.newParcel(REQUEST_CHANGE_SIM_PIN, options);
     Buf.writeInt32(this.v5Legacy ? 2 : 3);
-    Buf.writeString(options.pin);
-    Buf.writeString(options.newPin);
+    Buf.writeString(options.password);
+    Buf.writeString(options.newPassword);
     if (!this.v5Legacy) {
       Buf.writeString(options.aid || this.aid);
     }
@@ -761,9 +722,9 @@ RilObject.prototype = {
   /**
    * Change the current ICC PIN2 number.
    *
-   * @param pin
+   * @param password
    *        String containing the old PIN2 value
-   * @param newPin
+   * @param newPassword
    *        String containing the new PIN2 value
    * @param [optional] aid
    *        AID value.
@@ -772,19 +733,20 @@ RilObject.prototype = {
     let Buf = this.context.Buf;
     Buf.newParcel(REQUEST_CHANGE_SIM_PIN2, options);
     Buf.writeInt32(this.v5Legacy ? 2 : 3);
-    Buf.writeString(options.pin);
-    Buf.writeString(options.newPin);
+    Buf.writeString(options.password);
+    Buf.writeString(options.newPassword);
     if (!this.v5Legacy) {
       Buf.writeString(options.aid || this.aid);
     }
     Buf.sendParcel();
   },
+
   /**
    * Supplies ICC PUK and a new PIN to unlock the ICC.
    *
-   * @param puk
+   * @param password
    *        String containing the PUK value.
-   * @param newPin
+   * @param newPassword
    *        String containing the new PIN value.
    * @param [optional] aid
    *        AID value.
@@ -793,7 +755,7 @@ RilObject.prototype = {
      let Buf = this.context.Buf;
      Buf.newParcel(REQUEST_ENTER_SIM_PUK, options);
      Buf.writeInt32(this.v5Legacy ? 2 : 3);
-     Buf.writeString(options.puk);
+     Buf.writeString(options.password);
      Buf.writeString(options.newPin);
      if (!this.v5Legacy) {
        Buf.writeString(options.aid || this.aid);
@@ -804,9 +766,9 @@ RilObject.prototype = {
   /**
    * Supplies ICC PUK2 and a new PIN2 to unlock the ICC.
    *
-   * @param puk
+   * @param password
    *        String containing the PUK2 value.
-   * @param newPin
+   * @param newPassword
    *        String containing the new PIN2 value.
    * @param [optional] aid
    *        AID value.
@@ -815,7 +777,7 @@ RilObject.prototype = {
      let Buf = this.context.Buf;
      Buf.newParcel(REQUEST_ENTER_SIM_PUK2, options);
      Buf.writeInt32(this.v5Legacy ? 2 : 3);
-     Buf.writeString(options.puk);
+     Buf.writeString(options.password);
      Buf.writeString(options.newPin);
      if (!this.v5Legacy) {
        Buf.writeString(options.aid || this.aid);
@@ -824,19 +786,54 @@ RilObject.prototype = {
    },
 
   /**
-   * Helper function for fetching the state of ICC locks.
+   * Helper function for changing ICC locks.
    */
-  iccGetCardLockState: function(options) {
+  iccChangeCardLockPassword: function(options) {
     switch (options.lockType) {
       case GECKO_CARDLOCK_PIN:
-        options.facility = ICC_CB_FACILITY_SIM;
+        this.changeICCPIN(options);
         break;
-      case GECKO_CARDLOCK_FDN:
-        options.facility = ICC_CB_FACILITY_FDN;
+      case GECKO_CARDLOCK_PIN2:
+        this.changeICCPIN2(options);
         break;
       default:
-        options.errorMsg = "Unsupported Card Lock.";
-        options.success = false;
+        options.errorMsg = GECKO_ERROR_REQUEST_NOT_SUPPORTED;
+        this.sendChromeMessage(options);
+    }
+  },
+
+  /**
+   * Helper function for setting the state of ICC locks.
+   */
+  iccSetCardLockEnabled: function(options) {
+    switch (options.lockType) {
+      case GECKO_CARDLOCK_PIN: // Fall through.
+      case GECKO_CARDLOCK_FDN:
+        options.facility = GECKO_CARDLOCK_TO_FACILITY[options.lockType];
+        break;
+      default:
+        options.errorMsg = GECKO_ERROR_REQUEST_NOT_SUPPORTED;
+        this.sendChromeMessage(options);
+        return;
+    }
+
+    options.serviceClass = ICC_SERVICE_CLASS_VOICE |
+                           ICC_SERVICE_CLASS_DATA  |
+                           ICC_SERVICE_CLASS_FAX;
+    this.setICCFacilityLock(options);
+  },
+
+  /**
+   * Helper function for fetching the state of ICC locks.
+   */
+  iccGetCardLockEnabled: function(options) {
+    switch (options.lockType) {
+      case GECKO_CARDLOCK_PIN: // Fall through.
+      case GECKO_CARDLOCK_FDN:
+        options.facility = GECKO_CARDLOCK_TO_FACILITY[options.lockType];
+        break;
+      default:
+        options.errorMsg = GECKO_ERROR_REQUEST_NOT_SUPPORTED;
         this.sendChromeMessage(options);
         return;
     }
@@ -855,34 +852,33 @@ RilObject.prototype = {
    * not support the request id and their rild doesn't return an error.
    */
   iccGetCardLockRetryCount: function(options) {
-    var selCode = {
-      pin: ICC_SEL_CODE_SIM_PIN,
-      puk: ICC_SEL_CODE_SIM_PUK,
-      pin2: ICC_SEL_CODE_SIM_PIN2,
-      puk2: ICC_SEL_CODE_SIM_PUK2,
-      nck: ICC_SEL_CODE_PH_NET_PIN,
-      cck: ICC_SEL_CODE_PH_CORP_PIN,
-      spck: ICC_SEL_CODE_PH_SP_PIN
-    };
-
-    if (typeof(selCode[options.lockType]) === 'undefined') {
-      /* unknown lock type */
-      options.errorMsg = GECKO_ERROR_GENERIC_FAILURE;
-      options.success = false;
+    if (!RILQUIRKS_HAVE_QUERY_ICC_LOCK_RETRY_COUNT) {
+      // Only the emulator supports this request.
+      options.errorMsg = GECKO_ERROR_REQUEST_NOT_SUPPORTED;
       this.sendChromeMessage(options);
       return;
     }
 
-    if (RILQUIRKS_HAVE_QUERY_ICC_LOCK_RETRY_COUNT) {
-      /* Only the emulator supports this request, ... */
-      options.selCode = selCode[options.lockType];
-      this.queryICCLockRetryCount(options);
-    } else {
-      /* ... while the phones do not. */
-      options.errorMsg = GECKO_ERROR_REQUEST_NOT_SUPPORTED;
-      options.success = false;
-      this.sendChromeMessage(options);
+    switch (options.lockType) {
+      case GECKO_CARDLOCK_PIN:
+      case GECKO_CARDLOCK_PIN2:
+      case GECKO_CARDLOCK_PUK:
+      case GECKO_CARDLOCK_PUK2:
+      case GECKO_CARDLOCK_NCK:
+      case GECKO_CARDLOCK_NSCK:
+      case GECKO_CARDLOCK_CCK: // Fall through.
+      case GECKO_CARDLOCK_SPCK:
+      // TODO: Bug 1116072: identify the mapping between RIL_PERSOSUBSTATE_SIM_SIM
+      //       @ ril.h and TS 27.007, clause 8.65 for GECKO_CARDLOCK_SPCK.
+        options.selCode = GECKO_CARDLOCK_TO_SEL_CODE[options.lockType];
+        break;
+      default:
+        options.errorMsg = GECKO_ERROR_REQUEST_NOT_SUPPORTED;
+        this.sendChromeMessage(options);
+        return;
     }
+
+    this.queryICCLockRetryCount(options);
   },
 
   /**
@@ -1038,7 +1034,7 @@ RilObject.prototype = {
    * Read UICC Phonebook contacts.
    *
    * @param contactType
-   *        "adn" or "fdn".
+   *        One of GECKO_CARDCONTACT_TYPE_*.
    * @param requestId
    *        Request id from RadioInterfaceLayer.
    */
@@ -1072,7 +1068,7 @@ RilObject.prototype = {
   /**
    * Update UICC Phonebook.
    *
-   * @param contactType   "adn" or "fdn".
+   * @param contactType   One of GECKO_CARDCONTACT_TYPE_*.
    * @param contact       The contact will be updated.
    * @param pin2          PIN2 is required for updating FDN.
    * @param requestId     Request id from RadioInterfaceLayer.
@@ -1513,6 +1509,22 @@ RilObject.prototype = {
   },
 
   /**
+   * Get UICC service state
+   */
+  getIccServiceState: function(options) {
+    switch (options.service) {
+      case GECKO_CARDSERVICE_FDN:
+        let ICCUtilsHelper = this.context.ICCUtilsHelper;
+        options.result = ICCUtilsHelper.isICCServiceAvailable("FDN");
+        break;
+      default:
+        options.errorMsg = GECKO_ERROR_REQUEST_NOT_SUPPORTED;
+        break;
+    }
+    this.sendChromeMessage(options);
+  },
+
+  /**
    * Enable/Disable UICC subscription
    */
   setUiccSubscription: function(options) {
@@ -1543,18 +1555,6 @@ RilObject.prototype = {
     Buf.newParcel(REQUEST_SET_NETWORK_SELECTION_MANUAL, options);
     Buf.writeString(numeric);
     Buf.sendParcel();
-  },
-
-  /**
-   * Get current calls.
-   */
-  getCurrentCalls: function() {
-    this.telephonyRequestQueue.push(REQUEST_GET_CURRENT_CALLS,
-                                    this.sendRilRequestGetCurrentCalls, null);
-  },
-
-  sendRilRequestGetCurrentCalls: function() {
-    this.context.Buf.simpleRequest(REQUEST_GET_CURRENT_CALLS);
   },
 
   /**
@@ -1631,20 +1631,24 @@ RilObject.prototype = {
     let isRadioOff = (this.radioState === GECKO_RADIOSTATE_DISABLED);
 
     if (options.isEmergency) {
+      options.request = RILQUIRKS_REQUEST_USE_DIAL_EMERGENCY_CALL ?
+                        REQUEST_DIAL_EMERGENCY_CALL : REQUEST_DIAL;
+
       if (isRadioOff) {
         if (DEBUG) {
           this.context.debug("Automatically enable radio for an emergency call.");
         }
 
         this.cachedDialRequest = {
-          callback: this.dialEmergencyNumber.bind(this, options),
+          callback: this.dialInternal.bind(this, options),
           onerror: onerror
         };
+
         this.setRadioEnabled({enabled: true});
         return;
       }
 
-      this.dialEmergencyNumber(options);
+      this.dialInternal(options);
     } else {
       // Notify error in establishing the call without radio.
       if (isRadioOff) {
@@ -1658,70 +1662,39 @@ RilObject.prototype = {
         return;
       }
 
-      this.dialNonEmergencyNumber(options);
+      // Exit emergency callback mode when user dial a non-emergency call.
+      if (this._isInEmergencyCbMode) {
+        this.exitEmergencyCbMode();
+      }
+
+      options.request = REQUEST_DIAL;
+
+      this.dialInternal(options);
     }
   },
 
-  /**
-   * Dial a non-emergency number.
-   *
-   * @param number
-   *        String containing the number to dial.
-   * @param clirMode
-   *        Integer for showing/hidding the caller Id to the called party.
-   * @param uusInfo
-   *        Integer doing something XXX TODO
-   */
-  dialNonEmergencyNumber: function(options) {
-    // Exit emergency callback mode when user dial a non-emergency call.
-    if (this._isInEmergencyCbMode) {
-      this.exitEmergencyCbMode();
-    }
-
-    options.request = REQUEST_DIAL;
-    this.sendDialRequest(options);
-  },
-
-  /**
-   * Dial an emergency number.
-   *
-   * @param number
-   *        String containing the number to dial.
-   * @param clirMode
-   *        Integer for showing/hidding the caller Id to the called party.
-   * @param uusInfo
-   *        Integer doing something XXX TODO
-   */
-  dialEmergencyNumber: function(options) {
-    options.request = RILQUIRKS_REQUEST_USE_DIAL_EMERGENCY_CALL ?
-                      REQUEST_DIAL_EMERGENCY_CALL : REQUEST_DIAL;
-    this.sendDialRequest(options);
-  },
-
-  sendDialRequest: function(options) {
+  dialInternal: function(options) {
+    // Make a Cdma 3way call.
     if (this._isCdma && Object.keys(this.currentCalls).length == 1) {
-      // Make a Cdma 3way call.
       options.featureStr = options.number;
-      this.sendCdmaFlashCommand(options);
-    } else {
-      this.telephonyRequestQueue.push(options.request, this.sendRilRequestDial,
-                                      options);
+      this.cdmaFlash(options);
+      return;
     }
+
+    this.telephonyRequestQueue.push(options.request, () => {
+      let Buf = this.context.Buf;
+      Buf.newParcel(options.request, options);
+      Buf.writeString(options.number);
+      Buf.writeInt32(options.clirMode || 0);
+      Buf.writeInt32(options.uusInfo || 0);
+      // TODO Why do we need this extra 0? It was put it in to make this
+      // match the format of the binary message.
+      Buf.writeInt32(0);
+      Buf.sendParcel();
+    });
   },
 
-  sendRilRequestDial: function(options) {
-    let Buf = this.context.Buf;
-    Buf.newParcel(options.request, options);
-    Buf.writeString(options.number);
-    Buf.writeInt32(options.clirMode || 0);
-    Buf.writeInt32(options.uusInfo || 0);
-    // TODO Why do we need this extra 0? It was put it in to make this
-    // match the format of the binary message.
-    Buf.writeInt32(0);
-    Buf.sendParcel();
-  },
-
-  sendCdmaFlashCommand: function(options) {
+  cdmaFlash: function(options) {
     let Buf = this.context.Buf;
     options.isCdma = true;
     options.request = REQUEST_CDMA_FLASH;
@@ -1735,7 +1708,7 @@ RilObject.prototype = {
    */
   hangUpAll: function() {
     for (let callIndex in this.currentCalls) {
-      this.hangUp({callIndex: callIndex});
+      this.hangUpCall({callIndex: callIndex});
     }
   },
 
@@ -1745,66 +1718,84 @@ RilObject.prototype = {
    * @param callIndex
    *        Call index (1-based) as reported by REQUEST_GET_CURRENT_CALLS.
    */
-  hangUp: function(options) {
+  hangUpCall: function(options) {
     let call = this.currentCalls[options.callIndex];
     if (!call) {
+      // |hangUpCall()| is used to remove a call from the current call list,
+      // so we consider it as an successful case when hanging up a call that
+      // doesn't exist in the current call list.
+      options.success = true;
+      this.sendChromeMessage(options);
       return;
     }
 
     call.hangUpLocal = true;
     if (call.state === CALL_STATE_HOLDING) {
-      this.sendHangUpBackgroundRequest();
+      this.hangUpBackground(options);
     } else {
-      this.sendHangUpRequest(options);
+      this.telephonyRequestQueue.push(REQUEST_HANGUP, () => {
+        let Buf = this.context.Buf;
+        Buf.newParcel(REQUEST_HANGUP, options);
+        Buf.writeInt32(1);
+        Buf.writeInt32(options.callIndex);
+        Buf.sendParcel();
+      });
     }
   },
 
-  sendHangUpRequest: function(options) {
-    this.telephonyRequestQueue.push(REQUEST_HANGUP, this.sendRilRequestHangUp,
-                                    options);
+  hangUpForeground: function(options) {
+    for each (let currentCall in this.currentCalls) {
+      if (currentCall.state == CALL_STATE_ACTIVE) {
+        currentCall.hangUpLocal = true;
+      }
+    }
+
+    this.telephonyRequestQueue.push(REQUEST_HANGUP_FOREGROUND_RESUME_BACKGROUND, () => {
+      this.context.Buf.simpleRequest(REQUEST_HANGUP_FOREGROUND_RESUME_BACKGROUND,
+                                     options);
+    });
   },
 
-  sendRilRequestHangUp: function(options) {
-    let Buf = this.context.Buf;
-    Buf.newParcel(REQUEST_HANGUP, options);
-    Buf.writeInt32(1);
-    Buf.writeInt32(options.callIndex);
-    Buf.sendParcel();
+  hangUpBackground: function(options) {
+    let waitingCalls = [];
+    let heldCalls = [];
+
+    for each (let currentCall in this.currentCalls) {
+      switch (currentCall.state) {
+        case CALL_STATE_WAITING:
+          waitingCalls.push(currentCall);
+          break;
+        case CALL_STATE_HOLDING:
+          heldCalls.push(currentCall);
+          break;
+      }
+    }
+
+    // When both a held and a waiting call exist, the request shall apply to
+    // the waiting call.
+    if (waitingCalls.length) {
+      waitingCalls.forEach(call => call.hangUpLocal = true);
+    } else {
+      heldCalls.forEach(call => call.hangUpLocal = true);
+    }
+
+    this.telephonyRequestQueue.push(REQUEST_HANGUP_WAITING_OR_BACKGROUND, () => {
+      this.context.Buf.simpleRequest(REQUEST_HANGUP_WAITING_OR_BACKGROUND,
+                                     options);
+    });
   },
 
-  sendHangUpForegroundRequest: function(options) {
-    this.telephonyRequestQueue.push(REQUEST_HANGUP_FOREGROUND_RESUME_BACKGROUND,
-                                    this.sendRilRequestHangUpForeground,
-                                    options);
+  switchActiveCall: function(options) {
+    this.telephonyRequestQueue.push(REQUEST_SWITCH_WAITING_OR_HOLDING_AND_ACTIVE, () => {
+      this.context.Buf.simpleRequest(REQUEST_SWITCH_WAITING_OR_HOLDING_AND_ACTIVE,
+                                     options);
+    });
   },
 
-  sendRilRequestHangUpForeground: function(options) {
-    this.context.Buf.simpleRequest(REQUEST_HANGUP_FOREGROUND_RESUME_BACKGROUND,
-                                   options);
-  },
-
-  sendHangUpBackgroundRequest: function(options) {
-    this.telephonyRequestQueue.push(REQUEST_HANGUP_WAITING_OR_BACKGROUND,
-                                    this.sendRilRequestHangUpWaiting, options);
-  },
-
-  sendRilRequestHangUpWaiting: function(options) {
-    this.context.Buf.simpleRequest(REQUEST_HANGUP_WAITING_OR_BACKGROUND,
-                                   options);
-  },
-
-  /**
-   * Mute or unmute the radio.
-   *
-   * @param mute
-   *        Boolean to indicate whether to mute or unmute the radio.
-   */
-  setMute: function(options) {
-    let Buf = this.context.Buf;
-    Buf.newParcel(REQUEST_SET_MUTE);
-    Buf.writeInt32(1);
-    Buf.writeInt32(options.muted ? 1 : 0);
-    Buf.sendParcel();
+  udub: function(options) {
+    this.telephonyRequestQueue.push(REQUEST_UDUB, () => {
+      this.context.Buf.simpleRequest(REQUEST_UDUB, options);
+    });
   },
 
   /**
@@ -1814,38 +1805,35 @@ RilObject.prototype = {
    *        Call index of the call to answer.
    */
   answerCall: function(options) {
+    let call = this.currentCalls[options.callIndex];
+    if (!call) {
+      options.success = false;
+      options.errorMsg = GECKO_ERROR_GENERIC_FAILURE;
+      this.sendChromeMessage(options);
+      return;
+    }
+
     // Check for races. Since we dispatched the incoming/waiting call
     // notification the incoming/waiting call may have changed. The main
     // thread thinks that it is answering the call with the given index,
     // so only answer if that is still incoming/waiting.
-    let call = this.currentCalls[options.callIndex];
-    if (!call) {
-      return;
-    }
-
     switch (call.state) {
       case CALL_STATE_INCOMING:
-        this.telephonyRequestQueue.push(REQUEST_ANSWER, this.sendRilRequestAnswer,
-                                        null);
+        this.telephonyRequestQueue.push(REQUEST_ANSWER, () => {
+          this.context.Buf.simpleRequest(REQUEST_ANSWER, options);
+        });
         break;
       case CALL_STATE_WAITING:
         // Answer the waiting (second) call, and hold the first call.
-        this.sendSwitchWaitingRequest();
+        this.switchActiveCall(options);
         break;
+      default:
+        if (DEBUG) this.context.debug("AnswerCall: Invalid call state");
+
+        options.success = false;
+        options.errorMsg = GECKO_ERROR_GENERIC_FAILURE;
+        this.sendChromeMessage(options);
     }
-  },
-
-  sendRilRequestAnswer: function() {
-    this.context.Buf.simpleRequest(REQUEST_ANSWER);
-  },
-
-  sendSwitchWaitingRequest: function() {
-    this.telephonyRequestQueue.push(REQUEST_SWITCH_WAITING_OR_HOLDING_AND_ACTIVE,
-                                    this.sendRilRequestSwitch, null);
-  },
-
-  sendRilRequestSwitch: function() {
-    this.context.Buf.simpleRequest(REQUEST_SWITCH_WAITING_OR_HOLDING_AND_ACTIVE);
   },
 
   /**
@@ -1855,12 +1843,13 @@ RilObject.prototype = {
    *        Call index of the call to reject.
    */
   rejectCall: function(options) {
-    // Check for races. Since we dispatched the incoming/waiting call
-    // notification the incoming/waiting call may have changed. The main
-    // thread thinks that it is rejecting the call with the given index,
-    // so only reject if that is still incoming/waiting.
     let call = this.currentCalls[options.callIndex];
     if (!call) {
+      // |hangUpCall()| is used to remove an imcoming call from the current
+      // call list, so we consider it as an successful case when rejecting
+      // a call that doesn't exist in the current call list.
+      options.success = true;
+      this.sendChromeMessage(options);
       return;
     }
 
@@ -1868,24 +1857,29 @@ RilObject.prototype = {
 
     if (this._isCdma) {
       // AT+CHLD=0 means "release held or UDUB."
-      this.sendHangUpBackgroundRequest();
+      this.hangUpBackground(options);
       return;
     }
 
+    // Check for races. Since we dispatched the incoming/waiting call
+    // notification the incoming/waiting call may have changed. The main
+    // thread thinks that it is rejecting the call with the given index,
+    // so only reject if that is still incoming/waiting.
     switch (call.state) {
       case CALL_STATE_INCOMING:
-        this.telephonyRequestQueue.push(REQUEST_UDUB, this.sendRilRequestUdub,
-                                        null);
+        this.udub(options);
         break;
       case CALL_STATE_WAITING:
         // Reject the waiting (second) call, and remain the first call.
-        this.sendHangUpBackgroundRequest();
+        this.hangUpBackground(options);
         break;
-    }
-  },
+      default:
+        if (DEBUG) this.context.debug("RejectCall: Invalid call state");
 
-  sendRilRequestUdub: function() {
-    this.context.Buf.simpleRequest(REQUEST_UDUB);
+        options.success = false;
+        options.errorMsg = GECKO_ERROR_GENERIC_FAILURE;
+        this.sendChromeMessage(options);
+    }
   },
 
   holdCall: function(options) {
@@ -1900,9 +1894,9 @@ RilObject.prototype = {
     let Buf = this.context.Buf;
     if (this._isCdma) {
       options.featureStr = "";
-      this.sendCdmaFlashCommand(options);
+      this.cdmaFlash(options);
     } else if (call.state == CALL_STATE_ACTIVE) {
-      this.sendSwitchWaitingRequest();
+      this.switchActiveCall(options);
     }
   },
 
@@ -1918,24 +1912,22 @@ RilObject.prototype = {
     let Buf = this.context.Buf;
     if (this._isCdma) {
       options.featureStr = "";
-      this.sendCdmaFlashCommand(options);
+      this.cdmaFlash(options);
     } else if (call.state == CALL_STATE_HOLDING) {
-      this.sendSwitchWaitingRequest();
+      this.switchActiveCall(options);
     }
   },
 
   conferenceCall: function(options) {
     if (this._isCdma) {
       options.featureStr = "";
-      this.sendCdmaFlashCommand(options);
-    } else {
-      this.telephonyRequestQueue.push(REQUEST_CONFERENCE,
-                                      this.sendRilRequestConference, options);
+      this.cdmaFlash(options);
+      return;
     }
-  },
 
-  sendRilRequestConference: function(options) {
-    this.context.Buf.simpleRequest(REQUEST_CONFERENCE, options);
+    this.telephonyRequestQueue.push(REQUEST_CONFERENCE, () => {
+      this.context.Buf.simpleRequest(REQUEST_CONFERENCE, options);
+    });
   },
 
   separateCall: function(options) {
@@ -1950,20 +1942,17 @@ RilObject.prototype = {
 
     if (this._isCdma) {
       options.featureStr = "";
-      this.sendCdmaFlashCommand(options);
-    } else {
-      this.telephonyRequestQueue.push(REQUEST_SEPARATE_CONNECTION,
-                                     this.sendRilRequestSeparateConnection,
-                                     options);
+      this.cdmaFlash(options);
+      return;
     }
- },
 
-  sendRilRequestSeparateConnection: function(options) {
-    let Buf = this.context.Buf;
-    Buf.newParcel(REQUEST_SEPARATE_CONNECTION, options);
-    Buf.writeInt32(1);
-    Buf.writeInt32(options.callIndex);
-    Buf.sendParcel();
+    this.telephonyRequestQueue.push(REQUEST_SEPARATE_CONNECTION, () => {
+      let Buf = this.context.Buf;
+      Buf.newParcel(REQUEST_SEPARATE_CONNECTION, options);
+      Buf.writeInt32(1);
+      Buf.writeInt32(options.callIndex);
+      Buf.sendParcel();
+    });
   },
 
   hangUpConference: function(options) {
@@ -1976,31 +1965,64 @@ RilObject.prototype = {
         this.sendChromeMessage(options);
         return;
       }
-      call.hangUpLocal = true;
-      this.sendHangUpRequest(1);
+
+      options.callIndex = 1;
+      this.hangUpCall(options);
+      return;
+    }
+
+    if (this.currentConferenceState === CALL_STATE_ACTIVE) {
+      this.hangUpForeground(options);
     } else {
-      if (this.currentConferenceState === CALL_STATE_ACTIVE) {
-        this.sendHangUpForegroundRequest(options);
-      } else {
-        this.sendHangUpBackgroundRequest(options);
-      }
+      this.hangUpBackground(options);
     }
   },
 
-  holdConference: function() {
+  holdConference: function(options) {
     if (this._isCdma) {
+      // We cannot hold a conference call on CDMA.
+      options.success = false;
+      options.errorMsg = GECKO_ERROR_GENERIC_FAILURE;
+      this.sendChromeMessage(options);
       return;
     }
 
-    this.sendSwitchWaitingRequest();
+    this.switchActiveCall(options);
   },
 
-  resumeConference: function() {
+  resumeConference: function(options) {
     if (this._isCdma) {
+      // We cannot resume a conference call on CDMA
+      options.success = false;
+      options.errorMsg = GECKO_ERROR_GENERIC_FAILURE;
+      this.sendChromeMessage(options);
       return;
     }
 
-    this.sendSwitchWaitingRequest();
+    this.switchActiveCall(options);
+  },
+
+  /**
+   * Get current calls.
+   */
+  getCurrentCalls: function() {
+    this.telephonyRequestQueue.push(REQUEST_GET_CURRENT_CALLS, () => {
+      this.context.Buf.simpleRequest(REQUEST_GET_CURRENT_CALLS);
+    });
+  },
+
+  /**
+   * Mute or unmute the radio.
+   *
+   * @param mute
+   *        Boolean to indicate whether to mute or unmute the radio.
+   */
+  setMute: function(options) {
+    let Buf = this.context.Buf;
+    Buf.newParcel(REQUEST_SET_MUTE);
+    Buf.writeInt32(1);
+    Buf.writeInt32(options.muted ? 1 : 0);
+    Buf.sendParcel();
   },
 
   /**
@@ -2102,6 +2124,23 @@ RilObject.prototype = {
     }
   },
 
+  /**
+   * Report SMS storage status to modem.
+   */
+  _updateSmsMemoryStatus: function() {
+    let Buf = this.context.Buf;
+    Buf.newParcel(REQUEST_REPORT_SMS_MEMORY_STATUS);
+    Buf.writeInt32(1);
+    Buf.writeInt32(this.smsStorageAvailable ? 1 : 0);
+    Buf.sendParcel();
+  },
+
+  reportSmsMemoryStatus: function(options) {
+    this.pendingToReportSmsMemoryStatus = true;
+    this.smsStorageAvailable = options.isAvailable;
+    this._updateSmsMemoryStatus();
+  },
+
   setCellBroadcastDisabled: function(options) {
     this.cellBroadcastDisabled = options.disabled;
 
@@ -2165,8 +2204,9 @@ RilObject.prototype = {
     let numConfigs = config ? config.length / 2 : 0;
     Buf.writeInt32(numConfigs);
     for (let i = 0; i < config.length;) {
+      // convert [from, to) to [from, to - 1]
       Buf.writeInt32(config[i++]);
-      Buf.writeInt32(config[i++]);
+      Buf.writeInt32(config[i++] - 1);
       Buf.writeInt32(0x00);
       Buf.writeInt32(0xFF);
       Buf.writeInt32(1);
@@ -2233,7 +2273,7 @@ RilObject.prototype = {
    */
   startTone: function(options) {
     let Buf = this.context.Buf;
-    Buf.newParcel(REQUEST_DTMF_START);
+    Buf.newParcel(REQUEST_DTMF_START, options);
     Buf.writeString(options.dtmfChar);
     Buf.sendParcel();
   },
@@ -2447,6 +2487,33 @@ RilObject.prototype = {
       return true;
     }
 
+    function _isValidChangePasswordRequest() {
+      if (mmi.procedure !== MMI_PROCEDURE_REGISTRATION &&
+          mmi.procedure !== MMI_PROCEDURE_ACTIVATION) {
+        _sendMMIError(MMI_ERROR_KS_INVALID_ACTION);
+        return false;
+      }
+
+      if (mmi.sia !== "" && mmi.sia !== MMI_ZZ_BARRING_SERVICE) {
+        _sendMMIError(MMI_ERROR_KS_NOT_SUPPORTED);
+        return false;
+      }
+
+      let validPassword = si => /^[0-9]{4}$/.test(si);
+      if (!validPassword(mmi.sib) || !validPassword(mmi.sic) ||
+          !validPassword(mmi.pwd)) {
+        _sendMMIError(MMI_ERROR_KS_INVALID_PASSWORD);
+        return false;
+      }
+
+      if (mmi.sic != mmi.pwd) {
+        _sendMMIError(MMI_ERROR_KS_MISMATCH_PASSWORD);
+        return false;
+      }
+
+      return true;
+    }
+
     let _isRadioAvailable = (function() {
       if (this.radioState !== GECKO_RADIOSTATE_ENABLED) {
         _sendMMIError(GECKO_ERROR_RADIO_NOT_AVAILABLE);
@@ -2497,8 +2564,8 @@ RilObject.prototype = {
           return;
         }
 
-        options.pin = mmi.sia;
-        options.newPin = mmi.sib;
+        options.password = mmi.sia;
+        options.newPassword = mmi.sib;
         this.changeICCPIN(options);
         return;
 
@@ -2512,8 +2579,8 @@ RilObject.prototype = {
           return;
         }
 
-        options.pin = mmi.sia;
-        options.newPin = mmi.sib;
+        options.password = mmi.sia;
+        options.newPassword = mmi.sib;
         this.changeICCPIN2(options);
         return;
 
@@ -2527,7 +2594,7 @@ RilObject.prototype = {
           return;
         }
 
-        options.puk = mmi.sia;
+        options.password = mmi.sia;
         options.newPin = mmi.sib;
         this.enterICCPUK(options);
         return;
@@ -2542,7 +2609,7 @@ RilObject.prototype = {
           return;
         }
 
-        options.puk = mmi.sia;
+        options.password = mmi.sia;
         options.newPin = mmi.sib;
         this.enterICCPUK2(options);
         return;
@@ -2592,6 +2659,17 @@ RilObject.prototype = {
         }
         options.isSetCLIR = true;
         this.setCLIR(options);
+        return;
+
+      // Change call barring password
+      case MMI_SC_CHANGE_PASSWORD:
+        if (!_isRadioAvailable() || !_isValidChangePasswordRequest()) {
+          return;
+        }
+
+        options.pin = mmi.sib;
+        options.newPin = mmi.sic;
+        this.changeCallBarringPassword(options);
         return;
 
       // Call barring
@@ -2655,7 +2733,7 @@ RilObject.prototype = {
 
     options.ussd = mmi.fullMMI;
 
-    if (options.startNewSession && this._ussdSession) {
+    if (this._ussdSession) {
       if (DEBUG) this.context.debug("Cancel existing ussd session.");
       this.cachedUSSDRequest = options;
       this.cancelUSSD({});
@@ -2687,10 +2765,6 @@ RilObject.prototype = {
       return;
     }
 
-    this.sendRilRequestSendUSSD(options);
-  },
-
-  sendRilRequestSendUSSD: function(options) {
     let Buf = this.context.Buf;
     Buf.newParcel(REQUEST_SEND_USSD, options);
     Buf.writeString(options.ussd);
@@ -3936,6 +4010,9 @@ RilObject.prototype = {
    * Helpers for processing call state changes.
    */
   _processCalls: function(newCalls, failCause) {
+    if (DEBUG) this.context.debug("_processCalls: " + JSON.stringify(newCalls) +
+                                  " failCause: " + failCause);
+
     // Let's get the failCause first if there are removed calls. Otherwise, we
     // need to trigger another async request when removing call and it cause
     // the order of callDisconnected and conferenceCallStateChanged
@@ -4062,7 +4139,7 @@ RilObject.prototype = {
 
   _addVoiceCall: function(newCall) {
     newCall.number = this._formatInternationalNumber(newCall.number, newCall.toa);
-    newCall.isOutgoing = !(newCall.state == CALL_STATE_INCOMING);
+    newCall.isOutgoing = !newCall.isMT;
     newCall.isConference = false;
 
     this.currentCalls[newCall.callIndex] = newCall;
@@ -4141,6 +4218,10 @@ RilObject.prototype = {
     // can be removed if is the same as the current one.
     for each (let newDataCall in datacalls) {
       if (newDataCall.status != DATACALL_FAIL_NONE) {
+        if (newDataCallOptions) {
+          newDataCallOptions.status = newDataCall.status;
+          newDataCallOptions.suggestedRetryTime = newDataCall.suggestedRetryTime;
+        }
         this._sendDataCallError(newDataCallOptions || newDataCall,
                                 newDataCall.status);
       }
@@ -4783,7 +4864,7 @@ RilObject.prototype = {
     // MSG_TYPE          | 8
     // TOTAL_SEGMENTS    | 8
     // SEGMENT_NUMBER    | 8
-    // DATAGRAM          | (NUM_FIELDS – 3) * 8
+    // DATAGRAM          | (NUM_FIELDS - 3) * 8
     let index = 0;
     if (message.data[index++] !== 0) {
       if (DEBUG) this.context.debug("Ignore a WAP Message which is not WDP.");
@@ -5271,13 +5352,13 @@ RilObject.prototype = {
       return;
     }
 
-    cmdDetails.rilMessageType = "stkcommand";
-    cmdDetails.options =
-      this.context.StkCommandParamsFactory.createParam(cmdDetails, ctlvs);
-
-    if (!cmdDetails.options || !cmdDetails.options.pending) {
+    this.context.StkCommandParamsFactory.createParam(cmdDetails,
+                                                     ctlvs,
+                                                     (aResult) => {
+      cmdDetails.options = aResult;
+      cmdDetails.rilMessageType = "stkcommand";
       this.sendChromeMessage(cmdDetails);
-    }
+    });
   },
 
   /**
@@ -5460,7 +5541,11 @@ RilObject.prototype[REQUEST_GET_IMSI] = function REQUEST_GET_IMSI(length, option
   this.sendChromeMessage(options);
 };
 RilObject.prototype[REQUEST_HANGUP] = function REQUEST_HANGUP(length, options) {
-  options.success = options.rilRequestError === 0;
+  if (options.rilMessageType == null) {
+    return;
+  }
+
+  options.success = (options.rilRequestError === 0);
   options.errorMsg = RIL_ERROR_TO_GECKO_ERROR[options.rilRequestError];
   this.sendChromeMessage(options);
 };
@@ -5471,6 +5556,9 @@ RilObject.prototype[REQUEST_HANGUP_FOREGROUND_RESUME_BACKGROUND] = function REQU
   RilObject.prototype[REQUEST_HANGUP].call(this, length, options);
 };
 RilObject.prototype[REQUEST_SWITCH_WAITING_OR_HOLDING_AND_ACTIVE] = function REQUEST_SWITCH_WAITING_OR_HOLDING_AND_ACTIVE(length, options) {
+  options.success = (options.rilRequestError === 0);
+  options.errorMsg = RIL_ERROR_TO_GECKO_ERROR[options.rilRequestError];
+  this.sendChromeMessage(options);
 };
 RilObject.prototype[REQUEST_CONFERENCE] = function REQUEST_CONFERENCE(length, options) {
   options.success = (options.rilRequestError === 0);
@@ -5484,11 +5572,25 @@ RilObject.prototype[REQUEST_CONFERENCE] = function REQUEST_CONFERENCE(length, op
   this.sendChromeMessage(options);
 };
 RilObject.prototype[REQUEST_UDUB] = function REQUEST_UDUB(length, options) {
+  options.success = (options.rilRequestError === 0);
+  if (!options.success) {
+    options.errorMsg = RIL_ERROR_TO_GECKO_ERROR[options.rilRequestError];
+  }
+  this.sendChromeMessage(options);
 };
 RilObject.prototype[REQUEST_LAST_CALL_FAIL_CAUSE] = function REQUEST_LAST_CALL_FAIL_CAUSE(length, options) {
   let Buf = this.context.Buf;
   let num = length ? Buf.readInt32() : 0;
-  let failCause = num ? RIL_CALL_FAILCAUSE_TO_GECKO_CALL_ERROR[Buf.readInt32()] : null;
+  let failCause = null;
+
+  if (num) {
+    let causeNum = Buf.readInt32();
+    // To make _processCalls work as design, failCause couldn't be "undefined."
+    // See Bug 1112550 for details.
+    failCause = RIL_CALL_FAILCAUSE_TO_GECKO_CALL_ERROR[causeNum] || null;
+  }
+  if (DEBUG) this.context.debug("Last call fail cause: " + failCause);
+
   if (options.callback) {
     options.callback(failCause);
   }
@@ -5929,6 +6031,11 @@ RilObject.prototype[REQUEST_GET_IMEISV] = function REQUEST_GET_IMEISV(length, op
   this.IMEISV = this.context.Buf.readString();
 };
 RilObject.prototype[REQUEST_ANSWER] = function REQUEST_ANSWER(length, options) {
+  options.success = (options.rilRequestError === 0);
+  if (!options.success) {
+    options.errorMsg = RIL_ERROR_TO_GECKO_ERROR[options.rilRequestError];
+  }
+  this.sendChromeMessage(options);
 };
 RilObject.prototype[REQUEST_DEACTIVATE_DATA_CALL] = function REQUEST_DEACTIVATE_DATA_CALL(length, options) {
   if (options.rilRequestError) {
@@ -6009,6 +6116,13 @@ RilObject.prototype[REQUEST_CHANGE_BARRING_PASSWORD] =
   if (options.rilRequestError) {
     options.errorMsg = RIL_ERROR_TO_GECKO_ERROR[options.rilRequestError];
   }
+
+  if (options.rilMessageType != "sendMMI") {
+    this.sendChromeMessage(options);
+    return;
+  }
+
+  options.statusMessage = MMI_SM_KS_PASSWORD_CHANGED;
   this.sendChromeMessage(options);
 };
 RilObject.prototype[REQUEST_SIM_OPEN_CHANNEL] = function REQUEST_SIM_OPEN_CHANNEL(length, options) {
@@ -6102,7 +6216,13 @@ RilObject.prototype[REQUEST_QUERY_AVAILABLE_NETWORKS] = function REQUEST_QUERY_A
   }
   this.sendChromeMessage(options);
 };
-RilObject.prototype[REQUEST_DTMF_START] = null;
+RilObject.prototype[REQUEST_DTMF_START] = function REQUEST_DTMF_START(length, options) {
+  options.success = (options.rilRequestError === 0);
+  if (!options.success) {
+    options.errorMsg = RIL_ERROR_TO_GECKO_ERROR[options.rilRequestError];
+  }
+  this.sendChromeMessage(options);
+};
 RilObject.prototype[REQUEST_DTMF_STOP] = null;
 RilObject.prototype[REQUEST_BASEBAND_VERSION] = function REQUEST_BASEBAND_VERSION(length, options) {
   if (options.rilRequestError) {
@@ -6540,7 +6660,9 @@ RilObject.prototype[REQUEST_GET_SMSC_ADDRESS] = function REQUEST_GET_SMSC_ADDRES
   this.sendChromeMessage(options);
 };
 RilObject.prototype[REQUEST_SET_SMSC_ADDRESS] = null;
-RilObject.prototype[REQUEST_REPORT_SMS_MEMORY_STATUS] = null;
+RilObject.prototype[REQUEST_REPORT_SMS_MEMORY_STATUS] = function REQUEST_REPORT_SMS_MEMORY_STATUS(length, options) {
+  this.pendingToReportSmsMemoryStatus = options.rilRequestError != ERROR_SUCCESS;
+};
 RilObject.prototype[REQUEST_REPORT_STK_SERVICE_IS_RUNNING] = null;
 RilObject.prototype[REQUEST_CDMA_GET_SUBSCRIPTION_SOURCE] = null;
 RilObject.prototype[REQUEST_ISIM_AUTHENTICATION] = null;
@@ -6687,6 +6809,10 @@ RilObject.prototype[UNSOLICITED_RESPONSE_RADIO_STATE_CHANGED] = function UNSOLIC
          RILQUIRKS_SUBSCRIPTION_CONTROL) &&
         this._attachDataRegistration) {
       this.setDataRegistration({attach: true});
+    }
+
+    if (this.pendingToReportSmsMemoryStatus) {
+      this._updateSmsMemoryStatus();
     }
   }
 
@@ -6971,7 +7097,14 @@ RilObject.prototype[UNSOLICITED_RIL_CONNECTED] = function UNSOLICITED_RIL_CONNEC
   // Reset radio in the case that b2g restart (or crash).
   this.setRadioEnabled({enabled: false});
 };
-RilObject.prototype[UNSOLICITED_VOICE_RADIO_TECH_CHANGED] = null;
+RilObject.prototype[UNSOLICITED_VOICE_RADIO_TECH_CHANGED] = function UNSOLICITED_VOICE_RADIO_TECH_CHANGED(length) {
+  // This unsolicited response will be sent when the technology of a multi-tech
+  // modem is changed, ex. switch between gsm and cdma.
+  // TODO: We may need to do more on updating data when switching between gsm
+  //       and cdma mode, e.g. IMEI, ESN, iccInfo, iccType ... etc.
+  //       See Bug 866038.
+  this._processRadioTech(this.context.Buf.readInt32List()[0]);
+};
 
 /**
  * This object exposes the functionality to parse and serialize PDU strings
@@ -7084,21 +7217,21 @@ GsmPDUHelperObject.prototype = {
   },
 
   /**
-   * Convert a semi-octet (number) to a GSM BCD char, or return empty string
-   * if invalid semiOctet and supressException is set to true.
+   * Convert a semi-octet (number) to a GSM BCD char, or return empty
+   * string if invalid semiOctet and suppressException is set to true.
    *
    * @param semiOctet
    *        Nibble to be converted to.
-   * @param [optional] supressException
-   *        Supress exception if invalid semiOctet and supressException is set
+   * @param suppressException [optional]
+   *        Suppress exception if invalid semiOctet and suppressException is set
    *        to true.
    *
    * @return GSM BCD char, or empty string.
    */
-  bcdChars: "0123456789*#,;",
-  semiOctetToBcdChar: function(semiOctet, supressException) {
-    if (semiOctet >= 14) {
-      if (supressException) {
+  bcdChars: "0123456789",
+  semiOctetToBcdChar: function(semiOctet, suppressException) {
+    if (semiOctet >= this.bcdChars.length) {
+      if (suppressException) {
         return "";
       } else {
         throw new RangeError();
@@ -7106,6 +7239,31 @@ GsmPDUHelperObject.prototype = {
     }
 
     return this.bcdChars.charAt(semiOctet);
+  },
+
+  /**
+   * Convert a semi-octet (number) to a GSM extended BCD char, or return empty
+   * string if invalid semiOctet and suppressException is set to true.
+   *
+   * @param semiOctet
+   *        Nibble to be converted to.
+   * @param suppressException [optional]
+   *        Suppress exception if invalid semiOctet and suppressException is set
+   *        to true.
+   *
+   * @return GSM extended BCD char, or empty string.
+   */
+  extendedBcdChars: "0123456789*#,;",
+  semiOctetToExtendedBcdChar: function(semiOctet, suppressException) {
+    if (semiOctet >= this.extendedBcdChars.length) {
+      if (suppressException) {
+        return "";
+      } else {
+        throw new RangeError();
+      }
+    }
+
+    return this.extendedBcdChars.charAt(semiOctet);
   },
 
   /**
@@ -7138,17 +7296,17 @@ GsmPDUHelperObject.prototype = {
   },
 
   /**
-   * Read a *swapped nibble* binary coded string (BCD)
+   * Read a *swapped nibble* binary coded decimal (BCD) string
    *
    * @param pairs
    *        Number of nibble *pairs* to read.
-   * @param [optional] supressException
-   *        Supress exception if invalid semiOctet and supressException is set
+   * @param suppressException [optional]
+   *        Suppress exception if invalid semiOctet and suppressException is set
    *        to true.
    *
    * @return The BCD string.
    */
-  readSwappedNibbleBcdString: function(pairs, supressException) {
+  readSwappedNibbleBcdString: function(pairs, suppressException) {
     let str = "";
     for (let i = 0; i < pairs; i++) {
       let nibbleH = this.readHexNibble();
@@ -7157,9 +7315,38 @@ GsmPDUHelperObject.prototype = {
         break;
       }
 
-      str += this.semiOctetToBcdChar(nibbleL, supressException);
+      str += this.semiOctetToBcdChar(nibbleL, suppressException);
       if (nibbleH != 0x0F) {
-        str += this.semiOctetToBcdChar(nibbleH, supressException);
+        str += this.semiOctetToBcdChar(nibbleH, suppressException);
+      }
+    }
+
+    return str;
+  },
+
+  /**
+   * Read a *swapped nibble* extended binary coded decimal (BCD) string
+   *
+   * @param pairs
+   *        Number of nibble *pairs* to read.
+   * @param suppressException [optional]
+   *        Suppress exception if invalid semiOctet and suppressException is set
+   *        to true.
+   *
+   * @return The BCD string.
+   */
+  readSwappedNibbleExtendedBcdString: function(pairs, suppressException) {
+    let str = "";
+    for (let i = 0; i < pairs; i++) {
+      let nibbleH = this.readHexNibble();
+      let nibbleL = this.readHexNibble();
+      if (nibbleL == 0x0F) {
+        break;
+      }
+
+      str += this.semiOctetToExtendedBcdChar(nibbleL, suppressException);
+      if (nibbleH != 0x0F) {
+        str += this.semiOctetToExtendedBcdChar(nibbleH, suppressException);
       }
     }
 
@@ -7631,7 +7818,7 @@ GsmPDUHelperObject.prototype = {
           PDU_NL_IDENTIFIER_DEFAULT , PDU_NL_IDENTIFIER_DEFAULT );
       return addr;
     }
-    addr = this.readSwappedNibbleBcdString(len / 2);
+    addr = this.readSwappedNibbleExtendedBcdString(len / 2);
     if (addr.length <= 0) {
       if (DEBUG) this.context.debug("PDU error: no number provided");
       return null;
@@ -7981,7 +8168,7 @@ GsmPDUHelperObject.prototype = {
     if (smscLength > 0) {
       let smscTypeOfAddress = this.readHexOctet();
       // Subtract the type-of-address octet we just read from the length.
-      msg.SMSC = this.readSwappedNibbleBcdString(smscLength - 1);
+      msg.SMSC = this.readSwappedNibbleExtendedBcdString(smscLength - 1);
       if ((smscTypeOfAddress >> 4) == (PDU_TOA_INTERNATIONAL >> 4)) {
         msg.SMSC = '+' + msg.SMSC;
       }
@@ -10450,7 +10637,7 @@ ICCPDUHelperObject.prototype = {
     // TOA = TON + NPI
     let toa = GsmPDUHelper.readHexOctet();
 
-    let number = GsmPDUHelper.readSwappedNibbleBcdString(len - 1);
+    let number = GsmPDUHelper.readSwappedNibbleExtendedBcdString(len - 1);
     if (number.length <= 0) {
       if (DEBUG) this.context.debug("No number provided");
       return "";
@@ -10537,42 +10724,48 @@ function StkCommandParamsFactoryObject(aContext) {
 StkCommandParamsFactoryObject.prototype = {
   context: null,
 
-  createParam: function(cmdDetails, ctlvs) {
+  createParam: function(cmdDetails, ctlvs, onComplete) {
     let method = this[cmdDetails.typeOfCommand];
     if (typeof method != "function") {
       if (DEBUG) {
         this.context.debug("Unknown proactive command " +
                            cmdDetails.typeOfCommand.toString(16));
       }
-      return null;
+      return;
     }
-    return method.call(this, cmdDetails, ctlvs);
+    method.call(this, cmdDetails, ctlvs, onComplete);
   },
 
-  loadIconIfNecessary: function(cmdDetails, ctlvs, ret) {
-    let ctlv =
-      this.context.StkProactiveCmdHelper
-                  .searchForTag(COMPREHENSIONTLV_TAG_ICON_ID, ctlvs);
-    if (!ctlv || !this.context.ICCUtilsHelper.isICCServiceAvailable("IMG")) {
-      return ret;
+  loadIcons: function(iconIdCtlvs, callback) {
+    if (!iconIdCtlvs ||
+        !this.context.ICCUtilsHelper.isICCServiceAvailable("IMG")) {
+      callback(null);
+      return;
     }
 
-    let iconId = ctlv.value;
-    ret.iconSelfExplanatory = iconId.qualifier == 0 ? true : false;
-
     let onerror = (function() {
-      this.context.RIL.sendChromeMessage(cmdDetails);
+      callback(null);
     }).bind(this);
 
-    let onsuccess = (function(result) {
-      ret.icons = result[0];
-      this.context.RIL.sendChromeMessage(cmdDetails);
+    let onsuccess = (function(aIcons) {
+      callback(aIcons);
     }).bind(this);
 
-    ret.pending = true;
-    this.context.IconLoader.loadIcons([iconId.identifier], onsuccess, onerror);
+    this.context.IconLoader.loadIcons(iconIdCtlvs.map(aCtlv => aCtlv.value.identifier),
+                                      onsuccess,
+                                      onerror);
+  },
 
-    return ret;
+  appendIconIfNecessary: function(iconIdCtlvs, result, onComplete) {
+    this.loadIcons(iconIdCtlvs, (aIcons) => {
+      if (aIcons) {
+        result.icons = aIcons[0];
+        result.iconSelfExplanatory =
+          iconIdCtlvs[0].value.qualifier == 0 ? true : false;
+      }
+
+      onComplete(result);
+    });
   },
 
   /**
@@ -10583,7 +10776,7 @@ StkCommandParamsFactoryObject.prototype = {
    * @param ctlvs
    *        The all TLVs in this proactive command.
    */
-  processRefresh: function(cmdDetails, ctlvs) {
+  processRefresh: function(cmdDetails, ctlvs, onComplete) {
     let refreshType = cmdDetails.commandQualifier;
     switch (refreshType) {
       case STK_REFRESH_FILE_CHANGE:
@@ -10599,7 +10792,8 @@ StkCommandParamsFactoryObject.prototype = {
         }
         break;
     }
-    return null;
+
+    onComplete(null);
   },
 
   /**
@@ -10610,7 +10804,7 @@ StkCommandParamsFactoryObject.prototype = {
    * @param ctlvs
    *        The all TLVs in this proactive command.
    */
-  processPollInterval: function(cmdDetails, ctlvs) {
+  processPollInterval: function(cmdDetails, ctlvs, onComplete) {
     let ctlv = this.context.StkProactiveCmdHelper.searchForTag(
         COMPREHENSIONTLV_TAG_DURATION, ctlvs);
     if (!ctlv) {
@@ -10620,7 +10814,7 @@ StkCommandParamsFactoryObject.prototype = {
       throw new Error("Stk Poll Interval: Required value missing : Duration");
     }
 
-    return ctlv.value;
+    onComplete(ctlv.value);
   },
 
   /**
@@ -10631,8 +10825,8 @@ StkCommandParamsFactoryObject.prototype = {
    * @param ctlvs
    *        The all TLVs in this proactive command.
    */
-  processPollOff: function(cmdDetails, ctlvs) {
-    return null;
+  processPollOff: function(cmdDetails, ctlvs, onComplete) {
+    onComplete(null);
   },
 
   /**
@@ -10643,7 +10837,7 @@ StkCommandParamsFactoryObject.prototype = {
    * @param ctlvs
    *        The all TLVs in this proactive command.
    */
-  processSetUpEventList: function(cmdDetails, ctlvs) {
+  processSetUpEventList: function(cmdDetails, ctlvs, onComplete) {
     let ctlv = this.context.StkProactiveCmdHelper.searchForTag(
         COMPREHENSIONTLV_TAG_EVENT_LIST, ctlvs);
     if (!ctlv) {
@@ -10653,7 +10847,7 @@ StkCommandParamsFactoryObject.prototype = {
       throw new Error("Stk Event List: Required value missing : Event List");
     }
 
-    return ctlv.value || {eventList: null};
+    onComplete(ctlv.value || { eventList: null });
   },
 
   /**
@@ -10664,31 +10858,34 @@ StkCommandParamsFactoryObject.prototype = {
    * @param ctlvs
    *        The all TLVs in this proactive command.
    */
-  processSelectItem: function(cmdDetails, ctlvs) {
+  processSelectItem: function(cmdDetails, ctlvs, onComplete) {
     let StkProactiveCmdHelper = this.context.StkProactiveCmdHelper;
     let menu = {};
 
-    let ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_ALPHA_ID, ctlvs);
+    let selectedCtlvs = StkProactiveCmdHelper.searchForSelectedTags(ctlvs, [
+      COMPREHENSIONTLV_TAG_ALPHA_ID,
+      COMPREHENSIONTLV_TAG_ITEM,
+      COMPREHENSIONTLV_TAG_ITEM_ID,
+      COMPREHENSIONTLV_TAG_NEXT_ACTION_IND,
+      COMPREHENSIONTLV_TAG_ICON_ID,
+      COMPREHENSIONTLV_TAG_ICON_ID_LIST
+    ]);
+
+    let ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_ALPHA_ID);
     if (ctlv) {
       menu.title = ctlv.value.identifier;
     }
 
-    menu.items = [];
-    for (let i = 0; i < ctlvs.length; i++) {
-      let ctlv = ctlvs[i];
-      if (ctlv.tag == COMPREHENSIONTLV_TAG_ITEM) {
-        menu.items.push(ctlv.value);
-      }
-    }
-
-    if (menu.items.length === 0) {
+    let menuCtlvs = selectedCtlvs[COMPREHENSIONTLV_TAG_ITEM];
+    if (!menuCtlvs) {
       this.context.RIL.sendStkTerminalResponse({
         command: cmdDetails,
         resultCode: STK_RESULT_REQUIRED_VALUES_MISSING});
       throw new Error("Stk Menu: Required value missing : items");
     }
+    menu.items = menuCtlvs.map(aCtlv => aCtlv.value);
 
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_ITEM_ID, ctlvs);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_ITEM_ID);
     if (ctlv) {
       menu.defaultItem = ctlv.value.identifier - 1;
     }
@@ -10701,61 +10898,61 @@ StkCommandParamsFactoryObject.prototype = {
       menu.isHelpAvailable = true;
     }
 
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_NEXT_ACTION_IND, ctlvs);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_NEXT_ACTION_IND);
     if (ctlv) {
       menu.nextActionList = ctlv.value;
     }
 
-    let iconId;
-    let ids = [];
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_ICON_ID, ctlvs);
+    let iconIdCtlvs = null;
+    let menuIconCtlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_ICON_ID);
+    if (menuIconCtlv) {
+      iconIdCtlvs = [menuIconCtlv];
+    }
+
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_ICON_ID_LIST);
     if (ctlv) {
-      iconId = ctlv.value;
-      menu.iconSelfExplanatory = iconId.qualifier == 0 ? true : false;
-      ids[0] = iconId.identifier;
+      if (!iconIdCtlvs) {
+        iconIdCtlvs = [];
+      };
+      let iconIdList = ctlv.value;
+      iconIdCtlvs = iconIdCtlvs.concat(iconIdList.identifiers.map((aId) => {
+        return {
+          value: { qualifier: iconIdList.qualifier, identifier: aId }
+        };
+      }));
     }
 
-    let iconIdList;
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_ICON_ID_LIST, ctlvs);
-    if (ctlv) {
-      iconIdList = ctlv.value;
-      ids = ids.concat(iconIdList.identifiers);
-    }
+    this.loadIcons(iconIdCtlvs, (aIcons) => {
+      if (aIcons) {
+        if (menuIconCtlv) {
+          menu.iconSelfExplanatory =
+            (iconIdCtlvs.shift().value.qualifier == 0) ? true: false;
+          menu.icons = aIcons.shift();
+        }
 
-    if (!ids.length ||
-        !this.context.ICCUtilsHelper.isICCServiceAvailable("IMG")) {
-      return menu;
-    }
-
-    let onerror = (function() {
-      this.context.RIL.sendChromeMessage(cmdDetails);
-    }).bind(this);
-
-    let onsuccess = (function(result) {
-      if (iconId) {
-        menu.icons = result.shift();
+        for (let i = 0; i < aIcons.length; i++) {
+          menu.items[i].icons = aIcons[i];
+          menu.items[i].iconSelfExplanatory =
+            (iconIdCtlvs[i].value.qualifier == 0) ? true: false;
+        }
       }
 
-      let iconSelfExplanatory = iconIdList.qualifier == 0 ? true : false;
-      for (let i = 0; i < result.length; i++) {
-        menu.items[i].icons = result[i];
-        menu.items[i].iconSelfExplanatory = iconSelfExplanatory;
-      }
-
-      this.context.RIL.sendChromeMessage(cmdDetails);
-    }).bind(this);
-
-    menu.pending = true;
-    this.context.IconLoader.loadIcons(ids, onsuccess, onerror);
-
-    return menu;
+      onComplete(menu);
+    });
   },
 
-  processDisplayText: function(cmdDetails, ctlvs) {
+  processDisplayText: function(cmdDetails, ctlvs, onComplete) {
     let StkProactiveCmdHelper = this.context.StkProactiveCmdHelper;
     let textMsg = {};
 
-    let ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_TEXT_STRING, ctlvs);
+    let selectedCtlvs = StkProactiveCmdHelper.searchForSelectedTags(ctlvs, [
+      COMPREHENSIONTLV_TAG_TEXT_STRING,
+      COMPREHENSIONTLV_TAG_IMMEDIATE_RESPONSE,
+      COMPREHENSIONTLV_TAG_DURATION,
+      COMPREHENSIONTLV_TAG_ICON_ID
+    ]);
+
+    let ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_TEXT_STRING);
     if (!ctlv) {
       this.context.RIL.sendStkTerminalResponse({
         command: cmdDetails,
@@ -10764,12 +10961,12 @@ StkCommandParamsFactoryObject.prototype = {
     }
     textMsg.text = ctlv.value.textString;
 
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_IMMEDIATE_RESPONSE, ctlvs);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_IMMEDIATE_RESPONSE);
     if (ctlv) {
       textMsg.responseNeeded = true;
     }
 
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_DURATION, ctlvs);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_DURATION);
     if (ctlv) {
       textMsg.duration = ctlv.value;
     }
@@ -10784,15 +10981,21 @@ StkCommandParamsFactoryObject.prototype = {
       textMsg.userClear = true;
     }
 
-    return this.loadIconIfNecessary(cmdDetails, ctlvs, textMsg);
+    this.appendIconIfNecessary(selectedCtlvs[COMPREHENSIONTLV_TAG_ICON_ID] || null,
+                               textMsg,
+                               onComplete);
   },
 
-  processSetUpIdleModeText: function(cmdDetails, ctlvs) {
+  processSetUpIdleModeText: function(cmdDetails, ctlvs, onComplete) {
     let StkProactiveCmdHelper = this.context.StkProactiveCmdHelper;
     let textMsg = {};
 
-    let ctlv = StkProactiveCmdHelper.searchForTag(
-      COMPREHENSIONTLV_TAG_TEXT_STRING, ctlvs);
+    let selectedCtlvs = StkProactiveCmdHelper.searchForSelectedTags(ctlvs, [
+      COMPREHENSIONTLV_TAG_TEXT_STRING,
+      COMPREHENSIONTLV_TAG_ICON_ID
+    ]);
+
+    let ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_TEXT_STRING);
     if (!ctlv) {
       this.context.RIL.sendStkTerminalResponse({
         command: cmdDetails,
@@ -10801,14 +11004,22 @@ StkCommandParamsFactoryObject.prototype = {
     }
     textMsg.text = ctlv.value.textString;
 
-    return this.loadIconIfNecessary(cmdDetails, ctlvs, textMsg);
+    this.appendIconIfNecessary(selectedCtlvs[COMPREHENSIONTLV_TAG_ICON_ID] || null,
+                               textMsg,
+                               onComplete);
   },
 
-  processGetInkey: function(cmdDetails, ctlvs) {
+  processGetInkey: function(cmdDetails, ctlvs, onComplete) {
     let StkProactiveCmdHelper = this.context.StkProactiveCmdHelper;
     let input = {};
 
-    let ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_TEXT_STRING, ctlvs);
+    let selectedCtlvs = StkProactiveCmdHelper.searchForSelectedTags(ctlvs, [
+      COMPREHENSIONTLV_TAG_TEXT_STRING,
+      COMPREHENSIONTLV_TAG_DURATION,
+      COMPREHENSIONTLV_TAG_ICON_ID
+    ]);
+
+    let ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_TEXT_STRING);
     if (!ctlv) {
       this.context.RIL.sendStkTerminalResponse({
         command: cmdDetails,
@@ -10818,8 +11029,7 @@ StkCommandParamsFactoryObject.prototype = {
     input.text = ctlv.value.textString;
 
     // duration
-    ctlv = StkProactiveCmdHelper.searchForTag(
-        COMPREHENSIONTLV_TAG_DURATION, ctlvs);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_DURATION);
     if (ctlv) {
       input.duration = ctlv.value;
     }
@@ -10848,14 +11058,23 @@ StkCommandParamsFactoryObject.prototype = {
       input.isHelpAvailable = true;
     }
 
-    return this.loadIconIfNecessary(cmdDetails, ctlvs, input);
+    this.appendIconIfNecessary(selectedCtlvs[COMPREHENSIONTLV_TAG_ICON_ID] || null,
+                               input,
+                               onComplete);
   },
 
-  processGetInput: function(cmdDetails, ctlvs) {
+  processGetInput: function(cmdDetails, ctlvs, onComplete) {
     let StkProactiveCmdHelper = this.context.StkProactiveCmdHelper;
     let input = {};
 
-    let ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_TEXT_STRING, ctlvs);
+    let selectedCtlvs = StkProactiveCmdHelper.searchForSelectedTags(ctlvs, [
+      COMPREHENSIONTLV_TAG_TEXT_STRING,
+      COMPREHENSIONTLV_TAG_RESPONSE_LENGTH,
+      COMPREHENSIONTLV_TAG_DEFAULT_TEXT,
+      COMPREHENSIONTLV_TAG_ICON_ID
+    ]);
+
+    let ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_TEXT_STRING);
     if (!ctlv) {
       this.context.RIL.sendStkTerminalResponse({
         command: cmdDetails,
@@ -10864,13 +11083,13 @@ StkCommandParamsFactoryObject.prototype = {
     }
     input.text = ctlv.value.textString;
 
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_RESPONSE_LENGTH, ctlvs);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_RESPONSE_LENGTH);
     if (ctlv) {
       input.minLength = ctlv.value.minLength;
       input.maxLength = ctlv.value.maxLength;
     }
 
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_DEFAULT_TEXT, ctlvs);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_DEFAULT_TEXT);
     if (ctlv) {
       input.defaultText = ctlv.value.textString;
     }
@@ -10900,60 +11119,102 @@ StkCommandParamsFactoryObject.prototype = {
       input.isHelpAvailable = true;
     }
 
-    return this.loadIconIfNecessary(cmdDetails, ctlvs, input);
+    this.appendIconIfNecessary(selectedCtlvs[COMPREHENSIONTLV_TAG_ICON_ID] || null,
+                               input,
+                               onComplete);
   },
 
-  processEventNotify: function(cmdDetails, ctlvs) {
+  processEventNotify: function(cmdDetails, ctlvs, onComplete) {
     let StkProactiveCmdHelper = this.context.StkProactiveCmdHelper;
     let textMsg = {};
 
-    let ctlv = StkProactiveCmdHelper.searchForTag(
-      COMPREHENSIONTLV_TAG_ALPHA_ID, ctlvs);
+    let selectedCtlvs = StkProactiveCmdHelper.searchForSelectedTags(ctlvs, [
+      COMPREHENSIONTLV_TAG_ALPHA_ID,
+      COMPREHENSIONTLV_TAG_ICON_ID
+    ]);
+
+    let ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_ALPHA_ID);
     if (ctlv) {
       textMsg.text = ctlv.value.identifier;
     }
 
-    return this.loadIconIfNecessary(cmdDetails, ctlvs, textMsg);
+    this.appendIconIfNecessary(selectedCtlvs[COMPREHENSIONTLV_TAG_ICON_ID] || null,
+                               textMsg,
+                               onComplete);
   },
 
-  processSetupCall: function(cmdDetails, ctlvs) {
+  processSetupCall: function(cmdDetails, ctlvs, onComplete) {
     let StkProactiveCmdHelper = this.context.StkProactiveCmdHelper;
     let call = {};
-    let iter = Iterator(ctlvs);
+    let confirmMessage = {};
+    let callMessage = {};
 
-    let ctlv = StkProactiveCmdHelper.searchForNextTag(COMPREHENSIONTLV_TAG_ALPHA_ID, iter);
-    if (ctlv) {
-      call.confirmMessage = ctlv.value.identifier;
-    }
+    let selectedCtlvs = StkProactiveCmdHelper.searchForSelectedTags(ctlvs, [
+      COMPREHENSIONTLV_TAG_ADDRESS,
+      COMPREHENSIONTLV_TAG_ALPHA_ID,
+      COMPREHENSIONTLV_TAG_ICON_ID,
+      COMPREHENSIONTLV_TAG_DURATION
+    ]);
 
-    ctlv = StkProactiveCmdHelper.searchForNextTag(COMPREHENSIONTLV_TAG_ALPHA_ID, iter);
-    if (ctlv) {
-      call.callMessage = ctlv.value.identifier;
-    }
-
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_ADDRESS, ctlvs);
+    let ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_ADDRESS);
     if (!ctlv) {
       this.context.RIL.sendStkTerminalResponse({
         command: cmdDetails,
         resultCode: STK_RESULT_REQUIRED_VALUES_MISSING});
-      throw new Error("Stk Set Up Call: Required value missing : Adress");
+      throw new Error("Stk Set Up Call: Required value missing : Address");
     }
     call.address = ctlv.value.number;
 
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_ALPHA_ID);
+    if (ctlv) {
+      confirmMessage.text = ctlv.value.identifier;
+      call.confirmMessage = confirmMessage;
+    }
+
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_ALPHA_ID);
+    if (ctlv) {
+      callMessage.text = ctlv.value.identifier;
+      call.callMessage = callMessage;
+    }
+
     // see 3GPP TS 31.111 section 6.4.13
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_DURATION, ctlvs);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_DURATION);
     if (ctlv) {
       call.duration = ctlv.value;
     }
 
-    return this.loadIconIfNecessary(cmdDetails, ctlvs, call);
+    let iconIdCtlvs = selectedCtlvs[COMPREHENSIONTLV_TAG_ICON_ID] || null;
+    this.loadIcons(iconIdCtlvs, (aIcons) => {
+      if (aIcons) {
+        confirmMessage.icons = aIcons[0];
+        confirmMessage.iconSelfExplanatory =
+          (iconIdCtlvs[0].value.qualifier == 0) ? true: false;
+        call.confirmMessage = confirmMessage;
+
+        if (aIcons.length > 1) {
+          callMessage.icons = aIcons[1];
+          callMessage.iconSelfExplanatory =
+            (iconIdCtlvs[1].value.qualifier == 0) ? true: false;
+          call.callMessage = callMessage;
+        }
+      }
+
+      onComplete(call);
+    });
   },
 
-  processLaunchBrowser: function(cmdDetails, ctlvs) {
+  processLaunchBrowser: function(cmdDetails, ctlvs, onComplete) {
     let StkProactiveCmdHelper = this.context.StkProactiveCmdHelper;
     let browser = {};
+    let confirmMessage = {};
 
-    let ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_URL, ctlvs);
+    let selectedCtlvs = StkProactiveCmdHelper.searchForSelectedTags(ctlvs, [
+      COMPREHENSIONTLV_TAG_URL,
+      COMPREHENSIONTLV_TAG_ALPHA_ID,
+      COMPREHENSIONTLV_TAG_ICON_ID
+    ]);
+
+    let ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_URL);
     if (!ctlv) {
       this.context.RIL.sendStkTerminalResponse({
         command: cmdDetails,
@@ -10962,33 +11223,49 @@ StkCommandParamsFactoryObject.prototype = {
     }
     browser.url = ctlv.value.url;
 
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_ALPHA_ID, ctlvs);
-    if (ctlv) {
-      browser.confirmMessage = ctlv.value.identifier;
-    }
-
     browser.mode = cmdDetails.commandQualifier & 0x03;
 
-    return this.loadIconIfNecessary(cmdDetails, ctlvs, browser);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_ALPHA_ID);
+    if (ctlv) {
+      confirmMessage.text = ctlv.value.identifier;
+      browser.confirmMessage = confirmMessage;
+    }
+
+    let iconIdCtlvs = selectedCtlvs[COMPREHENSIONTLV_TAG_ICON_ID] || null;
+    this.loadIcons(iconIdCtlvs, (aIcons) => {
+       if (aIcons) {
+         confirmMessage.icons = aIcons[0];
+         confirmMessage.iconSelfExplanatory =
+           (iconIdCtlvs[0].value.qualifier == 0) ? true: false;
+         browser.confirmMessage = confirmMessage;
+       }
+
+       onComplete(browser);
+    });
   },
 
-  processPlayTone: function(cmdDetails, ctlvs) {
+  processPlayTone: function(cmdDetails, ctlvs, onComplete) {
     let StkProactiveCmdHelper = this.context.StkProactiveCmdHelper;
     let playTone = {};
 
-    let ctlv = StkProactiveCmdHelper.searchForTag(
-      COMPREHENSIONTLV_TAG_ALPHA_ID, ctlvs);
+    let selectedCtlvs = StkProactiveCmdHelper.searchForSelectedTags(ctlvs, [
+      COMPREHENSIONTLV_TAG_ALPHA_ID,
+      COMPREHENSIONTLV_TAG_TONE,
+      COMPREHENSIONTLV_TAG_DURATION,
+      COMPREHENSIONTLV_TAG_ICON_ID
+    ]);
+
+    let ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_ALPHA_ID);
     if (ctlv) {
       playTone.text = ctlv.value.identifier;
     }
 
-    ctlv = StkProactiveCmdHelper.searchForTag(COMPREHENSIONTLV_TAG_TONE, ctlvs);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_TONE);
     if (ctlv) {
       playTone.tone = ctlv.value.tone;
     }
 
-    ctlv = StkProactiveCmdHelper.searchForTag(
-        COMPREHENSIONTLV_TAG_DURATION, ctlvs);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_DURATION);
     if (ctlv) {
       playTone.duration = ctlv.value;
     }
@@ -10996,7 +11273,9 @@ StkCommandParamsFactoryObject.prototype = {
     // vibrate is only defined in TS 102.223
     playTone.isVibrate = (cmdDetails.commandQualifier & 0x01) !== 0x00;
 
-    return this.loadIconIfNecessary(cmdDetails, ctlvs, playTone);
+    this.appendIconIfNecessary(selectedCtlvs[COMPREHENSIONTLV_TAG_ICON_ID] || null,
+                               playTone,
+                               onComplete);
   },
 
   /**
@@ -11007,32 +11286,36 @@ StkCommandParamsFactoryObject.prototype = {
    * @param ctlvs
    *        The all TLVs in this proactive command.
    */
-  processProvideLocalInfo: function(cmdDetails, ctlvs) {
+  processProvideLocalInfo: function(cmdDetails, ctlvs, onComplete) {
     let provideLocalInfo = {
       localInfoType: cmdDetails.commandQualifier
     };
-    return provideLocalInfo;
+
+    onComplete(provideLocalInfo);
   },
 
-  processTimerManagement: function(cmdDetails, ctlvs) {
+  processTimerManagement: function(cmdDetails, ctlvs, onComplete) {
     let StkProactiveCmdHelper = this.context.StkProactiveCmdHelper;
     let timer = {
       timerAction: cmdDetails.commandQualifier
     };
 
-    let ctlv = StkProactiveCmdHelper.searchForTag(
-        COMPREHENSIONTLV_TAG_TIMER_IDENTIFIER, ctlvs);
+    let selectedCtlvs = StkProactiveCmdHelper.searchForSelectedTags(ctlvs, [
+      COMPREHENSIONTLV_TAG_TIMER_IDENTIFIER,
+      COMPREHENSIONTLV_TAG_TIMER_VALUE
+    ]);
+
+    let ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_TIMER_IDENTIFIER);
     if (ctlv) {
       timer.timerId = ctlv.value.timerId;
     }
 
-    ctlv = StkProactiveCmdHelper.searchForTag(
-        COMPREHENSIONTLV_TAG_TIMER_VALUE, ctlvs);
+    ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_TIMER_VALUE);
     if (ctlv) {
       timer.timerValue = ctlv.value.timerValue;
     }
 
-    return timer;
+    onComplete(timer);
   },
 
    /**
@@ -11043,87 +11326,93 @@ StkCommandParamsFactoryObject.prototype = {
     * @param ctlvs
     *        The all TLVs in this proactive command.
     */
-  processBipMessage: function(cmdDetails, ctlvs) {
+  processBipMessage: function(cmdDetails, ctlvs, onComplete) {
     let StkProactiveCmdHelper = this.context.StkProactiveCmdHelper;
     let bipMsg = {};
 
-    let ctlv = StkProactiveCmdHelper.searchForTag(
-      COMPREHENSIONTLV_TAG_ALPHA_ID, ctlvs);
+    let selectedCtlvs = StkProactiveCmdHelper.searchForSelectedTags(ctlvs, [
+      COMPREHENSIONTLV_TAG_ALPHA_ID,
+      COMPREHENSIONTLV_TAG_ICON_ID
+    ]);
+
+    let ctlv = selectedCtlvs.retrieve(COMPREHENSIONTLV_TAG_ALPHA_ID);
     if (ctlv) {
       bipMsg.text = ctlv.value.identifier;
     }
 
-    return this.loadIconIfNecessary(cmdDetails, ctlvs, bipMsg);
+    this.appendIconIfNecessary(selectedCtlvs[COMPREHENSIONTLV_TAG_ICON_ID] || null,
+                               bipMsg,
+                               onComplete);
   }
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_REFRESH] = function STK_CMD_REFRESH(cmdDetails, ctlvs) {
-  return this.processRefresh(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_REFRESH] = function STK_CMD_REFRESH(cmdDetails, ctlvs, onComplete) {
+  return this.processRefresh(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_POLL_INTERVAL] = function STK_CMD_POLL_INTERVAL(cmdDetails, ctlvs) {
-  return this.processPollInterval(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_POLL_INTERVAL] = function STK_CMD_POLL_INTERVAL(cmdDetails, ctlvs, onComplete) {
+  return this.processPollInterval(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_POLL_OFF] = function STK_CMD_POLL_OFF(cmdDetails, ctlvs) {
-  return this.processPollOff(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_POLL_OFF] = function STK_CMD_POLL_OFF(cmdDetails, ctlvs, onComplete) {
+  return this.processPollOff(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_PROVIDE_LOCAL_INFO] = function STK_CMD_PROVIDE_LOCAL_INFO(cmdDetails, ctlvs) {
-  return this.processProvideLocalInfo(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_PROVIDE_LOCAL_INFO] = function STK_CMD_PROVIDE_LOCAL_INFO(cmdDetails, ctlvs, onComplete) {
+  return this.processProvideLocalInfo(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_SET_UP_EVENT_LIST] = function STK_CMD_SET_UP_EVENT_LIST(cmdDetails, ctlvs) {
-  return this.processSetUpEventList(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_SET_UP_EVENT_LIST] = function STK_CMD_SET_UP_EVENT_LIST(cmdDetails, ctlvs, onComplete) {
+  return this.processSetUpEventList(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_SET_UP_MENU] = function STK_CMD_SET_UP_MENU(cmdDetails, ctlvs) {
-  return this.processSelectItem(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_SET_UP_MENU] = function STK_CMD_SET_UP_MENU(cmdDetails, ctlvs, onComplete) {
+  return this.processSelectItem(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_SELECT_ITEM] = function STK_CMD_SELECT_ITEM(cmdDetails, ctlvs) {
-  return this.processSelectItem(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_SELECT_ITEM] = function STK_CMD_SELECT_ITEM(cmdDetails, ctlvs, onComplete) {
+  return this.processSelectItem(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_DISPLAY_TEXT] = function STK_CMD_DISPLAY_TEXT(cmdDetails, ctlvs) {
-  return this.processDisplayText(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_DISPLAY_TEXT] = function STK_CMD_DISPLAY_TEXT(cmdDetails, ctlvs, onComplete) {
+  return this.processDisplayText(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_SET_UP_IDLE_MODE_TEXT] = function STK_CMD_SET_UP_IDLE_MODE_TEXT(cmdDetails, ctlvs) {
-  return this.processSetUpIdleModeText(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_SET_UP_IDLE_MODE_TEXT] = function STK_CMD_SET_UP_IDLE_MODE_TEXT(cmdDetails, ctlvs, onComplete) {
+  return this.processSetUpIdleModeText(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_GET_INKEY] = function STK_CMD_GET_INKEY(cmdDetails, ctlvs) {
-  return this.processGetInkey(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_GET_INKEY] = function STK_CMD_GET_INKEY(cmdDetails, ctlvs, onComplete) {
+  return this.processGetInkey(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_GET_INPUT] = function STK_CMD_GET_INPUT(cmdDetails, ctlvs) {
-  return this.processGetInput(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_GET_INPUT] = function STK_CMD_GET_INPUT(cmdDetails, ctlvs, onComplete) {
+  return this.processGetInput(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_SEND_SS] = function STK_CMD_SEND_SS(cmdDetails, ctlvs) {
-  return this.processEventNotify(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_SEND_SS] = function STK_CMD_SEND_SS(cmdDetails, ctlvs, onComplete) {
+  return this.processEventNotify(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_SEND_USSD] = function STK_CMD_SEND_USSD(cmdDetails, ctlvs) {
-  return this.processEventNotify(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_SEND_USSD] = function STK_CMD_SEND_USSD(cmdDetails, ctlvs, onComplete) {
+  return this.processEventNotify(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_SEND_SMS] = function STK_CMD_SEND_SMS(cmdDetails, ctlvs) {
-  return this.processEventNotify(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_SEND_SMS] = function STK_CMD_SEND_SMS(cmdDetails, ctlvs, onComplete) {
+  return this.processEventNotify(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_SEND_DTMF] = function STK_CMD_SEND_DTMF(cmdDetails, ctlvs) {
-  return this.processEventNotify(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_SEND_DTMF] = function STK_CMD_SEND_DTMF(cmdDetails, ctlvs, onComplete) {
+  return this.processEventNotify(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_SET_UP_CALL] = function STK_CMD_SET_UP_CALL(cmdDetails, ctlvs) {
-  return this.processSetupCall(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_SET_UP_CALL] = function STK_CMD_SET_UP_CALL(cmdDetails, ctlvs, onComplete) {
+  return this.processSetupCall(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_LAUNCH_BROWSER] = function STK_CMD_LAUNCH_BROWSER(cmdDetails, ctlvs) {
-  return this.processLaunchBrowser(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_LAUNCH_BROWSER] = function STK_CMD_LAUNCH_BROWSER(cmdDetails, ctlvs, onComplete) {
+  return this.processLaunchBrowser(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_PLAY_TONE] = function STK_CMD_PLAY_TONE(cmdDetails, ctlvs) {
-  return this.processPlayTone(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_PLAY_TONE] = function STK_CMD_PLAY_TONE(cmdDetails, ctlvs, onComplete) {
+  return this.processPlayTone(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_TIMER_MANAGEMENT] = function STK_CMD_TIMER_MANAGEMENT(cmdDetails, ctlvs) {
-  return this.processTimerManagement(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_TIMER_MANAGEMENT] = function STK_CMD_TIMER_MANAGEMENT(cmdDetails, ctlvs, onComplete) {
+  return this.processTimerManagement(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_OPEN_CHANNEL] = function STK_CMD_OPEN_CHANNEL(cmdDetails, ctlvs) {
-  return this.processBipMessage(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_OPEN_CHANNEL] = function STK_CMD_OPEN_CHANNEL(cmdDetails, ctlvs, onComplete) {
+  return this.processBipMessage(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_CLOSE_CHANNEL] = function STK_CMD_CLOSE_CHANNEL(cmdDetails, ctlvs) {
-  return this.processBipMessage(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_CLOSE_CHANNEL] = function STK_CMD_CLOSE_CHANNEL(cmdDetails, ctlvs, onComplete) {
+  return this.processBipMessage(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_RECEIVE_DATA] = function STK_CMD_RECEIVE_DATA(cmdDetails, ctlvs) {
-  return this.processBipMessage(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_RECEIVE_DATA] = function STK_CMD_RECEIVE_DATA(cmdDetails, ctlvs, onComplete) {
+  return this.processBipMessage(cmdDetails, ctlvs, onComplete);
 };
-StkCommandParamsFactoryObject.prototype[STK_CMD_SEND_DATA] = function STK_CMD_SEND_DATA(cmdDetails, ctlvs) {
-  return this.processBipMessage(cmdDetails, ctlvs);
+StkCommandParamsFactoryObject.prototype[STK_CMD_SEND_DATA] = function STK_CMD_SEND_DATA(cmdDetails, ctlvs, onComplete) {
+  return this.processBipMessage(cmdDetails, ctlvs, onComplete);
 };
 
 function StkProactiveCmdHelperObject(aContext) {
@@ -11528,16 +11817,34 @@ StkProactiveCmdHelperObject.prototype = {
 
   searchForTag: function(tag, ctlvs) {
     let iter = Iterator(ctlvs);
-    return this.searchForNextTag(tag, iter);
-  },
-
-  searchForNextTag: function(tag, iter) {
     for (let [index, ctlv] in iter) {
       if ((ctlv.tag & ~COMPREHENSIONTLV_FLAG_CR) == tag) {
         return ctlv;
       }
     }
     return null;
+  },
+
+  searchForSelectedTags: function(ctlvs, tags) {
+    let ret = {
+      // Handy utility to de-queue the 1st ctlv of the specified tag.
+      retrieve: function(aTag) {
+        return (this[aTag]) ? this[aTag].shift() : null;
+      }
+    };
+
+    ctlvs.forEach((aCtlv) => {
+      tags.forEach((aTag) => {
+        if ((aCtlv.tag & ~COMPREHENSIONTLV_FLAG_CR) == aTag) {
+          if (!ret[aTag]) {
+            ret[aTag] = [];
+          }
+          ret[aTag].push(aCtlv);
+        }
+      });
+    });
+
+    return ret;
   },
 };
 StkProactiveCmdHelperObject.prototype[COMPREHENSIONTLV_TAG_COMMAND_DETAILS] = function COMPREHENSIONTLV_TAG_COMMAND_DETAILS(length) {
@@ -12048,8 +12355,8 @@ BerTlvHelperObject.prototype = {
     };
     // byte 5 ~ 7 are mandatory for linear fixed and cyclic files, otherwise
     // they are not applicable.
-    if (fileStructure === UICC_EF_STRUCTURE[EF_TYPE_LINEAR_FIXED] ||
-        fileStructure === UICC_EF_STRUCTURE[EF_TYPE_CYCLIC]) {
+    if (fileStructure === UICC_EF_STRUCTURE[EF_STRUCTURE_LINEAR_FIXED] ||
+        fileStructure === UICC_EF_STRUCTURE[EF_STRUCTURE_CYCLIC]) {
       fileDescriptor.recordLength = (GsmPDUHelper.readHexOctet() << 8) +
                                      GsmPDUHelper.readHexOctet();
       fileDescriptor.numOfRecords = GsmPDUHelper.readHexOctet();
@@ -12269,7 +12576,7 @@ ICCIOHelperObject.prototype = {
       this.context.RIL.iccIO(options);
     }).bind(this);
 
-    options.type = EF_TYPE_LINEAR_FIXED;
+    options.structure = EF_STRUCTURE_LINEAR_FIXED;
     options.pathId = this.context.ICCFileHelper.getEFPath(options.fileId);
     if (options.recordSize) {
       readRecord(options);
@@ -12311,7 +12618,7 @@ ICCIOHelperObject.prototype = {
                       " or recordNumber " + options.recordNumber);
     }
 
-    options.type = EF_TYPE_LINEAR_FIXED;
+    options.structure = EF_STRUCTURE_LINEAR_FIXED;
     options.pathId = this.context.ICCFileHelper.getEFPath(options.fileId);
     let cb = options.callback;
     options.callback = function callback(options) {
@@ -12336,7 +12643,7 @@ ICCIOHelperObject.prototype = {
    *        The callback function shall be called when failure.
    */
   loadTransparentEF: function(options) {
-    options.type = EF_TYPE_TRANSPARENT;
+    options.structure = EF_STRUCTURE_TRANSPARENT;
     let cb = options.callback;
     options.callback = function callback(options) {
       options.callback = cb;
@@ -12421,13 +12728,15 @@ ICCIOHelperObject.prototype = {
     let iter = Iterator(berTlv.value);
     let tlv = BerTlvHelper.searchForNextTag(BER_FCP_FILE_DESCRIPTOR_TAG,
                                             iter);
-    if (!tlv || (tlv.value.fileStructure !== UICC_EF_STRUCTURE[options.type])) {
-      throw new Error("Expected EF type " + UICC_EF_STRUCTURE[options.type] +
+    if (!tlv ||
+        (tlv.value.fileStructure !== UICC_EF_STRUCTURE[options.structure])) {
+      throw new Error("Expected EF structure " +
+                      UICC_EF_STRUCTURE[options.structure] +
                       " but read " + tlv.value.fileStructure);
     }
 
-    if (tlv.value.fileStructure === UICC_EF_STRUCTURE[EF_TYPE_LINEAR_FIXED] ||
-        tlv.value.fileStructure === UICC_EF_STRUCTURE[EF_TYPE_CYCLIC]) {
+    if (tlv.value.fileStructure === UICC_EF_STRUCTURE[EF_STRUCTURE_LINEAR_FIXED] ||
+        tlv.value.fileStructure === UICC_EF_STRUCTURE[EF_STRUCTURE_CYCLIC]) {
       options.recordSize = tlv.value.recordLength;
       options.totalRecords = tlv.value.numOfRecords;
     }
@@ -12483,15 +12792,16 @@ ICCIOHelperObject.prototype = {
         Buf.PDU_HEX_OCTET_SIZE));
 
     // Read Structure of EF, data[13]
-    let efType = GsmPDUHelper.readHexOctet();
-    if (efType != options.type) {
-      throw new Error("Expected EF type " + options.type + " but read " + efType);
+    let efStructure = GsmPDUHelper.readHexOctet();
+    if (efStructure != options.structure) {
+      throw new Error("Expected EF structure " + options.structure +
+                      " but read " + efStructure);
     }
 
-    // TODO: Bug 952025.
     // Length of a record, data[14].
     // Only available for LINEAR_FIXED and CYCLIC.
-    if (efType == EF_TYPE_LINEAR_FIXED || efType == EF_TYPE_CYCLIC) {
+    if (efStructure == EF_STRUCTURE_LINEAR_FIXED ||
+        efStructure == EF_STRUCTURE_CYCLIC) {
       options.recordSize = GsmPDUHelper.readHexOctet();
       options.totalRecords = options.fileSize / options.recordSize;
     } else {
@@ -12574,11 +12884,12 @@ ICCRecordHelperObject.prototype = {
     function callback() {
       let Buf = this.context.Buf;
       let RIL = this.context.RIL;
+      let GsmPDUHelper = this.context.GsmPDUHelper;
 
       let strLen = Buf.readInt32();
       let octetLen = strLen / 2;
       RIL.iccInfo.iccid =
-        this.context.GsmPDUHelper.readSwappedNibbleBcdString(octetLen, true);
+        GsmPDUHelper.readSwappedNibbleBcdString(octetLen, true);
       // Consumes the remaining buffer if any.
       let unReadBuffer = this.context.Buf.getReadAvailable() -
                          this.context.Buf.PDU_HEX_OCTET_SIZE;
@@ -13867,7 +14178,7 @@ SimRecordHelperObject.prototype = {
         let buf = "";
         for (let i = 0; i < reformat.length; i++) {
           if (reformat[i] != 0xF) {
-            buf += GsmPDUHelper.semiOctetToBcdChar(reformat[i]);
+            buf += GsmPDUHelper.semiOctetToExtendedBcdChar(reformat[i]);
           }
           if (i === 2) {
             // 0-2: MCC
@@ -14024,7 +14335,7 @@ SimRecordHelperObject.prototype = {
           let plmnEntry = {};
           for (let i = 0; i < reformat.length; i++) {
             if (reformat[i] != 0xF) {
-              buf += GsmPDUHelper.semiOctetToBcdChar(reformat[i]);
+              buf += GsmPDUHelper.semiOctetToExtendedBcdChar(reformat[i]);
             }
             if (i === 2) {
               // 0-2: MCC
@@ -14517,7 +14828,7 @@ ICCUtilsHelperObject.prototype = {
       }
     } else {
       let GsmPDUHelper = this.context.GsmPDUHelper;
-      let wildChar = GsmPDUHelper.bcdChars.charAt(0x0d);
+      let wildChar = GsmPDUHelper.extendedBcdChars.charAt(0x0d);
       // According to 3GPP TS 31.102 Sec. 4.2.59 and 3GPP TS 51.011 Sec. 10.3.42,
       // the ME shall use this EF_OPL in association with the EF_PNN in place
       // of any network name stored within the ME's internal list and any network
@@ -14989,26 +15300,30 @@ ICCContactHelperObject.prototype = {
    * Helper function to read ICC contacts.
    *
    * @param appType       One of CARD_APPTYPE_*.
-   * @param contactType   "adn" or "fdn".
+   * @param contactType   One of GECKO_CARDCONTACT_TYPE_*.
    * @param onsuccess     Callback to be called when success.
    * @param onerror       Callback to be called when error.
    */
   readICCContacts: function(appType, contactType, onsuccess, onerror) {
     let ICCRecordHelper = this.context.ICCRecordHelper;
+    let ICCUtilsHelper = this.context.ICCUtilsHelper;
 
     switch (contactType) {
-      case "adn":
+      case GECKO_CARDCONTACT_TYPE_ADN:
         if (!this.hasDfPhoneBook(appType)) {
           ICCRecordHelper.readADNLike(ICC_EF_ADN, onsuccess, onerror);
         } else {
           this.readUSimContacts(onsuccess, onerror);
         }
         break;
-      case "fdn":
+      case GECKO_CARDCONTACT_TYPE_FDN:
+        if (!ICCUtilsHelper.isICCServiceAvailable("FDN")) {
+          onerror(CONTACT_ERR_CONTACT_TYPE_NOT_SUPPORTED);
+          break;
+        }
         ICCRecordHelper.readADNLike(ICC_EF_FDN, onsuccess, onerror);
         break;
-      case "sdn":
-        let ICCUtilsHelper = this.context.ICCUtilsHelper;
+      case GECKO_CARDCONTACT_TYPE_SDN:
         if (!ICCUtilsHelper.isICCServiceAvailable("SDN")) {
           onerror(CONTACT_ERR_CONTACT_TYPE_NOT_SUPPORTED);
           break;
@@ -15029,7 +15344,7 @@ ICCContactHelperObject.prototype = {
    * Helper function to find free contact record.
    *
    * @param appType       One of CARD_APPTYPE_*.
-   * @param contactType   "adn" or "fdn".
+   * @param contactType   One of GECKO_CARDCONTACT_TYPE_*.
    * @param onsuccess     Callback to be called when success.
    * @param onerror       Callback to be called when error.
    */
@@ -15037,7 +15352,7 @@ ICCContactHelperObject.prototype = {
     let ICCRecordHelper = this.context.ICCRecordHelper;
 
     switch (contactType) {
-      case "adn":
+      case GECKO_CARDCONTACT_TYPE_ADN:
         if (!this.hasDfPhoneBook(appType)) {
           ICCRecordHelper.findFreeRecordId(ICC_EF_ADN, onsuccess.bind(null, 0), onerror);
         } else {
@@ -15048,7 +15363,7 @@ ICCContactHelperObject.prototype = {
           ICCRecordHelper.readPBR(gotPbrCb, onerror);
         }
         break;
-      case "fdn":
+      case GECKO_CARDCONTACT_TYPE_FDN:
         ICCRecordHelper.findFreeRecordId(ICC_EF_FDN, onsuccess.bind(null, 0), onerror);
         break;
       default:
@@ -15106,7 +15421,7 @@ ICCContactHelperObject.prototype = {
    * Helper function to add a new ICC contact.
    *
    * @param appType       One of CARD_APPTYPE_*.
-   * @param contactType   "adn" or "fdn".
+   * @param contactType   One of GECKO_CARDCONTACT_TYPE_*.
    * @param contact       The contact will be added.
    * @param pin2          PIN2 is required for FDN.
    * @param onsuccess     Callback to be called when success.
@@ -15127,7 +15442,7 @@ ICCContactHelperObject.prototype = {
    * Helper function to update ICC contact.
    *
    * @param appType       One of CARD_APPTYPE_*.
-   * @param contactType   "adn" or "fdn".
+   * @param contactType   One of GECKO_CARDCONTACT_TYPE_*.
    * @param contact       The contact will be updated.
    * @param pin2          PIN2 is required for FDN.
    * @param onsuccess     Callback to be called when success.
@@ -15135,19 +15450,24 @@ ICCContactHelperObject.prototype = {
    */
   updateICCContact: function(appType, contactType, contact, pin2, onsuccess, onerror) {
     let ICCRecordHelper = this.context.ICCRecordHelper;
+    let ICCUtilsHelper = this.context.ICCUtilsHelper;
 
     switch (contactType) {
-      case "adn":
+      case GECKO_CARDCONTACT_TYPE_ADN:
         if (!this.hasDfPhoneBook(appType)) {
           ICCRecordHelper.updateADNLike(ICC_EF_ADN, contact, null, onsuccess, onerror);
         } else {
           this.updateUSimContact(contact, onsuccess, onerror);
         }
         break;
-      case "fdn":
+      case GECKO_CARDCONTACT_TYPE_FDN:
         if (!pin2) {
           onerror(GECKO_ERROR_SIM_PIN2);
           return;
+        }
+        if (!ICCUtilsHelper.isICCServiceAvailable("FDN")) {
+          onerror(CONTACT_ERR_CONTACT_TYPE_NOT_SUPPORTED);
+          break;
         }
         ICCRecordHelper.updateADNLike(ICC_EF_FDN, contact, pin2, onsuccess, onerror);
         break;
@@ -15183,7 +15503,7 @@ ICCContactHelperObject.prototype = {
    */
   readAllPhonebookSets: function(pbrs, onsuccess, onerror) {
     let allContacts = [], pbrIndex = 0;
-    let readPhonebook = function readPhonebook(contacts) {
+    let readPhonebook = function(contacts) {
       if (contacts) {
         allContacts = allContacts.concat(contacts);
       }

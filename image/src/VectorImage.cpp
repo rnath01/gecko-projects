@@ -250,9 +250,9 @@ public:
     , mImageFlags(aImageFlags)
   {}
   virtual bool operator()(gfxContext* aContext,
-                            const gfxRect& aFillRect,
-                            const GraphicsFilter& aFilter,
-                            const gfxMatrix& aTransform);
+                          const gfxRect& aFillRect,
+                          const GraphicsFilter& aFilter,
+                          const gfxMatrix& aTransform);
 private:
   nsRefPtr<SVGDocumentWrapper> mSVGDocumentWrapper;
   const nsIntRect              mViewport;
@@ -337,7 +337,7 @@ VectorImage::VectorImage(ProgressTracker* aProgressTracker,
 VectorImage::~VectorImage()
 {
   CancelAllListeners();
-  SurfaceCache::Discard(this);
+  SurfaceCache::RemoveImage(ImageKey(this));
 }
 
 //------------------------------------------------------------------------------
@@ -359,71 +359,34 @@ VectorImage::Init(const char* aMimeType,
   return NS_OK;
 }
 
-nsIntRect
-VectorImage::FrameRect(uint32_t aWhichFrame)
-{
-  return nsIntRect::GetMaxSizedIntRect();
-}
-
 size_t
-VectorImage::HeapSizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const
-{
-  // We're not storing the source data -- we just feed that directly to
-  // our helper SVG document as we receive it, for it to parse.
-  // So 0 is an appropriate return value here.
-  // If implementing this, we'll need to restructure our callers to make sure
-  // any amount we return is attributed to the vector images measure (i.e.
-  // "explicit/images/{content,chrome}/vector/{used,unused}/...")
-  return 0;
-}
-
-size_t
-VectorImage::HeapSizeOfDecodedWithComputedFallback(MallocSizeOf aMallocSizeOf) const
-{
-  // If implementing this, we'll need to restructure our callers to make sure
-  // any amount we return is attributed to the vector images measure (i.e.
-  // "explicit/images/{content,chrome}/vector/{used,unused}/...")
-  return 0;
-}
-
-size_t
-VectorImage::NonHeapSizeOfDecoded() const
-{
-  // If implementing this, we'll need to restructure our callers to make sure
-  // any amount we return is attributed to the vector images measure (i.e.
-  // "explicit/images/{content,chrome}/vector/{used,unused}/...")
-  return 0;
-}
-
-size_t
-VectorImage::OutOfProcessSizeOfDecoded() const
-{
-  // If implementing this, we'll need to restructure our callers to make sure
-  // any amount we return is attributed to the vector images measure (i.e.
-  // "explicit/images/{content,chrome}/vector/{used,unused}/...")
-  return 0;
-}
-
-MOZ_DEFINE_MALLOC_SIZE_OF(WindowsMallocSizeOf);
-
-size_t
-VectorImage::HeapSizeOfVectorImageDocument(nsACString* aDocURL) const
+VectorImage::SizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const
 {
   nsIDocument* doc = mSVGDocumentWrapper->GetDocument();
   if (!doc) {
-    if (aDocURL) {
-      mURI->GetSpec(*aDocURL);
-    }
-    return 0; // No document, so no memory used for the document
+    return 0; // No document, so no memory used for the document.
   }
 
-  if (aDocURL) {
-    doc->GetDocumentURI()->GetSpec(*aDocURL);
-  }
-
-  nsWindowSizes windowSizes(WindowsMallocSizeOf);
+  nsWindowSizes windowSizes(aMallocSizeOf);
   doc->DocAddSizeOfIncludingThis(&windowSizes);
+
+  if (windowSizes.getTotalSize() == 0) {
+    // MallocSizeOf fails on this platform. Because we also use this method for
+    // determining the size of cache entries, we need to return something
+    // reasonable here. Unfortunately, there's no way to estimate the document's
+    // size accurately, so we just use a constant value of 100KB, which will
+    // generally underestimate the true size.
+    return 100 * 1024;
+  }
+
   return windowSizes.getTotalSize();
+}
+
+size_t
+VectorImage::SizeOfDecoded(gfxMemoryLocation aLocation,
+                           MallocSizeOf aMallocSizeOf) const
+{
+  return SurfaceCache::SizeOfSurfaces(ImageKey(this), aLocation, aMallocSizeOf);
 }
 
 nsresult
@@ -457,12 +420,6 @@ VectorImage::OnImageDataAvailable(nsIRequest* aRequest,
                                   uint32_t aCount)
 {
   return OnDataAvailable(aRequest, aContext, aInStr, aSourceOffset, aCount);
-}
-
-nsresult
-VectorImage::OnNewSourceData()
-{
-  return NS_OK;
 }
 
 nsresult
@@ -537,8 +494,9 @@ VectorImage::RequestRefresh(const TimeStamp& aTime)
     return;
   }
 
-  // TODO: Implement for b666446.
   EvaluateAnimation();
+
+  mSVGDocumentWrapper->TickRefreshDriver();
 
   if (mHasPendingInvalidation) {
     SendInvalidationNotifications();
@@ -565,7 +523,7 @@ VectorImage::SendInvalidationNotifications()
   // notifications directly in |InvalidateObservers...|.
 
   if (mProgressTracker) {
-    SurfaceCache::Discard(this);
+    SurfaceCache::RemoveImage(ImageKey(this));
     mProgressTracker->SyncNotifyProgress(FLAG_FRAME_COMPLETE,
                                          nsIntRect::GetMaxSizedIntRect());
   }
@@ -687,15 +645,9 @@ VectorImage::GetFirstFrameDelay()
   return 0;
 }
 
-
-//******************************************************************************
-/* [notxpcom] boolean frameIsOpaque(in uint32_t aWhichFrame); */
 NS_IMETHODIMP_(bool)
-VectorImage::FrameIsOpaque(uint32_t aWhichFrame)
+VectorImage::IsOpaque()
 {
-  if (aWhichFrame > FRAME_MAX_VALUE)
-    NS_WARNING("aWhichFrame outside valid range!");
-
   return false; // In general, SVG content is not opaque.
 }
 
@@ -792,13 +744,11 @@ struct SVGDrawingParameters
 
 //******************************************************************************
 /* [noscript] void draw(in gfxContext aContext,
- *                      in gfxGraphicsFilter aFilter,
- *                      [const] in gfxMatrix aUserSpaceToImageSpace,
- *                      [const] in gfxRect aFill,
- *                      [const] in nsIntRect aSubimage,
- *                      [const] in nsIntSize aViewportSize,
- *                      [const] in SVGImageContext aSVGContext,
+ *                      [const] in nsIntSize aSize,
+ *                      [const] in ImageRegion aRegion,
  *                      in uint32_t aWhichFrame,
+ *                      in gfxGraphicsFilter aFilter,
+ *                      [const] in MaybeSVGImageContext aSVGContext,
  *                      in uint32_t aFlags); */
 NS_IMETHODIMP
 VectorImage::Draw(gfxContext* aContext,
@@ -909,7 +859,8 @@ VectorImage::CreateSurfaceAndShow(const SVGDrawingParameters& aParams)
   SurfaceCache::Insert(frame, ImageKey(this),
                        VectorSurfaceKey(aParams.size,
                                         aParams.svgContext,
-                                        aParams.animationTime));
+                                        aParams.animationTime),
+                       Lifetime::Transient);
 
   // Draw.
   nsRefPtr<gfxDrawable> drawable =
@@ -977,7 +928,7 @@ VectorImage::UnlockImage()
 NS_IMETHODIMP
 VectorImage::RequestDiscard()
 {
-  SurfaceCache::Discard(this);
+  SurfaceCache::RemoveImage(ImageKey(this));
   return NS_OK;
 }
 

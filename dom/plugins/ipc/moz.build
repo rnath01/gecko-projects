@@ -21,7 +21,9 @@ EXPORTS.mozilla.plugins += [
     'NPEventOSX.h',
     'NPEventUnix.h',
     'NPEventWindows.h',
+    'PluginAsyncSurrogate.h',
     'PluginBridge.h',
+    'PluginDataResolver.h',
     'PluginInstanceChild.h',
     'PluginInstanceParent.h',
     'PluginMessageUtils.h',
@@ -70,8 +72,9 @@ if CONFIG['MOZ_ENABLE_QT']:
     GENERATED_SOURCES += [
         'moc_NestedLoopTimer.cpp',
     ]
-    UNIFIED_SOURCES += [
+    SOURCES += [
         'NestedLoopTimer.cpp',
+        'PluginHelperQt.cpp',
     ]
 
 UNIFIED_SOURCES += [
@@ -79,6 +82,7 @@ UNIFIED_SOURCES += [
     'BrowserStreamParent.cpp',
     'ChildAsyncCall.cpp',
     'ChildTimer.cpp',
+    'PluginAsyncSurrogate.cpp',
     'PluginBackgroundDestroyer.cpp',
     'PluginInstanceParent.cpp',
     'PluginMessageUtils.cpp',

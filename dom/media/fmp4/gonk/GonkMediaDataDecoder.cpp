@@ -10,9 +10,8 @@
 #include "MediaCodecProxy.h"
 
 #include "prlog.h"
-#define LOG_TAG "GonkMediaDataDecoder(blake)"
 #include <android/log.h>
-#define ALOG(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define GMDD_LOG(...) __android_log_print(ANDROID_LOG_DEBUG, "GonkMediaDataDecoder", __VA_ARGS__)
 
 #ifdef PR_LOGGING
 PRLogModuleInfo* GetDemuxerLog();
@@ -76,7 +75,7 @@ GonkMediaDataDecoder::ProcessDecode(mp4_demuxer::MP4Sample* aSample)
   nsresult rv = mManager->Input(aSample);
   if (rv != NS_OK) {
     NS_WARNING("GonkAudioDecoder failed to input data");
-    ALOG("Failed to input data err: %d",rv);
+    GMDD_LOG("Failed to input data err: %d",rv);
     mCallback->Error();
     return;
   }
@@ -89,12 +88,13 @@ GonkMediaDataDecoder::ProcessDecode(mp4_demuxer::MP4Sample* aSample)
 void
 GonkMediaDataDecoder::ProcessOutput()
 {
-  nsAutoPtr<MediaData> output;
-  nsresult rv;
-  while (true && !mDrainComplete) {
+  nsRefPtr<MediaData> output;
+  nsresult rv = NS_ERROR_ABORT;
+
+  while (!mDrainComplete) {
     rv = mManager->Output(mLastStreamOffset, output);
     if (rv == NS_OK) {
-      mCallback->Output(output.forget());
+      mCallback->Output(output);
       continue;
     } else if (rv == NS_ERROR_NOT_AVAILABLE && mSignaledEOS) {
       // Try to get more frames before getting EOS frame
@@ -111,17 +111,18 @@ GonkMediaDataDecoder::ProcessOutput()
   }
   if (rv != NS_OK) {
     NS_WARNING("GonkMediaDataDecoder failed to output data");
-    ALOG("Failed to output data");
+    GMDD_LOG("Failed to output data");
     // GonkDecoderManangers report NS_ERROR_ABORT when EOS is reached.
     if (rv == NS_ERROR_ABORT) {
-      if (output.get() != nullptr) {
-        mCallback->Output(output.forget());
+      if (output) {
+        mCallback->Output(output);
       }
       mCallback->DrainComplete();
       mSignaledEOS = false;
       mDrainComplete = true;
       return;
     }
+    GMDD_LOG("Callback error!");
     mCallback->Error();
   }
 }
@@ -135,8 +136,7 @@ GonkMediaDataDecoder::Flush()
   // flushing.
   mTaskQueue->Flush();
 
-  status_t err = mDecoder->flush();
-  return err == OK ? NS_OK : NS_ERROR_FAILURE;
+  return mManager->Flush();
 }
 
 void
@@ -162,12 +162,19 @@ GonkMediaDataDecoder::IsWaitingMediaResources() {
 
 bool
 GonkMediaDataDecoder::IsDormantNeeded() {
-  return mDecoder->IsDormantNeeded();
+
+  return mDecoder.get() ? true : false;
+}
+
+void
+GonkMediaDataDecoder::AllocateMediaResources()
+{
+  mManager->AllocateMediaResources();
 }
 
 void
 GonkMediaDataDecoder::ReleaseMediaResources() {
-  mDecoder->ReleaseMediaResources();
+  mManager->ReleaseMediaResources();
 }
 
 } // namespace mozilla

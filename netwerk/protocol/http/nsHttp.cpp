@@ -42,7 +42,7 @@ struct HttpHeapAtom {
     char                 value[1];
 };
 
-static struct PLDHashTable  sAtomTable;
+static PLDHashTable         sAtomTable;
 static struct HttpHeapAtom *sHeapAtoms = nullptr;
 static Mutex               *sLock = nullptr;
 
@@ -85,13 +85,10 @@ StringCompare(PLDHashTable *table, const PLDHashEntryHdr *entry,
 }
 
 static const PLDHashTableOps ops = {
-    PL_DHashAllocTable,
-    PL_DHashFreeTable,
     StringHash,
     StringCompare,
     PL_DHashMoveEntryStub,
     PL_DHashClearEntryStub,
-    PL_DHashFinalizeStub,
     nullptr
 };
 
@@ -108,8 +105,7 @@ nsHttp::CreateAtomTable()
     // The initial length for this table is a value greater than the number of
     // known atoms (NUM_HTTP_ATOMS) because we expect to encounter a few random
     // headers right off the bat.
-    if (!PL_DHashTableInit(&sAtomTable, &ops, nullptr,
-                           sizeof(PLDHashEntryStub),
+    if (!PL_DHashTableInit(&sAtomTable, &ops, sizeof(PLDHashEntryStub),
                            fallible_t(), NUM_HTTP_ATOMS + 10)) {
         sAtomTable.ops = nullptr;
         return NS_ERROR_OUT_OF_MEMORY;
@@ -125,7 +121,7 @@ nsHttp::CreateAtomTable()
 
     for (int i = 0; atoms[i]; ++i) {
         PLDHashEntryStub *stub = reinterpret_cast<PLDHashEntryStub *>
-                                                 (PL_DHashTableOperate(&sAtomTable, atoms[i], PL_DHASH_ADD));
+                                                 (PL_DHashTableAdd(&sAtomTable, atoms[i]));
         if (!stub)
             return NS_ERROR_OUT_OF_MEMORY;
 
@@ -174,7 +170,7 @@ nsHttp::ResolveAtom(const char *str)
     MutexAutoLock lock(*sLock);
 
     PLDHashEntryStub *stub = reinterpret_cast<PLDHashEntryStub *>
-                                             (PL_DHashTableOperate(&sAtomTable, str, PL_DHASH_ADD));
+                                             (PL_DHashTableAdd(&sAtomTable, str));
     if (!stub)
         return atom;  // out of memory
 

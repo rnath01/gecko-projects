@@ -16,8 +16,6 @@
 #include "nsTArray.h"
 #include "nsToolkitCompsCID.h"
 #include "mozilla/MemoryReporting.h"
-#include "mozilla/Mutex.h"
-#include "mozilla/CondVar.h"
 #include "mozilla/FileUtils.h"
 #include "mozilla/Atomics.h"
 
@@ -28,14 +26,15 @@ class nsUrlClassifierPrefixSet MOZ_FINAL
 public:
   nsUrlClassifierPrefixSet();
 
-  NS_IMETHOD Init(const nsACString& aName);
-  NS_IMETHOD SetPrefixes(const uint32_t* aArray, uint32_t aLength);
-  NS_IMETHOD GetPrefixes(uint32_t* aCount, uint32_t** aPrefixes);
-  NS_IMETHOD Contains(uint32_t aPrefix, bool* aFound);
-  NS_IMETHOD IsEmpty(bool* aEmpty);
-  NS_IMETHOD LoadFromFile(nsIFile* aFile);
-  NS_IMETHOD StoreToFile(nsIFile* aFile);
+  NS_IMETHOD Init(const nsACString& aName) MOZ_OVERRIDE;
+  NS_IMETHOD SetPrefixes(const uint32_t* aArray, uint32_t aLength) MOZ_OVERRIDE;
+  NS_IMETHOD GetPrefixes(uint32_t* aCount, uint32_t** aPrefixes) MOZ_OVERRIDE;
+  NS_IMETHOD Contains(uint32_t aPrefix, bool* aFound) MOZ_OVERRIDE;
+  NS_IMETHOD IsEmpty(bool* aEmpty) MOZ_OVERRIDE;
+  NS_IMETHOD LoadFromFile(nsIFile* aFile) MOZ_OVERRIDE;
+  NS_IMETHOD StoreToFile(nsIFile* aFile) MOZ_OVERRIDE;
 
+  nsresult GetPrefixesNative(FallibleTArray<uint32_t>& outArray);
   size_t SizeInMemory() { return mMemoryInUse; };
 
   NS_DECL_THREADSAFE_ISUPPORTS

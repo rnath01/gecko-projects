@@ -92,7 +92,7 @@ static void RollUpPopups()
   nsCOMPtr<nsIWidget> rollupWidget = rollupListener->GetRollupWidget();
   if (!rollupWidget)
     return;
-  rollupListener->Rollup(0, nullptr, nullptr);
+  rollupListener->Rollup(0, true, nullptr, nullptr);
 }
 
 nsCocoaWindow::nsCocoaWindow()
@@ -141,12 +141,12 @@ nsCocoaWindow::~nsCocoaWindow()
 
   // Notify the children that we're gone.  Popup windows (e.g. tooltips) can
   // have nsChildView children.  'kid' is an nsChildView object if and only if
-  // its 'type' is 'eWindowType_child' or 'eWindowType_plugin'.
+  // its 'type' is 'eWindowType_child'.
   // childView->ResetParent() can change our list of children while it's
   // being iterated, so the way we iterate the list must allow for this.
   for (nsIWidget* kid = mLastChild; kid;) {
     nsWindowType kidType = kid->WindowType();
-    if (kidType == eWindowType_child || kidType == eWindowType_plugin) {
+    if (kidType == eWindowType_child) {
       nsChildView* childView = static_cast<nsChildView*>(kid);
       kid = kid->GetPrevSibling();
       childView->ResetParent();
@@ -1280,7 +1280,7 @@ void nsCocoaWindow::EnteredFullScreen(bool aFullScreen)
   DispatchSizeModeEvent();
 }
 
-NS_METHOD nsCocoaWindow::MakeFullScreen(bool aFullScreen)
+NS_METHOD nsCocoaWindow::MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
@@ -2118,6 +2118,8 @@ nsCocoaWindow::NotifyIME(const IMENotification& aIMENotification)
     case NOTIFY_IME_OF_FOCUS:
       if (mInputContext.IsPasswordEditor()) {
         TextInputHandler::EnableSecureEventInput();
+      } else {
+        TextInputHandler::EnsureSecureEventInputDisabled();
       }
       return NS_OK;
     case NOTIFY_IME_OF_BLUR:
@@ -2503,8 +2505,9 @@ nsCocoaWindow::ExecuteNativeKeyBinding(NativeKeyBindingsType aType,
 {
   if (!mToplevelActiveState && mGeckoWindow) {
     nsIWidgetListener* listener = mGeckoWindow->GetWidgetListener();
-    if (listener)
+    if (listener) {
       listener->WindowActivated();
+    }
     mToplevelActiveState = true;
   }
 }
@@ -2513,8 +2516,9 @@ nsCocoaWindow::ExecuteNativeKeyBinding(NativeKeyBindingsType aType,
 {
   if (mToplevelActiveState && mGeckoWindow) {
     nsIWidgetListener* listener = mGeckoWindow->GetWidgetListener();
-    if (listener)
+    if (listener) {
       listener->WindowDeactivated();
+    }
     mToplevelActiveState = false;
   }
 }
@@ -2583,7 +2587,7 @@ static NSMutableSet *gSwizzledFrameViewClasses = nil;
 // is not a public class, we declare the method on NSView instead. We only have
 // this declaration in order to avoid compiler warnings.
 @interface NSView(PrivateAddKnownSubviewMethod)
- - (void)_addKnownSubview:(id)arg1 positioned:(long long)arg2 relativeTo:(id)arg3;
+ - (void)_addKnownSubview:(NSView*)aView positioned:(NSWindowOrderingMode)place relativeTo:(NSView*)otherView;
 @end
 
 @interface BaseWindow(Private)

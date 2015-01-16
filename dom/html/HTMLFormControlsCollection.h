@@ -23,8 +23,8 @@ class HTMLImageElement;
 class OwningRadioNodeListOrElement;
 template<typename> struct Nullable;
 
-class HTMLFormControlsCollection : public nsIHTMLCollection
-                                 , public nsWrapperCache
+class HTMLFormControlsCollection MOZ_FINAL : public nsIHTMLCollection
+                                           , public nsWrapperCache
 {
 public:
   explicit HTMLFormControlsCollection(HTMLFormElement* aForm);
@@ -36,7 +36,7 @@ public:
   // nsIDOMHTMLCollection interface
   NS_DECL_NSIDOMHTMLCOLLECTION
 
-  virtual Element* GetElementAt(uint32_t index);
+  virtual Element* GetElementAt(uint32_t index) MOZ_OVERRIDE;
   virtual nsINode* GetParentObject() MOZ_OVERRIDE;
 
   virtual Element*

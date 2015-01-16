@@ -123,8 +123,15 @@ StyleEditorUI.prototype = {
 
       let hUtils = toolbox.highlighterUtils;
       if (hUtils.hasCustomHighlighter(SELECTOR_HIGHLIGHTER_TYPE)) {
-        this._highlighter =
-          yield hUtils.getHighlighterByType(SELECTOR_HIGHLIGHTER_TYPE);
+        try {
+          this._highlighter =
+            yield hUtils.getHighlighterByType(SELECTOR_HIGHLIGHTER_TYPE);
+        } catch (e) {
+          // The selectorHighlighter can't always be instantiated, for example
+          // it doesn't work with XUL windows (until bug 1094959 gets fixed).
+          console.warn("The selectorHighlighter couldn't be instantiated, " +
+            "elements matching hovered selectors will not be highlighted");
+        }
       }
     }.bind(this)).then(() => {
       this.createUI();
@@ -132,7 +139,7 @@ StyleEditorUI.prototype = {
         this._resetStyleSheetList(styleSheets); 
         this._target.on("will-navigate", this._clear);
         this._target.on("navigate", this._onNewDocument);
-      });
+      }, Cu.reportError);
     });
   },
 
@@ -200,7 +207,7 @@ StyleEditorUI.prototype = {
   _onNewDocument: function() {
     this._debuggee.getStyleSheets().then((styleSheets) => {
       this._resetStyleSheetList(styleSheets);
-    })
+    }, Cu.reportError);
   },
 
   /**
@@ -278,7 +285,7 @@ StyleEditorUI.prototype = {
           this._addStyleSheetEditor(source);
         });
       }
-    });
+    }, Cu.reportError);
   },
 
   /**
@@ -310,7 +317,8 @@ StyleEditorUI.prototype = {
 
     this.editors.push(editor);
 
-    editor.fetchSource(this._sourceLoaded.bind(this, editor));
+    editor.fetchSource(this._sourceLoaded.bind(this, editor))
+          .then(null, Cu.reportError);
     return editor;
   },
 
@@ -551,8 +559,8 @@ StyleEditorUI.prototype = {
                   this.emit("error", { key: "error-compressed", level: "info" });
                 }
               }
-            });
-          }, console.error);
+            }, Cu.reportError);
+          }, Cu.reportError);
         }.bind(this)).then(null, Cu.reportError);
       }.bind(this)
     });

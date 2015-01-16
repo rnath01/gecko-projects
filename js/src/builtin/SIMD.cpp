@@ -13,6 +13,7 @@
 
 #include "builtin/SIMD.h"
 
+#include "mozilla/IntegerTypeTraits.h"
 #include "jsapi.h"
 #include "jsfriendapi.h"
 
@@ -147,12 +148,17 @@ static bool SignMask(JSContext *cx, unsigned argc, Value *vp)
         return false;
     }
 
-    Elem *data = reinterpret_cast<Elem *>(typedObj.typedMem());
-    int32_t mx = data[0] < 0.0 ? 1 : 0;
-    int32_t my = data[1] < 0.0 ? 1 : 0;
-    int32_t mz = data[2] < 0.0 ? 1 : 0;
-    int32_t mw = data[3] < 0.0 ? 1 : 0;
-    int32_t result = mx | my << 1 | mz << 2 | mw << 3;
+    // Load the data as integer so that we treat the sign bit consistently,
+    // since -0.0 is not less than zero, but it still has the sign bit set.
+    typedef typename mozilla::SignedStdintTypeForSize<sizeof(Elem)>::Type Int;
+    static_assert(SimdType::lanes * sizeof(Int) <= jit::Simd128DataSize,
+                  "signMask access should respect the bounds of the type");
+    const Elem *elems = reinterpret_cast<const Elem *>(typedObj.typedMem());
+    int32_t result = 0;
+    for (unsigned i = 0; i < SimdType::lanes; ++i) {
+        Int x = mozilla::BitwiseCast<Int>(elems[i]);
+        result |= (x < 0) << i;
+    }
     args.rval().setInt32(result);
     return true;
 }
@@ -167,19 +173,16 @@ static bool type##SignMask(JSContext *cx, unsigned argc, Value *vp) { \
 
 const Class SimdTypeDescr::class_ = {
     "SIMD",
-    JSCLASS_HAS_RESERVED_SLOTS(JS_DESCR_SLOTS),
-    JS_PropertyStub,         /* addProperty */
-    JS_DeletePropertyStub,   /* delProperty */
-    JS_PropertyStub,         /* getProperty */
-    JS_StrictPropertyStub,   /* setProperty */
-    JS_EnumerateStub,
-    JS_ResolveStub,
-    JS_ConvertStub,
-    nullptr,             /* finalize    */
-    call,                /* call        */
-    nullptr,             /* hasInstance */
-    nullptr,             /* construct   */
-    nullptr
+    JSCLASS_HAS_RESERVED_SLOTS(JS_DESCR_SLOTS) | JSCLASS_BACKGROUND_FINALIZE,
+    nullptr, /* addProperty */
+    nullptr, /* delProperty */
+    nullptr, /* getProperty */
+    nullptr, /* setProperty */
+    nullptr, /* enumerate */
+    nullptr, /* resolve */
+    nullptr, /* convert */
+    TypeDescr::finalize,
+    call
 };
 
 // These classes just exist to group together various properties and so on.
@@ -244,9 +247,7 @@ const JSFunctionSpec js::Int32x4Defn::TypedObjectMethods[] = {
 
 template<typename T>
 static JSObject *
-CreateSimdClass(JSContext *cx,
-              Handle<GlobalObject*> global,
-              HandlePropertyName stringRepr)
+CreateSimdClass(JSContext *cx, Handle<GlobalObject*> global, HandlePropertyName stringRepr)
 {
     const SimdTypeDescr::Type type = T::type;
 
@@ -257,7 +258,7 @@ CreateSimdClass(JSContext *cx,
     // Create type constructor itself and initialize its reserved slots.
 
     Rooted<SimdTypeDescr*> typeDescr(cx);
-    typeDescr = NewObjectWithProto<SimdTypeDescr>(cx, funcProto, global, TenuredObject);
+    typeDescr = NewObjectWithProto<SimdTypeDescr>(cx, funcProto, global, SingletonObject);
     if (!typeDescr)
         return nullptr;
 
@@ -277,10 +278,9 @@ CreateSimdClass(JSContext *cx,
     if (!objProto)
         return nullptr;
     Rooted<TypedProto*> proto(cx);
-    proto = NewObjectWithProto<TypedProto>(cx, objProto, nullptr, TenuredObject);
+    proto = NewObjectWithProto<TypedProto>(cx, objProto, nullptr, SingletonObject);
     if (!proto)
         return nullptr;
-    proto->initTypeDescrSlot(*typeDescr);
     typeDescr->initReservedSlot(JS_DESCR_SLOT_TYPROTO, ObjectValue(*proto));
 
     // Link constructor to prototype and install properties.
@@ -302,7 +302,6 @@ bool
 SimdTypeDescr::call(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    const unsigned LANES = 4;
 
     Rooted<SimdTypeDescr*> descr(cx, &args.callee().as<SimdTypeDescr>());
     if (args.length() == 1) {
@@ -316,12 +315,6 @@ SimdTypeDescr::call(JSContext *cx, unsigned argc, Value *vp)
         return true;
     }
 
-    if (args.length() < LANES) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_MORE_ARGS_NEEDED,
-                             args.callee().getClass()->name, "3", "s");
-        return false;
-    }
-
     Rooted<TypedObject*> result(cx, TypedObject::createZeroed(cx, descr, 0));
     if (!result)
         return false;
@@ -330,7 +323,7 @@ SimdTypeDescr::call(JSContext *cx, unsigned argc, Value *vp)
       case SimdTypeDescr::TYPE_INT32: {
         int32_t *mem = reinterpret_cast<int32_t*>(result->typedMem());
         for (unsigned i = 0; i < 4; i++) {
-            if (!ToInt32(cx, args[i], &mem[i]))
+            if (!ToInt32(cx, args.get(i), &mem[i]))
                 return false;
         }
         break;
@@ -338,7 +331,7 @@ SimdTypeDescr::call(JSContext *cx, unsigned argc, Value *vp)
       case SimdTypeDescr::TYPE_FLOAT32: {
         float *mem = reinterpret_cast<float*>(result->typedMem());
         for (unsigned i = 0; i < 4; i++) {
-            if (!RoundFloat32(cx, args[i], &mem[i]))
+            if (!RoundFloat32(cx, args.get(i), &mem[i]))
                 return false;
         }
         break;
@@ -352,20 +345,8 @@ SimdTypeDescr::call(JSContext *cx, unsigned argc, Value *vp)
 // SIMD class
 
 const Class SIMDObject::class_ = {
-        "SIMD",
-        JSCLASS_HAS_CACHED_PROTO(JSProto_SIMD),
-        JS_PropertyStub,         /* addProperty */
-        JS_DeletePropertyStub,   /* delProperty */
-        JS_PropertyStub,         /* getProperty */
-        JS_StrictPropertyStub,   /* setProperty */
-        JS_EnumerateStub,
-        JS_ResolveStub,
-        JS_ConvertStub,
-        nullptr,             /* finalize    */
-        nullptr,             /* call        */
-        nullptr,             /* hasInstance */
-        nullptr,             /* construct   */
-        nullptr
+    "SIMD",
+    JSCLASS_HAS_CACHED_PROTO(JSProto_SIMD)
 };
 
 JSObject *
@@ -398,9 +379,9 @@ SIMDObject::initClass(JSContext *cx, Handle<GlobalObject *> global)
     // Define float32x4 functions and install as a property of the SIMD object.
     RootedValue float32x4Value(cx, ObjectValue(*float32x4Object));
     if (!JS_DefineFunctions(cx, float32x4Object, Float32x4Methods) ||
-        !JSObject::defineProperty(cx, SIMD, cx->names().float32x4,
-                                  float32x4Value, nullptr, nullptr,
-                                  JSPROP_READONLY | JSPROP_PERMANENT))
+        !DefineProperty(cx, SIMD, cx->names().float32x4,
+                        float32x4Value, nullptr, nullptr,
+                        JSPROP_READONLY | JSPROP_PERMANENT))
     {
         return nullptr;
     }
@@ -415,9 +396,9 @@ SIMDObject::initClass(JSContext *cx, Handle<GlobalObject *> global)
     // Define int32x4 functions and install as a property of the SIMD object.
     RootedValue int32x4Value(cx, ObjectValue(*int32x4Object));
     if (!JS_DefineFunctions(cx, int32x4Object, Int32x4Methods) ||
-        !JSObject::defineProperty(cx, SIMD, cx->names().int32x4,
-                                  int32x4Value, nullptr, nullptr,
-                                  JSPROP_READONLY | JSPROP_PERMANENT))
+        !DefineProperty(cx, SIMD, cx->names().int32x4,
+                        int32x4Value, nullptr, nullptr,
+                        JSPROP_READONLY | JSPROP_PERMANENT))
     {
         return nullptr;
     }
@@ -425,7 +406,7 @@ SIMDObject::initClass(JSContext *cx, Handle<GlobalObject *> global)
     RootedValue SIMDValue(cx, ObjectValue(*SIMD));
 
     // Everything is set up, install SIMD on the global object.
-    if (!JSObject::defineProperty(cx, global, cx->names().SIMD, SIMDValue, nullptr, nullptr, 0))
+    if (!DefineProperty(cx, global, cx->names().SIMD, SIMDValue, nullptr, nullptr, 0))
         return nullptr;
 
     global->setConstructor(JSProto_SIMD, SIMDValue);
@@ -508,11 +489,19 @@ struct Mul {
 };
 template<typename T>
 struct Minimum {
-    static inline T apply(T l, T r) { return l < r ? l : r; }
+    static inline T apply(T l, T r) { return math_min_impl(l, r); }
+};
+template<typename T>
+struct MinNum {
+    static inline T apply(T l, T r) { return IsNaN(l) ? r : (IsNaN(r) ? l : math_min_impl(l, r)); }
 };
 template<typename T>
 struct Maximum {
-    static inline T apply(T l, T r) { return l > r ? l : r; }
+    static inline T apply(T l, T r) { return math_max_impl(l, r); }
+};
+template<typename T>
+struct MaxNum {
+    static inline T apply(T l, T r) { return IsNaN(l) ? r : (IsNaN(r) ? l : math_max_impl(l, r)); }
 };
 template<typename T>
 struct LessThan {
@@ -551,10 +540,6 @@ struct Or {
     static inline T apply(T l, T r) { return l | r; }
 };
 template<typename T>
-struct Scale {
-    static inline T apply(int32_t lane, T scalar, T x) { return scalar * x; }
-};
-template<typename T>
 struct WithX {
     static inline T apply(int32_t lane, T scalar, T x) { return lane == 0 ? scalar : x; }
 };
@@ -569,22 +554,6 @@ struct WithZ {
 template<typename T>
 struct WithW {
     static inline T apply(int32_t lane, T scalar, T x) { return lane == 3 ? scalar : x; }
-};
-template<typename T>
-struct WithFlagX {
-    static inline T apply(T l, T f, T x) { return l == 0 ? (f ? 0xFFFFFFFF : 0x0) : x; }
-};
-template<typename T>
-struct WithFlagY {
-    static inline T apply(T l, T f, T x) { return l == 1 ? (f ? 0xFFFFFFFF : 0x0) : x; }
-};
-template<typename T>
-struct WithFlagZ {
-    static inline T apply(T l, T f, T x) { return l == 2 ? (f ? 0xFFFFFFFF : 0x0) : x; }
-};
-template<typename T>
-struct WithFlagW {
-    static inline T apply(T l, T f, T x) { return l == 3 ? (f ? 0xFFFFFFFF : 0x0) : x; }
 };
 struct ShiftLeft {
     static inline int32_t apply(int32_t v, int32_t bits) { return v << bits; }
@@ -912,12 +881,15 @@ Float32x4Clamp(JSContext *cx, unsigned argc, Value *vp)
     return StoreResult<Float32x4>(cx, args, result);
 }
 
+template<typename V>
 static bool
-Int32x4Select(JSContext *cx, unsigned argc, Value *vp)
+BitSelect(JSContext *cx, unsigned argc, Value *vp)
 {
+    typedef typename V::Elem Elem;
+
     CallArgs args = CallArgsFromVp(argc, vp);
     if (args.length() != 3 || !IsVectorObject<Int32x4>(args[0]) ||
-        !IsVectorObject<Int32x4>(args[1]) || !IsVectorObject<Int32x4>(args[2]))
+        !IsVectorObject<V>(args[1]) || !IsVectorObject<V>(args[2]))
     {
         return ErrorBadArgs(cx);
     }
@@ -938,37 +910,113 @@ Int32x4Select(JSContext *cx, unsigned argc, Value *vp)
     for (unsigned i = 0; i < Int32x4::lanes; i++)
         orInt[i] = Or<int32_t>::apply(tr[i], fr[i]);
 
-    return StoreResult<Int32x4>(cx, args, orInt);
+    Elem *result = reinterpret_cast<Elem*>(orInt);
+    return StoreResult<V>(cx, args, result);
 }
 
+template<typename V>
 static bool
-Float32x4Select(JSContext *cx, unsigned argc, Value *vp)
+Select(JSContext *cx, unsigned argc, Value *vp)
 {
+    typedef typename V::Elem Elem;
+
     CallArgs args = CallArgsFromVp(argc, vp);
     if (args.length() != 3 || !IsVectorObject<Int32x4>(args[0]) ||
-        !IsVectorObject<Float32x4>(args[1]) || !IsVectorObject<Float32x4>(args[2]))
+        !IsVectorObject<V>(args[1]) || !IsVectorObject<V>(args[2]))
     {
         return ErrorBadArgs(cx);
     }
 
-    int32_t *val = TypedObjectMemory<int32_t *>(args[0]);
-    int32_t *tv = TypedObjectMemory<int32_t *>(args[1]);
-    int32_t *fv = TypedObjectMemory<int32_t *>(args[2]);
+    int32_t *mask = TypedObjectMemory<int32_t*>(args[0]);
+    Elem *tv = TypedObjectMemory<Elem *>(args[1]);
+    Elem *fv = TypedObjectMemory<Elem *>(args[2]);
 
-    int32_t tr[Int32x4::lanes];
-    for (unsigned i = 0; i < Int32x4::lanes; i++)
-        tr[i] = And<int32_t>::apply(val[i], tv[i]);
+    Elem result[V::lanes];
+    for (unsigned i = 0; i < V::lanes; i++)
+        result[i] = mask[i] < 0 ? tv[i] : fv[i];
 
-    int32_t fr[Int32x4::lanes];
-    for (unsigned i = 0; i < Int32x4::lanes; i++)
-        fr[i] = And<int32_t>::apply(Not<int32_t>::apply(val[i]), fv[i]);
+    return StoreResult<V>(cx, args, result);
+}
 
-    int32_t orInt[Int32x4::lanes];
-    for (unsigned i = 0; i < Int32x4::lanes; i++)
-        orInt[i] = Or<int32_t>::apply(tr[i], fr[i]);
+template<class VElem, unsigned NumElem>
+static bool
+TypedArrayDataPtrFromArgs(JSContext *cx, const CallArgs &args, VElem **data)
+{
+    if (!args[0].isObject())
+        return ErrorBadArgs(cx);
 
-    float *result = reinterpret_cast<float *>(orInt);
-    return StoreResult<Float32x4>(cx, args, result);
+    JSObject &argobj = args[0].toObject();
+    if (!argobj.is<TypedArrayObject>())
+        return ErrorBadArgs(cx);
+
+    Rooted<TypedArrayObject*> typedArray(cx, &argobj.as<TypedArrayObject>());
+
+    int32_t index;
+    if (!ToInt32(cx, args[1], &index))
+        return false;
+
+    int32_t byteStart = index * typedArray->bytesPerElement();
+    if (byteStart < 0 || (uint32_t(byteStart) + NumElem * sizeof(VElem)) > typedArray->byteLength())
+    {
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_BAD_INDEX);
+        return false;
+    }
+
+    *data = reinterpret_cast<VElem*>(static_cast<char*>(typedArray->viewData()) + byteStart);
+    return true;
+}
+
+template<class V, unsigned NumElem>
+static bool
+Load(JSContext *cx, unsigned argc, Value *vp)
+{
+    typedef typename V::Elem Elem;
+
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() != 2)
+        return ErrorBadArgs(cx);
+
+    Elem *typedArrayData = nullptr;
+    if (!TypedArrayDataPtrFromArgs<Elem, NumElem>(cx, args, &typedArrayData))
+        return false;
+
+    Rooted<TypeDescr*> typeDescr(cx, &V::GetTypeDescr(*cx->global()));
+    MOZ_ASSERT(typeDescr);
+    Rooted<TypedObject *> result(cx, OutlineTypedObject::createZeroed(cx, typeDescr, 0));
+    if (!result)
+        return false;
+
+    Elem *dest = reinterpret_cast<Elem*>(result->typedMem());
+    for (unsigned i = 0; i < NumElem; i++)
+        dest[i] = typedArrayData[i];
+
+    args.rval().setObject(*result);
+    return true;
+}
+
+template<class V, unsigned NumElem>
+static bool
+Store(JSContext *cx, unsigned argc, Value *vp)
+{
+    typedef typename V::Elem Elem;
+
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() != 3)
+        return ErrorBadArgs(cx);
+
+    Elem *typedArrayData = nullptr;
+    if (!TypedArrayDataPtrFromArgs<Elem, NumElem>(cx, args, &typedArrayData))
+        return false;
+
+    if (!IsVectorObject<V>(args[2]))
+        return ErrorBadArgs(cx);
+
+    Elem *src = TypedObjectMemory<Elem*>(args[2]);
+    for (unsigned i = 0; i < NumElem; i++)
+        typedArrayData[i] = src[i];
+
+    args.rval().setObject(args[2].toObject());
+    return true;
 }
 
 #define DEFINE_SIMD_FLOAT32X4_FUNCTION(Name, Func, Operands, Flags) \

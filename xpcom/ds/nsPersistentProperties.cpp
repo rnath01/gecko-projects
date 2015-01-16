@@ -50,13 +50,10 @@ ArenaStrdup(const nsAFlatCString& aString, PLArenaPool* aArena)
 }
 
 static const struct PLDHashTableOps property_HashTableOps = {
-  PL_DHashAllocTable,
-  PL_DHashFreeTable,
   PL_DHashStringKey,
   PL_DHashMatchStringKey,
   PL_DHashMoveEntryStub,
   PL_DHashClearEntryStub,
-  PL_DHashFinalizeStub,
   nullptr,
 };
 
@@ -465,7 +462,7 @@ nsPersistentProperties::nsPersistentProperties()
 {
   mSubclass = static_cast<nsIPersistentProperties*>(this);
 
-  PL_DHashTableInit(&mTable, &property_HashTableOps, nullptr,
+  PL_DHashTableInit(&mTable, &property_HashTableOps,
                     sizeof(PropertyTableEntry), 16);
 
   PL_INIT_ARENA_POOL(&mArena, "PersistentPropertyArena", 2048);
@@ -533,7 +530,7 @@ nsPersistentProperties::SetStringProperty(const nsACString& aKey,
 {
   const nsAFlatCString&  flatKey = PromiseFlatCString(aKey);
   PropertyTableEntry* entry = static_cast<PropertyTableEntry*>(
-    PL_DHashTableOperate(&mTable, flatKey.get(), PL_DHASH_ADD));
+    PL_DHashTableAdd(&mTable, flatKey.get()));
 
   if (entry->mKey) {
     aOldValue = entry->mValue;
@@ -572,7 +569,7 @@ nsPersistentProperties::GetStringProperty(const nsACString& aKey,
   const nsAFlatCString&  flatKey = PromiseFlatCString(aKey);
 
   PropertyTableEntry* entry = static_cast<PropertyTableEntry*>(
-    PL_DHashTableOperate(&mTable, flatKey.get(), PL_DHASH_LOOKUP));
+    PL_DHashTableLookup(&mTable, flatKey.get()));
 
   if (PL_DHASH_ENTRY_IS_FREE(entry)) {
     return NS_ERROR_FAILURE;
@@ -644,7 +641,7 @@ NS_IMETHODIMP
 nsPersistentProperties::Has(const char* aProp, bool* aResult)
 {
   PropertyTableEntry* entry = static_cast<PropertyTableEntry*>(
-    PL_DHashTableOperate(&mTable, aProp, PL_DHASH_LOOKUP));
+    PL_DHashTableLookup(&mTable, aProp));
   *aResult = (entry && PL_DHASH_ENTRY_IS_BUSY(entry));
   return NS_OK;
 }

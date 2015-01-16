@@ -88,18 +88,19 @@ public class GeckoThread extends Thread implements GeckoEventListener {
     }
 
     private String initGeckoEnvironment() {
-        // At some point while loading the gecko libs our default locale gets set
-        // so just save it to locale here and reset it as default after the join
-        Locale locale = Locale.getDefault();
+        final Locale locale = Locale.getDefault();
 
+        final Context context = GeckoAppShell.getContext();
+        final Resources res = context.getResources();
         if (locale.toString().equalsIgnoreCase("zh_hk")) {
-            locale = Locale.TRADITIONAL_CHINESE;
-            Locale.setDefault(locale);
+            final Locale mappedLocale = Locale.TRADITIONAL_CHINESE;
+            Locale.setDefault(mappedLocale);
+            Configuration config = res.getConfiguration();
+            config.locale = mappedLocale;
+            res.updateConfiguration(config, null);
         }
 
-        Context context = GeckoAppShell.getContext();
         String resourcePath = "";
-        Resources res  = null;
         String[] pluginDirs = null;
         try {
             pluginDirs = GeckoAppShell.getPluginDirectories();
@@ -108,7 +109,6 @@ public class GeckoThread extends Thread implements GeckoEventListener {
         }
 
         resourcePath = context.getPackageResourcePath();
-        res = context.getResources();
         GeckoLoader.setupGeckoEnvironment(context, pluginDirs, context.getFilesDir().getPath());
 
         GeckoLoader.loadSQLiteLibs(context, resourcePath);
@@ -116,19 +116,10 @@ public class GeckoThread extends Thread implements GeckoEventListener {
         GeckoLoader.loadGeckoLibs(context, resourcePath);
         GeckoJavaSampler.setLibsLoaded();
 
-        Locale.setDefault(locale);
-
-        Configuration config = res.getConfiguration();
-        config.locale = locale;
-        res.updateConfiguration(config, null);
-
         return resourcePath;
     }
 
     private String getTypeFromAction(String action) {
-        if (action != null && action.startsWith(GeckoApp.ACTION_WEBAPP_PREFIX)) {
-            return "-webapp";
-        }
         if (GeckoApp.ACTION_HOMESCREEN_SHORTCUT.equals(action)) {
             return "-bookmark";
         }

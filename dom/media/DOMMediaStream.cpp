@@ -15,7 +15,6 @@
 #include "MediaStreamGraph.h"
 #include "AudioStreamTrack.h"
 #include "VideoStreamTrack.h"
-#include "MediaEngine.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -33,7 +32,7 @@ public:
   class TrackChange : public nsRunnable {
   public:
     TrackChange(StreamListener* aListener,
-                TrackID aID, TrackTicks aTrackOffset,
+                TrackID aID, StreamTime aTrackOffset,
                 uint32_t aEvents, MediaSegment::Type aType)
       : mListener(aListener), mID(aID), mEvents(aEvents), mType(aType)
     {
@@ -54,8 +53,8 @@ public:
         if (!track) {
           stream->CreateDOMTrack(mID, mType);
           track = stream->BindDOMTrack(mID, mType);
-          stream->NotifyMediaStreamTrackCreated(track);
         }
+        stream->NotifyMediaStreamTrackCreated(track);
       } else {
         track = stream->GetDOMTrackFor(mID);
       }
@@ -85,8 +84,7 @@ public:
    * aQueuedMedia can be null if there is no output.
    */
   virtual void NotifyQueuedTrackChanges(MediaStreamGraph* aGraph, TrackID aID,
-                                        TrackRate aTrackRate,
-                                        TrackTicks aTrackOffset,
+                                        StreamTime aTrackOffset,
                                         uint32_t aTrackEvents,
                                         const MediaSegment& aQueuedMedia) MOZ_OVERRIDE
   {
@@ -94,7 +92,7 @@ public:
       nsRefPtr<TrackChange> runnable =
         new TrackChange(this, aID, aTrackOffset, aTrackEvents,
                         aQueuedMedia.GetType());
-      NS_DispatchToMainThread(runnable);
+      aGraph->DispatchToMainThreadAfterStreamStateUpdate(runnable.forget());
     }
   }
 
@@ -146,7 +144,7 @@ NS_INTERFACE_MAP_END_INHERITING(DOMMediaStream)
 DOMMediaStream::DOMMediaStream()
   : mLogicalStreamStartTime(0),
     mStream(nullptr), mHintContents(0), mTrackTypesAvailable(0),
-    mNotifiedOfMediaStreamGraphShutdown(false)
+    mNotifiedOfMediaStreamGraphShutdown(false), mCORSMode(CORS_NONE)
 {
 }
 
@@ -303,6 +301,20 @@ DOMMediaStream::SetPrincipal(nsIPrincipal* aPrincipal)
 }
 
 void
+DOMMediaStream::SetCORSMode(CORSMode aCORSMode)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  mCORSMode = aCORSMode;
+}
+
+CORSMode
+DOMMediaStream::GetCORSMode()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  return mCORSMode;
+}
+
+void
 DOMMediaStream::NotifyPrincipalChanged()
 {
   for (uint32_t i = 0; i < mPrincipalChangeObservers.Length(); ++i) {
@@ -326,12 +338,15 @@ DOMMediaStream::RemovePrincipalChangeObserver(PrincipalChangeObserver* aObserver
 void
 DOMMediaStream::SetHintContents(TrackTypeHints aHintContents)
 {
-  mHintContents = aHintContents;
-  if (aHintContents & HINT_CONTENTS_AUDIO) {
-    CreateDOMTrack(kAudioTrack, MediaSegment::AUDIO);
-  }
-  if (aHintContents & HINT_CONTENTS_VIDEO) {
+  TrackTypeHints oldHintContents = mHintContents;
+  mHintContents |= aHintContents;
+  if (aHintContents & HINT_CONTENTS_VIDEO &&
+      !(oldHintContents & HINT_CONTENTS_VIDEO)) {
     CreateDOMTrack(kVideoTrack, MediaSegment::VIDEO);
+  }
+  if (aHintContents & HINT_CONTENTS_AUDIO &&
+      !(oldHintContents & HINT_CONTENTS_AUDIO)) {
+    CreateDOMTrack(kAudioTrack, MediaSegment::AUDIO);
   }
 }
 
@@ -341,9 +356,11 @@ DOMMediaStream::CreateDOMTrack(TrackID aTrackID, MediaSegment::Type aType)
   MediaStreamTrack* track;
   switch (aType) {
   case MediaSegment::AUDIO:
+    mHintContents |= HINT_CONTENTS_AUDIO;
     track = new AudioStreamTrack(this, aTrackID);
     break;
   case MediaSegment::VIDEO:
+    mHintContents |= HINT_CONTENTS_VIDEO;
     track = new VideoStreamTrack(this, aTrackID);
     break;
   default:
@@ -358,12 +375,13 @@ MediaStreamTrack*
 DOMMediaStream::BindDOMTrack(TrackID aTrackID, MediaSegment::Type aType)
 {
   MediaStreamTrack* track = nullptr;
+  bool bindSuccess = false;
   switch (aType) {
   case MediaSegment::AUDIO: {
     for (size_t i = 0; i < mTracks.Length(); ++i) {
       track = mTracks[i]->AsAudioStreamTrack();
-      if (track) {
-        track->BindTrackID(aTrackID);
+      if (track && track->GetTrackID() == aTrackID) {
+        bindSuccess = true;
         mTrackTypesAvailable |= HINT_CONTENTS_AUDIO;
         break;
       }
@@ -373,8 +391,8 @@ DOMMediaStream::BindDOMTrack(TrackID aTrackID, MediaSegment::Type aType)
   case MediaSegment::VIDEO: {
     for (size_t i = 0; i < mTracks.Length(); ++i) {
       track = mTracks[i]->AsVideoStreamTrack();
-      if (track) {
-        track->BindTrackID(aTrackID);
+      if (track && track->GetTrackID() == aTrackID) {
+        bindSuccess = true;
         mTrackTypesAvailable |= HINT_CONTENTS_VIDEO;
         break;
       }
@@ -384,10 +402,10 @@ DOMMediaStream::BindDOMTrack(TrackID aTrackID, MediaSegment::Type aType)
   default:
     MOZ_CRASH("Unhandled track type");
   }
-  if (track) {
+  if (bindSuccess) {
     CheckTracksAvailable();
   }
-  return track;
+  return bindSuccess ? track : nullptr;
 }
 
 MediaStreamTrack*
@@ -532,6 +550,8 @@ DOMMediaStream::DisconnectTrackListListeners(const AudioTrackList* aAudioTrackLi
 void
 DOMMediaStream::NotifyMediaStreamTrackCreated(MediaStreamTrack* aTrack)
 {
+  MOZ_ASSERT(aTrack);
+
   for (uint32_t i = 0; i < mMediaTrackListListeners.Length(); ++i) {
     if (AudioStreamTrack* t = aTrack->AsAudioStreamTrack()) {
       nsRefPtr<AudioTrack> track = CreateAudioTrack(t);
@@ -546,6 +566,8 @@ DOMMediaStream::NotifyMediaStreamTrackCreated(MediaStreamTrack* aTrack)
 void
 DOMMediaStream::NotifyMediaStreamTrackEnded(MediaStreamTrack* aTrack)
 {
+  MOZ_ASSERT(aTrack);
+
   nsAutoString id;
   aTrack->GetId(id);
   for (uint32_t i = 0; i < mMediaTrackListListeners.Length(); ++i) {

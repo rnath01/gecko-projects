@@ -10,15 +10,11 @@ const { Cc, Ci, Cu } = require("chrome");
 const Services = require("Services");
 const { ActorPool, appendExtraActors, createExtraActors } = require("devtools/server/actors/common");
 const { DebuggerServer } = require("devtools/server/main");
-const { dumpProtocolSpec } = require("devtools/server/protocol");
 const makeDebugger = require("./utils/make-debugger");
-const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
 
-DevToolsUtils.defineLazyGetter(this, "StyleSheetActor", () => {
-  return require("devtools/server/actors/stylesheets").StyleSheetActor;
-});
+loader.lazyRequireGetter(this, "StyleSheetActor", "devtools/server/actors/stylesheets", true);
 
-DevToolsUtils.defineLazyGetter(this, "ppmm", () => {
+loader.lazyGetter(this, "ppmm", () => {
   return Cc["@mozilla.org/parentprocessmessagemanager;1"].getService(Ci.nsIMessageBroadcaster);
 });
 
@@ -119,7 +115,11 @@ RootActor.prototype = {
 
   traits: {
     sources: true,
+    // Whether the inspector actor allows modifying outer HTML.
     editOuterHTML: true,
+    // Whether the inspector actor allows modifying innerHTML and inserting
+    // adjacent HTML.
+    pasteHTML: true,
     // Whether the server-side highlighter actor exists and can be used to
     // remotely highlight nodes (see server/actors/highlighter.js)
     highlightable: true,
@@ -128,7 +128,8 @@ RootActor.prototype = {
     customHighlighters: [
       "BoxModelHighlighter",
       "CssTransformHighlighter",
-      "SelectorHighlighter"
+      "SelectorHighlighter",
+      "RectHighlighter"
     ],
     // Whether the inspector actor implements the getImageDataFromURL
     // method that returns data-uris for image URLs. This is used for image
@@ -141,6 +142,9 @@ RootActor.prototype = {
     storageInspectorReadOnly: true,
     // Whether conditional breakpoints are supported
     conditionalBreakpoints: true,
+    // Whether the server supports full source actors (breakpoints on
+    // eval scripts, etc)
+    debuggerSourceActors: true,
     bulk: true,
     // Whether the style rule actor implements the modifySelector method
     // that modifies the rule's selector
@@ -153,7 +157,10 @@ RootActor.prototype = {
     // Whether the debugger server supports
     // blackboxing/pretty-printing (not supported in Fever Dream yet)
     noBlackBoxing: false,
-    noPrettyPrinting: false
+    noPrettyPrinting: false,
+    // Whether the page style actor implements the getUsedFontFaces method
+    // that returns the font faces used on a node
+    getUsedFontFaces: true
   },
 
   /**
@@ -391,7 +398,9 @@ RootActor.prototype = {
     return Cu.cloneInto(aRequest, {});
   },
 
-  onProtocolDescription: dumpProtocolSpec,
+  onProtocolDescription: function () {
+    return require("devtools/server/protocol").dumpProtocolSpec();
+  },
 
   /* Support for DebuggerServer.addGlobalActor. */
   _createExtraActors: createExtraActors,

@@ -61,7 +61,7 @@ public:
   virtual void ProcessBlock(AudioNodeStream* aStream,
                             const AudioChunk& aInput,
                             AudioChunk* aOutput,
-                            bool* aFinished)
+                            bool* aFinished) MOZ_OVERRIDE
   {
     MOZ_ASSERT(mSource == aStream, "Invalid source stream");
 
@@ -87,7 +87,7 @@ public:
       // XXX we need to add a method to AudioEventTimeline to compute this buffer directly.
       float computedGain[WEBAUDIO_BLOCK_SIZE];
       for (size_t counter = 0; counter < WEBAUDIO_BLOCK_SIZE; ++counter) {
-        TrackTicks tick = aStream->GetCurrentPosition();
+        StreamTime tick = aStream->GetCurrentPosition();
         computedGain[counter] = mGain.GetValueAtTime(tick, counter) * aInput.mVolume;
       }
 
@@ -125,8 +125,7 @@ GainNode::GainNode(AudioContext* aContext)
               2,
               ChannelCountMode::Max,
               ChannelInterpretation::Speakers)
-  , mGain(new AudioParam(MOZ_THIS_IN_INITIALIZER_LIST(),
-                         SendGainToStream, 1.0f))
+  , mGain(new AudioParam(this, SendGainToStream, 1.0f))
 {
   GainNodeEngine* engine = new GainNodeEngine(this, aContext->Destination());
   mStream = aContext->Graph()->CreateAudioNodeStream(engine, MediaStreamGraph::INTERNAL_STREAM);
@@ -166,4 +165,3 @@ GainNode::SendGainToStream(AudioNode* aNode)
 
 }
 }
-

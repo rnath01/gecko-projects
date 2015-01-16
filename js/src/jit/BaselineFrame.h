@@ -7,7 +7,7 @@
 #ifndef jit_BaselineFrame_h
 #define jit_BaselineFrame_h
 
-#include "jit/IonFrames.h"
+#include "jit/JitFrames.h"
 #include "vm/Stack.h"
 
 namespace js {
@@ -18,7 +18,7 @@ struct BaselineDebugModeOSRInfo;
 // The stack looks like this, fp is the frame pointer:
 //
 // fp+y   arguments
-// fp+x   IonJSFrameLayout (frame header)
+// fp+x   JitFrameLayout (frame header)
 // fp  => saved frame pointer
 // fp-x   BaselineFrame
 //        locals
@@ -63,17 +63,25 @@ class BaselineFrame
         OVER_RECURSED    = 1 << 9,
 
         // Frame has a BaselineRecompileInfo stashed in the scratch value
-        // slot. See PatchBaselineFramesForDebugMOde.
+        // slot. See PatchBaselineFramesForDebugMode.
         HAS_DEBUG_MODE_OSR_INFO = 1 << 10,
 
-        // Frame has had its scope chain unwound to a pc during exception
-        // handling that is different from its current pc.
+        // This flag is intended for use whenever the frame is settled on a
+        // native code address without a corresponding ICEntry. In this case,
+        // the frame contains an explicit bytecode offset for frame iterators.
         //
-        // This flag is intended for use in the DebugEpilogue. Once it is set,
-        // the only way to clear it is to pop the frame. Do *not* set this if
-        // we will resume execution on the frame, such as in a catch or
-        // finally block.
-        HAS_UNWOUND_SCOPE_OVERRIDE_PC = 1 << 11
+        // There can also be an override pc if the frame has had its scope chain
+        // unwound to a pc during exception handling that is different from its
+        // current pc.
+        //
+        // This flag should never be set when we're executing JIT code.
+        HAS_OVERRIDE_PC = 1 << 11,
+
+        // Frame has called out to Debugger code from
+        // HandleExceptionBaseline. This is set for debug mode OSR sanity
+        // checking when it handles corner cases which only arise during
+        // exception handling.
+        DEBUGGER_HANDLING_EXCEPTION = 1 << 12
     };
 
   protected: // Silence Clang warning about unused private fields.
@@ -94,7 +102,7 @@ class BaselineFrame
     JSScript *evalScript_;                // If isEvalFrame(), the current eval script.
     ArgumentsObject *argsObj_;            // If HAS_ARGS_OBJ, the arguments object.
     void *unused;                         // See static assertion re: sizeof, below.
-    uint32_t unwoundScopeOverrideOffset_; // If HAS_UNWOUND_SCOPE_OVERRIDE_PC.
+    uint32_t overrideOffset_;             // If HAS_OVERRIDE_PC, the bytecode offset.
     uint32_t flags_;
 
   public:
@@ -273,6 +281,9 @@ class BaselineFrame
     void setPrevUpToDate() {
         flags_ |= PREV_UP_TO_DATE;
     }
+    void unsetPrevUpToDate() {
+        flags_ &= ~PREV_UP_TO_DATE;
+    }
 
     bool isDebuggee() const {
         return flags_ & DEBUGGEE;
@@ -280,9 +291,16 @@ class BaselineFrame
     void setIsDebuggee() {
         flags_ |= DEBUGGEE;
     }
-    void unsetIsDebuggee() {
-        MOZ_ASSERT(!script()->isDebuggee());
-        flags_ &= ~DEBUGGEE;
+    inline void unsetIsDebuggee();
+
+    bool isDebuggerHandlingException() const {
+        return flags_ & DEBUGGER_HANDLING_EXCEPTION;
+    }
+    void setIsDebuggerHandlingException() {
+        flags_ |= DEBUGGER_HANDLING_EXCEPTION;
+    }
+    void unsetIsDebuggerHandlingException() {
+        flags_ &= ~DEBUGGER_HANDLING_EXCEPTION;
     }
 
     JSScript *evalScript() const {
@@ -328,20 +346,25 @@ class BaselineFrame
 
     void deleteDebugModeOSRInfo();
 
-    jsbytecode *unwoundScopeOverridePc() {
-        MOZ_ASSERT(flags_ & HAS_UNWOUND_SCOPE_OVERRIDE_PC);
-        return script()->offsetToPC(unwoundScopeOverrideOffset_);
+    // See the HAS_OVERRIDE_PC comment.
+    jsbytecode *overridePc() const {
+        MOZ_ASSERT(flags_ & HAS_OVERRIDE_PC);
+        return script()->offsetToPC(overrideOffset_);
     }
 
-    jsbytecode *getUnwoundScopeOverridePc() {
-        if (flags_ & HAS_UNWOUND_SCOPE_OVERRIDE_PC)
-            return unwoundScopeOverridePc();
+    jsbytecode *maybeOverridePc() const {
+        if (flags_ & HAS_OVERRIDE_PC)
+            return overridePc();
         return nullptr;
     }
 
-    void setUnwoundScopeOverridePc(jsbytecode *pc) {
-        flags_ |= HAS_UNWOUND_SCOPE_OVERRIDE_PC;
-        unwoundScopeOverrideOffset_ = script()->pcToOffset(pc);
+    void setOverridePc(jsbytecode *pc) {
+        flags_ |= HAS_OVERRIDE_PC;
+        overrideOffset_ = script()->pcToOffset(pc);
+    }
+
+    void clearOverridePc() {
+        flags_ &= ~HAS_OVERRIDE_PC;
     }
 
     void trace(JSTracer *trc, JitFrameIterator &frame);
@@ -374,23 +397,23 @@ class BaselineFrame
         return false;
     }
 
-    IonJSFrameLayout *framePrefix() const {
+    JitFrameLayout *framePrefix() const {
         uint8_t *fp = (uint8_t *)this + Size() + FramePointerOffset;
-        return (IonJSFrameLayout *)fp;
+        return (JitFrameLayout *)fp;
     }
 
     // Methods below are used by the compiler.
     static size_t offsetOfCalleeToken() {
-        return FramePointerOffset + js::jit::IonJSFrameLayout::offsetOfCalleeToken();
+        return FramePointerOffset + js::jit::JitFrameLayout::offsetOfCalleeToken();
     }
     static size_t offsetOfThis() {
-        return FramePointerOffset + js::jit::IonJSFrameLayout::offsetOfThis();
+        return FramePointerOffset + js::jit::JitFrameLayout::offsetOfThis();
     }
     static size_t offsetOfArg(size_t index) {
-        return FramePointerOffset + js::jit::IonJSFrameLayout::offsetOfActualArg(index);
+        return FramePointerOffset + js::jit::JitFrameLayout::offsetOfActualArg(index);
     }
     static size_t offsetOfNumActualArgs() {
-        return FramePointerOffset + js::jit::IonJSFrameLayout::offsetOfNumActualArgs();
+        return FramePointerOffset + js::jit::JitFrameLayout::offsetOfNumActualArgs();
     }
     static size_t Size() {
         return sizeof(BaselineFrame);

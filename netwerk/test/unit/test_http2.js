@@ -25,7 +25,7 @@ var bigListenerMD5 = '8f607cfdd2c87d6a7eedb657dafbd836';
 
 function checkIsHttp2(request) {
   try {
-    if (request.getResponseHeader("X-Firefox-Spdy") == "h2-15") {
+    if (request.getResponseHeader("X-Firefox-Spdy") == "h2-16") {
       if (request.getResponseHeader("X-Connection-Http2") == "yes") {
         return true;
       }
@@ -174,6 +174,27 @@ Http2BigListener.prototype.onStopRequest = function(request, ctx, status) {
   do_test_finished();
 };
 
+var Http2HugeSuspendedListener = function() {};
+
+Http2HugeSuspendedListener.prototype = new Http2CheckListener();
+Http2HugeSuspendedListener.prototype.count = 0;
+
+Http2HugeSuspendedListener.prototype.onDataAvailable = function(request, ctx, stream, off, cnt) {
+  this.onDataAvailableFired = true;
+  this.isHttp2Connection = checkIsHttp2(request);
+  this.count += cnt;
+  read_stream(stream, cnt);
+};
+
+Http2HugeSuspendedListener.prototype.onStopRequest = function(request, ctx, status) {
+  do_check_true(this.onStartRequestFired);
+  do_check_true(this.onDataAvailableFired);
+  do_check_true(this.isHttp2Connection);
+  do_check_eq(this.count, 1024 * 1024 * 1); // 1mb of data expected
+  run_next_test();
+  do_test_finished();
+};
+
 // Does the appropriate checks for POSTs
 var Http2PostListener = function(expected_md5) {
   this.expected_md5 = expected_md5;
@@ -191,7 +212,14 @@ Http2PostListener.prototype.onDataAvailable = function(request, ctx, stream, off
 
 function makeChan(url) {
   var ios = Cc["@mozilla.org/network/io-service;1"].getService(Ci.nsIIOService);
-  var chan = ios.newChannel(url, null, null).QueryInterface(Ci.nsIHttpChannel);
+  var chan = ios.newChannel2(url,
+                             null,
+                             null,
+                             null,      // aLoadingNode
+                             Services.scriptSecurityManager.getSystemPrincipal(),
+                             null,      // aTriggeringPrincipal
+                             Ci.nsILoadInfo.SEC_NORMAL,
+                             Ci.nsIContentPolicy.TYPE_OTHER).QueryInterface(Ci.nsIHttpChannel);
 
   return chan;
 }
@@ -199,6 +227,14 @@ function makeChan(url) {
 // Make sure we make a HTTP2 connection and both us and the server mark it as such
 function test_http2_basic() {
   var chan = makeChan("https://localhost:6944/");
+  var listener = new Http2CheckListener();
+  chan.asyncOpen(listener, null);
+}
+
+function test_http2_basic_unblocked_dep() {
+  var chan = makeChan("https://localhost:6944/basic_unblocked_dep");
+  var cos = chan.QueryInterface(Ci.nsIClassOfService);
+  cos.addClassFlags(Ci.nsIClassOfService.Unblocked);
   var listener = new Http2CheckListener();
   chan.asyncOpen(listener, null);
 }
@@ -259,7 +295,7 @@ function test_http2_header() {
 // Test to make sure cookies are split into separate fields before compression
 function test_http2_cookie_crumbling() {
   var chan = makeChan("https://localhost:6944/cookie_crumbling");
-  var cookiesSent = ['a=b', 'c=d', 'e=f'].sort();
+  var cookiesSent = ['a=b', 'c=d01234567890123456789', 'e=f'].sort();
   chan.setRequestHeader("Cookie", cookiesSent.join('; '), false);
   var listener = new Http2HeaderListener("X-Received-Header-Pairs", function(pairsReceived) {
     var cookiesReceived = JSON.parse(pairsReceived).filter(function(pair) {
@@ -318,6 +354,14 @@ function test_http2_big() {
   chan.asyncOpen(listener, null);
 }
 
+function test_http2_huge_suspended() {
+  var chan = makeChan("https://localhost:6944/huge");
+  var listener = new Http2HugeSuspendedListener();
+  chan.asyncOpen(listener, null);
+  chan.suspend();
+  do_timeout(500, chan.resume);
+}
+
 // Support for doing a POST
 function do_post(content, chan, listener) {
   var stream = Cc["@mozilla.org/io/string-input-stream;1"]
@@ -347,6 +391,8 @@ function test_http2_post_big() {
 }
 
 Cu.import("resource://testing-common/httpd.js");
+Cu.import("resource://gre/modules/Services.jsm");
+
 var httpserv = null;
 var ios = Components.classes["@mozilla.org/network/io-service;1"]
                     .getService(Components.interfaces.nsIIOService);
@@ -364,8 +410,15 @@ var altsvcClientListener = {
     var isHttp2Connection = checkIsHttp2(request);
     if (!isHttp2Connection) {
 	// not over tls yet - retry. It's all async and transparent to client
-	var chan = ios.newChannel("http://localhost:" + httpserv.identity.primaryPort + "/altsvc1",
-				  null, null).QueryInterface(Components.interfaces.nsIHttpChannel);
+	var chan = ios.newChannel2("http://localhost:" + httpserv.identity.primaryPort + "/altsvc1",
+                             null,
+                             null,
+                             null,      // aLoadingNode
+                             Services.scriptSecurityManager.getSystemPrincipal(),
+                             null,      // aTriggeringPrincipal
+                             Ci.nsILoadInfo.SEC_NORMAL,
+                             Ci.nsIContentPolicy.TYPE_OTHER)
+                .QueryInterface(Components.interfaces.nsIHttpChannel);
 	chan.asyncOpen(altsvcClientListener, null);
     } else {
         do_check_true(isHttp2Connection);
@@ -378,7 +431,7 @@ var altsvcClientListener = {
 function altsvcHttp1Server(metadata, response) {
   response.setStatusLine(metadata.httpVersion, 200, "OK");
   response.setHeader("Content-Type", "text/plain", false);
-  response.setHeader("Alt-Svc", 'h2=":6944"; ma=3200, h2-15=":6944"', false);
+  response.setHeader("Alt-Svc", 'h2-16=":6944"', false);
   var body = "this is where a cool kid would write something neat.\n";
   response.bodyOutputStream.write(body, body.length);
 }
@@ -388,8 +441,15 @@ function test_http2_altsvc() {
   httpserv.registerPathHandler("/altsvc1", altsvcHttp1Server);
   httpserv.start(-1);
 
-  var chan = ios.newChannel("http://localhost:" + httpserv.identity.primaryPort + "/altsvc1",
-			    null, null).QueryInterface(Components.interfaces.nsIHttpChannel);
+  var chan = ios.newChannel2("http://localhost:" + httpserv.identity.primaryPort + "/altsvc1",
+                             null,
+                             null,
+                             null,      // aLoadingNode
+                             Services.scriptSecurityManager.getSystemPrincipal(),
+                             null,      // aTriggeringPrincipal
+                             Ci.nsILoadInfo.SEC_NORMAL,
+                             Ci.nsIContentPolicy.TYPE_OTHER)
+                .QueryInterface(Components.interfaces.nsIHttpChannel);
   chan.asyncOpen(altsvcClientListener, null);
 }
 
@@ -508,6 +568,12 @@ function test_http2_retry_rst() {
   chan.asyncOpen(listener, null);
 }
 
+function test_complete() {
+  resetPrefs();
+  do_test_finished();
+  do_timeout(0,run_next_test);
+}
+
 // hack - the header test resets the multiplex object on the server,
 // so make sure header is always run before the multiplex test.
 //
@@ -515,6 +581,7 @@ function test_http2_retry_rst() {
 // a stalled stream when a SETTINGS frame arrives
 var tests = [ test_http2_post_big
             , test_http2_basic
+            , test_http2_basic_unblocked_dep
             , test_http2_nospdy
             , test_http2_push1
             , test_http2_push2
@@ -527,12 +594,16 @@ var tests = [ test_http2_post_big
             , test_http2_cookie_crumbling
             , test_http2_multiplex
             , test_http2_big
+            , test_http2_huge_suspended
             , test_http2_post
             , test_http2_pushapi_1
             // These next two must always come in this order
             , test_http2_h11required_stream
             , test_http2_h11required_session
             , test_http2_retry_rst
+
+            // cleanup
+            , test_complete
             ];
 var current_test = 0;
 
@@ -621,7 +692,7 @@ function resetPrefs() {
 function run_test() {
   // Set to allow the cert presented by our SPDY server
   do_get_profile();
-  var prefs = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefBranch);
+  prefs = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefBranch);
   var oldPref = prefs.getIntPref("network.http.speculative-parallel-limit");
   prefs.setIntPref("network.http.speculative-parallel-limit", 0);
 

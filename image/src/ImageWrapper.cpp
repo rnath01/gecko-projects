@@ -33,40 +33,17 @@ ImageWrapper::GetProgressTracker()
   return mInnerImage->GetProgressTracker();
 }
 
-nsIntRect
-ImageWrapper::FrameRect(uint32_t aWhichFrame)
+size_t
+ImageWrapper::SizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const
 {
-  return mInnerImage->FrameRect(aWhichFrame);
-}
-
-uint32_t
-ImageWrapper::SizeOfData()
-{
-  return mInnerImage->SizeOfData();
+  return mInnerImage->SizeOfSourceWithComputedFallback(aMallocSizeOf);
 }
 
 size_t
-ImageWrapper::HeapSizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const
+ImageWrapper::SizeOfDecoded(gfxMemoryLocation aLocation,
+                            MallocSizeOf aMallocSizeOf) const
 {
-  return mInnerImage->HeapSizeOfSourceWithComputedFallback(aMallocSizeOf);
-}
-
-size_t
-ImageWrapper::HeapSizeOfDecodedWithComputedFallback(MallocSizeOf aMallocSizeOf) const
-{
-  return mInnerImage->HeapSizeOfDecodedWithComputedFallback(aMallocSizeOf);
-}
-
-size_t
-ImageWrapper::NonHeapSizeOfDecoded() const
-{
-  return mInnerImage->NonHeapSizeOfDecoded();
-}
-
-size_t
-ImageWrapper::OutOfProcessSizeOfDecoded() const
-{
-  return mInnerImage->OutOfProcessSizeOfDecoded();
+  return mInnerImage->SizeOfDecoded(aLocation, aMallocSizeOf);
 }
 
 void
@@ -110,13 +87,14 @@ ImageWrapper::OnImageDataComplete(nsIRequest* aRequest,
                                   nsresult aStatus,
                                   bool aLastPart)
 {
-  return mInnerImage->OnImageDataComplete(aRequest, aContext, aStatus, aLastPart);
+  return mInnerImage->OnImageDataComplete(aRequest, aContext, aStatus,
+                                          aLastPart);
 }
 
-nsresult
-ImageWrapper::OnNewSourceData()
+void
+ImageWrapper::OnSurfaceDiscarded()
 {
-  return mInnerImage->OnNewSourceData();
+  return mInnerImage->OnSurfaceDiscarded();
 }
 
 void
@@ -209,13 +187,14 @@ ImageWrapper::GetFrame(uint32_t aWhichFrame,
 }
 
 NS_IMETHODIMP_(bool)
-ImageWrapper::FrameIsOpaque(uint32_t aWhichFrame)
+ImageWrapper::IsOpaque()
 {
-  return mInnerImage->FrameIsOpaque(aWhichFrame);
+  return mInnerImage->IsOpaque();
 }
 
 NS_IMETHODIMP
-ImageWrapper::GetImageContainer(LayerManager* aManager, ImageContainer** _retval)
+ImageWrapper::GetImageContainer(LayerManager* aManager,
+                                ImageContainer** _retval)
 {
   return mInnerImage->GetImageContainer(aManager, _retval);
 }
@@ -316,10 +295,12 @@ ImageWrapper::SetAnimationStartTime(const TimeStamp& aTime)
 }
 
 nsIntSize
-ImageWrapper::OptimalImageSizeForDest(const gfxSize& aDest, uint32_t aWhichFrame,
+ImageWrapper::OptimalImageSizeForDest(const gfxSize& aDest,
+                                      uint32_t aWhichFrame,
                                       GraphicsFilter aFilter, uint32_t aFlags)
 {
-  return mInnerImage->OptimalImageSizeForDest(aDest, aWhichFrame, aFilter, aFlags);
+  return mInnerImage->OptimalImageSizeForDest(aDest, aWhichFrame, aFilter,
+                                              aFlags);
 }
 
 NS_IMETHODIMP_(nsIntRect)

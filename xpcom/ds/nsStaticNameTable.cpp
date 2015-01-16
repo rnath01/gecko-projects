@@ -94,13 +94,10 @@ caseInsensitiveStringHashKey(PLDHashTable* aTable, const void* aKey)
 }
 
 static const struct PLDHashTableOps nametable_CaseInsensitiveHashTableOps = {
-  PL_DHashAllocTable,
-  PL_DHashFreeTable,
   caseInsensitiveStringHashKey,
   matchNameKeysCaseInsensitive,
   PL_DHashMoveEntryStub,
   PL_DHashClearEntryStub,
-  PL_DHashFinalizeStub,
   nullptr,
 };
 
@@ -143,7 +140,7 @@ nsStaticCaseInsensitiveNameTable::Init(const char* const aNames[],
   }
 
   if (!PL_DHashTableInit(&mNameTable, &nametable_CaseInsensitiveHashTableOps,
-                         nullptr, sizeof(NameTableEntry), fallible_t(),
+                         sizeof(NameTableEntry), fallible_t(),
                          aLength)) {
     mNameTable.ops = nullptr;
     return false;
@@ -170,8 +167,7 @@ nsStaticCaseInsensitiveNameTable::Init(const char* const aNames[],
     NameTableKey key(strPtr);
 
     NameTableEntry* entry =
-      static_cast<NameTableEntry*>(PL_DHashTableOperate(&mNameTable, &key,
-                                                        PL_DHASH_ADD));
+      static_cast<NameTableEntry*>(PL_DHashTableAdd(&mNameTable, &key));
     if (!entry) {
       continue;
     }
@@ -197,8 +193,7 @@ nsStaticCaseInsensitiveNameTable::Lookup(const nsACString& aName)
 
   NameTableKey key(&str);
   NameTableEntry* entry =
-    static_cast<NameTableEntry*>(PL_DHashTableOperate(&mNameTable, &key,
-                                                      PL_DHASH_LOOKUP));
+    static_cast<NameTableEntry*>(PL_DHashTableLookup(&mNameTable, &key));
   if (PL_DHASH_ENTRY_IS_FREE(entry)) {
     return nsStaticCaseInsensitiveNameTable::NOT_FOUND;
   }
@@ -216,8 +211,7 @@ nsStaticCaseInsensitiveNameTable::Lookup(const nsAString& aName)
 
   NameTableKey key(&str);
   NameTableEntry* entry =
-    static_cast<NameTableEntry*>(PL_DHashTableOperate(&mNameTable, &key,
-                                                      PL_DHASH_LOOKUP));
+    static_cast<NameTableEntry*>(PL_DHashTableLookup(&mNameTable, &key));
   if (PL_DHASH_ENTRY_IS_FREE(entry)) {
     return nsStaticCaseInsensitiveNameTable::NOT_FOUND;
   }

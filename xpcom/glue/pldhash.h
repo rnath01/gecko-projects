@@ -53,12 +53,10 @@
 #define PL_DHASH_BITS           32
 #define PL_DHASH_GOLDEN_RATIO   0x9E3779B9U
 
-/* Primitive and forward-struct typedefs. */
-typedef uint32_t                PLDHashNumber;
-typedef struct PLDHashEntryHdr  PLDHashEntryHdr;
-typedef struct PLDHashEntryStub PLDHashEntryStub;
-typedef struct PLDHashTable     PLDHashTable;
-typedef struct PLDHashTableOps  PLDHashTableOps;
+typedef uint32_t PLDHashNumber;
+
+class PLDHashTable;
+struct PLDHashTableOps;
 
 /*
  * Table entry header structure.
@@ -176,15 +174,14 @@ typedef size_t (*PLDHashSizeOfEntryExcludingThisFun)(
  * aTable->mGeneration before adding or removing, and compare the sample after,
  * dereferencing the entry pointer only if aTable->mGeneration has not changed.
  */
-struct PLDHashTable
+class PLDHashTable
 {
+public:
   /*
    * Virtual operations; see below. This field is public because it's commonly
    * zeroed to indicate that a table is no longer live.
    */
   const PLDHashTableOps* ops;
-
-  void*               data;           /* ops- and instance-specific data */
 
 private:
   int16_t             mHashShift;     /* multiplicative hash shift */
@@ -239,7 +236,7 @@ public:
   uint32_t EntryCount() const { return mEntryCount; }
   uint32_t Generation() const { return mGeneration; }
 
-  bool Init(const PLDHashTableOps* aOps, void* aData, uint32_t aEntrySize,
+  bool Init(const PLDHashTableOps* aOps, uint32_t aEntrySize,
             const mozilla::fallible_t&, uint32_t aLength);
 
   void Finish();
@@ -303,15 +300,6 @@ private:
 };
 
 /*
- * Table space at mEntryStore is allocated and freed using these callbacks.
- * The allocator should return null on error only (not if called with aNBytes
- * equal to 0; but note that pldhash.c code will never call with 0 aNBytes).
- */
-typedef void* (*PLDHashAllocTable)(PLDHashTable* aTable, uint32_t aNBytes);
-
-typedef void (*PLDHashFreeTable)(PLDHashTable* aTable, void* aPtr);
-
-/*
  * Compute the hash code for a given key to be looked up, added, or removed
  * from aTable.  A hash code may have any PLDHashNumber value.
  */
@@ -345,13 +333,6 @@ typedef void (*PLDHashClearEntry)(PLDHashTable* aTable,
                                   PLDHashEntryHdr* aEntry);
 
 /*
- * Called when a table (whether allocated dynamically by itself, or nested in
- * a larger structure, or allocated on the stack) is finished.  This callback
- * allows aTable->ops-specific code to finalize aTable->data.
- */
-typedef void (*PLDHashFinalize)(PLDHashTable* aTable);
-
-/*
  * Initialize a new entry, apart from keyHash.  This function is called when
  * PL_DHashTableOperate's PL_DHASH_ADD case finds no existing entry for the
  * given key, and must add a new one.  At that point, aEntry->keyHash is not
@@ -362,20 +343,16 @@ typedef bool (*PLDHashInitEntry)(PLDHashTable* aTable, PLDHashEntryHdr* aEntry,
                                  const void* aKey);
 
 /*
- * Finally, the "vtable" structure for PLDHashTable.  The first eight hooks
+ * Finally, the "vtable" structure for PLDHashTable.  The first four hooks
  * must be provided by implementations; they're called unconditionally by the
  * generic pldhash.c code.  Hooks after these may be null.
  *
  * Summary of allocation-related hook usage with C++ placement new emphasis:
- *  allocTable          Allocate raw bytes with malloc, no ctors run.
- *  freeTable           Free raw bytes with free, no dtors run.
  *  initEntry           Call placement new using default key-based ctor.
  *                      Return true on success, false on error.
  *  moveEntry           Call placement new using copy ctor, run dtor on old
  *                      entry storage.
  *  clearEntry          Run dtor on entry.
- *  finalize            Stub unless aTable->data was initialized and needs to
- *                      be finalized.
  *
  * Note the reason why initEntry is optional: the default hooks (stubs) clear
  * entry storage:  On successful PL_DHashTableOperate(tbl, key, PL_DHASH_ADD),
@@ -391,13 +368,10 @@ typedef bool (*PLDHashInitEntry)(PLDHashTable* aTable, PLDHashEntryHdr* aEntry,
 struct PLDHashTableOps
 {
   /* Mandatory hooks.  All implementations must provide these. */
-  PLDHashAllocTable   allocTable;
-  PLDHashFreeTable    freeTable;
   PLDHashHashKey      hashKey;
   PLDHashMatchEntry   matchEntry;
   PLDHashMoveEntry    moveEntry;
   PLDHashClearEntry   clearEntry;
-  PLDHashFinalize     finalize;
 
   /* Optional hooks start here.  If null, these are not called. */
   PLDHashInitEntry    initEntry;
@@ -406,9 +380,6 @@ struct PLDHashTableOps
 /*
  * Default implementations for the above ops.
  */
-void* PL_DHashAllocTable(PLDHashTable* aTable, uint32_t aNBytes);
-
-void PL_DHashFreeTable(PLDHashTable* aTable, void* aPtr);
 
 PLDHashNumber PL_DHashStringKey(PLDHashTable* aTable, const void* aKey);
 
@@ -438,8 +409,6 @@ void PL_DHashClearEntryStub(PLDHashTable* aTable, PLDHashEntryHdr* aEntry);
 
 void PL_DHashFreeStringKey(PLDHashTable* aTable, PLDHashEntryHdr* aEntry);
 
-void PL_DHashFinalizeStub(PLDHashTable* aTable);
-
 /*
  * If you use PLDHashEntryStub or a subclass of it as your entry struct, and
  * if your entries move via memcpy and clear via memset(0), you can use these
@@ -448,32 +417,30 @@ void PL_DHashFinalizeStub(PLDHashTable* aTable);
 const PLDHashTableOps* PL_DHashGetStubOps(void);
 
 /*
- * Dynamically allocate a new PLDHashTable using malloc, initialize it using
- * PL_DHashTableInit, and return its address.  Return null on malloc failure.
- * Note that the entry storage at aTable->mEntryStore will be allocated using
- * the aOps->allocTable callback.
+ * Dynamically allocate a new PLDHashTable, initialize it using
+ * PL_DHashTableInit, and return its address. Return null on allocation failure.
  */
 PLDHashTable* PL_NewDHashTable(
-  const PLDHashTableOps* aOps, void* aData, uint32_t aEntrySize,
+  const PLDHashTableOps* aOps, uint32_t aEntrySize,
   uint32_t aLength = PL_DHASH_DEFAULT_INITIAL_LENGTH);
 
 /*
- * Finalize aTable's data, free its entry storage (via aTable->ops->freeTable),
- * and return the memory starting at aTable to the malloc heap.
+ * Free |aTable|'s entry storage and |aTable| itself (both via
+ * aTable->ops->freeTable). Use this function to destroy a PLDHashTable that
+ * was allocated on the heap via PL_NewDHashTable().
  */
 void PL_DHashTableDestroy(PLDHashTable* aTable);
 
 /*
- * Initialize aTable with aOps, aData, aEntrySize, and aCapacity. The table's
- * initial capacity will be chosen such that |aLength| elements can be inserted
- * without rehashing. If |aLength| is a power-of-two, this capacity will be
- * |2*length|.
+ * Initialize aTable with aOps, aEntrySize, and aCapacity. The table's initial
+ * capacity will be chosen such that |aLength| elements can be inserted without
+ * rehashing. If |aLength| is a power-of-two, this capacity will be |2*length|.
  *
  * This function will crash if it can't allocate enough memory, or if
  * |aEntrySize| and/or |aLength| are too large.
  */
 void PL_DHashTableInit(
-  PLDHashTable* aTable, const PLDHashTableOps* aOps, void* aData,
+  PLDHashTable* aTable, const PLDHashTableOps* aOps,
   uint32_t aEntrySize, uint32_t aLength = PL_DHASH_DEFAULT_INITIAL_LENGTH);
 
 /*
@@ -481,15 +448,14 @@ void PL_DHashTableInit(
  * returns a boolean indicating success, rather than crashing on failure.
  */
 MOZ_WARN_UNUSED_RESULT bool PL_DHashTableInit(
-  PLDHashTable* aTable, const PLDHashTableOps* aOps, void* aData,
+  PLDHashTable* aTable, const PLDHashTableOps* aOps,
   uint32_t aEntrySize, const mozilla::fallible_t&,
   uint32_t aLength = PL_DHASH_DEFAULT_INITIAL_LENGTH);
 
 /*
- * Finalize aTable's data, free its entry storage using aTable->ops->freeTable,
- * and leave its members unchanged from their last live values (which leaves
- * pointers dangling).  If you want to burn cycles clearing aTable, it's up to
- * your code to call memset.
+ * Free |aTable|'s entry storage (via aTable->ops->freeTable). Use this function
+ * to destroy a PLDHashTable that is allocated on the stack or in static memory
+ * and was created via PL_DHashTableInit().
  */
 void PL_DHashTableFinish(PLDHashTable* aTable);
 
@@ -506,9 +472,9 @@ void PL_DHashTableFinish(PLDHashTable* aTable);
  *  entry = PL_DHashTableOperate(table, key, PL_DHASH_ADD);
  *
  * If entry is null upon return, then either the table is severely overloaded,
- * and memory can't be allocated for entry storage via aTable->ops->allocTable;
- * Or if aTable->ops->initEntry is non-null, the aTable->ops->initEntry op may
- * have returned false.
+ * and memory can't be allocated for entry storage. Or if
+ * aTable->ops->initEntry is non-null, the aTable->ops->initEntry op may have
+ * returned false.
  *
  * Otherwise, aEntry->keyHash has been set so that PL_DHASH_ENTRY_IS_BUSY(entry)
  * is true, and it is up to the caller to initialize the key and value parts
@@ -526,6 +492,18 @@ void PL_DHashTableFinish(PLDHashTable* aTable);
 PLDHashEntryHdr* PL_DHASH_FASTCALL
 PL_DHashTableOperate(PLDHashTable* aTable, const void* aKey,
                      PLDHashOperator aOp);
+
+/* Look up a key in table. */
+PLDHashEntryHdr* PL_DHASH_FASTCALL
+PL_DHashTableLookup(PLDHashTable* aTable, const void* aKey);
+
+/* Add an entry identified by key to table. */
+PLDHashEntryHdr* PL_DHASH_FASTCALL
+PL_DHashTableAdd(PLDHashTable* aTable, const void* aKey);
+
+/* Remove an entry identified by key from table. */
+void PL_DHASH_FASTCALL
+PL_DHashTableRemove(PLDHashTable* aTable, const void* aKey);
 
 /*
  * Remove an entry already accessed via LOOKUP or ADD.
@@ -546,7 +524,7 @@ PL_DHashTableEnumerate(PLDHashTable* aTable, PLDHashEnumerator aEtor,
  * Measure the size of the table's entry storage, and if
  * |aSizeOfEntryExcludingThis| is non-nullptr, measure the size of things
  * pointed to by entries.  Doesn't measure |ops| because it's often shared
- * between tables, nor |data| because it's opaque.
+ * between tables.
  */
 size_t PL_DHashTableSizeOfExcludingThis(
   const PLDHashTable* aTable,

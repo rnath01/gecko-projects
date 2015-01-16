@@ -374,6 +374,7 @@ private:
 
   /* Text Properties */
   mozilla::dom::CSSValue* DoGetLineHeight();
+  mozilla::dom::CSSValue* DoGetRubyPosition();
   mozilla::dom::CSSValue* DoGetTextAlign();
   mozilla::dom::CSSValue* DoGetTextAlignLast();
   mozilla::dom::CSSValue* DoGetTextCombineUpright();
@@ -591,6 +592,11 @@ private:
   // Helper function for computing basic shape styles.
   mozilla::dom::CSSValue* CreatePrimitiveValueForClipPath(
     const nsStyleBasicShape* aStyleBasicShape, uint8_t aSizingBox);
+  void BoxValuesToString(nsAString& aString,
+                         const nsTArray<nsStyleCoord>& aBoxValues);
+  void BasicShapeRadiiToString(nsAString& aCssText,
+                               const nsStyleCorners& aCorners);
+
 
   static nsComputedStyleMap* GetComputedStyleMap();
 

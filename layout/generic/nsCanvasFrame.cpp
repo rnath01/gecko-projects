@@ -120,8 +120,8 @@ nsCanvasFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Append all existing AnonymousContent nodes stored at document level if any.
-  int32_t anonymousContentCount = doc->GetAnonymousContents().Length();
-  for (int32_t i = 0; i < anonymousContentCount; ++i) {
+  size_t len = doc->GetAnonymousContents().Length();
+  for (size_t i = 0; i < len; ++i) {
     nsCOMPtr<Element> node = doc->GetAnonymousContents()[i]->GetContentNode();
     mCustomContentContainer->AppendChildTo(node->AsContent(), true);
   }
@@ -167,8 +167,10 @@ nsCanvasFrame::DestroyFrom(nsIFrame* aDestructRoot)
     nsCOMPtr<nsIDocument> doc = mContent->OwnerDoc();
     ErrorResult rv;
 
-    for (int32_t i = doc->GetAnonymousContents().Length() - 1; i >= 0; --i) {
-      AnonymousContent* content = doc->GetAnonymousContents()[i];
+    nsTArray<nsRefPtr<mozilla::dom::AnonymousContent>>& docAnonContents =
+      doc->GetAnonymousContents();
+    for (size_t i = 0, len = docAnonContents.Length(); i < len; ++i) {
+      AnonymousContent* content = docAnonContents[i];
       nsCOMPtr<nsINode> clonedElement = content->GetContentNode()->CloneNode(true, rv);
       content->SetContentNode(clonedElement->AsElement());
     }
@@ -286,11 +288,13 @@ nsDisplayCanvasBackgroundColor::Paint(nsDisplayListBuilder* aBuilder,
 
 #ifdef MOZ_DUMP_PAINTING
 void
-nsDisplayCanvasBackgroundColor::WriteDebugInfo(nsACString& aTo)
+nsDisplayCanvasBackgroundColor::WriteDebugInfo(std::stringstream& aStream)
 {
-  aTo += nsPrintfCString(" (rgba %d,%d,%d,%d)",
-          NS_GET_R(mColor), NS_GET_G(mColor),
-          NS_GET_B(mColor), NS_GET_A(mColor));
+  aStream << " (rgba "
+          << (int)NS_GET_R(mColor) << ","
+          << (int)NS_GET_G(mColor) << ","
+          << (int)NS_GET_B(mColor) << ","
+          << (int)NS_GET_A(mColor) << ")";
 }
 #endif
 
@@ -344,7 +348,7 @@ nsDisplayCanvasBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
 
   if (dt) {
     BlitSurface(dest->GetDrawTarget(), destRect, dt);
-    frame->Properties().Set(nsIFrame::CachedBackgroundImageDT(), dt.forget().drop());
+    frame->Properties().Set(nsIFrame::CachedBackgroundImageDT(), dt.forget().take());
   }
 }
 
@@ -593,25 +597,29 @@ nsCanvasFrame::Reflow(nsPresContext*           aPresContext,
       kidReflowState(aPresContext, aReflowState, kidFrame,
                      aReflowState.AvailableSize(kidFrame->GetWritingMode()));
 
-    if (aReflowState.mFlags.mVResize &&
+    if (aReflowState.IsVResize() &&
         (kidFrame->GetStateBits() & NS_FRAME_CONTAINS_RELATIVE_HEIGHT)) {
       // Tell our kid it's being vertically resized too.  Bit of a
       // hack for framesets.
-      kidReflowState.mFlags.mVResize = true;
+      kidReflowState.SetVResize(true);
     }
 
-    nsPoint kidPt(kidReflowState.ComputedPhysicalMargin().left,
-                  kidReflowState.ComputedPhysicalMargin().top);
+    WritingMode wm = aReflowState.GetWritingMode();
+    WritingMode kidWM = kidReflowState.GetWritingMode();
+    nscoord containerWidth = aReflowState.ComputedWidth();
 
-    kidReflowState.ApplyRelativePositioning(&kidPt);
+    LogicalMargin margin = kidReflowState.ComputedLogicalMargin();
+    LogicalPoint kidPt(kidWM, margin.IStart(kidWM), margin.BStart(kidWM));
+
+    kidReflowState.ApplyRelativePositioning(&kidPt, containerWidth);
 
     // Reflow the frame
     ReflowChild(kidFrame, aPresContext, kidDesiredSize, kidReflowState,
-                kidPt.x, kidPt.y, 0, aStatus);
+                kidWM, kidPt, containerWidth, 0, aStatus);
 
     // Complete the reflow and position and size the child frame
     FinishReflowChild(kidFrame, aPresContext, kidDesiredSize, &kidReflowState,
-                      kidPt.x, kidPt.y, 0);
+                      kidWM, kidPt, containerWidth, 0);
 
     if (!NS_FRAME_IS_FULLY_COMPLETE(aStatus)) {
       nsIFrame* nextFrame = kidFrame->GetNextInFlow();
@@ -649,7 +657,6 @@ nsCanvasFrame::Reflow(nsPresContext*           aPresContext,
     // Return our desired size. Normally it's what we're told, but
     // sometimes we can be given an unconstrained height (when a window
     // is sizing-to-content), and we should compute our desired height.
-    WritingMode wm = aReflowState.GetWritingMode();
     LogicalSize finalSize(wm);
     finalSize.ISize(wm) = aReflowState.ComputedISize();
     if (aReflowState.ComputedBSize() == NS_UNCONSTRAINEDSIZE) {
@@ -662,7 +669,7 @@ nsCanvasFrame::Reflow(nsPresContext*           aPresContext,
     aDesiredSize.SetSize(wm, finalSize);
     aDesiredSize.SetOverflowAreasToDesiredBounds();
     aDesiredSize.mOverflowAreas.UnionWith(
-      kidDesiredSize.mOverflowAreas + kidPt);
+      kidDesiredSize.mOverflowAreas + kidFrame->GetPosition());
   }
 
   if (prevCanvasFrame) {

@@ -260,7 +260,7 @@ class LiveInterval
     };
 
   private:
-    Vector<Range, 1, IonAllocPolicy> ranges_;
+    Vector<Range, 1, JitAllocPolicy> ranges_;
     LAllocation alloc_;
     LiveInterval *spillInterval_;
     uint32_t vreg_;
@@ -428,13 +428,13 @@ class VirtualRegister
 {
     LNode *ins_;
     LDefinition *def_;
-    Vector<LiveInterval *, 1, IonAllocPolicy> intervals_;
+    Vector<LiveInterval *, 1, JitAllocPolicy> intervals_;
 
     // Whether def_ is a temp or an output.
     bool isTemp_ : 1;
 
-    void operator=(const VirtualRegister &) MOZ_DELETE;
-    VirtualRegister(const VirtualRegister &) MOZ_DELETE;
+    void operator=(const VirtualRegister &) = delete;
+    VirtualRegister(const VirtualRegister &) = delete;
 
   protected:
     explicit VirtualRegister(TempAllocator &alloc)
@@ -530,8 +530,8 @@ class VirtualRegisterMap
   private:
     FixedList<VREG> vregs_;
 
-    void operator=(const VirtualRegisterMap &) MOZ_DELETE;
-    VirtualRegisterMap(const VirtualRegisterMap &) MOZ_DELETE;
+    void operator=(const VirtualRegisterMap &) = delete;
+    VirtualRegisterMap(const VirtualRegisterMap &) = delete;
 
   public:
     VirtualRegisterMap()
@@ -604,7 +604,7 @@ class LiveRangeAllocator : protected RegisterAllocator
 {
   protected:
     // Computed inforamtion
-    BitSet **liveIn;
+    BitSet *liveIn;
     VirtualRegisterMap<VREG> vregs;
     mozilla::Array<LiveInterval *, AnyRegister::Total> fixedIntervals;
 

@@ -27,6 +27,27 @@ XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "FormSubmitObserver",
   "resource:///modules/FormSubmitObserver.jsm");
+XPCOMUtils.defineLazyGetter(this, "SimpleServiceDiscovery", function() {
+  let ssdp = Cu.import("resource://gre/modules/SimpleServiceDiscovery.jsm", {}).SimpleServiceDiscovery;
+  // Register targets
+  ssdp.registerDevice({
+    id: "roku:ecp",
+    target: "roku:ecp",
+    factory: function(aService) {
+      Cu.import("resource://gre/modules/RokuApp.jsm");
+      return new RokuApp(aService);
+    },
+    mirror: true,
+    types: ["video/mp4"],
+    extensions: ["mp4"]
+  });
+  return ssdp;
+});
+XPCOMUtils.defineLazyGetter(this, "PageMenuChild", function() {
+  let tmp = {};
+  Cu.import("resource://gre/modules/PageMenu.jsm", tmp);
+  return new tmp.PageMenuChild();
+});
 
 // TabChildGlobal
 var global = this;
@@ -76,6 +97,20 @@ addMessageListener("MixedContent:ReenableProtection", function() {
   docShell.mixedContentChannel = null;
 });
 
+addMessageListener("SecondScreen:tab-mirror", function(message) {
+  let app = SimpleServiceDiscovery.findAppForService(message.data.service);
+  if (app) {
+    let width = content.innerWidth;
+    let height = content.innerHeight;
+    let viewport = {cssWidth: width, cssHeight: height, width: width, height: height};
+    app.mirror(function() {}, content, viewport, function() {}, content);
+  }
+});
+
+addMessageListener("ContextMenu:DoCustomCommand", function(message) {
+  PageMenuChild.executeMenu(message.data);
+});
+
 addEventListener("DOMFormHasPassword", function(event) {
   InsecurePasswordUtils.checkForInsecurePasswords(event.target);
   LoginManagerContent.onFormPassword(event);
@@ -122,7 +157,8 @@ let handleContentContextMenu = function (event) {
         InlineSpellCheckerContent.initContextMenu(event, editFlags, this);
     }
 
-    sendSyncMessage("contextmenu", { editFlags, spellInfo, addonInfo }, { event, popupNode: event.target });
+    let customMenuItems = PageMenuChild.build(event.target);
+    sendSyncMessage("contextmenu", { editFlags, spellInfo, customMenuItems, addonInfo }, { event, popupNode: event.target });
   }
   else {
     // Break out to the parent window and pass the add-on info along
@@ -269,6 +305,9 @@ let AboutHomeListener = {
       case "AboutHomeSearchEvent":
         this.onSearch(aEvent);
         break;
+      case "AboutHomeSearchPanel":
+        this.onOpenSearchPanel(aEvent);
+        break;
       case "click":
         this.onClick(aEvent);
         break;
@@ -320,14 +359,13 @@ let AboutHomeListener = {
     addEventListener("click", this, true);
     addEventListener("pagehide", this, true);
 
-    // XXX bug 738646 - when Marketplace is launched, remove this statement and
-    // the hidden attribute set on the apps button in aboutHome.xhtml
-    if (Services.prefs.getPrefType("browser.aboutHome.apps") == Services.prefs.PREF_BOOL &&
-        Services.prefs.getBoolPref("browser.aboutHome.apps"))
-      doc.getElementById("apps").removeAttribute("hidden");
+    if (!Services.prefs.getBoolPref("browser.search.showOneOffButtons")) {
+      doc.documentElement.setAttribute("searchUIConfiguration", "oldsearchui");
+    }
 
     sendAsyncMessage("AboutHome:RequestUpdate");
     doc.addEventListener("AboutHomeSearchEvent", this, true, true);
+    doc.addEventListener("AboutHomeSearchPanel", this, true, true);
   },
 
   onClick: function(aEvent) {
@@ -378,6 +416,10 @@ let AboutHomeListener = {
       case "settings":
         sendAsyncMessage("AboutHome:Settings");
         break;
+
+      case "searchIcon":
+        sendAsyncMessage("AboutHome:OpenSearchPanel", null, { anchor: originalTarget });
+        break;
     }
   },
 
@@ -395,6 +437,10 @@ let AboutHomeListener = {
 
   onSearch: function(aEvent) {
     sendAsyncMessage("AboutHome:Search", { searchData: aEvent.detail });
+  },
+
+  onOpenSearchPanel: function(aEvent) {
+    sendAsyncMessage("AboutHome:OpenSearchPanel");
   },
 
   onFocusInput: function () {
@@ -522,7 +568,8 @@ let ClickEventHandler = {
       this.onAboutBlocked(originalTarget, ownerDoc);
       return;
     } else if (ownerDoc.documentURI.startsWith("about:neterror")) {
-      this.onAboutNetError(originalTarget, ownerDoc);
+      this.onAboutNetError(event, ownerDoc.documentURI);
+      return;
     }
 
     let [href, node] = this._hrefAndLinkNodeForClickEvent(event);
@@ -543,6 +590,7 @@ let ClickEventHandler = {
             event.preventDefault(); // Need to prevent the pageload.
           }
         }
+        json.noReferrer = BrowserUtils.linkHasNoReferrer(node)
       }
 
       sendAsyncMessage("Content:Click", json);
@@ -588,12 +636,18 @@ let ClickEventHandler = {
     });
   },
 
-  onAboutNetError: function (targetElement, ownerDoc) {
-    let elmId = targetElement.getAttribute("id");
-    if (elmId != "errorTryAgain" || !/e=netOffline/.test(ownerDoc.documentURI)) {
+  onAboutNetError: function (event, documentURI) {
+    let elmId = event.originalTarget.getAttribute("id");
+    if (elmId != "errorTryAgain" || !/e=netOffline/.test(documentURI)) {
       return;
     }
-    sendSyncMessage("Browser:NetworkError", {});
+    // browser front end will handle clearing offline mode and refreshing
+    // the page *if* we're in offline mode now. Otherwise let the error page
+    // handle the click.
+    if (Services.io.offline) {
+      event.preventDefault();
+      sendAsyncMessage("Browser:EnableOnlineMode", {});
+    }
   },
 
   /**

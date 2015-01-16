@@ -3,9 +3,12 @@ const KEYSYSTEM_TYPE = "org.w3.clearkey";
 function bail(message)
 {
   return function(err) {
+    if (err) {
+      message +=  "; " + String(err)
+    }
     ok(false, message);
     if (err) {
-      info(err);
+      info(String(err));
     }
     SimpleTest.finish();
   }
@@ -70,13 +73,13 @@ function Log(token, msg) {
   info(TimeStamp(token) + " " + msg);
 }
 
-function UpdateSessionFunc(test, token) {
+function UpdateSessionFunc(test, token, sessionType) {
   return function(ev) {
     var msgStr = ArrayBufferToString(ev.message);
     var msg = JSON.parse(msgStr);
 
     Log(token, "got message from CDM: " + msgStr);
-    is(msg.type, test.sessionType, TimeStamp(token) + " key session type should match");
+    is(msg.type, sessionType, TimeStamp(token) + " key session type should match");
     ok(msg.kids, TimeStamp(token) + " message event should contain key ID array");
 
     var outKeys = [];
@@ -121,6 +124,15 @@ function PlayFragmented(test, elem, token)
     var curFragment = 0;
 
     function addNextFragment() {
+      /* We can get another updateevent as a result of calling ms.endOfStream() if
+         the highest end time of our source buffers is different from that of the
+         media source duration. Due to bug 1065207 this can happen because of
+         inaccuracies in the frame duration calculations. Check if we are already
+         "ended" and ignore the update event */
+      if (ms.readyState == "ended") {
+        return;
+      }
+
       if (curFragment >= test.fragments.length) {
         Log(token, "addNextFragment() end of stream");
         ms.endOfStream();
@@ -186,6 +198,9 @@ function SetupEME(test, token, params)
     }, false);
   });
 
+  // Finish the test when error is encountered.
+  v.onerror = bail(token + " got error event");
+
   var onSetKeysFail = (params && params.onSetKeysFail)
     ? params.onSetKeysFail
     : bail(token + " Failed to set MediaKeys on <video> element");
@@ -202,24 +217,24 @@ function SetupEME(test, token, params)
       .then(function(keySystemAccess) {
         return keySystemAccess.createMediaKeys();
       }, bail(token + " Failed to request key system access."))
-      
+
       .then(function(mediaKeys) {
         Log(token, "created MediaKeys object ok");
         mediaKeys.sessions = [];
         return v.setMediaKeys(mediaKeys);
       }, bail("failed to create MediaKeys object"))
-      
+
       .then(function() {
         Log(token, "set MediaKeys on <video> element ok");
-
-        var session = v.mediaKeys.createSession(test.sessionType);
+        var sessionType = (params && params.sessionType) ? params.sessionType : "temporary";
+        var session = v.mediaKeys.createSession(sessionType);
         if (params && params.onsessioncreated) {
           params.onsessioncreated(session);
         }
-        session.addEventListener("message", UpdateSessionFunc(test, token));
+        session.addEventListener("message", UpdateSessionFunc(test, token, sessionType));
         return session.generateRequest(ev.initDataType, ev.initData);
       }, onSetKeysFail)
-      
+
       .then(function() {
         Log(token, "generated request");
       }, bail(token + " Failed to request key system access2."));

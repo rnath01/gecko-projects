@@ -33,13 +33,13 @@
 namespace mozilla { namespace pkix {
 
 // These values correspond to the tag values in the ASN.1 CertStatus
-MOZILLA_PKIX_ENUM_CLASS CertStatus : uint8_t {
+enum class CertStatus : uint8_t {
   Good = der::CONTEXT_SPECIFIC | 0,
   Revoked = der::CONTEXT_SPECIFIC | der::CONSTRUCTED | 1,
   Unknown = der::CONTEXT_SPECIFIC | 2
 };
 
-class Context
+class Context final
 {
 public:
   Context(TrustDomain& trustDomain, const CertID& certID, Time time,
@@ -71,9 +71,8 @@ public:
   Time* validThrough;
   bool expired;
 
-private:
-  Context(const Context&); // delete
-  void operator=(const Context&); // delete
+  Context(const Context&) = delete;
+  void operator=(const Context&) = delete;
 };
 
 // Verify that potentialSigner is a valid delegated OCSP response signing cert
@@ -140,7 +139,7 @@ CheckOCSPResponseSignerCert(TrustDomain& trustDomain,
   return rv;
 }
 
-MOZILLA_PKIX_ENUM_CLASS ResponderIDType : uint8_t
+enum class ResponderIDType : uint8_t
 {
   byName = der::CONTEXT_SPECIFIC | der::CONSTRUCTED | 1,
   byKey = der::CONTEXT_SPECIFIC | der::CONSTRUCTED | 2
@@ -630,12 +629,15 @@ SingleResponse(Reader& input, Context& context)
     }
   }
 
-  Time timeMinusSlop(context.time);
-  rv = timeMinusSlop.SubtractSeconds(SLOP_SECONDS);
+  // Add some slop to hopefully handle clock-skew.
+  Time notAfterPlusSlop(notAfter);
+  rv = notAfterPlusSlop.AddSeconds(SLOP_SECONDS);
   if (rv != Success) {
-    return rv;
+    // This could only happen if we're dealing with times beyond the year
+    // 10,000AD.
+    return Result::ERROR_OCSP_FUTURE_RESPONSE;
   }
-  if (timeMinusSlop > notAfter) {
+  if (context.time > notAfterPlusSlop) {
     context.expired = true;
   }
 
@@ -650,7 +652,7 @@ SingleResponse(Reader& input, Context& context)
     *context.thisUpdate = thisUpdate;
   }
   if (context.validThrough) {
-    *context.validThrough = notAfter;
+    *context.validThrough = notAfterPlusSlop;
   }
 
   return Success;

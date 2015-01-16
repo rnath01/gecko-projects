@@ -24,8 +24,7 @@ FFmpegAudioDecoder<LIBAV_VER>::FFmpegAudioDecoder(
   , mCallback(aCallback)
 {
   MOZ_COUNT_CTOR(FFmpegAudioDecoder);
-  mExtraData.append(aConfig.audio_specific_config.begin(),
-                    aConfig.audio_specific_config.length());
+  mExtraData = aConfig.audio_specific_config;
 }
 
 nsresult
@@ -128,13 +127,13 @@ FFmpegAudioDecoder<LIBAV_VER>::DecodePacket(MP4Sample* aSample)
         return;
       }
 
-      AudioData* data = new AudioData(samplePosition,
-                                      pts,
-                                      duration.value(),
-                                      mFrame->nb_samples,
-                                      audio.forget(),
-                                      numChannels,
-                                      samplingRate);
+      nsRefPtr<AudioData> data = new AudioData(samplePosition,
+                                               pts,
+                                               duration.value(),
+                                               mFrame->nb_samples,
+                                               audio.forget(),
+                                               numChannels,
+                                               samplingRate);
       mCallback->Output(data);
       pts += duration.value();
     }

@@ -8,7 +8,7 @@
 #define jit_CompileInfo_inl_h
 
 #include "jit/CompileInfo.h"
-#include "jit/IonAllocPolicy.h"
+#include "jit/JitAllocPolicy.h"
 
 #include "jsscriptinlines.h"
 
@@ -55,6 +55,33 @@ InlineScriptTree::addCallee(TempAllocator *allocator, jsbytecode *callerPc,
     calleeTree->nextCallee_ = children_;
     children_ = calleeTree;
     return calleeTree;
+}
+
+static inline const char *
+AnalysisModeString(AnalysisMode mode)
+{
+    switch (mode) {
+      case Analysis_None:
+        return "Analysis_None";
+      case Analysis_DefiniteProperties:
+        return "Analysis_DefiniteProperties";
+      case Analysis_ArgumentsUsage:
+        return "Analysis_ArgumentsUsage";
+      default:
+        MOZ_CRASH("Invalid AnalysisMode");
+    }
+}
+
+static inline bool
+CanIonCompile(JSScript *script, AnalysisMode mode)
+{
+    switch (mode) {
+      case Analysis_None: return script->canIonCompile();
+      case Analysis_DefiniteProperties: return true;
+      case Analysis_ArgumentsUsage: return true;
+      default:;
+    }
+    MOZ_CRASH("Invalid AnalysisMode");
 }
 
 } // namespace jit

@@ -20,7 +20,7 @@
 
 #include "jsscriptinlines.h"
 
-#include "jit/IonFrames-inl.h"
+#include "jit/JitFrames-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -75,7 +75,7 @@ class BufferPointer
 struct BaselineStackBuilder
 {
     JitFrameIterator &iter_;
-    IonJSFrameLayout *frame_;
+    JitFrameLayout *frame_;
 
     static size_t HeaderSize() {
         return AlignBytes(sizeof(BaselineBailoutInfo), sizeof(void *));
@@ -90,7 +90,7 @@ struct BaselineStackBuilder
 
     BaselineStackBuilder(JitFrameIterator &iter, size_t initialSize)
       : iter_(iter),
-        frame_(static_cast<IonJSFrameLayout*>(iter.current())),
+        frame_(static_cast<JitFrameLayout*>(iter.current())),
         bufferTotal_(initialSize),
         bufferAvail_(0),
         bufferUsed_(0),
@@ -125,6 +125,7 @@ struct BaselineStackBuilder
         header_->valueR1 = UndefinedValue();
         header_->resumeFramePtr = nullptr;
         header_->resumeAddr = nullptr;
+        header_->resumePC = nullptr;
         header_->monitorStub = nullptr;
         header_->numFrames = 0;
         return true;
@@ -275,6 +276,10 @@ struct BaselineStackBuilder
         header_->resumeAddr = resumeAddr;
     }
 
+    void setResumePC(jsbytecode *pc) {
+        header_->resumePC = pc;
+    }
+
     void setMonitorStub(ICStub *stub) {
         header_->monitorStub = stub;
     }
@@ -300,12 +305,12 @@ struct BaselineStackBuilder
         return reinterpret_cast<uint8_t *>(frame_) + (offset - bufferUsed_);
     }
 
-    inline IonJSFrameLayout *startFrame() {
+    inline JitFrameLayout *startFrame() {
         return frame_;
     }
 
-    BufferPointer<IonJSFrameLayout> topFrameAddress() {
-        return pointerAtStackOffset<IonJSFrameLayout>(0);
+    BufferPointer<JitFrameLayout> topFrameAddress() {
+        return pointerAtStackOffset<JitFrameLayout>(0);
     }
 
     //
@@ -321,7 +326,7 @@ struct BaselineStackBuilder
     //
     void *calculatePrevFramePtr() {
         // Get the incoming frame.
-        BufferPointer<IonJSFrameLayout> topFrame = topFrameAddress();
+        BufferPointer<JitFrameLayout> topFrame = topFrameAddress();
         FrameType type = topFrame->prevType();
 
         // For IonJS and Entry frames, the "saved" frame pointer in the baseline
@@ -332,11 +337,11 @@ struct BaselineStackBuilder
 
         // BaselineStub - Baseline calling into Ion.
         //  PrevFramePtr needs to point to the BaselineStubFrame's saved frame pointer.
-        //      STACK_START_ADDR + IonJSFrameLayout::Size() + PREV_FRAME_SIZE
-        //                      - IonBaselineStubFrameLayout::reverseOffsetOfSavedFramePtr()
+        //      STACK_START_ADDR + JitFrameLayout::Size() + PREV_FRAME_SIZE
+        //                      - BaselineStubFrameLayout::reverseOffsetOfSavedFramePtr()
         if (type == JitFrame_BaselineStub) {
-            size_t offset = IonJSFrameLayout::Size() + topFrame->prevFrameLocalSize() +
-                            IonBaselineStubFrameLayout::reverseOffsetOfSavedFramePtr();
+            size_t offset = JitFrameLayout::Size() + topFrame->prevFrameLocalSize() +
+                            BaselineStubFrameLayout::reverseOffsetOfSavedFramePtr();
             return virtualPointerAtStackOffset(offset);
         }
 
@@ -345,7 +350,7 @@ struct BaselineStackBuilder
         // whether the arch is x86 or not.  The x86 rectifier frame saves the frame pointer,
         // so we can calculate it directly.  For other archs, the previous frame pointer
         // is stored on the stack in the frame that precedes the rectifier frame.
-        size_t priorOffset = IonJSFrameLayout::Size() + topFrame->prevFrameLocalSize();
+        size_t priorOffset = JitFrameLayout::Size() + topFrame->prevFrameLocalSize();
 #if defined(JS_CODEGEN_X86)
         // On X86, the FramePointer is pushed as the first value in the Rectifier frame.
         MOZ_ASSERT(BaselineFrameReg == FramePointer);
@@ -354,8 +359,8 @@ struct BaselineStackBuilder
 #elif defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
         // On X64, ARM and MIPS, the frame pointer save location depends on
         // the caller of the rectifier frame.
-        BufferPointer<IonRectifierFrameLayout> priorFrame =
-            pointerAtStackOffset<IonRectifierFrameLayout>(priorOffset);
+        BufferPointer<RectifierFrameLayout> priorFrame =
+            pointerAtStackOffset<RectifierFrameLayout>(priorOffset);
         FrameType priorType = priorFrame->prevType();
         MOZ_ASSERT(priorType == JitFrame_IonJS || priorType == JitFrame_BaselineStub);
 
@@ -365,12 +370,12 @@ struct BaselineStackBuilder
             return nullptr;
 
         // Otherwise, the frame preceding the rectifier is a BaselineStub frame.
-        //  let X = STACK_START_ADDR + IonJSFrameLayout::Size() + PREV_FRAME_SIZE
-        //      X + IonRectifierFrameLayout::Size()
-        //        + ((IonRectifierFrameLayout *) X)->prevFrameLocalSize()
+        //  let X = STACK_START_ADDR + JitFrameLayout::Size() + PREV_FRAME_SIZE
+        //      X + RectifierFrameLayout::Size()
+        //        + ((RectifierFrameLayout *) X)->prevFrameLocalSize()
         //        - BaselineStubFrameLayout::reverseOffsetOfSavedFramePtr()
-        size_t extraOffset = IonRectifierFrameLayout::Size() + priorFrame->prevFrameLocalSize() +
-                             IonBaselineStubFrameLayout::reverseOffsetOfSavedFramePtr();
+        size_t extraOffset = RectifierFrameLayout::Size() + priorFrame->prevFrameLocalSize() +
+                             BaselineStubFrameLayout::reverseOffsetOfSavedFramePtr();
         return virtualPointerAtStackOffset(priorOffset + extraOffset);
 #elif defined(JS_CODEGEN_NONE)
         MOZ_CRASH();
@@ -415,12 +420,14 @@ class SnapshotIteratorForBailout : public SnapshotIterator
     }
 };
 
+#ifdef DEBUG
 static inline bool
 IsInlinableFallback(ICFallbackStub *icEntry)
 {
     return icEntry->isCall_Fallback() || icEntry->isGetProp_Fallback() ||
            icEntry->isSetProp_Fallback();
 }
+#endif
 
 static inline void*
 GetStubReturnAddress(JSContext *cx, jsbytecode *pc)
@@ -673,8 +680,15 @@ InitFromBailout(JSContext *cx, HandleScript caller, jsbytecode *callerPC,
                 // If pcOffset == 0, we may have to push a new call object, so
                 // we leave scopeChain nullptr and enter baseline code before
                 // the prologue.
-                if (iter.pcOffset() != 0 || iter.resumeAfter())
+                //
+                // If we are propagating an exception for debug mode, we will
+                // not resume into baseline code, but instead into
+                // HandleExceptionBaseline, so *do* set the scope chain here.
+                if (iter.pcOffset() != 0 || iter.resumeAfter() ||
+                    (excInfo && excInfo->propagatingIonExceptionForDebugMode()))
+                {
                     scopeChain = fun->environment();
+                }
             } else {
                 // For global, compile-and-go scripts the scope chain is the
                 // script's global (Ion does not compile non-compile-and-go
@@ -719,7 +733,7 @@ InitFromBailout(JSContext *cx, HandleScript caller, jsbytecode *callerPC,
         JitSpew(JitSpew_BaselineBailouts, "      Is function!");
         JitSpew(JitSpew_BaselineBailouts, "      thisv=%016llx", *((uint64_t *) &thisv));
 
-        size_t thisvOffset = builder.framePushed() + IonJSFrameLayout::offsetOfThis();
+        size_t thisvOffset = builder.framePushed() + JitFrameLayout::offsetOfThis();
         *builder.valuePointerAtStackOffset(thisvOffset) = thisv;
 
         MOZ_ASSERT(iter.numAllocations() >= CountArgSlots(script, fun));
@@ -742,7 +756,7 @@ InitFromBailout(JSContext *cx, HandleScript caller, jsbytecode *callerPC,
             JitSpew(JitSpew_BaselineBailouts, "      arg %d = %016llx",
                         (int) i, *((uint64_t *) &arg));
             if (callerPC) {
-                size_t argOffset = builder.framePushed() + IonJSFrameLayout::offsetOfActualArg(i);
+                size_t argOffset = builder.framePushed() + JitFrameLayout::offsetOfActualArg(i);
                 *builder.valuePointerAtStackOffset(argOffset) = arg;
             } else {
                 startFrameFormals[i].set(arg);
@@ -873,10 +887,12 @@ InitFromBailout(JSContext *cx, HandleScript caller, jsbytecode *callerPC,
             // iterators, however, so read them out. They will be closed by
             // HandleExceptionBaseline.
             MOZ_ASSERT(cx->compartment()->isDebuggee());
-            if (iter.moreFrames() || HasLiveIteratorAtStackDepth(script, pc, i + 1))
+            if (iter.moreFrames() || HasLiveIteratorAtStackDepth(script, pc, i + 1)) {
                 v = iter.read();
-            else
+            } else {
+                iter.skip();
                 v = MagicValue(JS_OPTIMIZED_OUT);
+            }
         } else {
             v = iter.read();
         }
@@ -972,6 +988,7 @@ InitFromBailout(JSContext *cx, HandleScript caller, jsbytecode *callerPC,
         if (resumeAfter && !enterMonitorChain)
             pc = GetNextPc(pc);
 
+        builder.setResumePC(pc);
         builder.setResumeFramePtr(prevFramePtr);
 
         if (enterMonitorChain) {
@@ -1019,21 +1036,46 @@ InitFromBailout(JSContext *cx, HandleScript caller, jsbytecode *callerPC,
         } else {
             // If needed, initialize BaselineBailoutInfo's valueR0 and/or valueR1 with the
             // top stack values.
+            //
+            // Note that we use the 'maybe' variant of nativeCodeForPC because
+            // of exception propagation for debug mode. See note below.
             PCMappingSlotInfo slotInfo;
-            uint8_t *nativeCodeForPC = baselineScript->nativeCodeForPC(script, pc, &slotInfo);
+            uint8_t *nativeCodeForPC;
+
+            if (excInfo && excInfo->propagatingIonExceptionForDebugMode()) {
+                // When propagating an exception for debug mode, set the
+                // resume pc to the throwing pc, so that Debugger hooks report
+                // the correct pc offset of the throwing op instead of its
+                // successor (this pc will be used as the BaselineFrame's
+                // override pc).
+                //
+                // Note that we never resume at this pc, it is set for the sake
+                // of frame iterators giving the correct answer.
+                //
+                // We also set nativeCodeForPC to nullptr as this address
+                // won't be used anywhere.
+                jsbytecode *throwPC = script->offsetToPC(iter.pcOffset());
+                builder.setResumePC(throwPC);
+                nativeCodeForPC = nullptr;
+            } else {
+                nativeCodeForPC = baselineScript->nativeCodeForPC(script, pc, &slotInfo);
+                MOZ_ASSERT(nativeCodeForPC);
+            }
+
             unsigned numUnsynced = slotInfo.numUnsynced();
+
             MOZ_ASSERT(numUnsynced <= 2);
             PCMappingSlotInfo::SlotLocation loc1, loc2;
             if (numUnsynced > 0) {
                 loc1 = slotInfo.topSlotLocation();
                 JitSpew(JitSpew_BaselineBailouts, "      Popping top stack value into %d.",
-                            (int) loc1);
+                        (int) loc1);
                 builder.popValueInto(loc1);
             }
             if (numUnsynced > 1) {
                 loc2 = slotInfo.nextSlotLocation();
                 JitSpew(JitSpew_BaselineBailouts, "      Popping next stack value into %d.",
-                            (int) loc2);
+                        (int) loc2);
                 MOZ_ASSERT_IF(loc1 != PCMappingSlotInfo::SlotIgnore, loc1 != loc2);
                 builder.popValueInto(loc2);
             }
@@ -1043,7 +1085,7 @@ InitFromBailout(JSContext *cx, HandleScript caller, jsbytecode *callerPC,
             frameSize -= sizeof(Value) * numUnsynced;
             blFrame->setFrameSize(frameSize);
             JitSpew(JitSpew_BaselineBailouts, "      Adjusted framesize -= %d: %d",
-                            int(sizeof(Value) * numUnsynced), int(frameSize));
+                    int(sizeof(Value) * numUnsynced), int(frameSize));
 
             // If scopeChain is nullptr, then bailout is occurring during argument check.
             // In this case, resume into the prologue.
@@ -1347,9 +1389,9 @@ jit::BailoutIonToBaseline(JSContext *cx, JitActivation *activation, JitFrameIter
     MOZ_ASSERT(poppedLastSPSFrameOut);
     MOZ_ASSERT(!*poppedLastSPSFrameOut);
 
-    TraceLogger *logger = TraceLoggerForMainThread(cx->runtime());
-    TraceLogStopEvent(logger, TraceLogger::IonMonkey);
-    TraceLogStartEvent(logger, TraceLogger::Baseline);
+    TraceLoggerThread *logger = TraceLoggerForMainThread(cx->runtime());
+    TraceLogStopEvent(logger, TraceLogger_IonMonkey);
+    TraceLogStartEvent(logger, TraceLogger_Baseline);
 
     // The caller of the top frame must be one of the following:
     //      IonJS - Ion calling into Ion.
@@ -1460,8 +1502,12 @@ jit::BailoutIonToBaseline(JSContext *cx, JitActivation *activation, JitFrameIter
         snapIter.settleOnFrame();
 
         if (frameNo > 0) {
-            TraceLogStartEvent(logger, TraceLogCreateTextId(logger, scr));
-            TraceLogStartEvent(logger, TraceLogger::Baseline);
+            // TraceLogger doesn't create entries for inlined frames. But we
+            // see them in Baseline. Here we create the start events of those
+            // entries. So they correspond to what we will see in Baseline.
+            TraceLoggerEvent scriptEvent(logger, TraceLogger_Scripts, scr);
+            TraceLogStartEvent(logger, scriptEvent);
+            TraceLogStartEvent(logger, TraceLogger_Baseline);
         }
 
         JitSpew(JitSpew_BaselineBailouts, "    FrameNo %d", frameNo);
@@ -1645,12 +1691,12 @@ jit::FinishBailoutToBaseline(BaselineBailoutInfo *bailoutInfo)
 
     JitSpew(JitSpew_BaselineBailouts, "  Done restoring frames");
 
-    // Check that we can get the current script's PC.
-#ifdef DEBUG
-    jsbytecode *pc;
-    cx->currentScript(&pc);
-    JitSpew(JitSpew_BaselineBailouts, "  Got pc=%p", pc);
-#endif
+    // The current native code pc may not have a corresponding ICEntry, so we
+    // store the bytecode pc in the frame for frame iterators. This pc is
+    // cleared at the end of this function. If we return false, we don't clear
+    // it: the exception handler also needs it and will clear it for us.
+    BaselineFrame *topFrame = GetTopBaselineFrame(cx);
+    topFrame->setOverridePc(bailoutInfo->resumePC);
 
     uint32_t numFrames = bailoutInfo->numFrames;
     MOZ_ASSERT(numFrames > 0);
@@ -1663,7 +1709,6 @@ jit::FinishBailoutToBaseline(BaselineBailoutInfo *bailoutInfo)
     // Ensure the frame has a call object if it needs one. If the scope chain
     // is nullptr, we will enter baseline code at the prologue so no need to do
     // anything in that case.
-    BaselineFrame *topFrame = GetTopBaselineFrame(cx);
     if (topFrame->scopeChain() && !EnsureHasScopeObjects(cx, topFrame))
         return false;
 
@@ -1768,14 +1813,12 @@ jit::FinishBailoutToBaseline(BaselineBailoutInfo *bailoutInfo)
       case Bailout_MonitorTypes:
       case Bailout_Hole:
       case Bailout_NegativeIndex:
-      case Bailout_ObjectIdentityOrTypeGuard:
       case Bailout_NonInt32Input:
       case Bailout_NonNumericInput:
       case Bailout_NonBooleanInput:
       case Bailout_NonObjectInput:
       case Bailout_NonStringInput:
       case Bailout_NonSymbolInput:
-      case Bailout_GuardThreadExclusive:
       case Bailout_InitialState:
       case Bailout_Debugger:
         // Do nothing.
@@ -1785,6 +1828,7 @@ jit::FinishBailoutToBaseline(BaselineBailoutInfo *bailoutInfo)
       case Bailout_OverflowInvalidate:
       case Bailout_NonStringInputInvalidate:
       case Bailout_DoubleOutput:
+      case Bailout_ObjectIdentityOrTypeGuard:
         if (!HandleBaselineInfoBailout(cx, outerScript, innerScript))
             return false;
         break;
@@ -1812,5 +1856,7 @@ jit::FinishBailoutToBaseline(BaselineBailoutInfo *bailoutInfo)
     if (!CheckFrequentBailouts(cx, outerScript))
         return false;
 
+    // We're returning to JIT code, so we should clear the override pc.
+    topFrame->clearOverridePc();
     return true;
 }

@@ -16,7 +16,7 @@
 // Self
 #include "ProfileEntry.h"
 
-#if _MSC_VER
+#if defined(_MSC_VER) && _MSC_VER < 1900
  #define snprintf _snprintf
 #endif
 
@@ -157,7 +157,7 @@ ThreadProfile::ThreadProfile(ThreadInfo* aInfo, int aEntrySize)
   , mGeneration(0)
   , mPendingGenerationFlush(0)
   , mStackTop(aInfo->StackTop())
-  , mRespInfo(MOZ_THIS_IN_INITIALIZER_LIST())
+  , mRespInfo(this)
 #ifdef XP_LINUX
   , mRssMemory(0)
   , mUssMemory(0)
@@ -323,6 +323,10 @@ void ThreadProfile::StreamJSObject(JSStreamWriter& b)
     if (XRE_GetProcessType() == GeckoProcessType_Plugin) {
       // TODO Add the proper plugin name
       b.NameValue("name", "Plugin");
+    } else if (XRE_GetProcessType() == GeckoProcessType_Content) {
+      // This isn't going to really help once we have multiple content
+      // processes, but it'll do for now.
+      b.NameValue("name", "Content");
     } else {
       b.NameValue("name", Name());
     }

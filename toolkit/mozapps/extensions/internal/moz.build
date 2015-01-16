@@ -11,16 +11,13 @@ EXTRA_JS_MODULES.addons += [
     'AddonUpdateChecker.jsm',
     'Content.js',
     'LightweightThemeImageOptimizer.jsm',
+    'OpenH264Provider.jsm',
     'SpellCheckDictionaryBootstrap.js',
 ]
-
-if CONFIG['MOZ_BUILD_APP'] in ['browser']:
-      DEFINES['HAVE_SHIMS'] = True
 
 # Don't ship unused providers on Android
 if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'android':
     EXTRA_JS_MODULES.addons += [
-        'OpenH264Provider.jsm',
         'PluginProvider.jsm',
     ]
 

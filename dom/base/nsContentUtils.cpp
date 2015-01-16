@@ -41,6 +41,7 @@
 #include "mozilla/dom/HTMLShadowElement.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/TabParent.h"
 #include "mozilla/dom/TextDecoder.h"
 #include "mozilla/dom/TouchEvent.h"
 #include "mozilla/dom/ShadowRoot.h"
@@ -98,6 +99,7 @@
 #include "nsIDocShell.h"
 #include "nsIDocument.h"
 #include "nsIDocumentEncoder.h"
+#include "nsIDOMChromeWindow.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMDocumentType.h"
 #include "nsIDOMEvent.h"
@@ -180,6 +182,11 @@
 
 #include "nsIBidiKeyboard.h"
 
+#if defined(XP_WIN)
+// Undefine LoadImage to prevent naming conflict with Windows.
+#undef LoadImage
+#endif
+
 extern "C" int MOZ_XMLTranslateEntity(const char* ptr, const char* end,
                                       const char** next, char16_t* result);
 extern "C" int MOZ_XMLCheckQName(const char* ptr, const char* end,
@@ -236,6 +243,7 @@ bool nsContentUtils::sFullscreenApiIsContentOnly = false;
 bool nsContentUtils::sIsPerformanceTimingEnabled = false;
 bool nsContentUtils::sIsResourceTimingEnabled = false;
 bool nsContentUtils::sIsExperimentalAutocompleteEnabled = false;
+bool nsContentUtils::sEncodeDecodeURLHash = false;
 
 uint32_t nsContentUtils::sHandlingInputTimeout = 1000;
 
@@ -332,7 +340,7 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                            nsISupports* aData, bool aAnonymize)
+                            nsISupports* aData, bool aAnonymize) MOZ_OVERRIDE
   {
     // We don't measure the |EventListenerManager| objects pointed to by the
     // entries because those references are non-owning.
@@ -404,7 +412,7 @@ class CharsetDetectionObserver MOZ_FINAL : public nsICharsetDetectionObserver
 public:
   NS_DECL_ISUPPORTS
 
-  NS_IMETHOD Notify(const char *aCharset, nsDetectionConfident aConf)
+  NS_IMETHOD Notify(const char *aCharset, nsDetectionConfident aConf) MOZ_OVERRIDE
   {
     mCharset = aCharset;
     return NS_OK;
@@ -471,18 +479,15 @@ nsContentUtils::Init()
   if (!sEventListenerManagersHash.ops) {
     static const PLDHashTableOps hash_table_ops =
     {
-      PL_DHashAllocTable,
-      PL_DHashFreeTable,
       PL_DHashVoidPtrKeyStub,
       PL_DHashMatchEntryStub,
       PL_DHashMoveEntryStub,
       EventListenerManagerHashClearEntry,
-      PL_DHashFinalizeStub,
       EventListenerManagerHashInitEntry
     };
 
     PL_DHashTableInit(&sEventListenerManagersHash, &hash_table_ops,
-                      nullptr, sizeof(EventListenerManagerMapEntry));
+                      sizeof(EventListenerManagerMapEntry));
 
     RegisterStrongMemoryReporter(new DOMEventListenerManagersHashReporter());
   }
@@ -512,6 +517,9 @@ nsContentUtils::Init()
 
   Preferences::AddBoolVarCache(&sIsExperimentalAutocompleteEnabled,
                                "dom.forms.autocomplete.experimental", false);
+
+  Preferences::AddBoolVarCache(&sEncodeDecodeURLHash,
+                               "dom.url.encode_decode_hash", false);
 
   Preferences::AddUintVarCache(&sHandlingInputTimeout,
                                "dom.event.handling-user-input-time-limit",
@@ -3357,12 +3365,7 @@ nsContentUtils::ReportToConsoleNonLocalized(const nsAString& aErrorText,
   if (!aLineNumber) {
     JSContext *cx = GetCurrentJSContext();
     if (cx) {
-      const char* filename;
-      uint32_t lineno;
-      if (nsJSUtils::GetCallingLocation(cx, &filename, &lineno)) {
-        spec = filename;
-        aLineNumber = lineno;
-      }
+      nsJSUtils::GetCallingLocation(cx, spec, &aLineNumber);
     }
   }
   if (spec.IsEmpty() && aURI)
@@ -3952,8 +3955,7 @@ nsContentUtils::TraverseListenerManager(nsINode *aNode,
 
   EventListenerManagerMapEntry *entry =
     static_cast<EventListenerManagerMapEntry *>
-               (PL_DHashTableOperate(&sEventListenerManagersHash, aNode,
-                                        PL_DHASH_LOOKUP));
+               (PL_DHashTableLookup(&sEventListenerManagersHash, aNode));
   if (PL_DHASH_ENTRY_IS_BUSY(entry)) {
     CycleCollectionNoteChild(cb, entry->mListenerManager.get(),
                              "[via hash] mListenerManager");
@@ -3972,8 +3974,7 @@ nsContentUtils::GetListenerManagerForNode(nsINode *aNode)
 
   EventListenerManagerMapEntry *entry =
     static_cast<EventListenerManagerMapEntry *>
-               (PL_DHashTableOperate(&sEventListenerManagersHash, aNode,
-                                        PL_DHASH_ADD));
+               (PL_DHashTableAdd(&sEventListenerManagersHash, aNode));
 
   if (!entry) {
     return nullptr;
@@ -4004,8 +4005,7 @@ nsContentUtils::GetExistingListenerManagerForNode(const nsINode *aNode)
 
   EventListenerManagerMapEntry *entry =
     static_cast<EventListenerManagerMapEntry *>
-               (PL_DHashTableOperate(&sEventListenerManagersHash, aNode,
-                                        PL_DHASH_LOOKUP));
+               (PL_DHashTableLookup(&sEventListenerManagersHash, aNode));
   if (PL_DHASH_ENTRY_IS_BUSY(entry)) {
     return entry->mListenerManager;
   }
@@ -4020,8 +4020,7 @@ nsContentUtils::RemoveListenerManager(nsINode *aNode)
   if (sEventListenerManagersHash.ops) {
     EventListenerManagerMapEntry *entry =
       static_cast<EventListenerManagerMapEntry *>
-                 (PL_DHashTableOperate(&sEventListenerManagersHash, aNode,
-                                          PL_DHASH_LOOKUP));
+                 (PL_DHashTableLookup(&sEventListenerManagersHash, aNode));
     if (PL_DHASH_ENTRY_IS_BUSY(entry)) {
       nsRefPtr<EventListenerManager> listenerManager;
       listenerManager.swap(entry->mListenerManager);
@@ -5751,6 +5750,23 @@ nsContentUtils::GetASCIIOrigin(nsIURI* aURI, nsCString& aOrigin)
 {
   NS_PRECONDITION(aURI, "missing uri");
 
+  // For Blob URI we have to return the origin of page using its principal.
+  nsCOMPtr<nsIURIWithPrincipal> uriWithPrincipal = do_QueryInterface(aURI);
+  if (uriWithPrincipal) {
+    nsCOMPtr<nsIPrincipal> principal;
+    uriWithPrincipal->GetPrincipal(getter_AddRefs(principal));
+
+    if (principal) {
+      nsCOMPtr<nsIURI> uri;
+      nsresult rv = principal->GetURI(getter_AddRefs(uri));
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      if (uri && uri != aURI) {
+        return GetASCIIOrigin(uri, aOrigin);
+      }
+    }
+  }
+
   aOrigin.Truncate();
 
   nsCOMPtr<nsIURI> uri = NS_GetInnermostURI(aURI);
@@ -5808,6 +5824,23 @@ nsresult
 nsContentUtils::GetUTFOrigin(nsIURI* aURI, nsString& aOrigin)
 {
   NS_PRECONDITION(aURI, "missing uri");
+
+  // For Blob URI we have to return the origin of page using its principal.
+  nsCOMPtr<nsIURIWithPrincipal> uriWithPrincipal = do_QueryInterface(aURI);
+  if (uriWithPrincipal) {
+    nsCOMPtr<nsIPrincipal> principal;
+    uriWithPrincipal->GetPrincipal(getter_AddRefs(principal));
+
+    if (principal) {
+      nsCOMPtr<nsIURI> uri;
+      nsresult rv = principal->GetURI(getter_AddRefs(uri));
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      if (uri && uri != aURI) {
+        return GetUTFOrigin(uri, aOrigin);
+      }
+    }
+  }
 
   aOrigin.Truncate();
 
@@ -6007,7 +6040,7 @@ nsContentUtils::CreateBlobBuffer(JSContext* aCx,
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
-  if (!WrapNewBindingObject(aCx, blob, aBlob)) {
+  if (!GetOrCreateDOMReflector(aCx, blob, aBlob)) {
     return NS_ERROR_FAILURE;
   }
 
@@ -6223,15 +6256,31 @@ void nsContentUtils::RemoveNewlines(nsString &aString)
 void
 nsContentUtils::PlatformToDOMLineBreaks(nsString &aString)
 {
+  if (!PlatformToDOMLineBreaks(aString, mozilla::fallible_t())) {
+    aString.AllocFailed(aString.Length());
+  }
+}
+
+bool
+nsContentUtils::PlatformToDOMLineBreaks(nsString& aString, const fallible_t& aFallible)
+{
   if (aString.FindChar(char16_t('\r')) != -1) {
     // Windows linebreaks: Map CRLF to LF:
-    aString.ReplaceSubstring(MOZ_UTF16("\r\n"),
-                             MOZ_UTF16("\n"));
+    if (!aString.ReplaceSubstring(MOZ_UTF16("\r\n"),
+                                  MOZ_UTF16("\n"),
+                                  aFallible)) {
+      return false;
+    }
 
     // Mac linebreaks: Map any remaining CR to LF:
-    aString.ReplaceSubstring(MOZ_UTF16("\r"),
-                             MOZ_UTF16("\n"));
+    if (!aString.ReplaceSubstring(MOZ_UTF16("\r"),
+                                  MOZ_UTF16("\n"),
+                                  aFallible)) {
+      return false;
+    }
   }
+
+  return true;
 }
 
 void
@@ -7033,3 +7082,54 @@ nsContentUtils::GetHostOrIPv6WithBrackets(nsIURI* aURI, nsAString& aHost)
 
   CopyUTF8toUTF16(hostname, aHost);
 }
+
+void
+nsContentUtils::CallOnAllRemoteChildren(nsIMessageBroadcaster* aManager,
+                                        CallOnRemoteChildFunction aCallback,
+                                        void* aArg)
+{
+  uint32_t tabChildCount = 0;
+  aManager->GetChildCount(&tabChildCount);
+  for (uint32_t j = 0; j < tabChildCount; ++j) {
+    nsCOMPtr<nsIMessageListenerManager> childMM;
+    aManager->GetChildAt(j, getter_AddRefs(childMM));
+    if (!childMM) {
+      continue;
+    }
+
+    nsCOMPtr<nsIMessageBroadcaster> nonLeafMM = do_QueryInterface(childMM);
+    if (nonLeafMM) {
+      CallOnAllRemoteChildren(nonLeafMM, aCallback, aArg);
+      continue;
+    }
+
+    nsCOMPtr<nsIMessageSender> tabMM = do_QueryInterface(childMM);
+
+    mozilla::dom::ipc::MessageManagerCallback* cb =
+     static_cast<nsFrameMessageManager*>(tabMM.get())->GetCallback();
+    if (cb) {
+      nsFrameLoader* fl = static_cast<nsFrameLoader*>(cb);
+      PBrowserParent* remoteBrowser = fl->GetRemoteBrowser();
+      TabParent* remote = static_cast<TabParent*>(remoteBrowser);
+      if (remote && aCallback) {
+        aCallback(remote, aArg);
+      }
+    }
+  }
+}
+
+void
+nsContentUtils::CallOnAllRemoteChildren(nsIDOMWindow* aWindow,
+                                        CallOnRemoteChildFunction aCallback,
+                                        void* aArg)
+{
+  nsCOMPtr<nsIDOMChromeWindow> chromeWindow(do_QueryInterface(aWindow));
+  if (chromeWindow) {
+    nsCOMPtr<nsIMessageBroadcaster> windowMM;
+    chromeWindow->GetMessageManager(getter_AddRefs(windowMM));
+    if (windowMM) {
+      CallOnAllRemoteChildren(windowMM, aCallback, aArg);
+    }
+  }
+}
+

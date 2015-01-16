@@ -134,12 +134,10 @@ public:
    * into the principal child list after aFrame.
    * @note calling this method on a block frame is illegal. Use
    * nsBlockFrame::CreateContinuationFor() instead.
-   * @param aNextInFlowResult will contain the next-in-flow
-   *        <b>if and only if</b> one is created. If a next-in-flow already
-   *        exists aNextInFlowResult is set to nullptr.
-   * @return NS_OK if a next-in-flow already exists or is successfully created.
+   * @return the next-in-flow <b>if and only if</b> one is created. If
+   *         a next-in-flow already exists, nullptr will be returned.
    */
-  nsresult CreateNextInFlow(nsIFrame*  aFrame, nsIFrame*& aNextInFlowResult);
+  nsIFrame* CreateNextInFlow(nsIFrame* aFrame);
 
   /**
    * Delete aNextInFlow and its next-in-flows.
@@ -247,8 +245,9 @@ public:
                    nsPresContext*                 aPresContext,
                    nsHTMLReflowMetrics&           aDesiredSize,
                    const nsHTMLReflowState&       aReflowState,
-                   nscoord                        aX,
-                   nscoord                        aY,
+                   const mozilla::WritingMode&    aWM,
+                   const mozilla::LogicalPoint&   aPos,
+                   nscoord                        aContainerWidth,
                    uint32_t                       aFlags,
                    nsReflowStatus&                aStatus,
                    nsOverflowContinuationTracker* aTracker = nullptr);
@@ -270,6 +269,28 @@ public:
    *    don't want to automatically sync the frame and view
    * NS_FRAME_NO_SIZE_VIEW - don't size the frame's view
    */
+  static void FinishReflowChild(nsIFrame*                    aKidFrame,
+                                nsPresContext*               aPresContext,
+                                const nsHTMLReflowMetrics&   aDesiredSize,
+                                const nsHTMLReflowState*     aReflowState,
+                                const mozilla::WritingMode&  aWM,
+                                const mozilla::LogicalPoint& aPos,
+                                nscoord                      aContainerWidth,
+                                uint32_t                     aFlags);
+
+  //XXX temporary: hold on to a copy of the old physical versions of
+  //    ReflowChild and FinishReflowChild so that we can convert callers
+  //    incrementally.
+  void ReflowChild(nsIFrame*                      aKidFrame,
+                   nsPresContext*                 aPresContext,
+                   nsHTMLReflowMetrics&           aDesiredSize,
+                   const nsHTMLReflowState&       aReflowState,
+                   nscoord                        aX,
+                   nscoord                        aY,
+                   uint32_t                       aFlags,
+                   nsReflowStatus&                aStatus,
+                   nsOverflowContinuationTracker* aTracker = nullptr);
+
   static void FinishReflowChild(nsIFrame*                  aKidFrame,
                                 nsPresContext*             aPresContext,
                                 const nsHTMLReflowMetrics& aDesiredSize,
@@ -278,7 +299,6 @@ public:
                                 nscoord                    aY,
                                 uint32_t                   aFlags);
 
-  
   static void PositionChildViews(nsIFrame* aFrame);
 
   // ==========================================================================
@@ -525,6 +545,32 @@ protected:
    *            It's an error to push a parent's first child frame
    */
   void PushChildren(nsIFrame* aFromChild, nsIFrame* aPrevSibling);
+
+  // ==========================================================================
+  /*
+   * Convenience methods for traversing continuations
+   */
+
+  struct ContinuationTraversingState
+  {
+    nsContainerFrame* mNextInFlow;
+    explicit ContinuationTraversingState(nsContainerFrame* aFrame)
+      : mNextInFlow(static_cast<nsContainerFrame*>(aFrame->GetNextInFlow()))
+    { }
+  };
+
+  /**
+   * Find the first frame that is a child of this frame's next-in-flows,
+   * considering both their principal child lists and overflow lists.
+   */
+  nsIFrame* GetNextInFlowChild(ContinuationTraversingState& aState,
+                               bool* aIsInOverflow = nullptr);
+
+  /**
+   * Remove the result of GetNextInFlowChild from its current parent and
+   * append it to this frame's principal child list.
+   */
+  nsIFrame* PullNextInFlowChild(ContinuationTraversingState& aState);
 
   // ==========================================================================
   /*

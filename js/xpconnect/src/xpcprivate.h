@@ -77,6 +77,7 @@
 #include "mozilla/Alignment.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/CycleCollectedJSRuntime.h"
 #include "mozilla/GuardObjects.h"
@@ -242,12 +243,6 @@ static inline bool IS_WN_REFLECTOR(JSObject *obj)
 // pointer generally do so using an 'out' parm. When interface pointers are
 // returned as function call result values they are not addref'd. Exceptions
 // to this rule are noted explicitly.
-
-inline bool
-AddToCCKind(JSGCTraceKind kind)
-{
-    return kind == JSTRACE_OBJECT || kind == JSTRACE_SCRIPT;
-}
 
 class nsXPConnect : public nsIXPConnect,
                     public nsIThreadObserver,
@@ -628,6 +623,8 @@ public:
     void DeleteSingletonScopes();
 
     PRTime GetWatchdogTimestamp(WatchdogTimestampCategory aCategory);
+
+    void OnProcessNextEvent() { mSlowScriptCheckpoint = mozilla::TimeStamp::NowLoRes(); }
     void OnAfterProcessNextEvent() { mSlowScriptCheckpoint = mozilla::TimeStamp(); }
 
     nsTArray<nsXPCWrappedJS*>& WrappedJSToReleaseArray() { return mWrappedJSToReleaseArray; }
@@ -948,10 +945,6 @@ XPC_WN_CallMethod(JSContext *cx, unsigned argc, jsval *vp);
 extern bool
 XPC_WN_GetterSetter(JSContext *cx, unsigned argc, jsval *vp);
 
-extern bool
-XPC_WN_JSOp_Enumerate(JSContext *cx, JS::HandleObject obj, JSIterateOp enum_op,
-                      JS::MutableHandleValue statep, JS::MutableHandleId idp);
-
 extern JSObject*
 XPC_WN_JSOp_ThisObject(JSContext *cx, JS::HandleObject obj);
 
@@ -975,7 +968,7 @@ XPC_WN_JSOp_ThisObject(JSContext *cx, JS::HandleObject obj);
         nullptr, /* deleteGeneric */                                          \
         nullptr, nullptr, /* watch/unwatch */                                 \
         nullptr, /* getElements */                                            \
-        XPC_WN_JSOp_Enumerate,                                                \
+        nullptr, /* enumerate */                                              \
         XPC_WN_JSOp_ThisObject,                                               \
     }
 
@@ -998,7 +991,7 @@ XPC_WN_JSOp_ThisObject(JSContext *cx, JS::HandleObject obj);
         nullptr, /* deleteGeneric */                                          \
         nullptr, nullptr, /* watch/unwatch */                                 \
         nullptr, /* getElements */                                            \
-        XPC_WN_JSOp_Enumerate,                                                \
+        nullptr, /* enumerate */                                              \
         XPC_WN_JSOp_ThisObject,                                               \
     }
 
@@ -1626,7 +1619,6 @@ public:
     bool UseJSStubForAddProperty()      GET_IT(USE_JSSTUB_FOR_ADDPROPERTY)
     bool UseJSStubForDelProperty()      GET_IT(USE_JSSTUB_FOR_DELPROPERTY)
     bool UseJSStubForSetProperty()      GET_IT(USE_JSSTUB_FOR_SETPROPERTY)
-    bool DontEnumStaticProps()          GET_IT(DONT_ENUM_STATIC_PROPS)
     bool DontEnumQueryInterface()       GET_IT(DONT_ENUM_QUERY_INTERFACE)
     bool DontAskInstanceForScriptable() GET_IT(DONT_ASK_INSTANCE_FOR_SCRIPTABLE)
     bool ClassInfoInterfacesOnly()      GET_IT(CLASSINFO_INTERFACES_ONLY)
@@ -1947,8 +1939,8 @@ public:
     bool IsMarked() const {return mJSObject.hasFlag(1);}
 
 private:
-    XPCWrappedNativeTearOff(const XPCWrappedNativeTearOff& r) MOZ_DELETE;
-    XPCWrappedNativeTearOff& operator= (const XPCWrappedNativeTearOff& r) MOZ_DELETE;
+    XPCWrappedNativeTearOff(const XPCWrappedNativeTearOff& r) = delete;
+    XPCWrappedNativeTearOff& operator= (const XPCWrappedNativeTearOff& r) = delete;
 
 private:
     XPCNativeInterface* mInterface;
@@ -2393,11 +2385,11 @@ private:
 // nsXPCWrappedJS objects are chained together to represent the various
 // interface on the single underlying (possibly aggregate) JSObject.
 
-class nsXPCWrappedJS : protected nsAutoXPTCStub,
-                       public nsIXPConnectWrappedJS,
-                       public nsSupportsWeakReference,
-                       public nsIPropertyBag,
-                       public XPCRootSetElem
+class nsXPCWrappedJS MOZ_FINAL : protected nsAutoXPTCStub,
+                                 public nsIXPConnectWrappedJS,
+                                 public nsSupportsWeakReference,
+                                 public nsIPropertyBag,
+                                 public XPCRootSetElem
 {
 public:
     NS_DECL_CYCLE_COLLECTING_ISUPPORTS
@@ -2720,7 +2712,7 @@ public:
 // safe.
 extern void xpc_DestroyJSxIDClassObjects();
 
-class nsJSID : public nsIJSID
+class nsJSID MOZ_FINAL : public nsIJSID
 {
 public:
     NS_DEFINE_STATIC_CID_ACCESSOR(NS_JS_ID_CID)
@@ -2967,7 +2959,7 @@ xpc_PrintJSStack(JSContext* cx, bool showArgs, bool showLocals,
 
 // Definition of nsScriptError, defined here because we lack a place to put
 // XPCOM objects associated with the JavaScript engine.
-class nsScriptError : public nsIScriptError {
+class nsScriptError MOZ_FINAL : public nsIScriptError {
 public:
     nsScriptError();
 
@@ -2980,6 +2972,9 @@ public:
 private:
     virtual ~nsScriptError();
 
+    void
+    InitializeOnMainThread();
+
     nsString mMessage;
     nsString mSourceName;
     uint32_t mLineNumber;
@@ -2987,9 +2982,13 @@ private:
     uint32_t mColumnNumber;
     uint32_t mFlags;
     nsCString mCategory;
+    // mOuterWindowID is set on the main thread from InitializeOnMainThread().
     uint64_t mOuterWindowID;
     uint64_t mInnerWindowID;
     int64_t mTimeStamp;
+    // mInitializedOnMainThread and mIsFromPrivateWindow are set on the main
+    // thread from InitializeOnMainThread().
+    mozilla::Atomic<bool> mInitializedOnMainThread;
     bool mIsFromPrivateWindow;
 };
 
@@ -3028,8 +3027,8 @@ private:
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 
     // No copying or assignment allowed
-    AutoScriptEvaluate(const AutoScriptEvaluate &) MOZ_DELETE;
-    AutoScriptEvaluate & operator =(const AutoScriptEvaluate &) MOZ_DELETE;
+    AutoScriptEvaluate(const AutoScriptEvaluate &) = delete;
+    AutoScriptEvaluate & operator =(const AutoScriptEvaluate &) = delete;
 };
 
 /***************************************************************************/
@@ -3358,14 +3357,10 @@ struct GlobalProperties {
     GlobalProperties() {
       mozilla::PodZero(this);
 
-      // Promise is supposed to be part of ES, and therefore should appear on
-      // every global.
-      Promise = true;
     }
     bool Parse(JSContext *cx, JS::HandleObject obj);
     bool Define(JSContext *cx, JS::HandleObject obj);
     bool CSS : 1;
-    bool Promise : 1;
     bool indexedDB : 1;
     bool XMLHttpRequest : 1;
     bool TextDecoder : 1;
@@ -3376,6 +3371,7 @@ struct GlobalProperties {
     bool btoa : 1;
     bool Blob : 1;
     bool File : 1;
+    bool crypto : 1;
 };
 
 // Infallible.
@@ -3629,6 +3625,7 @@ public:
         , skipWriteToGlobalPrototype(false)
         , universalXPConnectEnabled(false)
         , forcePermissiveCOWs(false)
+        , CPOWTime(0)
         , skipCOWCallableChecks(false)
         , scriptability(c)
         , scope(nullptr)
@@ -3681,6 +3678,9 @@ public:
     //
     // Using it in production is inherently unsafe.
     bool forcePermissiveCOWs;
+
+    // A running count of how much time we've spent processing CPOWs.
+    PRIntervalTime               CPOWTime;
 
     // Disables the XPConnect security checks that deny access to callables and
     // accessor descriptors on COWs. Do not use this unless you are bholley.

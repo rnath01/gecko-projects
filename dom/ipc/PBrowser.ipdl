@@ -52,6 +52,7 @@ using mozilla::CSSPoint from "Units.h";
 using mozilla::CSSToScreenScale from "Units.h";
 using mozilla::CommandInt from "mozilla/EventForwards.h";
 using mozilla::layers::GeckoContentController::APZStateChange from "mozilla/layers/GeckoContentController.h";
+using mozilla::WritingMode from "WritingModes.h";
 
 namespace mozilla {
 namespace dom {
@@ -67,6 +68,15 @@ union MaybeNativeKeyBinding
 {
   NativeKeyBinding;
   void_t;
+};
+
+struct ShowInfo
+{
+  nsString name;
+  bool fullscreenAllowed;
+  bool isPrivate;
+  float dpi;
+  double defaultScale;
 };
 
 prio(normal upto urgent) intr protocol PBrowser
@@ -194,10 +204,13 @@ parent:
      *  seqno        Current seqno value on the content side
      *  anchor       Offset where the selection started
      *  focus        Offset where the caret is
+     *  writingMode  CSS writing-mode in effect at the focus
      *  causedByComposition true if the change is caused by composition
      */
     prio(urgent) async NotifyIMESelection(uint32_t seqno, uint32_t anchor,
-                                          uint32_t focus, bool causedByComposition);
+                                          uint32_t focus,
+                                          WritingMode writingMode,
+                                          bool causedByComposition);
 
     /**
      * Notifies chrome to refresh its text cache 
@@ -213,6 +226,23 @@ parent:
      */
     prio(urgent) sync NotifyIMEMouseButtonEvent(IMENotification notification)
       returns (bool consumedByIME);
+
+    /**
+     * Notifies chrome to currect editor rect
+     *
+     *  rect         Rect of current focused editor
+     */
+    prio(urgent) async NotifyIMEEditorRect(nsIntRect rect);
+
+    /**
+     * Notifies chrome to position change
+     *
+     *  editorRect   Rect of current focused editor
+     *  compositionRects     Rects of current composition string
+     */
+    prio(urgent) async NotifyIMEPositionChange(nsIntRect editorRect,
+                                               nsIntRect[] compositionRects,
+                                               nsIntRect caretRect);
 
     /**
      * Instructs chrome to end any pending composition
@@ -233,17 +263,25 @@ parent:
      */
     RequestFocus(bool canRaise);
 
+    /**
+     * Indicate, based on the current state, that some commands are enabled and
+     * some are disabled.
+     */
+    EnableDisableCommands(nsString action,
+                          nsCString[] enabledCommands,
+                          nsCString[] disabledCommands);
+
     prio(urgent) sync GetInputContext() returns (int32_t IMEEnabled,
                                                  int32_t IMEOpen,
                                                  intptr_t NativeIMEContext);
 
-    prio(urgent) async SetInputContext(int32_t IMEEnabled,
-                                       int32_t IMEOpen,
-                                       nsString type,
-                                       nsString inputmode,
-                                       nsString actionHint,
-                                       int32_t cause,
-                                       int32_t focusChange);
+    prio(urgent) sync SetInputContext(int32_t IMEEnabled,
+                                      int32_t IMEOpen,
+                                      nsString type,
+                                      nsString inputmode,
+                                      nsString actionHint,
+                                      int32_t cause,
+                                      int32_t focusChange);
 
     sync IsParentWindowMainWidgetVisible() returns (bool visible);
 
@@ -351,7 +389,14 @@ parent:
      * batched and only processed for panning and zooming if content does not
      * preventDefault.
      */
-    ContentReceivedTouch(ScrollableLayerGuid aGuid, uint64_t aInputBlockId, bool aPreventDefault);
+    ContentReceivedInputBlock(ScrollableLayerGuid aGuid, uint64_t aInputBlockId, bool aPreventDefault);
+
+    /**
+     * Notifies the APZ code of the results of the gecko hit-test for a
+     * particular input block. Each target corresponds to one touch point in the
+     * touch event.
+     */
+    SetTargetAPZC(uint64_t aInputBlockId, ScrollableLayerGuid[] aTargets);
 
     /**
      * Updates the zoom constraints for a scrollable frame in this tab.
@@ -404,6 +449,7 @@ child:
      * point.
      */
     Show(nsIntSize size,
+         ShowInfo info,
          ScrollingBehavior scrolling,
          TextureFactoryIdentifier textureFactoryIdentifier,
          uint64_t layersId,
@@ -413,7 +459,8 @@ child:
 
     CacheFileDescriptor(nsString path, FileDescriptor fd);
 
-    UpdateDimensions(nsIntRect rect, nsIntSize size, ScreenOrientation orientation) compress;
+    UpdateDimensions(nsIntRect rect, nsIntSize size, ScreenOrientation orientation,
+                     nsIntPoint chromeDisp) compress;
 
     UpdateFrame(FrameMetrics frame);
 
@@ -435,6 +482,8 @@ child:
 
     Deactivate();
 
+    ParentActivated(bool aActivated);
+
     /**
      * @see nsIDOMWindowUtils sendMouseEvent.
      */
@@ -448,7 +497,7 @@ child:
 
     RealMouseEvent(WidgetMouseEvent event);
     RealKeyEvent(WidgetKeyboardEvent event, MaybeNativeKeyBinding keyBinding);
-    MouseWheelEvent(WidgetWheelEvent event);
+    MouseWheelEvent(WidgetWheelEvent event, ScrollableLayerGuid aGuid, uint64_t aInputBlockId);
     RealTouchEvent(WidgetTouchEvent aEvent, ScrollableLayerGuid aGuid, uint64_t aInputBlockId);
     RealTouchMoveEvent(WidgetTouchEvent aEvent, ScrollableLayerGuid aGuid, uint64_t aInputBlockId);
 

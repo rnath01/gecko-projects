@@ -23,6 +23,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "hookWindowCloseForPanelClose",
                                         "resource://gre/modules/MozSocialAPI.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
                                         "resource://gre/modules/PluralForm.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "UITour",
+                                        "resource:///modules/UITour.jsm");
 XPCOMUtils.defineLazyGetter(this, "appInfo", function() {
   return Cc["@mozilla.org/xre/app-info;1"]
            .getService(Ci.nsIXULAppInfo)
@@ -41,17 +43,27 @@ this.EXPORTED_SYMBOLS = ["injectLoopAPI"];
  * We can work around this by copying the properties we care about onto a regular
  * object.
  *
- * @param {Error}        error        Error object to copy
- * @param {nsIDOMWindow} targetWindow The content window to attach the API
+ * @param {Error|nsIException} error        Error object to copy
+ * @param {nsIDOMWindow}       targetWindow The content window to clone into
  */
 const cloneErrorObject = function(error, targetWindow) {
   let obj = new targetWindow.Error();
-  for (let prop of Object.getOwnPropertyNames(error)) {
+  let props = Object.getOwnPropertyNames(error);
+  // nsIException properties are not enumerable, so we'll try to copy the most
+  // common and useful ones.
+  if (!props.length) {
+    props.push("message", "filename", "lineNumber", "columnNumber", "stack");
+  }
+  for (let prop of props) {
     let value = error[prop];
+    // for nsIException objects, the property may not be defined.
+    if (typeof value == "undefined") {
+      continue;
+    }
     if (typeof value != "string" && typeof value != "number") {
       value = String(value);
     }
-    
+
     Object.defineProperty(Cu.waiveXrays(obj), prop, {
       configurable: false,
       enumerable: true,
@@ -76,6 +88,11 @@ const cloneValueInto = function(value, targetWindow) {
     return value;
   }
 
+  // HAWK request errors contain an nsIException object inside `value`.
+  if (("error" in value) && (value.error instanceof Ci.nsIException)) {
+    value = value.error;
+  }
+
   // Strip Function properties, since they can not be cloned across boundaries
   // like this.
   for (let prop of Object.getOwnPropertyNames(value)) {
@@ -85,11 +102,19 @@ const cloneValueInto = function(value, targetWindow) {
   }
 
   // Inspect for an error this way, because the Error object is special.
-  if (value.constructor.name == "Error") {
+  if (value.constructor.name == "Error" || value instanceof Ci.nsIException) {
     return cloneErrorObject(value, targetWindow);
   }
 
-  return Cu.cloneInto(value, targetWindow);
+  let clone;
+  try {
+    clone = Cu.cloneInto(value, targetWindow);
+  } catch (ex) {
+    MozLoopService.log.debug("Failed to clone value:", value);
+    throw ex;
+  }
+
+  return clone;
 };
 
 /**
@@ -106,15 +131,29 @@ const injectObjectAPI = function(api, targetWindow) {
   Object.keys(api).forEach(func => {
     injectedAPI[func] = function(...params) {
       let lastParam = params.pop();
+      let callbackIsFunction = (typeof lastParam == "function");
+      // Clone params coming from content to the current scope.
+      params = [cloneValueInto(p, api) for (p of params)];
 
       // If the last parameter is a function, assume its a callback
       // and wrap it differently.
-      if (lastParam && typeof lastParam === "function") {
+      if (callbackIsFunction) {
         api[func](...params, function(...results) {
+          // When the function was garbage collected due to async events, like
+          // closing a window, we want to circumvent a JS error.
+          if (callbackIsFunction && typeof lastParam != "function") {
+            MozLoopService.log.debug(func + ": callback function was lost.");
+            // Assume the presence of a first result argument to be an error.
+            if (results[0]) {
+              MozLoopService.log.error(func + " error:", results[0]);
+            }
+            return;
+          }
           lastParam(...[cloneValueInto(r, targetWindow) for (r of results)]);
         });
       } else {
         try {
+          lastParam = cloneValueInto(lastParam, api);
           return cloneValueInto(api[func](...params, lastParam), targetWindow);
         } catch (ex) {
           return cloneValueInto(ex, targetWindow);
@@ -231,7 +270,7 @@ function injectLoopAPI(targetWindow) {
       enumerable: true,
       writable: true,
       value: function(conversationWindowId) {
-        return Cu.cloneInto(MozLoopService.getConversationWindowData(conversationWindowId),
+        return cloneValueInto(MozLoopService.getConversationWindowData(conversationWindowId),
           targetWindow);
       }
     },
@@ -343,53 +382,37 @@ function injectLoopAPI(targetWindow) {
     /**
      * Displays a confirmation dialog using the specified strings.
      *
-     * Callback parameters:
-     * - err null on success, non-null on unexpected failure to show the prompt.
-     * - {Boolean} True if the user chose the OK button.
+     * @param {Object}   options  Confirm dialog options
+     * @param {Function} callback Function that will be invoked once the operation
+     *                            finished. The first argument passed will be an
+     *                            `Error` object or `null`. The second argument
+     *                            will be the result of the operation, TRUE if
+     *                            the user chose the OK button.
      */
     confirm: {
       enumerable: true,
       writable: true,
-      value: function(bodyMessage, okButtonMessage, cancelButtonMessage, callback) {
-        try {
-          let buttonFlags =
+      value: function(options, callback) {
+        let buttonFlags;
+        if (options.okButton && options.cancelButton) {
+          buttonFlags =
             (Ci.nsIPrompt.BUTTON_POS_0 * Ci.nsIPrompt.BUTTON_TITLE_IS_STRING) +
             (Ci.nsIPrompt.BUTTON_POS_1 * Ci.nsIPrompt.BUTTON_TITLE_IS_STRING);
+        } else if (!options.okButton && !options.cancelButton) {
+          buttonFlags = Services.prompt.STD_YES_NO_BUTTONS;
+        } else {
+          callback(cloneValueInto(new Error("confirm: missing button options"), targetWindow));
+        }
 
+        try {
           let chosenButton = Services.prompt.confirmEx(null, "",
-            bodyMessage, buttonFlags, okButtonMessage, cancelButtonMessage,
+            options.message, buttonFlags, options.okButton, options.cancelButton,
             null, null, {});
 
           callback(null, chosenButton == 0);
         } catch (ex) {
           callback(cloneValueInto(ex, targetWindow));
         }
-      }
-    },
-
-    /**
-     * Call to ensure that any necessary registrations for the Loop Service
-     * have taken place.
-     *
-     * Callback parameters:
-     * - err null on successful registration, non-null otherwise.
-     *
-     * @param {LOOP_SESSION_TYPE} sessionType
-     * @param {Function} callback Will be called once registration is complete,
-     *                            or straight away if registration has already
-     *                            happened.
-     */
-    ensureRegistered: {
-      enumerable: true,
-      writable: true,
-      value: function(sessionType, callback) {
-        // We translate from a promise to a callback, as we can't pass promises from
-        // Promise.jsm across the priv versus unpriv boundary.
-        MozLoopService.promiseRegisteredWithServers(sessionType).then(() => {
-          callback(null);
-        }, err => {
-          callback(cloneValueInto(err, targetWindow));
-        }).catch(Cu.reportError);
       }
     },
 
@@ -414,78 +437,41 @@ function injectLoopAPI(targetWindow) {
     },
 
     /**
-     * Set any character preference under "loop."
+     * Set any preference under "loop."
      *
      * @param {String} prefName The name of the pref without the preceding "loop."
-     * @param {String} stringValue The value to set.
+     * @param {*} value The value to set.
+     * @param {Enum} prefType Type of preference, defined at Ci.nsIPrefBranch. Optional.
      *
      * Any errors thrown by the Mozilla pref API are logged to the console
      * and cause false to be returned.
      */
-    setLoopCharPref: {
+    setLoopPref: {
       enumerable: true,
       writable: true,
-      value: function(prefName, value) {
-        MozLoopService.setLoopCharPref(prefName, value);
+      value: function(prefName, value, prefType) {
+        MozLoopService.setLoopPref(prefName, value, prefType);
       }
     },
 
     /**
-     * Return any preference under "loop." that's coercible to a character
-     * preference.
+     * Return any preference under "loop.".
      *
      * @param {String} prefName The name of the pref without the preceding
      * "loop."
+     * @param {Enum} prefType Type of preference, defined at Ci.nsIPrefBranch. Optional.
      *
      * Any errors thrown by the Mozilla pref API are logged to the console
      * and cause null to be returned. This includes the case of the preference
      * not being found.
      *
-     * @return {String} on success, null on error
+     * @return {*} on success, null on error
      */
-    getLoopCharPref: {
+    getLoopPref: {
       enumerable: true,
       writable: true,
-      value: function(prefName) {
-        return MozLoopService.getLoopCharPref(prefName);
-      }
-    },
-
-    /**
-     * Set any boolean preference under "loop."
-     *
-     * @param {String} prefName The name of the pref without the preceding "loop."
-     * @param {bool} value The value to set.
-     *
-     * Any errors thrown by the Mozilla pref API are logged to the console
-     * and cause false to be returned.
-     */
-    setLoopBoolPref: {
-      enumerable: true,
-      writable: true,
-      value: function(prefName, value) {
-        MozLoopService.setLoopBoolPref(prefName, value);
-      }
-    },
-
-    /**
-     * Return any preference under "loop." that's coercible to a boolean
-     * preference.
-     *
-     * @param {String} prefName The name of the pref without the preceding
-     * "loop."
-     *
-     * Any errors thrown by the Mozilla pref API are logged to the console
-     * and cause null to be returned. This includes the case of the preference
-     * not being found.
-     *
-     * @return {String} on success, null on error
-     */
-    getLoopBoolPref: {
-      enumerable: true,
-      writable: true,
-      value: function(prefName) {
-        return MozLoopService.getLoopBoolPref(prefName);
+      value: function(prefName, prefType) {
+        return MozLoopService.getLoopPref(prefName);
       }
     },
 
@@ -558,9 +544,16 @@ function injectLoopAPI(targetWindow) {
       writable: true,
       value: function(sessionType, path, method, payloadObj, callback) {
         // XXX Should really return a DOM promise here.
+        let callbackIsFunction = (typeof callback == "function");
         MozLoopService.hawkRequest(sessionType, path, method, payloadObj).then((response) => {
           callback(null, response.body);
         }, hawkError => {
+          // When the function was garbage collected due to async events, like
+          // closing a window, we want to circumvent a JS error.
+          if (callbackIsFunction && typeof callback != "function") {
+            MozLoopService.log.error("hawkRequest: callback function was lost.", hawkError);
+            return;
+          }
           // The hawkError.error property, while usually a string representing
           // an HTTP response status message, may also incorrectly be a native
           // error object that will cause the cloning function to fail.
@@ -615,12 +608,15 @@ function injectLoopAPI(targetWindow) {
 
     /**
      * Opens the Getting Started tour in the browser.
+     *
+     * @param {String} aSrc
+     *   - The UI element that the user used to begin the tour, optional.
      */
     openGettingStartedTour: {
       enumerable: true,
       writable: true,
-      value: function() {
-        return MozLoopService.openGettingStartedTour();
+      value: function(aSrc) {
+        return MozLoopService.openGettingStartedTour(aSrc);
       },
     },
 
@@ -738,7 +734,39 @@ function injectLoopAPI(targetWindow) {
 
         request.send();
       }
-    }
+    },
+
+    /**
+     * Associates a session-id and a call-id with a window for debugging.
+     *
+     * @param  {string}  windowId  The window id.
+     * @param  {string}  sessionId OT session id.
+     * @param  {string}  callId    The callId on the server.
+     */
+    addConversationContext: {
+      enumerable: true,
+      writable: true,
+      value: function(windowId, sessionId, callid) {
+        MozLoopService.addConversationContext(windowId, {
+          sessionId: sessionId,
+          callId: callid
+        });
+      }
+    },
+
+    /**
+     * Notifies the UITour module that an event occurred that it might be
+     * interested in.
+     *
+     * @param {String} subject Subject of the notification
+     */
+    notifyUITour: {
+      enumerable: true,
+      writable: true,
+      value: function(subject) {
+        UITour.notify(subject);
+      }
+    },
   };
 
   function onStatusChanged(aSubject, aTopic, aData) {

@@ -47,7 +47,7 @@ public:
   {
   }
 
-  virtual DelayNodeEngine* AsDelayNodeEngine()
+  virtual DelayNodeEngine* AsDelayNodeEngine() MOZ_OVERRIDE
   {
     return this;
   }
@@ -136,7 +136,7 @@ public:
       // Compute the delay values for the duration of the input AudioChunk
       // If this DelayNode is in a cycle, make sure the delay value is at least
       // one block.
-      TrackTicks tick = mSource->GetCurrentPosition();
+      StreamTime tick = mSource->GetCurrentPosition();
       double computedDelay[WEBAUDIO_BLOCK_SIZE];
       for (size_t counter = 0; counter < WEBAUDIO_BLOCK_SIZE; ++counter) {
         double delayAtTick = mDelay.GetValueAtTime(tick, counter) * sampleRate;
@@ -190,8 +190,7 @@ DelayNode::DelayNode(AudioContext* aContext, double aMaxDelay)
               2,
               ChannelCountMode::Max,
               ChannelInterpretation::Speakers)
-  , mDelay(new AudioParam(MOZ_THIS_IN_INITIALIZER_LIST(),
-                          SendDelayToStream, 0.0f))
+  , mDelay(new AudioParam(this, SendDelayToStream, 0.0f))
 {
   DelayNodeEngine* engine =
     new DelayNodeEngine(this, aContext->Destination(),
@@ -233,4 +232,3 @@ DelayNode::SendDelayToStream(AudioNode* aNode)
 
 }
 }
-

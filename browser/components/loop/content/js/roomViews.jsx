@@ -16,8 +16,6 @@ loop.roomViews = (function(mozL10n) {
   var ROOM_STATES = loop.store.ROOM_STATES;
   var sharedViews = loop.shared.views;
 
-  function noop() {}
-
   /**
    * ActiveRoomStore mixin.
    * @type {Object}
@@ -69,22 +67,37 @@ loop.roomViews = (function(mozL10n) {
     getInitialState: function() {
       return {
         copiedUrl: false,
-        newRoomName: ""
+        newRoomName: "",
+        error: null,
+      };
+    },
+
+    componentWillMount: function() {
+      this.listenTo(this.props.roomStore, "change:error",
+                    this.onRoomError);
+    },
+
+    componentWillUnmount: function() {
+      this.stopListening(this.props.roomStore);
+    },
+
+    handleTextareaKeyDown: function(event) {
+      // Submit the form as soon as the user press Enter in that field
+      // Note: We're using a textarea instead of a simple text input to display
+      // placeholder and entered text on two lines, to circumvent l10n
+      // rendering/UX issues for some locales.
+      if (event.which === 13) {
+        this.handleFormSubmit(event);
       }
     },
 
     handleFormSubmit: function(event) {
       event.preventDefault();
 
-      var newRoomName = this.state.newRoomName;
-
-      if (newRoomName && this.state.roomName != newRoomName) {
-        this.props.dispatcher.dispatch(
-          new sharedActions.RenameRoom({
-            roomToken: this.state.roomToken,
-            newRoomName: newRoomName
-          }));
-      }
+      this.props.dispatcher.dispatch(new sharedActions.RenameRoom({
+        roomToken: this.state.roomToken,
+        newRoomName: this.state.newRoomName
+      }));
     },
 
     handleEmailButtonClick: function(event) {
@@ -103,13 +116,28 @@ loop.roomViews = (function(mozL10n) {
       this.setState({copiedUrl: true});
     },
 
+    onRoomError: function() {
+      // Only update the state if we're mounted, to avoid the problem where
+      // stopListening doesn't nuke the active listeners during a event
+      // processing.
+      if (this.isMounted()) {
+        this.setState({error: this.props.roomStore.getStoreState("error")});
+      }
+    },
+
     render: function() {
+      var cx = React.addons.classSet;
       return (
         <div className="room-invitation-overlay">
+          <p className={cx({"error": !!this.state.error,
+                            "error-display-area": true})}>
+            {mozL10n.get("rooms_name_change_failed_label")}
+          </p>
           <form onSubmit={this.handleFormSubmit}>
-            <input type="text" className="input-room-name"
+            <textarea rows="2" type="text" className="input-room-name"
               valueLink={this.linkState("newRoomName")}
               onBlur={this.handleFormSubmit}
+              onKeyDown={this.handleTextareaKeyDown}
               placeholder={mozL10n.get("rooms_name_this_room_label")} />
           </form>
           <p>{mozL10n.get("invite_header_text")}</p>
@@ -140,7 +168,9 @@ loop.roomViews = (function(mozL10n) {
     ],
 
     propTypes: {
-      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired
+      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
+      feedbackStore:
+        React.PropTypes.instanceOf(loop.store.FeedbackStore).isRequired,
     },
 
     _renderInvitationOverlay: function() {
@@ -162,15 +192,20 @@ loop.roomViews = (function(mozL10n) {
        */
       window.addEventListener('orientationchange', this.updateVideoContainer);
       window.addEventListener('resize', this.updateVideoContainer);
+    },
 
+    componentWillUpdate: function(nextProps, nextState) {
       // The SDK needs to know about the configuration and the elements to use
       // for display. So the best way seems to pass the information here - ideally
       // the sdk wouldn't need to know this, but we can't change that.
-      this.props.dispatcher.dispatch(new sharedActions.SetupStreamElements({
-        publisherConfig: this._getPublisherConfig(),
-        getLocalElementFunc: this._getElement.bind(this, ".local"),
-        getRemoteElementFunc: this._getElement.bind(this, ".remote")
-      }));
+      if (this.state.roomState !== ROOM_STATES.MEDIA_WAIT &&
+          nextState.roomState === ROOM_STATES.MEDIA_WAIT) {
+        this.props.dispatcher.dispatch(new sharedActions.SetupStreamElements({
+          publisherConfig: this._getPublisherConfig(),
+          getLocalElementFunc: this._getElement.bind(this, ".local"),
+          getRemoteElementFunc: this._getElement.bind(this, ".remote")
+        }));
+      }
     },
 
     _getPublisherConfig: function() {
@@ -216,6 +251,13 @@ loop.roomViews = (function(mozL10n) {
     },
 
     /**
+     * User clicked on the "Leave" button.
+     */
+    leaveRoom: function() {
+      this.props.dispatcher.dispatch(new sharedActions.LeaveRoom());
+    },
+
+    /**
      * Closes the window if the cancel button is pressed in the generic failure view.
      */
     closeWindow: function() {
@@ -244,7 +286,7 @@ loop.roomViews = (function(mozL10n) {
       var localStreamClasses = React.addons.classSet({
         local: true,
         "local-stream": true,
-        "local-stream-audio": !this.state.videoMuted,
+        "local-stream-audio": this.state.videoMuted,
         "room-preview": this.state.roomState !== ROOM_STATES.HAS_PARTICIPANTS
       });
 
@@ -253,9 +295,21 @@ loop.roomViews = (function(mozL10n) {
         case ROOM_STATES.FULL: {
           // Note: While rooms are set to hold a maximum of 2 participants, the
           //       FULL case should never happen on desktop.
-          return <loop.conversation.GenericFailureView
+          return <loop.conversationViews.GenericFailureView
             cancelCall={this.closeWindow}
           />;
+        }
+        case ROOM_STATES.ENDED: {
+          if (this.state.used)
+            return <sharedViews.FeedbackView
+              feedbackStore={this.props.feedbackStore}
+              onAfterFeedbackReceived={this.closeWindow}
+            />;
+
+          // In case the room was not used (no one was here), we
+          // bypass the feedback form.
+          this.closeWindow();
+          return null;
         }
         default: {
           return (
@@ -273,7 +327,7 @@ loop.roomViews = (function(mozL10n) {
                     video={{enabled: !this.state.videoMuted, visible: true}}
                     audio={{enabled: !this.state.audioMuted, visible: true}}
                     publishStream={this.publishStream}
-                    hangup={noop} />
+                    hangup={this.leaveRoom} />
                 </div>
               </div>
             </div>

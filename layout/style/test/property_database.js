@@ -2004,7 +2004,12 @@ var gCSSProperties = {
                       "top 20%", "bottom 20%", "50% left", "top 50%",
                       "50% bottom 10%", "right 10% 50%", "left right",
                       "top bottom", "left 10% right",
-                      "top 20px bottom 20px", "left left", "20 20" ]
+                      "top 20px bottom 20px", "left left" ],
+    quirks_values: {
+      "20 20": "20px 20px",
+      "10 5px": "10px 5px",
+      "7px 2": "7px 2px",
+    },
   },
   "background-repeat": {
     domProp: "backgroundRepeat",
@@ -2221,7 +2226,12 @@ var gCSSProperties = {
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "0", "0 0", "0px", "0 0px", "calc(0px)", "calc(0px) calc(0em)", "calc(2em - 2em) calc(3px + 7px - 10px)", "calc(-5px)", "calc(-5px) calc(-5px)" ],
     other_values: [ "3px", "4em 2px", "4em 0", "0px 2px", "calc(7px)", "0 calc(7px)", "calc(7px) 0", "calc(0px) calc(7px)", "calc(7px) calc(0px)", "7px calc(0px)", "calc(0px) 7px", "7px calc(0px)", "3px calc(2em)" ],
-    invalid_values: [ "0%", "0 0%", "-5px", "-5px -5px", "0 -5px", "-5px 0" ]
+    invalid_values: [ "0%", "0 0%", "-5px", "-5px -5px", "0 -5px", "-5px 0" ],
+    quirks_values: {
+      "2px 5": "2px 5px",
+      "7": "7px",
+      "3 4px": "3px 4px",
+    },
   },
   "border-style": {
     domProp: "borderStyle",
@@ -2441,7 +2451,7 @@ var gCSSProperties = {
     inherited: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "show" ],
-    other_values: [ "hide", "-moz-show-background" ],
+    other_values: [ "hide" ],
     invalid_values: []
   },
   "float": {
@@ -2930,7 +2940,8 @@ var gCSSProperties = {
       "calc(25px*3)",
       "calc(3*25px + 50%)",
     ],
-    invalid_values: [ "auto", "-moz-max-content", "-moz-min-content", "-moz-fit-content", "-moz-available", "5" ]
+    invalid_values: [ "auto", "-moz-max-content", "-moz-min-content", "-moz-fit-content", "-moz-available" ],
+    quirks_values: { "5": "5px" },
   },
   "max-width": {
     domProp: "maxWidth",
@@ -2947,7 +2958,8 @@ var gCSSProperties = {
       "calc(25px*3)",
       "calc(3*25px + 50%)",
     ],
-    invalid_values: [ "auto", "5" ]
+    invalid_values: [ "auto" ],
+    quirks_values: { "5": "5px" },
   },
   "min-height": {
     domProp: "minHeight",
@@ -2962,7 +2974,8 @@ var gCSSProperties = {
       "calc(25px*3)",
       "calc(3*25px + 50%)",
     ],
-    invalid_values: ["none", "-moz-max-content", "-moz-min-content", "-moz-fit-content", "-moz-available", "5" ]
+    invalid_values: ["none", "-moz-max-content", "-moz-min-content", "-moz-fit-content", "-moz-available" ],
+    quirks_values: { "5": "5px" },
   },
   "min-width": {
     domProp: "minWidth",
@@ -2977,7 +2990,8 @@ var gCSSProperties = {
       "calc(25px*3)",
       "calc(3*25px + 50%)",
     ],
-    invalid_values: [ "none", "5" ]
+    invalid_values: [ "none" ],
+    quirks_values: { "5": "5px" },
   },
 
   "opacity": {
@@ -3356,7 +3370,8 @@ var gCSSProperties = {
       "calc(25px*3)",
       "calc(3*25px + 50%)",
     ],
-    invalid_values: [ "5" ]
+    invalid_values: [ ],
+    quirks_values: { "5": "5px" },
   },
   "text-overflow": {
     domProp: "textOverflow",
@@ -3478,7 +3493,8 @@ var gCSSProperties = {
       "calc(25px*3)",
       "calc(3*25px + 50%)",
     ],
-    invalid_values: [ "5" ]
+    invalid_values: [ ],
+    quirks_values: { "5": "5px" },
   },
   "visibility": {
     domProp: "visibility",
@@ -3957,18 +3973,13 @@ var gCSSProperties = {
       "flex-shrink",
       "flex-basis"
     ],
-    initial_values: [ "0 1 main-size", "main-size 0 1", "0 main-size", "main-size 0" ],
+    initial_values: [ "0 1 auto", "auto 0 1", "0 auto", "auto 0" ],
     other_values: [
       "none",
-      "auto",
       "1",
       "0",
       "0 1",
       "0.5",
-      "5px",
-      "15%",
-      "calc(5px)",
-      "main-size",
       "1.2 3.4",
       "0 0 0",
       "0 0 0px",
@@ -3997,15 +4008,13 @@ var gCSSProperties = {
     domProp: "flexBasis",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    initial_values: [ "main-size" ],
+    initial_values: [ " auto" ],
         // NOTE: This is cribbed directly from the "width" chunk, since this
         // property takes the exact same values as width (albeit with
         // different semantics on 'auto').
         // XXXdholbert (Maybe these should get separated out into
         // a reusable array defined at the top of this file?)
-    other_values: [
-      "auto",
-      "15px", "3em", "15%", "-moz-max-content", "-moz-min-content", "-moz-fit-content", "-moz-available",
+    other_values: [ "15px", "3em", "15%", "-moz-max-content", "-moz-min-content", "-moz-fit-content", "-moz-available",
       // valid calc() values
       "calc(-2px)",
       "calc(2px)",
@@ -4633,7 +4642,7 @@ if (SpecialPowers.getBoolPref("svg.paint-order.enabled")) {
 
 if (SpecialPowers.getBoolPref("layout.css.clip-path-shapes.enabled")) {
   gCSSProperties["clip-path"] = {
-    domProp: "clip-path",
+    domProp: "clipPath",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "none" ],
@@ -4702,6 +4711,15 @@ if (SpecialPowers.getBoolPref("layout.css.clip-path-shapes.enabled")) {
       "ellipse(20px 50% at top right)",
       "ellipse(closest-side 40% at 50% 100%)",
       "ellipse(calc(20% + 20%) calc(20px + 20cm) at right bottom)",
+
+      "inset(1px)",
+      "inset(20% -20px)",
+      "inset(20em 4rem calc(20% + 20px))",
+      "inset(20vh 20vw 20pt 3%)",
+      "inset(5px round 3px)",
+      "inset(1px 2px round 3px / 3px)",
+      "inset(1px 2px 3px round 3px 2em / 20%)",
+      "inset(1px 2px 3px 4px round 3px 2vw 20% / 20px 3em 2vh 20%)",
     ],
     invalid_values: [
       "url(#test) url(#tes2)",
@@ -4767,6 +4785,18 @@ if (SpecialPowers.getBoolPref("layout.css.clip-path-shapes.enabled")) {
       "polygon(at center top closest-side closest-side)",
       "polygon(40% at 50% 100%)",
       "polygon(40% farthest-side 20px at 50% 100%)",
+
+      "inset()",
+      "inset(round)",
+      "inset(round 3px)",
+      "inset(1px round 1px 2px 3px 4px 5px)",
+      "inset(1px 2px 3px 4px 5px)",
+      "inset(1px, round 3px)",
+      "inset(1px, 2px)",
+      "inset(1px 2px, 3px)",
+      "inset(1px at 3px)",
+      "inset(1px round 1px // 2px)",
+      "inset(1px round)",
     ],
     unbalanced_values: [
       "polygon(30% 30%",
@@ -4777,6 +4807,13 @@ if (SpecialPowers.getBoolPref("layout.css.clip-path-shapes.enabled")) {
       "circle(40% at 50% 100%",
       "ellipse(",
       "ellipse(40% at 50% 100%",
+
+      "inset(1px",
+      "inset(1px 2px",
+      "inset(1px 2px 3px",
+      "inset(1px 2px 3px 4px",
+      "inset(1px 2px 3px 4px round 5px",
+      "inset(1px 2px 3px 4px round 5px / 6px",
     ]
   };
 }
@@ -5026,6 +5063,21 @@ if (SpecialPowers.getBoolPref("layout.css.ruby.enabled")) {
                                                  "ruby-base-container",
                                                  "ruby-text",
                                                  "ruby-text-container");
+  gCSSProperties["ruby-position"] = {
+    domProp: "rubyPosition",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "over right", "right over" ],
+    other_values: [
+      "over left", "under right", "under left",
+      "left over", "right under", "left under"
+    ],
+    invalid_values: [
+      "over", "under", "left", "right", "auto", "none", "not_a_position",
+      "over over", "over under", "left left", "left right",
+      "over left over", "right over left", "0", "100px", "50%"
+    ]
+  };
 }
 
 if (SpecialPowers.getBoolPref("layout.css.grid.enabled")) {
@@ -5041,19 +5093,13 @@ if (SpecialPowers.getBoolPref("layout.css.grid.enabled")) {
       "row dense",
       "dense column",
       "dense row",
-      "stack column",
-      "stack row",
-      "stack",
+      "dense",
     ],
     invalid_values: [
       "",
       "auto",
       "none",
       "10px",
-      "dense",
-      "stack dense",
-      "stack stack",
-      "stack row stack",
       "column row",
       "dense row dense",
     ]
@@ -5284,7 +5330,7 @@ if (SpecialPowers.getBoolPref("layout.css.grid.enabled")) {
       "none / none",
     ],
     other_values: [
-      "stack 40px",
+      "column 40px",
       "column dense auto",
       "dense row minmax(min-content, 2fr)",
       "row 40px / 100px",
@@ -5457,6 +5503,10 @@ if (SpecialPowers.getBoolPref("layout.css.grid.enabled")) {
     other_values: gridAreaOtherValues,
     invalid_values: gridAreaInvalidValues
   };
+}
+
+if (SpecialPowers.getBoolPref("layout.css.display-contents.enabled")) {
+  gCSSProperties["display"].other_values.push("contents");
 }
 
 if (SpecialPowers.getBoolPref("layout.css.image-orientation.enabled")) {

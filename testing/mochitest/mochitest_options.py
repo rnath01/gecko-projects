@@ -9,7 +9,6 @@ import optparse
 import os
 import tempfile
 
-from automationutils import addCommonOptions
 from mozprofile import DEFAULT_PORTS
 
 here = os.path.abspath(os.path.dirname(__file__))
@@ -312,6 +311,13 @@ class MochitestOptions(optparse.OptionParser):
           "help": ".ini format of tests to run.",
           "default": None,
         }],
+        [["--testrun-manifest-file"],
+        { "action": "store",
+          "type": "string",
+          "dest": "testRunManifestFile",
+          "help": "Overrides the default filename of the tests.json manifest file that is created from the manifest and used by the test runners to run the tests. Only useful when running multiple test runs simulatenously on the same machine.",
+          "default": 'tests.json',
+        }],
         [["--failure-file"],
         { "action": "store",
           "type": "string",
@@ -364,11 +370,17 @@ class MochitestOptions(optparse.OptionParser):
           "dest": "e10s",
           "help": "Run tests with electrolysis preferences and test filtering enabled.",
         }],
-        [["--content-sandbox"],
-        { "choices": ["off", "warn", "on"],
-          "default": "off",
-          "dest": "contentSandbox",
-          "help": "Run tests with the content sandbox enabled or in warn only mode (Windows only). --e10s is assumed.",
+        [["--strict-content-sandbox"],
+        { "action": "store_true",
+          "default": False,
+          "dest": "strictContentSandbox",
+          "help": "Run tests with a more strict content sandbox (Windows only).",
+        }],
+        [["--nested_oop"],
+        { "action": "store_true",
+          "default": False,
+          "dest": "nested_oop",
+          "help": "Run tests with nested_oop preferences and test filtering enabled.",
         }],
         [["--dmd-path"],
          { "action": "store",
@@ -435,6 +447,35 @@ class MochitestOptions(optparse.OptionParser):
           "dest": "gmp_path",
           "help": "Path to fake GMP plugin. Will be deduced from the binary if not passed.",
         }],
+        [["--xre-path"],
+        { "action": "store",
+          "type": "string", 
+          "dest": "xrePath",
+          "default": None,    # individual scripts will set a sane default
+          "help": "absolute path to directory containing XRE (probably xulrunner)",
+        }],
+        [["--symbols-path"],
+        { "action": "store", 
+          "type": "string", 
+          "dest": "symbolsPath",
+          "default": None,
+          "help": "absolute path to directory containing breakpad symbols, or the URL of a zip file containing symbols",
+        }],
+        [["--debugger"],
+        { "action": "store", 
+          "dest": "debugger",
+          "help": "use the given debugger to launch the application",
+        }],
+        [["--debugger-args"],
+        { "action": "store",
+          "dest": "debuggerArgs",
+          "help": "pass the given args to the debugger _before_ the application on the command line",
+        }],
+        [["--debugger-interactive"],
+        { "action": "store_true",
+          "dest": "debuggerInteractive",
+          "help": "prevents the test harness from redirecting stdout and stderr for interactive debuggers",
+        }],
     ]
 
     def __init__(self, **kwargs):
@@ -446,17 +487,14 @@ class MochitestOptions(optparse.OptionParser):
             if "default" in value and isinstance(value["default"], list):
                 value["default"] = []
             self.add_option(*option, **value)
-        addCommonOptions(self)
         self.set_usage(self.__doc__)
 
     def verifyOptions(self, options, mochitest):
         """ verify correct options and cleanup paths """
 
-        if options.contentSandbox != 'off':
-            options.e10s = True
-
         mozinfo.update({"e10s": options.e10s}) # for test manifest parsing.
-        mozinfo.update({"contentSandbox": options.contentSandbox}) # for test manifest parsing.
+        mozinfo.update({"strictContentSandbox": options.strictContentSandbox}) # for test manifest parsing.
+        mozinfo.update({"nested_oop": options.nested_oop}) # for test manifest parsing.
 
         if options.app is None:
             if build_obj is not None:
@@ -611,15 +649,26 @@ class MochitestOptions(optparse.OptionParser):
                 if not os.path.isfile(f):
                     self.error('Missing binary %s required for --use-test-media-devices')
 
+        if options.nested_oop:
+          if not options.e10s:
+            options.e10s = True
+
         options.leakThresholds = {
             "default": options.defaultLeakThreshold,
-            "tab": 2000000, # See dependencies of bug 1051230.
+            "tab": 20000, # See dependencies of bug 1051230.
             "geckomediaplugin": 20000, # GMP rarely gets a log, but when it does, it leaks a little.
         }
 
-        # Bug 1051230 - Leak logging does not yet work for tab processes on desktop.
         # Bug 1065098 - The geckomediaplugin process fails to produce a leak log for some reason.
-        options.ignoreMissingLeaks = ["tab", "geckomediaplugin"]
+        options.ignoreMissingLeaks = ["geckomediaplugin"]
+
+        # Bug 1091917 - We exit early in tab processes on Windows, so we don't get leak logs yet.
+        if mozinfo.isWin:
+            options.ignoreMissingLeaks.append("tab")
+
+        # Bug 1121539 - OSX-only intermittent tab process leak in test_ipc.html
+        if mozinfo.isMac:
+            options.leakThresholds["tab"] = 50000
 
         return options
 
@@ -778,7 +827,7 @@ class B2GOptions(MochitestOptions):
         defaults["testPath"] = ""
         defaults["extensionsToExclude"] = ["specialpowers"]
         # See dependencies of bug 1038943.
-        defaults["defaultLeakThreshold"] = 5180
+        defaults["defaultLeakThreshold"] = 5404
         self.set_defaults(**defaults)
 
     def verifyRemoteOptions(self, options):
@@ -829,7 +878,7 @@ class B2GOptions(MochitestOptions):
         options.ignoreMissingLeaks.append("default")
 
         # Bug 1070068 - Leak logging does not work for tab processes on B2G.
-        assert "tab" in options.ignoreMissingLeaks, "Ignore failures for tab processes on B2G"
+        options.ignoreMissingLeaks.append("tab")
 
         return options
 

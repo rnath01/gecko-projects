@@ -34,7 +34,8 @@ describe("loop.OTSdkDriver", function () {
       connect: sinon.stub(),
       disconnect: sinon.stub(),
       publish: sinon.stub(),
-      subscribe: sinon.stub()
+      subscribe: sinon.stub(),
+      forceDisconnect: sinon.stub()
     }, Backbone.Events);
 
     publisher = _.extend({
@@ -175,6 +176,43 @@ describe("loop.OTSdkDriver", function () {
     });
   });
 
+  describe("#forceDisconnectAll", function() {
+    it("should not disconnect anything when not connected", function() {
+      driver.session = session;
+      driver.forceDisconnectAll(function() {});
+
+      sinon.assert.notCalled(session.forceDisconnect);
+    });
+
+    it("should disconnect all remote connections when called", function() {
+      driver.connectSession(sessionData);
+      sinon.assert.calledOnce(session.connect);
+      driver._sessionConnected = true;
+
+      // Setup the right state in the driver to make `forceDisconnectAll` do
+      // something.
+      session.connection = {
+        id: "localUser"
+      };
+      session.trigger("connectionCreated", {
+        connection: {id: "remoteUser"}
+      });
+      expect(driver.connections).to.include.keys("remoteUser");
+
+      driver.forceDisconnectAll(function() {});
+      sinon.assert.calledOnce(session.forceDisconnect);
+
+      // Add another remote connection.
+      session.trigger("connectionCreated", {
+        connection: {id: "remoteUser2"}
+      });
+      expect(driver.connections).to.include.keys("remoteUser", "remoteUser2");
+
+      driver.forceDisconnectAll(function() {});
+      sinon.assert.calledThrice(session.forceDisconnect);
+    });
+  });
+
   describe("Events", function() {
     beforeEach(function() {
       driver.connectSession(sessionData);
@@ -229,6 +267,19 @@ describe("loop.OTSdkDriver", function () {
           sinon.assert.calledWithMatch(dispatcher.dispatch,
             sinon.match.hasOwn("reason", FAILURE_REASONS.NETWORK_DISCONNECTED));
         });
+
+      it("should dispatch a connectionFailure action if the session was " +
+         "forcibly disconnected", function() {
+          session.trigger("sessionDisconnected", {
+            reason: "forceDisconnected"
+          });
+
+          sinon.assert.calledOnce(dispatcher.dispatch);
+          sinon.assert.calledWithMatch(dispatcher.dispatch,
+            sinon.match.hasOwn("name", "connectionFailure"));
+          sinon.assert.calledWithMatch(dispatcher.dispatch,
+            sinon.match.hasOwn("reason", FAILURE_REASONS.EXPIRED_OR_INVALID));
+        });
     });
 
     describe("streamCreated", function() {
@@ -275,6 +326,9 @@ describe("loop.OTSdkDriver", function () {
           sinon.assert.calledOnce(dispatcher.dispatch);
           sinon.assert.calledWithExactly(dispatcher.dispatch,
             new sharedActions.RemotePeerConnected());
+          it("should store the connection details for a remote user", function() {
+            expect(driver.connections).to.include.keys("remoteUser");
+          });
         });
 
       it("should not dispatch an action if this is for a local user",
@@ -284,6 +338,9 @@ describe("loop.OTSdkDriver", function () {
           });
 
           sinon.assert.notCalled(dispatcher.dispatch);
+          it("should not store the connection details for a local user", function() {
+            expect(driver.connections).to.not.include.keys("localUser");
+          });
         });
     });
 
@@ -294,6 +351,14 @@ describe("loop.OTSdkDriver", function () {
         publisher.trigger("accessAllowed", fakeEvent);
 
         sinon.assert.calledOnce(session.publish);
+      });
+
+      it("should dispatch a GotMediaPermission action", function() {
+        publisher.trigger("accessAllowed", fakeEvent);
+
+        sinon.assert.calledOnce(dispatcher.dispatch);
+        sinon.assert.calledWithExactly(dispatcher.dispatch,
+          new sharedActions.GotMediaPermission());
       });
     });
 

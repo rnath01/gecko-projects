@@ -15,6 +15,12 @@
 #include "mozilla/Hal.h"
 #include "mozilla/ReentrantMonitor.h"
 #include "mozilla/dom/File.h"
+#include "mozilla/layers/TextureClientRecycleAllocator.h"
+#include "GonkCameraSource.h"
+
+namespace android {
+class MOZ_EXPORT MediaBuffer;
+}
 
 namespace mozilla {
 
@@ -45,8 +51,8 @@ public:
 
   MediaEngineGonkVideoSource(int aIndex)
     : MediaEngineCameraVideoSource(aIndex, "GonkCamera.Monitor")
-    , mCameraControl(nullptr)
     , mCallbackMonitor("GonkCamera.CallbackMonitor")
+    , mCameraControl(nullptr)
     , mRotation(0)
     , mBackCamera(false)
     , mOrientationChanged(true) // Correct the orientation at first time takePhoto.
@@ -62,19 +68,18 @@ public:
   virtual void NotifyPull(MediaStreamGraph* aGraph,
                           SourceMediaStream* aSource,
                           TrackID aId,
-                          StreamTime aDesiredTime,
-                          TrackTicks& aLastEndTime) MOZ_OVERRIDE;
+                          StreamTime aDesiredTime) MOZ_OVERRIDE;
   virtual bool SatisfiesConstraintSets(
       const nsTArray<const dom::MediaTrackConstraintSet*>& aConstraintSets)
   {
     return true;
   }
 
-  void OnHardwareStateChange(HardwareState aState);
+  void OnHardwareStateChange(HardwareState aState, nsresult aReason) MOZ_OVERRIDE;
   void GetRotation();
-  bool OnNewPreviewFrame(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight);
-  void OnUserError(UserContext aContext, nsresult aError);
-  void OnTakePictureComplete(uint8_t* aData, uint32_t aLength, const nsAString& aMimeType);
+  bool OnNewPreviewFrame(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight) MOZ_OVERRIDE;
+  void OnUserError(UserContext aContext, nsresult aError) MOZ_OVERRIDE;
+  void OnTakePictureComplete(uint8_t* aData, uint32_t aLength, const nsAString& aMimeType) MOZ_OVERRIDE;
 
   void AllocImpl();
   void DeallocImpl();
@@ -90,6 +95,12 @@ public:
   // current screen orientation.
   nsresult UpdatePhotoOrientation();
 
+  // It adds aBuffer to current preview image and sends this image to MediaStreamDirectListener
+  // via AppendToTrack(). Due to MediaBuffer is limited resource, it will clear
+  // image's MediaBuffer by calling GonkCameraImage::ClearMediaBuffer() before leaving
+  // this function.
+  nsresult OnNewMediaBufferFrame(android::MediaBuffer* aBuffer);
+
 protected:
   ~MediaEngineGonkVideoSource()
   {
@@ -100,11 +111,16 @@ protected:
   void Shutdown();
   void ChooseCapability(const VideoTrackConstraintsN& aConstraints,
                         const MediaEnginePrefs& aPrefs);
+  // Initialize the recording frame (MediaBuffer) callback and Gonk camera.
+  // MediaBuffer will transfers to MediaStreamGraph via AppendToTrack.
+  nsresult InitDirectMediaBuffer();
 
   mozilla::ReentrantMonitor mCallbackMonitor; // Monitor for camera callback handling
   // This is only modified on MainThread (AllocImpl and DeallocImpl)
   nsRefPtr<ICameraControl> mCameraControl;
   nsCOMPtr<nsIDOMFile> mLastCapture;
+
+  android::sp<android::GonkCameraSource> mCameraSource;
 
   // These are protected by mMonitor in parent class
   nsTArray<nsRefPtr<PhotoCallback>> mPhotoCallbacks;
@@ -112,6 +128,8 @@ protected:
   int mCameraAngle; // See dom/base/ScreenOrientation.h
   bool mBackCamera;
   bool mOrientationChanged; // True when screen rotates.
+
+  RefPtr<layers::TextureClientRecycleAllocator> mTextureClientAllocator;
 };
 
 } // namespace mozilla

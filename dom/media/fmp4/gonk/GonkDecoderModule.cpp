@@ -29,17 +29,15 @@ GonkDecoderModule::Init()
 nsresult
 GonkDecoderModule::Shutdown()
 {
-  MOZ_ASSERT(NS_IsMainThread(), "Must be on main thread.");
-
   return NS_OK;
 }
 
 already_AddRefed<MediaDataDecoder>
-GonkDecoderModule::CreateH264Decoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
-                                    mozilla::layers::LayersBackend aLayersBackend,
-                                    mozilla::layers::ImageContainer* aImageContainer,
-                                    MediaTaskQueue* aVideoTaskQueue,
-                                    MediaDataDecoderCallback* aCallback)
+GonkDecoderModule::CreateVideoDecoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
+                                     mozilla::layers::LayersBackend aLayersBackend,
+                                     mozilla::layers::ImageContainer* aImageContainer,
+                                     MediaTaskQueue* aVideoTaskQueue,
+                                     MediaDataDecoderCallback* aCallback)
 {
   nsRefPtr<MediaDataDecoder> decoder =
   new GonkMediaDataDecoder(new GonkVideoDecoderManager(aImageContainer,aConfig),

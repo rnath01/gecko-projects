@@ -7,7 +7,6 @@
 #include "GMPLoader.h"
 #include <stdio.h>
 #include "mozilla/Attributes.h"
-#include "mozilla/NullPtr.h"
 #include "gmp-entrypoints.h"
 #include "prlink.h"
 
@@ -72,7 +71,7 @@ GMPLoader* CreateGMPLoader(SandboxStarter* aStarter) {
   return static_cast<GMPLoader*>(new GMPLoaderImpl(aStarter));
 }
 
-#if defined(XP_WIN)
+#if defined(XP_WIN) && defined(HASH_NODE_ID_WITH_DEVICE_ID)
 MOZ_NEVER_INLINE
 static bool
 GetStackAfterCurrentFrame(uint8_t** aOutTop, uint8_t** aOutBottom)
@@ -156,21 +155,25 @@ GMPLoaderImpl::Load(const char* aLibPath,
       return false;
     }
     assert(top >= bottom);
-    SecureZeroMemory(bottom, (top - bottom));
+    // Inline instructions equivalent to RtlSecureZeroMemory().
+    // We can't just use RtlSecureZeroMemory here directly, as in debug
+    // builds, RtlSecureZeroMemory() can't be inlined, and the stack
+    // memory it uses would get wiped by itself running, causing crashes.
+    for (volatile uint8_t* p = (volatile uint8_t*)bottom; p < top; p++) {
+      *p = 0;
+    }
   } else
 #endif
   {
     nodeId = std::string(aOriginSalt, aOriginSalt + aOriginSaltLen);
   }
 
-#if defined(MOZ_GMP_SANDBOX)
   // Start the sandbox now that we've generated the device bound node id.
   // This must happen after the node id is bound to the device id, as
   // generating the device id requires privileges.
   if (mSandboxStarter) {
-    mSandboxStarter->Start();
+    mSandboxStarter->Start(aLibPath);
   }
-#endif
 
   // Load the GMP.
   PRLibSpec libSpec;

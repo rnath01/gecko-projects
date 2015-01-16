@@ -53,12 +53,8 @@ BailoutFrameInfo::BailoutFrameInfo(const JitActivationIterator &activations,
     framePointer_ = sp + bailout->frameSize();
     topFrameSize_ = framePointer_ - sp;
 
-    JSScript *script = ScriptFromCalleeToken(((IonJSFrameLayout *) framePointer_)->calleeToken());
-    JitActivation *activation = activations.activation()->asJit();
-    if (activation->cx()->isForkJoinContext())
-        topIonScript_ = script->parallelIonScript();
-    else
-        topIonScript_ = script->ionScript();
+    JSScript *script = ScriptFromCalleeToken(((JitFrameLayout *) framePointer_)->calleeToken());
+    topIonScript_ = script->ionScript();
 
     attachOnJitActivation(activations);
     snapshotOffset_ = bailout->snapshotOffset();

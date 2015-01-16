@@ -11,6 +11,7 @@
 #include "nsCOMPtr.h"
 #include "nsError.h"
 #include "MediaDecoder.h"
+#include "MediaSourceReader.h"
 
 class nsIStreamListener;
 
@@ -18,7 +19,6 @@ namespace mozilla {
 
 class MediaResource;
 class MediaDecoderStateMachine;
-class MediaSourceReader;
 class SourceBufferDecoder;
 class TrackBuffer;
 
@@ -46,7 +46,8 @@ public:
   void AttachMediaSource(dom::MediaSource* aMediaSource);
   void DetachMediaSource();
 
-  already_AddRefed<SourceBufferDecoder> CreateSubDecoder(const nsACString& aType);
+  already_AddRefed<SourceBufferDecoder> CreateSubDecoder(const nsACString& aType,
+                                                         int64_t aTimestampOffset /* microseconds */);
   void AddTrackBuffer(TrackBuffer* aTrackBuffer);
   void RemoveTrackBuffer(TrackBuffer* aTrackBuffer);
   void OnTrackBufferConfigured(TrackBuffer* aTrackBuffer, const MediaInfo& aInfo);
@@ -70,6 +71,12 @@ public:
 #ifdef MOZ_EME
   virtual nsresult SetCDMProxy(CDMProxy* aProxy) MOZ_OVERRIDE;
 #endif
+
+  MediaSourceReader* GetReader() { return mReader; }
+
+  // Returns true if aReader is a currently active audio or video
+  // reader in this decoders MediaSourceReader.
+  bool IsActiveReader(MediaDecoderReader* aReader);
 
 private:
   // The owning MediaSource holds a strong reference to this decoder, and

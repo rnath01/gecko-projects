@@ -25,6 +25,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=795785
 
 
 SimpleTest.waitForExplicitFinish();
+SimpleTest.requestFlakyTimeout("This test uses setTimeouts in order to fix an intermittent failure.");
 
 // Turn off spatial navigation because it hijacks arrow key events and VK_RETURN
 // events.
@@ -134,11 +135,7 @@ function doCompositionTest(aElement, aElementDescription, aCallback)
     hitEventLoop(function () {
       isnot(aElement.scrollTop, 0,
             aElementDescription + " was not scrolled by composition");
-      synthesizeCompositionChange({
-        composition: { string: "", clauses: [ { length: 0, attr: 0 } ] },
-        caret: { start: 0, length: 0 }
-      });
-      synthesizeComposition({ type: "compositionend", data: "" });
+      synthesizeComposition({ type: "compositioncommit", data: "" });
       hitEventLoop(function () {
         is(aElement.scrollTop, 0,
            aElementDescription + " was not scrolled back to the top by canceling composition");

@@ -33,13 +33,10 @@ SpanningCellSorter::~SpanningCellSorter()
 
 /* static */ const PLDHashTableOps
 SpanningCellSorter::HashTableOps = {
-    PL_DHashAllocTable,
-    PL_DHashFreeTable,
     HashTableHashKey,
     HashTableMatchEntry,
     PL_DHashMoveEntryStub,
     PL_DHashClearEntryStub,
-    PL_DHashFinalizeStub,
     nullptr
 };
 
@@ -76,12 +73,11 @@ SpanningCellSorter::AddCell(int32_t aColSpan, int32_t aRow, int32_t aCol)
         mArray[index] = i;
     } else {
         if (!mHashTable.ops) {
-            PL_DHashTableInit(&mHashTable, &HashTableOps, nullptr,
+            PL_DHashTableInit(&mHashTable, &HashTableOps,
                               sizeof(HashTableEntry));
         }
         HashTableEntry *entry = static_cast<HashTableEntry*>
-                                           (PL_DHashTableOperate(&mHashTable, NS_INT32_TO_PTR(aColSpan),
-                                 PL_DHASH_ADD));
+                                           (PL_DHashTableAdd(&mHashTable, NS_INT32_TO_PTR(aColSpan)));
         NS_ENSURE_TRUE(entry, false);
 
         NS_ASSERTION(entry->mColSpan == 0 || entry->mColSpan == aColSpan,

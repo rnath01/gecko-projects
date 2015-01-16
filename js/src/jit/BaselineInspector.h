@@ -92,7 +92,7 @@ class BaselineInspector
     bool dimorphicStub(jsbytecode *pc, ICStub **pfirst, ICStub **psecond);
 
   public:
-    typedef Vector<Shape *, 4, IonAllocPolicy> ShapeVector;
+    typedef Vector<Shape *, 4, JitAllocPolicy> ShapeVector;
     bool maybeShapesForPropertyOp(jsbytecode *pc, ShapeVector &shapes);
 
     SetElemICInspector setElemICInspector(jsbytecode *pc) {
@@ -119,6 +119,8 @@ class BaselineInspector
     JSObject *commonGetPropFunction(jsbytecode *pc, Shape **lastProperty, JSFunction **commonGetter,
                                     Shape **globalShape);
     JSObject *commonSetPropFunction(jsbytecode *pc, Shape **lastProperty, JSFunction **commonSetter);
+
+    bool instanceOfData(jsbytecode *pc, Shape **shape, uint32_t *slot, JSObject **prototypeObject);
 };
 
 } // namespace jit

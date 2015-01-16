@@ -52,6 +52,10 @@ def main(argv):
                   action='store_true', help='show command lines of failed tests')
     op.add_option('-o', '--show-output', dest='show_output', action='store_true',
                   help='show output from js shell')
+    op.add_option('-F', '--failed-only', dest='failed_only', action='store_true',
+                  help="if --show-output is given, only print output for failed tests")
+    op.add_option('--no-show-failed', dest='no_show_failed', action='store_true',
+                  help="don't print output for failed tests (no-op with --show-output)")
     op.add_option('-x', '--exclude', dest='exclude', action='append',
                   help='exclude given test dir or path')
     op.add_option('--slow', dest='run_slow', action='store_true',
@@ -193,27 +197,16 @@ def main(argv):
 
     # The full test list is ready. Now create copies for each JIT configuration.
     job_list = []
+    test_flags = []
     if options.tbpl:
         # Running all bits would take forever. Instead, we test a few interesting combinations.
-        for test in test_list:
-            for variant in TBPL_FLAGS:
-                new_test = test.copy()
-                new_test.jitflags.extend(variant)
-                job_list.append(new_test)
+        test_flags = TBPL_FLAGS
     elif options.ion:
-        flags = [['--baseline-eager'], ['--ion-eager', '--ion-offthread-compile=off']]
-        for test in test_list:
-            for variant in flags:
-                new_test = test.copy()
-                new_test.jitflags.extend(variant)
-                job_list.append(new_test)
+        test_flags = [['--baseline-eager'], ['--ion-eager', '--ion-offthread-compile=off']]
     else:
-        jitflags_list = jittests.parse_jitflags(options)
-        for test in test_list:
-            for jitflags in jitflags_list:
-                new_test = test.copy()
-                new_test.jitflags.extend(jitflags)
-                job_list.append(new_test)
+        test_flags = jittests.parse_jitflags(options)
+
+    job_list = [ _ for test in test_list for _ in test.copy_variants(test_flags) ]
 
     if options.ignore_timeouts:
         read_all = False

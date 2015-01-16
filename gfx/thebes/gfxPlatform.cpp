@@ -16,6 +16,7 @@
 #include "gfxPlatform.h"
 #include "gfxPrefs.h"
 #include "gfxTextRun.h"
+#include "gfxVR.h"
 
 #ifdef XP_WIN
 #include <process.h>
@@ -103,6 +104,8 @@ class mozilla::gl::SkiaGLGlue : public GenericAtomicRefCounted {
 
 #include "nsIGfxInfo.h"
 #include "nsIXULRuntime.h"
+#include "VsyncSource.h"
+#include "SoftwareVsyncSource.h"
 
 namespace mozilla {
 namespace layers {
@@ -163,8 +166,10 @@ public:
 class CrashStatsLogForwarder: public mozilla::gfx::LogForwarder
 {
 public:
-  CrashStatsLogForwarder(const char* aKey);
+  explicit CrashStatsLogForwarder(const char* aKey);
   virtual void Log(const std::string& aString) MOZ_OVERRIDE;
+
+  virtual std::vector<std::pair<int32_t,std::string> > StringsVectorCopy();
 
   void SetCircularBufferSize(uint32_t aCapacity);
 
@@ -178,6 +183,7 @@ private:
   nsCString mCrashCriticalKey;
   uint32_t mMaxCapacity;
   int32_t mIndex;
+  Mutex mMutex;
 };
 
 CrashStatsLogForwarder::CrashStatsLogForwarder(const char* aKey)
@@ -185,13 +191,23 @@ CrashStatsLogForwarder::CrashStatsLogForwarder(const char* aKey)
   , mCrashCriticalKey(aKey)
   , mMaxCapacity(0)
   , mIndex(-1)
+  , mMutex("CrashStatsLogForwarder")
 {
 }
 
 void CrashStatsLogForwarder::SetCircularBufferSize(uint32_t aCapacity)
 {
+  MutexAutoLock lock(mMutex);
+
   mMaxCapacity = aCapacity;
   mBuffer.reserve(static_cast<size_t>(aCapacity));
+}
+
+std::vector<std::pair<int32_t,std::string> >
+CrashStatsLogForwarder::StringsVectorCopy()
+{
+  MutexAutoLock lock(mMutex);
+  return mBuffer;
 }
 
 bool
@@ -242,6 +258,8 @@ void CrashStatsLogForwarder::UpdateCrashReport()
   
 void CrashStatsLogForwarder::Log(const std::string& aString)
 {
+  MutexAutoLock lock(mMutex);
+
   if (UpdateStringsVector(aString)) {
     UpdateCrashReport();
   }
@@ -367,8 +385,7 @@ static const char *gPrefLangNames[] = {
 gfxPlatform::gfxPlatform()
   : mTileWidth(-1)
   , mTileHeight(-1)
-  , mAzureCanvasBackendCollector(MOZ_THIS_IN_INITIALIZER_LIST(),
-                                 &gfxPlatform::GetAzureBackendInfo)
+  , mAzureCanvasBackendCollector(this, &gfxPlatform::GetAzureBackendInfo)
 {
     mAllowDownloadableFonts = UNINITIALIZED_VALUE;
     mFallbackUsesCmaps = UNINITIALIZED_VALUE;
@@ -386,6 +403,10 @@ gfxPlatform::gfxPlatform()
     InitBackendPrefs(canvasMask, BackendType::CAIRO,
                      contentMask, BackendType::CAIRO);
     mTotalSystemMemory = mozilla::hal::GetTotalSystemMemory();
+
+    // give ovr_Initialize a chance to be called very early on; we don't
+    // care if it succeeds or not
+    VRHMDManagerOculus::PlatformInit();
 }
 
 gfxPlatform*
@@ -543,8 +564,8 @@ gfxPlatform::Init()
 
     RegisterStrongMemoryReporter(new GfxMemoryImageReporter());
 
-    if (gfxPrefs::HardwareVsyncEnabled() && gfxPrefs::VsyncAlignedCompositor()) {
-      gPlatform->InitHardwareVsync();
+    if (XRE_IsParentProcess() && gfxPrefs::HardwareVsyncEnabled()) {
+      gPlatform->mVsyncSource = gPlatform->CreateHardwareVsyncSource();
     }
 }
 
@@ -592,6 +613,7 @@ gfxPlatform::Shutdown()
 
         gPlatform->mMemoryPressureObserver = nullptr;
         gPlatform->mSkiaGlue = nullptr;
+        gPlatform->mVsyncSource = nullptr;
     }
 
 #ifdef MOZ_WIDGET_ANDROID
@@ -677,13 +699,16 @@ gfxPlatform::~gfxPlatform()
     mScreenReferenceSurface = nullptr;
     mScreenReferenceDrawTarget = nullptr;
 
+    // Clean up any VR stuff
+    VRHMDManagerOculus::Destroy();
+
     // The cairo folks think we should only clean up in debug builds,
     // but we're generally in the habit of trying to shut down as
     // cleanly as possible even in production code, so call this
     // cairo_debug_* function unconditionally.
     //
     // because cairo can assert and thus crash on shutdown, don't do this in release builds
-#if defined(DEBUG) || defined(NS_BUILD_REFCNT_LOGGING) || defined(NS_TRACE_MALLOC) || defined(MOZ_VALGRIND)
+#if defined(DEBUG) || defined(NS_BUILD_REFCNT_LOGGING) || defined(MOZ_VALGRIND)
 #ifdef USE_SKIA
     // must do Skia cleanup before Cairo cleanup, because Skia may be referencing
     // Cairo objects e.g. through SkCairoFTTypeface
@@ -1163,16 +1188,16 @@ gfxPlatform::CreateDrawTargetForData(unsigned char* aData, const IntSize& aSize,
 {
   NS_ASSERTION(mContentBackend != BackendType::NONE, "No backend.");
 
-  RefPtr<DrawTarget> dt = Factory::CreateDrawTargetForData(mContentBackend,
+  BackendType backendType = mContentBackend;
+  
+  if (!Factory::DoesBackendSupportDataDrawtarget(mContentBackend)) {
+    backendType = BackendType::CAIRO;
+  }
+
+  RefPtr<DrawTarget> dt = Factory::CreateDrawTargetForData(backendType,
                                                            aData, aSize,
                                                            aStride, aFormat);
-  if (!dt) {
-    // Factory::CreateDrawTargetForData does not support mContentBackend; retry
-    // with BackendType::CAIRO:
-    dt = Factory::CreateDrawTargetForData(BackendType::CAIRO,
-                                          aData, aSize,
-                                          aStride, aFormat);
-  }
+
   return dt.forget();
 }
 
@@ -2176,6 +2201,10 @@ InitLayersAccelerationPrefs()
             sLayersSupportsD3D11 = true;
           }
         }
+        if (!gfxPrefs::LayersD3D11DisableWARP()) {
+          // Always support D3D11 when WARP is allowed.
+          sLayersSupportsD3D11 = true;
+        }
       }
     }
 #endif
@@ -2259,4 +2288,12 @@ gfxPlatform::UsesOffMainThreadCompositing()
   }
 
   return result;
+}
+
+already_AddRefed<mozilla::gfx::VsyncSource>
+gfxPlatform::CreateHardwareVsyncSource()
+{
+  NS_WARNING("Hardware Vsync support not yet implemented. Falling back to software timers\n");
+  nsRefPtr<mozilla::gfx::VsyncSource> softwareVsync = new SoftwareVsyncSource();
+  return softwareVsync.forget();
 }

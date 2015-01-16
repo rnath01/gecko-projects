@@ -26,6 +26,7 @@
 
 #if defined(HAVE_SYS_QUOTA_H) && defined(HAVE_LINUX_QUOTA_H)
 #define USE_LINUX_QUOTACTL
+#include <sys/mount.h>
 #include <sys/quota.h>
 #endif
 
@@ -1407,10 +1408,9 @@ nsLocalFile::GetDiskSpaceAvailable(int64_t* aDiskSpaceAvailable)
 #endif
       && dq.dqb_bhardlimit) {
     int64_t QuotaSpaceAvailable = 0;
-    if (dq.dqb_bhardlimit > dq.dqb_curspace) {
-      QuotaSpaceAvailable =
-        int64_t(fs_buf.F_BSIZE * (dq.dqb_bhardlimit - dq.dqb_curspace));
-    }
+    // dqb_bhardlimit is count of BLOCK_SIZE blocks, dqb_curspace is bytes
+    if ((BLOCK_SIZE * dq.dqb_bhardlimit) > dq.dqb_curspace)
+      QuotaSpaceAvailable = int64_t(BLOCK_SIZE * dq.dqb_bhardlimit - dq.dqb_curspace);
     if (QuotaSpaceAvailable < *aDiskSpaceAvailable) {
       *aDiskSpaceAvailable = QuotaSpaceAvailable;
     }
@@ -2058,9 +2058,13 @@ nsLocalFile::Launch()
   }
 
   nsAutoCString fileUri = NS_LITERAL_CSTRING("file://") + mPath;
-  return widget::android::GeckoAppShell::OpenUriExternal(
+  return widget::GeckoAppShell::OpenUriExternal(
     NS_ConvertUTF8toUTF16(fileUri),
-    NS_ConvertUTF8toUTF16(type)) ? NS_OK : NS_ERROR_FAILURE;
+    NS_ConvertUTF8toUTF16(type),
+    EmptyString(),
+    EmptyString(),
+    EmptyString(),
+    EmptyString()) ? NS_OK : NS_ERROR_FAILURE;
 #elif defined(MOZ_WIDGET_COCOA)
   CFURLRef url;
   if (NS_SUCCEEDED(GetCFURL(&url))) {

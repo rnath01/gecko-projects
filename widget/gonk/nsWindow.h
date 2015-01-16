@@ -16,6 +16,7 @@
 #ifndef nsWindow_h
 #define nsWindow_h
 
+#include "InputData.h"
 #include "nsBaseWidget.h"
 #include "nsRegion.h"
 #include "nsIIdleServiceInternal.h"
@@ -49,9 +50,10 @@ public:
     nsWindow();
     virtual ~nsWindow();
 
+    static void NotifyVsync(mozilla::TimeStamp aVsyncTimestamp);
     static void DoDraw(void);
-    static nsEventStatus DispatchInputEvent(mozilla::WidgetGUIEvent& aEvent,
-                                            bool* aWasCaptured = nullptr);
+    static nsEventStatus DispatchInputEvent(mozilla::WidgetGUIEvent& aEvent);
+    static void DispatchTouchInput(mozilla::MultiTouchInput& aInput);
 
     NS_IMETHOD Create(nsIWidget *aParent,
                       void *aNativeParent,
@@ -86,6 +88,7 @@ public:
         return NS_OK;
     }
     virtual nsIntPoint WidgetToScreenOffset();
+    void DispatchTouchInputViaAPZ(mozilla::MultiTouchInput& aInput);
     NS_IMETHOD DispatchEvent(mozilla::WidgetGUIEvent* aEvent,
                              nsEventStatus& aStatus);
     NS_IMETHOD CaptureRollupEvents(nsIRollupListener *aListener,
@@ -95,7 +98,7 @@ public:
     }
     NS_IMETHOD ReparentNativeWidget(nsIWidget* aNewParent);
 
-    NS_IMETHOD MakeFullScreen(bool aFullScreen) /*MOZ_OVERRIDE*/;
+    NS_IMETHOD MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen = nullptr) /*MOZ_OVERRIDE*/;
 
     virtual mozilla::TemporaryRef<mozilla::gfx::DrawTarget>
         StartRemoteDrawing() MOZ_OVERRIDE;

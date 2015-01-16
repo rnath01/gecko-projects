@@ -269,7 +269,7 @@ nsWindow::Destroy(void)
     if (rollupListener) {
         nsCOMPtr<nsIWidget> rollupWidget = rollupListener->GetRollupWidget();
         if (static_cast<nsIWidget *>(this) == rollupWidget) {
-            rollupListener->Rollup(0, nullptr, nullptr);
+            rollupListener->Rollup(0, false, nullptr, nullptr);
         }
     }
 
@@ -732,7 +732,7 @@ nsWindow::ReparentNativeWidget(nsIWidget *aNewParent)
 }
 
 NS_IMETHODIMP
-nsWindow::MakeFullScreen(bool aFullScreen)
+nsWindow::MakeFullScreen(bool aFullScreen, nsIScreen*)
 {
     NS_ENSURE_TRUE(mWidget, NS_ERROR_FAILURE);
 
@@ -1618,7 +1618,7 @@ nsWindow::CheckForRollup(double aMouseX, double aMouseY,
         // if we've determined that we should still rollup, do it.
         if (rollup) {
             nsIntPoint pos(aMouseX, aMouseY);
-            retVal = rollupListener->Rollup(popupsToRollup, &pos, nullptr);
+            retVal = rollupListener->Rollup(popupsToRollup, true, &pos, nullptr);
         }
     }
 

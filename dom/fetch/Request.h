@@ -23,11 +23,11 @@ namespace dom {
 class Headers;
 class InternalHeaders;
 class Promise;
-class RequestOrScalarValueString;
+class RequestOrUSVString;
 
 class Request MOZ_FINAL : public nsISupports
-                        , public nsWrapperCache
                         , public FetchBody<Request>
+                        , public nsWrapperCache
 {
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(Request)
@@ -36,7 +36,7 @@ public:
   Request(nsIGlobalObject* aOwner, InternalRequest* aRequest);
 
   JSObject*
-  WrapObject(JSContext* aCx)
+  WrapObject(JSContext* aCx) MOZ_OVERRIDE
   {
     return RequestBinding::Wrap(aCx, this);
   }
@@ -56,6 +56,9 @@ public:
   RequestMode
   Mode() const
   {
+    if (mRequest->mMode == RequestMode::Cors_with_forced_preflight) {
+      return RequestMode::Cors;
+    }
     return mRequest->mMode;
   }
 
@@ -63,6 +66,12 @@ public:
   Credentials() const
   {
     return mRequest->mCredentialsMode;
+  }
+
+  RequestCache
+  Cache() const
+  {
+    return mRequest->GetCacheMode();
   }
 
   void
@@ -89,7 +98,7 @@ public:
   GetBody(nsIInputStream** aStream) { return mRequest->GetBody(aStream); }
 
   static already_AddRefed<Request>
-  Constructor(const GlobalObject& aGlobal, const RequestOrScalarValueString& aInput,
+  Constructor(const GlobalObject& aGlobal, const RequestOrUSVString& aInput,
               const RequestInit& aInit, ErrorResult& rv);
 
   nsIGlobalObject* GetParentObject() const

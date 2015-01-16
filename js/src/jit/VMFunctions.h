@@ -10,14 +10,14 @@
 #include "jspubtd.h"
 
 #include "jit/CompileInfo.h"
-#include "jit/IonFrames.h"
+#include "jit/JitFrames.h"
 
 namespace js {
 
 class DeclEnvObject;
-class ForkJoinContext;
 class StaticWithObject;
 class InlineTypedObject;
+class GeneratorObject;
 
 namespace jit {
 
@@ -39,6 +39,11 @@ struct PopValues
     explicit PopValues(uint32_t numValues)
       : numValues(numValues)
     { }
+};
+
+enum MaybeTailCall {
+    TailCall,
+    NonTailCall
 };
 
 // Contains information about a virtual machine function that can be called
@@ -115,13 +120,15 @@ struct VMFunction
     // The root type of the out param if outParam == Type_Handle.
     RootType outParamRootType;
 
-    // Does this function take a ForkJoinContext * or a JSContext *?
-    ExecutionMode executionMode;
-
     // Number of Values the VM wrapper should pop from the stack when it returns.
     // Used by baseline IC stubs so that they can use tail calls to call the VM
     // wrapper.
     uint32_t extraValuesToPop;
+
+    // On some architectures, called functions need to explicitly push their
+    // return address, for a tail call, there is nothing to push, so tail-callness
+    // needs to be known at compile time.
+    MaybeTailCall expectTailCall;
 
     uint32_t argc() const {
         // JSContext * + args + (OutParam? *)
@@ -218,7 +225,6 @@ struct VMFunction
         outParam(Type_Void),
         returnType(Type_Void),
         outParamRootType(RootNone),
-        executionMode(SequentialExecution),
         extraValuesToPop(0)
     {
     }
@@ -227,7 +233,7 @@ struct VMFunction
     VMFunction(void *wrapped, uint32_t explicitArgs, uint32_t argumentProperties,
                uint32_t argumentPassedInFloatRegs, uint64_t argRootTypes,
                DataType outParam, RootType outParamRootType, DataType returnType,
-               ExecutionMode executionMode, uint32_t extraValuesToPop = 0)
+               uint32_t extraValuesToPop = 0, MaybeTailCall expectTailCall = NonTailCall)
       : wrapped(wrapped),
         explicitArgs(explicitArgs),
         argumentProperties(argumentProperties),
@@ -236,12 +242,11 @@ struct VMFunction
         returnType(returnType),
         argumentRootTypes(argRootTypes),
         outParamRootType(outParamRootType),
-        executionMode(executionMode),
-        extraValuesToPop(extraValuesToPop)
+        extraValuesToPop(extraValuesToPop),
+        expectTailCall(expectTailCall)
     {
         // Check for valid failure/return type.
-        MOZ_ASSERT_IF(outParam != Type_Void && executionMode == SequentialExecution,
-                      returnType == Type_Bool);
+        MOZ_ASSERT_IF(outParam != Type_Void, returnType == Type_Bool);
         MOZ_ASSERT(returnType == Type_Bool ||
                    returnType == Type_Object);
     }
@@ -261,31 +266,6 @@ struct VMFunction
     void addToFunctions();
 };
 
-// A collection of VM functions for each execution mode.
-struct VMFunctionsModal
-{
-    explicit VMFunctionsModal(const VMFunction &info) {
-        add(info);
-    }
-    VMFunctionsModal(const VMFunction &info1, const VMFunction &info2) {
-        add(info1);
-        add(info2);
-    }
-
-    inline const VMFunction &operator[](ExecutionMode mode) const {
-        MOZ_ASSERT((unsigned)mode < NumExecutionModes);
-        return funs_[mode];
-    }
-
-  private:
-    void add(const VMFunction &info) {
-        MOZ_ASSERT((unsigned)info.executionMode < NumExecutionModes);
-        funs_[info.executionMode].init(info);
-    }
-
-    mozilla::Array<VMFunction, NumExecutionModes> funs_;
-};
-
 template <class> struct TypeToDataType { /* Unexpected return type for a VMFunction. */ };
 template <> struct TypeToDataType<bool> { static const DataType result = Type_Bool; };
 template <> struct TypeToDataType<JSObject *> { static const DataType result = Type_Object; };
@@ -302,6 +282,8 @@ template <> struct TypeToDataType<HandleFunction> { static const DataType result
 template <> struct TypeToDataType<Handle<NativeObject *> > { static const DataType result = Type_Handle; };
 template <> struct TypeToDataType<Handle<InlineTypedObject *> > { static const DataType result = Type_Handle; };
 template <> struct TypeToDataType<Handle<ArrayObject *> > { static const DataType result = Type_Handle; };
+template <> struct TypeToDataType<Handle<GeneratorObject *> > { static const DataType result = Type_Handle; };
+template <> struct TypeToDataType<Handle<PlainObject *> > { static const DataType result = Type_Handle; };
 template <> struct TypeToDataType<Handle<StaticWithObject *> > { static const DataType result = Type_Handle; };
 template <> struct TypeToDataType<Handle<StaticBlockObject *> > { static const DataType result = Type_Handle; };
 template <> struct TypeToDataType<HandleScript> { static const DataType result = Type_Handle; };
@@ -336,6 +318,12 @@ template <> struct TypeToArgProperties<Handle<InlineTypedObject *> > {
 };
 template <> struct TypeToArgProperties<Handle<ArrayObject *> > {
     static const uint32_t result = TypeToArgProperties<ArrayObject *>::result | VMFunction::ByRef;
+};
+template <> struct TypeToArgProperties<Handle<GeneratorObject *> > {
+    static const uint32_t result = TypeToArgProperties<GeneratorObject *>::result | VMFunction::ByRef;
+};
+template <> struct TypeToArgProperties<Handle<PlainObject *> > {
+    static const uint32_t result = TypeToArgProperties<PlainObject *>::result | VMFunction::ByRef;
 };
 template <> struct TypeToArgProperties<Handle<StaticWithObject *> > {
     static const uint32_t result = TypeToArgProperties<StaticWithObject *>::result | VMFunction::ByRef;
@@ -408,6 +396,12 @@ template <> struct TypeToRootType<Handle<InlineTypedObject *> > {
 template <> struct TypeToRootType<Handle<ArrayObject *> > {
     static const uint32_t result = VMFunction::RootObject;
 };
+template <> struct TypeToRootType<Handle<GeneratorObject *> > {
+    static const uint32_t result = VMFunction::RootObject;
+};
+template <> struct TypeToRootType<Handle<PlainObject *> > {
+    static const uint32_t result = VMFunction::RootObject;
+};
 template <> struct TypeToRootType<Handle<StaticBlockObject *> > {
     static const uint32_t result = VMFunction::RootObject;
 };
@@ -444,19 +438,10 @@ template <> struct OutParamToRootType<MutableHandleString> {
 
 template <class> struct MatchContext { };
 template <> struct MatchContext<JSContext *> {
-    static const ExecutionMode execMode = SequentialExecution;
+    static const bool valid = true;
 };
 template <> struct MatchContext<ExclusiveContext *> {
-    static const ExecutionMode execMode = SequentialExecution;
-};
-template <> struct MatchContext<ForkJoinContext *> {
-    static const ExecutionMode execMode = ParallelExecution;
-};
-template <> struct MatchContext<ThreadSafeContext *> {
-    // ThreadSafeContext functions can be called from either mode, but for
-    // calling from parallel they should be wrapped first, so we default to
-    // SequentialExecution here.
-    static const ExecutionMode execMode = SequentialExecution;
+    static const bool valid = true;
 };
 
 #define FOR_EACH_ARGS_1(Macro, Sep, Last) Macro(1) Last(1)
@@ -476,9 +461,6 @@ template <> struct MatchContext<ThreadSafeContext *> {
 #define NOTHING(_)
 
 #define FUNCTION_INFO_STRUCT_BODY(ForEachNb)                                            \
-    static inline ExecutionMode executionMode() {                                       \
-        return MatchContext<Context>::execMode;                                         \
-    }                                                                                   \
     static inline DataType returnType() {                                               \
         return TypeToDataType<R>::result;                                               \
     }                                                                                   \
@@ -503,13 +485,23 @@ template <> struct MatchContext<ThreadSafeContext *> {
     static inline uint64_t argumentRootTypes() {                                        \
         return ForEachNb(COMPUTE_ARG_ROOT, SEP_OR, NOTHING);                            \
     }                                                                                   \
+    explicit FunctionInfo(pf fun, MaybeTailCall expectTailCall,                         \
+                          PopValues extraValuesToPop = PopValues(0))                    \
+        : VMFunction(JS_FUNC_TO_DATA_PTR(void *, fun), explicitArgs(),                  \
+                     argumentProperties(), argumentPassedInFloatRegs(),                 \
+                     argumentRootTypes(), outParam(), outParamRootType(),               \
+                     returnType(), extraValuesToPop.numValues, expectTailCall)          \
+    {                                                                                   \
+        static_assert(MatchContext<Context>::valid, "Invalid cx type in VMFunction");   \
+    }                                                                                   \
     explicit FunctionInfo(pf fun, PopValues extraValuesToPop = PopValues(0))            \
         : VMFunction(JS_FUNC_TO_DATA_PTR(void *, fun), explicitArgs(),                  \
                      argumentProperties(), argumentPassedInFloatRegs(),                 \
                      argumentRootTypes(), outParam(), outParamRootType(),               \
-                     returnType(), executionMode(),                                     \
-                     extraValuesToPop.numValues)                                        \
-    { }
+                     returnType(), extraValuesToPop.numValues, NonTailCall)             \
+    {                                                                                   \
+        static_assert(MatchContext<Context>::valid, "Invalid cx type in VMFunction");   \
+    }
 
 template <typename Fun>
 struct FunctionInfo {
@@ -520,9 +512,6 @@ template <class R, class Context>
 struct FunctionInfo<R (*)(Context)> : public VMFunction {
     typedef R (*pf)(Context);
 
-    static inline ExecutionMode executionMode() {
-        return MatchContext<Context>::execMode;
-    }
     static inline DataType returnType() {
         return TypeToDataType<R>::result;
     }
@@ -548,8 +537,18 @@ struct FunctionInfo<R (*)(Context)> : public VMFunction {
       : VMFunction(JS_FUNC_TO_DATA_PTR(void *, fun), explicitArgs(),
                    argumentProperties(), argumentPassedInFloatRegs(),
                    argumentRootTypes(), outParam(), outParamRootType(),
-                   returnType(), executionMode())
-    { }
+                   returnType(), 0, NonTailCall)
+    {
+        static_assert(MatchContext<Context>::valid, "Invalid cx type in VMFunction");
+    }
+    explicit FunctionInfo(pf fun, MaybeTailCall expectTailCall)
+      : VMFunction(JS_FUNC_TO_DATA_PTR(void *, fun), explicitArgs(),
+                   argumentProperties(), argumentPassedInFloatRegs(),
+                   argumentRootTypes(), outParam(), outParamRootType(),
+                   returnType(), expectTailCall)
+    {
+        static_assert(MatchContext<Context>::valid, "Invalid cx type in VMFunction");
+    }
 };
 
 // Specialize the class for each number of argument used by VMFunction.
@@ -631,7 +630,8 @@ class AutoDetectInvalidation
 };
 
 bool InvokeFunction(JSContext *cx, HandleObject obj0, uint32_t argc, Value *argv, Value *rval);
-JSObject *NewGCObject(JSContext *cx, gc::AllocKind allocKind, gc::InitialHeap initialHeap);
+JSObject *NewGCObject(JSContext *cx, gc::AllocKind allocKind, gc::InitialHeap initialHeap,
+                      const js::Class *clasp);
 
 bool CheckOverRecursed(JSContext *cx);
 bool CheckOverRecursedWithExtra(JSContext *cx, BaselineFrame *frame,
@@ -639,7 +639,7 @@ bool CheckOverRecursedWithExtra(JSContext *cx, BaselineFrame *frame,
 
 bool DefVarOrConst(JSContext *cx, HandlePropertyName dn, unsigned attrs, HandleObject scopeChain);
 bool SetConst(JSContext *cx, HandlePropertyName name, HandleObject scopeChain, HandleValue rval);
-bool MutatePrototype(JSContext *cx, HandleObject obj, HandleValue value);
+bool MutatePrototype(JSContext *cx, HandlePlainObject obj, HandleValue value);
 bool InitProp(JSContext *cx, HandleNativeObject obj, HandlePropertyName name, HandleValue value);
 
 template<bool Equal>
@@ -656,10 +656,8 @@ bool GreaterThanOrEqual(JSContext *cx, MutableHandleValue lhs, MutableHandleValu
 template<bool Equal>
 bool StringsEqual(JSContext *cx, HandleString left, HandleString right, bool *res);
 
-// Allocation functions for JSOP_NEWARRAY and JSOP_NEWOBJECT and parallel array inlining
-JSObject *NewInitParallelArray(JSContext *cx, HandleObject templateObj);
-JSObject *NewInitObject(JSContext *cx, HandleNativeObject templateObject);
-JSObject *NewInitObjectWithClassPrototype(JSContext *cx, HandleObject templateObject);
+JSObject *NewInitObject(JSContext *cx, HandlePlainObject templateObject);
+JSObject *NewInitObjectWithClassPrototype(JSContext *cx, HandlePlainObject templateObject);
 
 bool ArrayPopDense(JSContext *cx, HandleObject obj, MutableHandleValue rval);
 bool ArrayPushDense(JSContext *cx, HandleArrayObject obj, HandleValue v, uint32_t *length);
@@ -695,10 +693,8 @@ void GetDynamicName(JSContext *cx, JSObject *scopeChain, JSString *str, Value *v
 
 bool FilterArgumentsOrEval(JSContext *cx, JSString *str);
 
-#ifdef JSGC_GENERATIONAL
 void PostWriteBarrier(JSRuntime *rt, JSObject *obj);
 void PostGlobalWriteBarrier(JSRuntime *rt, JSObject *obj);
-#endif
 
 uint32_t GetIndexFromString(JSString *str);
 
@@ -713,8 +709,8 @@ bool FinalSuspend(JSContext *cx, HandleObject obj, BaselineFrame *frame, jsbytec
 bool InterpretResume(JSContext *cx, HandleObject obj, HandleValue val, HandlePropertyName kind,
                      MutableHandleValue rval);
 bool DebugAfterYield(JSContext *cx, BaselineFrame *frame);
-bool GeneratorThrowOrClose(JSContext *cx, BaselineFrame *frame, HandleObject obj, HandleValue arg,
-                           uint32_t resumeKind);
+bool GeneratorThrowOrClose(JSContext *cx, BaselineFrame *frame, Handle<GeneratorObject*> genObj,
+                           HandleValue arg, uint32_t resumeKind);
 
 bool StrictEvalPrologue(JSContext *cx, BaselineFrame *frame);
 bool HeavyweightFunPrologue(JSContext *cx, BaselineFrame *frame);
@@ -726,7 +722,7 @@ JSObject *InitRestParameter(JSContext *cx, uint32_t length, Value *rest, HandleO
 
 bool HandleDebugTrap(JSContext *cx, BaselineFrame *frame, uint8_t *retAddr, bool *mustReturn);
 bool OnDebuggerStatement(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool *mustReturn);
-bool IsCompartmentDebuggee(JSContext *cx);
+bool GlobalHasLiveOnDebuggerStatement(JSContext *cx);
 
 bool EnterWith(JSContext *cx, BaselineFrame *frame, HandleValue val,
                Handle<StaticWithObject *> templ);
@@ -761,8 +757,6 @@ void AssertValidStringPtr(JSContext *cx, JSString *str);
 void AssertValidSymbolPtr(JSContext *cx, JS::Symbol *sym);
 void AssertValidValue(JSContext *cx, Value *v);
 #endif
-
-JSObject *TypedObjectProto(JSObject *obj);
 
 void MarkValueFromIon(JSRuntime *rt, Value *vp);
 void MarkStringFromIon(JSRuntime *rt, JSString **stringp);

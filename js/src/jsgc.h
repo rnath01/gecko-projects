@@ -26,10 +26,6 @@ namespace js {
 
 class AutoLockGC;
 
-namespace gc {
-class ForkJoinNursery;
-}
-
 unsigned GetCPUCount();
 
 enum HeapState {
@@ -37,6 +33,12 @@ enum HeapState {
     Tracing,          // tracing the GC heap without collecting, e.g. IterateCompartments()
     MajorCollecting,  // doing a GC of the major heap
     MinorCollecting   // doing a GC of the minor heap (nursery)
+};
+
+enum ThreadType
+{
+    MainThread,
+    BackgroundThread
 };
 
 namespace jit {
@@ -52,14 +54,8 @@ enum State {
     MARK_ROOTS,
     MARK,
     SWEEP,
-#ifdef JSGC_COMPACTING
     COMPACT
-#endif
 };
-
-/* Return a printable string for the given kind, for diagnostic purposes. */
-const char *
-TraceKindAsAscii(JSGCTraceKind kind);
 
 /* Map from C++ type to alloc kind. JSObject does not have a 1:1 mapping, so must use Arena::thingSize. */
 template <typename T> struct MapTypeToFinalizeKind {};
@@ -75,7 +71,6 @@ template <> struct MapTypeToFinalizeKind<JSExternalString>  { static const Alloc
 template <> struct MapTypeToFinalizeKind<JS::Symbol>        { static const AllocKind kind = FINALIZE_SYMBOL; };
 template <> struct MapTypeToFinalizeKind<jit::JitCode>      { static const AllocKind kind = FINALIZE_JITCODE; };
 
-#if defined(JSGC_GENERATIONAL) || defined(DEBUG)
 static inline bool
 IsNurseryAllocable(AllocKind kind)
 {
@@ -108,45 +103,6 @@ IsNurseryAllocable(AllocKind kind)
     JS_STATIC_ASSERT(JS_ARRAY_LENGTH(map) == FINALIZE_LIMIT);
     return map[kind];
 }
-#endif
-
-#if defined(JSGC_FJGENERATIONAL)
-// This is separate from IsNurseryAllocable() so that the latter can evolve
-// without worrying about what the ForkJoinNursery's needs are, and vice
-// versa to some extent.
-static inline bool
-IsFJNurseryAllocable(AllocKind kind)
-{
-    MOZ_ASSERT(kind >= 0 && unsigned(kind) < FINALIZE_LIMIT);
-    static const bool map[] = {
-        false,     /* FINALIZE_OBJECT0 */
-        true,      /* FINALIZE_OBJECT0_BACKGROUND */
-        false,     /* FINALIZE_OBJECT2 */
-        true,      /* FINALIZE_OBJECT2_BACKGROUND */
-        false,     /* FINALIZE_OBJECT4 */
-        true,      /* FINALIZE_OBJECT4_BACKGROUND */
-        false,     /* FINALIZE_OBJECT8 */
-        true,      /* FINALIZE_OBJECT8_BACKGROUND */
-        false,     /* FINALIZE_OBJECT12 */
-        true,      /* FINALIZE_OBJECT12_BACKGROUND */
-        false,     /* FINALIZE_OBJECT16 */
-        true,      /* FINALIZE_OBJECT16_BACKGROUND */
-        false,     /* FINALIZE_SCRIPT */
-        false,     /* FINALIZE_LAZY_SCRIPT */
-        false,     /* FINALIZE_SHAPE */
-        false,     /* FINALIZE_ACCESSOR_SHAPE */
-        false,     /* FINALIZE_BASE_SHAPE */
-        false,     /* FINALIZE_TYPE_OBJECT */
-        false,     /* FINALIZE_FAT_INLINE_STRING */
-        false,     /* FINALIZE_STRING */
-        false,     /* FINALIZE_EXTERNAL_STRING */
-        false,     /* FINALIZE_SYMBOL */
-        false,     /* FINALIZE_JITCODE */
-    };
-    JS_STATIC_ASSERT(JS_ARRAY_LENGTH(map) == FINALIZE_LIMIT);
-    return map[kind];
-}
-#endif
 
 static inline bool
 IsBackgroundFinalized(AllocKind kind)
@@ -499,7 +455,6 @@ class ArenaList {
     }
 
 #ifdef JSGC_COMPACTING
-    size_t countUsedCells();
     ArenaHeader *removeRemainingArenas(ArenaHeader **arenap, const AutoLockGC &lock);
     ArenaHeader *pickArenasToRelocate(JSRuntime *runtime);
     ArenaHeader *relocateArenas(ArenaHeader *toRelocate, ArenaHeader *relocated);
@@ -641,7 +596,7 @@ class ArenaLists
     ArenaHeader *savedEmptyObjectArenas;
 
   public:
-    ArenaLists(JSRuntime *rt) : runtime_(rt) {
+    explicit ArenaLists(JSRuntime *rt) : runtime_(rt) {
         for (size_t i = 0; i != FINALIZE_LIMIT; ++i)
             freeLists[i].initAsEmpty();
         for (size_t i = 0; i != FINALIZE_LIMIT; ++i)
@@ -812,11 +767,7 @@ class ArenaLists
     TenuredCell *allocateFromArena(JS::Zone *zone, AllocKind thingKind);
 
     /*
-     * Moves all arenas from |fromArenaLists| into |this|.  In
-     * parallel blocks, we temporarily create one ArenaLists per
-     * parallel thread.  When the parallel block ends, we move
-     * whatever allocations may have been performed back into the
-     * compartment's main arena list using this function.
+     * Moves all arenas from |fromArenaLists| into |this|.
      */
     void adoptArenas(JSRuntime *runtime, ArenaLists *fromArenaLists);
 
@@ -845,9 +796,7 @@ class ArenaLists
 
     bool foregroundFinalize(FreeOp *fop, AllocKind thingKind, SliceBudget &sliceBudget,
                             SortedArenaList &sweepList);
-    static void backgroundFinalize(FreeOp *fop, ArenaHeader *listHead);
-
-    void wipeDuringParallelExecution(JSRuntime *rt);
+    static void backgroundFinalize(FreeOp *fop, ArenaHeader *listHead, ArenaHeader **empty);
 
     // When finalizing arenas, whether to keep empty arenas on the list or
     // release them immediately.
@@ -881,13 +830,6 @@ class ArenaLists
 
     friend class GCRuntime;
 };
-
-/*
- * Initial allocation size for data structures holding chunks is set to hold
- * chunks with total capacity of 16MB to avoid buffer resizes during browser
- * startup.
- */
-const size_t INITIAL_CHUNK_CAPACITY = 16 * 1024 * 1024 / ChunkSize;
 
 /* The number of GC cycles an empty chunk can survive before been released. */
 const size_t MAX_EMPTY_CHUNK_AGE = 4;
@@ -955,17 +897,6 @@ TraceRuntime(JSTracer *trc);
 extern void
 ReleaseAllJITCode(FreeOp *op);
 
-/*
- * Kinds of js_GC invocation.
- */
-typedef enum JSGCInvocationKind {
-    /* Normal invocation. */
-    GC_NORMAL           = 0,
-
-    /* Minimize GC triggers and release empty GC chunks right away. */
-    GC_SHRINK             = 1
-} JSGCInvocationKind;
-
 extern void
 PrepareForDebugGC(JSRuntime *rt);
 
@@ -1018,8 +949,7 @@ class GCHelperState
     State state();
     void setState(State state);
 
-    bool              sweepFlag;
-    bool              shrinkFlag;
+    bool shrinkFlag;
 
     friend class js::gc::ArenaLists;
 
@@ -1030,8 +960,7 @@ class GCHelperState
         js_free(array);
     }
 
-    /* Must be called with the GC lock taken. */
-    void doSweep(const AutoLockGC &lock);
+    void doSweep(AutoLockGC &lock);
 
   public:
     explicit GCHelperState(JSRuntime *rt)
@@ -1039,7 +968,6 @@ class GCHelperState
         done(nullptr),
         state_(IDLE),
         thread(nullptr),
-        sweepFlag(false),
         shrinkFlag(false)
     { }
 
@@ -1048,11 +976,8 @@ class GCHelperState
 
     void work();
 
-    /* Must be called with the GC lock taken. */
-    void startBackgroundSweep();
-
-    /* Must be called with the GC lock taken. */
-    void startBackgroundShrink();
+    void maybeStartBackgroundSweep(const AutoLockGC &lock);
+    void startBackgroundShrink(const AutoLockGC &lock);
 
     /* Must be called without the GC lock taken. */
     void waitBackgroundSweepEnd();
@@ -1232,8 +1157,6 @@ namespace gc {
 void
 MergeCompartments(JSCompartment *source, JSCompartment *target);
 
-#if defined(JSGC_GENERATIONAL) || defined(JSGC_COMPACTING)
-
 /*
  * This structure overlays a Cell in the Nursery and re-purposes its memory
  * for managing the Nursery collection process.
@@ -1241,7 +1164,6 @@ MergeCompartments(JSCompartment *source, JSCompartment *target);
 class RelocationOverlay
 {
     friend class MinorCollectionTracer;
-    friend class ForkJoinNursery;
 
     /* The low bit is set so this should never equal a normal pointer. */
     static const uintptr_t Relocated = uintptr_t(0xbad0bad1);
@@ -1340,14 +1262,6 @@ MaybeForwarded(T t)
 {
     return IsForwarded(t) ? Forwarded(t) : t;
 }
-
-#else
-
-template <typename T> inline bool IsForwarded(T t) { return false; }
-template <typename T> inline T Forwarded(T t) { return t; }
-template <typename T> inline T MaybeForwarded(T t) { return t; }
-
-#endif // JSGC_GENERATIONAL || JSGC_COMPACTING
 
 #ifdef JSGC_HASH_TABLE_CHECKS
 
@@ -1464,6 +1378,33 @@ class AutoEnterOOMUnsafeRegion {};
 // is appropriate.
 bool
 IsInsideGGCNursery(const gc::Cell *cell);
+
+// A singly linked list of zones.
+class ZoneList
+{
+    static Zone * const End;
+
+    Zone *head;
+    Zone *tail;
+
+  public:
+    ZoneList();
+    ~ZoneList();
+
+    bool isEmpty() const;
+    Zone *front() const;
+
+    void append(Zone *zone);
+    void transferFrom(ZoneList &other);
+    void removeFront();
+
+  private:
+    explicit ZoneList(Zone *singleZone);
+    void check() const;
+
+    ZoneList(const ZoneList &other) = delete;
+    ZoneList &operator=(const ZoneList &other) = delete;
+};
 
 } /* namespace gc */
 

@@ -280,9 +280,9 @@ class SimInstruction {
         return (bit(one_bit) << 4) | bits(four_bit + 3, four_bit);
     }
 
-    SimInstruction() MOZ_DELETE;
-    SimInstruction(const SimInstruction &other) MOZ_DELETE;
-    void operator=(const SimInstruction &other) MOZ_DELETE;
+    SimInstruction() = delete;
+    SimInstruction(const SimInstruction &other) = delete;
+    void operator=(const SimInstruction &other) = delete;
 };
 
 double
@@ -373,7 +373,7 @@ class SimulatorRuntime
   protected:
     ICacheMap icache_;
 
-    // Synchronize access between main thread and compilation/PJS threads.
+    // Synchronize access between main thread and compilation threads.
     PRLock *lock_;
     mozilla::DebugOnly<PRThread *> lockOwner_;
 

@@ -215,15 +215,15 @@ bool RawReader::DecodeVideoFrame(bool &aKeyframeSkip,
   b.mPlanes[2].mWidth = mMetadata.frameWidth / 2;
   b.mPlanes[2].mOffset = b.mPlanes[2].mSkip = 0;
 
-  VideoData *v = VideoData::Create(mInfo.mVideo,
-                                   mDecoder->GetImageContainer(),
-                                   -1,
-                                   currentFrameTime,
-                                   (USECS_PER_S / mFrameRate),
-                                   b,
-                                   1, // In raw video every frame is a keyframe
-                                   -1,
-                                   ToIntRect(mPicture));
+  nsRefPtr<VideoData> v = VideoData::Create(mInfo.mVideo,
+                                            mDecoder->GetImageContainer(),
+                                            -1,
+                                            currentFrameTime,
+                                            (USECS_PER_S / mFrameRate),
+                                            b,
+                                            1, // In raw video every frame is a keyframe
+                                            -1,
+                                            ToIntRect(mPicture));
   if (!v)
     return false;
 
@@ -235,10 +235,15 @@ bool RawReader::DecodeVideoFrame(bool &aKeyframeSkip,
   return true;
 }
 
-void RawReader::Seek(int64_t aTime, int64_t aStartTime, int64_t aEndTime, int64_t aCurrentTime)
+nsRefPtr<MediaDecoderReader::SeekPromise>
+RawReader::Seek(int64_t aTime, int64_t aStartTime, int64_t aEndTime, int64_t aCurrentTime)
 {
   nsresult res = SeekInternal(aTime);
-  GetCallback()->OnSeekCompleted(res);
+  if (NS_FAILED(res)) {
+    return SeekPromise::CreateAndReject(res, __func__);
+  } else {
+    return SeekPromise::CreateAndResolve(aTime, __func__);
+  }
 }
 
 nsresult RawReader::SeekInternal(int64_t aTime)
@@ -278,12 +283,8 @@ nsresult RawReader::SeekInternal(int64_t aTime)
       }
     }
 
-    nsAutoPtr<VideoData> video(mVideoQueue.PeekFront());
-    if (video && video->GetEndTime() < aTime) {
-      mVideoQueue.PopFront();
-      video = nullptr;
-    } else {
-      video.forget();
+    if (mVideoQueue.PeekFront() && mVideoQueue.PeekFront()->GetEndTime() < aTime) {
+      nsRefPtr<VideoData> releaseMe = mVideoQueue.PopFront();
     }
   }
 

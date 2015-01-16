@@ -65,6 +65,7 @@ class nsAnimationManager;
 class nsRefreshDriver;
 class nsIWidget;
 class nsDeviceContext;
+class gfxMissingFontRecorder;
 
 namespace mozilla {
 class EventStateManager;
@@ -72,7 +73,6 @@ class RestyleManager;
 class CounterStyleManager;
 namespace dom {
 class FontFaceSet;
-class MediaQueryList;
 }
 namespace layers {
 class ContainerLayer;
@@ -81,8 +81,7 @@ class ContainerLayer;
 
 // supported values for cached bool types
 enum nsPresContext_CachedBoolPrefType {
-  kPresContext_UseDocumentColors = 1,
-  kPresContext_UseDocumentFonts,
+  kPresContext_UseDocumentFonts = 1,
   kPresContext_UnderlineLinks
 };
 
@@ -290,12 +289,6 @@ public:
   }
 
   /**
-   * Support for window.matchMedia()
-   */
-  already_AddRefed<mozilla::dom::MediaQueryList>
-    MatchMedia(const nsAString& aMediaQueryList);
-
-  /**
    * Access compatibility mode for this context.  This is the same as
    * our document's compatibility mode.
    */
@@ -385,8 +378,6 @@ public:
     switch (aPrefType) {
     case kPresContext_UseDocumentFonts:
       return mUseDocumentFonts;
-    case kPresContext_UseDocumentColors:
-      return mUseDocumentColors;
     case kPresContext_UnderlineLinks:
       return mUnderlineLinks;
     default:
@@ -806,12 +797,6 @@ public:
    */
   void UIResolutionChanged();
 
-  /**
-   * Recursively notify all remote leaf descendants of a given message manager
-   * that the resolution of the user interface has changed.
-   */
-  void NotifyUIResolutionChanged(nsIMessageBroadcaster* aManager);
-
   /*
    * Notify the pres context that a system color has changed
    */
@@ -836,6 +821,20 @@ public:
                                 nsIFrame * aFrame);
 #endif
 
+  void ConstructedFrame() {
+    ++mFramesConstructed;
+  }
+  void ReflowedFrame() {
+    ++mFramesReflowed;
+  }
+
+  uint64_t FramesConstructedCount() {
+    return mFramesConstructed;
+  }
+  uint64_t FramesReflowedCount() {
+    return mFramesReflowed;
+  }
+
   /**
    * This table maps border-width enums 'thin', 'medium', 'thick'
    * to actual nscoord values.
@@ -859,7 +858,9 @@ public:
 
   // Is it OK to let the page specify colors and backgrounds?
   bool UseDocumentColors() const {
-    return GetCachedBoolPref(kPresContext_UseDocumentColors) || IsChrome() || IsChromeOriginImage();
+    MOZ_ASSERT(mUseDocumentColors || !(IsChrome() || IsChromeOriginImage()),
+               "We should never have a chrome doc or image that can't use its colors.");
+    return mUseDocumentColors;
   }
 
   // Explicitly enable and disable paint flashing.
@@ -889,6 +890,9 @@ public:
   // font set changes (e.g., because a new font loads, or because the
   // user font set is changed and fonts become unavailable).
   void UserFontSetUpdated();
+
+  gfxMissingFontRecorder *MissingFontRecorder() { return mMissingFonts; }
+  void NotifyMissingFonts();
 
   mozilla::dom::FontFaceSet* Fonts();
 
@@ -1172,11 +1176,12 @@ public:
   void StopRestyleLogging() { mRestyleLoggingEnabled = false; }
 #endif
 
+  void InvalidatePaintedLayers();
+
 protected:
   // May be called multiple times (unlink, destructor)
   void Destroy();
 
-  void InvalidatePaintedLayers();
   void AppUnitsPerDevPixelChanged();
 
   void HandleRebuildUserFontSet() {
@@ -1239,8 +1244,6 @@ protected:
 
   mozilla::WeakPtr<nsDocShell>             mContainer;
 
-  PRCList               mDOMMediaQueryLists;
-
   // Base minimum font size, independent of the language-specific global preference. Defaults to 0
   int32_t               mBaseMinFontSize;
   float                 mTextZoom;      // Text zoom, defaults to 1.0
@@ -1266,6 +1269,8 @@ protected:
 
   // text performance metrics
   nsAutoPtr<gfxTextPerfMetrics>   mTextPerf;
+
+  nsAutoPtr<gfxMissingFontRecorder> mMissingFonts;
 
   nsRect                mVisibleArea;
   nsSize                mPageSize;
@@ -1297,6 +1302,11 @@ protected:
   nscoord               mBorderWidthTable[3];
 
   uint32_t              mInterruptChecksToSkip;
+
+  // Counters for tests and tools that want to detect frame construction
+  // or reflow.
+  uint64_t              mFramesConstructed;
+  uint64_t              mFramesReflowed;
 
   mozilla::TimeStamp    mReflowStartTime;
 

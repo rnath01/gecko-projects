@@ -10,19 +10,17 @@ EXPORTS += [
     'imgLoader.h',
     'imgRequest.h',
     'imgRequestProxy.h',
+    'IProgressObserver.h',
     'Orientation.h',
-    'SurfaceCache.h'
+    'SurfaceCache.h',
 ]
 
 UNIFIED_SOURCES += [
     'ClippedImage.cpp',
     'DecodePool.cpp',
     'Decoder.cpp',
-    'DiscardTracker.cpp',
     'DynamicImage.cpp',
     'FrameAnimator.cpp',
-    'FrameBlender.cpp',
-    'FrameSequence.cpp',
     'FrozenImage.cpp',
     'Image.cpp',
     'ImageFactory.cpp',
@@ -31,9 +29,11 @@ UNIFIED_SOURCES += [
     'ImageWrapper.cpp',
     'imgFrame.cpp',
     'imgTools.cpp',
+    'MultipartImage.cpp',
     'OrientedImage.cpp',
     'ScriptedNotificationObserver.cpp',
     'ShutdownTracker.cpp',
+    'SourceBuffer.cpp',
     'SurfaceCache.cpp',
     'SVGDocumentWrapper.cpp',
     'VectorImage.cpp',

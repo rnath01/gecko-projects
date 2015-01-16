@@ -42,6 +42,18 @@ public:
 
   virtual void DestroyFrom(nsIFrame* aDestructRoot) MOZ_OVERRIDE;
 
+  virtual mozilla::WritingMode GetWritingMode() const MOZ_OVERRIDE
+  {
+    nsIContent* rootElem = GetContent();
+    if (rootElem) {
+      nsIFrame* rootElemFrame = rootElem->GetPrimaryFrame();
+      if (rootElemFrame) {
+        return rootElemFrame->GetWritingMode();
+      }
+    }
+    return nsIFrame::GetWritingMode();
+  }
+
 #ifdef DEBUG
   virtual void SetInitialChildList(ChildListID     aListID,
                                    nsFrameList&    aChildList) MOZ_OVERRIDE;
@@ -214,7 +226,7 @@ public:
 
   NS_DISPLAY_DECL_NAME("CanvasBackgroundColor", TYPE_CANVAS_BACKGROUND_COLOR)
 #ifdef MOZ_DUMP_PAINTING
-  virtual void WriteDebugInfo(nsACString& aTo) MOZ_OVERRIDE;
+  virtual void WriteDebugInfo(std::stringstream& aStream) MOZ_OVERRIDE;
 #endif
 
 private:

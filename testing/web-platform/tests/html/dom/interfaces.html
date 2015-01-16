@@ -47,12 +47,6 @@ exception DOMException {
   unsigned short code;
 };
 
-[Constructor(DOMString name, optional DOMString message = "")]
-interface DOMError {
-  readonly attribute DOMString name;
-  readonly attribute DOMString message;
-};
-
 [Constructor(DOMString type, optional EventInit eventInitDict),
  Exposed=Window,Worker]
 interface Event {
@@ -266,6 +260,7 @@ interface Document : Node {
   readonly attribute DOMString origin;
   readonly attribute DOMString compatMode;
   readonly attribute DOMString characterSet;
+  readonly attribute DOMString inputEncoding; // legacy alias of .characterSet
   readonly attribute DOMString contentType;
 
   readonly attribute DocumentType? doctype;
@@ -3193,6 +3188,7 @@ setup(function() {
 }, {explicit_done:true});
 window.onload = function() {
 	idlArray.add_objects({
+		NodeList: ['document.getElementsByName("name")'],
 		HTMLAllCollection: ['document.all'],
 		HTMLFormControlsCollection: ['document.createElement("form").elements'],
 		RadioNodeList: [],

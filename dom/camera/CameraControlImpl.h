@@ -28,7 +28,7 @@ namespace layers {
 class CameraControlImpl : public ICameraControl
 {
 public:
-  explicit CameraControlImpl(uint32_t aCameraId);
+  explicit CameraControlImpl();
   virtual void AddListener(CameraControlListener* aListener) MOZ_OVERRIDE;
   virtual void RemoveListener(CameraControlListener* aListener) MOZ_OVERRIDE;
 
@@ -47,13 +47,8 @@ public:
   virtual nsresult StopRecording() MOZ_OVERRIDE;
   virtual nsresult ResumeContinuousFocus() MOZ_OVERRIDE;
 
-  uint32_t GetCameraId() { return mCameraId; }
-
-  virtual void Shutdown() MOZ_OVERRIDE;
-
   // Event handlers called directly from outside this class.
   void OnShutter();
-  void OnClosed();
   void OnUserError(CameraControlListener::UserContext aContext, nsresult aError);
   void OnSystemError(CameraControlListener::SystemContext aContext, nsresult aError);
   void OnAutoFocusMoving(bool aIsMoving);
@@ -69,7 +64,8 @@ protected:
   void OnRecorderStateChange(CameraControlListener::RecorderState aState,
                              int32_t aStatus = -1, int32_t aTrackNumber = -1);
   void OnPreviewStateChange(CameraControlListener::PreviewState aState);
-  void OnHardwareStateChange(CameraControlListener::HardwareState aState);
+  void OnHardwareStateChange(CameraControlListener::HardwareState aState,
+                             nsresult aReason);
   void OnConfigurationChange();
 
   // When we create a new CameraThread, we keep a static reference to it so
@@ -77,7 +73,7 @@ protected:
   // don't want that reference to keep the thread object around unnecessarily,
   // so we make it a weak reference. The strong dynamic references will keep
   // the thread object alive as needed.
-  static nsWeakPtr sCameraThread;
+  static StaticRefPtr<nsIThread> sCameraThread;
   nsCOMPtr<nsIThread> mCameraThread;
 
   virtual ~CameraControlImpl();
@@ -128,16 +124,15 @@ protected:
   void OnShutterInternal();
   void OnClosedInternal();
 
-  uint32_t mCameraId;
-
   CameraControlListener::CameraListenerConfiguration mCurrentConfiguration;
 
   CameraControlListener::PreviewState   mPreviewState;
   CameraControlListener::HardwareState  mHardwareState;
+  nsresult                              mHardwareStateChangeReason;
 
 private:
-  CameraControlImpl(const CameraControlImpl&) MOZ_DELETE;
-  CameraControlImpl& operator=(const CameraControlImpl&) MOZ_DELETE;
+  CameraControlImpl(const CameraControlImpl&) = delete;
+  CameraControlImpl& operator=(const CameraControlImpl&) = delete;
 };
 
 } // namespace mozilla

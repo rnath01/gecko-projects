@@ -174,8 +174,7 @@ public:
    * at aTrackOffset (relative to the start of the stream).
    */
   virtual void NotifyQueuedTrackChanges(MediaStreamGraph* aGraph, TrackID aID,
-                                        TrackRate aTrackRate,
-                                        TrackTicks aTrackOffset,
+                                        StreamTime aTrackOffset,
                                         uint32_t aTrackEvents,
                                         const MediaSegment& aQueuedMedia) {}
 };
@@ -198,8 +197,7 @@ public:
    * Note that NotifyQueuedTrackChanges() calls will also still occur.
    */
   virtual void NotifyRealtimeData(MediaStreamGraph* aGraph, TrackID aID,
-                                  TrackRate aTrackRate,
-                                  TrackTicks aTrackOffset,
+                                  StreamTime aTrackOffset,
                                   uint32_t aTrackEvents,
                                   const MediaSegment& aMedia) {}
 };
@@ -460,7 +458,7 @@ public:
   void AddListenerImpl(already_AddRefed<MediaStreamListener> aListener);
   void RemoveListenerImpl(MediaStreamListener* aListener);
   void RemoveAllListenersImpl();
-  void SetTrackEnabledImpl(TrackID aTrackID, bool aEnabled);
+  virtual void SetTrackEnabledImpl(TrackID aTrackID, bool aEnabled);
   /**
    * Returns true when this stream requires the contents of its inputs even if
    * its own outputs are not being consumed. This is used to signal inputs to
@@ -489,19 +487,21 @@ public:
 
   double StreamTimeToSeconds(StreamTime aTime)
   {
-    return TrackTicksToSeconds(mBuffer.GraphRate(), aTime);
+    NS_ASSERTION(0 <= aTime && aTime <= STREAM_TIME_MAX, "Bad time");
+    return static_cast<double>(aTime)/mBuffer.GraphRate();
   }
   int64_t StreamTimeToMicroseconds(StreamTime aTime)
   {
-    return TimeToTicksRoundDown(1000000, aTime);
+    NS_ASSERTION(0 <= aTime && aTime <= STREAM_TIME_MAX, "Bad time");
+    return (aTime*1000000)/mBuffer.GraphRate();
   }
+  StreamTime MicrosecondsToStreamTimeRoundDown(int64_t aMicroseconds) {
+    return (aMicroseconds*mBuffer.GraphRate())/1000000;
+  }
+
   TrackTicks TimeToTicksRoundUp(TrackRate aRate, StreamTime aTime)
   {
     return RateConvertTicksRoundUp(aRate, mBuffer.GraphRate(), aTime);
-  }
-  TrackTicks TimeToTicksRoundDown(TrackRate aRate, StreamTime aTime)
-  {
-    return RateConvertTicksRoundDown(aRate, mBuffer.GraphRate(), aTime);
   }
   StreamTime TicksToTimeRoundDown(TrackRate aRate, TrackTicks aTicks)
   {
@@ -534,9 +534,9 @@ public:
 
   bool HasCurrentData() { return mHasCurrentData; }
 
-  StreamBuffer::Track* EnsureTrack(TrackID aTrack, TrackRate aSampleRate);
+  StreamBuffer::Track* EnsureTrack(TrackID aTrack);
 
-  void ApplyTrackDisabling(TrackID aTrackID, MediaSegment* aSegment, MediaSegment* aRawSegment = nullptr);
+  virtual void ApplyTrackDisabling(TrackID aTrackID, MediaSegment* aSegment, MediaSegment* aRawSegment = nullptr);
 
   DOMMediaStream* GetWrapper()
   {
@@ -620,7 +620,7 @@ protected:
     // blocking.
     MediaTime mBlockedAudioTime;
     // Last tick written to the audio output.
-    TrackTicks mLastTickWritten;
+    StreamTime mLastTickWritten;
     TrackID mTrackID;
   };
   nsTArray<AudioOutputStream> mAudioOutputStreams;
@@ -693,10 +693,10 @@ public:
     mNeedsMixing(false)
   {}
 
-  virtual SourceMediaStream* AsSourceStream() { return this; }
+  virtual SourceMediaStream* AsSourceStream() MOZ_OVERRIDE { return this; }
 
   // Media graph thread only
-  virtual void DestroyImpl();
+  virtual void DestroyImpl() MOZ_OVERRIDE;
 
   // Call these on any thread.
   /**
@@ -724,8 +724,19 @@ public:
    * AdvanceKnownTracksTime). Takes ownership of aSegment. aSegment should
    * contain data starting after aStart.
    */
-  void AddTrack(TrackID aID, TrackRate aRate, TrackTicks aStart,
-                MediaSegment* aSegment);
+  void AddTrack(TrackID aID, StreamTime aStart, MediaSegment* aSegment)
+  {
+    AddTrackInternal(aID, GraphRate(), aStart, aSegment);
+  }
+
+  /**
+   * Like AddTrack, but resamples audio from aRate to the graph rate.
+   */
+  void AddAudioTrack(TrackID aID, TrackRate aRate, StreamTime aStart,
+                     AudioSegment* aSegment)
+  {
+    AddTrackInternal(aID, aRate, aStart, aSegment);
+  }
 
   /**
    * Append media data to a track. Ownership of aSegment remains with the caller,
@@ -739,6 +750,13 @@ public:
    * Returns false if there isn't enough data or if no such track exists.
    */
   bool HaveEnoughBuffered(TrackID aID);
+  /**
+   * Get the stream time of the end of the data that has been appended so far.
+   * Can be called from any thread but won't be useful if it can race with
+   * an AppendToTrack call, so should probably just be called from the thread
+   * that also calls AppendToTrack.
+   */
+  StreamTime GetEndOfAppendedData(TrackID aID);
   /**
    * Ensures that aSignalRunnable will be dispatched to aSignalThread
    * when we don't have enough buffered data in the track (which could be
@@ -765,15 +783,24 @@ public:
    */
   void FinishWithLockHeld();
   void Finish()
-    {
-      MutexAutoLock lock(mMutex);
-      FinishWithLockHeld();
-    }
+  {
+    MutexAutoLock lock(mMutex);
+    FinishWithLockHeld();
+  }
 
   // Overriding allows us to hold the mMutex lock while changing the track enable status
-  void SetTrackEnabledImpl(TrackID aTrackID, bool aEnabled) {
+  virtual void
+  SetTrackEnabledImpl(TrackID aTrackID, bool aEnabled) MOZ_OVERRIDE {
     MutexAutoLock lock(mMutex);
     MediaStream::SetTrackEnabledImpl(aTrackID, aEnabled);
+  }
+
+  // Overriding allows us to ensure mMutex is locked while changing the track enable status
+  virtual void
+  ApplyTrackDisabling(TrackID aTrackID, MediaSegment* aSegment,
+                      MediaSegment* aRawSegment = nullptr) MOZ_OVERRIDE {
+    mMutex.AssertCurrentThreadOwns();
+    MediaStream::ApplyTrackDisabling(aTrackID, aSegment, aRawSegment);
   }
 
   /**
@@ -791,7 +818,7 @@ public:
    * any "extra" buffering, but NotifyQueued TrackChanges() on a TrackUnion
    * will be buffered.
    */
-  TrackTicks GetBufferedTicks(TrackID aID);
+  StreamTime GetBufferedTicks(TrackID aID);
 
   void RegisterForAudioMixing();
 
@@ -821,29 +848,31 @@ protected:
     TrackID mID;
     // Sample rate of the input data.
     TrackRate mInputRate;
-    // Sample rate of the output data, always equal to the sample rate of the
-    // graph.
-    TrackRate mOutputRate;
     // Resampler if the rate of the input track does not match the
     // MediaStreamGraph's.
     nsAutoRef<SpeexResamplerState> mResampler;
 #ifdef DEBUG
     int mResamplerChannelCount;
 #endif
-    TrackTicks mStart;
-    // Each time the track updates are flushed to the media graph thread,
-    // this is cleared.
-    uint32_t mCommands;
+    StreamTime mStart;
+    // End-time of data already flushed to the track (excluding mData)
+    StreamTime mEndOfFlushedData;
     // Each time the track updates are flushed to the media graph thread,
     // the segment buffer is emptied.
     nsAutoPtr<MediaSegment> mData;
     nsTArray<ThreadAndRunnable> mDispatchWhenNotEnough;
+    // Each time the track updates are flushed to the media graph thread,
+    // this is cleared.
+    uint32_t mCommands;
     bool mHaveEnough;
   };
 
   bool NeedsMixing();
 
   void ResampleAudioToGraphSampleRate(TrackData* aTrackData, MediaSegment* aSegment);
+
+  void AddTrackInternal(TrackID aID, TrackRate aRate,
+                        StreamTime aStart, MediaSegment* aSegment);
 
   TrackData* FindDataForTrack(TrackID aID)
   {
@@ -1040,7 +1069,7 @@ public:
    */
   void SetAutofinish(bool aAutofinish);
 
-  virtual ProcessedMediaStream* AsProcessedStream() { return this; }
+  virtual ProcessedMediaStream* AsProcessedStream() MOZ_OVERRIDE { return this; }
 
   friend class MediaStreamGraphImpl;
 
@@ -1058,7 +1087,7 @@ public:
   {
     return mInputs.Length();
   }
-  virtual void DestroyImpl();
+  virtual void DestroyImpl() MOZ_OVERRIDE;
   /**
    * This gets called after we've computed the blocking states for all
    * streams (mBlocked is up to date up to mStateComputedTime).
@@ -1180,7 +1209,7 @@ public:
   /**
    * Start processing non-realtime for a specific number of ticks.
    */
-  void StartNonRealtimeProcessing(TrackRate aRate, uint32_t aTicksToProcess);
+  void StartNonRealtimeProcessing(uint32_t aTicksToProcess);
 
   /**
    * Media graph thread only.
@@ -1194,9 +1223,15 @@ public:
     *mPendingUpdateRunnables.AppendElement() = aRunnable;
   }
 
+  /**
+   * Returns graph sample rate in Hz.
+   */
+  TrackRate GraphRate() const { return mSampleRate; }
+
 protected:
-  MediaStreamGraph()
+  explicit MediaStreamGraph(TrackRate aSampleRate)
     : mNextGraphUpdateIndex(1)
+    , mSampleRate(aSampleRate)
   {
     MOZ_COUNT_CTOR(MediaStreamGraph);
   }
@@ -1212,6 +1247,13 @@ protected:
   // The number of updates we have sent to the media graph thread + 1.
   // We start this at 1 just to ensure that 0 is usable as a special value.
   int64_t mNextGraphUpdateIndex;
+
+  /**
+   * Sample rate at which this graph runs. For real time graphs, this is
+   * the rate of the audio mixer. For offline graphs, this is the rate specified
+   * at construction.
+   */
+  TrackRate mSampleRate;
 };
 
 }

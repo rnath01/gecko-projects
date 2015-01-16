@@ -12,6 +12,8 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/DebugOnly.h"
 #include "WMFMediaDataDecoder.h"
+#include "nsIWindowsRegKey.h"
+#include "nsComponentManagerUtils.h"
 
 namespace mozilla {
 
@@ -59,16 +61,15 @@ WMFDecoderModule::Shutdown()
 {
   DebugOnly<HRESULT> hr = wmf::MFShutdown();
   NS_ASSERTION(SUCCEEDED(hr), "MFShutdown failed");
-
   return NS_OK;
 }
 
 already_AddRefed<MediaDataDecoder>
-WMFDecoderModule::CreateH264Decoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
-                                    layers::LayersBackend aLayersBackend,
-                                    layers::ImageContainer* aImageContainer,
-                                    MediaTaskQueue* aVideoTaskQueue,
-                                    MediaDataDecoderCallback* aCallback)
+WMFDecoderModule::CreateVideoDecoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
+                                     layers::LayersBackend aLayersBackend,
+                                     layers::ImageContainer* aImageContainer,
+                                     MediaTaskQueue* aVideoTaskQueue,
+                                     MediaDataDecoderCallback* aCallback)
 {
   nsRefPtr<MediaDataDecoder> decoder =
     new WMFMediaDataDecoder(new WMFVideoMFTManager(aConfig,
@@ -93,10 +94,58 @@ WMFDecoderModule::CreateAudioDecoder(const mp4_demuxer::AudioDecoderConfig& aCon
 }
 
 bool
+WMFDecoderModule::SupportsVideoMimeType(const char* aMimeType)
+{
+  return !strcmp(aMimeType, "video/mp4") ||
+         !strcmp(aMimeType, "video/avc") ||
+         !strcmp(aMimeType, "video/webm; codecs=vp8") ||
+         !strcmp(aMimeType, "video/webm; codecs=vp9");
+}
+
+bool
 WMFDecoderModule::SupportsAudioMimeType(const char* aMimeType)
 {
   return !strcmp(aMimeType, "audio/mp4a-latm") ||
          !strcmp(aMimeType, "audio/mpeg");
+}
+
+static bool
+ClassesRootRegKeyExists(const nsAString& aRegKeyPath)
+{
+  nsresult rv;
+
+  nsCOMPtr<nsIWindowsRegKey> regKey =
+    do_CreateInstance("@mozilla.org/windows-registry-key;1", &rv);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return false;
+  }
+
+  rv = regKey->Open(nsIWindowsRegKey::ROOT_KEY_CLASSES_ROOT,
+                    aRegKeyPath,
+                    nsIWindowsRegKey::ACCESS_READ);
+  if (NS_FAILED(rv)) {
+    return false;
+  }
+
+  regKey->Close();
+
+  return true;
+}
+
+/* static */ bool
+WMFDecoderModule::HasH264()
+{
+  // CLSID_CMSH264DecoderMFT
+  return ClassesRootRegKeyExists(
+    NS_LITERAL_STRING("CLSID\\{32D186A7-218F-4C75-8876-DD77273A8999}"));
+}
+
+/* static */ bool
+WMFDecoderModule::HasAAC()
+{
+  // CLSID_CMSAACDecMFT
+  return ClassesRootRegKeyExists(
+    NS_LITERAL_STRING("CLSID\\{62CE7E72-4C71-4D20-B15D-452831A87D9D}"));
 }
 
 } // namespace mozilla

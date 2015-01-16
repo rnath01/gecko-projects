@@ -5,6 +5,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "Sandbox.h"
+#include "SandboxFilter.h"
 #include "SandboxInternal.h"
 #include "SandboxLogging.h"
 
@@ -24,18 +25,12 @@
 #include <fcntl.h>
 
 #include "mozilla/Atomics.h"
-#include "mozilla/NullPtr.h"
+#include "mozilla/SandboxInfo.h"
 #include "mozilla/unused.h"
-
+#include "sandbox/linux/seccomp-bpf/linux_seccomp.h"
 #if defined(ANDROID)
-#include "android_ucontext.h"
+#include "sandbox/linux/services/android_ucontext.h"
 #endif
-
-#include "linux_seccomp.h"
-#include "SandboxFilter.h"
-
-// See definition of SandboxDie, below.
-#include "sandbox/linux/seccomp-bpf/die.h"
 
 #ifdef MOZ_ASAN
 // Copy libsanitizer declarations to avoid depending on ASAN headers.
@@ -59,7 +54,9 @@ __sanitizer_sandbox_on_notify(__sanitizer_sandbox_arguments *args);
 
 namespace mozilla {
 
+#ifdef ANDROID
 SandboxCrashFunc gSandboxCrashFunc;
+#endif
 
 #ifdef MOZ_GMP_SANDBOX
 // For media plugins, we can start the sandbox before we dlopen the
@@ -68,49 +65,6 @@ SandboxCrashFunc gSandboxCrashFunc;
 static int gMediaPluginFileDesc = -1;
 static const char *gMediaPluginFilePath;
 #endif
-
-struct SandboxFlags {
-  bool isSupported;
-#ifdef MOZ_CONTENT_SANDBOX
-  bool isDisabledForContent;
-#endif
-#ifdef MOZ_GMP_SANDBOX
-  bool isDisabledForGMP;
-#endif
-
-  SandboxFlags() {
-    // Allow simulating the absence of seccomp-bpf support, for testing.
-    if (getenv("MOZ_FAKE_NO_SANDBOX")) {
-      isSupported = false;
-    } else {
-      // Determine whether seccomp-bpf is supported by trying to
-      // enable it with an invalid pointer for the filter.  This will
-      // fail with EFAULT if supported and EINVAL if not, without
-      // changing the process's state.
-      if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, nullptr) != -1) {
-        MOZ_CRASH("prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, nullptr)"
-                  " didn't fail");
-      }
-      isSupported = errno == EFAULT;
-    }
-#ifdef MOZ_CONTENT_SANDBOX
-    isDisabledForContent = getenv("MOZ_DISABLE_CONTENT_SANDBOX");
-#endif
-#ifdef MOZ_GMP_SANDBOX
-    isDisabledForGMP = getenv("MOZ_DISABLE_GMP_SANDBOX");
-#endif
-  }
-};
-
-static const SandboxFlags gSandboxFlags;
-
-SandboxFeatureFlags
-GetSandboxFeatureFlags()
-{
-  return gSandboxFlags.isSupported
-    ? kSandboxFeatureSeccompBPF
-    : static_cast<SandboxFeatureFlags>(0);
-}
 
 /**
  * This is the SIGSYS handler function. It is used to report to the user
@@ -319,7 +273,7 @@ BroadcastSetThreadSandbox(SandboxType aType)
   DIR *taskdp;
   struct dirent *de;
   SandboxFilter filter(&sSetSandboxFilter, aType,
-                       getenv("MOZ_SANDBOX_VERBOSE"));
+                       SandboxInfo::Get().Test(SandboxInfo::kVerbose));
 
   static_assert(sizeof(mozilla::Atomic<int>) == sizeof(int),
                 "mozilla::Atomic<int> isn't represented by an int");
@@ -477,18 +431,11 @@ SetCurrentProcessSandbox(SandboxType aType)
 void
 SetContentProcessSandbox()
 {
-  if (gSandboxFlags.isDisabledForContent) {
+  if (!SandboxInfo::Get().Test(SandboxInfo::kEnabledForContent)) {
     return;
   }
 
   SetCurrentProcessSandbox(kSandboxContentProcess);
-}
-
-SandboxStatus
-ContentProcessSandboxStatus()
-{
-  return gSandboxFlags.isDisabledForContent ? kSandboxingDisabled :
-    gSandboxFlags.isSupported ? kSandboxingSupported : kSandboxingWouldFail;
 }
 #endif // MOZ_CONTENT_SANDBOX
 
@@ -507,7 +454,7 @@ ContentProcessSandboxStatus()
 void
 SetMediaPluginSandbox(const char *aFilePath)
 {
-  if (gSandboxFlags.isDisabledForGMP) {
+  if (!SandboxInfo::Get().Test(SandboxInfo::kEnabledForMedia)) {
     return;
   }
 
@@ -522,13 +469,6 @@ SetMediaPluginSandbox(const char *aFilePath)
   }
   // Finally, start the sandbox.
   SetCurrentProcessSandbox(kSandboxMediaPlugin);
-}
-
-SandboxStatus
-MediaPluginSandboxStatus()
-{
-  return gSandboxFlags.isDisabledForGMP ? kSandboxingDisabled :
-    gSandboxFlags.isSupported ? kSandboxingSupported : kSandboxingWouldFail;
 }
 #endif // MOZ_GMP_SANDBOX
 

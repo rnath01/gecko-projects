@@ -29,7 +29,6 @@
 
 #ifdef MOZ_WIDGET_ANDROID
 #include "AndroidBridge.h"
-using namespace mozilla::widget::android;
 #endif
 
 #ifdef MOZ_WIDGET_GONK
@@ -45,7 +44,7 @@ NS_EXPORT int android_sdk_version;
 #endif
 
 #if defined(XP_LINUX) && defined(MOZ_SANDBOX)
-#include "mozilla/Sandbox.h"
+#include "mozilla/SandboxInfo.h"
 #endif
 
 // Slot for NS_InitXPCOM2 to pass information to nsSystemInfo::Init.
@@ -308,7 +307,7 @@ nsSystemInfo::Init()
           "android/os/Build", "HARDWARE", str)) {
       SetPropertyAsAString(NS_LITERAL_STRING("hardware"), str);
     }
-    bool isTablet = mozilla::widget::android::GeckoAppShell::IsTablet();
+    bool isTablet = mozilla::widget::GeckoAppShell::IsTablet();
     SetPropertyAsBool(NS_LITERAL_STRING("tablet"), isTablet);
     // NSPR "version" is the kernel version. For Android we want the Android version.
     // Rename SDK version to version and put the kernel version into kernel_version.
@@ -357,20 +356,19 @@ nsSystemInfo::Init()
 #endif
 
 #if defined(XP_LINUX) && defined(MOZ_SANDBOX)
-  SandboxFeatureFlags sandboxFlags = GetSandboxFeatureFlags();
-  SetPropertyAsBool(NS_LITERAL_STRING("hasSeccompBPF"),
-                    sandboxFlags & kSandboxFeatureSeccompBPF);
+  SandboxInfo sandInfo = SandboxInfo::Get();
 
-  SandboxStatus sandboxContent = ContentProcessSandboxStatus();
-  if (sandboxContent != kSandboxingDisabled) {
+  SetPropertyAsBool(NS_LITERAL_STRING("hasSeccompBPF"),
+                    sandInfo.Test(SandboxInfo::kHasSeccompBPF));
+
+  if (sandInfo.Test(SandboxInfo::kEnabledForContent)) {
     SetPropertyAsBool(NS_LITERAL_STRING("canSandboxContent"),
-                      sandboxContent != kSandboxingWouldFail);
+                      sandInfo.CanSandboxContent());
   }
 
-  SandboxStatus sandboxMedia = MediaPluginSandboxStatus();
-  if (sandboxMedia != kSandboxingDisabled) {
+  if (sandInfo.Test(SandboxInfo::kEnabledForMedia)) {
     SetPropertyAsBool(NS_LITERAL_STRING("canSandboxMedia"),
-                      sandboxMedia != kSandboxingWouldFail);
+                      sandInfo.CanSandboxMedia());
   }
 #endif // XP_LINUX && MOZ_SANDBOX
 

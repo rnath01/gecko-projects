@@ -264,12 +264,19 @@ JSONSpewer::spewMDef(MDefinition *def)
         integerValue(use.def()->id());
     endList();
 
+    if (!def->isLowered()) {
+        beginListProperty("memInputs");
+        if (def->dependency())
+            integerValue(def->dependency()->id());
+        endList();
+    }
+
     bool isTruncated = false;
     if (def->isAdd() || def->isSub() || def->isMod() || def->isMul() || def->isDiv())
         isTruncated = static_cast<MBinaryArithInstruction*>(def)->isTruncated();
 
     if (def->type() != MIRType_None && def->range()) {
-        Sprinter sp(GetIonContext()->cx);
+        Sprinter sp(GetJitContext()->cx);
         sp.init();
         def->range()->print(sp);
         stringProperty("type", "%s : %s%s", sp.string(), StringFromMIRType(def->type()), (isTruncated ? " (t)" : ""));

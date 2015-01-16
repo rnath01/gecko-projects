@@ -69,7 +69,7 @@ protected:
   }
 public:
 
-  virtual Element* GetElementAt(uint32_t aIndex);
+  virtual Element* GetElementAt(uint32_t aIndex) MOZ_OVERRIDE;
 
   void SetDocument(nsIDocument* aDocument);
   nsINode* GetParentObject() MOZ_OVERRIDE;
@@ -148,8 +148,8 @@ protected:
   bool mIsDirty;
 };
 
-class PropertyNodeList : public nsINodeList,
-                         public nsStubMutationObserver
+class PropertyNodeList MOZ_FINAL : public nsINodeList,
+                                   public nsStubMutationObserver
 {
 public:
   PropertyNodeList(HTMLPropertiesCollection* aCollection,

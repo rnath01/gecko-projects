@@ -15,18 +15,19 @@
 
 using namespace mozilla;
 
-nsWeakPtr CameraControlImpl::sCameraThread;
+/* static */ StaticRefPtr<nsIThread> CameraControlImpl::sCameraThread;
 
-CameraControlImpl::CameraControlImpl(uint32_t aCameraId)
+CameraControlImpl::CameraControlImpl()
   : mListenerLock(PR_NewRWLock(PR_RWLOCK_RANK_NONE, "CameraControlImpl.Listeners.Lock"))
-  , mCameraId(aCameraId)
   , mPreviewState(CameraControlListener::kPreviewStopped)
-  , mHardwareState(CameraControlListener::kHardwareClosed)
+  , mHardwareState(CameraControlListener::kHardwareUninitialized)
+  , mHardwareStateChangeReason(NS_OK)
 {
   DOM_CAMERA_LOGT("%s:%d : this=%p\n", __func__, __LINE__, this);
+  mCurrentConfiguration.mMode = ICameraControl::kUnspecifiedMode;
 
   // reuse the same camera thread to conserve resources
-  nsCOMPtr<nsIThread> ct = do_QueryReferent(sCameraThread);
+  nsCOMPtr<nsIThread> ct = do_QueryInterface(sCameraThread);
   if (ct) {
     mCameraThread = ct.forget();
   } else {
@@ -34,9 +35,7 @@ CameraControlImpl::CameraControlImpl(uint32_t aCameraId)
     if (NS_FAILED(rv)) {
       MOZ_CRASH("Failed to create new Camera Thread");
     }
-
-    // keep a weak reference to the new thread
-    sCameraThread = do_GetWeakReference(mCameraThread);
+    sCameraThread = mCameraThread;
   }
 
   // Care must be taken with the mListenerLock read-write lock to prevent
@@ -57,6 +56,8 @@ CameraControlImpl::CameraControlImpl(uint32_t aCameraId)
 
 CameraControlImpl::~CameraControlImpl()
 {
+  DOM_CAMERA_LOGT("%s:%d : this=%p\n", __func__, __LINE__, this);
+
   MOZ_ASSERT(mListenerLock, "mListenerLock missing in ~CameraControlImpl()");
   if (mListenerLock) {
     PR_DestroyRWLock(mListenerLock);
@@ -65,13 +66,8 @@ CameraControlImpl::~CameraControlImpl()
 }
 
 void
-CameraControlImpl::Shutdown()
-{
-  DOM_CAMERA_LOGT("%s:%d\n", __func__, __LINE__);
-}
-
-void
-CameraControlImpl::OnHardwareStateChange(CameraControlListener::HardwareState aNewState)
+CameraControlImpl::OnHardwareStateChange(CameraControlListener::HardwareState aNewState,
+                                         nsresult aReason)
 {
   // This callback can run on threads other than the Main Thread and
   //  the Camera Thread. On Gonk, it may be called from the camera's
@@ -84,20 +80,22 @@ CameraControlImpl::OnHardwareStateChange(CameraControlListener::HardwareState aN
   }
 
 #ifdef PR_LOGGING
-  const char* state[] = { "closed", "open", "failed" };
+  const char* state[] = { "uninitialized", "closed", "open", "failed" };
   MOZ_ASSERT(aNewState >= 0);
   if (static_cast<unsigned int>(aNewState) < sizeof(state) / sizeof(state[0])) {
-    DOM_CAMERA_LOGI("New hardware state is '%s'\n", state[aNewState]);
+    DOM_CAMERA_LOGI("New hardware state is '%s' (reason=0x%x)\n",
+      state[aNewState], aReason);
   } else {
     DOM_CAMERA_LOGE("OnHardwareStateChange: got invalid HardwareState value %d\n", aNewState);
   }
 #endif
 
   mHardwareState = aNewState;
+  mHardwareStateChangeReason = aReason;
 
   for (uint32_t i = 0; i < mListeners.Length(); ++i) {
     CameraControlListener* l = mListeners[i];
-    l->OnHardwareStateChange(mHardwareState);
+    l->OnHardwareStateChange(mHardwareState, mHardwareStateChangeReason);
   }
 }
 
@@ -179,19 +177,6 @@ CameraControlImpl::OnShutter()
   for (uint32_t i = 0; i < mListeners.Length(); ++i) {
     CameraControlListener* l = mListeners[i];
     l->OnShutter();
-  }
-}
-
-void
-CameraControlImpl::OnClosed()
-{
-  // This callback can run on threads other than the Main Thread and
-  //  the Camera Thread.
-  RwLockAutoEnterRead lock(mListenerLock);
-
-  for (uint32_t i = 0; i < mListeners.Length(); ++i) {
-    CameraControlListener* l = mListeners[i];
-    l->OnHardwareStateChange(CameraControlListener::kHardwareClosed);
   }
 }
 
@@ -706,7 +691,7 @@ CameraControlImpl::AddListenerImpl(already_AddRefed<CameraControlListener> aList
 
   // Update the newly-added listener's state
   l->OnConfigurationChange(mCurrentConfiguration);
-  l->OnHardwareStateChange(mHardwareState);
+  l->OnHardwareStateChange(mHardwareState, mHardwareStateChangeReason);
   l->OnPreviewStateChange(mPreviewState);
 }
 

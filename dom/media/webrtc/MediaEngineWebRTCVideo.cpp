@@ -124,8 +124,7 @@ void
 MediaEngineWebRTCVideoSource::NotifyPull(MediaStreamGraph* aGraph,
                                          SourceMediaStream* aSource,
                                          TrackID aID,
-                                         StreamTime aDesiredTime,
-                                         TrackTicks &aLastEndTime)
+                                         StreamTime aDesiredTime)
 {
   VideoSegment segment;
 
@@ -134,10 +133,9 @@ MediaEngineWebRTCVideoSource::NotifyPull(MediaStreamGraph* aGraph,
   // So mState could be kReleased here.  We really don't care about the state,
   // though.
 
-  TrackTicks target = aSource->TimeToTicksRoundUp(USECS_PER_S, aDesiredTime);
-  TrackTicks delta = target - aLastEndTime;
-  LOGFRAME(("NotifyPull, desired = %ld, target = %ld, delta = %ld %s", (int64_t) aDesiredTime,
-            (int64_t) target, (int64_t) delta, mImage ? "" : "<null>"));
+  StreamTime delta = aDesiredTime - aSource->GetEndOfAppendedData(aID);
+  LOGFRAME(("NotifyPull, desired = %ld, delta = %ld %s", (int64_t) aDesiredTime,
+            (int64_t) delta, mImage.get() ? "" : "<null>"));
 
   // Bug 846188 We may want to limit incoming frames to the requested frame rate
   // mFps - if you want 30FPS, and the camera gives you 60FPS, this could
@@ -151,9 +149,7 @@ MediaEngineWebRTCVideoSource::NotifyPull(MediaStreamGraph* aGraph,
   // Doing so means a negative delta and thus messes up handling of the graph
   if (delta > 0) {
     // nullptr images are allowed
-    if (AppendToTrack(aSource, mImage, aID, delta)) {
-      aLastEndTime = target;
-    }
+    AppendToTrack(aSource, mImage, aID, delta);
   }
 }
 
@@ -398,7 +394,7 @@ MediaEngineWebRTCVideoSource::Start(SourceMediaStream* aStream, TrackID aID)
 
   mSources.AppendElement(aStream);
 
-  aStream->AddTrack(aID, USECS_PER_S, 0, new VideoSegment());
+  aStream->AddTrack(aID, 0, new VideoSegment());
   aStream->AdvanceKnownTracksTime(STREAM_TIME_MAX);
 
   if (mState == kStarted) {
@@ -434,6 +430,9 @@ MediaEngineWebRTCVideoSource::Stop(SourceMediaStream *aSource, TrackID aID)
     // Already stopped - this is allowed
     return NS_OK;
   }
+
+  aSource->EndTrack(aID);
+
   if (!mSources.IsEmpty()) {
     return NS_OK;
   }
@@ -444,7 +443,6 @@ MediaEngineWebRTCVideoSource::Stop(SourceMediaStream *aSource, TrackID aID)
   {
     MonitorAutoLock lock(mMonitor);
     mState = kStopped;
-    aSource->EndTrack(aID);
     // Drop any cached image so we don't start with a stale image on next
     // usage
     mImage = nullptr;

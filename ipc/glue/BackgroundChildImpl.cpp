@@ -4,11 +4,16 @@
 
 #include "BackgroundChildImpl.h"
 
+#include "ActorsChild.h" // IndexedDB
+#include "BroadcastChannelChild.h"
 #include "FileDescriptorSetChild.h"
+#include "mozilla/Assertions.h"
 #include "mozilla/dom/PBlobChild.h"
 #include "mozilla/dom/indexedDB/PBackgroundIDBFactoryChild.h"
 #include "mozilla/dom/ipc/BlobChild.h"
 #include "mozilla/ipc/PBackgroundTestChild.h"
+#include "mozilla/layout/VsyncChild.h"
+#include "nsID.h"
 #include "nsTraceRefcnt.h"
 
 namespace {
@@ -47,11 +52,6 @@ namespace ipc {
 
 BackgroundChildImpl::
 ThreadLocal::ThreadLocal()
-  : mCurrentTransaction(nullptr)
-#ifdef MOZ_ENABLE_PROFILER_SPS
-  , mNextTransactionSerialNumber(1)
-  , mNextRequestSerialNumber(1)
-#endif
 {
   // May happen on any thread!
   MOZ_COUNT_CTOR(mozilla::ipc::BackgroundChildImpl::ThreadLocal);
@@ -81,6 +81,39 @@ BackgroundChildImpl::~BackgroundChildImpl()
 }
 
 void
+BackgroundChildImpl::ProcessingError(Result aWhat)
+{
+  // May happen on any thread!
+
+  nsAutoCString abortMessage;
+
+  switch (aWhat) {
+
+#define HANDLE_CASE(_result)                                                   \
+    case _result:                                                              \
+      abortMessage.AssignLiteral(#_result);                                    \
+      break
+
+    HANDLE_CASE(MsgDropped);
+    HANDLE_CASE(MsgNotKnown);
+    HANDLE_CASE(MsgNotAllowed);
+    HANDLE_CASE(MsgPayloadError);
+    HANDLE_CASE(MsgProcessingError);
+    HANDLE_CASE(MsgRouteError);
+    HANDLE_CASE(MsgValueError);
+
+#undef HANDLE_CASE
+
+    default:
+      MOZ_CRASH("Unknown error code!");
+  }
+
+  // This is just MOZ_CRASH() un-inlined so that we can pass the result code as
+  // a string. MOZ_CRASH() only supports string literals at the moment.
+  MOZ_ReportCrash(abortMessage.get(), __FILE__, __LINE__); MOZ_REALLY_CRASH();
+}
+
+void
 BackgroundChildImpl::ActorDestroy(ActorDestroyReason aWhy)
 {
   // May happen on any thread!
@@ -103,7 +136,7 @@ BackgroundChildImpl::DeallocPBackgroundTestChild(PBackgroundTestChild* aActor)
 
 BackgroundChildImpl::PBackgroundIDBFactoryChild*
 BackgroundChildImpl::AllocPBackgroundIDBFactoryChild(
-                                      const OptionalWindowId& aOptionalWindowId)
+                                                const LoggingInfo& aLoggingInfo)
 {
   MOZ_CRASH("PBackgroundIDBFactoryChild actors should be manually "
             "constructed!");
@@ -151,6 +184,45 @@ BackgroundChildImpl::DeallocPFileDescriptorSetChild(
   MOZ_ASSERT(aActor);
 
   delete static_cast<FileDescriptorSetChild*>(aActor);
+  return true;
+}
+
+BackgroundChildImpl::PVsyncChild*
+BackgroundChildImpl::AllocPVsyncChild()
+{
+  return new mozilla::layout::VsyncChild();
+}
+
+bool
+BackgroundChildImpl::DeallocPVsyncChild(PVsyncChild* aActor)
+{
+  MOZ_ASSERT(aActor);
+
+  delete static_cast<mozilla::layout::VsyncChild*>(aActor);
+  return true;
+}
+
+// -----------------------------------------------------------------------------
+// BroadcastChannel API
+// -----------------------------------------------------------------------------
+
+dom::PBroadcastChannelChild*
+BackgroundChildImpl::AllocPBroadcastChannelChild(const PrincipalInfo& aPrincipalInfo,
+                                                 const nsString& aOrigin,
+                                                 const nsString& aChannel)
+{
+  nsRefPtr<dom::BroadcastChannelChild> agent =
+    new dom::BroadcastChannelChild(aOrigin, aChannel);
+  return agent.forget().take();
+}
+
+bool
+BackgroundChildImpl::DeallocPBroadcastChannelChild(
+                                                 PBroadcastChannelChild* aActor)
+{
+  nsRefPtr<dom::BroadcastChannelChild> child =
+    dont_AddRef(static_cast<dom::BroadcastChannelChild*>(aActor));
+  MOZ_ASSERT(child);
   return true;
 }
 

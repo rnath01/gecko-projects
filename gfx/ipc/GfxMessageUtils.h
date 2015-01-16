@@ -815,6 +815,7 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
     WriteParam(aMsg, aParam.mMaxTextureSize);
     WriteParam(aMsg, aParam.mSupportsTextureBlitting);
     WriteParam(aMsg, aParam.mSupportsPartialUploads);
+    WriteParam(aMsg, aParam.mSyncHandle);
   }
 
   static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
@@ -824,7 +825,8 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
                   ReadParam(aMsg, aIter, &supportedBlendModes) &&
                   ReadParam(aMsg, aIter, &aResult->mMaxTextureSize) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsTextureBlitting) &&
-                  ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads);
+                  ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads) &&
+                  ReadParam(aMsg, aIter, &aResult->mSyncHandle);
     aResult->mSupportedBlendModes.deserialize(supportedBlendModes);
     return result;
   }
@@ -854,8 +856,8 @@ template <>
 struct ParamTraits<mozilla::layers::CompositableType>
   : public ContiguousTypedEnumSerializer<
              mozilla::layers::CompositableType,
-             mozilla::layers::CompositableType::BUFFER_UNKNOWN,
-             mozilla::layers::CompositableType::BUFFER_COUNT>
+             mozilla::layers::CompositableType::UNKNOWN,
+             mozilla::layers::CompositableType::COUNT>
 {};
 
 template <>

@@ -42,8 +42,7 @@ public:
                             bool* aFinished) MOZ_OVERRIDE
   {
     *aOutput = aInput;
-    StreamBuffer::Track* track = mOutputStream->EnsureTrack(MEDIA_STREAM_DEST_TRACK_ID,
-                                                            aStream->SampleRate());
+    StreamBuffer::Track* track = mOutputStream->EnsureTrack(MEDIA_STREAM_DEST_TRACK_ID);
     AudioSegment* segment = track->Get<AudioSegment>();
     segment->AppendAndConsumeChunk(aOutput);
   }
@@ -69,7 +68,7 @@ MediaStreamAudioDestinationNode::MediaStreamAudioDestinationNode(AudioContext* a
               ChannelCountMode::Explicit,
               ChannelInterpretation::Speakers)
   , mDOMStream(DOMAudioNodeMediaStream::CreateTrackUnionStream(GetOwner(),
-                                                               MOZ_THIS_IN_INITIALIZER_LIST(),
+                                                               this,
                                                                DOMMediaStream::HINT_CONTENTS_AUDIO))
 {
   TrackUnionStream* tus = static_cast<TrackUnionStream*>(mDOMStream->GetStream());

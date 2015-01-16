@@ -160,14 +160,18 @@ enum nsSelectionAmount {
                         // choice for movement or selection by "character"
                         // as perceived by the user
   eSelectWord      = 2,
-  eSelectLine      = 3, // previous drawn line in flow.
-  eSelectBeginLine = 4,
-  eSelectEndLine   = 5,
-  eSelectNoAmount  = 6, // just bounce back current offset.
-  eSelectParagraph = 7,  // select a "paragraph"
-  eSelectWordNoSpace = 8 // select a "word" without selecting the following
-                         // space, no matter what the default platform
-                         // behavior is
+  eSelectWordNoSpace = 3, // select a "word" without selecting the following
+                          // space, no matter what the default platform
+                          // behavior is
+  eSelectLine      = 4, // previous drawn line in flow.
+  // NOTE that selection code depends on the ordering of the above values,
+  // allowing simple <= tests to check categories of caret movement.
+  // Don't rearrange without checking the usage in nsSelection.cpp!
+
+  eSelectBeginLine = 5,
+  eSelectEndLine   = 6,
+  eSelectNoAmount  = 7, // just bounce back current offset.
+  eSelectParagraph = 8  // select a "paragraph"
 };
 
 enum nsSpread {
@@ -242,14 +246,6 @@ typedef uint32_t nsReflowStatus;
 
 #define NS_FRAME_SET_OVERFLOW_INCOMPLETE(status) \
   status = (status & ~NS_FRAME_NOT_COMPLETE) | NS_FRAME_OVERFLOW_INCOMPLETE
-
-// This macro tests to see if an nsReflowStatus is an error value
-// or just a regular return value
-#define NS_IS_REFLOW_ERROR(_status) (int32_t(_status) < 0)
-
-/**
- * Extensions to the reflow status bits defined by nsIFrameReflow
- */
 
 // This bit is set, when a break is requested. This bit is orthogonal
 // to the nsIFrame::nsReflowStatus completion bits.
@@ -607,7 +603,7 @@ public:
   /**
    * The frame's writing-mode, used for logical layout computations.
    */
-  mozilla::WritingMode GetWritingMode() const {
+  virtual mozilla::WritingMode GetWritingMode() const {
     return mozilla::WritingMode(StyleContext());
   }
 
@@ -730,6 +726,15 @@ public:
     SetRect(nsRect(mRect.TopLeft(), aSize));
   }
   void SetPosition(const nsPoint& aPt) { mRect.MoveTo(aPt); }
+  void SetPosition(mozilla::WritingMode aWritingMode,
+                   const mozilla::LogicalPoint& aPt,
+                   nscoord aContainerWidth) {
+    // We subtract mRect.width from the container width to account for
+    // the fact that logical origins in RTL coordinate systems are at
+    // the top right of the frame instead of the top left.
+    mRect.MoveTo(aPt.GetPhysicalPoint(aWritingMode,
+                                      aContainerWidth - mRect.width));
+  }
 
   /**
    * Move the frame, accounting for relative positioning. Use this when
@@ -754,6 +759,11 @@ public:
   }
 
   /**
+   * Return frame's rect without relative positioning
+   */
+  nsRect GetNormalRect() const;
+
+  /**
    * Return frame's position without relative positioning
    */
   nsPoint GetNormalPosition() const;
@@ -761,8 +771,12 @@ public:
   GetLogicalNormalPosition(mozilla::WritingMode aWritingMode,
                            nscoord aContainerWidth) const
   {
+    // Subtract the width of this frame from the container width to get
+    // the correct position in rtl frames where the origin is on the
+    // right instead of the left
     return mozilla::LogicalPoint(aWritingMode,
-                                 GetNormalPosition(), aContainerWidth);
+                                 GetNormalPosition(),
+                                 aContainerWidth - mRect.width);
   }
 
   virtual nsPoint GetPositionOfChildIgnoringScrolling(nsIFrame* aChild)
@@ -794,6 +808,7 @@ public:
 
   static void DestroySurface(void* aPropertyValue);
   static void DestroyDT(void* aPropertyValue);
+  static void DestroyContentArray(void* aPropertyValue);
 
 #ifdef _MSC_VER
 // XXX Workaround MSVC issue by making the static FramePropertyDescriptor
@@ -852,6 +867,13 @@ public:
   NS_DECLARE_FRAME_PROPERTY(InvalidationRect, DestroyRect)
 
   NS_DECLARE_FRAME_PROPERTY(RefusedAsyncAnimation, nullptr)
+
+  NS_DECLARE_FRAME_PROPERTY(GenConProperty, DestroyContentArray)
+
+  nsTArray<nsIContent*>* GetGenConPseudos() {
+    const FramePropertyDescriptor* prop = GenConProperty();
+    return static_cast<nsTArray<nsIContent*>*>(Properties().Get(prop));
+  }
 
   /**
    * Return the distance between the border edge of the frame and the
@@ -2474,11 +2496,13 @@ public:
    * return a grandparent or higher!  Furthermore, if a child frame is
    * returned it must have the same GetContent() as this frame.
    *
-   * @return The frame whose style context should be the parent of this frame's
+   * @param aProviderFrame (out) the frame associated with the returned value
+   *     or nullptr if the style context is for display:contents content.
+   * @return The style context that should be the parent of this frame's
    *         style context.  Null is permitted, and means that this frame's
    *         style context should be the root of the style context tree.
    */
-  virtual nsIFrame* GetParentStyleContextFrame() const = 0;
+  virtual nsStyleContext* GetParentStyleContext(nsIFrame** aProviderFrame) const = 0;
 
   /**
    * Determines whether a frame is visible for painting;
@@ -2856,6 +2880,11 @@ NS_PTR_TO_INT32(frame->Properties().Get(nsIFrame::ParagraphDepthProperty()))
    * Is this a flex or grid item? (i.e. a non-abs-pos child of a flex/grid container)
    */
   inline bool IsFlexOrGridItem() const;
+
+  /**
+   * @return true if this frame is used as a table caption.
+   */
+  inline bool IsTableCaption() const;
 
   inline bool IsBlockInside() const;
   inline bool IsBlockOutside() const;
