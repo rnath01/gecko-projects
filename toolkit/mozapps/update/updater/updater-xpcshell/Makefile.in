@@ -30,8 +30,8 @@ libs:: ../updater.png
 	$(INSTALL) $(IFLAGS1) $^ $(DIST)/bin/icons
 endif
 
-ifeq (cocoa,$(MOZ_WIDGET_TOOLKIT))
 libs::
+ifeq (cocoa,$(MOZ_WIDGET_TOOLKIT))
 	$(NSINSTALL) -D $(XPCSHELLTESTROOT)/data/updater-xpcshell.app
 	rsync -a -C --exclude '*.in' $(srcdir)/../macbuild/Contents $(XPCSHELLTESTROOT)/data/updater-xpcshell.app
 	sed -e 's/%APP_NAME%/$(MOZ_APP_DISPLAYNAME)/' $(srcdir)/../macbuild/Contents/Resources/English.lproj/InfoPlist.strings.in | \
@@ -42,7 +42,7 @@ libs::
 	mv $(XPCSHELLTESTROOT)/data/updater-xpcshell.app $(XPCSHELLTESTROOT)/data/updater.app
 	mv $(XPCSHELLTESTROOT)/data/updater.app/Contents/MacOS/updater-xpcshell $(XPCSHELLTESTROOT)/data/updater.app/Contents/MacOS/updater
 else
-	mv $(XPCSHELLTESTROOT)/data/updater-xpcshell $(XPCSHELLTESTROOT)/data/updater
+	mv $(XPCSHELLTESTROOT)/data/updater-xpcshell$(BIN_SUFFIX) $(XPCSHELLTESTROOT)/data/updater$(BIN_SUFFIX)
 endif
 
 CXXFLAGS += $(MOZ_BZ2_CFLAGS)
