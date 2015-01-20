@@ -132,11 +132,6 @@ nsLoadGroup::nsLoadGroup(nsISupports* outer)
 #endif
 
     LOG(("LOADGROUP [%x]: Created.\n", this));
-
-    // Initialize the ops in the hash to null to make sure we get
-    // consistent errors if someone fails to call ::Init() on an
-    // nsLoadGroup.
-    mRequests.ops = nullptr;
 }
 
 nsLoadGroup::~nsLoadGroup()
@@ -144,7 +139,7 @@ nsLoadGroup::~nsLoadGroup()
     DebugOnly<nsresult> rv = Cancel(NS_BINDING_ABORTED);
     NS_ASSERTION(NS_SUCCEEDED(rv), "Cancel failed");
 
-    if (mRequests.ops) {
+    if (mRequests.IsInitialized()) {
         PL_DHashTableFinish(&mRequests);
     }
 
@@ -1156,17 +1151,14 @@ nsresult nsLoadGroup::Init()
 {
     static const PLDHashTableOps hash_table_ops =
     {
-        PL_DHashAllocTable,
-        PL_DHashFreeTable,
         PL_DHashVoidPtrKeyStub,
         RequestHashMatchEntry,
         PL_DHashMoveEntryStub,
         RequestHashClearEntry,
-        PL_DHashFinalizeStub,
         RequestHashInitEntry
     };
 
-    PL_DHashTableInit(&mRequests, &hash_table_ops, nullptr,
+    PL_DHashTableInit(&mRequests, &hash_table_ops,
                       sizeof(RequestMapEntry));
 
     mConnectionInfo = new nsLoadGroupConnectionInfo();

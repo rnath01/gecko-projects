@@ -622,17 +622,14 @@ public:
         : mWriteNeeded(false)
     {
         mOps = (PLDHashTableOps) {
-            PL_DHashAllocTable,
-            PL_DHashFreeTable,
             StringHash,
             HashMatchEntry,
             MoveEntry,
             PL_DHashClearEntryStub,
-            PL_DHashFinalizeStub,
             nullptr
         };
 
-        PL_DHashTableInit(&mMap, &mOps, nullptr, sizeof(FNCMapEntry), 0);
+        PL_DHashTableInit(&mMap, &mOps, sizeof(FNCMapEntry), 0);
 
         NS_ABORT_IF_FALSE(XRE_GetProcessType() == GeckoProcessType_Default,
                           "StartupCacheFontNameCache should only be used in chrome process");
@@ -643,7 +640,7 @@ public:
 
     ~FontNameCache()
     {
-        if (!mMap.ops) {
+        if (!mMap.IsInitialized()) {
             return;
         }
         if (!mWriteNeeded || !mCache) {
@@ -659,7 +656,7 @@ public:
 
     void Init()
     {
-        if (!mMap.ops || !mCache) {
+        if (!mMap.IsInitialized() || !mCache) {
             return;
         }
         uint32_t size;
@@ -715,7 +712,7 @@ public:
     GetInfoForFile(const nsCString& aFileName, nsCString& aFaceList,
                    uint32_t *aTimestamp, uint32_t *aFilesize)
     {
-        if (!mMap.ops) {
+        if (!mMap.IsInitialized()) {
             return;
         }
         PLDHashEntryHdr *hdr =
@@ -739,7 +736,7 @@ public:
     CacheFileInfo(const nsCString& aFileName, const nsCString& aFaceList,
                   uint32_t aTimestamp, uint32_t aFilesize)
     {
-        if (!mMap.ops) {
+        if (!mMap.IsInitialized()) {
             return;
         }
         FNCMapEntry* entry =

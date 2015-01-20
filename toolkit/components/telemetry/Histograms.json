@@ -2228,13 +2228,13 @@
     "extended_statistics_ok": true,
     "description": "Number of times nsINetworkPredictor::Learn doesn't continue because the queue is full"
   },
-  "PREDICTOR_PREDICT_WAIT_TIME": {
+  "PREDICTOR_WAIT_TIME": {
     "expires_in_version": "never",
     "kind": "exponential",
     "high": "3000",
     "n_buckets": 10,
     "extended_statistics_ok": true,
-    "description": "Amount of time a predict event waits in the queue (ms)"
+    "description": "Amount of time a predictor event waits in the queue (ms)"
   },
   "PREDICTOR_PREDICT_WORK_TIME": {
     "expires_in_version": "never",
@@ -2243,14 +2243,6 @@
     "n_buckets": 10,
     "extended_statistics_ok": true,
     "description": "Amount of time spent doing the work for predict (ms)"
-  },
-  "PREDICTOR_LEARN_WAIT_TIME": {
-    "expires_in_version": "never",
-    "kind": "exponential",
-    "high": "3000",
-    "n_buckets": 10,
-    "extended_statistics_ok": true,
-    "description": "Amount of time a learn event waits in the queue (ms)"
   },
   "PREDICTOR_LEARN_WORK_TIME": {
     "expires_in_version": "never",
@@ -7157,5 +7149,40 @@
     "high": "1024",
     "n_buckets": 16,
     "description": "The number of entries in persistent DataStorage (HSTS and HPKP data, basically)"
+  },
+  "PWMGR_NUM_SAVED_PASSWORDS": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 750,
+    "n_buckets" : 50,
+    "extended_statistics_ok": true,
+    "description": "The number of saved signons in storage"
+  },
+  "FENNEC_SYNC11_MIGRATION_SENTINELS_SEEN": {
+    "expires_in_version": "45",
+    "kind": "count",
+    "description": "The number of Sync 1.1 -> Sync 1.5 migration sentinels seen by Android Sync."
+  },
+  "FENNEC_SYNC11_MIGRATIONS_FAILED": {
+    "expires_in_version": "45",
+    "kind": "count",
+    "description": "The number of Sync 1.1 -> Sync 1.5 migrations that failed during Android Sync."
+  },
+  "FENNEC_SYNC11_MIGRATIONS_SUCCEEDED": {
+    "expires_in_version": "45",
+    "kind": "count",
+    "description": "The number of Sync 1.1 -> Sync 1.5 migrations that succeeded during Android Sync."
+  },
+  "FENNEC_SYNC11_MIGRATION_NOTIFICATIONS_OFFERED": {
+    "expires_in_version": "45",
+    "kind": "exponential",
+    "high": 500,
+    "n_buckets": 5,
+    "description": "The number of Sync 1.5 'complete upgrade/migration' notifications offered by Android Sync."
+  },
+  "FENNEC_SYNC11_MIGRATIONS_COMPLETED": {
+    "expires_in_version": "45",
+    "kind": "count",
+    "description": "The number of Sync 1.5 migrations completed by Android Sync."
   }
 }

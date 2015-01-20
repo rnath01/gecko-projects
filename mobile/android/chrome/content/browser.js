@@ -177,7 +177,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "GMPInstallManager",
     "Reader:ShowToast",
     "Reader:ToolbarVisibility",
     "Reader:SystemUIVisibility",
-    "Reader:UpdateIsArticle",
+    "Reader:UpdateReaderButton",
   ], "chrome://browser/content/Reader.js"],
 ].forEach(aScript => {
   let [name, messages, script] = aScript;
@@ -2267,9 +2267,14 @@ var NativeWindow = {
   contextmenus: {
     items: {}, //  a list of context menu items that we may show
     DEFAULT_HTML5_ORDER: -1, // Sort order for HTML5 context menu items
+    _isLongPressEnabled: 1, // Android longpress events can be ignored during robocop tests.
 
     init: function() {
       BrowserApp.deck.addEventListener("contextmenu", this.show.bind(this), false);
+
+      Messaging.addListener((data) => {
+        return {result: (this._isLongPressEnabled = data.isLongPressEnabled)};
+      }, "ContextMenu:SetIsLongpressEnabled");
     },
 
     add: function() {
@@ -2562,6 +2567,11 @@ var NativeWindow = {
      * for chrome consumers to do lazy menuitem construction
      */
     show: function(event) {
+      if (!this._isLongPressEnabled) {
+        dump("Longpress Event is ignored by request");
+        return;
+      }
+
       // Android Long-press / contextmenu event provides clientX/Y data. This is not provided
       // by mochitest: test_browserElement_inproc_ContextmenuEvents.html.
       if (!event.clientX || !event.clientY) {
@@ -3271,7 +3281,6 @@ function Tab(aURL, aParams) {
   this.clickToPlayPluginsActivated = false;
   this.desktopMode = false;
   this.originalURI = null;
-  this.isArticle = false;
   this.hasTouchListener = false;
   this.browserWidth = 0;
   this.browserHeight = 0;
@@ -4862,10 +4871,6 @@ Tab.prototype = {
           ViewportHandler.updateMetadata(this, false);
         break;
     }
-  },
-
-  get readerActive() {
-    return this.browser.currentURI.spec.startsWith("about:reader");
   },
 
   // nsIBrowserTab

@@ -50,13 +50,10 @@ ArenaStrdup(const nsAFlatCString& aString, PLArenaPool* aArena)
 }
 
 static const struct PLDHashTableOps property_HashTableOps = {
-  PL_DHashAllocTable,
-  PL_DHashFreeTable,
   PL_DHashStringKey,
   PL_DHashMatchStringKey,
   PL_DHashMoveEntryStub,
   PL_DHashClearEntryStub,
-  PL_DHashFinalizeStub,
   nullptr,
 };
 
@@ -79,7 +76,7 @@ enum EParserSpecial
   eParserSpecial_Unicode        // parsing a \Uxxx value
 };
 
-class nsPropertiesParser
+class MOZ_STACK_CLASS nsPropertiesParser
 {
 public:
   explicit nsPropertiesParser(nsIPersistentProperties* aProps)
@@ -180,7 +177,7 @@ private:
   EParserState mState;
   // if we see a '\' then we enter this special state
   EParserSpecial mSpecialState;
-  nsIPersistentProperties* mProps;
+  nsCOMPtr<nsIPersistentProperties> mProps;
 };
 
 inline bool
@@ -463,9 +460,7 @@ nsPropertiesParser::ParseBuffer(const char16_t* aBuffer,
 nsPersistentProperties::nsPersistentProperties()
   : mIn(nullptr)
 {
-  mSubclass = static_cast<nsIPersistentProperties*>(this);
-
-  PL_DHashTableInit(&mTable, &property_HashTableOps, nullptr,
+  PL_DHashTableInit(&mTable, &property_HashTableOps,
                     sizeof(PropertyTableEntry), 16);
 
   PL_INIT_ARENA_POOL(&mArena, "PersistentPropertyArena", 2048);
@@ -474,7 +469,7 @@ nsPersistentProperties::nsPersistentProperties()
 nsPersistentProperties::~nsPersistentProperties()
 {
   PL_FinishArenaPool(&mArena);
-  if (mTable.ops) {
+  if (mTable.IsInitialized()) {
     PL_DHashTableFinish(&mTable);
   }
 }
@@ -503,7 +498,7 @@ nsPersistentProperties::Load(nsIInputStream* aIn)
     return NS_ERROR_FAILURE;
   }
 
-  nsPropertiesParser parser(mSubclass);
+  nsPropertiesParser parser(this);
 
   uint32_t nProcessed;
   // If this 4096 is changed to some other value, make sure to adjust
@@ -553,16 +548,6 @@ NS_IMETHODIMP
 nsPersistentProperties::Save(nsIOutputStream* aOut, const nsACString& aHeader)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
-nsPersistentProperties::Subclass(nsIPersistentProperties* aSubclass)
-{
-  if (aSubclass) {
-    mSubclass = aSubclass;
-  }
-
-  return NS_OK;
 }
 
 NS_IMETHODIMP

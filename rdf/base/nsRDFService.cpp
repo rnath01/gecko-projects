@@ -140,13 +140,10 @@ struct ResourceHashEntry : public PLDHashEntryHdr {
 };
 
 static const PLDHashTableOps gResourceTableOps = {
-    PL_DHashAllocTable,
-    PL_DHashFreeTable,
     ResourceHashEntry::HashKey,
     ResourceHashEntry::MatchEntry,
     PL_DHashMoveEntryStub,
     PL_DHashClearEntryStub,
-    PL_DHashFinalizeStub,
     nullptr
 };
 
@@ -178,13 +175,10 @@ struct LiteralHashEntry : public PLDHashEntryHdr {
 };
 
 static const PLDHashTableOps gLiteralTableOps = {
-    PL_DHashAllocTable,
-    PL_DHashFreeTable,
     LiteralHashEntry::HashKey,
     LiteralHashEntry::MatchEntry,
     PL_DHashMoveEntryStub,
     PL_DHashClearEntryStub,
-    PL_DHashFinalizeStub,
     nullptr
 };
 
@@ -215,13 +209,10 @@ struct IntHashEntry : public PLDHashEntryHdr {
 };
 
 static const PLDHashTableOps gIntTableOps = {
-    PL_DHashAllocTable,
-    PL_DHashFreeTable,
     IntHashEntry::HashKey,
     IntHashEntry::MatchEntry,
     PL_DHashMoveEntryStub,
     PL_DHashClearEntryStub,
-    PL_DHashFinalizeStub,
     nullptr
 };
 
@@ -256,13 +247,10 @@ struct DateHashEntry : public PLDHashEntryHdr {
 };
 
 static const PLDHashTableOps gDateTableOps = {
-    PL_DHashAllocTable,
-    PL_DHashFreeTable,
     DateHashEntry::HashKey,
     DateHashEntry::MatchEntry,
     PL_DHashMoveEntryStub,
     PL_DHashClearEntryStub,
-    PL_DHashFinalizeStub,
     nullptr
 };
 
@@ -376,13 +364,10 @@ struct BlobHashEntry : public PLDHashEntryHdr {
 };
 
 static const PLDHashTableOps gBlobTableOps = {
-    PL_DHashAllocTable,
-    PL_DHashFreeTable,
     BlobHashEntry::HashKey,
     BlobHashEntry::MatchEntry,
     PL_DHashMoveEntryStub,
     PL_DHashClearEntryStub,
-    PL_DHashFinalizeStub,
     nullptr
 };
 
@@ -738,11 +723,6 @@ RDFServiceImpl::gRDFService;
 RDFServiceImpl::RDFServiceImpl()
     :  mNamedDataSources(nullptr)
 {
-    mResources.ops = nullptr;
-    mLiterals.ops = nullptr;
-    mInts.ops = nullptr;
-    mDates.ops = nullptr;
-    mBlobs.ops = nullptr;
     gRDFService = this;
 }
 
@@ -760,20 +740,16 @@ RDFServiceImpl::Init()
     if (! mNamedDataSources)
         return NS_ERROR_OUT_OF_MEMORY;
 
-    PL_DHashTableInit(&mResources, &gResourceTableOps, nullptr,
+    PL_DHashTableInit(&mResources, &gResourceTableOps,
                       sizeof(ResourceHashEntry));
 
-    PL_DHashTableInit(&mLiterals, &gLiteralTableOps, nullptr,
-                      sizeof(LiteralHashEntry));
+    PL_DHashTableInit(&mLiterals, &gLiteralTableOps, sizeof(LiteralHashEntry));
 
-    PL_DHashTableInit(&mInts, &gIntTableOps, nullptr,
-                      sizeof(IntHashEntry));
+    PL_DHashTableInit(&mInts, &gIntTableOps, sizeof(IntHashEntry));
 
-    PL_DHashTableInit(&mDates, &gDateTableOps, nullptr,
-                      sizeof(DateHashEntry));
+    PL_DHashTableInit(&mDates, &gDateTableOps, sizeof(DateHashEntry));
 
-    PL_DHashTableInit(&mBlobs, &gBlobTableOps, nullptr,
-                      sizeof(BlobHashEntry));
+    PL_DHashTableInit(&mBlobs, &gBlobTableOps, sizeof(BlobHashEntry));
 
     mDefaultResourceFactory = do_GetClassObject(kRDFDefaultResourceCID, &rv);
     NS_ASSERTION(NS_SUCCEEDED(rv), "unable to get default resource factory");
@@ -794,15 +770,15 @@ RDFServiceImpl::~RDFServiceImpl()
         PL_HashTableDestroy(mNamedDataSources);
         mNamedDataSources = nullptr;
     }
-    if (mResources.ops)
+    if (mResources.IsInitialized())
         PL_DHashTableFinish(&mResources);
-    if (mLiterals.ops)
+    if (mLiterals.IsInitialized())
         PL_DHashTableFinish(&mLiterals);
-    if (mInts.ops)
+    if (mInts.IsInitialized())
         PL_DHashTableFinish(&mInts);
-    if (mDates.ops)
+    if (mDates.IsInitialized())
         PL_DHashTableFinish(&mDates);
-    if (mBlobs.ops)
+    if (mBlobs.IsInitialized())
         PL_DHashTableFinish(&mBlobs);
     gRDFService = nullptr;
 }

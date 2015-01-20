@@ -208,24 +208,21 @@ NS_GetContentList(nsINode* aRootNode,
 
   static const PLDHashTableOps hash_table_ops =
   {
-    PL_DHashAllocTable,
-    PL_DHashFreeTable,
     ContentListHashtableHashKey,
     ContentListHashtableMatchEntry,
     PL_DHashMoveEntryStub,
-    PL_DHashClearEntryStub,
-    PL_DHashFinalizeStub
+    PL_DHashClearEntryStub
   };
 
   // Initialize the hashtable if needed.
-  if (!gContentListHashTable.ops) {
-    PL_DHashTableInit(&gContentListHashTable, &hash_table_ops, nullptr,
+  if (!gContentListHashTable.IsInitialized()) {
+    PL_DHashTableInit(&gContentListHashTable, &hash_table_ops,
                       sizeof(ContentListHashEntry));
   }
 
   ContentListHashEntry *entry = nullptr;
   // First we look in our hashtable.  Then we create a content list if needed
-  if (gContentListHashTable.ops) {
+  if (gContentListHashTable.IsInitialized()) {
 
     // A PL_DHASH_ADD is equivalent to a PL_DHASH_LOOKUP for cases
     // when the entry is already in the hashtable.
@@ -321,24 +318,21 @@ GetFuncStringContentList(nsINode* aRootNode,
 
   static const PLDHashTableOps hash_table_ops =
   {
-    PL_DHashAllocTable,
-    PL_DHashFreeTable,
     FuncStringContentListHashtableHashKey,
     FuncStringContentListHashtableMatchEntry,
     PL_DHashMoveEntryStub,
-    PL_DHashClearEntryStub,
-    PL_DHashFinalizeStub
+    PL_DHashClearEntryStub
   };
 
   // Initialize the hashtable if needed.
-  if (!gFuncStringContentListHashTable.ops) {
+  if (!gFuncStringContentListHashTable.IsInitialized()) {
     PL_DHashTableInit(&gFuncStringContentListHashTable, &hash_table_ops,
-                      nullptr, sizeof(FuncStringContentListHashEntry));
+                      sizeof(FuncStringContentListHashEntry));
   }
 
   FuncStringContentListHashEntry *entry = nullptr;
   // First we look in our hashtable.  Then we create a content list if needed
-  if (gFuncStringContentListHashTable.ops) {
+  if (gFuncStringContentListHashTable.IsInitialized()) {
     nsFuncStringCacheKey hashKey(aRootNode, aFunc, aString);
 
     // A PL_DHASH_ADD is equivalent to a PL_DHASH_LOOKUP for cases
@@ -983,14 +977,13 @@ nsContentList::RemoveFromHashtable()
     sRecentlyUsedContentLists[recentlyUsedCacheIndex] = nullptr;
   }
 
-  if (!gContentListHashTable.ops)
+  if (!gContentListHashTable.IsInitialized())
     return;
 
   PL_DHashTableRemove(&gContentListHashTable, &key);
 
   if (gContentListHashTable.EntryCount() == 0) {
     PL_DHashTableFinish(&gContentListHashTable);
-    gContentListHashTable.ops = nullptr;
   }
 }
 
@@ -1022,7 +1015,7 @@ nsCacheableFuncStringContentList::~nsCacheableFuncStringContentList()
 void
 nsCacheableFuncStringContentList::RemoveFromFuncStringHashtable()
 {
-  if (!gFuncStringContentListHashTable.ops) {
+  if (!gFuncStringContentListHashTable.IsInitialized()) {
     return;
   }
 
@@ -1031,7 +1024,6 @@ nsCacheableFuncStringContentList::RemoveFromFuncStringHashtable()
 
   if (gFuncStringContentListHashTable.EntryCount() == 0) {
     PL_DHashTableFinish(&gFuncStringContentListHashTable);
-    gFuncStringContentListHashTable.ops = nullptr;
   }
 }
 

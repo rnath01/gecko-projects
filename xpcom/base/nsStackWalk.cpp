@@ -13,7 +13,7 @@
 
 #include "nsStackWalk.h"
 
-#ifdef XP_WIN
+#if defined(_MSC_VER) && _MSC_VER < 1900
 #define snprintf _snprintf
 #endif
 
@@ -505,7 +505,7 @@ WalkStackThread(void* aData)
  * whose in memory address doesn't match its in-file address.
  */
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
              uint32_t aMaxFrames, void* aClosure, uintptr_t aThread,
              void* aPlatformData)
@@ -773,7 +773,7 @@ EnsureSymInitialized()
 }
 
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
 {
   aDetails->library[0] = '\0';
@@ -875,14 +875,14 @@ void DemangleSymbol(const char* aSymbol,
 #endif // MOZ_DEMANGLE_SYMBOLS
 }
 
-#if __GLIBC__ > 2 || __GLIBC_MINOR > 1
+#if __GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 1)
 #define HAVE___LIBC_STACK_END 1
 #else
 #define HAVE___LIBC_STACK_END 0
 #endif
 
 #if HAVE___LIBC_STACK_END
-extern void* __libc_stack_end; // from ld-linux.so
+extern MOZ_EXPORT void* __libc_stack_end; // from ld-linux.so
 #endif
 namespace mozilla {
 nsresult
@@ -939,7 +939,7 @@ FramePointerStackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
 #define X86_OR_PPC (defined(__i386) || defined(PPC) || defined(__ppc__))
 #if X86_OR_PPC && (NSSTACKWALK_SUPPORTS_MACOSX || NSSTACKWALK_SUPPORTS_LINUX) // i386 or PPC Linux or Mac stackwalking code
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
              uint32_t aMaxFrames, void* aClosure, uintptr_t aThread,
              void* aPlatformData)
@@ -1008,7 +1008,7 @@ unwind_callback(struct _Unwind_Context* context, void* closure)
   return _URC_NO_REASON;
 }
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
              uint32_t aMaxFrames, void* aClosure, uintptr_t aThread,
              void* aPlatformData)
@@ -1042,7 +1042,7 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
 
 #endif
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
 {
   aDetails->library[0] = '\0';
@@ -1079,7 +1079,7 @@ NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
 
 #else // unsupported platform.
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
              uint32_t aMaxFrames, void* aClosure, uintptr_t aThread,
              void* aPlatformData)
@@ -1098,7 +1098,7 @@ FramePointerStackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
 }
 }
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
 {
   aDetails->library[0] = '\0';
@@ -1112,7 +1112,7 @@ NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
 
 #endif
 
-EXPORT_XPCOM_API(void)
+XPCOM_API(void)
 NS_FormatCodeAddressDetails(char* aBuffer, uint32_t aBufferSize,
                             uint32_t aFrameNumber, void* aPC,
                             const nsCodeAddressDetails* aDetails)
@@ -1123,7 +1123,7 @@ NS_FormatCodeAddressDetails(char* aBuffer, uint32_t aBufferSize,
                        aDetails->filename, aDetails->lineno);
 }
 
-EXPORT_XPCOM_API(void)
+XPCOM_API(void)
 NS_FormatCodeAddress(char* aBuffer, uint32_t aBufferSize, uint32_t aFrameNumber,
                      const void* aPC, const char* aFunction,
                      const char* aLibrary, ptrdiff_t aLOffset,

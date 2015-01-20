@@ -297,7 +297,7 @@ let UI = {
       this.unbusy();
     }, (e) => {
       let message;
-      if (e.error && e.message) {
+      if (e && e.error && e.message) {
         // Some errors come from fronts that are not based on protocol.js.
         // Errors are not translated to strings.
         message = operationDescription + " (" + e.error + "): " + e.message;
@@ -308,7 +308,9 @@ let UI = {
       let operationCanceled = e && e.canceled;
       if (!operationCanceled) {
         UI.reportError("error_operationFail", message);
-        console.error(e);
+        if (e) {
+          console.error(e);
+        }
       }
       this.unbusy();
     });
@@ -444,8 +446,13 @@ let UI = {
   connectToRuntime: function(runtime) {
     let name = runtime.name;
     let promise = AppManager.connectToRuntime(runtime);
-    promise.then(() => this.initConnectionTelemetry());
-    return this.busyUntil(promise, "connecting to runtime " + name);
+    promise.then(() => this.initConnectionTelemetry())
+           .catch(() => {
+             // Empty rejection handler to silence uncaught rejection warnings
+             // |busyUntil| will listen for rejections.
+             // Bug 1121100 may find a better way to silence these.
+           });
+    return this.busyUntil(promise, "Connecting to " + name);
   },
 
   updateRuntimeButton: function() {

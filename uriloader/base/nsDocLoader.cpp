@@ -114,18 +114,14 @@ nsDocLoader::nsDocLoader()
 
   static const PLDHashTableOps hash_table_ops =
   {
-    PL_DHashAllocTable,
-    PL_DHashFreeTable,
     PL_DHashVoidPtrKeyStub,
     PL_DHashMatchEntryStub,
     PL_DHashMoveEntryStub,
     RequestInfoHashClearEntry,
-    PL_DHashFinalizeStub,
     RequestInfoHashInitEntry
   };
 
-  PL_DHashTableInit(&mRequestInfoHash, &hash_table_ops, nullptr,
-                    sizeof(nsRequestInfo));
+  PL_DHashTableInit(&mRequestInfoHash, &hash_table_ops, sizeof(nsRequestInfo));
 
   ClearInternalProgress();
 
@@ -143,7 +139,7 @@ nsDocLoader::SetDocLoaderParent(nsDocLoader *aParent)
 nsresult
 nsDocLoader::Init()
 {
-  if (!mRequestInfoHash.ops) {
+  if (!mRequestInfoHash.IsInitialized()) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
@@ -176,7 +172,7 @@ nsDocLoader::~nsDocLoader()
   PR_LOG(gDocLoaderLog, PR_LOG_DEBUG,
          ("DocLoader:%p: deleted.\n", this));
 
-  if (mRequestInfoHash.ops) {
+  if (mRequestInfoHash.IsInitialized()) {
     PL_DHashTableFinish(&mRequestInfoHash);
   }
 }
@@ -1384,7 +1380,7 @@ RemoveInfoCallback(PLDHashTable *table, PLDHashEntryHdr *hdr, uint32_t number,
 
 void nsDocLoader::ClearRequestInfoHash(void)
 {
-  if (!mRequestInfoHash.ops || !mRequestInfoHash.EntryCount()) {
+  if (!mRequestInfoHash.IsInitialized() || !mRequestInfoHash.EntryCount()) {
     // No hash, or the hash is empty, nothing to do here then...
 
     return;

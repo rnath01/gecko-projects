@@ -155,7 +155,9 @@ enum EventNameType {
 
 struct EventNameMapping
 {
-  nsIAtom* mAtom;
+  // This holds pointers to nsGkAtoms members, and is therefore safe as a
+  // non-owning reference.
+  nsIAtom* MOZ_OWNING_REF mAtom;
   uint32_t mId;
   int32_t  mType;
   mozilla::EventClassID mEventClassID;
@@ -360,11 +362,6 @@ public:
    * Is the HTML local name a block element?
    */
   static bool IsHTMLBlock(nsIAtom* aLocalName);
-
-  /**
-   * Is the HTML local name a void element?
-   */
-  static bool IsHTMLVoid(nsIAtom* aLocalName);
 
   enum ParseHTMLIntegerResultFlags {
     eParseHTMLInteger_NoFlags               = 0,
@@ -1715,6 +1712,8 @@ public:
    * @param aString the string to convert the newlines inside [in/out]
    */
   static void PlatformToDOMLineBreaks(nsString &aString);
+  static NS_WARN_UNUSED_RESULT bool PlatformToDOMLineBreaks(nsString &aString,
+                                                            const mozilla::fallible_t&);
 
   /**
    * Populates aResultString with the contents of the string-buffer aBuf, up

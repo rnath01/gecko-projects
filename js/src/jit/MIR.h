@@ -2963,6 +2963,17 @@ class MSimdBox
         return initialHeap_;
     }
 
+    bool congruentTo(const MDefinition *ins) const MOZ_OVERRIDE {
+        if (congruentIfOperandsEqual(ins)) {
+            MOZ_ASSERT(ins->toSimdBox()->initialHeap() == initialHeap());
+            // The template object is likely to be different, but represents the
+            // same kind of objects as the MIRTypes are identical.
+            return true;
+        }
+
+        return false;
+    }
+
     AliasSet getAliasSet() const MOZ_OVERRIDE {
         return AliasSet::None();
     }
@@ -10728,6 +10739,10 @@ class MCeil
         return congruentIfOperandsEqual(ins);
     }
     void computeRange(TempAllocator &alloc) MOZ_OVERRIDE;
+    bool writeRecoverData(CompactBufferWriter &writer) const MOZ_OVERRIDE;
+    bool canRecoverOnBailout() const MOZ_OVERRIDE {
+        return true;
+    }
 
     ALLOW_CLONE(MCeil)
 };
@@ -11436,48 +11451,6 @@ class MNewStringObject :
     }
 
     StringObject *templateObj() const;
-};
-
-// Node that represents that a script has begun executing. This comes at the
-// start of the function and is called once per function (including inline
-// ones)
-class MProfilerStackOp : public MNullaryInstruction
-{
-  public:
-    enum Type {
-        Enter,        // a function has begun executing and it is not inline
-        Exit          // any function has exited and is not inline
-    };
-
-  private:
-    JSScript *script_;
-    Type type_;
-
-    MProfilerStackOp(JSScript *script, Type type)
-      : script_(script), type_(type)
-    {
-        MOZ_ASSERT(script);
-        setGuard();
-    }
-
-  public:
-    INSTRUCTION_HEADER(ProfilerStackOp)
-
-    static MProfilerStackOp *New(TempAllocator &alloc, JSScript *script, Type type) {
-        return new(alloc) MProfilerStackOp(script, type);
-    }
-
-    JSScript *script() {
-        return script_;
-    }
-
-    Type type() {
-        return type_;
-    }
-
-    AliasSet getAliasSet() const MOZ_OVERRIDE {
-        return AliasSet::None();
-    }
 };
 
 // This is an alias for MLoadFixedSlot.

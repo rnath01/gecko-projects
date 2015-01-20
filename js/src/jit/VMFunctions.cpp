@@ -203,7 +203,7 @@ MutatePrototype(JSContext *cx, HandlePlainObject obj, HandleValue value)
     RootedObject newProto(cx, value.toObjectOrNull());
 
     bool succeeded;
-    if (!JSObject::setProto(cx, obj, newProto, &succeeded))
+    if (!SetPrototype(cx, obj, newProto, &succeeded))
         return false;
     MOZ_ASSERT(succeeded);
     return true;
@@ -213,7 +213,7 @@ bool
 InitProp(JSContext *cx, HandleNativeObject obj, HandlePropertyName name, HandleValue value)
 {
     RootedId id(cx, NameToId(name));
-    return DefineNativeProperty(cx, obj, id, value, nullptr, nullptr, JSPROP_ENUMERATE);
+    return NativeDefineProperty(cx, obj, id, value, nullptr, nullptr, JSPROP_ENUMERATE);
 }
 
 template<bool Equal>
@@ -504,17 +504,17 @@ SetProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, HandleValu
     }
 
     if (MOZ_LIKELY(!obj->getOps()->setProperty)) {
-        return baseops::SetPropertyHelper(
+        return NativeSetProperty(
             cx, obj.as<NativeObject>(), obj.as<NativeObject>(), id,
             (op == JSOP_SETNAME || op == JSOP_STRICTSETNAME ||
              op == JSOP_SETGNAME || op == JSOP_STRICTSETGNAME)
-            ? baseops::Unqualified
-            : baseops::Qualified,
+            ? Unqualified
+            : Qualified,
             &v,
             strict);
     }
 
-    return JSObject::setGeneric(cx, obj, obj, id, &v, strict);
+    return SetProperty(cx, obj, obj, id, &v, strict);
 }
 
 bool
@@ -577,19 +577,6 @@ NewStringObject(JSContext *cx, HandleString str)
 }
 
 bool
-SPSEnter(JSContext *cx, HandleScript script)
-{
-    return cx->runtime()->spsProfiler.enter(script, script->functionNonDelazifying());
-}
-
-bool
-SPSExit(JSContext *cx, HandleScript script)
-{
-    cx->runtime()->spsProfiler.exit(script, script->functionNonDelazifying());
-    return true;
-}
-
-bool
 OperatorIn(JSContext *cx, HandleValue key, HandleObject obj, bool *out)
 {
     RootedId id(cx);
@@ -598,7 +585,7 @@ OperatorIn(JSContext *cx, HandleValue key, HandleObject obj, bool *out)
 
     RootedObject obj2(cx);
     RootedShape prop(cx);
-    if (!JSObject::lookupGeneric(cx, obj, id, &obj2, &prop))
+    if (!LookupProperty(cx, obj, id, &obj2, &prop))
         return false;
 
     *out = !!prop;
@@ -785,8 +772,8 @@ bool
 DebugEpilogue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool ok)
 {
     // Unwind scope chain to stack depth 0.
-    ScopeIter si(frame, pc, cx);
-    UnwindAllScopes(cx, si);
+    ScopeIter si(cx, frame, pc);
+    UnwindAllScopesInFrame(cx, si);
     jsbytecode *unwindPc = frame->script()->main();
     frame->setOverridePc(unwindPc);
 
@@ -801,15 +788,6 @@ DebugEpilogue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool ok)
     } else if (frame->isStrictEvalFrame()) {
         MOZ_ASSERT_IF(frame->hasCallObj(), frame->scopeChain()->as<CallObject>().isForEval());
         DebugScopes::onPopStrictEvalScope(frame);
-    }
-
-    // If the frame has a pushed SPS frame, make sure to pop it.
-    if (frame->hasPushedSPSFrame()) {
-        cx->runtime()->spsProfiler.exit(frame->script(), frame->maybeFun());
-        // Unset the pushedSPSFrame flag because DebugEpilogue may get called before
-        // probes::ExitScript in baseline during exception handling, and we don't
-        // want to double-pop SPS frames.
-        frame->unsetPushedSPSFrame();
     }
 
     if (!ok) {

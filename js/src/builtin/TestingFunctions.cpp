@@ -14,13 +14,12 @@
 #include "jsfriendapi.h"
 #include "jsgc.h"
 #include "jsobj.h"
-#ifndef JS_MORE_DETERMINISTIC
 #include "jsprf.h"
-#endif
 #include "jswrapper.h"
 
 #include "asmjs/AsmJSLink.h"
 #include "asmjs/AsmJSValidate.h"
+#include "jit/JitFrameIterator.h"
 #include "js/Debug.h"
 #include "js/HashTable.h"
 #include "js/StructuredClone.h"
@@ -340,6 +339,30 @@ GCParameter(JSContext *cx, unsigned argc, Value *vp)
     JS_SetGCParameter(cx->runtime(), param, value);
     args.rval().setUndefined();
     return true;
+}
+
+static void
+SetAllowRelazification(JSContext *cx, bool allow)
+{
+    JSRuntime *rt = cx->runtime();
+    MOZ_ASSERT(rt->allowRelazificationForTesting != allow);
+    rt->allowRelazificationForTesting = allow;
+
+    for (AllFramesIter i(cx); !i.done(); ++i)
+        i.script()->setDoNotRelazify(allow);
+}
+
+static bool
+RelazifyFunctions(JSContext *cx, unsigned argc, Value *vp)
+{
+    // Relazifying functions on GC is usually only done for compartments that are
+    // not active. To aid fuzzing, this testing function allows us to relazify
+    // even if the compartment is active.
+
+    SetAllowRelazification(cx, true);
+    bool res = GC(cx, argc, vp);
+    SetAllowRelazification(cx, false);
+    return res;
 }
 
 static bool
@@ -1222,17 +1245,6 @@ DisplayName(JSContext *cx, unsigned argc, jsval *vp)
     return true;
 }
 
-bool
-js::testingFunc_inParallelSection(JSContext *cx, unsigned argc, jsval *vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-
-    // If we were actually *in* a parallel section, then this function
-    // would be inlined to TRUE in ion-generated code.
-    args.rval().setBoolean(false);
-    return true;
-}
-
 static bool
 ShellObjectMetadataCallback(JSContext *cx, JSObject **pmetadata)
 {
@@ -1336,6 +1348,16 @@ js::testingFunc_assertFloat32(JSContext *cx, unsigned argc, jsval *vp)
     CallArgs args = CallArgsFromVp(argc, vp);
 
     // NOP when not in IonMonkey
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+TestingFunc_assertValidJitStack(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    jit::AssertValidJitStack(cx);
     args.rval().setUndefined();
     return true;
 }
@@ -2224,7 +2246,7 @@ SetImmutablePrototype(JSContext *cx, unsigned argc, Value *vp)
     RootedObject obj(cx, &args[0].toObject());
 
     bool succeeded;
-    if (!JSObject::setImmutablePrototype(cx, obj, &succeeded))
+    if (!js::SetImmutablePrototype(cx, obj, &succeeded))
         return false;
 
     args.rval().setBoolean(succeeded);
@@ -2248,6 +2270,11 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("gcparam", GCParameter, 2, 0,
 "gcparam(name [, value])",
 "  Wrapper for JS_[GS]etGCParameter. The name is one of " GC_PARAMETER_ARGS_LIST),
+
+    JS_FN_HELP("relazifyFunctions", RelazifyFunctions, 0, 0,
+"relazifyFunctions(...)",
+"  Perform a GC and allow relazification of functions. Accepts the same\n"
+"  arguments as gc()."),
 
     JS_FN_HELP("getBuildConfiguration", GetBuildConfiguration, 0, 0,
 "getBuildConfiguration()",
@@ -2456,10 +2483,6 @@ gc::ZealModeHelpText),
 "isRelazifiableFunction(fun)",
 "  Ture if fun is a JSFunction with a relazifiable JSScript."),
 
-    JS_FN_HELP("inParallelSection", testingFunc_inParallelSection, 0, 0,
-"inParallelSection()",
-"  True if this code is executing within a parallel section."),
-
     JS_FN_HELP("setObjectMetadataCallback", SetObjectMetadataCallback, 1, 0,
 "setObjectMetadataCallback(fn)",
 "  Specify function to supply metadata for all newly created objects."),
@@ -2475,6 +2498,10 @@ gc::ZealModeHelpText),
     JS_FN_HELP("bailout", testingFunc_bailout, 0, 0,
 "bailout()",
 "  Force a bailout out of ionmonkey (if running in ionmonkey)."),
+
+    JS_FN_HELP("assertValidJitStack", TestingFunc_assertValidJitStack, 0, 0,
+"assertValidJitStack()",
+"  Iterates the Jit stack and check that stack invariants hold."),
 
     JS_FN_HELP("setJitCompilerOption", SetJitCompilerOption, 2, 0,
 "setCompilerOption(<option>, <number>)",

@@ -79,6 +79,12 @@ struct ShowInfo
   double defaultScale;
 };
 
+struct FrameScriptInfo
+{
+    nsString url;
+    bool runInGlobalScope;
+};
+
 prio(normal upto urgent) intr protocol PBrowser
 {
     manager PContent or PContentBridge;
@@ -117,7 +123,8 @@ parent:
 
     Event(RemoteDOMEvent aEvent);
 
-    intr CreateWindow(uint32_t aChromeFlags,
+    sync CreateWindow(PBrowser aNewTab,
+                      uint32_t aChromeFlags,
                       bool aCalledFromJS,
                       bool aPositionSpecified,
                       bool aSizeSpecified,
@@ -125,7 +132,7 @@ parent:
                       nsString aName,
                       nsString aFeatures,
                       nsString aBaseURI)
-      returns (bool windowIsNew, PBrowser window);
+      returns (bool windowOpened, FrameScriptInfo[] frameScripts);
 
     sync SyncMessage(nsString aMessage, ClonedMessageData aData,
                      CpowEntry[] aCpows, Principal aPrincipal)
@@ -275,13 +282,13 @@ parent:
                                                  int32_t IMEOpen,
                                                  intptr_t NativeIMEContext);
 
-    prio(urgent) async SetInputContext(int32_t IMEEnabled,
-                                       int32_t IMEOpen,
-                                       nsString type,
-                                       nsString inputmode,
-                                       nsString actionHint,
-                                       int32_t cause,
-                                       int32_t focusChange);
+    prio(urgent) sync SetInputContext(int32_t IMEEnabled,
+                                      int32_t IMEOpen,
+                                      nsString type,
+                                      nsString inputmode,
+                                      nsString actionHint,
+                                      int32_t cause,
+                                      int32_t focusChange);
 
     sync IsParentWindowMainWidgetVisible() returns (bool visible);
 
@@ -437,6 +444,12 @@ parent:
         returns (ScrollingBehavior scrolling,
                  TextureFactoryIdentifier textureFactoryIdentifier,
                  uint64_t layersId);
+
+    /**
+     * Sent by the child to the parent to inform it that an update to the
+     * dimensions has been requested, likely through win.moveTo or resizeTo
+     */
+    async SetDimensions(uint32_t aFlags, int32_t aX, int32_t aY, int32_t aCx, int32_t aCy);
 
 child:
     /**
