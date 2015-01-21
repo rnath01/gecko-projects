@@ -2278,7 +2278,7 @@ pref("editor.positioning.offset",            0);
 
 pref("dom.use_watchdog", true);
 pref("dom.max_chrome_script_run_time", 20);
-pref("dom.max_child_script_run_time", 2);
+pref("dom.max_child_script_run_time", 10);
 pref("dom.max_script_run_time", 10);
 
 // If true, ArchiveReader will be enabled
@@ -2327,7 +2327,7 @@ pref("dom.ipc.plugins.timeoutSecs", 45);
 pref("dom.ipc.plugins.parentTimeoutSecs", 0);
 // How long a plugin in e10s is allowed to process a synchronous IPC
 // message before we notify the chrome process of a hang.
-pref("dom.ipc.plugins.contentTimeoutSecs", 2);
+pref("dom.ipc.plugins.contentTimeoutSecs", 45);
 // How long a plugin launch is allowed to take before
 // we consider it failed.
 pref("dom.ipc.plugins.processLaunchTimeoutSecs", 45);
@@ -3789,7 +3789,7 @@ pref("image.mem.discardable", true);
 
 // Prevents images from automatically being decoded on load, instead allowing
 // them to be decoded on demand when they are drawn.
-pref("image.mem.decodeondraw", true);
+pref("image.mem.decodeondraw", false);
 
 // Allows image locking of decoded image data in content processes.
 pref("image.mem.allow_locking_in_content_processes", true);
@@ -4511,3 +4511,24 @@ pref("media.gmp-manager.certs.2.issuerName", "CN=Thawte SSL CA,O=\"Thawte, Inc.\
 pref("media.gmp-manager.certs.2.commonName", "aus4.mozilla.org");
 #endif
 
+// Whether or not to perform reader mode article parsing on page load.
+// If this pref is disabled, we will never show a reader mode icon in the toolbar.
+pref("reader.parse-on-load.enabled", true);
+
+// Force-enables reader mode parsing, even on low-memory platforms, where it
+// is disabled by default.
+pref("reader.parse-on-load.force-enabled", false);
+
+// The default relative font size in reader mode (1-5)
+pref("reader.font_size", 3);
+
+// The default color scheme in reader mode (light, dark, auto)
+// auto = color automatically adjusts according to ambient light level
+pref("reader.color_scheme", "auto");
+
+// The font type in reader (sans-serif, serif)
+pref("reader.font_type", "sans-serif");
+
+// Whether or not the user has interacted with the reader mode toolbar.
+// This is used to show a first-launch tip in reader mode.
+pref("reader.has_used_toolbar", false);

@@ -282,13 +282,13 @@ parent:
                                                  int32_t IMEOpen,
                                                  intptr_t NativeIMEContext);
 
-    prio(urgent) sync SetInputContext(int32_t IMEEnabled,
-                                      int32_t IMEOpen,
-                                      nsString type,
-                                      nsString inputmode,
-                                      nsString actionHint,
-                                      int32_t cause,
-                                      int32_t focusChange);
+    prio(urgent) async SetInputContext(int32_t IMEEnabled,
+                                       int32_t IMEOpen,
+                                       nsString type,
+                                       nsString inputmode,
+                                       nsString actionHint,
+                                       int32_t cause,
+                                       int32_t focusChange);
 
     sync IsParentWindowMainWidgetVisible() returns (bool visible);
 
@@ -444,6 +444,12 @@ parent:
         returns (ScrollingBehavior scrolling,
                  TextureFactoryIdentifier textureFactoryIdentifier,
                  uint64_t layersId);
+
+    /**
+     * Sent by the child to the parent to inform it that an update to the
+     * dimensions has been requested, likely through win.moveTo or resizeTo
+     */
+    async SetDimensions(uint32_t aFlags, int32_t aX, int32_t aY, int32_t aCx, int32_t aCy);
 
 child:
     /**

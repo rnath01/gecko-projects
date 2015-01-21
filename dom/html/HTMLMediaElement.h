@@ -217,8 +217,6 @@ public:
   layers::ImageContainer* GetImageContainer();
 
   // Dispatch events
-  using nsGenericHTMLElement::DispatchEvent;
-  virtual nsresult DispatchEvent(const nsAString& aName) MOZ_FINAL MOZ_OVERRIDE;
   virtual nsresult DispatchAsyncEvent(const nsAString& aName) MOZ_FINAL MOZ_OVERRIDE;
 
   // Dispatch events that were raised while in the bfcache
@@ -338,8 +336,8 @@ public:
 
   MediaStream* GetSrcMediaStream() const
   {
-    NS_ASSERTION(mSrcStream, "Don't call this when not playing a stream");
-    return mSrcStream->GetStream();
+    NS_ASSERTION(mPlaybackStream, "Don't call this when not playing a stream");
+    return mPlaybackStream->GetStream();
   }
 
   // WebIDL
@@ -980,6 +978,11 @@ protected:
   // MediaElement doesn't yet have one then it will create it.
   TextTrackManager* GetOrCreateTextTrackManager();
 
+  class nsAsyncEventRunner;
+  using nsGenericHTMLElement::DispatchEvent;
+  // For nsAsyncEventRunner.
+  nsresult DispatchEvent(const nsAString& aName);
+
   // The current decoder. Load() has been called on this decoder.
   // At most one of mDecoder and mSrcStream can be non-null.
   nsRefPtr<MediaDecoder> mDecoder;
@@ -996,6 +999,14 @@ protected:
   // actually playing.
   // At most one of mDecoder and mSrcStream can be non-null.
   nsRefPtr<DOMMediaStream> mSrcStream;
+
+  // Holds a reference to a MediaInputPort connecting mSrcStream to mPlaybackStream.
+  nsRefPtr<MediaInputPort> mPlaybackStreamInputPort;
+
+  // Holds a reference to a stream with mSrcStream as input but intended for
+  // playback. Used so we don't block playback of other video elements
+  // playing the same mSrcStream.
+  nsRefPtr<DOMMediaStream> mPlaybackStream;
 
   // Holds references to the DOM wrappers for the MediaStreams that we're
   // writing to.

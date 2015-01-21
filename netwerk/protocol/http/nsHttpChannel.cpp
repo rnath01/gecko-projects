@@ -1558,6 +1558,23 @@ nsHttpChannel::ProcessResponse()
     Telemetry::Accumulate(Telemetry::HTTP_RESPONSE_VERSION,
                           mResponseHead->Version());
 
+#if defined(ANDROID) || defined(MOZ_B2G)
+    if (gHttpHandler->IsTelemetryEnabled()) {
+      // Gather telemetry on being sent a WAP content-type
+      // This check will catch (at least) the following content types:
+      // application/wml+xml, application/vnd.wap.xhtml+xml,
+      // text/vnd.wap.wml, application/vnd.wap.wmlc
+      bool isWap = false;
+      if (!mResponseHead->ContentType().IsEmpty() && (
+          mResponseHead->ContentType().Find(".wap") != -1 ||
+          mResponseHead->ContentType().Find("/wml") != -1)) {
+        isWap = true;
+      }
+
+      Telemetry::Accumulate(Telemetry::HTTP_WAP_CONTENT_TYPE_RECEIVED, isWap);
+    }
+#endif
+
     return rv;
 }
 
@@ -5594,8 +5611,8 @@ class OnTransportStatusAsyncEvent : public nsRunnable
 public:
     OnTransportStatusAsyncEvent(nsITransportEventSink* aEventSink,
                                 nsresult aTransportStatus,
-                                uint64_t aProgress,
-                                uint64_t aProgressMax)
+                                int64_t aProgress,
+                                int64_t aProgressMax)
     : mEventSink(aEventSink)
     , mTransportStatus(aTransportStatus)
     , mProgress(aProgress)
@@ -5616,8 +5633,8 @@ public:
 private:
     nsCOMPtr<nsITransportEventSink> mEventSink;
     nsresult mTransportStatus;
-    uint64_t mProgress;
-    uint64_t mProgressMax;
+    int64_t mProgress;
+    int64_t mProgressMax;
 };
 
 NS_IMETHODIMP
@@ -5662,12 +5679,22 @@ nsHttpChannel::OnDataAvailable(nsIRequest *request, nsISupports *ctxt,
         // of a byte range request, the content length stored in the cached
         // response headers is what we want to use here.
 
-        uint64_t progressMax(uint64_t(mResponseHead->ContentLength()));
-        uint64_t progress = mLogicalOffset + uint64_t(count);
+        int64_t progressMax(mResponseHead->ContentLength());
+        int64_t progress = mLogicalOffset + count;
 
-        if (progress > progressMax)
+        if ((progress > progressMax) && (progressMax != -1)) {
             NS_WARNING("unexpected progress values - "
                        "is server exceeding content length?");
+        }
+
+        // make sure params are in range for js
+        if (!InScriptableRange(progressMax)) {
+            progressMax = -1;
+        }
+
+        if (!InScriptableRange(progress)) {
+            progress = -1;
+        }
 
         if (NS_IsMainThread()) {
             OnTransportStatus(nullptr, transportStatus, progress, progressMax);
@@ -5796,7 +5823,7 @@ nsHttpChannel::CheckListenerChain()
 
 NS_IMETHODIMP
 nsHttpChannel::OnTransportStatus(nsITransport *trans, nsresult status,
-                                 uint64_t progress, uint64_t progressMax)
+                                 int64_t progress, int64_t progressMax)
 {
     MOZ_ASSERT(NS_IsMainThread(), "Should be on main thread only");
     // cache the progress sink so we don't have to query for it each time.
@@ -5816,7 +5843,7 @@ nsHttpChannel::OnTransportStatus(nsITransport *trans, nsresult status,
     // block socket status event after Cancel or OnStopRequest has been called.
     if (mProgressSink && NS_SUCCEEDED(mStatus) && mIsPending) {
         LOG(("sending progress%s notification [this=%p status=%x"
-             " progress=%llu/%llu]\n",
+             " progress=%lld/%lld]\n",
             (mLoadFlags & LOAD_BACKGROUND)? "" : " and status",
             this, status, progress, progressMax));
 
@@ -5828,7 +5855,7 @@ nsHttpChannel::OnTransportStatus(nsITransport *trans, nsresult status,
         }
 
         if (progress > 0) {
-            if (progress > progressMax) {
+            if ((progress > progressMax) && (progressMax != -1)) {
                 NS_WARNING("unexpected progress values");
             }
 
