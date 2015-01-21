@@ -2111,10 +2111,14 @@ function runUpdateUsingService(aInitialStatus, aExpectedStatus, aCheckSvcLog) {
 
   setEnvironment();
 
-  // There is a security check done by the service to make sure the updater
-  // we are executing is the same as the one in the apply-to dir.
-  // To make sure they match from tests we copy updater.exe to the apply-to dir.
-  copyFileToTestAppDir(FILE_UPDATER_BIN, false);
+
+  let updater = getTestDirFile(FILE_UPDATER_BIN);
+  if (!updater.exists()) {
+    do_throw("Unable to find updater binary!");
+  }
+  let outputBinDir = getGREBinDir()
+  updater.copyToFollowingLinks(outputBinDir, updater.leafName);
+  updater.copyToFollowingLinks(updatesDir, updater.leafName);
 
   // The service will execute maintenanceservice_installer.exe and
   // will copy maintenanceservice.exe out of the same directory from
