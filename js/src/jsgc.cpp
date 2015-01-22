@@ -1064,21 +1064,6 @@ GCRuntime::releaseArena(ArenaHeader *aheader, const AutoLockGC &lock)
     return aheader->chunk()->releaseArena(rt, aheader, lock);
 }
 
-void
-GCRuntime::decommitArena(ArenaHeader *aheader, AutoLockGC &lock)
-{
-    aheader->zone->usage.removeGCArena();
-    if (isBackgroundSweeping())
-        aheader->zone->threshold.updateForRemovedArena(tunables);
-
-    bool ok;
-    {
-        AutoUnlockGC unlock(lock);
-        ok = MarkPagesUnused(aheader, ArenaSize);
-    }
-    return aheader->chunk()->releaseArena(rt, aheader, lock, Chunk::ArenaDecommitState(ok));
-}
-
 GCRuntime::GCRuntime(JSRuntime *rt) :
     rt(rt),
     systemZone(nullptr),
@@ -1098,9 +1083,7 @@ GCRuntime::GCRuntime(JSRuntime *rt) :
     decommitThreshold(32 * 1024 * 1024),
     cleanUpEverything(false),
     grayBitsValid(false),
-    majorGCRequested(0),
     majorGCTriggerReason(JS::gcreason::NO_REASON),
-    minorGCRequested(false),
     minorGCTriggerReason(JS::gcreason::NO_REASON),
     majorGCNumber(0),
     jitReleaseNumber(0),
@@ -1129,9 +1112,7 @@ GCRuntime::GCRuntime(JSRuntime *rt) :
     sliceBudget(SliceBudget::Unlimited),
     incrementalAllowed(true),
     generationalDisabled(0),
-#ifdef JSGC_COMPACTING
     compactingDisabled(0),
-#endif
     manipulatingDeadZones(false),
     objectsMarkedInDeadZones(0),
     poked(false),
@@ -1151,9 +1132,7 @@ GCRuntime::GCRuntime(JSRuntime *rt) :
 #ifdef DEBUG
     inUnsafeRegion(0),
     noGCOrAllocationCheck(0),
-#ifdef JSGC_COMPACTING
     relocatedArenasToRelease(nullptr),
-#endif
 #endif
     lock(nullptr),
     lockOwner(nullptr),
@@ -1947,14 +1926,8 @@ ArenaLists::allocateFromArenaInner(JS::Zone *zone, ArenaHeader *aheader, AllocKi
 bool
 GCRuntime::shouldCompact()
 {
-#ifdef JSGC_COMPACTING
     return invocationKind == GC_SHRINK && isCompactingGCEnabled();
-#else
-    return false;
-#endif
 }
-
-#ifdef JSGC_COMPACTING
 
 void
 GCRuntime::disableCompactingGC()
@@ -2390,13 +2363,19 @@ namespace gc {
 
 struct ArenasToUpdate
 {
-    explicit ArenasToUpdate(JSRuntime *rt);
+    enum KindsToUpdate {
+        FOREGROUND = 1,
+        BACKGROUND = 2,
+        ALL = FOREGROUND | BACKGROUND
+    };
+    ArenasToUpdate(JSRuntime *rt, KindsToUpdate kinds);
     bool done() { return initialized && arena == nullptr; }
     ArenaHeader* next();
     ArenaHeader *getArenasToUpdate(AutoLockHelperThreadState& lock, unsigned max);
 
   private:
     bool initialized;
+    KindsToUpdate kinds;
     GCZonesIter zone;    // Current zone to process, unless zone.done()
     unsigned kind;       // Current alloc kind to process
     ArenaHeader *arena;  // Next arena to process
@@ -2407,16 +2386,25 @@ struct ArenasToUpdate
 bool ArenasToUpdate::shouldProcessKind(unsigned kind)
 {
     MOZ_ASSERT(kind < FINALIZE_LIMIT);
-    return
-        kind != FINALIZE_FAT_INLINE_STRING &&
-        kind != FINALIZE_STRING &&
-        kind != FINALIZE_EXTERNAL_STRING &&
-        kind != FINALIZE_SYMBOL;
+    if (kind == FINALIZE_FAT_INLINE_STRING ||
+        kind == FINALIZE_STRING ||
+        kind == FINALIZE_EXTERNAL_STRING ||
+        kind == FINALIZE_SYMBOL)
+    {
+        return false;
+    }
+
+    if (kind > FINALIZE_OBJECT_LAST || js::gc::IsBackgroundFinalized(AllocKind(kind)))
+        return (kinds & BACKGROUND) != 0;
+    else
+        return (kinds & FOREGROUND) != 0;
 }
 
-ArenasToUpdate::ArenasToUpdate(JSRuntime *rt)
-  : initialized(false), zone(rt, SkipAtoms)
-{}
+ArenasToUpdate::ArenasToUpdate(JSRuntime *rt, KindsToUpdate kinds)
+  : initialized(false), kinds(kinds), zone(rt, SkipAtoms)
+{
+    MOZ_ASSERT(kinds && !(kinds & ~ALL));
+}
 
 ArenaHeader *
 ArenasToUpdate::next()
@@ -2543,20 +2531,23 @@ UpdateCellPointersTask::run()
 } // namespace js
 
 void
-GCRuntime::updateAllCellPointersParallel(ArenasToUpdate &source)
+GCRuntime::updateAllCellPointersParallel(MovingTracer *trc)
 {
     AutoDisableProxyCheck noProxyCheck(rt); // These checks assert when run in parallel.
 
     const size_t minTasks = 2;
     const size_t maxTasks = 8;
     unsigned taskCount = Min(Max(HelperThreadState().cpuCount / 2, minTasks),
-                             maxTasks);
+                             maxTasks) + 1;
     UpdateCellPointersTask updateTasks[maxTasks];
 
+    ArenasToUpdate fgArenas(rt, ArenasToUpdate::FOREGROUND);
+    ArenasToUpdate bgArenas(rt, ArenasToUpdate::BACKGROUND);
     AutoLockHelperThreadState lock;
     unsigned i;
-    for (i = 0; i < taskCount && !source.done(); ++i) {
-        updateTasks[i].init(rt, &source, lock);
+    for (i = 0; i < taskCount && !bgArenas.done(); ++i) {
+        ArenasToUpdate *source = i == 0 ? &fgArenas : &bgArenas;
+        updateTasks[i].init(rt, source, lock);
         startTask(updateTasks[i], gcstats::PHASE_COMPACT_UPDATE_CELLS);
     }
     unsigned tasksStarted = i;
@@ -2566,9 +2557,10 @@ GCRuntime::updateAllCellPointersParallel(ArenasToUpdate &source)
 }
 
 void
-GCRuntime::updateAllCellPointersSerial(MovingTracer *trc, ArenasToUpdate &source)
+GCRuntime::updateAllCellPointersSerial(MovingTracer *trc)
 {
-    while (ArenaHeader *arena = source.next())
+    ArenasToUpdate allArenas(rt, ArenasToUpdate::ALL);
+    while (ArenaHeader *arena = allArenas.next())
         UpdateCellPointers(trc, arena);
 }
 
@@ -2597,11 +2589,10 @@ GCRuntime::updatePointersToRelocatedCells()
     // Iterate through all cells that can contain JSObject pointers to update
     // them. Since updating each cell is independent we try to parallelize this
     // as much as possible.
-    ArenasToUpdate source(rt);
     if (CanUseExtraThreads())
-        updateAllCellPointersParallel(source);
+        updateAllCellPointersParallel(&trc);
     else
-        updateAllCellPointersSerial(&trc, source);
+        updateAllCellPointersSerial(&trc);
 
     // Mark roots to update them.
     {
@@ -2714,12 +2705,10 @@ GCRuntime::releaseRelocatedArenasWithoutUnlocking(ArenaHeader *relocatedList, co
     }
 }
 
-#endif // JSGC_COMPACTING
-
 void
 GCRuntime::releaseHeldRelocatedArenas()
 {
-#if defined(JSGC_COMPACTING) && defined(DEBUG)
+#ifdef DEBUG
     // In debug mode we don't release relocated arenas straight away.  Instead
     // we protect them and hold onto them until the next GC sweep phase to catch
     // any pointers to them that didn't get forwarded.
@@ -2736,16 +2725,6 @@ ReleaseArenaList(JSRuntime *rt, ArenaHeader *aheader, const AutoLockGC &lock)
     for (; aheader; aheader = next) {
         next = aheader->next;
         rt->gc.releaseArena(aheader, lock);
-    }
-}
-
-void
-DecommitArenaList(JSRuntime *rt, ArenaHeader *aheader, AutoLockGC &lock)
-{
-    ArenaHeader *next;
-    for (; aheader; aheader = next) {
-        next = aheader->next;
-        rt->gc.decommitArena(aheader, lock);
     }
 }
 
@@ -2793,7 +2772,7 @@ ArenaLists::forceFinalizeNow(FreeOp *fop, AllocKind thingKind, KeepArenasEnum ke
         return;
     arenaLists[thingKind].clear();
 
-    const size_t thingsPerArena = Arena::thingsPerArena(Arena::thingSize(thingKind));
+    size_t thingsPerArena = Arena::thingsPerArena(Arena::thingSize(thingKind));
     SortedArenaList finalizedSorted(thingsPerArena);
 
     SliceBudget budget;
@@ -2862,7 +2841,7 @@ ArenaLists::backgroundFinalize(FreeOp *fop, ArenaHeader *listHead, ArenaHeader *
     AllocKind thingKind = listHead->getAllocKind();
     Zone *zone = listHead->zone;
 
-    const size_t thingsPerArena = Arena::thingsPerArena(Arena::thingSize(thingKind));
+    size_t thingsPerArena = Arena::thingsPerArena(Arena::thingSize(thingKind));
     SortedArenaList finalizedSorted(thingsPerArena);
 
     SliceBudget budget;
@@ -3144,10 +3123,9 @@ js::MarkCompartmentActive(InterpreterFrame *fp)
 void
 GCRuntime::requestMajorGC(JS::gcreason::Reason reason)
 {
-    if (majorGCRequested)
+    if (majorGCRequested())
         return;
 
-    majorGCRequested = true;
     majorGCTriggerReason = reason;
     rt->requestInterrupt(JSRuntime::RequestInterruptUrgent);
 }
@@ -3156,10 +3134,9 @@ void
 GCRuntime::requestMinorGC(JS::gcreason::Reason reason)
 {
     MOZ_ASSERT(CurrentThreadCanAccessRuntime(rt));
-    if (minorGCRequested)
+    if (minorGCRequested())
         return;
 
-    minorGCRequested = true;
     minorGCTriggerReason = reason;
     rt->requestInterrupt(JSRuntime::RequestInterruptUrgent);
 }
@@ -3194,7 +3171,7 @@ GCRuntime::maybeAllocTriggerZoneGC(Zone *zone, const AutoLockGC &lock)
         // The threshold has been surpassed, immediately trigger a GC,
         // which will be done non-incrementally.
         triggerZoneGC(zone, JS::gcreason::ALLOC_TRIGGER);
-    } else if (usedBytes >= igcThresholdBytes && interFrameGC) {
+    } else if (usedBytes >= igcThresholdBytes) {
         // Reduce the delay to the start of the next incremental slice.
         if (zone->gcDelayBytes < ArenaSize)
             zone->gcDelayBytes = 0;
@@ -3402,7 +3379,7 @@ GCRuntime::sweepBackgroundThings(ZoneList &zones, LifoAlloc &freeBlocks, ThreadT
     }
 
     AutoLockGC lock(rt);
-    DecommitArenaList(rt, emptyArenas, lock);
+    ReleaseArenaList(rt, emptyArenas, lock);
     while (!zones.isEmpty())
         zones.removeFront();
 }
@@ -5491,9 +5468,6 @@ GCRuntime::endSweepPhase(bool lastGC)
 bool
 GCRuntime::compactPhase(bool lastGC)
 {
-#ifndef JSGC_COMPACTING
-    MOZ_CRASH();
-#else
     gcstats::AutoPhase ap(stats, gcstats::PHASE_COMPACT);
 
     if (isIncremental) {
@@ -5558,8 +5532,6 @@ GCRuntime::compactPhase(bool lastGC)
         }
     }
 #endif
-
-#endif // JSGC_COMPACTING
     return true;
 }
 
@@ -5719,7 +5691,6 @@ GCRuntime::resetIncrementalGC(const char *reason)
         break;
       }
 
-#ifdef JSGC_COMPACTING
       case COMPACT: {
         {
             gcstats::AutoPhase ap(stats, gcstats::PHASE_WAIT_BACKGROUND_THREAD);
@@ -5735,7 +5706,6 @@ GCRuntime::resetIncrementalGC(const char *reason)
         invocationKind = oldInvocationKind;
         break;
       }
-#endif
 
       default:
         MOZ_CRASH("Invalid incremental GC state");
@@ -6059,7 +6029,7 @@ GCRuntime::gcCycle(bool incremental, SliceBudget &budget, JS::gcreason::Reason r
 
     AutoTraceSession session(rt, MajorCollecting);
 
-    majorGCRequested = false;
+    majorGCTriggerReason = JS::gcreason::NO_REASON;
     interFrameGC = true;
 
     number++;
@@ -6423,7 +6393,7 @@ GCRuntime::onOutOfMallocMemory(const AutoLockGC &lock)
 {
     // Release any relocated arenas we may be holding on to, without releasing
     // the GC lock.
-#if defined(JSGC_COMPACTING) && defined(DEBUG)
+#ifdef DEBUG
     unprotectRelocatedArenas(relocatedArenasToRelease);
     releaseRelocatedArenasWithoutUnlocking(relocatedArenasToRelease, lock);
     relocatedArenasToRelease = nullptr;
@@ -6441,7 +6411,7 @@ GCRuntime::onOutOfMallocMemory(const AutoLockGC &lock)
 void
 GCRuntime::minorGCImpl(JS::gcreason::Reason reason, Nursery::TypeObjectList *pretenureTypes)
 {
-    minorGCRequested = false;
+    minorGCTriggerReason = JS::gcreason::NO_REASON;
     TraceLoggerThread *logger = TraceLoggerForMainThread(rt);
     AutoTraceLog logMinorGC(logger, TraceLogger_MinorGC);
     nursery.collect(rt, reason, pretenureTypes);
@@ -6490,14 +6460,14 @@ GCRuntime::gcIfNeeded(JSContext *cx /* = nullptr */)
 {
     // This method returns whether a major GC was performed.
 
-    if (minorGCRequested) {
+    if (minorGCRequested()) {
         if (cx)
             minorGC(cx, minorGCTriggerReason);
         else
             minorGC(minorGCTriggerReason);
     }
 
-    if (majorGCRequested) {
+    if (majorGCRequested()) {
         if (!isIncrementalGCInProgress())
             startGC(GC_NORMAL, majorGCTriggerReason);
         else
@@ -7144,19 +7114,13 @@ JS::IsIncrementalGCEnabled(JSRuntime *rt)
 JS_PUBLIC_API(void)
 JS::DisableCompactingGC(JSRuntime *rt)
 {
-#ifdef JSGC_COMPACTING
     rt->gc.disableCompactingGC();
-#endif
 }
 
 JS_PUBLIC_API(bool)
 JS::IsCompactingGCEnabled(JSRuntime *rt)
 {
-#ifdef JSGC_COMPACTING
     return rt->gc.isCompactingGCEnabled();
-#else
-    return false;
-#endif
 }
 
 JS_PUBLIC_API(bool)

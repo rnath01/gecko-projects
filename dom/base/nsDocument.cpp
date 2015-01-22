@@ -3617,7 +3617,7 @@ nsDocument::SetBaseURI(nsIURI* aURI)
   nsCOMPtr<nsIContentSecurityPolicy> csp;
   nsresult rv = NodePrincipal()->GetCsp(getter_AddRefs(csp));
   NS_ENSURE_SUCCESS(rv, rv);
-  if (csp) {
+  if (csp && aURI) {
     bool permitsBaseURI = false;
 
     // base-uri is only enforced if explicitly defined in the
@@ -5252,6 +5252,7 @@ nsIDocument::InsertAnonymousContent(Element& aElement, ErrorResult& aRv)
     return nullptr;
   }
 
+  nsAutoScriptBlocker scriptBlocker;
   nsCOMPtr<Element> container = shell->GetCanvasFrame()
                                      ->GetCustomContentContainer();
   if (!container) {
@@ -5276,6 +5277,8 @@ nsIDocument::InsertAnonymousContent(Element& aElement, ErrorResult& aRv)
     new AnonymousContent(clonedElement->AsElement());
   mAnonymousContents.AppendElement(anonymousContent);
 
+  shell->GetCanvasFrame()->ShowCustomContentContainer();
+
   return anonymousContent.forget();
 }
 
@@ -5289,6 +5292,7 @@ nsIDocument::RemoveAnonymousContent(AnonymousContent& aContent,
     return;
   }
 
+  nsAutoScriptBlocker scriptBlocker;
   nsCOMPtr<Element> container = shell->GetCanvasFrame()
                                      ->GetCustomContentContainer();
   if (!container) {
@@ -5313,6 +5317,9 @@ nsIDocument::RemoveAnonymousContent(AnonymousContent& aContent,
 
       break;
     }
+  }
+  if (mAnonymousContents.IsEmpty()) {
+    shell->GetCanvasFrame()->HideCustomContentContainer();
   }
 }
 

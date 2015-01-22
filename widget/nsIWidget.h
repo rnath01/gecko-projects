@@ -225,7 +225,7 @@ struct nsIMEUpdatePreference {
 
   typedef uint8_t Notifications;
 
-  enum MOZ_ENUM_TYPE(Notifications)
+  enum : Notifications
   {
     NOTIFY_NOTHING                       = 0,
     NOTIFY_SELECTION_CHANGE              = 1 << 0,
@@ -434,6 +434,7 @@ struct InputContext {
      be nullptr. */
   void* mNativeIMEContext;
 
+
   /**
    * mOrigin indicates whether this focus event refers to main or remote content.
    */
@@ -454,7 +455,7 @@ struct InputContext {
   bool IsOriginContentProcess() const
   {
     return mOrigin == ORIGIN_CONTENT;
-}
+  }
 
   bool IsOriginCurrentProcess() const
   {
@@ -549,7 +550,7 @@ struct SizeConstraints {
 // Update values in GeckoEditable.java if you make changes here.
 // XXX Negative values are used in Android...
 typedef int8_t IMEMessageType;
-enum IMEMessage MOZ_ENUM_TYPE(IMEMessageType)
+enum IMEMessage : IMEMessageType
 {
   // An editable content is getting focus
   NOTIFY_IME_OF_FOCUS = 1,

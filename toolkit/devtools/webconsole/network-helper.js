@@ -207,11 +207,13 @@ let NetworkHelper = {
   },
 
   /**
-   * Gets the topFrameElement that is associated with aRequest.
+   * Gets the topFrameElement that is associated with aRequest. This
+   * works in single-process and multiprocess contexts. It may cross
+   * the content/chrome boundary.
    *
    * @param nsIHttpChannel aRequest
    * @returns nsIDOMElement|null
-   *          The top frame element for the given request, if available.
+   *          The top frame element for the given request.
    */
   getTopFrameForRequest: function NH_getTopFrameForRequest(aRequest)
   {
@@ -489,9 +491,9 @@ let NetworkHelper = {
    * @param object securityInfo
    *        The securityInfo object of a request. If null channel is assumed
    *        to be insecure.
-   * @param nsIRequest request
-   *        The nsIRequest object for the request used to dig more information
-   *        about this request.
+   * @param object httpActivity
+   *        The httpActivity object for the request with at least members
+   *        { private, hostname }.
    *
    * @return object
    *         Returns an object containing following members:
@@ -510,7 +512,7 @@ let NetworkHelper = {
    *            - hsts: true if host uses Strict Transport Security, false otherwise
    *            - hpkp: true if host uses Public Key Pinning, false otherwise
    */
-  parseSecurityInfo: function NH_parseSecurityInfo(securityInfo, request) {
+  parseSecurityInfo: function NH_parseSecurityInfo(securityInfo, httpActivity) {
     const info = {
       state: "insecure",
     };
@@ -574,25 +576,24 @@ let NetworkHelper = {
       info.cert = this.parseCertificateInfo(SSLStatus.serverCert);
 
       // HSTS and HPKP if available.
-      if (request.URI) {
+      if (httpActivity.hostname) {
         const sss = Cc["@mozilla.org/ssservice;1"]
                       .getService(Ci.nsISiteSecurityService);
 
-        request.QueryInterface(Ci.nsIPrivateBrowsingChannel);
 
         // SiteSecurityService uses different storage if the channel is
         // private. Thus we must give isSecureHost correct flags or we
         // might get incorrect results.
-        let flags = (request.isChannelPrivate) ?
+        let flags = (httpActivity.private) ?
                       Ci.nsISocketProvider.NO_PERMANENT_STORAGE : 0;
 
-        let host = request.URI.host;
+        let host = httpActivity.hostname;
 
         info.hsts = sss.isSecureHost(sss.HEADER_HSTS, host, flags);
         info.hpkp = sss.isSecureHost(sss.HEADER_HPKP, host, flags);
       } else {
         DevToolsUtils.reportException("NetworkHelper.parseSecurityInfo",
-          "Could not get HSTS/HPKP status as request.URI not available.");
+          "Could not get HSTS/HPKP status as hostname is not available.");
         info.hsts = false;
         info.hpkp = false;
       }

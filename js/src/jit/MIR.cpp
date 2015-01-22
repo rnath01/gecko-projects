@@ -1142,6 +1142,18 @@ MStringLength::foldsTo(TempAllocator &alloc)
     return this;
 }
 
+MDefinition *
+MConcat::foldsTo(TempAllocator &alloc)
+{
+    if (lhs()->isConstantValue() && lhs()->constantValue().toString()->empty())
+        return rhs();
+
+    if (rhs()->isConstantValue() && rhs()->constantValue().toString()->empty())
+        return lhs();
+
+    return this;
+}
+
 static bool
 EnsureFloatInputOrConvert(MUnaryInstruction *owner, TempAllocator &alloc)
 {
@@ -2226,14 +2238,6 @@ MBinaryArithInstruction::infer(TempAllocator &alloc, BaselineInspector *inspecto
     MOZ_ASSERT(this->type() == MIRType_Value);
 
     specialization_ = MIRType_None;
-
-    // Don't specialize if one operand could be an object or symbol. If we
-    // specialize as int32 or double based on baseline feedback, we could DCE
-    // this instruction and fail to invoke any valueOf methods.
-    if (getOperand(0)->mightBeType(MIRType_Object) || getOperand(1)->mightBeType(MIRType_Object))
-        return;
-    if (getOperand(0)->mightBeType(MIRType_Symbol) || getOperand(1)->mightBeType(MIRType_Symbol))
-        return;
 
     // Anything complex - strings, symbols, and objects - are not specialized
     // unless baseline type hints suggest it might be profitable

@@ -722,9 +722,14 @@ CodeGenerator::visitFunctionDispatch(LFunctionDispatch *lir)
     // Compare function pointers, except for the last case.
     for (size_t i = 0; i < casesWithFallback - 1; i++) {
         MOZ_ASSERT(i < mir->numCases());
-        JSFunction *func = mir->getCase(i);
         LBlock *target = skipTrivialBlocks(mir->getCaseBlock(i))->lir();
-        masm.branchPtr(Assembler::Equal, input, ImmGCPtr(func), target->label());
+        if (types::TypeObject *funcType = mir->getCaseTypeObject(i)) {
+            masm.branchPtr(Assembler::Equal, Address(input, JSObject::offsetOfType()),
+                           ImmGCPtr(funcType), target->label());
+        } else {
+            JSFunction *func = mir->getCase(i);
+            masm.branchPtr(Assembler::Equal, input, ImmGCPtr(func), target->label());
+        }
     }
 
     // Jump to the last case.
@@ -7203,19 +7208,6 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
 
         // Mark the jitcode as having a bytecode map.
         code->setHasBytecodeMap();
-    }
-
-    if (cx->runtime()->spsProfiler.enabled()) {
-        const char *filename = script->filename();
-        if (filename == nullptr)
-            filename = "<unknown>";
-        unsigned len = strlen(filename) + 50;
-        char *buf = js_pod_malloc<char>(len);
-        if (!buf)
-            return false;
-        JS_snprintf(buf, len, "Ion compiled %s:%d", filename, (int) script->lineno());
-        cx->runtime()->spsProfiler.markEvent(buf);
-        js_free(buf);
     }
 
     ionScript->setMethod(code);

@@ -30,7 +30,8 @@
 #include "mozilla/StaticPtr.h"
 #include "cutils/properties.h"
 #include "gfx2DGlue.h"
-#include "nsWindow.h"
+#include "gfxPlatform.h"
+#include "VsyncSource.h"
 
 #if ANDROID_VERSION >= 17
 #include "libdisplay/FramebufferSurface.h"
@@ -195,8 +196,7 @@ HwcComposer2D::EnableVsync(bool aEnable)
       return false;
     }
 
-    device->eventControl(device, HWC_DISPLAY_PRIMARY, HWC_EVENT_VSYNC, aEnable);
-    return aEnable;
+    return !device->eventControl(device, HWC_DISPLAY_PRIMARY, HWC_EVENT_VSYNC, aEnable) && aEnable;
 #else
     return false;
 #endif
@@ -228,7 +228,8 @@ HwcComposer2D::Vsync(int aDisplay, nsecs_t aVsyncTimestamp)
       LOGE("Non-uniform vsync interval: %lld\n", vsyncInterval);
     }
     mLastVsyncTime = aVsyncTimestamp;
-    nsWindow::NotifyVsync(vsyncTime);
+
+    gfxPlatform::GetPlatform()->GetHardwareVsync()->GetGlobalDisplay().NotifyVsync(vsyncTime);
 }
 
 // Called on the "invalidator" thread (run from HAL).
