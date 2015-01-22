@@ -27,8 +27,10 @@
 #include "xpcprivate.h"
 #include "XPCWrapper.h"
 #include "XrayWrapper.h"
+#include "Crypto.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/BlobBinding.h"
+#include "mozilla/dom/CryptoBinding.h"
 #include "mozilla/dom/CSSBinding.h"
 #include "mozilla/dom/indexedDB/IndexedDatabaseManager.h"
 #include "mozilla/dom/FileBinding.h"
@@ -206,7 +208,7 @@ SandboxCreateXMLHttpRequest(JSContext *cx, unsigned argc, jsval *vp)
 
     nsCOMPtr<nsIXMLHttpRequest> xhr = new nsXMLHttpRequest();
     nsresult rv = xhr->Init(nsContentUtils::SubjectPrincipal(), nullptr,
-                            iglobal, nullptr);
+                            iglobal, nullptr, nullptr);
     if (NS_FAILED(rv))
         return false;
 
@@ -215,6 +217,20 @@ SandboxCreateXMLHttpRequest(JSContext *cx, unsigned argc, jsval *vp)
         return false;
 
     return true;
+}
+
+static bool
+SandboxCreateCrypto(JSContext *cx, JS::HandleObject obj)
+{
+    MOZ_ASSERT(JS_IsGlobalObject(obj));
+
+    nsIGlobalObject* native = xpc::NativeGlobal(obj);
+    MOZ_ASSERT(native);
+
+    dom::Crypto* crypto = new dom::Crypto();
+    crypto->Init(native);
+    JS::RootedObject wrapped(cx, dom::CryptoBinding::Wrap(cx, crypto));
+    return JS_DefineProperty(cx, obj, "crypto", wrapped, JSPROP_ENUMERATE);
 }
 
 static bool
@@ -343,7 +359,7 @@ sandbox_convert(JSContext *cx, HandleObject obj, JSType type, MutableHandleValue
         return true;
     }
 
-    return JS::OrdinaryToPrimitive(cx, obj, type, vp);
+    return OrdinaryToPrimitive(cx, obj, type, vp);
 }
 
 static bool
@@ -783,6 +799,8 @@ xpc::GlobalProperties::Parse(JSContext *cx, JS::HandleObject obj)
             Blob = true;
         } else if (!strcmp(name.ptr(), "File")) {
             File = true;
+        } else if (!strcmp(name.ptr(), "crypto")) {
+            crypto = true;
         } else {
             JS_ReportError(cx, "Unknown property name: %s", name.ptr());
             return false;
@@ -835,6 +853,9 @@ xpc::GlobalProperties::Define(JSContext *cx, JS::HandleObject obj)
 
     if (File &&
         !dom::FileBinding::GetConstructorObject(cx, obj))
+        return false;
+
+    if (crypto && !SandboxCreateCrypto(cx, obj))
         return false;
 
     return true;
@@ -1415,6 +1436,10 @@ nsXPCComponents_utils_Sandbox::CallOrConstruct(nsIXPConnectWrappedNative *wrappe
         } else {
             ok = GetPrincipalOrSOP(cx, obj, getter_AddRefs(prinOrSop));
         }
+    } else if (args[0].isNull()) {
+        // Null means that we just pass prinOrSop = nullptr, and get an
+        // nsNullPrincipal.
+        ok = true;
     }
 
     if (!ok)

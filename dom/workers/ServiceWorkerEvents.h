@@ -38,7 +38,7 @@ public:
 
   virtual JSObject* WrapObjectInternal(JSContext* aCx) MOZ_OVERRIDE
   {
-    return mozilla::dom::InstallPhaseEventBinding_workers::Wrap(aCx, this);
+    return mozilla::dom::InstallPhaseEventBinding::Wrap(aCx, this);
   }
 
   static already_AddRefed<InstallPhaseEvent>
@@ -78,6 +78,7 @@ class InstallEvent MOZ_FINAL : public InstallPhaseEvent
 {
   // FIXME(nsm): Bug 982787 will allow actually populating this.
   nsRefPtr<ServiceWorker> mActiveWorker;
+  bool mActivateImmediately;
 
 protected:
   explicit InstallEvent(mozilla::dom::EventTarget* aOwner);
@@ -90,7 +91,7 @@ public:
 
   virtual JSObject* WrapObjectInternal(JSContext* aCx) MOZ_OVERRIDE
   {
-    return mozilla::dom::InstallEventBinding_workers::Wrap(aCx, this);
+    return mozilla::dom::InstallEventBinding::Wrap(aCx, this);
   }
 
   static already_AddRefed<InstallEvent>
@@ -126,9 +127,14 @@ public:
   void
   Replace()
   {
-    // FIXME(nsm): Unspecced. Bug 982711
-    NS_WARNING("Not Implemented");
+    mActivateImmediately = true;
   };
+
+  bool
+  ActivateImmediately() const
+  {
+    return mActivateImmediately;
+  }
 };
 
 END_WORKERS_NAMESPACE

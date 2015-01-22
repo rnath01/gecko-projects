@@ -83,6 +83,7 @@ extern PRThread *gSocketThread;
 #define INTL_ACCEPT_LANGUAGES   "intl.accept_languages"
 #define BROWSER_PREF_PREFIX     "browser.cache."
 #define DONOTTRACK_HEADER_ENABLED "privacy.donottrackheader.enabled"
+#define H2MANDATORY_SUITE        "security.ssl3.ecdhe_rsa_aes_128_gcm_sha256"
 #define TELEMETRY_ENABLED        "toolkit.telemetry.enabled"
 #define ALLOW_EXPERIMENTS        "network.allow-experiments"
 #define SAFE_HINT_HEADER_VALUE   "safeHint.enabled"
@@ -146,6 +147,7 @@ nsHttpHandler::nsHttpHandler()
     , mMaxRequestAttempts(10)
     , mMaxRequestDelay(10)
     , mIdleSynTimeout(250)
+    , mH2MandatorySuiteEnabled(false)
     , mPipeliningEnabled(false)
     , mMaxConnections(24)
     , mMaxPersistentConnectionsPerServer(2)
@@ -182,6 +184,7 @@ nsHttpHandler::nsHttpHandler()
     , mSpdyV31(true)
     , mHttp2DraftEnabled(true)
     , mHttp2Enabled(true)
+    , mUseH2Deps(true)
     , mEnforceHttp2TlsProfile(true)
     , mCoalesceSpdy(true)
     , mSpdyPersistentSettings(false)
@@ -272,6 +275,7 @@ nsHttpHandler::Init()
         prefBranch->AddObserver(BROWSER_PREF("disk_cache_ssl"), this, true);
         prefBranch->AddObserver(DONOTTRACK_HEADER_ENABLED, this, true);
         prefBranch->AddObserver(TELEMETRY_ENABLED, this, true);
+        prefBranch->AddObserver(H2MANDATORY_SUITE, this, true);
         prefBranch->AddObserver(HTTP_PREF("tcp_keepalive.short_lived_connections"), this, true);
         prefBranch->AddObserver(HTTP_PREF("tcp_keepalive.long_lived_connections"), this, true);
         prefBranch->AddObserver(SAFE_HINT_HEADER_VALUE, this, true);
@@ -1194,6 +1198,12 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
             mHttp2Enabled = cVar;
     }
 
+    if (PREF_CHANGED(HTTP_PREF("spdy.enabled.deps"))) {
+        rv = prefs->GetBoolPref(HTTP_PREF("spdy.enabled.deps"), &cVar);
+        if (NS_SUCCEEDED(rv))
+            mUseH2Deps = cVar;
+    }
+
     if (PREF_CHANGED(HTTP_PREF("spdy.enforce-tls-profile"))) {
         rv = prefs->GetBoolPref(HTTP_PREF("spdy.enforce-tls-profile"), &cVar);
         if (NS_SUCCEEDED(rv))
@@ -1368,6 +1378,17 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
         rv = prefs->GetBoolPref(TELEMETRY_ENABLED, &cVar);
         if (NS_SUCCEEDED(rv)) {
             mTelemetryEnabled = cVar;
+        }
+    }
+
+    // "security.ssl3.ecdhe_rsa_aes_128_gcm_sha256" is the required h2 interop
+    // suite.
+
+    if (PREF_CHANGED(H2MANDATORY_SUITE)) {
+        cVar = false;
+        rv = prefs->GetBoolPref(H2MANDATORY_SUITE, &cVar);
+        if (NS_SUCCEEDED(rv)) {
+            mH2MandatorySuiteEnabled = cVar;
         }
     }
 

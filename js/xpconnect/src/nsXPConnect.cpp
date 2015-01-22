@@ -345,7 +345,15 @@ xpc::TraceXPCGlobal(JSTracer *trc, JSObject *obj)
         compartmentPrivate->scope->TraceInside(trc);
 }
 
+
 namespace xpc {
+
+uint64_t
+GetCompartmentCPOWMicroseconds(JSCompartment *compartment)
+{
+    xpc::CompartmentPrivate *compartmentPrivate = xpc::CompartmentPrivate::Get(compartment);
+    return compartmentPrivate ? PR_IntervalToMicroseconds(compartmentPrivate->CPOWTime) : 0;
+}
 
 JSObject*
 CreateGlobalObject(JSContext *cx, const JSClass *clasp, nsIPrincipal *principal,
@@ -1032,6 +1040,9 @@ nsXPConnect::OnProcessNextEvent(nsIThreadInternal *aThread, bool aMayWait,
 
     // Record this event.
     mEventDepth++;
+
+    // Start the slow script timer.
+    mRuntime->OnProcessNextEvent();
 
     // Push a null JSContext so that we don't see any script during
     // event processing.

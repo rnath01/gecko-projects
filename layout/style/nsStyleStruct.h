@@ -56,8 +56,8 @@ class imgIContainer;
 // See nsStyleContext::AssertStructsNotUsedElsewhere
 // (This bit is currently only used in #ifdef DEBUG code.)
 #define NS_STYLE_IS_GOING_AWAY             0x040000000
-// See nsStyleContext::IsDirectlyInsideRuby
-#define NS_STYLE_IS_DIRECTLY_INSIDE_RUBY   0x080000000
+// See nsStyleContext::IsInlineDescendantOfRuby
+#define NS_STYLE_IS_INLINE_DESCENDANT_OF_RUBY 0x080000000
 // See nsStyleContext::GetPseudoEnum
 #define NS_STYLE_CONTEXT_TYPE_SHIFT        32
 
@@ -142,8 +142,8 @@ struct nsStyleGradientStop {
   bool mIsInterpolationHint;
 
   // Use ==/!= on nsStyleGradient instead of on the gradient stop.
-  bool operator==(const nsStyleGradientStop&) const MOZ_DELETE;
-  bool operator!=(const nsStyleGradientStop&) const MOZ_DELETE;
+  bool operator==(const nsStyleGradientStop&) const = delete;
+  bool operator!=(const nsStyleGradientStop&) const = delete;
 };
 
 class nsStyleGradient MOZ_FINAL {
@@ -180,8 +180,8 @@ private:
   // Private destructor, to discourage deletion outside of Release():
   ~nsStyleGradient() {}
 
-  nsStyleGradient(const nsStyleGradient& aOther) MOZ_DELETE;
-  nsStyleGradient& operator=(const nsStyleGradient& aOther) MOZ_DELETE;
+  nsStyleGradient(const nsStyleGradient& aOther) = delete;
+  nsStyleGradient& operator=(const nsStyleGradient& aOther) = delete;
 };
 
 enum nsStyleImageType {
@@ -1041,7 +1041,7 @@ protected:
 private:
   nscoord       mTwipsPerPixel;
 
-  nsStyleBorder& operator=(const nsStyleBorder& aOther) MOZ_DELETE;
+  nsStyleBorder& operator=(const nsStyleBorder& aOther) = delete;
 };
 
 
@@ -1203,7 +1203,7 @@ private:
   nsString  mListStyleType;             // [inherited]
   nsRefPtr<mozilla::CounterStyle> mCounterStyle; // [inherited]
   nsRefPtr<imgRequestProxy> mListStyleImage; // [inherited]
-  nsStyleList& operator=(const nsStyleList& aOther) MOZ_DELETE;
+  nsStyleList& operator=(const nsStyleList& aOther) = delete;
 public:
   nsRect        mImageRegion;           // [inherited] the rect to use within an image
 };
@@ -1596,6 +1596,7 @@ struct nsStyleText {
   uint8_t mWordBreak;                   // [inherited] see nsStyleConsts.h
   uint8_t mWordWrap;                    // [inherited] see nsStyleConsts.h
   uint8_t mHyphens;                     // [inherited] see nsStyleConsts.h
+  uint8_t mRubyPosition;                // [inherited] see nsStyleConsts.h
   uint8_t mTextSizeAdjust;              // [inherited] see nsStyleConsts.h
   uint8_t mTextCombineUpright;          // [inherited] see nsStyleConsts.h
   uint8_t mControlCharacterVisibility;  // [inherited] see nsStyleConsts.h
@@ -2075,8 +2076,9 @@ struct nsStyleDisplay {
   bool IsBlockInsideStyle() const {
     return NS_STYLE_DISPLAY_BLOCK == mDisplay ||
            NS_STYLE_DISPLAY_LIST_ITEM == mDisplay ||
-           NS_STYLE_DISPLAY_INLINE_BLOCK == mDisplay;
-    // Should TABLE_CELL and TABLE_CAPTION go here?  They have
+           NS_STYLE_DISPLAY_INLINE_BLOCK == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_CAPTION == mDisplay;
+    // Should TABLE_CELL be included here?  They have
     // block frames nested inside of them.
     // (But please audit all callers before changing.)
   }
@@ -2889,11 +2891,11 @@ public:
     return false;
   }
   nsStyleCorners& GetRadius() {
-    NS_ASSERTION(mType == eInset, "expected circle or ellipse");
+    NS_ASSERTION(mType == eInset, "expected inset");
     return mRadius;
   }
   const nsStyleCorners& GetRadius() const {
-    NS_ASSERTION(mType == eInset, "expected circle or ellipse");
+    NS_ASSERTION(mType == eInset, "expected inset");
     return mRadius;
   }
 
@@ -2972,7 +2974,7 @@ struct nsStyleClipPath
 
 private:
   void ReleaseRef();
-  void* operator new(size_t) MOZ_DELETE;
+  void* operator new(size_t) = delete;
 
   int32_t mType; // see NS_STYLE_CLIP_PATH_* constants in nsStyleConsts.h
   union {

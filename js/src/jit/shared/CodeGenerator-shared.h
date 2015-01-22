@@ -17,7 +17,6 @@
 #include "jit/Safepoints.h"
 #include "jit/Snapshots.h"
 #include "jit/VMFunctions.h"
-#include "vm/ForkJoin.h"
 
 namespace js {
 namespace jit {
@@ -114,13 +113,8 @@ class CodeGeneratorShared : public LElementVisitor
     JSScript **nativeToBytecodeScriptList_;
     uint32_t nativeToBytecodeScriptListLength_;
 
-    // When profiling is enabled, this is the instrumentation manager which
-    // maintains state of what script is currently being generated (for inline
-    // scripts) and when instrumentation needs to be emitted or skipped.
-    IonInstrumentation sps_;
-
-    bool isNativeToBytecodeMapEnabled() {
-        return gen->isNativeToBytecodeMapEnabled();
+    bool isProfilerInstrumentationEnabled() {
+        return gen->isProfilerInstrumentationEnabled();
     }
 
   protected:
@@ -459,17 +453,6 @@ class CodeGeneratorShared : public LElementVisitor
     inline OutOfLineCode *oolCallVM(const VMFunction &fun, LInstruction *ins, const ArgSeq &args,
                                     const StoreOutputTo &out);
 
-    void callVM(const VMFunctionsModal &f, LInstruction *ins, const Register *dynStack = nullptr) {
-        callVM(f[gen->info().executionMode()], ins, dynStack);
-    }
-
-    template <class ArgSeq, class StoreOutputTo>
-    inline OutOfLineCode *oolCallVM(const VMFunctionsModal &f, LInstruction *ins,
-                                    const ArgSeq &args, const StoreOutputTo &out)
-    {
-        return oolCallVM(f[gen->info().executionMode()], ins, args, out);
-    }
-
     void addCache(LInstruction *lir, size_t cacheIndex);
     size_t addCacheLocations(const CacheLocationList &locs, size_t *numLocs);
     ReciprocalMulConstants computeDivisionConstants(int d);
@@ -526,6 +509,18 @@ class CodeGeneratorShared : public LElementVisitor
         emitTracelogTree(/* isStart =*/ false, textId);
     }
 #endif
+    void emitTracelogIonStart() {
+#ifdef JS_TRACE_LOGGING
+        emitTracelogScriptStart();
+        emitTracelogStartEvent(TraceLogger_IonMonkey);
+#endif
+    }
+    void emitTracelogIonStop() {
+#ifdef JS_TRACE_LOGGING
+        emitTracelogStopEvent(TraceLogger_IonMonkey);
+        emitTracelogScriptStop();
+#endif
+    }
 };
 
 // An out-of-line path is generated at the end of the function.

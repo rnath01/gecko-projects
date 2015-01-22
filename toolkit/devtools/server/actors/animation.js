@@ -24,10 +24,15 @@
  *   /dom/webidl/Animation*.webidl
  */
 
-const {ActorClass, Actor,
-       FrontClass, Front,
-       Arg, method, RetVal} = require("devtools/server/protocol");
+const {Cu} = require("chrome");
+const {Task} = Cu.import("resource://gre/modules/Task.jsm", {});
+const {setInterval, clearInterval} = require("sdk/timers");
+const protocol = require("devtools/server/protocol");
+const {ActorClass, Actor, FrontClass, Front, Arg, method, RetVal} = protocol;
 const {NodeActor} = require("devtools/server/actors/inspector");
+const EventEmitter = require("devtools/toolkit/event-emitter");
+
+const PLAYER_DEFAULT_AUTO_REFRESH_TIMEOUT = 500; // ms
 
 /**
  * The AnimationPlayerActor provides information about a given animation: its
@@ -51,11 +56,12 @@ let AnimationPlayerActor = ActorClass({
    * applied to the same node.
    */
   initialize: function(animationsActor, player, node, playerIndex) {
+    Actor.prototype.initialize.call(this, animationsActor.conn);
+
     this.player = player;
     this.node = node;
     this.playerIndex = playerIndex;
     this.styles = node.ownerDocument.defaultView.getComputedStyle(node);
-    Actor.prototype.initialize.call(this, animationsActor.conn);
   },
 
   destroy: function() {
@@ -105,6 +111,30 @@ let AnimationPlayerActor = ActorClass({
   },
 
   /**
+   * Get the animation delay from this player, in milliseconds.
+   * Note that the Web Animations API doesn't yet offer a way to retrieve this
+   * directly from the AnimationPlayer object, so for now, a delay is only
+   * returned if found in the node's computed styles.
+   * @return {Number}
+   */
+  getDelay: function() {
+    let delayText;
+    if (this.styles.animationDelay !== "0s") {
+      delayText = this.styles.animationDelay;
+    } else if (this.styles.transitionDelay !== "0s") {
+      delayText = this.styles.transitionDelay;
+    } else {
+      return 0;
+    }
+
+    if (delayText.indexOf(",") !== -1) {
+      delayText = delayText.split(",")[this.playerIndex];
+    }
+
+    return parseFloat(delayText) * 1000;
+  },
+
+  /**
    * Get the animation iteration count for this player. That is, how many times
    * is the animation scheduled to run.
    * Note that the Web Animations API doesn't yet offer a way to retrieve this
@@ -139,6 +169,7 @@ let AnimationPlayerActor = ActorClass({
       playState: this.player.playState,
       name: this.player.source.effect.name,
       duration: this.getDuration(),
+      delay: this.getDelay(),
       iterationCount: this.getIterationCount(),
       /**
        * Is the animation currently running on the compositor. This is important for
@@ -169,9 +200,29 @@ let AnimationPlayerActor = ActorClass({
 
   /**
    * Play the player.
+   * This method only returns when the animation has left its pending state.
    */
   play: method(function() {
     this.player.play();
+    return this.player.ready;
+  }, {
+    request: {},
+    response: {}
+  }),
+
+  /**
+   * Simply exposes the player ready promise.
+   *
+   * When an animation is created/paused then played, there's a short time
+   * during which its playState is pending, before being set to running.
+   *
+   * If you either created a new animation using the Web Animations API or
+   * paused/played an existing one, and then want to access the playState, you
+   * might be interested to call this method.
+   * This is especially important for tests.
+   */
+  ready: method(function() {
+    return this.player.ready;
   }, {
     request: {},
     response: {}
@@ -179,8 +230,13 @@ let AnimationPlayerActor = ActorClass({
 });
 
 let AnimationPlayerFront = FrontClass(AnimationPlayerActor, {
+  AUTO_REFRESH_EVENT: "updated-state",
+
   initialize: function(conn, form, detail, ctx) {
+    EventEmitter.decorate(this);
     Front.prototype.initialize.call(this, conn, form, detail, ctx);
+
+    this.state = {};
   },
 
   form: function(form, detail) {
@@ -189,9 +245,11 @@ let AnimationPlayerFront = FrontClass(AnimationPlayerActor, {
       return;
     }
     this._form = form;
+    this.state = this.initialState;
   },
 
   destroy: function() {
+    this.stopAutoRefresh();
     Front.prototype.destroy.call(this);
   },
 
@@ -206,10 +264,79 @@ let AnimationPlayerFront = FrontClass(AnimationPlayerActor, {
       playState: this._form.playState,
       name: this._form.name,
       duration: this._form.duration,
+      delay: this._form.delay,
       iterationCount: this._form.iterationCount,
       isRunningOnCompositor: this._form.isRunningOnCompositor
     }
-  }
+  },
+
+  // About auto-refresh:
+  //
+  // The AnimationPlayerFront is capable of automatically refreshing its state
+  // by calling the getCurrentState method at regular intervals. This allows
+  // consumers to update their knowledge of the player's currentTime, playState,
+  // ... dynamically.
+  //
+  // Calling startAutoRefresh will start the automatic refreshing of the state,
+  // and calling stopAutoRefresh will stop it.
+  // Once the automatic refresh has been started, the AnimationPlayerFront emits
+  // "updated-state" events everytime the state changes.
+  //
+  // Note that given the time-related nature of animations, the actual state
+  // changes a lot more often than "updated-state" events are emitted. This is
+  // to avoid making many protocol requests.
+
+  /**
+   * Start auto-refreshing this player's state.
+   * @param {Number} interval Optional auto-refresh timer interval to override
+   * the default value.
+   */
+  startAutoRefresh: function(interval=PLAYER_DEFAULT_AUTO_REFRESH_TIMEOUT) {
+    if (this.autoRefreshTimer) {
+      return;
+    }
+
+    this.autoRefreshTimer = setInterval(this.refreshState.bind(this), interval);
+  },
+
+  /**
+   * Stop auto-refreshing this player's state.
+   */
+  stopAutoRefresh: function() {
+    if (!this.autoRefreshTimer) {
+      return;
+    }
+
+    clearInterval(this.autoRefreshTimer);
+    this.autoRefreshTimer = null;
+  },
+
+  /**
+   * Called automatically when auto-refresh is on. Doesn't return anything, but
+   * emits the "updated-state" event.
+   */
+  refreshState: Task.async(function*() {
+    let data = yield this.getCurrentState();
+
+    // By the time the new state is received, auto-refresh might be stopped.
+    if (!this.autoRefreshTimer) {
+      return;
+    }
+
+    // Check if something has changed
+    let hasChanged = false;
+    for (let key in data) {
+      if (this.state[key] !== data[key]) {
+        hasChanged = true;
+        break;
+      }
+    }
+
+    if (hasChanged) {
+      this.state = data;
+      this.emit(this.AUTO_REFRESH_EVENT, this.state);
+    }
+  })
 });
 
 /**

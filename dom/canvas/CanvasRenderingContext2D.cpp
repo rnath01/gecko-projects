@@ -164,7 +164,7 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                            nsISupports* aData, bool aAnonymize)
+                            nsISupports* aData, bool aAnonymize) MOZ_OVERRIDE
   {
     return MOZ_COLLECT_REPORT(
       "canvas-2d-pixels", KIND_OTHER, UNITS_BYTES,
@@ -578,7 +578,7 @@ public:
     return mTarget;
   }
 
-  DrawTarget* operator->()
+  DrawTarget* operator->() MOZ_NO_ADDREF_RELEASE_ON_RETURN
   {
     return mTarget;
   }
@@ -2310,10 +2310,12 @@ class CanvasUserSpaceMetrics : public UserSpaceMetricsWithSize
 {
 public:
   CanvasUserSpaceMetrics(const gfx::IntSize& aSize, const nsFont& aFont,
-                         nsIAtom* aFontLanguage, nsPresContext* aPresContext)
+                         nsIAtom* aFontLanguage, bool aExplicitLanguage,
+                         nsPresContext* aPresContext)
     : mSize(aSize)
     , mFont(aFont)
     , mFontLanguage(aFontLanguage)
+    , mExplicitLanguage(aExplicitLanguage)
     , mPresContext(aPresContext)
   {
   }
@@ -2329,8 +2331,8 @@ public:
     gfxTextPerfMetrics* tp = mPresContext->GetTextPerfMetrics();
     nsRefPtr<nsFontMetrics> fontMetrics;
     nsDeviceContext* dc = mPresContext->DeviceContext();
-    dc->GetMetricsFor(mFont, mFontLanguage, gfxFont::eHorizontal,
-                      nullptr, tp,
+    dc->GetMetricsFor(mFont, mFontLanguage, mExplicitLanguage,
+                      gfxFont::eHorizontal, nullptr, tp,
                       *getter_AddRefs(fontMetrics));
     return NSAppUnitsToFloatPixels(fontMetrics->XHeight(),
                                    nsPresContext::AppUnitsPerCSSPixel());
@@ -2343,6 +2345,7 @@ private:
   gfx::IntSize mSize;
   const nsFont& mFont;
   nsIAtom* mFontLanguage;
+  bool mExplicitLanguage;
   nsPresContext* mPresContext;
 };
 
@@ -2360,6 +2363,7 @@ CanvasRenderingContext2D::UpdateFilter()
       CanvasUserSpaceMetrics(IntSize(mWidth, mHeight),
                              CurrentState().fontFont,
                              CurrentState().fontLanguage,
+                             CurrentState().fontExplicitLanguage,
                              presShell->GetPresContext()),
       gfxRect(0, 0, mWidth, mHeight),
       CurrentState().filterAdditionalImages);
@@ -2991,16 +2995,7 @@ CanvasRenderingContext2D::SetFont(const nsAString& font,
 
   const nsStyleFont* fontStyle = sc->StyleFont();
 
-  nsIAtom* language = sc->StyleFont()->mLanguage;
-  if (!language) {
-    language = presShell->GetPresContext()->GetLanguageFromCharset();
-  }
-
-  // use CSS pixels instead of dev pixels to avoid being affected by page zoom
-  const uint32_t aupcp = nsPresContext::AppUnitsPerCSSPixel();
-
-  bool printerFont = (presShell->GetPresContext()->Type() == nsPresContext::eContext_PrintPreview ||
-                      presShell->GetPresContext()->Type() == nsPresContext::eContext_Print);
+  nsPresContext *c = presShell->GetPresContext();
 
   // Purposely ignore the font size that respects the user's minimum
   // font preference (fontStyle->mFont.size) in favor of the computed
@@ -3008,31 +3003,33 @@ CanvasRenderingContext2D::SetFont(const nsAString& font,
   // https://bugzilla.mozilla.org/show_bug.cgi?id=698652.
   MOZ_ASSERT(!fontStyle->mAllowZoom,
              "expected text zoom to be disabled on this nsStyleFont");
-  gfxFontStyle style(fontStyle->mFont.style,
-                     fontStyle->mFont.weight,
-                     fontStyle->mFont.stretch,
-                     NSAppUnitsToFloatPixels(fontStyle->mSize, float(aupcp)),
-                     language,
-                     fontStyle->mFont.sizeAdjust,
-                     fontStyle->mFont.systemFont,
-                     printerFont,
-                     fontStyle->mFont.synthesis & NS_FONT_SYNTHESIS_WEIGHT,
-                     fontStyle->mFont.synthesis & NS_FONT_SYNTHESIS_STYLE,
-                     fontStyle->mFont.languageOverride);
+  nsFont resizedFont(fontStyle->mFont);
+  // Create a font group working in units of CSS pixels instead of the usual
+  // device pixels, to avoid being affected by page zoom. nsFontMetrics will
+  // convert nsFont size in app units to device pixels for the font group, so
+  // here we first apply to the size the equivalent of a conversion from device
+  // pixels to CSS pixels, to adjust for the difference in expectations from
+  // other nsFontMetrics clients.
+  resizedFont.size =
+    (fontStyle->mSize * c->AppUnitsPerDevPixel()) / c->AppUnitsPerCSSPixel();
 
-  fontStyle->mFont.AddFontFeaturesToStyle(&style);
+  nsRefPtr<nsFontMetrics> metrics;
+  c->DeviceContext()->GetMetricsFor(resizedFont,
+                                    fontStyle->mLanguage,
+                                    fontStyle->mExplicitLanguage,
+                                    gfxFont::eHorizontal,
+                                    c->GetUserFontSet(),
+                                    c->GetTextPerfMetrics(),
+                                    *getter_AddRefs(metrics));
 
-  nsPresContext *c = presShell->GetPresContext();
-  CurrentState().fontGroup =
-      gfxPlatform::GetPlatform()->CreateFontGroup(fontStyle->mFont.fontlist,
-                                                  &style,
-                                                  c->GetUserFontSet());
+  gfxFontGroup* newFontGroup = metrics->GetThebesFontGroup();
+  CurrentState().fontGroup = newFontGroup;
   NS_ASSERTION(CurrentState().fontGroup, "Could not get font group");
-  CurrentState().fontGroup->SetTextPerfMetrics(c->GetTextPerfMetrics());
   CurrentState().font = usedFont;
   CurrentState().fontFont = fontStyle->mFont;
   CurrentState().fontFont.size = fontStyle->mSize;
   CurrentState().fontLanguage = fontStyle->mLanguage;
+  CurrentState().fontExplicitLanguage = fontStyle->mExplicitLanguage;
 }
 
 void
@@ -3224,6 +3221,12 @@ CanvasRenderingContext2D::RemoveHitRegion(const nsAString& id)
   }
 }
 
+void
+CanvasRenderingContext2D::ClearHitRegions()
+{
+  mHitRegionsOptions.Clear();
+}
+
 bool
 CanvasRenderingContext2D::GetHitRegionRect(Element* aElement, nsRect& aRect)
 {
@@ -3246,6 +3249,22 @@ CanvasRenderingContext2D::GetHitRegionRect(Element* aElement, nsRect& aRect)
  */
 struct MOZ_STACK_CLASS CanvasBidiProcessor : public nsBidiPresUtils::BidiProcessor
 {
+  CanvasBidiProcessor()
+    : nsBidiPresUtils::BidiProcessor()
+  {
+    if (Preferences::GetBool(GFX_MISSING_FONTS_NOTIFY_PREF)) {
+      mMissingFonts = new gfxMissingFontRecorder();
+    }
+  }
+
+  ~CanvasBidiProcessor()
+  {
+    // notify front-end code if we encountered missing glyphs in any script
+    if (mMissingFonts) {
+      mMissingFonts->Flush();
+    }
+  }
+
   typedef CanvasRenderingContext2D::ContextState ContextState;
 
   virtual void SetText(const char16_t* text, int32_t length, nsBidiDirection direction)
@@ -3262,7 +3281,8 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor : public nsBidiPresUtils::BidiProcess
                                      length,
                                      mThebes,
                                      mAppUnitsPerDevPixel,
-                                     flags);
+                                     flags,
+                                     mMissingFonts);
   }
 
   virtual nscoord GetWidth()
@@ -3507,6 +3527,10 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor : public nsBidiPresUtils::BidiProcess
 
   // current font
   gfxFontGroup* mFontgrp;
+
+  // to record any unsupported characters found in the text,
+  // and notify front-end if it is interested
+  nsAutoPtr<gfxMissingFontRecorder> mMissingFonts;
 
   // dev pixel conversion factor
   int32_t mAppUnitsPerDevPixel;

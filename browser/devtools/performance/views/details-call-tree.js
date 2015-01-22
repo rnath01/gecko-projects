@@ -12,39 +12,51 @@ let CallTreeView = {
    */
   initialize: function () {
     this._callTree = $(".call-tree-cells-container");
+    this._onRecordingStoppedOrSelected = this._onRecordingStoppedOrSelected.bind(this);
     this._onRangeChange = this._onRangeChange.bind(this);
+    this._onPrefChanged = this._onPrefChanged.bind(this);
     this._onLink = this._onLink.bind(this);
-    this._stop = this._stop.bind(this);
 
+    PerformanceController.on(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
+    PerformanceController.on(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
+    PerformanceController.on(EVENTS.PREF_CHANGED, this._onPrefChanged);
     OverviewView.on(EVENTS.OVERVIEW_RANGE_SELECTED, this._onRangeChange);
     OverviewView.on(EVENTS.OVERVIEW_RANGE_CLEARED, this._onRangeChange);
-    PerformanceController.on(EVENTS.RECORDING_STOPPED, this._stop);
   },
 
   /**
    * Unbinds events.
    */
   destroy: function () {
+    PerformanceController.off(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
+    PerformanceController.off(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
+    PerformanceController.off(EVENTS.PREF_CHANGED, this._onPrefChanged);
     OverviewView.off(EVENTS.OVERVIEW_RANGE_SELECTED, this._onRangeChange);
     OverviewView.off(EVENTS.OVERVIEW_RANGE_CLEARED, this._onRangeChange);
-    PerformanceController.off(EVENTS.RECORDING_STOPPED, this._stop);
   },
 
   /**
    * Method for handling all the set up for rendering a new call tree.
    */
   render: function (profilerData, beginAt, endAt, options={}) {
+    // Empty recordings might yield no profiler data.
+    if (profilerData.profile == null) {
+      return;
+    }
     let threadNode = this._prepareCallTree(profilerData, beginAt, endAt, options);
     this._populateCallTree(threadNode, options);
     this.emit(EVENTS.CALL_TREE_RENDERED);
   },
 
   /**
-   * Called when recording is stopped.
+   * Called when recording is stopped or has been selected.
    */
-  _stop: function (_, { profilerData }) {
-    this._profilerData = profilerData;
-    this.render(profilerData);
+  _onRecordingStoppedOrSelected: function (_, recording) {
+    // If not recording, then this recording is done and we can render all of it
+    if (!recording.isRecording()) {
+      let profilerData = recording.getProfilerData();
+      this.render(profilerData);
+    }
   },
 
   /**
@@ -53,8 +65,10 @@ let CallTreeView = {
   _onRangeChange: function (_, params) {
     // When a range is cleared, we'll have no beginAt/endAt data,
     // so the rebuild will just render all the data again.
+    let recording = PerformanceController.getCurrentRecording();
+    let profilerData = recording.getProfilerData();
     let { beginAt, endAt } = params || {};
-    this.render(this._profilerData, beginAt, endAt);
+    this.render(profilerData, beginAt, endAt);
   },
 
   /**
@@ -71,13 +85,17 @@ let CallTreeView = {
    * Called when the recording is stopped and prepares data to
    * populate the call tree.
    */
-  _prepareCallTree: function (profilerData, beginAt, endAt, options) {
+  _prepareCallTree: function (profilerData, startTime, endTime, options) {
     let threadSamples = profilerData.profile.threads[0].samples;
     let contentOnly = !Prefs.showPlatformData;
-    // TODO handle inverted tree bug 1102347
-    let invertTree = false;
+    let invertTree = PerformanceController.getPref("invert-call-tree");
 
-    let threadNode = new ThreadNode(threadSamples, contentOnly, beginAt, endAt, invertTree);
+    let threadNode = new ThreadNode(threadSamples,
+      { startTime, endTime, contentOnly, invertTree });
+
+    // If we have an empty profile (no samples), then don't invert the tree, as
+    // it would hide the root node and a completely blank call tree space can be
+    // mis-interpreted as an error.
     options.inverted = invertTree && threadNode.samples > 0;
 
     return threadNode;
@@ -103,6 +121,17 @@ let CallTreeView = {
 
     let contentOnly = !Prefs.showPlatformData;
     root.toggleCategories(!contentOnly);
+  },
+
+  /**
+   * Called when a preference under "devtools.performance.ui." is changed.
+   */
+  _onPrefChanged: function (_, prefName, value) {
+    if (prefName === "invert-call-tree") {
+      let { beginAt, endAt } = OverviewView.getRange();
+      let profilerData = PerformanceController.getCurrentRecording().getProfilerData();
+      this.render(profilerData, beginAt || void 0, endAt || void 0);
+    }
   }
 };
 
@@ -122,18 +151,19 @@ let viewSourceInDebugger = Task.async(function *(url, line) {
   // source immediately. Otherwise, initialize it and wait for the sources
   // to be added first.
   let debuggerAlreadyOpen = gToolbox.getPanel("jsdebugger");
-
   let { panelWin: dbg } = yield gToolbox.selectTool("jsdebugger");
 
   if (!debuggerAlreadyOpen) {
-    yield new Promise((resolve) => dbg.once(dbg.EVENTS.SOURCES_ADDED, () => resolve(dbg)));
+    yield dbg.once(dbg.EVENTS.SOURCES_ADDED);
   }
 
   let { DebuggerView } = dbg;
-  let item = DebuggerView.Sources.getItemForAttachment(a => a.source.url === url);
+  let { Sources } = DebuggerView;
 
+  let item = Sources.getItemForAttachment(a => a.source.url === url);
   if (item) {
     return DebuggerView.setEditorLocation(item.attachment.source.actor, line, { noDebug: true });
   }
-  return Promise.reject();
+
+  return Promise.reject("Couldn't find the specified source in the debugger.");
 });

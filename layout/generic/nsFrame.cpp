@@ -538,6 +538,8 @@ nsFrame::Init(nsIContent*       aContent,
                        NS_FRAME_MAY_BE_TRANSFORMED |
                        NS_FRAME_MAY_HAVE_GENERATED_CONTENT |
                        NS_FRAME_CAN_HAVE_ABSPOS_CHILDREN);
+  } else {
+    PresContext()->ConstructedFrame();
   }
   if (GetParent()) {
     nsFrameState state = GetParent()->GetStateBits();
@@ -2020,7 +2022,7 @@ nsIFrame::BuildDisplayListForStackingContext(nsDisplayListBuilder* aBuilder,
 
   DisplayListClipState::AutoSaveRestore clipState(aBuilder);
 
-  if (isTransformed || useOpacity || useBlendMode || usingSVGEffects || useStickyPosition) {
+  if (isTransformed || useBlendMode || usingSVGEffects || useStickyPosition) {
     // We don't need to pass ancestor clipping down to our children;
     // everything goes inside a display item's child list, and the display
     // item itself will be clipped.
@@ -2136,6 +2138,11 @@ nsIFrame::BuildDisplayListForStackingContext(nsDisplayListBuilder* aBuilder,
    * effects, wrap it up in an opacity item.
    */
   else if (useOpacity && !resultList.IsEmpty()) {
+    // Don't clip nsDisplayOpacity items. We clip their descendants instead.
+    // The clip we would set on an element with opacity would clip
+    // all descendant content, but some should not be clipped.
+    DisplayListClipState::AutoSaveRestore opacityClipState(aBuilder);
+    opacityClipState.Clear();
     resultList.AppendNewToTop(
         new (aBuilder) nsDisplayOpacity(aBuilder, this, &resultList));
   }
@@ -2461,7 +2468,7 @@ nsIFrame::BuildDisplayListForChild(nsDisplayListBuilder*   aBuilder,
     nsDisplayListCollection pseudoStack;
     if (aBuilder->IsBuildingLayerEventRegions()) {
       nsDisplayLayerEventRegions* eventRegions =
-        new (aBuilder) nsDisplayLayerEventRegions(aBuilder, this);
+        new (aBuilder) nsDisplayLayerEventRegions(aBuilder, child);
       aBuilder->SetLayerEventRegions(eventRegions);
       pseudoStack.BorderBackground()->AppendNewToTop(eventRegions);
     }
@@ -4432,6 +4439,8 @@ nsFrame::DidReflow(nsPresContext*           aPresContext,
       aReflowState->mPercentHeightObserver->NotifyPercentHeight(*aReflowState);
     }
   }
+
+  aPresContext->ReflowedFrame();
 }
 
 void
@@ -5302,6 +5311,19 @@ nsIFrame::MovePositionBy(const nsPoint& aTranslation)
   SetPosition(position);
 }
 
+nsRect
+nsIFrame::GetNormalRect() const
+{
+  // It might be faster to first check
+  // StyleDisplay()->IsRelativelyPositionedStyle().
+  nsPoint* normalPosition = static_cast<nsPoint*>
+    (Properties().Get(NormalPositionProperty()));
+  if (normalPosition) {
+    return nsRect(*normalPosition, GetSize());
+  }
+  return GetRect();
+}
+
 nsPoint
 nsIFrame::GetNormalPosition() const
 {
@@ -6085,9 +6107,8 @@ nsFrame::GetNextPrevLineFromeBlockFrame(nsPresContext* aPresContext,
       //we need to jump to new block frame.
       return NS_ERROR_FAILURE;
     }
-    uint32_t lineFlags;
     result = it->GetLine(searchingLine, &firstFrame, &lineFrameCount,
-                         rect, &lineFlags);
+                         rect);
     if (!lineFrameCount) 
       continue;
     if (NS_SUCCEEDED(result)){
@@ -6723,7 +6744,6 @@ nsIFrame::PeekOffset(nsPeekOffsetStruct* aPos)
       int32_t lineFrameCount;
       nsIFrame *firstFrame;
       nsRect usedRect;
-      uint32_t lineFlags;
       nsIFrame* baseFrame = nullptr;
       bool endOfLine = (eSelectEndLine == aPos->mAmount);
 
@@ -6744,7 +6764,7 @@ nsIFrame::PeekOffset(nsPeekOffsetStruct* aPos)
           }
         }
       } else {
-        it->GetLine(thisLine, &firstFrame, &lineFrameCount, usedRect, &lineFlags);
+        it->GetLine(thisLine, &firstFrame, &lineFrameCount, usedRect);
 
         nsIFrame* frame = firstFrame;
         for (int32_t count = lineFrameCount; count;
@@ -6976,9 +6996,8 @@ nsIFrame::GetFrameFromDirection(nsDirection aDirection, bool aVisual,
     } else {
       nsRect  nonUsedRect;
       int32_t lineFrameCount;
-      uint32_t lineFlags;
-      result = it->GetLine(thisLine, &firstFrame, &lineFrameCount,nonUsedRect,
-                           &lineFlags);
+      result = it->GetLine(thisLine, &firstFrame, &lineFrameCount,
+                           nonUsedRect);
       if (NS_FAILED(result))
         return result;
 
@@ -7070,6 +7089,9 @@ nsFrame::ChildIsDirty(nsIFrame* aChild)
 a11y::AccType
 nsFrame::AccessibleType()
 {
+  if (IsTableCaption() && !GetRect().IsEmpty()) {
+    return a11y::eHTMLCaptionType;
+  }
   return a11y::eNoType;
 }
 #endif
@@ -7738,9 +7760,18 @@ GetIBSplitSiblingForAnonymousBlock(const nsIFrame* aFrame)
 static nsIFrame*
 GetCorrectedParent(const nsIFrame* aFrame)
 {
-  nsIFrame *parent = aFrame->GetParent();
+  nsIFrame* parent = aFrame->GetParent();
   if (!parent) {
     return nullptr;
+  }
+
+  // For a table caption we want the _inner_ table frame (unless it's anonymous)
+  // as the style parent.
+  if (aFrame->IsTableCaption()) {
+    nsIFrame* innerTable = parent->GetFirstPrincipalChild();
+    if (!innerTable->StyleContext()->GetPseudo()) {
+      return innerTable;
+    }
   }
 
   // Outer tables are always anon boxes; if we're in here for an outer
@@ -8113,10 +8144,9 @@ nsFrame::RefreshSizeCache(nsBoxLayoutState& aState)
       nsIFrame* firstFrame = nullptr;
       int32_t framesOnLine;
       nsRect lineBounds;
-      uint32_t lineFlags;
 
       do {
-         lines->GetLine(count, &firstFrame, &framesOnLine, lineBounds, &lineFlags);
+         lines->GetLine(count, &firstFrame, &framesOnLine, lineBounds);
 
          if (lineBounds.height > metrics->mBlockMinSize.height)
            metrics->mBlockMinSize.height = lineBounds.height;
@@ -9170,7 +9200,7 @@ struct DR_FrameTypeInfo
   char        mName[32];
   nsTArray<DR_Rule*> mRules;
 private:
-  DR_FrameTypeInfo& operator=(const DR_FrameTypeInfo&) MOZ_DELETE;
+  DR_FrameTypeInfo& operator=(const DR_FrameTypeInfo&) = delete;
 };
 
 DR_FrameTypeInfo::DR_FrameTypeInfo(nsIAtom* aFrameType, 
@@ -9443,7 +9473,6 @@ void DR_State::InitFrameTypeTable()
   AddFrameTypeInfo(nsGkAtoms::canvasFrame,           "canvas",    "canvas");
   AddFrameTypeInfo(nsGkAtoms::rootFrame,             "root",      "root");
   AddFrameTypeInfo(nsGkAtoms::scrollFrame,           "scroll",    "scroll");
-  AddFrameTypeInfo(nsGkAtoms::tableCaptionFrame,     "caption",   "tableCaption");
   AddFrameTypeInfo(nsGkAtoms::tableCellFrame,        "cell",      "tableCell");
   AddFrameTypeInfo(nsGkAtoms::bcTableCellFrame,      "bcCell",    "bcTableCell");
   AddFrameTypeInfo(nsGkAtoms::tableColFrame,         "col",       "tableCol");

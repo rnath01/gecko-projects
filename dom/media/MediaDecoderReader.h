@@ -13,6 +13,8 @@
 #include "MediaQueue.h"
 #include "AudioCompactor.h"
 
+#include "mozilla/TypedEnum.h"
+
 namespace mozilla {
 
 namespace dom {
@@ -21,6 +23,17 @@ class TimeRanges;
 
 class MediaDecoderReader;
 class SharedDecoderManager;
+
+struct WaitForDataRejectValue {
+  enum Reason {
+    SHUTDOWN
+  };
+
+  WaitForDataRejectValue(MediaData::Type aType, Reason aReason)
+    :mType(aType), mReason(aReason) {}
+  MediaData::Type mType;
+  Reason mReason;
+};
 
 // Encapsulates the decoding and reading of media data. Reading can either
 // synchronous and done on the calling "decode" thread, or asynchronous and
@@ -37,9 +50,15 @@ public:
     CANCELED
   };
 
-  typedef MediaPromise<nsRefPtr<AudioData>, NotDecodedReason> AudioDataPromise;
-  typedef MediaPromise<nsRefPtr<VideoData>, NotDecodedReason> VideoDataPromise;
-  typedef MediaPromise<bool, nsresult> SeekPromise;
+  typedef MediaPromise<nsRefPtr<AudioData>, NotDecodedReason, /* IsExclusive = */ true> AudioDataPromise;
+  typedef MediaPromise<nsRefPtr<VideoData>, NotDecodedReason, /* IsExclusive = */ true> VideoDataPromise;
+  typedef MediaPromise<int64_t, nsresult, /* IsExclusive = */ true> SeekPromise;
+
+  // Note that, conceptually, WaitForData makes sense in a non-exclusive sense.
+  // But in the current architecture it's only ever used exclusively (by MDSM),
+  // so we mark it that way to verify our assumptions. If you have a use-case
+  // for multiple WaitForData consumers, feel free to flip the exclusivity here.
+  typedef MediaPromise<MediaData::Type, WaitForDataRejectValue, /* IsExclusive = */ true> WaitForDataPromise;
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaDecoderReader)
 
@@ -113,6 +132,12 @@ public:
   virtual nsRefPtr<VideoDataPromise>
   RequestVideoData(bool aSkipToNextKeyframe, int64_t aTimeThreshold);
 
+  // By default, the state machine polls the reader once per second when it's
+  // in buffering mode. Some readers support a promise-based mechanism by which
+  // they notify the state machine when the data arrives.
+  virtual bool IsWaitForDataSupported() { return false; }
+  virtual nsRefPtr<WaitForDataPromise> WaitForData(MediaData::Type aType) { MOZ_CRASH(); }
+
   virtual bool HasAudio() = 0;
   virtual bool HasVideo() = 0;
 
@@ -130,12 +155,20 @@ public:
   // ReadUpdatedMetadata will always be called once ReadMetadata has succeeded.
   virtual void ReadUpdatedMetadata(MediaInfo* aInfo) { };
 
-  // Moves the decode head to aTime microseconds. aStartTime and aEndTime
-  // denote the start and end times of the media in usecs, and aCurrentTime
-  // is the current playback position in microseconds.
+  // Moves the decode head to aTime microseconds. aEndTime denotes the end
+  // time of the media in usecs. This is only needed for OggReader, and should
+  // probably be removed somehow.
   virtual nsRefPtr<SeekPromise>
-  Seek(int64_t aTime, int64_t aStartTime,
-       int64_t aEndTime, int64_t aCurrentTime) = 0;
+  Seek(int64_t aTime, int64_t aEndTime) = 0;
+
+  // Cancels an ongoing seek, if any. Any previously-requested seek is
+  // guaranteeed to be resolved or rejected in finite time, though no
+  // guarantees are made about precise nature of the resolve/reject, since the
+  // promise might have already dispatched a resolution or an error code before
+  // the cancel arrived.
+  //
+  // Must be called on the decode task queue.
+  virtual void CancelSeek() { };
 
   // Called to move the reader into idle state. When the reader is
   // created it is assumed to be active (i.e. not idle). When the media
@@ -175,10 +208,11 @@ public:
 
   virtual int64_t ComputeStartTime(const VideoData* aVideo, const AudioData* aAudio);
 
-  // Wait this number of seconds when buffering, then leave and play
-  // as best as we can if the required amount of data hasn't been
-  // retrieved.
-  virtual uint32_t GetBufferingWait() { return 30; }
+  // The MediaDecoderStateMachine uses various heuristics that assume that
+  // raw media data is arriving sequentially from a network channel. This
+  // makes sense in the <video src="foo"> case, but not for more advanced use
+  // cases like MSE.
+  virtual bool UseBufferingHeuristics() { return true; }
 
   // Returns the number of bytes of memory allocated by structures/frames in
   // the video queue.
@@ -187,6 +221,9 @@ public:
   // Returns the number of bytes of memory allocated by structures/frames in
   // the audio queue.
   size_t SizeOfAudioQueueInBytes() const;
+
+  virtual size_t SizeOfVideoQueueInFrames();
+  virtual size_t SizeOfAudioQueueInFrames();
 
   // Only used by WebMReader and MediaOmxReader for now, so stub here rather
   // than in every reader than inherits from MediaDecoderReader.
@@ -218,6 +255,12 @@ public:
   void ClearDecoder() {
     mDecoder = nullptr;
   }
+
+  // Returns true if the reader implements RequestAudioData()
+  // and RequestVideoData() asynchronously, rather than using the
+  // implementation in this class to adapt the old synchronous to
+  // the newer async model.
+  virtual bool IsAsync() const { return false; }
 
 protected:
   virtual ~MediaDecoderReader();
@@ -276,6 +319,7 @@ protected:
   // replace this with a promise-y mechanism as we make this stuff properly
   // async.
   bool mHitAudioDecodeError;
+  bool mShutdown;
 
 private:
   // Promises used only for the base-class (sync->async adapter) implementation
@@ -290,7 +334,6 @@ private:
   // "discontinuity" in the stream. For example after a seek.
   bool mAudioDiscontinuity;
   bool mVideoDiscontinuity;
-  bool mShutdown;
 };
 
 } // namespace mozilla

@@ -1503,7 +1503,9 @@ Toolbox.prototype = {
     if (!this._initInspector) {
       this._initInspector = Task.spawn(function*() {
         this._inspector = InspectorFront(this._target.client, this._target.form);
-        this._walker = yield this._inspector.getWalker();
+        this._walker = yield this._inspector.getWalker(
+          {showAllAnonymousContent: Services.prefs.getBoolPref("devtools.inspector.showAllAnonymousContent")}
+        );
         this._selection = new Selection(this._walker);
 
         if (this.highlighterUtils.isRemoteHighlightable()) {
@@ -1578,9 +1580,12 @@ Toolbox.prototype = {
    * @return {promise} to be resolved when the host is destroyed.
    */
   destroyHost: function() {
-    this.doc.removeEventListener("keypress",
-      this._splitConsoleOnKeypress, false);
-    this.doc.removeEventListener("focus", this._onFocus, true);
+    // The host iframe's contentDocument may already be gone.
+    if (this.doc) {
+      this.doc.removeEventListener("keypress",
+        this._splitConsoleOnKeypress, false);
+      this.doc.removeEventListener("focus", this._onFocus, true);
+    }
     return this._host.destroy();
   },
 
@@ -1645,18 +1650,17 @@ Toolbox.prototype = {
     // We need to grab a reference to win before this._host is destroyed.
     let win = this.frame.ownerGlobal;
 
-    // Remove the host UI
-    outstanding.push(this.destroyHost());
-
     if (this._requisition) {
       this._requisition.destroy();
     }
     this._telemetry.toolClosed("toolbox");
     this._telemetry.destroy();
 
-    // Finish all outstanding tasks (successfully or not) before destroying the
+    // Finish all outstanding tasks (which means finish destroying panels and
+    // then destroying the host, successfully or not) before destroying the
     // target.
-    this._destroyer = promise.all(outstanding).then(null, console.error).then(() => {
+    this._destroyer = promise.all(outstanding)
+      .then(() => this.destroyHost()).then(null, console.error).then(() => {
       // Targets need to be notified that the toolbox is being torn down.
       // This is done after other destruction tasks since it may tear down
       // fronts and the debugger transport which earlier destroy methods may

@@ -285,25 +285,11 @@ function RemoteMirror(url, win, viewport, mirrorStartedCallback, contentWindow) 
   this._iceCandidates = [];
   this.mirrorStarted = mirrorStartedCallback;
 
-  // This code insures the generated tab mirror is not wider than 800 nor taller than 600
+  // This code insures the generated tab mirror is not wider than 1280 nor taller than 720
   // Better dimensions should be chosen after the Roku Channel is working.
   let windowId = contentWindow.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils).outerWindowID;
-  let cWidth =  Math.max(viewport.cssWidth, viewport.width);
-  let cHeight = Math.max(viewport.cssHeight, viewport.height);
-
-  const MAX_WIDTH = 800;
-  const MAX_HEIGHT = 600;
-
-  let tWidth = 0;
-  let tHeight = 0;
-
-  if ((cWidth / MAX_WIDTH) > (cHeight / MAX_HEIGHT)) {
-    tHeight = Math.ceil((MAX_WIDTH / cWidth) * cHeight);
-    tWidth = MAX_WIDTH;
-  } else {
-    tWidth = Math.ceil((MAX_HEIGHT / cHeight) * cWidth);
-    tHeight = MAX_HEIGHT;
-  }
+  const MAX_WIDTH = 1280;
+  const MAX_HEIGHT = 720;
 
   let constraints = {
     video: {
@@ -312,10 +298,10 @@ function RemoteMirror(url, win, viewport, mirrorStartedCallback, contentWindow) 
       scrollWithPage: true,
       advanced: [
         {
-          width: { min: tWidth, max: tWidth },
-          height: { min: tHeight, max: tHeight }
+          width: { min: 0, max: MAX_WIDTH },
+          height: { min: 0, max: MAX_HEIGHT }
         },
-        { aspectRatio: cWidth / cHeight }
+        { aspectRatio: MAX_WIDTH/MAX_HEIGHT }
       ]
     }
   };

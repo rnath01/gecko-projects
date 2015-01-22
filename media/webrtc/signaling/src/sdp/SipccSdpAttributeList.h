@@ -103,6 +103,7 @@ private:
   bool LoadFingerprint(sdp_t* sdp, uint16_t level, SdpErrorHolder& errorHolder);
   void LoadCandidate(sdp_t* sdp, uint16_t level);
   void LoadSetup(sdp_t* sdp, uint16_t level);
+  void LoadSsrc(sdp_t* sdp, uint16_t level);
   bool LoadGroups(sdp_t* sdp, uint16_t level, SdpErrorHolder& errorHolder);
   void LoadFmtp(sdp_t* sdp, uint16_t level);
   void LoadMsids(sdp_t* sdp, uint16_t level, SdpErrorHolder& errorHolder);
@@ -124,8 +125,8 @@ private:
 
   SdpAttribute* mAttributes[kNumAttributeTypes];
 
-  SipccSdpAttributeList(const SipccSdpAttributeList& orig) MOZ_DELETE;
-  SipccSdpAttributeList& operator=(const SipccSdpAttributeList& rhs) MOZ_DELETE;
+  SipccSdpAttributeList(const SipccSdpAttributeList& orig) = delete;
+  SipccSdpAttributeList& operator=(const SipccSdpAttributeList& rhs) = delete;
 };
 
 } // namespace mozilla

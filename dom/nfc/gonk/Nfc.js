@@ -61,11 +61,10 @@ const NFC_IPC_MSG_ENTRIES = [
 
   { permission: "nfc",
     messages: ["NFC:ReadNDEF",
-               "NFC:Connect",
-               "NFC:Close",
                "NFC:WriteNDEF",
                "NFC:MakeReadOnly",
-               "NFC:Format"] },
+               "NFC:Format",
+               "NFC:Transceive"] },
 
   { permission: "nfc-share",
     messages: ["NFC:SendFile",
@@ -471,14 +470,18 @@ Nfc.prototype = {
         delete message.sessionId;
 
         if (SessionHelper.isP2PSession(sessionId)) {
-          gMessageManager.onPeerEvent(NFC.PEER_EVENT_FOUND, message.sessionToken);
+          if (message.records) {
+            // TODO: Bug 1082493.
+          } else {
+            gMessageManager.onPeerEvent(NFC.PEER_EVENT_FOUND, message.sessionToken);
+          }
         } else {
           gMessageManager.onTagFound(message);
         }
 
         let sysMsg = new NfcTechDiscoveredSysMsg(message.sessionToken,
                                                  message.isP2P,
-                                                 message.records);
+                                                 message.records || null);
         gSystemMessenger.broadcastMessage("nfc-manager-tech-discovered", sysMsg);
         break;
       case "TechLostNotification":
@@ -509,11 +512,10 @@ Nfc.prototype = {
           gMessageManager.onRFStateChange(this.rfState);
         }
         break;
-      case "ConnectResponse": // Fall through.
-      case "CloseResponse":
-      case "ReadNDEFResponse":
+      case "ReadNDEFResponse": // Fall through.
       case "MakeReadOnlyResponse":
       case "FormatResponse":
+      case "TransceiveResponse":
       case "WriteNDEFResponse":
         this.sendNfcResponse(message);
         break;
@@ -570,11 +572,8 @@ Nfc.prototype = {
       case "NFC:Format":
         this.sendToNfcService("format", message.data);
         break;
-      case "NFC:Connect":
-        this.sendToNfcService("connect", message.data);
-        break;
-      case "NFC:Close":
-        this.sendToNfcService("close", message.data);
+      case "NFC:Transceive":
+        this.sendToNfcService("transceive", message.data);
         break;
       case "NFC:SendFile":
         // Chrome process is the arbitrator / mediator between

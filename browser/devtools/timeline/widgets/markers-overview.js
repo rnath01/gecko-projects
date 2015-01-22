@@ -14,49 +14,46 @@ const {Cc, Ci, Cu, Cr} = require("chrome");
 Cu.import("resource:///modules/devtools/Graphs.jsm");
 Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
 
+const { colorUtils: { setAlpha }} = require("devtools/css-color");
+const { getColor } = require("devtools/shared/theme");
+
 loader.lazyRequireGetter(this, "L10N",
   "devtools/timeline/global", true);
-loader.lazyRequireGetter(this, "TIMELINE_BLUEPRINT",
-  "devtools/timeline/global", true);
-
-const HTML_NS = "http://www.w3.org/1999/xhtml";
 
 const OVERVIEW_HEADER_HEIGHT = 14; // px
-const OVERVIEW_BODY_HEIGHT = 55; // 11px * 5 groups
+const OVERVIEW_ROW_HEIGHT = 11; // px
 
-const OVERVIEW_BACKGROUND_COLOR = "#fff";
-const OVERVIEW_CLIPHEAD_LINE_COLOR = "#666";
-const OVERVIEW_SELECTION_LINE_COLOR = "#555";
-const OVERVIEW_SELECTION_BACKGROUND_COLOR = "rgba(76,158,217,0.25)";
-const OVERVIEW_SELECTION_STRIPES_COLOR = "rgba(255,255,255,0.1)";
+const OVERVIEW_SELECTION_LINE_COLOR = "#666";
+const OVERVIEW_CLIPHEAD_LINE_COLOR = "#555";
 
 const OVERVIEW_HEADER_TICKS_MULTIPLE = 100; // ms
 const OVERVIEW_HEADER_TICKS_SPACING_MIN = 75; // px
 const OVERVIEW_HEADER_SAFE_BOUNDS = 50; // px
-const OVERVIEW_HEADER_BACKGROUND = "#fff";
-const OVERVIEW_HEADER_TEXT_COLOR = "#18191a";
 const OVERVIEW_HEADER_TEXT_FONT_SIZE = 9; // px
 const OVERVIEW_HEADER_TEXT_FONT_FAMILY = "sans-serif";
 const OVERVIEW_HEADER_TEXT_PADDING_LEFT = 6; // px
 const OVERVIEW_HEADER_TEXT_PADDING_TOP = 1; // px
-const OVERVIEW_TIMELINE_STROKES = "#ccc";
 const OVERVIEW_MARKERS_COLOR_STOPS = [0, 0.1, 0.75, 1];
 const OVERVIEW_MARKER_DURATION_MIN = 4; // ms
 const OVERVIEW_GROUP_VERTICAL_PADDING = 5; // px
-const OVERVIEW_GROUP_ALTERNATING_BACKGROUND = "rgba(0,0,0,0.05)";
 
 /**
  * An overview for the markers data.
  *
  * @param nsIDOMNode parent
  *        The parent node holding the overview.
+ * @param Object blueprint
+ *        List of names and colors defining markers.
  */
-function MarkersOverview(parent, ...args) {
+function MarkersOverview(parent, blueprint, ...args) {
   AbstractCanvasGraph.apply(this, [parent, "markers-overview", ...args]);
-  this.once("ready", () => {
-    // Set the list of names, properties and colors used to paint this overview.
-    this.setBlueprint(TIMELINE_BLUEPRINT);
 
+  this.setTheme();
+
+  // Set the list of names, properties and colors used to paint this overview.
+  this.setBlueprint(blueprint);
+
+  this.once("ready", () => {
     // Populate this overview with some dummy initial data.
     this.setData({ interval: { startTime: 0, endTime: 1000 }, markers: [] });
   });
@@ -65,17 +62,15 @@ function MarkersOverview(parent, ...args) {
 MarkersOverview.prototype = Heritage.extend(AbstractCanvasGraph.prototype, {
   clipheadLineColor: OVERVIEW_CLIPHEAD_LINE_COLOR,
   selectionLineColor: OVERVIEW_SELECTION_LINE_COLOR,
-  selectionBackgroundColor: OVERVIEW_SELECTION_BACKGROUND_COLOR,
-  selectionStripesColor: OVERVIEW_SELECTION_STRIPES_COLOR,
   headerHeight: OVERVIEW_HEADER_HEIGHT,
-  bodyHeight: OVERVIEW_BODY_HEIGHT,
+  rowHeight: OVERVIEW_ROW_HEIGHT,
   groupPadding: OVERVIEW_GROUP_VERTICAL_PADDING,
 
   /**
    * Compute the height of the overview.
    */
   get fixedHeight() {
-    return this.headerHeight + this.bodyHeight;
+    return this.headerHeight + this.rowHeight * (this._lastGroup + 1);
   },
 
   /**
@@ -119,14 +114,17 @@ MarkersOverview.prototype = Heritage.extend(AbstractCanvasGraph.prototype, {
     // draw all markers sharing the same style at once.
 
     for (let marker of markers) {
-      this._paintBatches.get(marker.name).batch.push(marker);
+      let markerType = this._paintBatches.get(marker.name);
+      if (markerType) {
+        markerType.batch.push(marker);
+      }
     }
 
     // Calculate each group's height, and the time-based scaling.
 
     let totalGroups = this._lastGroup + 1;
     let headerHeight = this.headerHeight * this._pixelRatio;
-    let groupHeight = this.bodyHeight * this._pixelRatio / totalGroups;
+    let groupHeight = this.rowHeight * this._pixelRatio;
     let groupPadding = this.groupPadding * this._pixelRatio;
 
     let totalTime = (endTime - startTime) || 0;
@@ -134,15 +132,15 @@ MarkersOverview.prototype = Heritage.extend(AbstractCanvasGraph.prototype, {
 
     // Draw the header and overview background.
 
-    ctx.fillStyle = OVERVIEW_HEADER_BACKGROUND;
+    ctx.fillStyle = this.headerBackgroundColor;
     ctx.fillRect(0, 0, canvasWidth, headerHeight);
 
-    ctx.fillStyle = OVERVIEW_BACKGROUND_COLOR;
+    ctx.fillStyle = this.backgroundColor;
     ctx.fillRect(0, headerHeight, canvasWidth, canvasHeight);
 
     // Draw the alternating odd/even group backgrounds.
 
-    ctx.fillStyle = OVERVIEW_GROUP_ALTERNATING_BACKGROUND;
+    ctx.fillStyle = this.alternatingBackgroundColor;
     ctx.beginPath();
 
     for (let i = 0; i < totalGroups; i += 2) {
@@ -162,8 +160,8 @@ MarkersOverview.prototype = Heritage.extend(AbstractCanvasGraph.prototype, {
 
     ctx.textBaseline = "middle";
     ctx.font = fontSize + "px " + fontFamily;
-    ctx.fillStyle = OVERVIEW_HEADER_TEXT_COLOR;
-    ctx.strokeStyle = OVERVIEW_TIMELINE_STROKES;
+    ctx.fillStyle = this.headerTextColor;
+    ctx.strokeStyle = this.headerTimelineStrokeColor;
     ctx.beginPath();
 
     for (let x = 0; x < availableWidth; x += tickInterval) {
@@ -228,6 +226,22 @@ MarkersOverview.prototype = Heritage.extend(AbstractCanvasGraph.prototype, {
       }
       return scaledStep;
     }
+  },
+
+  /**
+   * Sets the theme via `theme` to either "light" or "dark",
+   * and updates the internal styling to match. Requires a redraw
+   * to see the effects.
+   */
+  setTheme: function (theme) {
+    theme = theme || "light";
+    this.backgroundColor = getColor("body-background", theme);
+    this.selectionBackgroundColor = setAlpha(getColor("selection-background", theme), 0.25);
+    this.selectionStripesColor = setAlpha("#fff", 0.1);
+    this.headerBackgroundColor = getColor("body-background", theme);
+    this.headerTextColor = getColor("body-color", theme);
+    this.headerTimelineStrokeColor = setAlpha(getColor("body-color-alt", theme), 0.25);
+    this.alternatingBackgroundColor = setAlpha(getColor("body-color", theme), 0.05);
   }
 });
 

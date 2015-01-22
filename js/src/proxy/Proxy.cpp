@@ -87,7 +87,7 @@ js::assertEnteredPolicy(JSContext *cx, JSObject *proxy, jsid id,
 #define INVOKE_ON_PROTOTYPE(cx, handler, proxy, protoCall)                   \
     JS_BEGIN_MACRO                                                           \
         RootedObject proto(cx);                                              \
-        if (!JSObject::getProto(cx, proxy, &proto))                          \
+        if (!GetPrototype(cx, proxy, &proto))                                \
             return false;                                                    \
         if (!proto)                                                          \
             return true;                                                     \
@@ -297,7 +297,7 @@ Proxy::get(JSContext *cx, HandleObject proxy, HandleObject receiver, HandleId id
     }
     if (own)
         return handler->get(cx, proxy, receiver, id, vp);
-    INVOKE_ON_PROTOTYPE(cx, handler, proxy, JSObject::getGeneric(cx, proto, receiver, id, vp));
+    INVOKE_ON_PROTOTYPE(cx, handler, proxy, GetProperty(cx, proto, receiver, id, vp));
 }
 
 bool
@@ -370,7 +370,7 @@ Proxy::enumerate(JSContext *cx, HandleObject proxy, MutableHandleObject objp)
         return false;
 
     RootedObject proto(cx);
-    if (!JSObject::getProto(cx, proxy, &proto))
+    if (!GetPrototype(cx, proxy, &proto))
         return false;
     if (!proto)
         return EnumeratedIdVectorToIterator(cx, proxy, 0, props, objp);
@@ -535,6 +535,13 @@ Proxy::getElements(JSContext *cx, HandleObject proxy, uint32_t begin, uint32_t e
         return false;
     }
     return handler->getElements(cx, proxy, begin, end, adder);
+}
+
+/* static */ void
+Proxy::trace(JSTracer *trc, JSObject *proxy)
+{
+    const BaseProxyHandler *handler = proxy->as<ProxyObject>().handler();
+    handler->trace(trc, proxy);
 }
 
 JSObject *
@@ -730,6 +737,8 @@ ProxyObject::trace(JSTracer *trc, JSObject *obj)
      */
     if (!proxy->is<CrossCompartmentWrapperObject>())
         MarkValue(trc, proxy->slotOfExtra(1), "extra1");
+
+    Proxy::trace(trc, obj);
 }
 
 JSObject *

@@ -607,6 +607,31 @@ bool RFloor::recover(JSContext *cx, SnapshotIterator &iter) const
 }
 
 bool
+MCeil::writeRecoverData(CompactBufferWriter &writer) const
+{
+    MOZ_ASSERT(canRecoverOnBailout());
+    writer.writeUnsigned(uint32_t(RInstruction::Recover_Ceil));
+    return true;
+}
+
+RCeil::RCeil(CompactBufferReader &reader)
+{ }
+
+
+bool
+RCeil::recover(JSContext *cx, SnapshotIterator &iter) const
+{
+    RootedValue v(cx, iter.read());
+    RootedValue result(cx);
+
+    if (!js::math_ceil_handle(cx, v, &result))
+        return false;
+
+    iter.storeInstructionResult(result);
+    return true;
+}
+
+bool
 MRound::writeRecoverData(CompactBufferWriter &writer) const
 {
     MOZ_ASSERT(canRecoverOnBailout());
@@ -885,6 +910,7 @@ MMathFunction::writeRecoverData(CompactBufferWriter &writer) const
         writer.writeUnsigned(uint32_t(RInstruction::Recover_Round));
         return true;
       case Sin:
+      case Log:
         writer.writeUnsigned(uint32_t(RInstruction::Recover_MathFunction));
         writer.writeByte(function_);
         return true;
@@ -907,6 +933,16 @@ RMathFunction::recover(JSContext *cx, SnapshotIterator &iter) const
         RootedValue result(cx);
 
         if (!js::math_sin_handle(cx, arg, &result))
+            return false;
+
+        iter.storeInstructionResult(result);
+        return true;
+      }
+      case MMathFunction::Log: {
+        RootedValue arg(cx, iter.read());
+        RootedValue result(cx);
+
+        if (!js::math_log_handle(cx, arg, &result))
             return false;
 
         iter.storeInstructionResult(result);
@@ -1219,6 +1255,34 @@ RCreateThisWithTemplate::recover(JSContext *cx, SnapshotIterator &iter) const
 }
 
 bool
+MLambda::writeRecoverData(CompactBufferWriter &writer) const
+{
+    MOZ_ASSERT(canRecoverOnBailout());
+    writer.writeUnsigned(uint32_t(RInstruction::Recover_Lambda));
+    return true;
+}
+
+RLambda::RLambda(CompactBufferReader &reader)
+{
+}
+
+bool
+RLambda::recover(JSContext *cx, SnapshotIterator &iter) const
+{
+    RootedObject scopeChain(cx, &iter.read().toObject());
+    RootedFunction fun(cx, &iter.read().toObject().as<JSFunction>());
+
+    JSObject *resultObject = js::Lambda(cx, fun, scopeChain);
+    if (!resultObject)
+        return false;
+
+    RootedValue result(cx);
+    result.setObject(*resultObject);
+    iter.storeInstructionResult(result);
+    return true;
+}
+
+bool
 MObjectState::writeRecoverData(CompactBufferWriter &writer) const
 {
     MOZ_ASSERT(canRecoverOnBailout());
@@ -1235,7 +1299,7 @@ RObjectState::RObjectState(CompactBufferReader &reader)
 bool
 RObjectState::recover(JSContext *cx, SnapshotIterator &iter) const
 {
-    RootedPlainObject object(cx, &iter.read().toObject().as<PlainObject>());
+    RootedNativeObject object(cx, &iter.read().toObject().as<NativeObject>());
     MOZ_ASSERT(object->slotSpan() == numSlots());
 
     RootedValue val(cx);

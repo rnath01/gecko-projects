@@ -23,6 +23,7 @@ const {Task} = Cu.import("resource://gre/modules/Task.jsm", {});
 const {RuntimeScanners, RuntimeTypes} = require("devtools/webide/runtimes");
 const {NetUtil} = Cu.import("resource://gre/modules/NetUtil.jsm", {});
 const Telemetry = require("devtools/shared/telemetry");
+const {ProjectBuilding} = require("./build");
 
 const Strings = Services.strings.createBundle("chrome://browser/locale/devtools/webide.properties");
 
@@ -92,12 +93,13 @@ let AppManager = exports.AppManager = {
   },
 
   onConnectionChanged: function() {
+    console.log("Connection status changed: " + this.connection.status);
+
     if (this.connection.status == Connection.Status.DISCONNECTED) {
       this.selectedRuntime = null;
     }
 
     if (this.connection.status != Connection.Status.CONNECTED) {
-      console.log("Connection status changed: " + this.connection.status);
       if (this._appsFront) {
         this._appsFront.off("install-progress", this.onInstallProgress);
         this._appsFront.unwatchApps();
@@ -275,6 +277,13 @@ let AppManager = exports.AppManager = {
     // A regular comparison still sees a difference when equal in some cases
     if (JSON.stringify(this._selectedProject) !==
         JSON.stringify(value)) {
+
+      let cancelled = false;
+      this.update("before-project", { cancel: () => { cancelled = true; } });
+      if (cancelled)  {
+        return;
+      }
+
       this._selectedProject = value;
 
       // Clear out tab store's selected state, if any
@@ -302,6 +311,10 @@ let AppManager = exports.AppManager = {
   removeSelectedProject: function() {
     let location = this.selectedProject.location;
     AppManager.selectedProject = null;
+    // If the user cancels the removeProject operation, don't remove the project
+    if (AppManager.selectedProject != null) {
+      return;
+    }
     return AppProjects.remove(location);
   },
 
@@ -342,18 +355,15 @@ let AppManager = exports.AppManager = {
         } else {
           deferred.reject();
         }
-      }
+      };
       this.connection.on(Connection.Events.CONNECTED, onConnectedOrDisconnected);
       this.connection.on(Connection.Events.DISCONNECTED, onConnectedOrDisconnected);
       try {
         // Reset the connection's state to defaults
         this.connection.resetOptions();
-        this.selectedRuntime.connect(this.connection).then(
-          () => {},
-          deferred.reject.bind(deferred));
+        deferred.resolve(this.selectedRuntime.connect(this.connection));
       } catch(e) {
-        console.error(e);
-        deferred.reject();
+        deferred.reject(e);
       }
     }, deferred.reject);
 
@@ -374,6 +384,10 @@ let AppManager = exports.AppManager = {
       this.connection.once(Connection.Events.STATUS_CHANGED, () => {
         this._telemetry.stopTimer(timerId);
       });
+    }).catch(() => {
+      // Empty rejection handler to silence uncaught rejection warnings
+      // |connectToRuntime| caller should listen for rejections.
+      // Bug 1121100 may find a better way to silence these.
     });
 
     return deferred.promise;
@@ -453,6 +467,8 @@ let AppManager = exports.AppManager = {
     return Task.spawn(function* () {
       let self = AppManager;
 
+      let packageDir = yield ProjectBuilding.build(project);
+
       yield self.validateProject(project);
 
       if (project.errorsCount > 0) {
@@ -468,8 +484,11 @@ let AppManager = exports.AppManager = {
 
       let response;
       if (project.type == "packaged") {
-        response = yield self._appsFront.installPackaged(project.location,
-                                                             project.packagedAppOrigin);
+        packageDir = packageDir || project.location;
+        console.log("Installing app from " + packageDir);
+
+        response = yield self._appsFront.installPackaged(packageDir,
+                                                         project.packagedAppOrigin);
 
         // If the packaged app specified a custom origin override,
         // we need to update the local project origin
@@ -489,6 +508,12 @@ let AppManager = exports.AppManager = {
         response = yield self._appsFront.installHosted(appId,
                                             metadata,
                                             project.manifest);
+      }
+
+      // Addons don't have any document to load (yet?)
+      // So that there is no need to run them, installing is enough
+      if (project.manifest.role && project.manifest.role === "addon") {
+        return;
       }
 
       let {app} = response;

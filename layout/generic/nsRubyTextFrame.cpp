@@ -21,7 +21,7 @@ using namespace mozilla;
 
 NS_QUERYFRAME_HEAD(nsRubyTextFrame)
   NS_QUERYFRAME_ENTRY(nsRubyTextFrame)
-NS_QUERYFRAME_TAIL_INHERITING(nsInlineFrame)
+NS_QUERYFRAME_TAIL_INHERITING(nsRubyTextFrameSuper)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsRubyTextFrame)
 
@@ -52,14 +52,6 @@ nsRubyTextFrame::GetFrameName(nsAString& aResult) const
 }
 #endif
 
-/* virtual */ bool
-nsRubyTextFrame::IsFrameOfType(uint32_t aFlags) const
-{
-  if (aFlags & eBidiInlineContainer) {
-    return false;
-  }
-  return nsRubyTextFrameSuper::IsFrameOfType(aFlags);
-}
 
 
 /* virtual */ void
@@ -90,7 +82,10 @@ nsRubyTextFrame::Reflow(nsPresContext* aPresContext,
                                aReflowState, aStatus);
 
   if (GetStateBits() & NS_RUBY_TEXT_FRAME_AUTOHIDE) {
-    aDesiredSize.ClearSize();
+    // Reset the ISize. The BSize is not changed so that it won't
+    // affect vertical positioning in unexpected way.
+    WritingMode lineWM = aReflowState.mLineLayout->GetWritingMode();
+    aDesiredSize.ISize(lineWM) = 0;
     aDesiredSize.SetOverflowAreasToDesiredBounds();
   }
 }

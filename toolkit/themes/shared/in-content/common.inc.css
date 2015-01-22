@@ -40,8 +40,15 @@ xul|caption > xul|label {
   margin: 0 !important;
 }
 
+xul|description {
+  -moz-margin-start: 0;
+}
+
 *|*.main-content {
-  padding: 40px 48px 48px;
+  padding-top: 40px;
+  -moz-padding-end: 44px; /* compensate the 4px margin of child elements */
+  padding-bottom: 48px;
+  -moz-padding-start: 48px;
   overflow: auto;
 }
 
@@ -54,9 +61,7 @@ xul|prefpane > xul|*.content-box {
 xul|groupbox {
   -moz-appearance: none;
   border: none;
-  margin-top: 15px;
-  margin-bottom: 15px;
-  -moz-margin-end: 0;
+  margin: 15px 0;
   -moz-padding-start: 0;
   -moz-padding-end: 0;
   font-size: 1.25rem;
@@ -524,6 +529,7 @@ xul|*#categories[keyboard-navigation="true"]:-moz-focusring > xul|*.category[cur
 
 *|*.header {
   border-bottom: 1px solid #c8c8c8;
+  -moz-margin-end: 4px; /* add the 4px end-margin of other elements */
   margin-bottom: 15px;
   padding-bottom: 15px;
 }
@@ -584,20 +590,30 @@ xul|filefield + xul|button {
 xul|richlistbox,
 xul|listbox {
   -moz-appearance: none;
+  -moz-margin-start: 0;
+  background-color: #fff;
   border: 1px solid #c1c1c1;
+  color: #333;
 }
 
 xul|treechildren::-moz-tree-row,
 xul|listbox xul|listitem {
-  padding: 5px;
+  padding: 0.3em;
   margin: 0;
   border: none;
+  border-radius: 0;
   background-image: none;
+}
+
+xul|treechildren::-moz-tree-row(hover),
+xul|listbox xul|listitem:hover {
+  background-color: rgba(0,149,221,0.25);
 }
 
 xul|treechildren::-moz-tree-row(selected),
 xul|listbox xul|listitem[selected="true"] {
-  background-color: #f1f1f1;
+  background-color: #0095dd;
+  color: #fff;
 }
 
 /* Trees */
@@ -652,4 +668,18 @@ xul|treecol:not([hideheader="true"]) > xul|*.treecol-sortdirection[sortDirection
   xul|treecol:not([hideheader="true"]) > xul|*.treecol-sortdirection[sortDirection] {
     list-style-image: url("chrome://global/skin/in-content/sorter@2x.png");
   }
+}
+
+/* This is the only way to increase the height of a tree row unfortunately */
+xul|treechildren::-moz-tree-row {
+  min-height: 2em;
+}
+
+/* Color needs to be set on tree cell in order to be applied */
+xul|treechildren::-moz-tree-cell-text {
+  color: #333;
+}
+
+xul|treechildren::-moz-tree-cell-text(selected) {
+  color: #fff;
 }

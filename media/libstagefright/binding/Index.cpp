@@ -90,8 +90,6 @@ MP4Sample* SampleIterator::GetNext()
     return nullptr;
   }
 
-  Next();
-
   nsAutoPtr<MP4Sample> sample(new MP4Sample());
   sample->decode_timestamp = s->mDecodeTime;
   sample->composition_timestamp = s->mCompositionRange.start;
@@ -131,6 +129,8 @@ MP4Sample* SampleIterator::GetNext()
     }
   }
 
+  Next();
+
   return sample.forget();
 }
 
@@ -140,7 +140,7 @@ Sample* SampleIterator::Get()
     return nullptr;
   }
 
-  nsTArray<Moof>& moofs = mIndex->mMoofParser->mMoofs;
+  nsTArray<Moof>& moofs = mIndex->mMoofParser->Moofs();
   while (true) {
     if (mCurrentMoof == moofs.Length()) {
       if (!mIndex->mMoofParser->BlockingReadNextMoof()) {
@@ -186,12 +186,39 @@ void SampleIterator::Seek(Microseconds aTime)
   mCurrentSample = syncSample;
 }
 
+Microseconds
+SampleIterator::GetNextKeyframeTime()
+{
+  nsTArray<Moof>& moofs = mIndex->mMoofParser->Moofs();
+  size_t sample = mCurrentSample + 1;
+  size_t moof = mCurrentMoof;
+  while (true) {
+    while (true) {
+      if (moof == moofs.Length()) {
+        return -1;
+      }
+      if (sample < moofs[moof].mIndex.Length()) {
+        break;
+      }
+      sample = 0;
+      ++moof;
+    }
+    if (moofs[moof].mIndex[sample].mSync) {
+      return moofs[moof].mIndex[sample].mDecodeTime;
+    }
+    ++sample;
+  }
+  MOZ_ASSERT(false); // should not be reached.
+}
+
 Index::Index(const stagefright::Vector<MediaSource::Indice>& aIndex,
-             Stream* aSource, uint32_t aTrackId)
+             Stream* aSource, uint32_t aTrackId, Microseconds aTimestampOffset,
+             Monitor* aMonitor)
   : mSource(aSource)
+  , mMonitor(aMonitor)
 {
   if (aIndex.isEmpty()) {
-    mMoofParser = new MoofParser(aSource, aTrackId);
+    mMoofParser = new MoofParser(aSource, aTrackId, aTimestampOffset, aMonitor);
   } else {
     for (size_t i = 0; i < aIndex.size(); i++) {
       const MediaSource::Indice& indice = aIndex[i];
@@ -223,10 +250,10 @@ Index::GetEndCompositionIfBuffered(const nsTArray<MediaByteRange>& aByteRanges)
 {
   nsTArray<Sample>* index;
   if (mMoofParser) {
-    if (!mMoofParser->ReachedEnd() || mMoofParser->mMoofs.IsEmpty()) {
+    if (!mMoofParser->ReachedEnd() || mMoofParser->Moofs().IsEmpty()) {
       return 0;
     }
-    index = &mMoofParser->mMoofs.LastElement().mIndex;
+    index = &mMoofParser->Moofs().LastElement().mIndex;
   } else {
     index = &mIndex;
   }
@@ -259,8 +286,8 @@ Index::ConvertByteRangesToTimeRanges(
     // We take the index out of the moof parser and move it into a local
     // variable so we don't get concurrency issues. It gets freed when we
     // exit this function.
-    for (int i = 0; i < mMoofParser->mMoofs.Length(); i++) {
-      Moof& moof = mMoofParser->mMoofs[i];
+    for (int i = 0; i < mMoofParser->Moofs().Length(); i++) {
+      Moof& moof = mMoofParser->Moofs()[i];
 
       // We need the entire moof in order to play anything
       if (rangeFinder.Contains(moof.mRange)) {
@@ -308,8 +335,8 @@ Index::GetEvictionOffset(Microseconds aTime)
   if (mMoofParser) {
     // We need to keep the whole moof if we're keeping any of it because the
     // parser doesn't keep parsed moofs.
-    for (int i = 0; i < mMoofParser->mMoofs.Length(); i++) {
-      Moof& moof = mMoofParser->mMoofs[i];
+    for (int i = 0; i < mMoofParser->Moofs().Length(); i++) {
+      Moof& moof = mMoofParser->Moofs()[i];
 
       if (moof.mTimeRange.Length() && moof.mTimeRange.end > aTime) {
         offset = std::min(offset, uint64_t(std::min(moof.mRange.mStart,

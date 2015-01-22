@@ -14,6 +14,8 @@ Cu.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
                                   "resource://gre/modules/BrowserUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Prefetcher",
+                                  "resource://gre/modules/Prefetcher.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "SystemPrincipal",
                                    "@mozilla.org/systemprincipal;1", "nsIPrincipal");
@@ -80,14 +82,17 @@ let NotificationTracker = {
     }
   },
 
-  watch: function(component1, watcher) {
-    setDefault(this._watchers, component1, []).push(watcher);
-    this._registered.set(watcher, new Set());
+  findPaths: function(prefix) {
+    let tracked = this._paths;
+    for (let component of prefix) {
+      tracked = setDefault(tracked, component, {});
+    }
 
+    let result = [];
     let enumerate = (tracked, curPath) => {
       for (let component in tracked) {
         if (component == "_count") {
-          this.runCallback(watcher, curPath, tracked._count);
+          result.push([curPath, tracked._count]);
         } else {
           let path = curPath.slice();
           if (component === "true") {
@@ -100,7 +105,24 @@ let NotificationTracker = {
         }
       }
     }
-    enumerate(this._paths[component1] || {}, [component1]);
+    enumerate(tracked, prefix);
+
+    return result;
+  },
+
+  findSuffixes: function(prefix) {
+    let paths = this.findPaths(prefix);
+    return paths.map(([path, count]) => path[path.length - 1]);
+  },
+
+  watch: function(component1, watcher) {
+    setDefault(this._watchers, component1, []).push(watcher);
+    this._registered.set(watcher, new Set());
+
+    let paths = this.findPaths([component1]);
+    for (let [path, count] of paths) {
+      this.runCallback(watcher, path, count);
+    }
   },
 
   unwatch: function(component1, watcher) {
@@ -145,6 +167,11 @@ let ContentPolicyChild = {
 
   shouldLoad: function(contentType, contentLocation, requestOrigin,
                        node, mimeTypeGuess, extra, requestPrincipal) {
+    let addons = NotificationTracker.findSuffixes(["content-policy"]);
+    let [prefetched, cpows] = Prefetcher.prefetch("ContentPolicy.shouldLoad",
+                                                  addons, {InitNode: node});
+    cpows.node = node;
+
     let cpmm = Cc["@mozilla.org/childprocessmessagemanager;1"]
                .getService(Ci.nsISyncMessageSender);
     let rval = cpmm.sendRpcMessage("Addons:ContentPolicy:Run", {
@@ -153,9 +180,8 @@ let ContentPolicyChild = {
       requestOrigin: requestOrigin ? requestOrigin.spec : null,
       mimeTypeGuess: mimeTypeGuess,
       requestPrincipal: requestPrincipal,
-    }, {
-      node: node, // Sent as a CPOW.
-    });
+      prefetched: prefetched,
+    }, cpows);
     if (rval.length != 1) {
       return Ci.nsIContentPolicy.ACCEPT;
     }
@@ -396,11 +422,20 @@ EventTargetChild.prototype = {
   },
 
   handleEvent: function(capturing, event) {
+    let addons = NotificationTracker.findSuffixes(["event", event.type, capturing]);
+    let [prefetched, cpows] = Prefetcher.prefetch("EventTarget.handleEvent",
+                                                  addons,
+                                                  {Event: event,
+                                                   Window: this._childGlobal.content});
+    cpows.event = event;
+    cpows.eventTarget = event.target;
+
     this._childGlobal.sendRpcMessage("Addons:Event:Run",
                                      {type: event.type,
                                       capturing: capturing,
-                                      isTrusted: event.isTrusted},
-                                     {event: event});
+                                      isTrusted: event.isTrusted,
+                                      prefetched: prefetched},
+                                     cpows);
   }
 };
 
@@ -461,10 +496,21 @@ let RemoteAddonsChild = {
   _ready: false,
 
   makeReady: function() {
-    NotificationTracker.init();
-    ContentPolicyChild.init();
-    AboutProtocolChild.init();
-    ObserverChild.init();
+    let shims = [
+      Prefetcher,
+      NotificationTracker,
+      ContentPolicyChild,
+      AboutProtocolChild,
+      ObserverChild,
+    ];
+
+    for (let shim of shims) {
+      try {
+        shim.init();
+      } catch(e) {
+        Cu.reportError(e);
+      }
+    }
   },
 
   init: function(global) {
@@ -484,7 +530,11 @@ let RemoteAddonsChild = {
 
   uninit: function(perTabShims) {
     for (let shim of perTabShims) {
-      shim.uninit();
+      try {
+        shim.uninit();
+      } catch(e) {
+        Cu.reportError(e);
+      }
     }
   },
 };

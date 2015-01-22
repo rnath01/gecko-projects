@@ -317,8 +317,8 @@ class JSAPITest
 #define BEGIN_TEST(testname)                                            \
     class cls_##testname : public JSAPITest {                           \
       public:                                                           \
-        virtual const char * name() { return #testname; }               \
-        virtual bool run(JS::HandleObject global)
+        virtual const char * name() MOZ_OVERRIDE { return #testname; }  \
+        virtual bool run(JS::HandleObject global) MOZ_OVERRIDE
 
 #define END_TEST(testname)                                              \
     };                                                                  \
@@ -335,8 +335,8 @@ class JSAPITest
 #define BEGIN_FIXTURE_TEST(fixture, testname)                           \
     class cls_##testname : public fixture {                             \
       public:                                                           \
-        virtual const char * name() { return #testname; }               \
-        virtual bool run(JS::HandleObject global)
+        virtual const char * name() MOZ_OVERRIDE { return #testname; }  \
+        virtual bool run(JS::HandleObject global) MOZ_OVERRIDE
 
 #define END_FIXTURE_TEST(fixture, testname)                             \
     };                                                                  \
@@ -411,5 +411,30 @@ class TestJSPrincipals : public JSPrincipals
         refcount = rc;
     }
 };
+
+#ifdef JS_GC_ZEAL
+/*
+ * Temporarily disable the GC zeal setting. This is only useful in tests that
+ * need very explicit GC behavior and should not be used elsewhere.
+ */
+class AutoLeaveZeal
+{
+    JSContext *cx_;
+    uint8_t zeal_;
+    uint32_t frequency_;
+
+  public:
+    explicit AutoLeaveZeal(JSContext *cx) : cx_(cx) {
+        uint32_t dummy;
+        JS_GetGCZeal(cx_, &zeal_, &frequency_, &dummy);
+        JS_SetGCZeal(cx_, 0, 0);
+        JS::PrepareForFullGC(JS_GetRuntime(cx_));
+        JS::GCForReason(JS_GetRuntime(cx_), GC_SHRINK, JS::gcreason::DEBUG_GC);
+    }
+    ~AutoLeaveZeal() {
+        JS_SetGCZeal(cx_, zeal_, frequency_);
+    }
+};
+#endif /* JS_GC_ZEAL */
 
 #endif /* jsapi_tests_tests_h */

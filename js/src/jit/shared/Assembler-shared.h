@@ -897,6 +897,7 @@ class AssemblerShared
     Vector<AsmJSAbsoluteLink, 0, SystemAllocPolicy> asmJSAbsoluteLinks_;
 
   protected:
+    Vector<CodeOffsetLabel, 0, SystemAllocPolicy> profilerCallSites_;
     bool enoughMemory_;
     bool embedsNurseryPointers_;
 
@@ -918,12 +919,17 @@ class AssemblerShared
         return !enoughMemory_;
     }
 
+    void appendProfilerCallSite(CodeOffsetLabel label) {
+        enoughMemory_ &= profilerCallSites_.append(label);
+    }
+
     bool embedsNurseryPointers() const {
         return embedsNurseryPointers_;
     }
 
     ImmGCPtr noteMaybeNurseryPtr(ImmMaybeNurseryPtr ptr) {
         if (ptr.value && gc::IsInsideNursery(ptr.value)) {
+            // PJS FIXME bug 1121435
             // FIXME: Ideally we'd assert this in all cases, but PJS needs to
             //        compile IC's from off-main-thread; it will not touch
             //        nursery pointers, however.

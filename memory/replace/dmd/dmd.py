@@ -20,37 +20,26 @@ import sys
 import tempfile
 
 # The DMD output version this script handles.
-outputVersion = 3
+outputVersion = 4
 
 # If --ignore-alloc-fns is specified, stack frames containing functions that
 # match these strings will be removed from the *start* of stack traces. (Once
 # we hit a non-matching frame, any subsequent frames won't be removed even if
 # they do match.)
 allocatorFns = [
-    'replace_malloc',
-    'replace_calloc',
-    'replace_realloc',
-    'replace_memalign',
-    'replace_posix_memalign',
-    'moz_xmalloc',
-    'moz_xcalloc',
-    'moz_xrealloc',
+    # Matches malloc, replace_malloc, moz_xmalloc, vpx_malloc, js_malloc, pod_malloc, malloc_zone_*, g_malloc.
+    'malloc',
+    # Matches calloc, replace_calloc, moz_xcalloc, vpx_calloc, js_calloc, pod_calloc, malloc_zone_calloc, pod_callocCanGC.
+    'calloc',
+    # Matches realloc, replace_realloc, moz_xrealloc, vpx_realloc, js_realloc, pod_realloc, pod_reallocCanGC.
+    'realloc',
+    # Matches memalign, posix_memalign, replace_memalign, replace_posix_memalign, moz_xmemalign, moz_xposix_memalign, vpx_memalign, malloc_zone_memalign.
+    'memalign',
     'operator new(',
     'operator new[](',
-    'g_malloc',
+    'NS_Alloc',
+    'NS_Realloc',
     'g_slice_alloc',
-    'callocCanGC',
-    'reallocCanGC',
-    'vpx_malloc',
-    'vpx_calloc',
-    'vpx_realloc',
-    'vpx_memalign',
-    'js_malloc',
-    'js_calloc',
-    'js_realloc',
-    'pod_malloc',
-    'pod_calloc',
-    'pod_realloc',
     # This one necessary to fully filter some sequences of allocation functions
     # that happen in practice. Note that ??? entries that follow non-allocation
     # functions won't be stripped, as explained above.
@@ -419,14 +408,19 @@ def getDigestFromFile(args, inputFile):
             slopSize = 0
             isSampled = True
 
-        usableSize = reqSize + slopSize
-        heapUsableSize += usableSize
-        heapBlocks += 1
+        if 'num' in block:
+            num = block['num']
+        else:
+            num = 1
 
-        record.numBlocks  += 1
-        record.reqSize    += reqSize
-        record.slopSize   += slopSize
-        record.usableSize += usableSize
+        usableSize = reqSize + slopSize
+        heapUsableSize += num * usableSize
+        heapBlocks += num
+
+        record.numBlocks  += num
+        record.reqSize    += num * reqSize
+        record.slopSize   += num * slopSize
+        record.usableSize += num * usableSize
         record.isSampled   = record.isSampled or isSampled
         if record.allocatedAtDesc == None:
             record.allocatedAtDesc = \
@@ -439,7 +433,7 @@ def getDigestFromFile(args, inputFile):
             if 'reps' in block and record.reportedAtDescs == []:
                 f = lambda k: buildTraceDescription(traceTable, frameTable, k)
                 record.reportedAtDescs = map(f, reportedAtTraceKeys)
-        record.usableSizes[(usableSize, isSampled)] += 1
+        record.usableSizes[(usableSize, isSampled)] += num
 
     # All the processed data for a single DMD file is called a "digest".
     digest = {}

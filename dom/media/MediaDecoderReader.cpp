@@ -74,10 +74,10 @@ MediaDecoderReader::MediaDecoderReader(AbstractMediaDecoder* aDecoder)
   , mIgnoreAudioOutputFormat(false)
   , mStartTime(-1)
   , mHitAudioDecodeError(false)
+  , mShutdown(false)
   , mTaskQueueIsBorrowed(false)
   , mAudioDiscontinuity(false)
   , mVideoDiscontinuity(false)
-  , mShutdown(false)
 {
   MOZ_COUNT_CTOR(MediaDecoderReader);
   EnsureMediaPromiseLog();
@@ -102,6 +102,16 @@ size_t MediaDecoderReader::SizeOfAudioQueueInBytes() const
   AudioQueueMemoryFunctor functor;
   mAudioQueue.LockedForEach(functor);
   return functor.mSize;
+}
+
+size_t MediaDecoderReader::SizeOfVideoQueueInFrames()
+{
+  return mVideoQueue.GetSize();
+}
+
+size_t MediaDecoderReader::SizeOfAudioQueueInFrames()
+{
+  return mAudioQueue.GetSize();
 }
 
 nsresult MediaDecoderReader::ResetDecode()

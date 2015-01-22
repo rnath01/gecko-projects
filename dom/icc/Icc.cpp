@@ -7,6 +7,7 @@
 #include "mozilla/dom/DOMRequest.h"
 #include "mozilla/dom/IccInfo.h"
 #include "mozilla/dom/MozStkCommandEvent.h"
+#include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "nsIIccInfo.h"
 #include "nsIIccProvider.h"
@@ -34,9 +35,9 @@ IsPukCardLockType(IccLockType aLockType)
     case IccLockType::RcckPuk:
     case IccLockType::RspckPuk:
       return true;
+    default:
+      return false;
   }
-
-  return false;
 }
 
 } // anonymous namespace
@@ -341,7 +342,7 @@ Icc::GetCardLockRetryCount(IccLockType aLockType, ErrorResult& aRv)
 }
 
 already_AddRefed<DOMRequest>
-Icc::ReadContacts(const nsAString& aContactType, ErrorResult& aRv)
+Icc::ReadContacts(IccContactType aContactType, ErrorResult& aRv)
 {
   if (!mProvider) {
     aRv.Throw(NS_ERROR_FAILURE);
@@ -349,7 +350,8 @@ Icc::ReadContacts(const nsAString& aContactType, ErrorResult& aRv)
   }
 
   nsRefPtr<nsIDOMDOMRequest> request;
-  nsresult rv = mProvider->ReadContacts(mClientId, GetOwner(), aContactType,
+  nsresult rv = mProvider->ReadContacts(mClientId, GetOwner(),
+                                        static_cast<uint32_t>(aContactType),
                                         getter_AddRefs(request));
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
@@ -360,7 +362,7 @@ Icc::ReadContacts(const nsAString& aContactType, ErrorResult& aRv)
 }
 
 already_AddRefed<DOMRequest>
-Icc::UpdateContact(const JSContext* aCx, const nsAString& aContactType,
+Icc::UpdateContact(const JSContext* aCx, IccContactType aContactType,
                    JS::Handle<JS::Value> aContact, const nsAString& aPin2,
                    ErrorResult& aRv)
 {
@@ -370,7 +372,8 @@ Icc::UpdateContact(const JSContext* aCx, const nsAString& aContactType,
   }
 
   nsRefPtr<nsIDOMDOMRequest> request;
-  nsresult rv = mProvider->UpdateContact(mClientId, GetOwner(), aContactType,
+  nsresult rv = mProvider->UpdateContact(mClientId, GetOwner(),
+                                         static_cast<uint32_t>(aContactType),
                                          aContact, aPin2,
                                          getter_AddRefs(request));
   if (NS_FAILED(rv)) {
@@ -382,8 +385,7 @@ Icc::UpdateContact(const JSContext* aCx, const nsAString& aContactType,
 }
 
 already_AddRefed<DOMRequest>
-Icc::MatchMvno(const nsAString& aMvnoType,
-               const nsAString& aMvnoData,
+Icc::MatchMvno(IccMvnoType aMvnoType, const nsAString& aMvnoData,
                ErrorResult& aRv)
 {
   if (!mProvider) {
@@ -393,14 +395,35 @@ Icc::MatchMvno(const nsAString& aMvnoType,
 
   nsRefPtr<nsIDOMDOMRequest> request;
   nsresult rv = mProvider->MatchMvno(mClientId, GetOwner(),
-                                     aMvnoType, aMvnoData,
-                                     getter_AddRefs(request));
+                                     static_cast<uint32_t>(aMvnoType),
+                                     aMvnoData, getter_AddRefs(request));
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
     return nullptr;
   }
 
   return request.forget().downcast<DOMRequest>();
+}
+
+already_AddRefed<Promise>
+Icc::GetServiceState(IccService aService, ErrorResult& aRv)
+{
+  if (!mProvider) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  nsCOMPtr<nsISupports> supports;
+  nsresult rv = mProvider->GetServiceState(mClientId, GetOwner(),
+                                           static_cast<uint32_t>(aService),
+                                           getter_AddRefs(supports));
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+    return nullptr;
+  }
+
+  nsCOMPtr<Promise> promise = do_QueryInterface(supports);
+  return promise.forget();
 }
 
 } // namespace dom

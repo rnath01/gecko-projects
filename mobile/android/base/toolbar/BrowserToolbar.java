@@ -12,7 +12,6 @@ import java.util.List;
 import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.BrowserApp;
 import org.mozilla.gecko.GeckoAppShell;
-import org.mozilla.gecko.GeckoApplication;
 import org.mozilla.gecko.NewTabletUI;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tab;
@@ -140,7 +139,6 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
     private final Paint shadowPaint;
     private final int shadowSize;
 
-    private final LightweightTheme theme;
     private final ToolbarPrefs prefs;
 
     public abstract boolean isAnimating();
@@ -179,7 +177,6 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
         setWillNotDraw(false);
 
         isNewTablet = NewTabletUI.isEnabled(context);
-        theme = ((GeckoApplication) context.getApplicationContext()).getLightweightTheme();
 
         // BrowserToolbar is attached to BrowserApp only.
         activity = (BrowserApp) context;

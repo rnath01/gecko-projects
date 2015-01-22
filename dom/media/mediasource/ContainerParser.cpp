@@ -203,7 +203,7 @@ private:
 
 class MP4ContainerParser : public ContainerParser {
 public:
-  MP4ContainerParser() {}
+  MP4ContainerParser() :mMonitor("MP4ContainerParser Index Monitor") {}
 
   bool IsInitSegmentPresent(const uint8_t* aData, uint32_t aLength)
   {
@@ -237,17 +237,23 @@ public:
       return false;
     }
 
-    return aData[4] == 'm' && aData[5] == 'o' && aData[6] == 'o' &&
-           aData[7] == 'f';
+    return (aData[4] == 'm' && aData[5] == 'o' && aData[6] == 'o' && aData[7] == 'f') ||
+           (aData[4] == 's' && aData[5] == 't' && aData[6] == 'y' && aData[7] == 'p');
   }
 
   bool ParseStartAndEndTimestamps(const uint8_t* aData, uint32_t aLength,
                                   int64_t& aStart, int64_t& aEnd)
   {
+    MonitorAutoLock mon(mMonitor); // We're not actually racing against anything,
+                                   // but mParser requires us to hold a monitor.
     bool initSegment = IsInitSegmentPresent(aData, aLength);
     if (initSegment) {
       mStream = new mp4_demuxer::BufferStream();
-      mParser = new mp4_demuxer::MoofParser(mStream, 0);
+      // We use a timestampOffset of 0 for ContainerParser, and require
+      // consumers of ParseStartAndEndTimestamps to add their timestamp offset
+      // manually. This allows the ContainerParser to be shared across different
+      // timestampOffsets.
+      mParser = new mp4_demuxer::MoofParser(mStream, 0, 0, &mMonitor);
     } else if (!mStream || !mParser) {
       return false;
     }
@@ -283,14 +289,17 @@ public:
     return true;
   }
 
+  // Gaps of up to 20ms (marginally longer than a single frame at 60fps) are considered
+  // to be sequential frames.
   int64_t GetRoundingError()
   {
-    return 1000;
+    return 20000;
   }
 
 private:
   nsRefPtr<mp4_demuxer::BufferStream> mStream;
   nsAutoPtr<mp4_demuxer::MoofParser> mParser;
+  Monitor mMonitor;
 };
 
 /*static*/ ContainerParser*

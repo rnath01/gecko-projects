@@ -209,7 +209,7 @@ private:
   // Overloaded new operator. Uses an arena (which comes from the presShell)
   // to perform the allocation.
   void* operator new(size_t sz, nsIPresShell* aPresShell) CPP_THROW_NEW;
-  void operator delete(void* aPtr, size_t sz) MOZ_DELETE;
+  void operator delete(void* aPtr, size_t sz) = delete;
 
 public:
   // Use these functions to allocate and destroy line boxes
@@ -1721,8 +1721,7 @@ public:
   NS_IMETHOD GetLine(int32_t aLineNumber,
                      nsIFrame** aFirstFrameOnLine,
                      int32_t* aNumFramesOnLine,
-                     nsRect& aLineBounds,
-                     uint32_t* aLineFlags) MOZ_OVERRIDE;
+                     nsRect& aLineBounds) MOZ_OVERRIDE;
   virtual int32_t FindLineContaining(nsIFrame* aFrame, int32_t aStartLine = 0) MOZ_OVERRIDE;
   NS_IMETHOD FindFrameAt(int32_t aLineNumber,
                          nsPoint aPos,

@@ -8,7 +8,7 @@ const {Cc, Ci, Cu, Cr} = require("chrome");
 
 Cu.import("resource://gre/modules/Services.jsm");
 
-let promise = require("devtools/toolkit/deprecated-sync-thenables");
+let promise = require("resource://gre/modules/Promise.jsm").Promise;
 let EventEmitter = require("devtools/toolkit/event-emitter");
 let clipboard = require("sdk/clipboard");
 
@@ -313,7 +313,9 @@ InspectorPanel.prototype = {
    */
   setupSidebar: function InspectorPanel_setupSidebar() {
     let tabbox = this.panelDoc.querySelector("#inspector-sidebar");
-    this.sidebar = new ToolSidebar(tabbox, this, "inspector");
+    this.sidebar = new ToolSidebar(tabbox, this, "inspector", {
+      showAllTabsMenu: true
+    });
 
     let defaultTab = Services.prefs.getCharPref("devtools.inspector.activeSidebar");
 
@@ -341,7 +343,11 @@ InspectorPanel.prototype = {
                         "chrome://browser/content/devtools/layoutview/view.xhtml",
                         "layoutview" == defaultTab);
 
-    let ruleViewTab = this.sidebar.getTab("ruleview");
+    if (this.target.form.animationsActor) {
+      this.sidebar.addTab("animationinspector",
+                          "chrome://browser/content/devtools/animationinspector/animation-inspector.xhtml",
+                          "animationinspector" == defaultTab);
+    }
 
     this.sidebar.show();
   },
@@ -549,7 +555,7 @@ InspectorPanel.prototype = {
     this._toolbox.off("select", this.updateDebuggerPausedWarning);
 
     this.sidebar.off("select", this._setDefaultSidebar);
-    this.sidebar.destroy();
+    let sidebarDestroyer = this.sidebar.destroy();
     this.sidebar = null;
 
     this.nodemenu.removeEventListener("popupshowing", this._setupNodeMenu, true);
@@ -561,7 +567,7 @@ InspectorPanel.prototype = {
     this.selection.off("before-new-node", this.onBeforeNewSelection);
     this.selection.off("before-new-node-front", this.onBeforeNewSelection);
     this.selection.off("detached-front", this.onDetached);
-    this._panelDestroyer = this._destroyMarkup();
+    let markupDestroyer = this._destroyMarkup();
     this.panelWin.inspector = null;
     this.target = null;
     this.panelDoc = null;
@@ -571,6 +577,11 @@ InspectorPanel.prototype = {
     this.lastNodemenuItem = null;
     this.nodemenu = null;
     this._toolbox = null;
+
+    this._panelDestroyer = promise.all([
+      sidebarDestroyer,
+      markupDestroyer
+    ]);
 
     return this._panelDestroyer;
   },

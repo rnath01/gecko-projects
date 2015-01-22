@@ -1014,7 +1014,7 @@ nsLayoutUtils::SetDisplayPortMargins(nsIContent* aContent,
                             aMargins, aPriority),
                         nsINode::DeleteProperty<DisplayPortMarginsPropertyData>);
 
-  if (nsLayoutUtils::UsesAsyncScrolling()) {
+  if (nsLayoutUtils::UsesAsyncScrolling() && gfxPrefs::LayoutUseContainersForRootFrames()) {
     nsIFrame* rootScrollFrame = aPresShell->GetRootScrollFrame();
     if (rootScrollFrame && aContent == rootScrollFrame->GetContent()) {
       // We are setting a root displayport for a document.
@@ -1134,7 +1134,7 @@ nsLayoutUtils::GetChildListNameFor(nsIFrame* aChildFrame)
       }
     } else if (nsGkAtoms::tableColGroupFrame == childType) {
       id = nsIFrame::kColGroupList;
-    } else if (nsGkAtoms::tableCaptionFrame == childType) {
+    } else if (aChildFrame->IsTableCaption()) {
       id = nsIFrame::kCaptionList;
     } else {
       id = nsIFrame::kPrincipalList;
@@ -1171,7 +1171,10 @@ nsLayoutUtils::GetChildListNameFor(nsIFrame* aChildFrame)
 nsLayoutUtils::GetBeforeFrameForContent(nsIFrame* aFrame,
                                         nsIContent* aContent)
 {
-  nsContainerFrame* genConParentFrame = aFrame->GetContentInsertionFrame();
+  // We need to call GetGenConPseudos() on the first continuation/ib-split.
+  // Find it, for symmetry with GetAfterFrameForContent.
+  nsContainerFrame* genConParentFrame =
+    FirstContinuationOrIBSplitSibling(aFrame)->GetContentInsertionFrame();
   if (!genConParentFrame) {
     return nullptr;
   }
@@ -1207,7 +1210,10 @@ nsLayoutUtils::GetBeforeFrame(nsIFrame* aFrame)
 nsLayoutUtils::GetAfterFrameForContent(nsIFrame* aFrame,
                                        nsIContent* aContent)
 {
-  nsContainerFrame* genConParentFrame = aFrame->GetContentInsertionFrame();
+  // We need to call GetGenConPseudos() on the first continuation,
+  // but callers are likely to pass the last.
+  nsContainerFrame* genConParentFrame =
+    FirstContinuationOrIBSplitSibling(aFrame)->GetContentInsertionFrame();
   if (!genConParentFrame) {
     return nullptr;
   }
@@ -1224,8 +1230,13 @@ nsLayoutUtils::GetAfterFrameForContent(nsIFrame* aFrame,
   // If the last child frame is a pseudo-frame, then try that.
   // Note that the frame we create for the generated content is also a
   // pseudo-frame and so don't drill down in that case.
+  genConParentFrame = aFrame->GetContentInsertionFrame();
+  if (!genConParentFrame) {
+    return nullptr;
+  }
   nsIFrame* lastParentContinuation =
-    nsLayoutUtils::LastContinuationWithChild(genConParentFrame);
+    LastContinuationWithChild(static_cast<nsContainerFrame*>(
+      LastContinuationOrIBSplitSibling(genConParentFrame)));
   nsIFrame* childFrame =
     lastParentContinuation->GetLastChild(nsIFrame::kPrincipalList);
   if (childFrame &&
@@ -2806,9 +2817,9 @@ CalculateFrameMetricsForDisplayPort(nsIScrollableFrame* aScrollFrame) {
     * nsLayoutUtils::GetTransformToAncestorScale(frame).width);
 
   LayerToParentLayerScale layerToParentLayerScale(1.0f);
-  metrics.mDevPixelsPerCSSPixel = deviceScale;
-  metrics.mPresShellResolution = resolution;
-  metrics.mCumulativeResolution = cumulativeResolution;
+  metrics.SetDevPixelsPerCSSPixel(deviceScale);
+  metrics.SetPresShellResolution(resolution);
+  metrics.SetCumulativeResolution(cumulativeResolution);
   metrics.SetZoom(deviceScale * cumulativeResolution * layerToParentLayerScale);
 
   // Only the size of the composition bounds is relevant to the
@@ -2834,8 +2845,8 @@ CalculateFrameMetricsForDisplayPort(nsIScrollableFrame* aScrollFrame) {
   metrics.SetScrollOffset(CSSPoint::FromAppUnits(
       aScrollFrame->GetScrollPosition()));
 
-  metrics.mScrollableRect = CSSRect::FromAppUnits(
-      nsLayoutUtils::CalculateScrollableRectForFrame(aScrollFrame, nullptr));
+  metrics.SetScrollableRect(CSSRect::FromAppUnits(
+      nsLayoutUtils::CalculateScrollableRectForFrame(aScrollFrame, nullptr)));
 
   return metrics;
 }
@@ -3103,11 +3114,17 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
     willFlushRetainedLayers = true;
   }
 
+
+  bool profilerNeedsDisplayList = profiler_feature_active("displaylistdump");
+  bool consoleNeedsDisplayList = gfxUtils::DumpDisplayList() || gfxUtils::sDumpPainting;
 #ifdef MOZ_DUMP_PAINTING
   FILE* savedDumpFile = gfxUtils::sDumpPaintFile;
+#endif
 
-  UniquePtr<std::stringstream> ss = MakeUnique<std::stringstream>();
-  if (gfxUtils::DumpPaintList() || gfxUtils::sDumpPainting) {
+  UniquePtr<std::stringstream> ss;
+  if (consoleNeedsDisplayList || profilerNeedsDisplayList) {
+    ss = MakeUnique<std::stringstream>();
+#ifdef MOZ_DUMP_PAINTING
     if (gfxUtils::sDumpPaintingToFile) {
       nsCString string("dump-");
       string.AppendInt(gPaintCount);
@@ -3119,6 +3136,7 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
     if (gfxUtils::sDumpPaintingToFile) {
       *ss << "<html><head><script>var array = {}; function ViewImage(index) { window.location = array[index]; }</script></head><body>";
     }
+#endif
     *ss << nsPrintfCString("Painting --- before optimization (dirty %d,%d,%d,%d):\n",
             dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height).get();
     nsFrame::PrintDisplayList(&builder, list, *ss, gfxUtils::sDumpPaintingToFile);
@@ -3127,11 +3145,15 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
     } else {
       // Flush stream now to avoid reordering dump output relative to
       // messages dumped by PaintRoot below.
-      fprint_stderr(gfxUtils::sDumpPaintFile, *ss);
+      if (profilerNeedsDisplayList && !consoleNeedsDisplayList) {
+        profiler_log(ss->str().c_str());
+      } else {
+        // Send to the console which will send to the profiler if required.
+        fprint_stderr(gfxUtils::sDumpPaintFile, *ss);
+      }
       ss = MakeUnique<std::stringstream>();
     }
   }
-#endif
 
   uint32_t flags = nsDisplayList::PAINT_DEFAULT;
   if (aFlags & PAINT_WIDGET_LAYERS) {
@@ -3170,11 +3192,12 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
   Telemetry::AccumulateTimeDelta(Telemetry::PAINT_RASTERIZE_TIME,
                                  paintStart);
 
+  if (consoleNeedsDisplayList || profilerNeedsDisplayList) {
 #ifdef MOZ_DUMP_PAINTING
-  if (gfxUtils::DumpPaintList() || gfxUtils::sDumpPainting) {
     if (gfxUtils::sDumpPaintingToFile) {
       *ss << "</script>";
     }
+#endif
     *ss << "Painting --- after optimization:\n";
     nsFrame::PrintDisplayList(&builder, list, *ss, gfxUtils::sDumpPaintingToFile);
 
@@ -3183,19 +3206,25 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
       FrameLayerBuilder::DumpRetainedLayerTree(layerManager, *ss,
                                                gfxUtils::sDumpPaintingToFile);
     }
+
+    if (profilerNeedsDisplayList && !consoleNeedsDisplayList) {
+      profiler_log(ss->str().c_str());
+    } else {
+      // Send to the console which will send to the profiler if required.
+      fprint_stderr(gfxUtils::sDumpPaintFile, *ss);
+    }
+
+#ifdef MOZ_DUMP_PAINTING
     if (gfxUtils::sDumpPaintingToFile) {
       *ss << "</body></html>";
     }
-
-    fprint_stderr(gfxUtils::sDumpPaintFile, *ss);
-
     if (gfxUtils::sDumpPaintingToFile) {
       fclose(gfxUtils::sDumpPaintFile);
     }
     gfxUtils::sDumpPaintFile = savedDumpFile;
     gPaintCount++;
-  }
 #endif
+  }
 
   // Update the widget's opaque region information. This sets
   // glass boundaries on Windows. Also set up the window dragging region
@@ -3769,6 +3798,7 @@ nsLayoutUtils::GetFontMetricsForStyleContext(nsStyleContext* aStyleContext,
   if (aInflation == 1.0f) {
     return pc->DeviceContext()->GetMetricsFor(styleFont->mFont,
                                               styleFont->mLanguage,
+                                              styleFont->mExplicitLanguage,
                                               orientation, fs, tp,
                                               *aFontMetrics);
   }
@@ -3776,6 +3806,7 @@ nsLayoutUtils::GetFontMetricsForStyleContext(nsStyleContext* aStyleContext,
   nsFont font = styleFont->mFont;
   font.size = NSToCoordRound(font.size * aInflation);
   return pc->DeviceContext()->GetMetricsFor(font, styleFont->mLanguage,
+                                            styleFont->mExplicitLanguage,
                                             orientation, fs, tp,
                                             *aFontMetrics);
 }
@@ -3883,6 +3914,25 @@ nsLayoutUtils::FirstContinuationOrIBSplitSibling(nsIFrame *aFrame)
       result = f;
     }
   }
+
+  return result;
+}
+
+nsIFrame*
+nsLayoutUtils::LastContinuationOrIBSplitSibling(nsIFrame *aFrame)
+{
+  nsIFrame *result = aFrame->FirstContinuation();
+  if (result->GetStateBits() & NS_FRAME_PART_OF_IBSPLIT) {
+    while (true) {
+      nsIFrame *f = static_cast<nsIFrame*>
+        (result->Properties().Get(nsIFrame::IBSplitSibling()));
+      if (!f)
+        break;
+      result = f;
+    }
+  }
+
+  result = result->LastContinuation();
 
   return result;
 }
@@ -5095,8 +5145,32 @@ nsLayoutUtils::AppUnitWidthOfStringBidi(const char16_t* aString,
                                              aFontMetrics);
   }
   aFontMetrics.SetTextRunRTL(false);
+  aFontMetrics.SetVertical(aFrame->GetWritingMode().IsVertical());
+  aFontMetrics.SetTextOrientation(aFrame->StyleVisibility()->mTextOrientation);
   return nsLayoutUtils::AppUnitWidthOfString(aString, aLength, aFontMetrics,
                                              aContext);
+}
+
+bool
+nsLayoutUtils::StringWidthIsGreaterThan(const nsString& aString,
+                                        nsFontMetrics& aFontMetrics,
+                                        nsRenderingContext& aContext,
+                                        nscoord aWidth)
+{
+  const char16_t *string = aString.get();
+  uint32_t length = aString.Length();
+  uint32_t maxChunkLength = GetMaxChunkLength(aFontMetrics);
+  nscoord width = 0;
+  while (length > 0) {
+    int32_t len = FindSafeLength(string, length, maxChunkLength);
+    width += aFontMetrics.GetWidth(string, len, &aContext);
+    if (width > aWidth) {
+      return true;
+    }
+    length -= len;
+    string += len;
+  }
+  return false;
 }
 
 nsBoundingMetrics
@@ -5136,11 +5210,19 @@ nsLayoutUtils::DrawString(const nsIFrame*       aFrame,
                           nsStyleContext*       aStyleContext)
 {
   nsresult rv = NS_ERROR_FAILURE;
+
+  // If caller didn't pass a style context, use the frame's.
+  if (!aStyleContext) {
+    aStyleContext = aFrame->StyleContext();
+  }
+  aFontMetrics.SetVertical(WritingMode(aStyleContext).IsVertical());
+  aFontMetrics.SetTextOrientation(
+    aStyleContext->StyleVisibility()->mTextOrientation);
+
   nsPresContext* presContext = aFrame->PresContext();
   if (presContext->BidiEnabled()) {
     nsBidiLevel level =
-      nsBidiPresUtils::BidiLevelFromStyle(aStyleContext ?
-                                          aStyleContext : aFrame->StyleContext());
+      nsBidiPresUtils::BidiLevelFromStyle(aStyleContext);
     rv = nsBidiPresUtils::RenderText(aString, aLength, level,
                                      presContext, *aContext, *aContext,
                                      aFontMetrics,
@@ -7714,8 +7796,7 @@ nsLayoutUtils::IsOutlineStyleAutoEnabled()
 /* static */ void
 nsLayoutUtils::SetBSizeFromFontMetrics(const nsIFrame* aFrame,
                                        nsHTMLReflowMetrics& aMetrics,
-                                       const nsHTMLReflowState& aReflowState,
-                                       LogicalMargin aFramePadding, 
+                                       const LogicalMargin& aFramePadding,
                                        WritingMode aLineWM,
                                        WritingMode aFrameWM)
 {
@@ -7743,6 +7824,5 @@ nsLayoutUtils::SetBSizeFromFontMetrics(const nsIFrame* aFrame,
   }
   aMetrics.SetBlockStartAscent(aMetrics.BlockStartAscent() +
                                aFramePadding.BStart(aFrameWM));
-  aMetrics.BSize(aLineWM) +=
-    aReflowState.ComputedLogicalBorderPadding().BStartEnd(aFrameWM);
+  aMetrics.BSize(aLineWM) += aFramePadding.BStartEnd(aFrameWM);
 }

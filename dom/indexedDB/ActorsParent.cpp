@@ -3036,7 +3036,7 @@ private:
   virtual bool
   RecvPBackgroundIDBTransactionConstructor(
                                     PBackgroundIDBTransactionParent* aActor,
-                                    const nsTArray<nsString>& aObjectStoreNames,
+                                    InfallibleTArray<nsString>&& aObjectStoreNames,
                                     const Mode& aMode)
                                     MOZ_OVERRIDE;
 
@@ -3667,7 +3667,7 @@ public:
   }
 
   mozIStorageStatement*
-  operator->()
+  operator->() MOZ_NO_ADDREF_RELEASE_ON_RETURN
   {
     MOZ_ASSERT(mStatement);
     return mStatement;
@@ -3699,8 +3699,8 @@ private:
   }
 
   // No funny business allowed.
-  CachedStatement(const CachedStatement&) MOZ_DELETE;
-  CachedStatement& operator=(const CachedStatement&) MOZ_DELETE;
+  CachedStatement(const CachedStatement&) = delete;
+  CachedStatement& operator=(const CachedStatement&) = delete;
 };
 
 class NormalTransaction MOZ_FINAL
@@ -4077,7 +4077,7 @@ struct FactoryOp::MaybeBlockedDatabaseInfo MOZ_FINAL
   }
 
   Database*
-  operator->()
+  operator->() MOZ_NO_ADDREF_RELEASE_ON_RETURN
   {
     return mDatabase;
   }
@@ -4898,7 +4898,7 @@ private:
 
   // Must call SendResponseInternal!
   bool
-  SendResponse(const CursorResponse& aResponse) MOZ_DELETE;
+  SendResponse(const CursorResponse& aResponse) = delete;
 
   // IPDL methods.
   virtual void
@@ -5210,7 +5210,7 @@ public:
   void
   NoteBackgroundThread(nsIEventTarget* aBackgroundThread);
 
-  NS_INLINE_DECL_REFCOUNTING(QuotaClient)
+  NS_INLINE_DECL_REFCOUNTING(QuotaClient, MOZ_OVERRIDE)
 
   virtual mozilla::dom::quota::Client::Type
   GetType() MOZ_OVERRIDE;
@@ -6526,7 +6526,7 @@ Database::AllocPBackgroundIDBTransactionParent(
 bool
 Database::RecvPBackgroundIDBTransactionConstructor(
                                     PBackgroundIDBTransactionParent* aActor,
-                                    const nsTArray<nsString>& aObjectStoreNames,
+                                    InfallibleTArray<nsString>&& aObjectStoreNames,
                                     const Mode& aMode)
 {
   AssertIsOnBackgroundThread();
@@ -7821,13 +7821,8 @@ bool
 NormalTransaction::SendCompleteNotification(nsresult aResult)
 {
   AssertIsOnBackgroundThread();
-  MOZ_ASSERT(!IsActorDestroyed());
 
-  if (NS_WARN_IF(!SendComplete(aResult))) {
-    return false;
-  }
-
-  return true;
+  return IsActorDestroyed() || !NS_WARN_IF(!SendComplete(aResult));
 }
 
 void
@@ -8106,7 +8101,6 @@ VersionChangeTransaction::SendCompleteNotification(nsresult aResult)
 {
   AssertIsOnBackgroundThread();
   MOZ_ASSERT(mOpenDatabaseOp);
-  MOZ_ASSERT(!IsActorDestroyed());
 
   nsRefPtr<OpenDatabaseOp> openDatabaseOp;
   mOpenDatabaseOp.swap(openDatabaseOp);
@@ -8117,7 +8111,7 @@ VersionChangeTransaction::SendCompleteNotification(nsresult aResult)
 
   openDatabaseOp->mState = OpenDatabaseOp::State_SendingResults;
 
-  bool result = SendComplete(aResult);
+  bool result = IsActorDestroyed() || !NS_WARN_IF(!SendComplete(aResult));
 
   MOZ_ALWAYS_TRUE(NS_SUCCEEDED(openDatabaseOp->Run()));
 
@@ -10550,10 +10544,23 @@ FactoryOp::Open()
     return NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR;
   }
 
-  // This has to be started on the main thread currently.
-  if (NS_WARN_IF(!IndexedDatabaseManager::GetOrCreate())) {
-    IDB_REPORT_INTERNAL_ERR();
-    return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+  {
+    // These services have to be started on the main thread currently.
+    if (NS_WARN_IF(!IndexedDatabaseManager::GetOrCreate())) {
+      IDB_REPORT_INTERNAL_ERR();
+      return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+    }
+
+    nsCOMPtr<mozIStorageService> ss;
+    if (NS_WARN_IF(!(ss = do_GetService(MOZ_STORAGE_SERVICE_CONTRACTID)))) {
+      IDB_REPORT_INTERNAL_ERR();
+      return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+    }
+
+    if (NS_WARN_IF(!QuotaManager::GetOrCreate())) {
+      IDB_REPORT_INTERNAL_ERR();
+      return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+    }
   }
 
   const DatabaseMetadata& metadata = mCommonParams.metadata();
@@ -10741,7 +10748,9 @@ FactoryOp::CheckPermission(ContentParent* aContentParent,
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(mState == State_Initial || mState == State_PermissionRetry);
 
-  if (NS_WARN_IF(!Preferences::GetBool(kPrefIndexedDBEnabled, false))) {
+  const PrincipalInfo& principalInfo = mCommonParams.principalInfo();
+  if (principalInfo.type() != PrincipalInfo::TSystemPrincipalInfo &&
+      NS_WARN_IF(!Preferences::GetBool(kPrefIndexedDBEnabled, false))) {
     if (aContentParent) {
       // The DOM in the other process should have kept us from receiving any
       // indexedDB messages so assume that the child is misbehaving.
@@ -10757,7 +10766,6 @@ FactoryOp::CheckPermission(ContentParent* aContentParent,
 
   PersistenceType persistenceType = mCommonParams.metadata().persistenceType();
 
-  const PrincipalInfo& principalInfo = mCommonParams.principalInfo();
   MOZ_ASSERT(principalInfo.type() != PrincipalInfo::TNullPrincipalInfo);
 
   if (principalInfo.type() == PrincipalInfo::TSystemPrincipalInfo) {
@@ -10844,6 +10852,14 @@ FactoryOp::CheckPermission(ContentParent* aContentParent,
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
+
+#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+  if (persistenceType == PERSISTENCE_TYPE_PERSISTENT &&
+      !QuotaManager::IsOriginWhitelistedForPersistentStorage(origin) &&
+      !isApp) {
+    return NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR;
+  }
+#endif
 
   PermissionRequestBase::PermissionValue permission;
 
@@ -11936,8 +11952,7 @@ OpenDatabaseOp::SendResults()
     mVersionChangeTransaction = nullptr;
   }
 
-  if (!IsActorDestroyed() &&
-      (!mDatabase || !mDatabase->IsInvalidated())) {
+  if (!IsActorDestroyed()) {
     FactoryRequestResponse response;
 
     if (NS_SUCCEEDED(mResultCode)) {
@@ -11976,6 +11991,10 @@ OpenDatabaseOp::SendResults()
     mOfflineStorage->CloseOnOwningThread();
     DatabaseOfflineStorage::UnregisterOnOwningThread(mOfflineStorage.forget());
   }
+
+  // Make sure to release the database on this thread.
+  nsRefPtr<Database> database;
+  mDatabase.swap(database);
 
   FinishSendResults();
 }
@@ -13377,9 +13396,7 @@ CommitOp::TransactionFinishedAfterUnblock()
 
   mTransaction->ReleaseBackgroundThreadObjects();
 
-  if (!mTransaction->IsActorDestroyed()) {
-    mTransaction->SendCompleteNotification(ClampResultCode(mResultCode));
-  }
+  mTransaction->SendCompleteNotification(ClampResultCode(mResultCode));
 
   mTransaction->GetDatabase()->UnregisterTransaction(mTransaction);
 

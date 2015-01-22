@@ -149,6 +149,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "Social",
 XPCOMUtils.defineLazyModuleGetter(this, "PageThumbs",
   "resource://gre/modules/PageThumbs.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "ProcessHangMonitor",
+  "resource:///modules/ProcessHangMonitor.jsm");
+
 #ifdef MOZ_SAFE_BROWSING
 XPCOMUtils.defineLazyModuleGetter(this, "SafeBrowsing",
   "resource://gre/modules/SafeBrowsing.jsm");
@@ -194,6 +197,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "CastingApps",
 
 XPCOMUtils.defineLazyModuleGetter(this, "SimpleServiceDiscovery",
   "resource://gre/modules/SimpleServiceDiscovery.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "ReaderParent",
+  "resource:///modules/ReaderParent.jsm");
 
 let gInitialPages = [
   "about:blank",
@@ -259,10 +265,10 @@ XPCOMUtils.defineLazyServiceGetter(this, "gCrashReporter",
                                    "nsICrashReporter");
 #endif
 
-XPCOMUtils.defineLazyGetter(this, "PageMenu", function() {
+XPCOMUtils.defineLazyGetter(this, "PageMenuParent", function() {
   let tmp = {};
   Cu.import("resource://gre/modules/PageMenu.jsm", tmp);
-  return new tmp.PageMenu();
+  return new tmp.PageMenuParent();
 });
 
 /**
@@ -923,6 +929,7 @@ var gBrowserInit = {
     gHistorySwipeAnimation.init();
 
     if (window.opener && !window.opener.closed &&
+        window.opener.document.documentURIObject.schemeIs("chrome") &&
         PrivateBrowsingUtils.isWindowPrivate(window) == PrivateBrowsingUtils.isWindowPrivate(window.opener)) {
       let openerSidebarBox = window.opener.document.getElementById("sidebar-box");
       // If the opener had a sidebar, open the same sidebar in our window.
@@ -1094,9 +1101,6 @@ var gBrowserInit = {
     socialBrowser.addEventListener("MozApplicationManifest",
                               OfflineApps, false);
 
-    let uriToLoad = this._getUriToLoad();
-    var isLoadingBlank = isBlankPageURL(uriToLoad);
-
     // This pageshow listener needs to be registered before we may call
     // swapBrowsersAndCloseOther() to receive pageshow events fired by that.
     let mm = window.messageManager;
@@ -1134,6 +1138,7 @@ var gBrowserInit = {
       SessionStore.reviveCrashedTab(tab);
     }, false, true);
 
+    let uriToLoad = this._getUriToLoad();
     if (uriToLoad && uriToLoad != "about:blank") {
       if (uriToLoad instanceof Ci.nsISupportsArray) {
         let count = uriToLoad.Count();
@@ -1218,8 +1223,10 @@ var gBrowserInit = {
 
     UpdateUrlbarSearchSplitterState();
 
-    if (!isLoadingBlank || !focusAndSelectUrlBar())
+    if (!(isBlankPageURL(uriToLoad) || uriToLoad == "about:privatebrowsing") ||
+        !focusAndSelectUrlBar()) {
       gBrowser.selectedBrowser.focus();
+    }
 
     // Set up Sanitize Item
     this._initializeSanitizer();
@@ -1737,7 +1744,7 @@ function HandleAppCommandEvent(evt) {
     saveDocument(gBrowser.selectedBrowser.contentDocumentAsCPOW);
     break;
   case "SendMail":
-    MailIntegration.sendLinkForWindow(window.content);
+    MailIntegration.sendLinkForBrowser(gBrowser.selectedBrowser);
     break;
   default:
     return;
@@ -2081,7 +2088,7 @@ function getShortcutOrURIAndPostData(aURL, aCallback) {
 
   let engine = Services.search.getEngineByAlias(keyword);
   if (engine) {
-    let submission = engine.getSubmission(param);
+    let submission = engine.getSubmission(param, null, "keyword");
     postData = submission.postData;
     aCallback({ postData: submission.postData, url: submission.uri.spec,
                 mayInheritPrincipal: mayInheritPrincipal });
@@ -2561,7 +2568,7 @@ let BrowserOnClick = {
     let mm = window.messageManager;
     mm.addMessageListener("Browser:CertExceptionError", this);
     mm.addMessageListener("Browser:SiteBlockedError", this);
-    mm.addMessageListener("Browser:NetworkError", this);
+    mm.addMessageListener("Browser:EnableOnlineMode", this);
     mm.addMessageListener("Browser:SendSSLErrorReport", this);
     mm.addMessageListener("Browser:SetSSLErrorReportAuto", this);
   },
@@ -2570,7 +2577,7 @@ let BrowserOnClick = {
     let mm = window.messageManager;
     mm.removeMessageListener("Browser:CertExceptionError", this);
     mm.removeMessageListener("Browser:SiteBlockedError", this);
-    mm.removeMessageListener("Browser:NetworkError", this);
+    mm.removeMessageListener("Browser:EnableOnlineMode", this);
     mm.removeMessageListener("Browser:SendSSLErrorReport", this);
     mm.removeMessageListener("Browser:SetSSLErrorReportAuto", this);
   },
@@ -2604,9 +2611,12 @@ let BrowserOnClick = {
         this.onAboutBlocked(msg.data.elementId, msg.data.isMalware,
                             msg.data.isTopFrame, msg.data.location);
       break;
-      case "Browser:NetworkError":
-        // Reset network state, the error page will refresh on its own.
-        Services.io.offline = false;
+      case "Browser:EnableOnlineMode":
+        if (Services.io.offline) {
+          // Reset network state and refresh the page.
+          Services.io.offline = false;
+          msg.target.reload();
+        }
       break;
       case "Browser:SendSSLErrorReport":
         this.onSSLErrorReport(msg.target, msg.data.elementId,
@@ -2642,11 +2652,6 @@ let BrowserOnClick = {
     let transportSecurityInfo = serhelper.deserializeObject(securityInfo);
     transportSecurityInfo.QueryInterface(Ci.nsITransportSecurityInfo)
 
-    if (transportSecurityInfo.failedCertChain == null) {
-      Cu.reportError("transportSecurityInfo didn't have a failedCertChain for a failedChannel");
-      return;
-    }
-
     showReportStatus("activity");
 
     /*
@@ -2676,11 +2681,14 @@ let BrowserOnClick = {
     // Convert the nsIX509CertList into a format that can be parsed into
     // JSON
     let asciiCertChain = [];
-    let certs = transportSecurityInfo.failedCertChain.getEnumerator();
-    while (certs.hasMoreElements()) {
-      let cert = certs.getNext();
-      cert.QueryInterface(Ci.nsIX509Cert);
-      asciiCertChain.push(btoa(getDERString(cert)));
+
+    if (transportSecurityInfo.failedCertChain) {
+      let certs = transportSecurityInfo.failedCertChain.getEnumerator();
+      while (certs.hasMoreElements()) {
+        let cert = certs.getNext();
+        cert.QueryInterface(Ci.nsIX509Cert);
+        asciiCertChain.push(btoa(getDERString(cert)));
+      }
     }
 
     let report = {
@@ -2941,7 +2949,7 @@ function BrowserFullScreen()
 
 function mirrorShow(popup) {
   let services = CastingApps.getServicesForMirroring();
-  popup.ownerDocument.getElementById("menu_mirrorTabCmd").disabled = !services.length;
+  popup.ownerDocument.getElementById("menu_mirrorTabCmd").hidden = !services.length;
 }
 
 function mirrorMenuItemClicked(event) {
@@ -3308,8 +3316,32 @@ const BrowserSearch = {
 
     if (hidden)
       browser.hiddenEngines = engines;
-    else
+    else {
       browser.engines = engines;
+      if (browser == gBrowser.selectedBrowser)
+        this.updateSearchButton();
+    }
+  },
+
+  /**
+   * Update the browser UI to show whether or not additional engines are
+   * available when a page is loaded or the user switches tabs to a page that
+   * has search engines.
+   */
+  updateSearchButton: function() {
+    var searchBar = this.searchBar;
+
+    // The search bar binding might not be applied even though the element is
+    // in the document (e.g. when the navigation toolbar is hidden), so check
+    // for .searchButton specifically.
+    if (!searchBar || !searchBar.searchButton)
+      return;
+
+    var engines = gBrowser.selectedBrowser.engines;
+    if (engines && engines.length > 0)
+      searchBar.setAttribute("addengines", "true");
+    else
+      searchBar.removeAttribute("addengines");
   },
 
   /**
@@ -3543,6 +3575,11 @@ const BrowserSearch = {
     let count = Services.telemetry.getKeyedHistogramById("SEARCH_COUNTS");
     count.add(countId);
   },
+
+  recordOneoffSearchInTelemetry: function (engine, source, type, where) {
+    let id = this._getSearchEngineId(engine) + "." + source;
+    BrowserUITelemetry.countOneoffSearchEvent(id, type, where);
+  }
 };
 
 const SearchHighlight = {
@@ -3771,8 +3808,11 @@ function toJavaScriptConsole()
 
 function BrowserDownloadsUI()
 {
-  Cc["@mozilla.org/download-manager-ui;1"].
-  getService(Ci.nsIDownloadManagerUI).show(window);
+  if (PrivateBrowsingUtils.isWindowPrivate(window)) {
+    openUILinkIn("about:downloads", "tab");
+  } else {
+    PlacesCommandHook.showPlacesOrganizer("Downloads");
+  }
 }
 
 function toOpenWindowByType(inType, uri, features)
@@ -4297,6 +4337,7 @@ var XULBrowserWindow = {
       }
     }
     UpdateBackForwardCommands(gBrowser.webNavigation);
+    ReaderParent.updateReaderButton(gBrowser.selectedBrowser);
 
     gGestureSupport.restoreRotationState();
 
@@ -4326,6 +4367,7 @@ var XULBrowserWindow = {
 
   asyncUpdateUI: function () {
     FeedHandler.updateFeeds();
+    BrowserSearch.updateSearchButton();
   },
 
   // Left here for add-on compatibility, see bug 752434
@@ -5684,9 +5726,11 @@ function handleLinkClick(event, href, linkNode) {
   }
 
   urlSecurityCheck(href, doc.nodePrincipal);
-  openLinkIn(href, where, { referrerURI: referrerURI,
-                            charset: doc.characterSet,
-                            allowMixedContent: persistAllowMixedContentInChildTab });
+  let params = { charset: doc.characterSet,
+                 allowMixedContent: persistAllowMixedContentInChildTab };
+  if (!BrowserUtils.linkHasNoReferrer(linkNode))
+    params.referrerURI = referrerURI;
+  openLinkIn(href, where, params);
   event.preventDefault();
   return true;
 }
@@ -6416,8 +6460,18 @@ function WindowIsClosing()
 
   for (let browser of gBrowser.browsers) {
     let ds = browser.docShell;
-    if (ds.contentViewer && !ds.contentViewer.permitUnload())
+    // Passing true to permitUnload indicates we plan on closing the window.
+    // This means that once unload is permitted, all further calls to
+    // permitUnload will be ignored. This avoids getting multiple prompts
+    // to unload the page.
+    if (ds.contentViewer && !ds.contentViewer.permitUnload(true)) {
+      // ... however, if the user aborts closing, we need to undo that,
+      // to ensure they get prompted again when we next try to close the window.
+      // We do this on the window's toplevel docshell instead of on the tab, so
+      // that all tabs we iterated before will get this reset.
+      window.getInterface(Ci.nsIDocShell).contentViewer.resetCloseWindow();
       return false;
+    }
   }
 
   return true;
@@ -6493,9 +6547,8 @@ function warnAboutClosingWindow() {
 }
 
 var MailIntegration = {
-  sendLinkForWindow: function (aWindow) {
-    this.sendMessage(aWindow.location.href,
-                     aWindow.document.title);
+  sendLinkForBrowser: function (aBrowser) {
+    this.sendMessage(aBrowser.currentURI.spec, aBrowser.contentTitle);
   },
 
   sendMessage: function (aBody, aSubject) {
@@ -6744,7 +6797,7 @@ function isTabEmpty(aTab) {
   if (!gMultiProcessBrowser && browser.contentWindow.opener)
     return false;
 
-  if (browser.sessionHistory && browser.sessionHistory.count >= 2)
+  if (browser.canGoForward || browser.canGoBack)
     return false;
 
   return true;
@@ -7005,7 +7058,7 @@ var gIdentityHandler = {
          nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT     |
          nsIWebProgressListener.STATE_LOADED_TRACKING_CONTENT)) {
       this.showBadContentDoorhanger(state);
-    } else {
+    } else if (gPrefService.getBoolPref("privacy.trackingprotection.enabled")) {
       // We didn't show the shield
       Services.telemetry.getHistogramById("TRACKING_PROTECTION_SHIELD")
         .add(0);
@@ -7038,9 +7091,9 @@ var gIdentityHandler = {
     } else if (state &
                Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT) {
       histogram.add(2);
-    } else {
-      // The shield is due to mixed content, just keep a count so we can
-      // normalize later.
+    } else if (gPrefService.getBoolPref("privacy.trackingprotection.enabled")) {
+      // Tracking protection is enabled but no tracking elements are loaded,
+      // the shield is due to mixed content.
       histogram.add(3);
     }
     if (state &
@@ -7474,6 +7527,7 @@ function switchToTabHavingURI(aURI, aOpenNew, aOpenParams={}) {
   // Certain URLs can be switched to irrespective of the source or destination
   // window being in private browsing mode:
   const kPrivateBrowsingWhitelist = new Set([
+    "about:addons",
     "about:customizing",
   ]);
 
@@ -7485,6 +7539,7 @@ function switchToTabHavingURI(aURI, aOpenNew, aOpenParams={}) {
   // not be used as a parameter for the new load.
   delete aOpenParams.ignoreFragment;
   delete aOpenParams.ignoreQueryString;
+  delete aOpenParams.replaceQueryString;
 
   // This will switch to the tab in aWindow having aURI, if present.
   function switchIfURIInWindow(aWindow) {
@@ -7735,7 +7790,8 @@ XPCOMUtils.defineLazyGetter(ResponsiveUI, "ResponsiveUIManager", function() {
 });
 
 function openEyedropper() {
-  var eyedropper = new this.Eyedropper(this);
+  var eyedropper = new this.Eyedropper(this, { context: "menu",
+                                               copyOnSelect: true });
   eyedropper.open();
 }
 

@@ -2370,7 +2370,7 @@ nsComputedDOMStyle::DoGetGridAutoFlow()
   nsAutoString str;
   nsStyleUtil::AppendBitmaskCSSValue(eCSSProperty_grid_auto_flow,
                                      StylePosition()->mGridAutoFlow,
-                                     NS_STYLE_GRID_AUTO_FLOW_STACK,
+                                     NS_STYLE_GRID_AUTO_FLOW_ROW,
                                      NS_STYLE_GRID_AUTO_FLOW_DENSE,
                                      str);
   nsROCSSPrimitiveValue* val = new nsROCSSPrimitiveValue;
@@ -3073,6 +3073,15 @@ nsComputedDOMStyle::DoGetLineHeight()
                     nullptr, nsCSSProps::kLineHeightKTable);
   }
 
+  return val;
+}
+
+CSSValue*
+nsComputedDOMStyle::DoGetRubyPosition()
+{
+  nsROCSSPrimitiveValue *val = new nsROCSSPrimitiveValue;
+  val->SetIdent(nsCSSProps::ValueToKeywordEnum(
+    StyleText()->mRubyPosition, nsCSSProps::kRubyPositionKTable));
   return val;
 }
 
@@ -5854,7 +5863,9 @@ nsComputedDOMStyle::RegisterPrefChangeCallbacks()
 #define CSS_PROP(prop_, id_, method_, flags_, pref_, parsevariant_,          \
                  kwtable_, stylestruct_, stylestructoffset_, animtype_)      \
   REGISTER_CALLBACK(pref_)
+#define CSS_PROP_LIST_INCLUDE_LOGICAL
 #include "nsCSSPropList.h"
+#undef CSS_PROP_LIST_INCLUDE_LOGICAL
 #undef CSS_PROP
 #undef REGISTER_CALLBACK
 }
@@ -5870,7 +5881,9 @@ nsComputedDOMStyle::UnregisterPrefChangeCallbacks()
 #define CSS_PROP(prop_, id_, method_, flags_, pref_, parsevariant_,            \
                  kwtable_, stylestruct_, stylestructoffset_, animtype_)        \
   UNREGISTER_CALLBACK(pref_)
+#define CSS_PROP_LIST_INCLUDE_LOGICAL
 #include "nsCSSPropList.h"
+#undef CSS_PROP_LIST_INCLUDE_LOGICAL
 #undef CSS_PROP
 #undef UNREGISTER_CALLBACK
 }

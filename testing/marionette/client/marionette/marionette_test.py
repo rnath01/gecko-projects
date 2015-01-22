@@ -88,6 +88,21 @@ def skip_if_b2g(target):
 
     return wrapper
 
+def skip_if_e10s(target):
+    def wrapper(self, *args, **kwargs):
+        with self.marionette.using_context('chrome'):
+            multi_process_browser = self.marionette.execute_script("""
+            try {
+              return Services.appinfo.browserTabsRemoteAutostart;
+            } catch (e) {
+              return false;
+            }""")
+
+        if multi_process_browser:
+            raise SkipTest('skipping due to e10s')
+        return target(self, *args, **kwargs)
+    return wrapper
+
 def parameterized(func_suffix, *args, **kwargs):
     """
     A decorator that can generate methods given a base method and some data.
@@ -648,3 +663,14 @@ class MarionetteJSTestCase(CommonTestCase):
 
         self.marionette.execute_script("log('TEST-END: %s');" % self.jsFile.replace('\\', '\\\\'))
         self.marionette.test_name = None
+
+    def get_test_class_name(self):
+        # returns a dot separated folders as class name
+        dirname = os.path.dirname(self.jsFile).replace('\\', '/')
+        if dirname.startswith('/'):
+            dirname = dirname[1:]
+        return '.'.join(dirname.split('/'))
+
+    def get_test_method_name(self):
+        # returns the js filename without extension as method name
+        return os.path.splitext(os.path.basename(self.jsFile))[0]

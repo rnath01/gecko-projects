@@ -12,19 +12,24 @@ let PerformanceView = {
    */
   initialize: function () {
     this._recordButton = $("#record-button");
+    this._importButton = $("#import-button");
 
     this._onRecordButtonClick = this._onRecordButtonClick.bind(this);
+    this._onImportButtonClick = this._onImportButtonClick.bind(this);
     this._lockRecordButton = this._lockRecordButton.bind(this);
     this._unlockRecordButton = this._unlockRecordButton.bind(this);
 
     this._recordButton.addEventListener("click", this._onRecordButtonClick);
+    this._importButton.addEventListener("click", this._onImportButtonClick);
 
     // Bind to controller events to unlock the record button
     PerformanceController.on(EVENTS.RECORDING_STARTED, this._unlockRecordButton);
     PerformanceController.on(EVENTS.RECORDING_STOPPED, this._unlockRecordButton);
 
     return promise.all([
+      RecordingsView.initialize(),
       OverviewView.initialize(),
+      ToolbarView.initialize(),
       DetailsView.initialize()
     ]);
   },
@@ -34,11 +39,15 @@ let PerformanceView = {
    */
   destroy: function () {
     this._recordButton.removeEventListener("click", this._onRecordButtonClick);
+    this._importButton.removeEventListener("click", this._onImportButtonClick);
+
     PerformanceController.off(EVENTS.RECORDING_STARTED, this._unlockRecordButton);
     PerformanceController.off(EVENTS.RECORDING_STOPPED, this._unlockRecordButton);
 
     return promise.all([
+      RecordingsView.destroy(),
       OverviewView.destroy(),
+      ToolbarView.destroy(),
       DetailsView.destroy()
     ]);
   },
@@ -70,6 +79,20 @@ let PerformanceView = {
       this._recordButton.setAttribute("checked", "true");
       this._lockRecordButton();
       this.emit(EVENTS.UI_START_RECORDING);
+    }
+  },
+
+  /**
+   * Handler for clicking the import button.
+   */
+  _onImportButtonClick: function(e) {
+    let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
+    fp.init(window, L10N.getStr("recordingsList.saveDialogTitle"), Ci.nsIFilePicker.modeOpen);
+    fp.appendFilter(L10N.getStr("recordingsList.saveDialogJSONFilter"), "*.json");
+    fp.appendFilter(L10N.getStr("recordingsList.saveDialogAllFilter"), "*.*");
+
+    if (fp.show() == Ci.nsIFilePicker.returnOK) {
+      this.emit(EVENTS.UI_IMPORT_RECORDING, fp.file);
     }
   }
 };

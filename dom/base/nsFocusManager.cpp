@@ -1145,11 +1145,12 @@ nsFocusManager::ActivateOrDeactivate(nsPIDOMWindow* aWindow, bool aActive)
   aWindow->ActivateOrDeactivate(aActive);
 
   // Send the activate event.
-  nsContentUtils::DispatchTrustedEvent(aWindow->GetExtantDoc(),
-                                       aWindow,
-                                       aActive ? NS_LITERAL_STRING("activate") :
-                                                 NS_LITERAL_STRING("deactivate"),
-                                       true, true, nullptr);
+  nsContentUtils::DispatchEventOnlyToChrome(aWindow->GetExtantDoc(),
+                                            aWindow,
+                                            aActive ?
+                                              NS_LITERAL_STRING("activate") :
+                                              NS_LITERAL_STRING("deactivate"),
+                                            true, true, nullptr);
 
   // Look for any remote child frames, iterate over them and send the activation notification.
   nsContentUtils::CallOnAllRemoteChildren(aWindow, ActivateOrDeactivateChild,
@@ -1614,11 +1615,6 @@ nsFocusManager::Blur(nsPIDOMWindow* aWindowToClear,
     return true;
   }
 
-  nsRefPtr<SelectionCarets> selectionCarets = presShell->GetSelectionCarets();
-  if (selectionCarets) {
-    selectionCarets->NotifyBlur();
-  }
-
   bool clearFirstBlurEvent = false;
   if (!mFirstBlurEvent) {
     mFirstBlurEvent = content;
@@ -1688,8 +1684,14 @@ nsFocusManager::Blur(nsPIDOMWindow* aWindowToClear,
 
   // if we are leaving the document or the window was lowered, make the caret
   // invisible.
-  if (aIsLeavingDocument || !mActiveWindow)
+  if (aIsLeavingDocument || !mActiveWindow) {
     SetCaretVisible(presShell, false, nullptr);
+  }
+
+  nsRefPtr<SelectionCarets> selectionCarets = presShell->GetSelectionCarets();
+  if (selectionCarets) {
+    selectionCarets->NotifyBlur(aIsLeavingDocument || !mActiveWindow);
+  }
 
   // at this point, it is expected that this window will be still be
   // focused, but the focused content will be null, as it was cleared before

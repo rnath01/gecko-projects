@@ -7,9 +7,14 @@
 SOURCES += [
     'TestBadImplicitConversionCtor.cpp',
     'TestCustomHeap.cpp',
+    'TestGlobalClass.cpp',
     'TestMustOverride.cpp',
+    'TestNANTestingExpr.cpp',
+    'TestNANTestingExprC.c',
+    'TestNoArithmeticExprInArgument.cpp',
     'TestNonHeapClass.cpp',
     'TestStackClass.cpp',
+    'TestTrivialCtorDtor.cpp',
 ]
 
 DISABLE_STL_WRAPPING = True

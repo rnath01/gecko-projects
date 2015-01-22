@@ -14,6 +14,8 @@ user_pref("dom.forms.color", true); // on for testing
 user_pref("dom.max_script_run_time", 0); // no slow script dialogs
 user_pref("hangmonitor.timeout", 0); // no hang monitor
 user_pref("dom.max_chrome_script_run_time", 0);
+user_pref("dom.max_child_script_run_time", 0);
+user_pref("dom.ipc.reportProcessHangs", false); // process hang monitor
 user_pref("dom.popup_maximum", -1);
 user_pref("dom.send_after_paint_to_content", true);
 user_pref("dom.successive_dialog_time_limit", 0);
@@ -157,6 +159,7 @@ user_pref("layout.spammy_warnings.enabled", false);
 
 // Enable Media Source Extensions for testing
 user_pref("media.mediasource.enabled", true);
+user_pref("media.mediasource.youtubeonly", false);
 user_pref("media.mediasource.mp4.enabled", true);
 user_pref("media.mediasource.webm.enabled", true);
 
@@ -259,11 +262,13 @@ user_pref("browser.newtabpage.directory.source", 'data:application/json,{"testin
 user_pref("browser.newtabpage.directory.ping", "");
 
 // Enable Loop
+user_pref("loop.debug.loglevel", "All");
 user_pref("loop.enabled", true);
 user_pref("loop.throttled", false);
 user_pref("loop.oauth.google.URL", "http://%(server)s/browser/browser/components/loop/test/mochitest/google_service.sjs?action=");
 user_pref("loop.oauth.google.getContactsURL", "http://%(server)s/browser/browser/components/loop/test/mochitest/google_service.sjs?action=contacts");
 user_pref("loop.oauth.google.getGroupsURL", "http://%(server)s/browser/browser/components/loop/test/mochitest/google_service.sjs?action=groups");
+user_pref("loop.server", "http://%(server)s/browser/browser/components/loop/test/mochitest/loop_fxa.sjs?");
 user_pref("loop.CSP","default-src 'self' about: file: chrome: data: wss://* http://* https://*");
 
 // Ensure UITour won't hit the network
@@ -272,6 +277,10 @@ user_pref("browser.uitour.url", "http://%(server)s/uitour-dummy/tour");
 
 // Don't show the search first run UI by default
 user_pref("browser.search.highlightCount", 0);
+// Tell the search service we are running in the US.  This also has the desired
+// side-effect of preventing our geoip lookup.
+user_pref("browser.search.isUS", true);
+user_pref("browser.search.countryCode", "US");
 
 user_pref("media.eme.enabled", true);
 
@@ -279,3 +288,5 @@ user_pref("media.eme.enabled", true);
 user_pref("browser.displayedE10SPrompt.1", 5);
 // Don't use auto-enabled e10s
 user_pref("browser.tabs.remote.autostart.1", false);
+// Don't forceably kill content processes after a timeout
+user_pref("dom.ipc.tabs.shutdownTimeoutSecs", 0);

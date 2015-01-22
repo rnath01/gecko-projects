@@ -45,11 +45,11 @@ nsresult DispatchMediaPromiseRunnable(nsIEventTarget* aTarget, nsIRunnable* aRun
  * callbacks to be invoked (asynchronously, on a specified thread) when the
  * request is either completed (resolved) or cannot be completed (rejected).
  *
- * By default, resolve and reject callbacks are always invoked on the same thread
- * where Then() was invoked.
+ * When IsExclusive is true, the MediaPromise does a release-mode assertion that
+ * there is at most one call to either Then(...) or ChainTo(...).
  */
 template<typename T> class MediaPromiseHolder;
-template<typename ResolveValueT, typename RejectValueT>
+template<typename ResolveValueT, typename RejectValueT, bool IsExclusive>
 class MediaPromise
 {
 public:
@@ -60,25 +60,23 @@ public:
   explicit MediaPromise(const char* aCreationSite)
     : mCreationSite(aCreationSite)
     , mMutex("MediaPromise Mutex")
+    , mHaveConsumer(false)
   {
-    MOZ_COUNT_CTOR(MediaPromise);
     PROMISE_LOG("%s creating MediaPromise (%p)", mCreationSite, this);
   }
 
-  static nsRefPtr<MediaPromise<ResolveValueT, RejectValueT>>
+  static nsRefPtr<MediaPromise>
   CreateAndResolve(ResolveValueType aResolveValue, const char* aResolveSite)
   {
-    nsRefPtr<MediaPromise<ResolveValueT, RejectValueT>> p =
-      new MediaPromise<ResolveValueT, RejectValueT>(aResolveSite);
+    nsRefPtr<MediaPromise> p = new MediaPromise(aResolveSite);
     p->Resolve(aResolveValue, aResolveSite);
     return p;
   }
 
-  static nsRefPtr<MediaPromise<ResolveValueT, RejectValueT>>
+  static nsRefPtr<MediaPromise>
   CreateAndReject(RejectValueType aRejectValue, const char* aRejectSite)
   {
-    nsRefPtr<MediaPromise<ResolveValueT, RejectValueT>> p =
-      new MediaPromise<ResolveValueT, RejectValueT>(aRejectSite);
+    nsRefPtr<MediaPromise> p = new MediaPromise(aRejectSite);
     p->Reject(aRejectValue, aRejectSite);
     return p;
   }
@@ -99,14 +97,10 @@ protected:
     public:
       ResolveRunnable(ThenValueBase* aThenValue, ResolveValueType aResolveValue)
         : mThenValue(aThenValue)
-        , mResolveValue(aResolveValue)
-      {
-        MOZ_COUNT_CTOR(ResolveRunnable);
-      }
+        , mResolveValue(aResolveValue) {}
 
       ~ResolveRunnable()
       {
-        MOZ_COUNT_DTOR(ResolveRunnable);
         MOZ_ASSERT(!mThenValue);
       }
 
@@ -130,14 +124,10 @@ protected:
     public:
       RejectRunnable(ThenValueBase* aThenValue, RejectValueType aRejectValue)
         : mThenValue(aThenValue)
-        , mRejectValue(aRejectValue)
-      {
-        MOZ_COUNT_CTOR(RejectRunnable);
-      }
+        , mRejectValue(aRejectValue) {}
 
       ~RejectRunnable()
       {
-        MOZ_COUNT_DTOR(RejectRunnable);
         MOZ_ASSERT(!mThenValue);
       }
 
@@ -229,12 +219,12 @@ protected:
     }
 
   protected:
-    virtual void DoResolve(ResolveValueType aResolveValue)
+    virtual void DoResolve(ResolveValueType aResolveValue) MOZ_OVERRIDE
     {
       InvokeCallbackMethod(mThisVal.get(), mResolveMethod, aResolveValue);
     }
 
-    virtual void DoReject(RejectValueType aRejectValue)
+    virtual void DoReject(RejectValueType aRejectValue) MOZ_OVERRIDE
     {
       InvokeCallbackMethod(mThisVal.get(), mRejectMethod, aRejectValue);
     }
@@ -255,6 +245,8 @@ public:
             ResolveMethodType aResolveMethod, RejectMethodType aRejectMethod)
   {
     MutexAutoLock lock(mMutex);
+    MOZ_RELEASE_ASSERT(!IsExclusive || !mHaveConsumer);
+    mHaveConsumer = true;
     ThenValueBase* thenValue = new ThenValue<TargetType, ThisType, ResolveMethodType,
                                              RejectMethodType>(aResponseTarget, aThisVal,
                                                                aResolveMethod, aRejectMethod,
@@ -271,6 +263,8 @@ public:
   void ChainTo(already_AddRefed<MediaPromise> aChainedPromise, const char* aCallSite)
   {
     MutexAutoLock lock(mMutex);
+    MOZ_RELEASE_ASSERT(!IsExclusive || !mHaveConsumer);
+    mHaveConsumer = true;
     nsRefPtr<MediaPromise> chainedPromise = aChainedPromise;
     PROMISE_LOG("%s invoking Chain() [this=%p, chainedPromise=%p, isPending=%d]",
                 aCallSite, this, chainedPromise.get(), (int) IsPending());
@@ -327,7 +321,6 @@ protected:
 
   ~MediaPromise()
   {
-    MOZ_COUNT_DTOR(MediaPromise);
     PROMISE_LOG("MediaPromise::~MediaPromise [this=%p]", this);
     MOZ_ASSERT(!IsPending());
     MOZ_ASSERT(mThenValues.IsEmpty());
@@ -340,6 +333,7 @@ protected:
   Maybe<RejectValueType> mRejectValue;
   nsTArray<ThenValueBase*> mThenValues;
   nsTArray<nsRefPtr<MediaPromise>> mChainedPromises;
+  bool mHaveConsumer;
 };
 
 /*

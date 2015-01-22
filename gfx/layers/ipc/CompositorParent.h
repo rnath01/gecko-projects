@@ -100,12 +100,13 @@ class CompositorVsyncObserver MOZ_FINAL : public VsyncObserver
   friend class CompositorParent;
 
 public:
-  explicit CompositorVsyncObserver(CompositorParent* aCompositorParent);
+  explicit CompositorVsyncObserver(CompositorParent* aCompositorParent, nsIWidget* aWidget);
   virtual bool NotifyVsync(TimeStamp aVsyncTimestamp) MOZ_OVERRIDE;
   void SetNeedsComposite(bool aSchedule);
   bool NeedsComposite();
   void CancelCurrentCompositeTask();
- 
+  void Destroy();
+
 private:
   virtual ~CompositorVsyncObserver();
 
@@ -114,13 +115,19 @@ private:
   void ObserveVsync();
   void UnobserveVsync();
   void DispatchTouchEvents(TimeStamp aVsyncTimestamp);
+  void CancelCurrentSetNeedsCompositeTask();
 
   bool mNeedsComposite;
   bool mIsObservingVsync;
+  int32_t mVsyncNotificationsSkipped;
   nsRefPtr<CompositorParent> mCompositorParent;
+  nsRefPtr<CompositorVsyncDispatcher> mCompositorVsyncDispatcher;
 
   mozilla::Monitor mCurrentCompositeTaskMonitor;
   CancelableTask* mCurrentCompositeTask;
+
+  mozilla::Monitor mSetNeedsCompositeMonitor;
+  CancelableTask* mSetNeedsCompositeTask;
 };
 
 class CompositorParent MOZ_FINAL : public PCompositorParent,
@@ -187,6 +194,8 @@ public:
    */
   void ForceIsFirstPaint();
   void Destroy();
+
+  static void SetShadowProperties(Layer* aLayer);
 
   void NotifyChildCreated(const uint64_t& aChild);
 

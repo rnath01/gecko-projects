@@ -22,6 +22,10 @@
     <dimen name="new_tablet_nav_button_width_half">21dp</dimen>
     <dimen name="new_tablet_nav_button_width_plus_half">63dp</dimen>
 
+    <!-- This is the system default for the vertical padding for the divider of the TabWidget.
+         Used to mimic the divider padding on the tablet tabs panel back button. -->
+    <dimen name="new_tablet_tab_panel_divider_vertical_padding">12dp</dimen>
+
     <dimen name="new_tablet_tab_strip_height">48dp</dimen>
     <dimen name="new_tablet_tab_strip_item_width">208dp</dimen>
     <dimen name="new_tablet_tab_strip_item_margin">-28dp</dimen>
@@ -148,6 +152,9 @@
 
     <!-- Banner -->
     <dimen name="home_banner_height">72dp</dimen>
+    <dimen name="home_banner_close_width">42dp</dimen>
+    <dimen name="home_banner_icon_height">48dip</dimen>
+    <dimen name="home_banner_icon_width">48dip</dimen>
 
     <!-- Icon Grid -->
     <dimen name="icongrid_columnwidth">128dp</dimen>
@@ -190,8 +197,8 @@
     <dimen name="find_in_page_text_margin_right">12dip</dimen>
     <dimen name="find_in_page_text_padding_left">10dip</dimen>
     <dimen name="find_in_page_text_padding_right">10dip</dimen>
-    <dimen name="find_in_page_status_margin_right">15dip</dimen>
-    <dimen name="find_in_page_matchcase_margin_right">10dip</dimen>
+    <dimen name="find_in_page_status_margin_right">10dip</dimen>
+    <dimen name="find_in_page_matchcase_padding">10dip</dimen>
     <dimen name="find_in_page_control_margin_top">2dip</dimen>
 
 </resources>

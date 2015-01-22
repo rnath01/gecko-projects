@@ -70,6 +70,7 @@ GStreamerReader::GStreamerReader(AbstractMediaDecoder* aDecoder)
   mMP3FrameParser(aDecoder->GetResource()->GetLength()),
   mDataOffset(0),
   mUseParserDuration(false),
+  mLastParserDuration(-1),
 #if GST_VERSION_MAJOR >= 1
   mAllocator(nullptr),
   mBufferPool(nullptr),
@@ -788,10 +789,7 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
 }
 
 nsRefPtr<MediaDecoderReader::SeekPromise>
-GStreamerReader::Seek(int64_t aTarget,
-                      int64_t aStartTime,
-                      int64_t aEndTime,
-                      int64_t aCurrentTime)
+GStreamerReader::Seek(int64_t aTarget, int64_t aEndTime)
 {
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
 
@@ -813,7 +811,7 @@ GStreamerReader::Seek(int64_t aTarget,
   gst_message_unref(message);
   LOG(PR_LOG_DEBUG, "seek completed");
 
-  return SeekPromise::CreateAndResolve(true, __func__);
+  return SeekPromise::CreateAndResolve(aTarget, __func__);
 }
 
 nsresult GStreamerReader::GetBuffered(dom::TimeRanges* aBuffered)

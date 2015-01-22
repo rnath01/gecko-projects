@@ -277,8 +277,8 @@ EMEH264Decoder::GmpInit()
 
   nsTArray<uint8_t> codecSpecific;
   codecSpecific.AppendElement(0); // mPacketizationMode.
-  codecSpecific.AppendElements(mConfig.extra_data.begin(),
-                               mConfig.extra_data.length());
+  codecSpecific.AppendElements(mConfig.extra_data->Elements(),
+                               mConfig.extra_data->Length());
 
   rv = mGMP->InitDecode(codec,
                         codecSpecific,
@@ -312,7 +312,7 @@ EMEH264Decoder::GmpInput(MP4Sample* aSample)
     return NS_ERROR_FAILURE;
   }
 
-  UniquePtr<gmp::GMPVideoEncodedFrameImpl> frame(static_cast<gmp::GMPVideoEncodedFrameImpl*>(ftmp));
+  GMPUniquePtr<gmp::GMPVideoEncodedFrameImpl> frame(static_cast<gmp::GMPVideoEncodedFrameImpl*>(ftmp));
   err = frame->CreateEmptyFrame(sample->size);
   if (GMP_FAILED(err)) {
     mCallback->Error();
@@ -333,7 +333,7 @@ EMEH264Decoder::GmpInput(MP4Sample* aSample)
   frame->SetBufferType(GMP_BufferLength32);
 
   nsTArray<uint8_t> info; // No codec specific per-frame info to pass.
-  nsresult rv = mGMP->Decode(UniquePtr<GMPVideoEncodedFrame>(frame.release()), false, info, 0);
+  nsresult rv = mGMP->Decode(GMPUniquePtr<GMPVideoEncodedFrame>(frame.release()), false, info, 0);
   if (NS_FAILED(rv)) {
     mCallback->Error();
     return rv;

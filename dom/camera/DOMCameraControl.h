@@ -171,6 +171,7 @@ protected:
   void OnTakePictureComplete(nsIDOMBlob* aPicture);
   void OnFacesDetected(const nsTArray<ICameraControl::Face>& aFaces);
 
+  void OnGetCameraComplete();
   void OnHardwareStateChange(DOMCameraControlListener::HardwareState aState, nsresult aReason);
   void OnPreviewStateChange(DOMCameraControlListener::PreviewState aState);
   void OnRecorderStateChange(CameraControlListener::RecorderState aState, int32_t aStatus, int32_t aTrackNum);
@@ -179,6 +180,7 @@ protected:
   void OnUserError(CameraControlListener::UserContext aContext, nsresult aError);
 
   bool IsWindowStillActive();
+  nsresult SelectPreviewSize(const dom::CameraSize& aRequestedPreviewSize, ICameraControl::Size& aSelectedPreviewSize);
 
   nsresult NotifyRecordingStatusChange(const nsString& aMsg);
 
@@ -222,6 +224,8 @@ protected:
   nsRefPtr<DeviceStorageFileDescriptor> mDSFileDescriptor;
   DOMCameraControlListener::PreviewState mPreviewState;
 
+  bool mSetInitialConfig;
+
 #ifdef MOZ_WIDGET_GONK
   // cached camera control, to improve start-up time
   static StaticRefPtr<ICameraControl> sCachedCameraControl;
@@ -230,8 +234,8 @@ protected:
 #endif
 
 private:
-  nsDOMCameraControl(const nsDOMCameraControl&) MOZ_DELETE;
-  nsDOMCameraControl& operator=(const nsDOMCameraControl&) MOZ_DELETE;
+  nsDOMCameraControl(const nsDOMCameraControl&) = delete;
+  nsDOMCameraControl& operator=(const nsDOMCameraControl&) = delete;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsDOMCameraControl, NS_DOM_CAMERA_CONTROL_CID)

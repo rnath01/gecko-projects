@@ -161,6 +161,18 @@ var ctrlTab = {
     delete this.previews;
     return this.previews = this.panel.getElementsByClassName("ctrlTab-preview");
   },
+  get maxTabPreviews () {
+    delete this.maxTabPreviews;
+    return this.maxTabPreviews = this.previews.length - 1;
+  },
+  get canvasWidth () {
+    delete this.canvasWidth;
+    return this.canvasWidth = Math.ceil(screen.availWidth * .85 / this.maxTabPreviews);
+  },
+  get canvasHeight () {
+    delete this.canvasHeight;
+    return this.canvasHeight = Math.round(this.canvasWidth * tabPreviews.aspectRatio);
+  },
   get keys () {
     var keys = {};
     ["close", "find", "selectAll"].forEach(function (key) {
@@ -172,14 +184,20 @@ var ctrlTab = {
     return this.keys = keys;
   },
   _selectedIndex: 0,
-  get selected () this._selectedIndex < 0 ?
-                    document.activeElement :
-                    this.previews.item(this._selectedIndex),
-  get isOpen   () this.panel.state == "open" || this.panel.state == "showing" || this._timer,
-  get tabCount () this.tabList.length,
-  get tabPreviewCount () Math.min(this.previews.length - 1, this.tabCount),
-  get canvasWidth () Math.ceil(screen.availWidth * .85 / this.tabPreviewCount),
-  get canvasHeight () Math.round(this.canvasWidth * tabPreviews.aspectRatio),
+  get selected () {
+    return this._selectedIndex < 0 ?
+             document.activeElement :
+             this.previews.item(this._selectedIndex);
+  },
+  get isOpen () {
+    return this.panel.state == "open" || this.panel.state == "showing" || this._timer;
+  },
+  get tabCount () {
+    return this.tabList.length;
+  },
+  get tabPreviewCount () {
+    return Math.min(this.maxTabPreviews, this.tabCount);
+  },
 
   get tabList () {
     return this._recentlyUsedTabs;
@@ -219,7 +237,7 @@ var ctrlTab = {
     for (let i = 0; i < this.previews.length; i++)
       this.updatePreview(this.previews[i], this.tabList[i]);
 
-    var showAllLabel = gNavigatorBundle.getString("ctrlTab.showAll.label");
+    var showAllLabel = gNavigatorBundle.getString("ctrlTab.listAllTabs.label");
     this.showAllButton.label =
       PluralForm.get(this.tabCount, showAllLabel).replace("#1", this.tabCount);
     this.showAllButton.hidden = !allTabs.canOpen;
@@ -389,9 +407,9 @@ var ctrlTab = {
   suspendGUI: function ctrlTab_suspendGUI() {
     document.removeEventListener("keyup", this, true);
 
-    Array.forEach(this.previews, function (preview) {
+    for (let preview of this.previews) {
       this.updatePreview(preview, null);
-    }, this);
+    }
   },
 
   onKeyPress: function ctrlTab_onKeyPress(event) {

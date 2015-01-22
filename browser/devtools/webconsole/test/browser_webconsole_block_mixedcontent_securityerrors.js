@@ -59,37 +59,59 @@ function pushPrefEnv()
   return deferred.promise;
 }
 
+function waitForNotificationShown(notification, callback)
+{
+  if (PopupNotifications.panel.state == "open") {
+    executeSoon(callback);
+    return;
+  }
+  PopupNotifications.panel.addEventListener("popupshown", function onShown(e) {
+    PopupNotifications.panel.removeEventListener("popupshown", onShown);
+    callback();
+  }, false);
+  notification.reshow();
+}
+
 function mixedContentOverrideTest2(hud, browser)
 {
   var notification = PopupNotifications.getNotification("bad-content", browser);
   ok(notification, "Mixed Content Doorhanger did appear");
-  notification.reshow();
+  let deferred = promise.defer();
+  waitForNotificationShown(notification, () => {
+    afterNotificationShown(hud, notification, deferred);
+  });
+  return deferred.promise;
+}
+
+function afterNotificationShown(hud, notification, deferred)
+{
   ok(PopupNotifications.panel.firstChild.isMixedContentBlocked, "OK: Mixed Content is being blocked");
   // Click on the doorhanger.
   PopupNotifications.panel.firstChild.disableMixedContentProtection();
   notification.remove();
 
-  return waitForMessages({
+  waitForMessages({
     webconsole: hud,
     messages: [
       {
         name: "Logged blocking mixed active content",
-        text: "Loading mixed (insecure) active content on a secure"+
-          " page \"http://example.com/\"",
+        text: "Loading mixed (insecure) active content \"http://example.com/\"" +
+          " on a secure page",
         category: CATEGORY_SECURITY,
         severity: SEVERITY_WARNING,
         objects: true,
       },
       {
         name: "Logged blocking mixed passive content - image",
-        text: "Loading mixed (insecure) display content on a secure page"+
-          " \"http://example.com/tests/image/test/mochitest/blue.png\"",
+        text: "Loading mixed (insecure) display content" +
+          " \"http://example.com/tests/image/test/mochitest/blue.png\"" +
+          " on a secure page",
         category: CATEGORY_SECURITY,
         severity: SEVERITY_WARNING,
         objects: true,
       },
     ],
-  });
+  }).then(msgs => deferred.resolve(msgs), Cu.reportError);
 }
 
 function testClickOpenNewTab(hud, match) {

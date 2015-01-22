@@ -1165,6 +1165,97 @@ TEST_F(JsepSessionTest, TestExtmap)
   ASSERT_EQ(3U, answerExtmap[1].entry);
 }
 
+TEST_F(JsepSessionTest, TestRtcpFbStar)
+{
+  AddTracks(&mSessionOff, "video");
+  AddTracks(&mSessionAns, "video");
+
+  std::string offer = CreateOffer();
+
+  SipccSdpParser parser;
+  UniquePtr<Sdp> parsedOffer = parser.Parse(offer);
+  auto* rtcpfbs = new SdpRtcpFbAttributeList;
+  rtcpfbs->PushEntry("*", SdpRtcpFbAttributeList::kNack);
+  parsedOffer->GetMediaSection(0).GetAttributeList().SetAttribute(rtcpfbs);
+  offer = parsedOffer->ToString();
+
+  SetLocalOffer(offer, CHECK_SUCCESS);
+  SetRemoteOffer(offer, CHECK_SUCCESS);
+  std::string answer = CreateAnswer();
+  SetLocalAnswer(answer, CHECK_SUCCESS);
+  SetRemoteAnswer(answer, CHECK_SUCCESS);
+
+  ASSERT_EQ(1U, mSessionAns.GetRemoteTrackCount());
+  RefPtr<JsepTrack> track;
+  ASSERT_EQ(NS_OK, mSessionAns.GetRemoteTrack(0, &track));
+  ASSERT_TRUE(track->GetNegotiatedDetails());
+  auto* details = track->GetNegotiatedDetails();
+  for (size_t i = 0; i < details->GetCodecCount(); ++i) {
+    const JsepCodecDescription* codec;
+    ASSERT_EQ(NS_OK, details->GetCodec(i, &codec));
+    const JsepVideoCodecDescription* videoCodec =
+      static_cast<const JsepVideoCodecDescription*>(codec);
+    ASSERT_EQ(1U, videoCodec->mNackFbTypes.size());
+    ASSERT_EQ("", videoCodec->mNackFbTypes[0]);
+  }
+}
+
+TEST_F(JsepSessionTest, TestUniquePayloadTypes)
+{
+  // The audio payload types will all appear more than once, but the video
+  // payload types will be unique.
+  AddTracks(&mSessionOff, "audio,audio,video");
+  AddTracks(&mSessionAns, "audio,audio,video");
+
+  std::string offer = CreateOffer();
+  SetLocalOffer(offer, CHECK_SUCCESS);
+  SetRemoteOffer(offer, CHECK_SUCCESS);
+  std::string answer = CreateAnswer();
+  SetLocalAnswer(answer, CHECK_SUCCESS);
+  SetRemoteAnswer(answer, CHECK_SUCCESS);
+
+  ASSERT_EQ(3U, mSessionOff.GetNegotiatedTrackPairCount());
+  ASSERT_EQ(3U, mSessionAns.GetNegotiatedTrackPairCount());
+
+  const JsepTrackPair* pair;
+  ASSERT_EQ(NS_OK, mSessionOff.GetNegotiatedTrackPair(0, &pair));
+  ASSERT_TRUE(pair->mReceiving);
+  ASSERT_TRUE(pair->mReceiving->GetNegotiatedDetails());
+  ASSERT_EQ(0U,
+      pair->mReceiving->GetNegotiatedDetails()->GetUniquePayloadTypes().size());
+
+  ASSERT_EQ(NS_OK, mSessionOff.GetNegotiatedTrackPair(1, &pair));
+  ASSERT_TRUE(pair->mReceiving);
+  ASSERT_TRUE(pair->mReceiving->GetNegotiatedDetails());
+  ASSERT_EQ(0U,
+      pair->mReceiving->GetNegotiatedDetails()->GetUniquePayloadTypes().size());
+
+  ASSERT_EQ(NS_OK, mSessionOff.GetNegotiatedTrackPair(2, &pair));
+  ASSERT_TRUE(pair->mReceiving);
+  ASSERT_TRUE(pair->mReceiving->GetNegotiatedDetails());
+  ASSERT_NE(0U,
+      pair->mReceiving->GetNegotiatedDetails()->GetUniquePayloadTypes().size());
+
+  ASSERT_EQ(NS_OK, mSessionAns.GetNegotiatedTrackPair(0, &pair));
+  ASSERT_TRUE(pair->mReceiving);
+  ASSERT_TRUE(pair->mReceiving->GetNegotiatedDetails());
+  ASSERT_EQ(0U,
+      pair->mReceiving->GetNegotiatedDetails()->GetUniquePayloadTypes().size());
+
+  ASSERT_EQ(NS_OK, mSessionAns.GetNegotiatedTrackPair(1, &pair));
+  ASSERT_TRUE(pair->mReceiving);
+  ASSERT_TRUE(pair->mReceiving->GetNegotiatedDetails());
+  ASSERT_EQ(0U,
+      pair->mReceiving->GetNegotiatedDetails()->GetUniquePayloadTypes().size());
+
+  ASSERT_EQ(NS_OK, mSessionAns.GetNegotiatedTrackPair(2, &pair));
+  ASSERT_TRUE(pair->mReceiving);
+  ASSERT_TRUE(pair->mReceiving->GetNegotiatedDetails());
+  ASSERT_NE(0U,
+      pair->mReceiving->GetNegotiatedDetails()->GetUniquePayloadTypes().size());
+
+}
+
 } // namespace mozilla
 
 int

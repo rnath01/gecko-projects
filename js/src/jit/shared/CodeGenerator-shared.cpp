@@ -15,7 +15,7 @@
 #include "jit/MacroAssembler.h"
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
-#include "jit/ParallelFunctions.h"
+#include "js/Conversions.h"
 #include "vm/TraceLogging.h"
 
 #include "jit/JitFrames-inl.h"
@@ -23,6 +23,7 @@
 using namespace js;
 using namespace js::jit;
 
+using mozilla::BitwiseCast;
 using mozilla::DebugOnly;
 
 namespace js {
@@ -51,13 +52,13 @@ CodeGeneratorShared::CodeGeneratorShared(MIRGenerator *gen, LIRGraph *graph, Mac
     pushedArgs_(0),
 #endif
     lastOsiPointOffset_(0),
+    safepoints_(graph->totalSlotCount()),
     nativeToBytecodeMap_(nullptr),
     nativeToBytecodeMapSize_(0),
     nativeToBytecodeTableOffset_(0),
     nativeToBytecodeNumRegions_(0),
     nativeToBytecodeScriptList_(nullptr),
     nativeToBytecodeScriptListLength_(0),
-    sps_(&GetJitContext()->runtime->spsProfiler(), &lastNotInlinedPC_),
     osrEntryOffset_(0),
     skipArgCheckEntryOffset_(0),
 #ifdef CHECK_OSIPOINT_REGISTERS
@@ -66,8 +67,8 @@ CodeGeneratorShared::CodeGeneratorShared(MIRGenerator *gen, LIRGraph *graph, Mac
     frameDepth_(graph->paddedLocalSlotsSize() + graph->argumentsSize()),
     frameInitialAdjustment_(0)
 {
-    if (!gen->compilingAsmJS())
-        masm.setInstrumentation(&sps_);
+    if (gen->isProfilerInstrumentationEnabled())
+        masm.enableProfilingInstrumentation();
 
     if (gen->compilingAsmJS()) {
         // Since asm.js uses the system ABI which does not necessarily use a
@@ -105,7 +106,6 @@ CodeGeneratorShared::CodeGeneratorShared(MIRGenerator *gen, LIRGraph *graph, Mac
 bool
 CodeGeneratorShared::generateOutOfLineCode()
 {
-    JSScript *topScript = sps_.getPushed();
     for (size_t i = 0; i < outOfLineCode_.length(); i++) {
         // Add native => bytecode mapping entries for OOL sites.
         // Not enabled on asm.js yet since asm doesn't contain bytecode mappings.
@@ -121,16 +121,11 @@ CodeGeneratorShared::generateOutOfLineCode()
 
         masm.setFramePushed(outOfLineCode_[i]->framePushed());
         lastPC_ = outOfLineCode_[i]->pc();
-        if (!sps_.prepareForOOL())
-            return false;
-        sps_.setPushed(outOfLineCode_[i]->script());
         outOfLineCode_[i]->bind(&masm);
 
         oolIns = outOfLineCode_[i];
         outOfLineCode_[i]->generate(this);
-        sps_.finishOOL();
     }
-    sps_.setPushed(topScript);
     oolIns = nullptr;
 
     return true;
@@ -156,7 +151,7 @@ bool
 CodeGeneratorShared::addNativeToBytecodeEntry(const BytecodeSite *site)
 {
     // Skip the table entirely if profiling is not enabled.
-    if (!isNativeToBytecodeMapEnabled())
+    if (!isProfilerInstrumentationEnabled())
         return true;
 
     MOZ_ASSERT(site);
@@ -307,6 +302,17 @@ CodeGeneratorShared::encodeAllocation(LSnapshot *snapshot, MDefinition *mir,
         // This MDefinition is recovered, thus it should be listed in the
         // LRecoverInfo.
         MOZ_ASSERT(it != end && mir == *it);
+
+        // Lambda should have a default value readable for iterating over the
+        // inner frames.
+        if (mir->isLambda()) {
+            MConstant *constant = mir->toLambda()->functionOperand();
+            uint32_t cstIndex;
+            masm.propagateOOM(graph.addConstantToPool(constant->value(), &cstIndex));
+            alloc = RValueAllocation::RecoverInstruction(index, cstIndex);
+            break;
+        }
+
         alloc = RValueAllocation::RecoverInstruction(index);
         break;
       }
@@ -387,6 +393,12 @@ CodeGeneratorShared::encodeAllocation(LSnapshot *snapshot, MDefinition *mir,
         break;
       }
     }
+
+    // This set an extra bit as part of the RValueAllocation, such that we know
+    // that recover instruction have to be executed without wrapping the
+    // instruction in a no-op recover instruction.
+    if (mir->isIncompleteObject())
+        alloc.setNeedSideEffect();
 
     snapshots_.add(alloc);
     *allocIndex += mir->isRecoveredOnBailout() ? 0 : 1;
@@ -474,13 +486,6 @@ CodeGeneratorShared::assignBailoutId(LSnapshot *snapshot)
     // Can we not use bailout tables at all?
     if (!deoptTable_)
         return false;
-
-    // We do not generate a bailout table for parallel code.
-    switch (gen->info().executionMode()) {
-      case SequentialExecution: break;
-      case ParallelExecution: return false;
-      default: MOZ_CRASH("No such execution mode");
-    }
 
     MOZ_ASSERT(frameClass_ != FrameSizeClass::None());
 
@@ -955,9 +960,6 @@ CodeGeneratorShared::shouldVerifyOsiPointRegs(LSafepoint *safepoint)
     if (!checkOsiPointRegisters)
         return false;
 
-    if (gen->info().executionMode() != SequentialExecution)
-        return false;
-
     if (safepoint->liveRegs().empty(true) && safepoint->liveRegs().empty(false))
         return false; // No registers to check.
 
@@ -987,9 +989,6 @@ CodeGeneratorShared::resetOsiPointRegs(LSafepoint *safepoint)
 void
 CodeGeneratorShared::callVM(const VMFunction &fun, LInstruction *ins, const Register *dynStack)
 {
-    // Different execution modes have different sets of VM functions.
-    MOZ_ASSERT(fun.executionMode == gen->info().executionMode());
-
     // If we're calling a function with an out parameter type of double, make
     // sure we have an FPU.
     MOZ_ASSERT_IF(fun.outParam == Type_Double, GetJitContext()->runtime->jitSupportsFloatingPoint());
@@ -1003,7 +1002,7 @@ CodeGeneratorShared::callVM(const VMFunction &fun, LInstruction *ins, const Regi
 #endif
 
 #ifdef JS_TRACE_LOGGING
-    emitTracelogStartEvent(TraceLogger::VM);
+    emitTracelogStartEvent(TraceLogger_VM);
 #endif
 
     // Stack is:
@@ -1048,7 +1047,7 @@ CodeGeneratorShared::callVM(const VMFunction &fun, LInstruction *ins, const Regi
     //    ... frame ...
 
 #ifdef JS_TRACE_LOGGING
-    emitTracelogStopEvent(TraceLogger::VM);
+    emitTracelogStopEvent(TraceLogger_VM);
 #endif
 }
 
@@ -1129,7 +1128,7 @@ CodeGeneratorShared::visitOutOfLineTruncateSlow(OutOfLineTruncateSlow *ool)
     if (gen->compilingAsmJS())
         masm.callWithABI(AsmJSImm_ToInt32);
     else
-        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void *, js::ToInt32));
+        masm.callWithABI(BitwiseCast<void*, int32_t(*)(double)>(JS::ToInt32));
     masm.storeCallResult(dest);
 
 #ifndef JS_CODEGEN_ARM
@@ -1240,7 +1239,7 @@ CodeGeneratorShared::labelForBackedgeWithImplicitCheck(MBasicBlock *mir)
             } else {
                 // The interrupt check should be the first instruction in the
                 // loop header other than the initial label and move groups.
-                MOZ_ASSERT(iter->isInterruptCheck() || iter->isInterruptCheckPar());
+                MOZ_ASSERT(iter->isInterruptCheck());
                 return nullptr;
             }
         }
@@ -1381,9 +1380,12 @@ CodeGeneratorShared::computeDivisionConstants(int d) {
 
 #ifdef JS_TRACE_LOGGING
 
-bool
+void
 CodeGeneratorShared::emitTracelogScript(bool isStart)
 {
+    if (!TraceLogTextIdEnabled(TraceLogger_Scripts))
+        return;
+
     Label done;
 
     RegisterSet regs = RegisterSet::Volatile();
@@ -1393,36 +1395,33 @@ CodeGeneratorShared::emitTracelogScript(bool isStart)
     masm.Push(logger);
 
     CodeOffsetLabel patchLogger = masm.movWithPatch(ImmPtr(nullptr), logger);
-    if (!patchableTraceLoggers_.append(patchLogger))
-        return false;
+    masm.propagateOOM(patchableTraceLoggers_.append(patchLogger));
 
-    Address enabledAddress(logger, TraceLogger::offsetOfEnabled());
+    Address enabledAddress(logger, TraceLoggerThread::offsetOfEnabled());
     masm.branch32(Assembler::Equal, enabledAddress, Imm32(0), &done);
 
     masm.Push(script);
 
     CodeOffsetLabel patchScript = masm.movWithPatch(ImmWord(0), script);
-    if (!patchableTLScripts_.append(patchScript))
-        return false;
+    masm.propagateOOM(patchableTLScripts_.append(patchScript));
 
     if (isStart)
-        masm.tracelogStart(logger, script);
+        masm.tracelogStartId(logger, script);
     else
-        masm.tracelogStop(logger, script);
+        masm.tracelogStopId(logger, script);
 
     masm.Pop(script);
 
     masm.bind(&done);
 
     masm.Pop(logger);
-    return true;
 }
 
-bool
+void
 CodeGeneratorShared::emitTracelogTree(bool isStart, uint32_t textId)
 {
     if (!TraceLogTextIdEnabled(textId))
-        return true;
+        return;
 
     Label done;
     RegisterSet regs = RegisterSet::Volatile();
@@ -1431,26 +1430,19 @@ CodeGeneratorShared::emitTracelogTree(bool isStart, uint32_t textId)
     masm.Push(logger);
 
     CodeOffsetLabel patchLocation = masm.movWithPatch(ImmPtr(nullptr), logger);
-    if (!patchableTraceLoggers_.append(patchLocation))
-        return false;
+    masm.propagateOOM(patchableTraceLoggers_.append(patchLocation));
 
-    Address enabledAddress(logger, TraceLogger::offsetOfEnabled());
+    Address enabledAddress(logger, TraceLoggerThread::offsetOfEnabled());
     masm.branch32(Assembler::Equal, enabledAddress, Imm32(0), &done);
 
-    if (isStart) {
-        masm.tracelogStart(logger, textId);
-    } else {
-#ifdef DEBUG
-        masm.tracelogStop(logger, textId);
-#else
-        masm.tracelogStop(logger);
-#endif
-    }
+    if (isStart)
+        masm.tracelogStartId(logger, textId);
+    else
+        masm.tracelogStopId(logger, textId);
 
     masm.bind(&done);
 
     masm.Pop(logger);
-    return true;
 }
 #endif
 

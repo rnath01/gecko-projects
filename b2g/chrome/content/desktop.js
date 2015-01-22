@@ -117,13 +117,16 @@ function checkDebuggerPort() {
 function initResponsiveDesign() {
   Cu.import('resource:///modules/devtools/responsivedesign.jsm');
   ResponsiveUIManager.on('on', function(event, {tab:tab}) {
-    let responsive = tab.__responsiveUI;
+    let responsive = ResponsiveUIManager.getResponsiveUIForTab(tab);
     let document = tab.ownerDocument;
 
     // Only tweak reponsive mode for shell.html tabs.
     if (tab.linkedBrowser.contentWindow != window) {
       return;
     }
+
+    // Disable transition as they mess up with screen size handler
+    responsive.transitionsEnabled = false;
 
     responsive.buildPhoneUI();
 
@@ -134,7 +137,7 @@ function initResponsiveDesign() {
     }, true);
 
     // Enable touch events
-    browserWindow.gBrowser.selectedTab.__responsiveUI.enableTouch();
+    responsive.enableTouch();
   });
 
   // Automatically toggle responsive design mode

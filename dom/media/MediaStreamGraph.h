@@ -693,10 +693,10 @@ public:
     mNeedsMixing(false)
   {}
 
-  virtual SourceMediaStream* AsSourceStream() { return this; }
+  virtual SourceMediaStream* AsSourceStream() MOZ_OVERRIDE { return this; }
 
   // Media graph thread only
-  virtual void DestroyImpl();
+  virtual void DestroyImpl() MOZ_OVERRIDE;
 
   // Call these on any thread.
   /**
@@ -750,6 +750,13 @@ public:
    * Returns false if there isn't enough data or if no such track exists.
    */
   bool HaveEnoughBuffered(TrackID aID);
+  /**
+   * Get the stream time of the end of the data that has been appended so far.
+   * Can be called from any thread but won't be useful if it can race with
+   * an AppendToTrack call, so should probably just be called from the thread
+   * that also calls AppendToTrack.
+   */
+  StreamTime GetEndOfAppendedData(TrackID aID);
   /**
    * Ensures that aSignalRunnable will be dispatched to aSignalThread
    * when we don't have enough buffered data in the track (which could be
@@ -848,13 +855,15 @@ protected:
     int mResamplerChannelCount;
 #endif
     StreamTime mStart;
-    // Each time the track updates are flushed to the media graph thread,
-    // this is cleared.
-    uint32_t mCommands;
+    // End-time of data already flushed to the track (excluding mData)
+    StreamTime mEndOfFlushedData;
     // Each time the track updates are flushed to the media graph thread,
     // the segment buffer is emptied.
     nsAutoPtr<MediaSegment> mData;
     nsTArray<ThreadAndRunnable> mDispatchWhenNotEnough;
+    // Each time the track updates are flushed to the media graph thread,
+    // this is cleared.
+    uint32_t mCommands;
     bool mHaveEnough;
   };
 
@@ -1060,7 +1069,7 @@ public:
    */
   void SetAutofinish(bool aAutofinish);
 
-  virtual ProcessedMediaStream* AsProcessedStream() { return this; }
+  virtual ProcessedMediaStream* AsProcessedStream() MOZ_OVERRIDE { return this; }
 
   friend class MediaStreamGraphImpl;
 
@@ -1078,7 +1087,7 @@ public:
   {
     return mInputs.Length();
   }
-  virtual void DestroyImpl();
+  virtual void DestroyImpl() MOZ_OVERRIDE;
   /**
    * This gets called after we've computed the blocking states for all
    * streams (mBlocked is up to date up to mStateComputedTime).

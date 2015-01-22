@@ -77,6 +77,7 @@
 #include "mozilla/Alignment.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/CycleCollectedJSRuntime.h"
 #include "mozilla/GuardObjects.h"
@@ -622,7 +623,15 @@ public:
     void DeleteSingletonScopes();
 
     PRTime GetWatchdogTimestamp(WatchdogTimestampCategory aCategory);
-    void OnAfterProcessNextEvent() { mSlowScriptCheckpoint = mozilla::TimeStamp(); }
+
+    void OnProcessNextEvent() {
+        mSlowScriptCheckpoint = mozilla::TimeStamp::NowLoRes();
+        mSlowScriptSecondHalf = false;
+    }
+    void OnAfterProcessNextEvent() {
+        mSlowScriptCheckpoint = mozilla::TimeStamp();
+        mSlowScriptSecondHalf = false;
+    }
 
     nsTArray<nsXPCWrappedJS*>& WrappedJSToReleaseArray() { return mWrappedJSToReleaseArray; }
 
@@ -666,6 +675,23 @@ private:
     JS::PersistentRootedObject mCompilationScope;
     nsRefPtr<AsyncFreeSnowWhite> mAsyncSnowWhiteFreer;
 
+    // If we spend too much time running JS code in an event handler, then we
+    // want to show the slow script UI. The timeout T is controlled by prefs. We
+    // invoke the interrupt callback once after T/2 seconds and set
+    // mSlowScriptSecondHalf to true. After another T/2 seconds, we invoke the
+    // interrupt callback again. Since mSlowScriptSecondHalf is now true, it
+    // shows the slow script UI. The reason we invoke the callback twice is to
+    // ensure that putting the computer to sleep while running a script doesn't
+    // cause the UI to be shown. If the laptop goes to sleep during one of the
+    // timeout periods, the script still has the other T/2 seconds to complete
+    // before the slow script UI is shown.
+    bool mSlowScriptSecondHalf;
+
+    // mSlowScriptCheckpoint is set to the time when:
+    // 1. We started processing the current event, or
+    // 2. mSlowScriptSecondHalf was set to true
+    // (whichever comes later). We use it to determine whether the interrupt
+    // callback needs to do anything.
     mozilla::TimeStamp mSlowScriptCheckpoint;
 
     friend class Watchdog;
@@ -1062,9 +1088,12 @@ public:
     static void
     TraceWrappedNativesInAllScopes(JSTracer* trc, XPCJSRuntime* rt);
 
-    void TraceInside(JSTracer *trc) {
+    void TraceSelf(JSTracer *trc) {
         MOZ_ASSERT(mGlobalJSObject);
         mGlobalJSObject.trace(trc, "XPCWrappedNativeScope::mGlobalJSObject");
+    }
+
+    void TraceInside(JSTracer *trc) {
         if (mContentXBLScope)
             mContentXBLScope.trace(trc, "XPCWrappedNativeScope::mXBLScope");
         for (size_t i = 0; i < mAddonScopes.Length(); i++)
@@ -1844,7 +1873,7 @@ public:
                 mScriptableInfo->Mark();
         }
 
-        GetScope()->TraceInside(trc);
+        GetScope()->TraceSelf(trc);
     }
 
     void TraceJS(JSTracer *trc) {
@@ -1936,8 +1965,8 @@ public:
     bool IsMarked() const {return mJSObject.hasFlag(1);}
 
 private:
-    XPCWrappedNativeTearOff(const XPCWrappedNativeTearOff& r) MOZ_DELETE;
-    XPCWrappedNativeTearOff& operator= (const XPCWrappedNativeTearOff& r) MOZ_DELETE;
+    XPCWrappedNativeTearOff(const XPCWrappedNativeTearOff& r) = delete;
+    XPCWrappedNativeTearOff& operator= (const XPCWrappedNativeTearOff& r) = delete;
 
 private:
     XPCNativeInterface* mInterface;
@@ -2159,7 +2188,7 @@ public:
         if (HasProto())
             GetProto()->TraceSelf(trc);
         else
-            GetScope()->TraceInside(trc);
+            GetScope()->TraceSelf(trc);
         if (mFlatJSObject && JS_IsGlobalObject(mFlatJSObject))
         {
             xpc::TraceXPCGlobal(trc, mFlatJSObject);
@@ -2969,6 +2998,9 @@ public:
 private:
     virtual ~nsScriptError();
 
+    void
+    InitializeOnMainThread();
+
     nsString mMessage;
     nsString mSourceName;
     uint32_t mLineNumber;
@@ -2976,9 +3008,13 @@ private:
     uint32_t mColumnNumber;
     uint32_t mFlags;
     nsCString mCategory;
+    // mOuterWindowID is set on the main thread from InitializeOnMainThread().
     uint64_t mOuterWindowID;
     uint64_t mInnerWindowID;
     int64_t mTimeStamp;
+    // mInitializedOnMainThread and mIsFromPrivateWindow are set on the main
+    // thread from InitializeOnMainThread().
+    mozilla::Atomic<bool> mInitializedOnMainThread;
     bool mIsFromPrivateWindow;
 };
 
@@ -3017,8 +3053,8 @@ private:
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 
     // No copying or assignment allowed
-    AutoScriptEvaluate(const AutoScriptEvaluate &) MOZ_DELETE;
-    AutoScriptEvaluate & operator =(const AutoScriptEvaluate &) MOZ_DELETE;
+    AutoScriptEvaluate(const AutoScriptEvaluate &) = delete;
+    AutoScriptEvaluate & operator =(const AutoScriptEvaluate &) = delete;
 };
 
 /***************************************************************************/
@@ -3361,6 +3397,7 @@ struct GlobalProperties {
     bool btoa : 1;
     bool Blob : 1;
     bool File : 1;
+    bool crypto : 1;
 };
 
 // Infallible.

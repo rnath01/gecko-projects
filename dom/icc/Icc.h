@@ -16,6 +16,7 @@ namespace dom {
 
 class DOMRequest;
 class OwningMozIccInfoOrMozGsmIccInfoOrMozCdmaIccInfo;
+class Promise;
 
 class Icc MOZ_FINAL : public DOMEventTargetHelper
 {
@@ -90,16 +91,19 @@ public:
   GetCardLockRetryCount(IccLockType aLockType, ErrorResult& aRv);
 
   already_AddRefed<DOMRequest>
-  ReadContacts(const nsAString& aContactType, ErrorResult& aRv);
+  ReadContacts(IccContactType aContactType, ErrorResult& aRv);
 
   already_AddRefed<DOMRequest>
-  UpdateContact(const JSContext* aCx, const nsAString& aContactType,
+  UpdateContact(const JSContext* aCx, IccContactType aContactType,
                 JS::Handle<JS::Value> aContact, const nsAString& aPin2,
                 ErrorResult& aRv);
 
   already_AddRefed<DOMRequest>
-  MatchMvno(const nsAString& aMvnoType, const nsAString& aMatchData,
+  MatchMvno(IccMvnoType aMvnoType, const nsAString& aMatchData,
             ErrorResult& aRv);
+
+  already_AddRefed<Promise>
+  GetServiceState(IccService aService, ErrorResult& aRv);
 
   IMPL_EVENT_HANDLER(iccinfochange)
   IMPL_EVENT_HANDLER(cardstatechange)

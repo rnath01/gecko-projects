@@ -9,11 +9,12 @@
 #include <stdint.h>
 
 #include "ExtendedValidation.h"
-#include "nsNSSCertificate.h"
-#include "NSSErrorsService.h"
 #include "OCSPRequestor.h"
 #include "certdb.h"
+#include "nsNSSCertificate.h"
 #include "nss.h"
+#include "NSSErrorsService.h"
+#include "nsServiceManagerUtils.h"
 #include "pk11pub.h"
 #include "pkix/pkix.h"
 #include "pkix/pkixnss.h"
@@ -67,6 +68,7 @@ NSSCertDBTrustDomain::NSSCertDBTrustDomain(SECTrustType certDBTrustType,
   , mMinimumNonECCBits(forEV ? MINIMUM_NON_ECC_BITS_EV : MINIMUM_NON_ECC_BITS_DV)
   , mHostname(hostname)
   , mBuiltChain(builtChain)
+  , mCertBlocklist(do_GetService(NS_CERTBLOCKLIST_CONTRACTID))
   , mOCSPStaplingStatus(CertVerifier::OCSP_STAPLING_NEVER_CHECKED)
 {
 }
@@ -258,15 +260,15 @@ Result
 NSSCertDBTrustDomain::VerifySignedData(const SignedDataWithSignature& signedData,
                                        Input subjectPublicKeyInfo)
 {
-  return ::mozilla::pkix::VerifySignedData(signedData, subjectPublicKeyInfo,
-                                           mMinimumNonECCBits, mPinArg);
+  return ::mozilla::pkix::VerifySignedDataNSS(signedData, subjectPublicKeyInfo,
+                                              mMinimumNonECCBits, mPinArg);
 }
 
 Result
 NSSCertDBTrustDomain::DigestBuf(Input item,
                                 /*out*/ uint8_t* digestBuf, size_t digestBufLen)
 {
-  return ::mozilla::pkix::DigestBuf(item, digestBuf, digestBufLen);
+  return ::mozilla::pkix::DigestBufNSS(item, digestBuf, digestBufLen);
 }
 
 
@@ -366,12 +368,37 @@ NSSCertDBTrustDomain::CheckRevocation(EndEntityOrCA endEntityOrCA,
     maxOCSPLifetimeInDays = 365;
   }
 
+  if (!mCertBlocklist) {
+    return Result::FATAL_ERROR_LIBRARY_FAILURE;
+  }
+
+  bool isCertRevoked;
+  nsresult nsrv = mCertBlocklist->IsCertRevoked(
+                    certID.issuer.UnsafeGetData(),
+                    certID.issuer.GetLength(),
+                    certID.serialNumber.UnsafeGetData(),
+                    certID.serialNumber.GetLength(),
+                    &isCertRevoked);
+  if (NS_FAILED(nsrv)) {
+    return Result::FATAL_ERROR_LIBRARY_FAILURE;
+  }
+
+  if (isCertRevoked) {
+    PR_LOG(gCertVerifierLog, PR_LOG_DEBUG,
+           ("NSSCertDBTrustDomain: certificate is in blocklist"));
+    return Result::ERROR_REVOKED_CERTIFICATE;
+  }
+
   // If we have a stapled OCSP response then the verification of that response
   // determines the result unless the OCSP response is expired. We make an
   // exception for expired responses because some servers, nginx in particular,
   // are known to serve expired responses due to bugs.
   // We keep track of the result of verifying the stapled response but don't
   // immediately return failure if the response has expired.
+  //
+  // We only set the OCSP stapling status if we're validating the end-entity
+  // certificate. Non-end-entity certificates would always be
+  // OCSP_STAPLING_NONE unless/until we implement multi-stapling.
   Result stapledOCSPResponseResult = Success;
   if (stapledOCSPResponse) {
     PR_ASSERT(endEntityOrCA == EndEntityOrCA::MustBeEndEntity);
@@ -401,7 +428,7 @@ NSSCertDBTrustDomain::CheckRevocation(EndEntityOrCA endEntityOrCA,
              ("NSSCertDBTrustDomain: stapled OCSP response: failure"));
       return stapledOCSPResponseResult;
     }
-  } else {
+  } else if (endEntityOrCA == EndEntityOrCA::MustBeEndEntity) {
     // no stapled OCSP response
     mOCSPStaplingStatus = CertVerifier::OCSP_STAPLING_NONE;
     PR_LOG(gCertVerifierLog, PR_LOG_DEBUG,
@@ -696,8 +723,8 @@ NSSCertDBTrustDomain::IsChainValid(const DERArray& certArray, Time time)
 Result
 NSSCertDBTrustDomain::CheckPublicKey(Input subjectPublicKeyInfo)
 {
-  return ::mozilla::pkix::CheckPublicKey(subjectPublicKeyInfo,
-                                         mMinimumNonECCBits);
+  return ::mozilla::pkix::CheckPublicKeyNSS(subjectPublicKeyInfo,
+                                            mMinimumNonECCBits);
 }
 
 namespace {
