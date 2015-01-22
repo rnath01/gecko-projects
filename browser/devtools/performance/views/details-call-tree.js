@@ -12,13 +12,14 @@ let CallTreeView = {
    */
   initialize: function () {
     this._callTree = $(".call-tree-cells-container");
-    this._onRecordingStopped = this._onRecordingStopped.bind(this);
-    this._onRecordingSelected = this._onRecordingSelected.bind(this);
+    this._onRecordingStoppedOrSelected = this._onRecordingStoppedOrSelected.bind(this);
     this._onRangeChange = this._onRangeChange.bind(this);
+    this._onPrefChanged = this._onPrefChanged.bind(this);
     this._onLink = this._onLink.bind(this);
 
-    PerformanceController.on(EVENTS.RECORDING_STOPPED, this._onRecordingStopped);
-    PerformanceController.on(EVENTS.RECORDING_SELECTED, this._onRecordingSelected);
+    PerformanceController.on(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
+    PerformanceController.on(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
+    PerformanceController.on(EVENTS.PREF_CHANGED, this._onPrefChanged);
     OverviewView.on(EVENTS.OVERVIEW_RANGE_SELECTED, this._onRangeChange);
     OverviewView.on(EVENTS.OVERVIEW_RANGE_CLEARED, this._onRangeChange);
   },
@@ -27,8 +28,9 @@ let CallTreeView = {
    * Unbinds events.
    */
   destroy: function () {
-    PerformanceController.off(EVENTS.RECORDING_STOPPED, this._onRecordingStopped);
-    PerformanceController.off(EVENTS.RECORDING_SELECTED, this._onRecordingSelected);
+    PerformanceController.off(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
+    PerformanceController.off(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
+    PerformanceController.off(EVENTS.PREF_CHANGED, this._onPrefChanged);
     OverviewView.off(EVENTS.OVERVIEW_RANGE_SELECTED, this._onRangeChange);
     OverviewView.off(EVENTS.OVERVIEW_RANGE_CLEARED, this._onRangeChange);
   },
@@ -47,20 +49,10 @@ let CallTreeView = {
   },
 
   /**
-   * Called when recording is stopped.
+   * Called when recording is stopped or has been selected.
    */
-  _onRecordingStopped: function () {
-    let profilerData = PerformanceController.getProfilerData();
-    this.render(profilerData);
-  },
-
-  /**
-   * Called when a recording has been selected.
-   */
-  _onRecordingSelected: function (_, recording) {
+  _onRecordingStoppedOrSelected: function (_, recording) {
     // If not recording, then this recording is done and we can render all of it
-    // Otherwise, TODO in bug 1120699 will hide the details view altogether if
-    // this is still recording.
     if (!recording.isRecording()) {
       let profilerData = recording.getProfilerData();
       this.render(profilerData);
@@ -73,7 +65,8 @@ let CallTreeView = {
   _onRangeChange: function (_, params) {
     // When a range is cleared, we'll have no beginAt/endAt data,
     // so the rebuild will just render all the data again.
-    let profilerData = PerformanceController.getProfilerData();
+    let recording = PerformanceController.getCurrentRecording();
+    let profilerData = recording.getProfilerData();
     let { beginAt, endAt } = params || {};
     this.render(profilerData, beginAt, endAt);
   },
@@ -92,13 +85,17 @@ let CallTreeView = {
    * Called when the recording is stopped and prepares data to
    * populate the call tree.
    */
-  _prepareCallTree: function (profilerData, beginAt, endAt, options) {
+  _prepareCallTree: function (profilerData, startTime, endTime, options) {
     let threadSamples = profilerData.profile.threads[0].samples;
     let contentOnly = !Prefs.showPlatformData;
-    // TODO handle inverted tree bug 1102347
-    let invertTree = false;
+    let invertTree = PerformanceController.getPref("invert-call-tree");
 
-    let threadNode = new ThreadNode(threadSamples, contentOnly, beginAt, endAt, invertTree);
+    let threadNode = new ThreadNode(threadSamples,
+      { startTime, endTime, contentOnly, invertTree });
+
+    // If we have an empty profile (no samples), then don't invert the tree, as
+    // it would hide the root node and a completely blank call tree space can be
+    // mis-interpreted as an error.
     options.inverted = invertTree && threadNode.samples > 0;
 
     return threadNode;
@@ -124,6 +121,17 @@ let CallTreeView = {
 
     let contentOnly = !Prefs.showPlatformData;
     root.toggleCategories(!contentOnly);
+  },
+
+  /**
+   * Called when a preference under "devtools.performance.ui." is changed.
+   */
+  _onPrefChanged: function (_, prefName, value) {
+    if (prefName === "invert-call-tree") {
+      let { beginAt, endAt } = OverviewView.getRange();
+      let profilerData = PerformanceController.getCurrentRecording().getProfilerData();
+      this.render(profilerData, beginAt || void 0, endAt || void 0);
+    }
   }
 };
 

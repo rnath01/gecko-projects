@@ -417,6 +417,11 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
       $("#requests-menu-network-summary-button").hidden = true;
       $("#requests-menu-network-summary-label").hidden = true;
     }
+
+    if (!NetMonitorController.supportsTransferredResponseSize) {
+      $("#requests-menu-transferred-header-box").hidden = true;
+      $("#requests-menu-item-template .requests-menu-transferred").hidden = true;
+    }
   },
 
   /**
@@ -800,8 +805,8 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
    * Sorts all network requests in this container by a specified detail.
    *
    * @param string aType
-   *        Either "status", "method", "file", "domain", "type", "size" or
-   *        "waterfall".
+   *        Either "status", "method", "file", "domain", "type", "transferred",
+   *        "size" or "waterfall".
    */
   sortBy: function(aType = "waterfall") {
     let target = $("#requests-menu-" + aType + "-button");
@@ -860,6 +865,13 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
           this.sortContents(this._byType);
         } else {
           this.sortContents((a, b) => !this._byType(a, b));
+        }
+        break;
+      case "transferred":
+        if (direction == "ascending") {
+          this.sortContents(this._byTransferred);
+        } else {
+          this.sortContents((a, b) => !this._byTransferred(a, b));
         }
         break;
       case "size":
@@ -994,8 +1006,13 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
       : firstType > secondType;
   },
 
-  _bySize: function({ attachment: first }, { attachment: second })
-    first.contentSize > second.contentSize,
+  _byTransferred: function({ attachment: first }, { attachment: second }) {
+    return first.transferredSize > second.transferredSize;
+  },
+
+  _bySize: function({ attachment: first }, { attachment: second }) {
+    return first.contentSize > second.contentSize;
+  },
 
   /**
    * Refreshes the status displayed in this container's footer, providing
@@ -1178,6 +1195,10 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
             requestItem.attachment.contentSize = value;
             this.updateMenuView(requestItem, key, value);
             break;
+          case "transferredSize":
+            requestItem.attachment.transferredSize = value;
+            this.updateMenuView(requestItem, key, value);
+            break;
           case "mimeType":
             requestItem.attachment.mimeType = value;
             this.updateMenuView(requestItem, key, value);
@@ -1331,6 +1352,20 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
         let size = L10N.numberWithDecimals(kb, CONTENT_SIZE_DECIMALS);
         let node = $(".requests-menu-size", target);
         let text = L10N.getFormatStr("networkMenu.sizeKB", size);
+        node.setAttribute("value", text);
+        node.setAttribute("tooltiptext", text);
+        break;
+      }
+      case "transferredSize": {
+        let text;
+        if (aValue === null) {
+          text = L10N.getStr("networkMenu.sizeUnavailable");
+        } else {
+          let kb = aValue / 1024;
+          let size = L10N.numberWithDecimals(kb, CONTENT_SIZE_DECIMALS);
+          text = L10N.getFormatStr("networkMenu.sizeKB", size);
+        }
+        let node = $(".requests-menu-transferred", target);
         node.setAttribute("value", text);
         node.setAttribute("tooltiptext", text);
         break;
@@ -2001,6 +2036,9 @@ CustomRequestView.prototype = {
 function NetworkDetailsView() {
   dumpn("NetworkDetailsView was instantiated");
 
+  // The ToolSidebar requires the panel object to be able to emit events.
+  EventEmitter.decorate(this);
+
   this._onTabSelect = this._onTabSelect.bind(this);
 };
 
@@ -2025,6 +2063,10 @@ NetworkDetailsView.prototype = {
     dumpn("Initializing the NetworkDetailsView");
 
     this.widget = $("#event-details-pane");
+    this.sidebar = new ToolSidebar(this.widget, this, "netmonitor", {
+      disableTelemetry: true,
+      showAllTabsMenu: true
+    });
 
     this._headers = new VariablesView($("#all-headers"),
       Heritage.extend(GENERIC_VARIABLES_VIEW_SETTINGS, {
@@ -2065,7 +2107,7 @@ NetworkDetailsView.prototype = {
    */
   destroy: function() {
     dumpn("Destroying the NetworkDetailsView");
-
+    this.sidebar.destroy();
     $("tabpanels", this.widget).removeEventListener("select", this._onTabSelect);
   },
 
@@ -2090,16 +2132,14 @@ NetworkDetailsView.prototype = {
     let isHtml = RequestsMenuView.prototype.isHtml({ attachment: aData });
 
     // Show the "Preview" tabpanel only for plain HTML responses.
-    $("#preview-tab").hidden = !isHtml;
-    $("#preview-tabpanel").hidden = !isHtml;
+    this.sidebar.toggleTab(isHtml, "preview-tab", "preview-tabpanel");
 
     // Show the "Security" tab only for requests that
     //   1) are https (state != insecure)
     //   2) come from a target that provides security information.
     let hasSecurityInfo = aData.securityState &&
                           aData.securityState !== "insecure";
-
-    $("#security-tab").hidden = !hasSecurityInfo;
+    this.sidebar.toggleTab(hasSecurityInfo, "security-tab", "security-tabpanel");
 
     // Switch to the "Headers" tabpanel if the "Preview" previously selected
     // and this is not an HTML response or "Security" was selected but this

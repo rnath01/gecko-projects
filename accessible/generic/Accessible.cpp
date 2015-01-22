@@ -1281,7 +1281,7 @@ Accessible::Value(nsString& aValue)
     Accessible* option = CurrentItem();
     if (!option) {
       Accessible* listbox = nullptr;
-      IDRefsIterator iter(mDoc, mContent, nsGkAtoms::aria_owns);
+      ARIAOwnsIterator iter(this);
       while ((listbox = iter.Next()) && !listbox->IsListControl());
 
       if (!listbox) {
@@ -1559,8 +1559,7 @@ Accessible::RelationByType(RelationType aType)
     }
 
     case RelationType::NODE_CHILD_OF: {
-      Relation rel(new RelatedAccIterator(Document(), mContent,
-                                          nsGkAtoms::aria_owns));
+      Relation rel(new ARIAOwnedByIterator(this));
 
       // This is an ARIA tree or treegrid that doesn't use owns, so we need to
       // get the parent the hard way.
@@ -1590,7 +1589,7 @@ Accessible::RelationByType(RelationType aType)
     }
 
     case RelationType::NODE_PARENT_OF: {
-      Relation rel(new IDRefsIterator(mDoc, mContent, nsGkAtoms::aria_owns));
+      Relation rel(new ARIAOwnsIterator(this));
 
       // ARIA tree or treegrid can do the hierarchy by @aria-level, ARIA trees
       // also can be organized by groups.
@@ -1729,7 +1728,7 @@ Accessible::DoCommand(nsIContent *aContent, uint32_t aActionIndex)
     Runnable(Accessible* aAcc, nsIContent* aContent, uint32_t aIdx) :
       mAcc(aAcc), mContent(aContent), mIdx(aIdx) { }
 
-    NS_IMETHOD Run()
+    NS_IMETHOD Run() MOZ_OVERRIDE
     {
       if (mAcc)
         mAcc->DispatchClickEvent(mContent, mIdx);

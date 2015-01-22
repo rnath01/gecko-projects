@@ -1210,6 +1210,11 @@
     "kind": "boolean",
     "description": "Whether a HTTP transaction routed via Alt-Svc was scheme=http"
   },
+  "HTTP_WAP_CONTENT_TYPE_RECEIVED": {
+    "expires_in_version": "40",
+    "kind": "boolean",
+    "description": "Whether a WAP content type response is served to the browser."
+  },
   "SSL_HANDSHAKE_VERSION": {
     "expires_in_version": "never",
     "kind": "enumerated",
@@ -6795,7 +6800,7 @@
     "description": "If any version of Firefox Sync is configured for this device"
   },
   "WEAVE_CONFIGURED_MASTER_PASSWORD": {
-    "expires_in_version": "default",
+    "expires_in_version": "never",
     "kind": "boolean",
     "description": "If both Firefox Sync and Master Password are configured for this device"
   },
@@ -6866,7 +6871,7 @@
     "description": "Algorithms used with WebCrypto (see table in WebCryptoTask.cpp)"
   },
   "MASTER_PASSWORD_ENABLED": {
-    "expires_in_version": "40",
+    "expires_in_version": "never",
     "kind": "flag",
     "description": "If a master-password is enabled for this profile"
   },
@@ -6974,7 +6979,7 @@
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 4,
-    "description": "Tracking protection shield (0 = not shown, 1 = blocked, 2 = loaded, 3 = due to mixed content"
+    "description": "Tracking protection shield (0 = not shown, 1 = loaded, 2 = blocked, 3 = due to mixed content"
   },
   "TRACKING_PROTECTION_EVENTS": {
     "expires_in_version": "never",
@@ -7149,5 +7154,40 @@
     "high": "1024",
     "n_buckets": 16,
     "description": "The number of entries in persistent DataStorage (HSTS and HPKP data, basically)"
+  },
+  "PWMGR_NUM_SAVED_PASSWORDS": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": 750,
+    "n_buckets" : 50,
+    "extended_statistics_ok": true,
+    "description": "The number of saved signons in storage"
+  },
+  "FENNEC_SYNC11_MIGRATION_SENTINELS_SEEN": {
+    "expires_in_version": "45",
+    "kind": "count",
+    "description": "The number of Sync 1.1 -> Sync 1.5 migration sentinels seen by Android Sync."
+  },
+  "FENNEC_SYNC11_MIGRATIONS_FAILED": {
+    "expires_in_version": "45",
+    "kind": "count",
+    "description": "The number of Sync 1.1 -> Sync 1.5 migrations that failed during Android Sync."
+  },
+  "FENNEC_SYNC11_MIGRATIONS_SUCCEEDED": {
+    "expires_in_version": "45",
+    "kind": "count",
+    "description": "The number of Sync 1.1 -> Sync 1.5 migrations that succeeded during Android Sync."
+  },
+  "FENNEC_SYNC11_MIGRATION_NOTIFICATIONS_OFFERED": {
+    "expires_in_version": "45",
+    "kind": "exponential",
+    "high": 500,
+    "n_buckets": 5,
+    "description": "The number of Sync 1.5 'complete upgrade/migration' notifications offered by Android Sync."
+  },
+  "FENNEC_SYNC11_MIGRATIONS_COMPLETED": {
+    "expires_in_version": "45",
+    "kind": "count",
+    "description": "The number of Sync 1.5 migrations completed by Android Sync."
   }
 }

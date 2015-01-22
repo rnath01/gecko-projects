@@ -7,6 +7,8 @@
 #ifndef gc_GCRuntime_h
 #define gc_GCRuntime_h
 
+#include "mozilla/Atomics.h"
+
 #include "jsgc.h"
 
 #include "gc/Heap.h"
@@ -32,11 +34,8 @@ struct FinalizePhase;
 class MarkingValidator;
 struct AutoPrepareForTracing;
 class AutoTraceSession;
-
-#ifdef JSGC_COMPACTING
 struct ArenasToUpdate;
 struct MovingTracer;
-#endif
 
 class ChunkPool
 {
@@ -295,11 +294,7 @@ class GCRuntime
     bool isHeapMajorCollecting() { return heapState == js::MajorCollecting; }
     bool isHeapMinorCollecting() { return heapState == js::MinorCollecting; }
     bool isHeapCollecting() { return isHeapMajorCollecting() || isHeapMinorCollecting(); }
-#ifdef JSGC_COMPACTING
     bool isHeapCompacting() { return isHeapMajorCollecting() && state() == COMPACT; }
-#else
-    bool isHeapCompacting() { return false; }
-#endif
 
     bool triggerGC(JS::gcreason::Reason reason);
     void maybeAllocTriggerZoneGC(Zone *zone, const AutoLockGC &lock);
@@ -435,11 +430,9 @@ class GCRuntime
     void disableGenerationalGC();
     void enableGenerationalGC();
 
-#ifdef JSGC_COMPACTING
     void disableCompactingGC();
     void enableCompactingGC();
     bool isCompactingGCEnabled();
-#endif
 
     void setGrayRootsTracer(JSTraceDataOp traceOp, void *data);
     bool addBlackRootsTracer(JSTraceDataOp traceOp, void *data);
@@ -483,7 +476,9 @@ class GCRuntime
     bool areGrayBitsValid() { return grayBitsValid; }
     void setGrayBitsInvalid() { grayBitsValid = false; }
 
-    bool isGcNeeded() { return minorGCRequested || majorGCRequested; }
+    bool minorGCRequested() const { return minorGCTriggerReason != JS::gcreason::NO_REASON; }
+    bool majorGCRequested() const { return majorGCTriggerReason != JS::gcreason::NO_REASON; }
+    bool isGcNeeded() { return minorGCRequested() || majorGCRequested(); }
 
     double computeHeapGrowthFactor(size_t lastBytes);
     size_t computeTriggerBytes(double growthFactor, size_t lastBytes);
@@ -595,24 +590,22 @@ class GCRuntime
     void decommitAllWithoutUnlocking(const AutoLockGC &lock);
     void decommitArenas(AutoLockGC &lock);
     void expireChunksAndArenas(bool shouldShrink, AutoLockGC &lock);
-    void queueZonesForBackgroundSweep(js::gc::ZoneList& zones);
-    void sweepBackgroundThings(js::gc::ZoneList &zones, ThreadType threadType);
+    void queueZonesForBackgroundSweep(ZoneList &zones);
+    void sweepBackgroundThings(ZoneList &zones, LifoAlloc &freeBlocks, ThreadType threadType);
     void assertBackgroundSweepingFinished();
     bool shouldCompact();
     bool compactPhase(bool lastGC);
-#ifdef JSGC_COMPACTING
     void sweepTypesAfterCompacting(Zone *zone);
     void sweepZoneAfterCompacting(Zone *zone);
     ArenaHeader *relocateArenas();
-    void updateAllCellPointersParallel(ArenasToUpdate &source);
-    void updateAllCellPointersSerial(MovingTracer *trc, ArenasToUpdate &source);
+    void updateAllCellPointersParallel(MovingTracer *trc);
+    void updateAllCellPointersSerial(MovingTracer *trc);
     void updatePointersToRelocatedCells();
     void releaseRelocatedArenas(ArenaHeader *relocatedList);
     void releaseRelocatedArenasWithoutUnlocking(ArenaHeader *relocatedList, const AutoLockGC& lock);
 #ifdef DEBUG
     void protectRelocatedArenas(ArenaHeader *relocatedList);
     void unprotectRelocatedArenas(ArenaHeader *relocatedList);
-#endif
 #endif
     void finishCollection();
 
@@ -698,10 +691,8 @@ class GCRuntime
      */
     bool grayBitsValid;
 
-    volatile uintptr_t majorGCRequested;
-    JS::gcreason::Reason majorGCTriggerReason;
+    mozilla::Atomic<JS::gcreason::Reason, mozilla::Relaxed> majorGCTriggerReason;
 
-    bool minorGCRequested;
     JS::gcreason::Reason minorGCTriggerReason;
 
     /* Incremented at the start of every major GC. */
@@ -752,7 +743,7 @@ class GCRuntime
     bool foundBlackGrayEdges;
 
     /* Singly linekd list of zones to be swept in the background. */
-    js::gc::ZoneList backgroundSweepZones;
+    ZoneList backgroundSweepZones;
     /*
      * Free LIFO blocks are transferred to this allocator before being freed on
      * the background GC thread.
@@ -809,13 +800,11 @@ class GCRuntime
      */
     unsigned generationalDisabled;
 
-#ifdef JSGC_COMPACTING
     /*
      * Some code cannot tolerate compacting GC so it can be disabled with this
      * counter.
      */
     unsigned compactingDisabled;
-#endif
 
     /*
      * This is true if we are in the middle of a brain transplant (e.g.,
@@ -916,9 +905,7 @@ class GCRuntime
 
     size_t noGCOrAllocationCheck;
 
-#ifdef JSGC_COMPACTING
     ArenaHeader* relocatedArenasToRelease;
-#endif
 
 #endif
 

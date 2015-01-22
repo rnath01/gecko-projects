@@ -722,9 +722,14 @@ CodeGenerator::visitFunctionDispatch(LFunctionDispatch *lir)
     // Compare function pointers, except for the last case.
     for (size_t i = 0; i < casesWithFallback - 1; i++) {
         MOZ_ASSERT(i < mir->numCases());
-        JSFunction *func = mir->getCase(i);
         LBlock *target = skipTrivialBlocks(mir->getCaseBlock(i))->lir();
-        masm.branchPtr(Assembler::Equal, input, ImmGCPtr(func), target->label());
+        if (types::TypeObject *funcType = mir->getCaseTypeObject(i)) {
+            masm.branchPtr(Assembler::Equal, Address(input, JSObject::offsetOfType()),
+                           ImmGCPtr(funcType), target->label());
+        } else {
+            JSFunction *func = mir->getCase(i);
+            masm.branchPtr(Assembler::Equal, input, ImmGCPtr(func), target->label());
+        }
     }
 
     // Jump to the last case.
@@ -1981,6 +1986,8 @@ CodeGenerator::visitReturn(LReturn *lir)
 void
 CodeGenerator::visitOsrEntry(LOsrEntry *lir)
 {
+    Register temp = ToRegister(lir->temp());
+
     // Remember the OSR entry offset into the code buffer.
     masm.flushBuffer();
     setOsrEntryOffset(masm.size());
@@ -1989,6 +1996,10 @@ CodeGenerator::visitOsrEntry(LOsrEntry *lir)
     emitTracelogStopEvent(TraceLogger_Baseline);
     emitTracelogStartEvent(TraceLogger_IonMonkey);
 #endif
+
+    // If profiling, save the current frame pointer to a per-thread global field.
+    if (isProfilerInstrumentationEnabled())
+        masm.profilerEnterFrame(StackPointer, temp);
 
     // Allocate the full frame for this function
     // Note we have a new entry here. So we reset MacroAssembler::framePushed()
@@ -3647,7 +3658,7 @@ CodeGenerator::emitObjectOrStringResultChecks(LInstruction *lir, MDefinition *mi
         MOZ_CRASH();
     }
 
-    masm.callWithABINoProfiling(callee);
+    masm.callWithABI(callee);
     restoreVolatile();
 
     masm.bind(&done);
@@ -3713,7 +3724,7 @@ CodeGenerator::emitValueResultChecks(LInstruction *lir, MDefinition *mir)
     masm.loadJSContext(temp2);
     masm.passABIArg(temp2);
     masm.passABIArg(temp1);
-    masm.callWithABINoProfiling(JS_FUNC_TO_DATA_PTR(void *, AssertValidValue));
+    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void *, AssertValidValue));
     masm.popValue(output);
     restoreVolatile();
 
@@ -6926,9 +6937,6 @@ CodeGenerator::generateAsmJS(AsmJSFunctionLabels *labels)
 {
     JitSpew(JitSpew_Codegen, "# Emitting asm.js code");
 
-    // AsmJS doesn't do SPS instrumentation.
-    sps_.disable();
-
     if (!omitOverRecursedCheck())
         labels->overflowThunk.emplace();
 
@@ -7154,7 +7162,7 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
         return false;
 
     // Encode native to bytecode map if profiling is enabled.
-    if (isNativeToBytecodeMapEnabled()) {
+    if (isProfilerInstrumentationEnabled()) {
         // Generate native-to-bytecode main table.
         if (!generateCompactNativeToBytecodeMap(cx, code))
             return false;
@@ -7177,7 +7185,22 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
 
         // Add entry to the global table.
         JitcodeGlobalTable *globalTable = cx->runtime()->jitRuntime()->getJitcodeGlobalTable();
-        if (!globalTable->addEntry(entry)) {
+        if (!globalTable->addEntry(entry, cx->runtime())) {
+            // Memory may have been allocated for the entry.
+            entry.destroy();
+            return false;
+        }
+
+        // Mark the jitcode as having a bytecode map.
+        code->setHasBytecodeMap();
+    } else {
+        // Add a dumy jitcodeGlobalTable entry.
+        JitcodeGlobalEntry::DummyEntry entry;
+        entry.init(code->raw(), code->rawEnd());
+
+        // Add entry to the global table.
+        JitcodeGlobalTable *globalTable = cx->runtime()->jitRuntime()->getJitcodeGlobalTable();
+        if (!globalTable->addEntry(entry, cx->runtime())) {
             // Memory may have been allocated for the entry.
             entry.destroy();
             return false;
@@ -7187,25 +7210,12 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
         code->setHasBytecodeMap();
     }
 
-    if (cx->runtime()->spsProfiler.enabled()) {
-        const char *filename = script->filename();
-        if (filename == nullptr)
-            filename = "<unknown>";
-        unsigned len = strlen(filename) + 50;
-        char *buf = js_pod_malloc<char>(len);
-        if (!buf)
-            return false;
-        JS_snprintf(buf, len, "Ion compiled %s:%d", filename, (int) script->lineno());
-        cx->runtime()->spsProfiler.markEvent(buf);
-        js_free(buf);
-    }
-
     ionScript->setMethod(code);
     ionScript->setSkipArgCheckEntryOffset(getSkipArgCheckEntryOffset());
 
     // If SPS is enabled, mark IonScript as having been instrumented with SPS
-    if (sps_.enabled())
-        ionScript->setHasSPSInstrumentation();
+    if (isProfilerInstrumentationEnabled())
+        ionScript->setHasProfilingInstrumentation();
 
     script->setIonScript(cx, ionScript);
 
@@ -8889,49 +8899,6 @@ CodeGenerator::visitSetDOMProperty(LSetDOMProperty *ins)
     masm.adjustStack(IonDOMExitFrameLayout::Size());
 
     MOZ_ASSERT(masm.framePushed() == initialStack);
-}
-
-typedef bool(*SPSFn)(JSContext *, HandleScript);
-static const VMFunction SPSEnterInfo = FunctionInfo<SPSFn>(SPSEnter);
-static const VMFunction SPSExitInfo = FunctionInfo<SPSFn>(SPSExit);
-
-void
-CodeGenerator::visitProfilerStackOp(LProfilerStackOp *lir)
-{
-    Register temp = ToRegister(lir->temp()->output());
-
-    switch (lir->type()) {
-        case MProfilerStackOp::Enter:
-            if (gen->options.spsSlowAssertionsEnabled()) {
-                saveLive(lir);
-                pushArg(ImmGCPtr(lir->script()));
-                callVM(SPSEnterInfo, lir);
-                restoreLive(lir);
-                sps_.pushManual(lir->script(), masm, temp, /* inlinedFunction = */ false);
-            } else {
-                masm.propagateOOM(sps_.push(lir->script(), masm, temp,
-                                            /* inlinedFunction = */ false));
-            }
-            return;
-
-        case MProfilerStackOp::Exit:
-            if (gen->options.spsSlowAssertionsEnabled()) {
-                saveLive(lir);
-                pushArg(ImmGCPtr(lir->script()));
-                // Once we've exited, then we shouldn't emit instrumentation for
-                // the corresponding reenter() because we no longer have a
-                // frame.
-                sps_.skipNextReenter();
-                callVM(SPSExitInfo, lir);
-                restoreLive(lir);
-            } else {
-                sps_.pop(masm, temp, /* inlinedFunction = */ false);
-            }
-            return;
-
-        default:
-            MOZ_CRASH("invalid LProfilerStackOp type");
-    }
 }
 
 class OutOfLineIsCallable : public OutOfLineCodeBase<CodeGenerator>

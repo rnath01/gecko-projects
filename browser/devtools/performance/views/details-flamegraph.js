@@ -12,14 +12,15 @@ let FlameGraphView = {
    * Sets up the view with event binding.
    */
   initialize: Task.async(function* () {
-    this._onRecordingStopped = this._onRecordingStopped.bind(this);
+    this._onRecordingStoppedOrSelected = this._onRecordingStoppedOrSelected.bind(this);
     this._onRangeChange = this._onRangeChange.bind(this);
 
     this.graph = new FlameGraph($("#flamegraph-view"));
     this.graph.timelineTickUnits = L10N.getStr("graphs.ms");
     yield this.graph.ready();
 
-    PerformanceController.on(EVENTS.RECORDING_STOPPED, this._onRecordingStopped);
+    PerformanceController.on(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
+    PerformanceController.on(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
     OverviewView.on(EVENTS.OVERVIEW_RANGE_SELECTED, this._onRangeChange);
     OverviewView.on(EVENTS.OVERVIEW_RANGE_CLEARED, this._onRangeChange);
   }),
@@ -28,7 +29,8 @@ let FlameGraphView = {
    * Unbinds events.
    */
   destroy: function () {
-    PerformanceController.off(EVENTS.RECORDING_STOPPED, this._onRecordingStopped);
+    PerformanceController.off(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
+    PerformanceController.off(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
     OverviewView.off(EVENTS.OVERVIEW_RANGE_SELECTED, this._onRangeChange);
     OverviewView.off(EVENTS.OVERVIEW_RANGE_CLEARED, this._onRangeChange);
   },
@@ -42,17 +44,24 @@ let FlameGraphView = {
       return;
     }
     let samples = profilerData.profile.threads[0].samples;
-    let dataSrc = FlameGraphUtils.createFlameGraphDataFromSamples(samples);
+    let dataSrc = FlameGraphUtils.createFlameGraphDataFromSamples(samples, {
+      flattenRecursion: Prefs.flattenTreeRecursion,
+      filterFrames: !Prefs.showPlatformData && FrameNode.isContent,
+      showIdleBlocks: Prefs.showIdleBlocks && L10N.getStr("table.idle")
+    });
     this.graph.setData(dataSrc);
     this.emit(EVENTS.FLAMEGRAPH_RENDERED);
   },
 
   /**
-   * Called when recording is stopped.
+   * Called when recording is stopped or selected.
    */
-  _onRecordingStopped: function () {
-    let profilerData = PerformanceController.getProfilerData();
-    this.render(profilerData);
+  _onRecordingStoppedOrSelected: function (_, recording) {
+    // If not recording, then this recording is done and we can render all of it
+    if (!recording.isRecording()) {
+      let profilerData = recording.getProfilerData();
+      this.render(profilerData);
+    }
   },
 
   /**

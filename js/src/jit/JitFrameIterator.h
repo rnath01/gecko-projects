@@ -14,6 +14,8 @@
 #include "jit/IonCode.h"
 #include "jit/Snapshots.h"
 
+#include "js/ProfilingFrameIterator.h"
+
 namespace js {
     class ActivationIterator;
 };
@@ -86,6 +88,10 @@ class BaselineFrame;
 
 class JitActivation;
 
+// Iterate over the JIT stack to assert that all invariants are respected.
+//  - Check that all entry frames are aligned on StackAlignment.
+void AssertValidJitStack(JSContext *cx);
+
 class JitFrameIterator
 {
   protected:
@@ -153,6 +159,12 @@ class JitFrameIterator
     }
     bool isBaselineStub() const {
         return type_ == JitFrame_BaselineStub;
+    }
+    bool isBaselineStubMaybeUnwound() const {
+        return type_ == JitFrame_BaselineStub || type_ == JitFrame_Unwound_BaselineStub;
+    }
+    bool isRectifierMaybeUnwound() const {
+        return type_ == JitFrame_Rectifier || type_ == JitFrame_Unwound_Rectifier;
     }
     bool isBareExit() const;
     template <typename T> bool isExitFrameLayout() const;
@@ -253,6 +265,33 @@ class JitFrameIterator
 #else
     inline bool verifyReturnAddressUsingNativeToBytecodeMap() { return true; }
 #endif
+};
+
+class JitcodeGlobalTable;
+
+class JitProfilingFrameIterator
+{
+    uint8_t *fp_;
+    FrameType type_;
+    void *returnAddressToFp_;
+
+    inline JitFrameLayout *framePtr();
+    inline JSScript *frameScript();
+    bool tryInitWithPC(void *pc);
+    bool tryInitWithTable(JitcodeGlobalTable *table, void *pc, JSRuntime *rt);
+
+  public:
+    JitProfilingFrameIterator(JSRuntime *rt,
+                              const JS::ProfilingFrameIterator::RegisterState &state);
+    explicit JitProfilingFrameIterator(void *exitFrame);
+
+    void operator++();
+    bool done() const { return fp_ == nullptr; }
+
+    void *fp() const { MOZ_ASSERT(!done()); return fp_; }
+    void *stackAddress() const { return fp(); }
+    FrameType frameType() const { MOZ_ASSERT(!done()); return type_; }
+    void *returnAddressToFp() const { MOZ_ASSERT(!done()); return returnAddressToFp_; }
 };
 
 class RInstructionResults

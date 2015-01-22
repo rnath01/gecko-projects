@@ -1633,7 +1633,7 @@ LIRGenerator::visitLimitedTruncate(MLimitedTruncate *nop)
 void
 LIRGenerator::visitOsrEntry(MOsrEntry *entry)
 {
-    LOsrEntry *lir = new(alloc()) LOsrEntry;
+    LOsrEntry *lir = new(alloc()) LOsrEntry(temp());
     defineFixed(lir, entry, LAllocation(AnyRegister(OsrFrameReg)));
 }
 
@@ -3160,6 +3160,13 @@ LIRGenerator::visitGuardString(MGuardString *ins)
 }
 
 void
+LIRGenerator::visitPolyInlineGuard(MPolyInlineGuard *ins)
+{
+    MOZ_ASSERT(ins->input()->type() == MIRType_Object);
+    redefine(ins, ins->input());
+}
+
+void
 LIRGenerator::visitGuardShapePolymorphic(MGuardShapePolymorphic *ins)
 {
     MOZ_ASSERT(ins->obj()->type() == MIRType_Object);
@@ -3490,18 +3497,6 @@ LIRGenerator::visitCallInstanceOf(MCallInstanceOf *ins)
     useBoxAtStart(lir, LCallInstanceOf::LHS, lhs);
     defineReturn(lir, ins);
     assignSafepoint(lir, ins);
-}
-
-void
-LIRGenerator::visitProfilerStackOp(MProfilerStackOp *ins)
-{
-    LProfilerStackOp *lir = new(alloc()) LProfilerStackOp(temp());
-    add(lir, ins);
-
-    // If slow assertions are enabled, then this node will result in a callVM
-    // out to a C++ function for the assertions, so we will need a safepoint.
-    if (gen->options.spsSlowAssertionsEnabled())
-        assignSafepoint(lir, ins);
 }
 
 void

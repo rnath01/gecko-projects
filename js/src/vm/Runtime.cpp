@@ -75,6 +75,7 @@ PerThreadData::PerThreadData(JSRuntime *runtime)
     runtime_(runtime),
     jitTop(nullptr),
     jitJSContext(nullptr),
+    jitActivation(nullptr),
     jitStackLimit_(0xbad),
 #ifdef JS_TRACE_LOGGING
     traceLogger(nullptr),
@@ -182,6 +183,7 @@ JSRuntime::JSRuntime(JSRuntime *parentRuntime)
     suppressProfilerSampling(false),
     hadOutOfMemory(false),
     haveCreatedContext(false),
+    allowRelazificationForTesting(false),
     data(nullptr),
     signalHandlersInstalled_(false),
     canUseSignalHandlers_(false),

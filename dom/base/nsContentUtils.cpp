@@ -344,7 +344,7 @@ public:
   {
     // We don't measure the |EventListenerManager| objects pointed to by the
     // entries because those references are non-owning.
-    int64_t amount = sEventListenerManagersHash.ops
+    int64_t amount = sEventListenerManagersHash.IsInitialized()
                    ? PL_DHashTableSizeOfExcludingThis(
                        &sEventListenerManagersHash, nullptr, MallocSizeOf)
                    : 0;
@@ -476,7 +476,7 @@ nsContentUtils::Init()
   if (!InitializeEventTable())
     return NS_ERROR_FAILURE;
 
-  if (!sEventListenerManagersHash.ops) {
+  if (!sEventListenerManagersHash.IsInitialized()) {
     static const PLDHashTableOps hash_table_ops =
     {
       PL_DHashVoidPtrKeyStub,
@@ -1545,32 +1545,6 @@ nsContentUtils::IsHTMLBlock(nsIAtom* aLocalName)
 
 /* static */
 bool
-nsContentUtils::IsHTMLVoid(nsIAtom* aLocalName)
-{
-  return
-    (aLocalName == nsGkAtoms::area) ||
-    (aLocalName == nsGkAtoms::base) ||
-    (aLocalName == nsGkAtoms::basefont) ||
-    (aLocalName == nsGkAtoms::bgsound) ||
-    (aLocalName == nsGkAtoms::br) ||
-    (aLocalName == nsGkAtoms::col) ||
-    (aLocalName == nsGkAtoms::command) ||
-    (aLocalName == nsGkAtoms::embed) ||
-    (aLocalName == nsGkAtoms::frame) ||
-    (aLocalName == nsGkAtoms::hr) ||
-    (aLocalName == nsGkAtoms::img) ||
-    (aLocalName == nsGkAtoms::input) ||
-    (aLocalName == nsGkAtoms::keygen) ||
-    (aLocalName == nsGkAtoms::link) ||
-    (aLocalName == nsGkAtoms::meta) ||
-    (aLocalName == nsGkAtoms::param) ||
-    (aLocalName == nsGkAtoms::source) ||
-    (aLocalName == nsGkAtoms::track) ||
-    (aLocalName == nsGkAtoms::wbr);
-}
-
-/* static */
-bool
 nsContentUtils::ParseIntMarginValue(const nsAString& aString, nsIntMargin& result)
 {
   nsAutoString marginStr(aString);
@@ -1787,7 +1761,7 @@ nsContentUtils::Shutdown()
   delete sUserDefinedEvents;
   sUserDefinedEvents = nullptr;
 
-  if (sEventListenerManagersHash.ops) {
+  if (sEventListenerManagersHash.IsInitialized()) {
     NS_ASSERTION(sEventListenerManagersHash.EntryCount() == 0,
                  "Event listener manager hash not empty at shutdown!");
 
@@ -1802,7 +1776,6 @@ nsContentUtils::Shutdown()
 
     if (sEventListenerManagersHash.EntryCount() == 0) {
       PL_DHashTableFinish(&sEventListenerManagersHash);
-      sEventListenerManagersHash.ops = nullptr;
     }
   }
 
@@ -3647,7 +3620,8 @@ nsresult
 nsContentUtils::DispatchEvent(nsIDocument* aDoc, nsISupports* aTarget,
                               const nsAString& aEventName,
                               bool aCanBubble, bool aCancelable,
-                              bool aTrusted, bool *aDefaultAction)
+                              bool aTrusted, bool *aDefaultAction,
+                              bool aOnlyChromeDispatch)
 {
   nsCOMPtr<nsIDOMEvent> event;
   nsCOMPtr<EventTarget> target;
@@ -3655,6 +3629,7 @@ nsContentUtils::DispatchEvent(nsIDocument* aDoc, nsISupports* aTarget,
                                   aCancelable, aTrusted, getter_AddRefs(event),
                                   getter_AddRefs(target));
   NS_ENSURE_SUCCESS(rv, rv);
+  event->GetInternalNSEvent()->mFlags.mOnlyChromeDispatch = aOnlyChromeDispatch;
 
   bool dummy;
   return target->DispatchEvent(event, aDefaultAction ? aDefaultAction : &dummy);
@@ -3689,6 +3664,17 @@ nsContentUtils::DispatchChromeEvent(nsIDocument *aDoc,
     *aDefaultAction = (status != nsEventStatus_eConsumeNoDefault);
   }
   return rv;
+}
+
+nsresult
+nsContentUtils::DispatchEventOnlyToChrome(nsIDocument* aDoc,
+                                          nsISupports* aTarget,
+                                          const nsAString& aEventName,
+                                          bool aCanBubble, bool aCancelable,
+                                          bool* aDefaultAction)
+{
+  return DispatchEvent(aDoc, aTarget, aEventName, aCanBubble, aCancelable,
+                       true, aDefaultAction, true);
 }
 
 /* static */
@@ -3937,7 +3923,7 @@ ListenerEnumerator(PLDHashTable* aTable, PLDHashEntryHdr* aEntry,
 void
 nsContentUtils::UnmarkGrayJSListenersInCCGenerationDocuments(uint32_t aGeneration)
 {
-  if (sEventListenerManagersHash.ops) {
+  if (sEventListenerManagersHash.IsInitialized()) {
     PL_DHashTableEnumerate(&sEventListenerManagersHash, ListenerEnumerator,
                            &aGeneration);
   }
@@ -3948,7 +3934,7 @@ void
 nsContentUtils::TraverseListenerManager(nsINode *aNode,
                                         nsCycleCollectionTraversalCallback &cb)
 {
-  if (!sEventListenerManagersHash.ops) {
+  if (!sEventListenerManagersHash.IsInitialized()) {
     // We're already shut down, just return.
     return;
   }
@@ -3965,7 +3951,7 @@ nsContentUtils::TraverseListenerManager(nsINode *aNode,
 EventListenerManager*
 nsContentUtils::GetListenerManagerForNode(nsINode *aNode)
 {
-  if (!sEventListenerManagersHash.ops) {
+  if (!sEventListenerManagersHash.IsInitialized()) {
     // We're already shut down, don't bother creating an event listener
     // manager.
 
@@ -3996,7 +3982,7 @@ nsContentUtils::GetExistingListenerManagerForNode(const nsINode *aNode)
     return nullptr;
   }
   
-  if (!sEventListenerManagersHash.ops) {
+  if (!sEventListenerManagersHash.IsInitialized()) {
     // We're already shut down, don't bother creating an event listener
     // manager.
 
@@ -4017,7 +4003,7 @@ nsContentUtils::GetExistingListenerManagerForNode(const nsINode *aNode)
 void
 nsContentUtils::RemoveListenerManager(nsINode *aNode)
 {
-  if (sEventListenerManagersHash.ops) {
+  if (sEventListenerManagersHash.IsInitialized()) {
     EventListenerManagerMapEntry *entry =
       static_cast<EventListenerManagerMapEntry *>
                  (PL_DHashTableLookup(&sEventListenerManagersHash, aNode));

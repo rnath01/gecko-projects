@@ -19,6 +19,7 @@
 
 #include "asmjs/AsmJSLink.h"
 #include "asmjs/AsmJSValidate.h"
+#include "jit/JitFrameIterator.h"
 #include "js/Debug.h"
 #include "js/HashTable.h"
 #include "js/StructuredClone.h"
@@ -338,6 +339,30 @@ GCParameter(JSContext *cx, unsigned argc, Value *vp)
     JS_SetGCParameter(cx->runtime(), param, value);
     args.rval().setUndefined();
     return true;
+}
+
+static void
+SetAllowRelazification(JSContext *cx, bool allow)
+{
+    JSRuntime *rt = cx->runtime();
+    MOZ_ASSERT(rt->allowRelazificationForTesting != allow);
+    rt->allowRelazificationForTesting = allow;
+
+    for (AllFramesIter i(cx); !i.done(); ++i)
+        i.script()->setDoNotRelazify(allow);
+}
+
+static bool
+RelazifyFunctions(JSContext *cx, unsigned argc, Value *vp)
+{
+    // Relazifying functions on GC is usually only done for compartments that are
+    // not active. To aid fuzzing, this testing function allows us to relazify
+    // even if the compartment is active.
+
+    SetAllowRelazification(cx, true);
+    bool res = GC(cx, argc, vp);
+    SetAllowRelazification(cx, false);
+    return res;
 }
 
 static bool
@@ -1328,6 +1353,16 @@ js::testingFunc_assertFloat32(JSContext *cx, unsigned argc, jsval *vp)
 }
 
 static bool
+TestingFunc_assertValidJitStack(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    jit::AssertValidJitStack(cx);
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
 SetJitCompilerOption(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -2236,6 +2271,11 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
 "gcparam(name [, value])",
 "  Wrapper for JS_[GS]etGCParameter. The name is one of " GC_PARAMETER_ARGS_LIST),
 
+    JS_FN_HELP("relazifyFunctions", RelazifyFunctions, 0, 0,
+"relazifyFunctions(...)",
+"  Perform a GC and allow relazification of functions. Accepts the same\n"
+"  arguments as gc()."),
+
     JS_FN_HELP("getBuildConfiguration", GetBuildConfiguration, 0, 0,
 "getBuildConfiguration()",
 "  Return an object describing some of the configuration options SpiderMonkey\n"
@@ -2458,6 +2498,10 @@ gc::ZealModeHelpText),
     JS_FN_HELP("bailout", testingFunc_bailout, 0, 0,
 "bailout()",
 "  Force a bailout out of ionmonkey (if running in ionmonkey)."),
+
+    JS_FN_HELP("assertValidJitStack", TestingFunc_assertValidJitStack, 0, 0,
+"assertValidJitStack()",
+"  Iterates the Jit stack and check that stack invariants hold."),
 
     JS_FN_HELP("setJitCompilerOption", SetJitCompilerOption, 2, 0,
 "setCompilerOption(<option>, <number>)",

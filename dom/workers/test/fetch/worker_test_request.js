@@ -11,7 +11,7 @@ function testDefaultCtor() {
   is(req.method, "GET", "Default Request method is GET");
   ok(req.headers instanceof Headers, "Request should have non-null Headers object");
   is(req.url, self.location.href, "URL should be resolved with entry settings object's API base URL");
-  is(req.referrer, "", "Default referrer is `client` which serializes to empty string.");
+  is(req.referrer, "about:client", "Default referrer is `client` which serializes to about:client.");
   is(req.mode, "cors", "Request mode for string input is cors");
   is(req.credentials, "omit", "Default Request credentials is omit");
 
@@ -19,7 +19,7 @@ function testDefaultCtor() {
   is(req.method, "GET", "Default Request method is GET");
   ok(req.headers instanceof Headers, "Request should have non-null Headers object");
   is(req.url, self.location.href, "URL should be resolved with entry settings object's API base URL");
-  is(req.referrer, "", "Default referrer is `client` which serializes to empty string.");
+  is(req.referrer, "about:client", "Default referrer is `client` which serializes to about:client.");
   is(req.mode, "cors", "Request mode string input is cors");
   is(req.credentials, "omit", "Default Request credentials is omit");
 }
@@ -37,7 +37,7 @@ function testClone() {
   is(req.headers.get('content-length'), "5", "Request content-length should be 5.");
   ok(req.url === (new URL("./cloned_request.txt", self.location.href)).href,
        "URL should be resolved with entry settings object's API base URL");
-  ok(req.referrer === "", "Default referrer is `client` which serializes to empty string.");
+  ok(req.referrer === "about:client", "Default referrer is `client` which serializes to about:client.");
   ok(req.mode === "same-origin", "Request mode is same-origin");
   ok(req.credentials === "same-origin", "Default credentials is same-origin");
 }
@@ -78,17 +78,33 @@ function testBug1109574() {
 }
 
 function testMethod() {
-  var allowed = ["delete", "get", "head", "options", "post", "put"];
+  // These get normalized.
+  var allowed = ["delete", "get", "head", "options", "post", "put" ];
   for (var i = 0; i < allowed.length; ++i) {
     try {
       var r = new Request("", { method: allowed[i] });
       ok(true, "Method " + allowed[i] + " should be allowed");
+      is(r.method, allowed[i].toUpperCase(),
+         "Standard HTTP method " + allowed[i] + " should be normalized");
     } catch(e) {
       ok(false, "Method " + allowed[i] + " should be allowed");
     }
   }
 
-  var forbidden = ["aardvark", "connect", "trace", "track"];
+  var allowed = [ "pAtCh", "foo" ];
+  for (var i = 0; i < allowed.length; ++i) {
+    try {
+      var r = new Request("", { method: allowed[i] });
+      ok(true, "Method " + allowed[i] + " should be allowed");
+      is(r.method, allowed[i],
+         "Non-standard but valid HTTP method " + allowed[i] +
+         " should not be normalized");
+    } catch(e) {
+      ok(false, "Method " + allowed[i] + " should be allowed");
+    }
+  }
+
+  var forbidden = ["connect", "trace", "track", "<invalid token??"];
   for (var i = 0; i < forbidden.length; ++i) {
     try {
       var r = new Request("", { method: forbidden[i] });

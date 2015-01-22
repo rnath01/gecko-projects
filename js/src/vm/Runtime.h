@@ -87,6 +87,7 @@ struct PcScriptCache;
 class Simulator;
 class SimulatorRuntime;
 struct AutoFlushICache;
+class CompileRuntime;
 }
 
 /*
@@ -519,6 +520,12 @@ class PerThreadData : public PerThreadDataFriendFields
      */
     JSContext           *jitJSContext;
 
+     /*
+     * Points to the most recent JitActivation pushed on the thread.
+     * See JitActivation constructor in vm/Stack.cpp
+     */
+    js::jit::JitActivation *jitActivation;
+
     /* See comment for JSRuntime::interrupt_. */
   private:
     mozilla::Atomic<uintptr_t, mozilla::Relaxed> jitStackLimit_;
@@ -545,6 +552,7 @@ class PerThreadData : public PerThreadDataFriendFields
     friend class js::ActivationIterator;
     friend class js::jit::JitActivation;
     friend class js::AsmJSActivation;
+    friend class js::jit::CompileRuntime;
 #ifdef DEBUG
     friend void js::AssertCurrentThreadCanLock(RuntimeLock which);
 #endif
@@ -585,6 +593,12 @@ class PerThreadData : public PerThreadDataFriendFields
 
     js::Activation *profilingActivation() const {
         return profilingActivation_;
+    }
+    void *addressOfProfilingActivation() {
+        return (void*) &profilingActivation_;
+    }
+    static unsigned offsetOfProfilingActivation() {
+        return offsetof(PerThreadData, profilingActivation_);
     }
 
     js::AsmJSActivation *asmJSActivationStack() const {
@@ -1018,7 +1032,7 @@ struct JSRuntime : public JS::shadow::Runtime,
 
     /* Whether sampling should be enabled or not. */
   private:
-    bool                suppressProfilerSampling;
+    mozilla::Atomic<bool, mozilla::SequentiallyConsistent> suppressProfilerSampling;
 
   public:
     bool isProfilerSamplingEnabled() const {
@@ -1036,6 +1050,12 @@ struct JSRuntime : public JS::shadow::Runtime,
 
     /* A context has been created on this runtime. */
     bool                haveCreatedContext;
+
+    /*
+     * Allow relazifying functions in compartments that are active. This is
+     * only used by the relazifyFunctions() testing function.
+     */
+    bool                allowRelazificationForTesting;
 
     /* Linked list of all Debugger objects in the runtime. */
     mozilla::LinkedList<js::Debugger> debuggerList;
