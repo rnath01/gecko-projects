@@ -73,6 +73,7 @@ HttpBaseChannel::HttpBaseChannel()
   , mForceNoIntercept(false)
   , mSuspendCount(0)
   , mProxyResolveFlags(0)
+  , mProxyURI(nullptr)
   , mContentDispositionHint(UINT32_MAX)
   , mHttpHandler(gHttpHandler)
   , mReferrerPolicy(REFERRER_POLICY_NO_REFERRER_WHEN_DOWNGRADE)
@@ -1199,6 +1200,17 @@ HttpBaseChannel::SetReferrerWithPolicy(nsIURI *referrer,
   return NS_OK;
 }
 
+// Return the channel's proxy URI, or if it doesn't exist, the
+// channel's main URI.
+NS_IMETHODIMP
+HttpBaseChannel::GetProxyURI(nsIURI **aOut)
+{
+  NS_ENSURE_ARG_POINTER(aOut);
+  nsCOMPtr<nsIURI> result(mProxyURI);
+  result.forget(aOut);
+  return NS_OK;
+}
+
 NS_IMETHODIMP
 HttpBaseChannel::GetRequestHeader(const nsACString& aHeader,
                                   nsACString& aValue)
@@ -2183,8 +2195,10 @@ HttpBaseChannel::SetupReplacementChannel(nsIURI       *newURI,
       nsCOMPtr<nsIURI> uri;
       mRedirects[i]->GetURI(getter_AddRefs(uri));
       nsCString spec;
-      uri->GetSpec(spec);
-      LOG(("HttpBaseChannel::SetupReplacementChannel adding redirect %s "
+      if (uri) {
+        uri->GetSpec(spec);
+      }
+      LOG(("HttpBaseChannel::SetupReplacementChannel adding redirect \'%s\' "
            "[this=%p]", spec.get(), this));
 #endif
       httpInternal->AddRedirect(mRedirects[i]);

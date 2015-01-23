@@ -2427,7 +2427,7 @@ dnl Checks for library functions.
 dnl ========================================================
 AC_PROG_GCC_TRADITIONAL
 AC_FUNC_MEMCMP
-AC_CHECK_FUNCS([getc_unlocked _getc_nolock localtime_r])
+AC_CHECK_FUNCS([getc_unlocked _getc_nolock gmtime_r localtime_r])
 
 
 dnl Checks for math functions.
@@ -3051,18 +3051,6 @@ dnl ========================================================
 MOZ_ARG_WITH_STRING(wrap-malloc,
 [  --with-wrap-malloc=DIR  Location of malloc wrapper library],
     WRAP_LDFLAGS="${WRAP_LDFLAGS} $withval")
-
-dnl ========================================================
-dnl = Use compacting GC
-dnl ========================================================
-dnl Compact the heap by moving GC things when doing a shrinking colletion.
-MOZ_ARG_ENABLE_BOOL(gccompacting,
-[  --enable-gccompacting   Compact the heap by moving GC things],
-    JSGC_COMPACTING=1,
-    JSGC_COMPACTING= )
-if test -n "$JSGC_COMPACTING"; then
-    AC_DEFINE(JSGC_COMPACTING)
-fi
 
 dnl ========================================================
 dnl = Use a smaller chunk size for GC chunks

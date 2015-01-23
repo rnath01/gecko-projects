@@ -40,6 +40,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "BookmarkHTMLUtils",
                                   "resource://gre/modules/BookmarkHTMLUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesBackups",
                                   "resource://gre/modules/PlacesBackups.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
+                                  "resource://testing-common/PlacesTestUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesTransactions",
                                   "resource://gre/modules/PlacesTransactions.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
@@ -389,20 +391,6 @@ function promiseTopicObserved(aTopic)
 }
 
 /**
- * Clears history asynchronously.
- *
- * @return {Promise}
- * @resolves When history has been cleared.
- * @rejects Never.
- */
-function promiseClearHistory() {
-  let promise = promiseTopicObserved(PlacesUtils.TOPIC_EXPIRATION_FINISHED);
-  do_execute_soon(function() PlacesUtils.bhistory.removeAllPages());
-  return promise;
-}
-
-
-/**
  * Simulates a Places shutdown.
  */
 function shutdownPlaces(aKeepAliveConnection)
@@ -414,7 +402,7 @@ function shutdownPlaces(aKeepAliveConnection)
 
 const FILENAME_BOOKMARKS_HTML = "bookmarks.html";
 const FILENAME_BOOKMARKS_JSON = "bookmarks-" +
-  (new Date().toLocaleFormat("%Y-%m-%d")) + ".json";
+  (new Date().toISOString().substr(0, 10)) + ".json";
 
 /**
  * Creates a bookmarks.html file in the profile folder from a given source file.
@@ -526,7 +514,7 @@ function check_JSON_backup(aIsAutomaticBackup) {
     let bookmarksBackupDir = gProfD.clone();
     bookmarksBackupDir.append("bookmarkbackups");
     let files = bookmarksBackupDir.directoryEntries;
-    let backup_date = new Date().toLocaleFormat("%Y-%m-%d");
+    let backup_date = new Date().toISOString().substr(0, 10);
     while (files.hasMoreElements()) {
       let entry = files.getNext().QueryInterface(Ci.nsIFile);
       if (PlacesBackups.filenamesRegex.test(entry.leafName)) {
