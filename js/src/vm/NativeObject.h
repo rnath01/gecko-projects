@@ -1294,6 +1294,13 @@ NativeDeleteProperty(JSContext *cx, HandleNativeObject obj, HandleId id, bool *s
 
 /*** SpiderMonkey nonstandard internal methods ***************************************************/
 
+template <AllowGC allowGC>
+extern bool
+NativeLookupOwnProperty(ExclusiveContext *cx,
+                        typename MaybeRooted<NativeObject*, allowGC>::HandleType obj,
+                        typename MaybeRooted<jsid, allowGC>::HandleType id,
+                        typename MaybeRooted<Shape*, allowGC>::MutableHandleType propp);
+
 /*
  * On success, and if id was found, return true with *objp non-null and with a
  * property of *objp stored in *propp. If successful but id was not found,
@@ -1318,9 +1325,6 @@ NativeLookupElement(JSContext *cx, HandleNativeObject obj, uint32_t index,
 extern bool
 NativeGetExistingProperty(JSContext *cx, HandleObject obj, HandleNativeObject pobj,
                           HandleShape shape, MutableHandle<Value> vp);
-
-extern bool
-NativeGetPropertyAttributes(JSContext *cx, HandleNativeObject obj, HandleId id, unsigned *attrsp);
 
 extern bool
 NativeSetPropertyAttributes(JSContext *cx, HandleNativeObject obj, HandleId id, unsigned *attrsp);
@@ -1395,14 +1399,6 @@ js::SetElement(JSContext *cx, HandleObject obj, HandleObject receiver, uint32_t 
     if (obj->getOps()->setElement)
         return JSObject::nonNativeSetElement(cx, obj, receiver, index, vp, strict);
     return NativeSetElement(cx, obj.as<NativeObject>(), receiver, index, vp, strict);
-}
-
-inline bool
-js::GetPropertyAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp)
-{
-    if (GenericAttributesOp op = obj->getOps()->getGenericAttributes)
-        return op(cx, obj, id, attrsp);
-    return NativeGetPropertyAttributes(cx, obj.as<NativeObject>(), id, attrsp);
 }
 
 #endif /* vm_NativeObject_h */

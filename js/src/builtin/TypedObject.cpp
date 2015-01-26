@@ -2004,46 +2004,63 @@ TypedObject::obj_setArrayElement(JSContext *cx,
 }
 
 bool
-TypedObject::obj_getGenericAttributes(JSContext *cx, HandleObject obj,
-                                     HandleId id, unsigned *attrsp)
+TypedObject::obj_getOwnPropertyDescriptor(JSContext *cx, HandleObject obj, HandleId id,
+                                          MutableHandle<JSPropertyDescriptor> desc)
 {
-    uint32_t index;
     Rooted<TypedObject *> typedObj(cx, &obj->as<TypedObject>());
-    switch (typedObj->typeDescr().kind()) {
+    if (!typedObj->isAttached()) {
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_TYPEDOBJECT_HANDLE_UNATTACHED);
+        return false;
+    }
+
+    Rooted<TypeDescr *> descr(cx, &typedObj->typeDescr());
+    switch (descr->kind()) {
       case type::Scalar:
       case type::Reference:
-        break;
-
       case type::Simd:
         break;
 
       case type::Array:
+      {
+        uint32_t index;
         if (js_IdIsIndex(id, &index)) {
-            *attrsp = JSPROP_ENUMERATE | JSPROP_PERMANENT;
+            if (!obj_getArrayElement(cx, typedObj, descr, index, desc.value()))
+                return false;
+            desc.setAttributes(JSPROP_ENUMERATE | JSPROP_PERMANENT);
+            desc.object().set(obj);
             return true;
         }
+
         if (JSID_IS_ATOM(id, cx->names().length)) {
-            *attrsp = JSPROP_READONLY | JSPROP_PERMANENT;
+            desc.value().setInt32(typedObj->length());
+            desc.setAttributes(JSPROP_READONLY | JSPROP_PERMANENT);
+            desc.object().set(obj);
             return true;
         }
         break;
+      }
 
       case type::Struct:
-        size_t index;
-        if (typedObj->typeDescr().as<StructTypeDescr>().fieldIndex(id, &index)) {
-            *attrsp = JSPROP_ENUMERATE | JSPROP_PERMANENT;
-            return true;
-        }
-        break;
-    }
+      {
+        Rooted<StructTypeDescr*> descr(cx, &typedObj->typeDescr().as<StructTypeDescr>());
 
-    RootedObject proto(cx, obj->getProto());
-    if (!proto) {
-        *attrsp = 0;
+        size_t fieldIndex;
+        if (!descr->fieldIndex(id, &fieldIndex))
+            break;
+
+        size_t offset = descr->fieldOffset(fieldIndex);
+        Rooted<TypeDescr*> fieldType(cx, &descr->fieldDescr(fieldIndex));
+        if (!Reify(cx, fieldType, typedObj, offset, desc.value()))
+            return false;
+
+        desc.setAttributes(JSPROP_ENUMERATE | JSPROP_PERMANENT);
+        desc.object().set(obj);
         return true;
+      }
     }
 
-    return GetPropertyAttributes(cx, proto, id, attrsp);
+    desc.object().set(nullptr);
+    return true;
 }
 
 static bool
@@ -2365,7 +2382,7 @@ LazyArrayBufferTable::sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf)
             TypedObject::obj_setGeneric,                 \
             TypedObject::obj_setProperty,                \
             TypedObject::obj_setElement,                 \
-            TypedObject::obj_getGenericAttributes,       \
+            TypedObject::obj_getOwnPropertyDescriptor,   \
             TypedObject::obj_setGenericAttributes,       \
             TypedObject::obj_deleteGeneric,              \
             nullptr, nullptr, /* watch/unwatch */        \

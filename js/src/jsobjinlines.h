@@ -545,6 +545,15 @@ NewObjectWithGivenProto(ExclusiveContext *cx, JSObject *proto, JSObject *parent,
     return NewObjectWithGivenProto<T>(cx, TaggedProto(proto), parent, newKind);
 }
 
+template <typename T>
+inline T *
+NewObjectWithGivenProto(ExclusiveContext *cx, JSObject *proto, JSObject *parent,
+                        gc::AllocKind allocKind, NewObjectKind newKind = GenericObject)
+{
+    JSObject *obj = NewObjectWithGivenProto(cx, &T::class_, TaggedProto(proto), parent, newKind);
+    return obj ? &obj->as<T>() : nullptr;
+}
+
 inline bool
 FindProto(ExclusiveContext *cx, const js::Class *clasp, MutableHandleObject proto)
 {
@@ -710,7 +719,10 @@ ObjectClassIs(HandleObject obj, ESClassValue classValue, JSContext *cx)
 
     switch (classValue) {
       case ESClass_Object: return obj->is<PlainObject>();
-      case ESClass_Array: return obj->is<ArrayObject>();
+      case ESClass_Array:
+      case ESClass_IsArray:
+        // There difference between those is only relevant for proxies.
+        return obj->is<ArrayObject>();
       case ESClass_Number: return obj->is<NumberObject>();
       case ESClass_String: return obj->is<StringObject>();
       case ESClass_Boolean: return obj->is<BooleanObject>();
@@ -731,6 +743,16 @@ IsObjectWithClass(const Value &v, ESClassValue classValue, JSContext *cx)
         return false;
     RootedObject obj(cx, &v.toObject());
     return ObjectClassIs(obj, classValue, cx);
+}
+
+// ES6 7.2.2
+inline bool
+IsArray(HandleObject obj, JSContext *cx)
+{
+    if (obj->is<ArrayObject>())
+        return true;
+
+    return ObjectClassIs(obj, ESClass_IsArray, cx);
 }
 
 inline bool

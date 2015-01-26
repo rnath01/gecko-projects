@@ -538,9 +538,8 @@ DefinePropertyOnObject(JSContext *cx, HandleNativeObject obj, HandleId id, const
 {
     /* 8.12.9 step 1. */
     RootedShape shape(cx);
-    RootedObject obj2(cx);
     MOZ_ASSERT(!obj->getOps()->lookupGeneric);
-    if (!NonProxyLookupOwnProperty<CanGC>(cx, nullptr, obj, id, &obj2, &shape))
+    if (!NativeLookupOwnProperty<CanGC>(cx, obj, id, &shape))
         return false;
 
     MOZ_ASSERT(!obj->getOps()->defineProperty);
@@ -569,8 +568,6 @@ DefinePropertyOnObject(JSContext *cx, HandleNativeObject obj, HandleId id, const
 
     /* 8.12.9 steps 5-6 (note 5 is merely a special case of 6). */
     RootedValue v(cx);
-
-    MOZ_ASSERT(obj == obj2);
 
     bool shapeDataDescriptor = true,
          shapeAccessorDescriptor = false,
@@ -644,7 +641,7 @@ DefinePropertyOnObject(JSContext *cx, HandleNativeObject obj, HandleId id, const
                     return Reject(cx, JSMSG_CANT_REDEFINE_PROP, throwError, id, rval);
                 }
 
-                if (!NativeGetExistingProperty(cx, obj, obj2.as<NativeObject>(), shape, &v))
+                if (!NativeGetExistingProperty(cx, obj, obj, shape, &v))
                     return false;
             }
 
@@ -826,7 +823,7 @@ DefinePropertyOnObject(JSContext *cx, HandleNativeObject obj, HandleId id, const
      */
     if (callDelProperty) {
         bool succeeded;
-        if (!CallJSDeletePropertyOp(cx, obj2->getClass()->delProperty, obj2, id, &succeeded))
+        if (!CallJSDeletePropertyOp(cx, obj->getClass()->delProperty, obj, id, &succeeded))
             return false;
     }
 
@@ -1080,13 +1077,17 @@ js::SetIntegrityLevel(JSContext *cx, HandleObject obj, IntegrityLevel level)
         JS_ALWAYS_TRUE(NativeObject::setLastProperty(cx, nobj, last));
     } else {
         RootedId id(cx);
+        Rooted<PropertyDescriptor> desc(cx);
         for (size_t i = 0; i < keys.length(); i++) {
             id = keys[i];
 
-            unsigned attrs;
-            if (!GetPropertyAttributes(cx, obj, id, &attrs))
+            if (!GetOwnPropertyDescriptor(cx, obj, id, &desc))
                 return false;
 
+            if (!desc.object())
+                continue;
+
+            unsigned attrs = desc.attributes();
             unsigned new_attrs = GetSealedOrFrozenAttributes(attrs, level);
 
             // If we already have the attributes we need, skip the setAttributes call.
@@ -1150,19 +1151,21 @@ js::TestIntegrityLevel(JSContext *cx, HandleObject obj, IntegrityLevel level, bo
     // Steps 9-11. The spec does not permit stopping as soon as we find out the
     // answer is false, so we are cheating a little here (bug 1120512).
     RootedId id(cx);
+    Rooted<PropertyDescriptor> desc(cx);
     for (size_t i = 0, len = props.length(); i < len; i++) {
         id = props[i];
 
-        unsigned attrs;
-        if (!GetPropertyAttributes(cx, obj, id, &attrs))
+        if (!GetOwnPropertyDescriptor(cx, obj, id, &desc))
             return false;
+
+        if (!desc.object())
+            continue;
 
         // If the property is configurable, this object is neither sealed nor
         // frozen. If the property is a writable data property, this object is
         // not frozen.
-        if (!(attrs & JSPROP_PERMANENT) ||
-            (level == IntegrityLevel::Frozen &&
-             !(attrs & (JSPROP_READONLY | JSPROP_GETTER | JSPROP_SETTER))))
+        if (!desc.isPermanent() ||
+            (level == IntegrityLevel::Frozen && desc.isDataDescriptor() && desc.isWritable()))
         {
             *result = false;
             return true;
@@ -1425,7 +1428,8 @@ js::NewObjectWithTypeCommon(JSContext *cx, HandleTypeObject type, JSObject *pare
     NewObjectCache &cache = cx->runtime()->newObjectCache;
 
     NewObjectCache::EntryIndex entry = -1;
-    if (parent == type->proto().toObject()->getParent() &&
+    if (type->proto().isObject() &&
+        parent == type->proto().toObject()->getParent() &&
         newKind == GenericObject &&
         type->clasp()->isNative() &&
         !cx->compartment()->hasObjectMetadataCallback())
@@ -1642,7 +1646,8 @@ JSObject::nonNativeSetElement(JSContext *cx, HandleObject obj, HandleObject rece
 
 JS_FRIEND_API(bool)
 JS_CopyPropertyFrom(JSContext *cx, HandleId id, HandleObject target,
-                    HandleObject obj)
+                    HandleObject obj,
+                    PropertyCopyBehavior copyBehavior)
 {
     // |obj| and |cx| are generally not same-compartment with |target| here.
     assertSameCompartment(cx, obj, id);
@@ -1657,6 +1662,11 @@ JS_CopyPropertyFrom(JSContext *cx, HandleId id, HandleObject target,
         return true;
     if (desc.setter() && !desc.hasSetterObject())
         return true;
+
+    if (copyBehavior == MakeNonConfigurableIntoConfigurable) {
+        // Mask off the JSPROP_PERMANENT bit.
+        desc.attributesRef() &= ~JSPROP_PERMANENT;
+    }
 
     JSAutoCompartment ac(cx, target);
     RootedId wrappedId(cx, id);
@@ -1784,12 +1794,8 @@ js::DeepCloneObjectLiteral(JSContext *cx, HandleNativeObject obj, NewObjectKind 
     if (!clone || !clone->ensureElements(cx, obj->getDenseCapacity()))
         return nullptr;
 
-    // Copy the number of initialized elements.
-    uint32_t initialized = obj->getDenseInitializedLength();
-    if (initialized)
-        clone->setDenseInitializedLength(initialized);
-
     // Recursive copy of dense element.
+    uint32_t initialized = obj->getDenseInitializedLength();
     for (uint32_t i = 0; i < initialized; ++i) {
         v = obj->getDenseElement(i);
         if (v.isObject()) {
@@ -1801,6 +1807,7 @@ js::DeepCloneObjectLiteral(JSContext *cx, HandleNativeObject obj, NewObjectKind 
             }
             v.setObject(*deepObj);
         }
+        clone->setDenseInitializedLength(i + 1);
         clone->initDenseElement(i, v);
     }
 
@@ -2880,88 +2887,22 @@ js::LookupNameUnqualified(JSContext *cx, HandlePropertyName name, HandleObject s
     return true;
 }
 
-template <AllowGC allowGC>
-bool
-js::NonProxyLookupOwnProperty(JSContext *cx, LookupGenericOp lookup,
-                              typename MaybeRooted<JSObject*, allowGC>::HandleType obj,
-                              typename MaybeRooted<jsid, allowGC>::HandleType id,
-                              typename MaybeRooted<JSObject*, allowGC>::MutableHandleType objp,
-                              typename MaybeRooted<Shape*, allowGC>::MutableHandleType propp)
-{
-    MOZ_ASSERT(!obj->template is<ProxyObject>());
-
-    if (lookup) {
-        if (!allowGC)
-            return false;
-        if (!lookup(cx,
-                    MaybeRooted<JSObject*, allowGC>::toHandle(obj),
-                    MaybeRooted<jsid, allowGC>::toHandle(id),
-                    MaybeRooted<JSObject*, allowGC>::toMutableHandle(objp),
-                    MaybeRooted<Shape*, allowGC>::toMutableHandle(propp)))
-        {
-            return false;
-        }
-    } else {
-        typename MaybeRooted<NativeObject*, allowGC>::HandleType nobj =
-            MaybeRooted<JSObject*, allowGC>::template downcastHandle<NativeObject>(obj);
-
-        bool done;
-        if (!LookupOwnPropertyInline<allowGC>(cx, nobj, id, propp, &done))
-            return false;
-        if (!done) {
-            objp.set(nullptr);
-            propp.set(nullptr);
-            return true;
-        }
-
-        if (propp)
-            objp.set(obj);
-        else
-            objp.set(nullptr);
-    }
-
-    if (!propp)
-        return true;
-
-    if (objp == obj)
-        return true;
-
-    JSObject *outer = nullptr;
-    if (js::ObjectOp op = objp->getClass()->ext.outerObject) {
-        if (!allowGC)
-            return false;
-        RootedObject inner(cx, objp);
-        outer = op(cx, inner);
-        if (!outer)
-            return false;
-    }
-
-    if (outer != objp)
-        propp.set(nullptr);
-    return true;
-}
-
-template bool
-js::NonProxyLookupOwnProperty<CanGC>(JSContext *cx, LookupGenericOp lookup,
-                                     HandleObject obj, HandleId id,
-                                     MutableHandleObject objp, MutableHandleShape propp);
-
-template bool
-js::NonProxyLookupOwnProperty<NoGC>(JSContext *cx, LookupGenericOp lookup,
-                                    JSObject *obj, jsid id,
-                                    FakeMutableHandle<JSObject*> objp,
-                                    FakeMutableHandle<Shape*> propp);
-
 bool
 js::HasOwnProperty(JSContext *cx, HandleObject obj, HandleId id, bool *result)
 {
     if (obj->is<ProxyObject>())
         return Proxy::hasOwn(cx, obj, id, result);
 
-    RootedObject pobj(cx);
+    if (GetOwnPropertyOp op = obj->getOps()->getOwnPropertyDescriptor) {
+        Rooted<PropertyDescriptor> desc(cx);
+        if (!op(cx, obj, id, &desc))
+            return false;
+        *result = !!desc.object();
+        return true;
+    }
+
     RootedShape shape(cx);
-    LookupGenericOp lookupOp = obj->getOps()->lookupGeneric;
-    if (!NonProxyLookupOwnProperty<CanGC>(cx, lookupOp, obj, id, &pobj, &shape))
+    if (!NativeLookupOwnProperty<CanGC>(cx, obj.as<NativeObject>(), id, &shape))
         return false;
     *result = (shape != nullptr);
     return true;
@@ -3196,13 +3137,11 @@ bool
 js::GetOwnPropertyDescriptor(JSContext *cx, HandleObject obj, HandleId id,
                              MutableHandle<PropertyDescriptor> desc)
 {
-    if (obj->is<ProxyObject>())
-        return Proxy::getOwnPropertyDescriptor(cx, obj, id, desc);
+    if (GetOwnPropertyOp op = obj->getOps()->getOwnPropertyDescriptor)
+        return op(cx, obj, id, desc);
 
-    RootedObject pobj(cx);
     RootedShape shape(cx);
-    LookupGenericOp lookupOp = obj->getOps()->lookupGeneric;
-    if (!NonProxyLookupOwnProperty<CanGC>(cx, lookupOp, obj, id, &pobj, &shape))
+    if (!NativeLookupOwnProperty<CanGC>(cx, obj.as<NativeObject>(), id, &shape))
         return false;
     if (!shape) {
         desc.object().set(nullptr);
@@ -3210,25 +3149,20 @@ js::GetOwnPropertyDescriptor(JSContext *cx, HandleObject obj, HandleId id,
     }
 
     bool doGet = true;
-    if (pobj->isNative()) {
-        desc.setAttributes(GetShapeAttributes(pobj, shape));
-        if (desc.hasGetterOrSetterObject()) {
-            MOZ_ASSERT(desc.isShared());
-            doGet = false;
-            if (desc.hasGetterObject())
-                desc.setGetterObject(shape->getterObject());
-            if (desc.hasSetterObject())
-                desc.setSetterObject(shape->setterObject());
-        } else {
-            // This is either a straight-up data property or (rarely) a
-            // property with a JSPropertyOp getter/setter. The latter must be
-            // reported to the caller as a plain data property, so don't
-            // populate desc.getter/setter, and mask away the SHARED bit.
-            desc.attributesRef() &= ~JSPROP_SHARED;
-        }
+    desc.setAttributes(GetShapeAttributes(obj, shape));
+    if (desc.hasGetterOrSetterObject()) {
+        MOZ_ASSERT(desc.isShared());
+        doGet = false;
+        if (desc.hasGetterObject())
+            desc.setGetterObject(shape->getterObject());
+        if (desc.hasSetterObject())
+            desc.setSetterObject(shape->setterObject());
     } else {
-        if (!GetPropertyAttributes(cx, pobj, id, &desc.attributesRef()))
-            return false;
+        // This is either a straight-up data property or (rarely) a
+        // property with a JSPropertyOp getter/setter. The latter must be
+        // reported to the caller as a plain data property, so don't
+        // populate desc.getter/setter, and mask away the SHARED bit.
+        desc.attributesRef() &= ~JSPROP_SHARED;
     }
 
     RootedValue value(cx);

@@ -234,7 +234,7 @@ const static js::Class sNPObjectJSWrapperClass =
         nullptr, // setGeneric
         nullptr, // setProperty
         nullptr, // setElement
-        nullptr, // getGenericAttributes
+        nullptr, // getOwnPropertyDescriptor
         nullptr, // setGenericAttributes
         nullptr, // deleteGeneric
         nullptr, nullptr, // watch/unwatch

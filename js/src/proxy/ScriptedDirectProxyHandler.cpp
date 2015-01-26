@@ -685,7 +685,7 @@ ScriptedDirectProxyHandler::ownPropertyKeys(JSContext *cx, HandleObject proxy,
     // the spec. See step 10-11
     return ArrayToIdVector(cx, proxy, target, trapResult, props,
                            JSITER_OWNONLY | JSITER_HIDDEN | JSITER_SYMBOLS,
-                           cx->names().getOwnPropertyNames);
+                           cx->names().ownKeys);
 }
 
 // ES6 (5 April 2014) 9.5.10 Proxy.[[Delete]](P)
@@ -786,12 +786,7 @@ ScriptedDirectProxyHandler::enumerate(JSContext *cx, HandleObject proxy,
 
     // step 10
     if (trapResult.isPrimitive()) {
-        JSAutoByteString bytes;
-        if (!AtomToPrintableString(cx, cx->names().enumerate, &bytes))
-            return false;
-        RootedValue v(cx, ObjectOrNullValue(proxy));
-        js_ReportValueError2(cx, JSMSG_INVALID_TRAP_RESULT, JSDVG_SEARCH_STACK,
-                             v, js::NullPtr(), bytes.ptr());
+        ReportInvalidTrapResult(cx, proxy, cx->names().enumerate);
         return false;
     }
 
@@ -1005,7 +1000,7 @@ ScriptedDirectProxyHandler::set(JSContext *cx, HandleObject proxy, HandleObject 
     }
 
     // step 11, 15
-    vp.set(BooleanValue(success));
+    vp.setBoolean(success);
     return true;
 }
 
@@ -1025,11 +1020,7 @@ ScriptedDirectProxyHandler::call(JSContext *cx, HandleObject proxy, const CallAr
 
     // step 3
     RootedObject target(cx, proxy->as<ProxyObject>().target());
-
-    /*
-     * NB: Remember to throw a TypeError here if we change NewProxyObject so that this trap can get
-     * called for non-callable objects.
-     */
+    MOZ_ASSERT(target->isCallable());
 
     // step 7
     RootedObject argsArray(cx, NewDenseCopiedArray(cx, args.length(), args.array()));
@@ -1070,11 +1061,7 @@ ScriptedDirectProxyHandler::construct(JSContext *cx, HandleObject proxy, const C
 
     // step 3
     RootedObject target(cx, proxy->as<ProxyObject>().target());
-
-    /*
-     * NB: Remember to throw a TypeError here if we change NewProxyObject so that this trap can get
-     * called for non-callable objects. FIXME: See bug 1041756
-     */
+    MOZ_ASSERT(target->isConstructor());
 
     // step 7
     RootedObject argsArray(cx, NewDenseCopiedArray(cx, args.length(), args.array()));
@@ -1105,6 +1092,50 @@ ScriptedDirectProxyHandler::construct(JSContext *cx, HandleObject proxy, const C
         return false;
     }
     return true;
+}
+
+bool
+ScriptedDirectProxyHandler::nativeCall(JSContext *cx, IsAcceptableThis test, NativeImpl impl,
+                                       CallArgs args) const
+{
+    ReportIncompatible(cx, args);
+    return false;
+}
+
+bool
+ScriptedDirectProxyHandler::objectClassIs(HandleObject proxy, ESClassValue classValue,
+                                          JSContext *cx) const
+{
+    // Special case IsArray. In every other instance ES wants to have exactly
+    // one object type and not a proxy around it, so return false.
+    if (classValue != ESClass_IsArray)
+        return false;
+
+    // In ES6 IsArray is supposed to poke at the Proxy target, instead we do this here.
+    // The reason for this is that we have proxies for which looking at the target might
+    // be impossible. So instead we use our little objectClassIs function that just works
+    // already across different wrappers.
+    RootedObject target(cx, proxy->as<ProxyObject>().target());
+    if (!target)
+        return false;
+
+    return IsArray(target, cx);
+}
+
+bool
+ScriptedDirectProxyHandler::regexp_toShared(JSContext *cx, HandleObject proxy,
+                                            RegExpGuard *g) const
+{
+    MOZ_CRASH("Should not end up in ScriptedDirectProxyHandler::regexp_toShared");
+    return false;
+}
+
+bool
+ScriptedDirectProxyHandler::boxedValue_unbox(JSContext *cx, HandleObject proxy,
+                                             MutableHandleValue vp) const
+{
+    MOZ_CRASH("Should not end up in ScriptedDirectProxyHandler::boxedValue_unbox");
+    return false;
 }
 
 bool
