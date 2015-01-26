@@ -2491,6 +2491,7 @@ PaintedLayerData::Accumulate(ContainerState* aState,
 
     mVisibleRegion.Or(mVisibleRegion, aVisibleRect);
     mVisibleRegion.SimplifyOutward(4);
+    mDrawRegion.Or(mDrawRegion, mVisibleRegion);
     mDrawRegion.Or(mDrawRegion, aDrawRect);
     mDrawRegion.SimplifyOutward(4);
   }
@@ -4526,7 +4527,7 @@ public:
   {
   }
 
-  virtual void AddLayerRectangles(mozilla::dom::Sequence<mozilla::dom::ProfileTimelineLayerRect>& aRectangles)
+  virtual void AddLayerRectangles(mozilla::dom::Sequence<mozilla::dom::ProfileTimelineLayerRect>& aRectangles) MOZ_OVERRIDE
   {
     nsIntRegionRectIterator it(mRegion);
     while (const nsIntRect* iterRect = it.Next()) {

@@ -75,7 +75,8 @@ const NFC_IPC_MSG_ENTRIES = [
     messages: ["NFC:CheckP2PRegistration",
                "NFC:NotifyUserAcceptedP2P",
                "NFC:NotifySendFileStatus",
-               "NFC:ChangeRFState"] }
+               "NFC:ChangeRFState",
+               "NFC:SetFocusApp"] }
 ];
 
 XPCOMUtils.defineLazyServiceGetter(this, "ppmm",
@@ -97,7 +98,9 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function () {
     // Manage registered Peer Targets
     peerTargets: {},
 
-    eventListeners: [],
+    eventListeners: {},
+
+    focusApp: null,
 
     init: function init(nfc) {
       this.nfc = nfc;
@@ -172,18 +175,30 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function () {
       target.sendAsyncMessage("NFC:DOMEvent", options);
     },
 
-    addEventListener: function addEventListener(target) {
-      if (this.eventListeners.indexOf(target) != -1) {
+    setFocusApp: function setFocusApp(id, isFocus) {
+      if (isFocus) {
+        // Now we only support one focus app.
+        this.focusApp = id;
+      } else if (this.focusApp == id){
+        // Set focusApp to null means currently there is no foreground app.
+        this.focusApp = NFC.SYSTEM_APP_ID;
+      }
+    },
+
+    addEventListener: function addEventListener(target, id) {
+      if (this.eventListeners[id] !== undefined) {
         return;
       }
 
-      this.eventListeners.push(target);
+      this.eventListeners[id] = target;
     },
 
     removeEventListener: function removeEventListener(target) {
-      let index = this.eventListeners.indexOf(target);
-      if (index !== -1) {
-        this.eventListeners.splice(index, 1);
+      for (let id in this.eventListeners) {
+        if (target == this.eventListeners[id]) {
+          delete this.eventListeners[id];
+          break;
+        }
       }
     },
 
@@ -213,31 +228,37 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function () {
     },
 
     onTagFound: function onTagFound(message) {
+      let target = this.eventListeners[this.focusApp] ||
+                   this.eventListeners[NFC.SYSTEM_APP_ID];
+
       message.event = NFC.TAG_EVENT_FOUND;
-      for (let target of this.eventListeners) {
-        this.notifyDOMEvent(target, message);
-      }
+
+      this.notifyDOMEvent(target, message);
+
       delete message.event;
     },
 
     onTagLost: function onTagLost(sessionToken) {
-      for (let target of this.eventListeners) {
-        this.notifyDOMEvent(target, {event: NFC.TAG_EVENT_LOST,
-                                     sessionToken: sessionToken});
-      }
+      let target = this.eventListeners[this.focusApp] ||
+                   this.eventListeners[NFC.SYSTEM_APP_ID];
+
+      this.notifyDOMEvent(target, { event: NFC.TAG_EVENT_LOST,
+                                    sessionToken: sessionToken });
     },
 
     onPeerEvent: function onPeerEvent(eventType, sessionToken) {
-      for (let target of this.eventListeners) {
-        this.notifyDOMEvent(target, { event: eventType,
-                                      sessionToken: sessionToken });
-      }
+      let target = this.eventListeners[this.focusApp] ||
+                   this.eventListeners[NFC.SYSTEM_APP_ID];
+
+      this.notifyDOMEvent(target, { event: eventType,
+                                    sessionToken: sessionToken });
     },
 
     onRFStateChange: function onRFStateChange(rfState) {
-      for (let target of this.eventListeners) {
-        this.notifyDOMEvent(target, { event: NFC.RF_EVENT_STATE_CHANGE,
-                                      rfState: rfState});
+      for (let id in this.eventListeners) {
+        this.notifyDOMEvent(this.eventListeners[id],
+                            { event: NFC.RF_EVENT_STATE_CHANGE,
+                              rfState: rfState });
       }
     },
 
@@ -268,8 +289,11 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function () {
       }
 
       switch (message.name) {
+        case "NFC:SetFocusApp":
+          this.setFocusApp(message.data.tabId, message.data.isFocus);
+          return null;
         case "NFC:AddEventListener":
-          this.addEventListener(message.target);
+          this.addEventListener(message.target, message.data.tabId);
           return null;
         case "NFC:RegisterPeerReadyTarget":
           this.registerPeerReadyTarget(message.target, message.data.appId);

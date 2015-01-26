@@ -123,6 +123,7 @@ pref("browser.sessionstore.interval", 10000); // milliseconds
 pref("browser.sessionstore.max_tabs_undo", 5);
 pref("browser.sessionstore.max_resumed_crashes", 1);
 pref("browser.sessionstore.recent_crashes", 0);
+pref("browser.sessionstore.privacy_level", 0); // saving data: 0 = all, 1 = unencrypted sites, 2 = never
 
 /* these should help performance */
 pref("mozilla.widget.force-24bpp", true);
@@ -537,7 +538,6 @@ pref("dom.webnotifications.enabled", true);
 
 // prevent tooltips from showing up
 pref("browser.chrome.toolbar_tips", false);
-pref("dom.indexedDB.warningQuota", 5);
 
 // prevent video elements from preloading too much data
 pref("media.preload.default", 1); // default to preload none

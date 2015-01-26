@@ -1194,10 +1194,6 @@ DefinePropertyOrElement(ExclusiveContext *cx, HandleNativeObject obj, HandleId i
     return true;
 }
 
-static bool
-NativeLookupOwnProperty(ExclusiveContext *cx, HandleNativeObject obj, HandleId id,
-                        MutableHandle<Shape*> shapep);
-
 static unsigned
 ApplyOrDefaultAttributes(unsigned attrs, const Shape *shape = nullptr)
 {
@@ -1326,7 +1322,7 @@ js::NativeDefineProperty(ExclusiveContext *cx, HandleNativeObject obj, HandleId 
      * only half of a property.
      */
     if (attrs & (JSPROP_GETTER | JSPROP_SETTER)) {
-        if (!NativeLookupOwnProperty(cx, obj, id, &shape))
+        if (!NativeLookupOwnProperty<CanGC>(cx, obj, id, &shape))
             return false;
         if (shape) {
             /*
@@ -1392,7 +1388,7 @@ js::NativeDefineProperty(ExclusiveContext *cx, HandleNativeObject obj, HandleId 
         // We have been asked merely to update some attributes. If the
         // property already exists and it's a data property, we can just
         // call JSObject::changeProperty.
-        if (!NativeLookupOwnProperty(cx, obj, id, &shape))
+        if (!NativeLookupOwnProperty<CanGC>(cx, obj, id, &shape))
             return false;
 
         if (shape) {
@@ -1454,13 +1450,24 @@ js::NativeDefineProperty(ExclusiveContext *cx, HandleNativeObject obj, HandleId 
     return CallAddPropertyHook(cx, obj, shape, updateValue);
 }
 
-static bool
-NativeLookupOwnProperty(ExclusiveContext *cx, HandleNativeObject obj, HandleId id,
-                        MutableHandle<Shape*> shapep)
+template <AllowGC allowGC>
+bool
+js::NativeLookupOwnProperty(ExclusiveContext *cx,
+                            typename MaybeRooted<NativeObject*, allowGC>::HandleType obj,
+                            typename MaybeRooted<jsid, allowGC>::HandleType id,
+                            typename MaybeRooted<Shape*, allowGC>::MutableHandleType propp)
 {
     bool done;
-    return LookupOwnPropertyInline<CanGC>(cx, obj, id, shapep, &done);
+    return LookupOwnPropertyInline<allowGC>(cx, obj, id, propp, &done);
 }
+
+template bool
+js::NativeLookupOwnProperty<CanGC>(ExclusiveContext *cx, HandleNativeObject obj, HandleId id,
+                                   MutableHandleShape propp);
+
+template bool
+js::NativeLookupOwnProperty<NoGC>(ExclusiveContext *cx, NativeObject *obj, jsid id,
+                                  FakeMutableHandle<Shape*> propp);
 
 template <AllowGC allowGC>
 bool
@@ -2119,24 +2126,6 @@ js::NativeSetElement(JSContext *cx, HandleNativeObject obj, HandleObject receive
     if (!IndexToId(cx, index, &id))
         return false;
     return NativeSetProperty(cx, obj, receiver, id, Qualified, vp, strict);
-}
-
-bool
-js::NativeGetPropertyAttributes(JSContext *cx, HandleNativeObject obj, HandleId id, unsigned *attrsp)
-{
-    RootedObject nobj(cx);
-    RootedShape shape(cx);
-    if (!NativeLookupProperty<CanGC>(cx, obj, id, &nobj, &shape))
-        return false;
-    if (!shape) {
-        *attrsp = 0;
-        return true;
-    }
-    if (!nobj->isNative())
-        return GetPropertyAttributes(cx, nobj, id, attrsp);
-
-    *attrsp = GetShapeAttributes(nobj, shape);
-    return true;
 }
 
 bool

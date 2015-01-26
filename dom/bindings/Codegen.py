@@ -404,7 +404,7 @@ class CGDOMJSClass(CGThing):
                       nullptr, /* setGeneric */
                       nullptr, /* setProperty */
                       nullptr, /* setElement */
-                      nullptr, /* getGenericAttributes */
+                      nullptr, /* getOwnPropertyDescriptor */
                       nullptr, /* setGenericAttributes */
                       nullptr, /* deleteGeneric */
                       nullptr, /* watch */
@@ -5701,7 +5701,7 @@ def getWrapTemplateForType(type, descriptorProvider, result, successCode,
 
             nsTArray<nsString> keys;
             ${result}.GetKeys(keys);
-            JS::Rooted<JSObject*> returnObj(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
+            JS::Rooted<JSObject*> returnObj(cx, JS_NewPlainObject(cx));
             if (!returnObj) {
               $*{exceptionCode}
             }
@@ -6282,6 +6282,9 @@ class CGCallGenerator(CGThing):
                 self.cgRoot.prepend(CGWrapper(result, post=";\n"))
                 if resultOutParam is None:
                     call = CGWrapper(call, pre=resultVar + " = ")
+        elif result is not None:
+            assert resultOutParam is None
+            call = CGWrapper(call, pre=resultVar + " = ")
 
         call = CGWrapper(call, post=";\n")
         self.cgRoot.append(call)
@@ -7541,7 +7544,7 @@ class CGJsonifierMethod(CGSpecializedMethod):
 
     def definition_body(self):
         ret = dedent("""
-            JS::Rooted<JSObject*> result(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
+            JS::Rooted<JSObject*> result(cx, JS_NewPlainObject(cx));
             if (!result) {
               return false;
             }
@@ -8437,10 +8440,10 @@ class CGEnum(CGThing):
     def declare(self):
         decl = fill(
             """
-            MOZ_BEGIN_ENUM_CLASS(${name}, uint32_t)
+            enum class ${name} : uint32_t {
               $*{enums}
               EndGuard_
-            MOZ_END_ENUM_CLASS(${name})
+            };
             """,
             name=self.enum.identifier.name,
             enums=",\n".join(map(getEnumValueName, self.enum.values())) + ",\n")
@@ -11515,7 +11518,7 @@ class CGDictionary(CGThing):
         else:
             body += fill(
                 """
-                JS::Rooted<JSObject*> obj(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
+                JS::Rooted<JSObject*> obj(cx, JS_NewPlainObject(cx));
                 if (!obj) {
                   return false;
                 }
