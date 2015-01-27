@@ -1,4 +1,4 @@
 {
-    "repo": "https://hg.mozilla.org/build/ash-mozharness",
-    "revision": "default"
+    "repo": "https://hg.mozilla.org/build/mozharness",
+    "revision": "production"
 }
