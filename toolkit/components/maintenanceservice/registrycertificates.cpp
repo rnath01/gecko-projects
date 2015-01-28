@@ -49,6 +49,10 @@ DoesBinaryMatchAllowedCertificates(LPCWSTR basePathForUpdate, LPCWSTR filePath)
     if (retCode != ERROR_SUCCESS) {
       LOG_WARN(("Could not open fallback key.  (%d)", retCode));
       return FALSE;
+    } else {
+      LOG_WARN(("Fallback key present, skipping authenticode "
+                "check and cert check."));
+      return TRUE;
     }
   }
   nsAutoRegKey baseKey(baseKeyRaw);
