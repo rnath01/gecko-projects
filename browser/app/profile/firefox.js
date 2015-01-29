@@ -1188,6 +1188,10 @@ pref("security.sandbox.windows.log", false);
 pref("dom.ipc.plugins.sandbox.default", false);
 pref("dom.ipc.plugins.sandbox.flash", true);
 
+// This controls whether the Windows NPAPI process sandbox is using a more
+// strict sandboxing policy.  This will require a restart.
+pref("dom.ipc.plugins.moreStrictSandbox", false);
+
 #if defined(MOZ_CONTENT_SANDBOX)
 // This controls whether the Windows content process sandbox is using a more
 // strict sandboxing policy.  This will require a restart.
@@ -1710,6 +1714,11 @@ pref("dom.debug.propagate_gesture_events_through_content", false);
 
 // The request URL of the GeoLocation backend.
 pref("geo.wifi.uri", "https://location.services.mozilla.com/v1/geolocate?key=%MOZILLA_API_KEY%");
+
+// On Mac, the default geo provider is corelocation.
+#ifdef XP_MACOSX
+pref("geo.provider.use_corelocation", true);
+#endif
 
 // Necko IPC security checks only needed for app isolation for cookies/cache/etc:
 // currently irrelevant for desktop e10s

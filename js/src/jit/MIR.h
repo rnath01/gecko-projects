@@ -456,6 +456,11 @@ class MDefinition : public MNode
     InlineScriptTree *trackedTree() const {
         return trackedSite_ ? trackedSite_->tree() : nullptr;
     }
+    TrackedOptimizations *trackedOptimizations() const {
+        return trackedSite_ && trackedSite_->hasOptimizations()
+               ? trackedSite_->optimizations()
+               : nullptr;
+    }
 
     JSScript *profilerLeaveScript() const {
         return trackedTree()->outermostCaller()->script();
@@ -4794,8 +4799,8 @@ class MTruncateToInt32
     }
 #endif
 
-    bool writeRecoverData(CompactBufferWriter &writer) const;
-    bool canRecoverOnBailout() const {
+    bool writeRecoverData(CompactBufferWriter &writer) const MOZ_OVERRIDE;
+    bool canRecoverOnBailout() const MOZ_OVERRIDE {
         return input()->type() < MIRType_Symbol;
     }
 
@@ -5507,11 +5512,10 @@ class MAtan2
 
 // Inline implementation of Math.hypot().
 class MHypot
-  : public MBinaryInstruction,
-    public MixPolicy<DoublePolicy<0>, DoublePolicy<1> >::Data
+  : public MVariadicInstruction,
+    public AllDoublePolicy::Data
 {
-    MHypot(MDefinition *y, MDefinition *x)
-      : MBinaryInstruction(x, y)
+    MHypot()
     {
         setResultType(MIRType_Double);
         setMovable();
@@ -5519,17 +5523,7 @@ class MHypot
 
   public:
     INSTRUCTION_HEADER(Hypot)
-    static MHypot *New(TempAllocator &alloc, MDefinition *x, MDefinition *y) {
-        return new(alloc) MHypot(y, x);
-    }
-
-    MDefinition *x() const {
-        return getOperand(0);
-    }
-
-    MDefinition *y() const {
-        return getOperand(1);
-    }
+    static MHypot *New(TempAllocator &alloc, const MDefinitionVector &vector);
 
     bool congruentTo(const MDefinition *ins) const MOZ_OVERRIDE {
         return congruentIfOperandsEqual(ins);
@@ -5548,7 +5542,14 @@ class MHypot
         return true;
     }
 
-    ALLOW_CLONE(MHypot)
+    bool canClone() const MOZ_OVERRIDE {
+        return true;
+    }
+
+    MInstruction *clone(TempAllocator &alloc,
+                        const MDefinitionVector &inputs) const MOZ_OVERRIDE {
+       return MHypot::New(alloc, inputs);
+    }
 };
 
 // Inline implementation of Math.pow().
@@ -9387,13 +9388,13 @@ class MGetPropertyPolymorphic
 // one of the shapes observed by the baseline IC, else bails out.
 class MSetPropertyPolymorphic
   : public MBinaryInstruction,
-    public SingleObjectPolicy::Data
+    public MixPolicy<SingleObjectPolicy, NoFloatPolicy<1> >::Data
 {
     struct Entry {
         // The shape to guard against.
         Shape *objShape;
 
-        // The property to laod.
+        // The property to load.
         Shape *shape;
     };
 

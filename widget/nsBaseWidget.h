@@ -195,7 +195,7 @@ public:
   NS_IMETHOD              BeginMoveDrag(mozilla::WidgetMouseEvent* aEvent) MOZ_OVERRIDE;
   virtual nsresult        ActivateNativeMenuItemAt(const nsAString& indexString) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   virtual nsresult        ForceUpdateNativeMenuAt(const nsAString& indexString) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
-  NS_IMETHOD              NotifyIME(const IMENotification& aIMENotification) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
+  NS_IMETHOD              NotifyIME(const IMENotification& aIMENotification) MOZ_OVERRIDE MOZ_FINAL;
   NS_IMETHOD              AttachNativeKeyEvent(mozilla::WidgetKeyboardEvent& aEvent) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   NS_IMETHOD_(bool)       ExecuteNativeKeyBinding(
                             NativeKeyBindingsType aType,
@@ -221,6 +221,7 @@ public:
   virtual void               SetAttachedWidgetListener(nsIWidgetListener* aListener) MOZ_OVERRIDE;
   NS_IMETHOD              RegisterTouchWindow() MOZ_OVERRIDE;
   NS_IMETHOD              UnregisterTouchWindow() MOZ_OVERRIDE;
+  NS_IMETHOD_(TextEventDispatcher*) GetTextEventDispatcher() MOZ_OVERRIDE MOZ_FINAL;
 
   void NotifyWindowDestroyed();
   void NotifySizeMoveDone();
@@ -357,10 +358,16 @@ protected:
                                               uint32_t aPointerOrientation) MOZ_OVERRIDE
   { return NS_ERROR_UNEXPECTED; }
 
+  virtual nsresult NotifyIMEInternal(const IMENotification& aIMENotification)
+  { return NS_ERROR_NOT_IMPLEMENTED; }
+
 protected:
-  // Stores the clip rectangles in aRects into mClipRects. Returns true
-  // if the new rectangles are different from the old rectangles.
-  bool StoreWindowClipRegion(const nsTArray<nsIntRect>& aRects);
+  // Utility to check if an array of clip rects is equal to our
+  // internally stored clip rect array mClipRects.
+  bool IsWindowClipRegionEqual(const nsTArray<nsIntRect>& aRects);
+
+  // Stores the clip rectangles in aRects into mClipRects.
+  void StoreWindowClipRegion(const nsTArray<nsIntRect>& aRects);
 
   virtual already_AddRefed<nsIWidget>
   AllocateChildPopupWidget()
@@ -428,6 +435,7 @@ protected:
   nsRefPtr<mozilla::CompositorVsyncDispatcher> mCompositorVsyncDispatcher;
   nsRefPtr<APZCTreeManager> mAPZC;
   nsRefPtr<WidgetShutdownObserver> mShutdownObserver;
+  nsRefPtr<TextEventDispatcher> mTextEventDispatcher;
   nsCursor          mCursor;
   bool              mUpdateCursor;
   nsBorderStyle     mBorderStyle;
