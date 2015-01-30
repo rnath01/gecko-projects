@@ -17,10 +17,16 @@
  * Verifies if the file path matches any certificate stored in the registry.
  *
  * @param  filePath The file path of the application to check if allowed.
+ * @param  allowFallbackKeySkip TRUE if the Fallback key can be used to
+ *   skip the cert check.  Since it is stored in a secured location, and cannot
+ *   be created / tampered with by a low integrity process, this is the default.
+ *   The maintenance service binary can be used to do checks directly or can be
+ *   used by tests.
  * @return TRUE if the binary matches any of the allowed certificates.
  */
 BOOL
-DoesBinaryMatchAllowedCertificates(LPCWSTR basePathForUpdate, LPCWSTR filePath)
+DoesBinaryMatchAllowedCertificates(LPCWSTR basePathForUpdate, LPCWSTR filePath,
+                                   BOOL allowFallbackKeySkip)
 { 
   WCHAR maintenanceServiceKey[MAX_PATH + 1];
   if (!CalculateRegistryPathFromFilePath(basePathForUpdate, 
@@ -49,7 +55,7 @@ DoesBinaryMatchAllowedCertificates(LPCWSTR basePathForUpdate, LPCWSTR filePath)
     if (retCode != ERROR_SUCCESS) {
       LOG_WARN(("Could not open fallback key.  (%d)", retCode));
       return FALSE;
-    } else {
+    } else if (allowFallbackKeySkip) {
       LOG_WARN(("Fallback key present, skipping authenticode "
                 "check and cert check."));
       return TRUE;
