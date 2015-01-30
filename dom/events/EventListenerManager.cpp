@@ -1024,17 +1024,17 @@ EventListenerManager::GetDocShellForTarget()
   return docShell;
 }
 
-class EventTimelineMarker : public nsDocShell::TimelineMarker
+class EventTimelineMarker : public TimelineMarker
 {
 public:
   EventTimelineMarker(nsDocShell* aDocShell, TracingMetadata aMetaData,
                       uint16_t aPhase, const nsAString& aCause)
-    : nsDocShell::TimelineMarker(aDocShell, "DOMEvent", aMetaData, aCause)
+    : TimelineMarker(aDocShell, "DOMEvent", aMetaData, aCause)
     , mPhase(aPhase)
   {
   }
 
-  virtual void AddDetails(mozilla::dom::ProfileTimelineMarker& aMarker)
+  virtual void AddDetails(mozilla::dom::ProfileTimelineMarker& aMarker) MOZ_OVERRIDE
   {
     if (GetMetaData() == TRACING_INTERVAL_START) {
       aMarker.mType.Construct(GetCause());
@@ -1114,7 +1114,7 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
               (*aDOMEvent)->GetType(typeStr);
               uint16_t phase;
               (*aDOMEvent)->GetEventPhase(&phase);
-              mozilla::UniquePtr<nsDocShell::TimelineMarker> marker =
+              mozilla::UniquePtr<TimelineMarker> marker =
                 MakeUnique<EventTimelineMarker>(ds, TRACING_INTERVAL_START,
                                                 phase, typeStr);
               ds->AddProfileTimelineMarker(marker);
@@ -1247,8 +1247,19 @@ EventListenerManager::MutationListenerBits()
 bool
 EventListenerManager::HasListenersFor(const nsAString& aEventName)
 {
-  nsCOMPtr<nsIAtom> atom = do_GetAtom(NS_LITERAL_STRING("on") + aEventName);
-  return HasListenersFor(atom);
+  if (mIsMainThreadELM) {
+    nsCOMPtr<nsIAtom> atom = do_GetAtom(NS_LITERAL_STRING("on") + aEventName);
+    return HasListenersFor(atom);
+  }
+
+  uint32_t count = mListeners.Length();
+  for (uint32_t i = 0; i < count; ++i) {
+    Listener* listener = &mListeners.ElementAt(i);
+    if (listener->mTypeString == aEventName) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool

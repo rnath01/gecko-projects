@@ -114,7 +114,11 @@ static bool LockD3DTexture(T* aTexture)
   aTexture->QueryInterface((IDXGIKeyedMutex**)byRef(mutex));
   // Textures created by the DXVA decoders don't have a mutex for synchronization
   if (mutex) {
-    HRESULT hr = mutex->AcquireSync(0, INFINITE);
+    HRESULT hr = mutex->AcquireSync(0, 10000);
+    if (hr == WAIT_TIMEOUT) {
+      MOZ_CRASH();
+    }
+
     if (FAILED(hr)) {
       NS_WARNING("Failed to lock the texture");
       return false;
@@ -347,17 +351,66 @@ TextureClientD3D11::BorrowDrawTarget()
   }
 
   // This may return a null DrawTarget
-#if USE_D2D1_1
   if (mTexture) {
     mDrawTarget = Factory::CreateDrawTargetForD3D11Texture(mTexture, mFormat);
   } else
-#endif
   {
     MOZ_ASSERT(mTexture10);
     mDrawTarget = Factory::CreateDrawTargetForD3D10Texture(mTexture10, mFormat);
   }
+  if (!mDrawTarget) {
+      gfxWarning() << "Invalid draw target for borrowing";
+  }
   return mDrawTarget;
 }
+
+static const GUID sD3D11TextureUsage =
+{ 0xd89275b0, 0x6c7d, 0x4038, { 0xb5, 0xfa, 0x4d, 0x87, 0x16, 0xd5, 0xcc, 0x4e } };
+
+/* This class get's it's lifetime tied to a D3D texture
+ * and increments memory usage on construction and decrements
+ * on destruction */
+class TextureMemoryMeasurer : public IUnknown
+{
+public:
+  TextureMemoryMeasurer(size_t aMemoryUsed)
+  {
+    mMemoryUsed = aMemoryUsed;
+    gfxWindowsPlatform::sD3D11MemoryUsed += mMemoryUsed;
+    mRefCnt = 0;
+  }
+  STDMETHODIMP_(ULONG) AddRef() {
+    mRefCnt++;
+    return mRefCnt;
+  }
+  STDMETHODIMP QueryInterface(REFIID riid,
+                              void **ppvObject)
+  {
+    IUnknown *punk = nullptr;
+    if (riid == IID_IUnknown) {
+      punk = this;
+    }
+    *ppvObject = punk;
+    if (punk) {
+      punk->AddRef();
+      return S_OK;
+    } else {
+      return E_NOINTERFACE;
+    }
+  }
+
+  STDMETHODIMP_(ULONG) Release() {
+    int refCnt = --mRefCnt;
+    if (refCnt == 0) {
+      gfxWindowsPlatform::sD3D11MemoryUsed -= mMemoryUsed;
+      delete this;
+    }
+    return refCnt;
+  }
+private:
+  int mRefCnt;
+  int mMemoryUsed;
+};
 
 bool
 TextureClientD3D11::AllocateForSurface(gfx::IntSize aSize, TextureAllocationFlags aFlags)
@@ -370,7 +423,6 @@ TextureClientD3D11::AllocateForSurface(gfx::IntSize aSize, TextureAllocationFlag
     return false;
   }
 
-#ifdef USE_D2D1_1
   ID3D11Device* d3d11device = gfxWindowsPlatform::GetPlatform()->GetD3D11ContentDevice();
 
   if (gfxPrefs::Direct2DUse1_1() && d3d11device) {
@@ -382,8 +434,15 @@ TextureClientD3D11::AllocateForSurface(gfx::IntSize aSize, TextureAllocationFlag
     newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
     hr = d3d11device->CreateTexture2D(&newDesc, nullptr, byRef(mTexture));
+    if (FAILED(hr)) {
+      gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize))) << "[D3D11] 2 CreateTexture2D failure " << aSize << " Code: " << gfx::hexa(hr);
+      return false;
+    }
+    mTexture->SetPrivateDataInterface(sD3D11TextureUsage,
+                                      new TextureMemoryMeasurer(newDesc.Width * newDesc.Height *
+                                                                (mFormat == SurfaceFormat::A8 ?
+                                                                 1 : 4)));
   } else
-#endif
   {
     ID3D10Device* device = gfxWindowsPlatform::GetPlatform()->GetD3D10Device();
 
@@ -394,11 +453,15 @@ TextureClientD3D11::AllocateForSurface(gfx::IntSize aSize, TextureAllocationFlag
     newDesc.MiscFlags = D3D10_RESOURCE_MISC_SHARED;
 
     hr = device->CreateTexture2D(&newDesc, nullptr, byRef(mTexture10));
-  }
+    if (FAILED(hr)) {
+      gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize))) << "[D3D10] 2 CreateTexture2D failure " << aSize << " Code: " << gfx::hexa(hr);
+      return false;
+    }
+    mTexture10->SetPrivateDataInterface(sD3D11TextureUsage,
+                                        new TextureMemoryMeasurer(newDesc.Width * newDesc.Height *
+                                                                  (mFormat == SurfaceFormat::A8 ?
+                                                                   1 : 4)));
 
-  if (FAILED(hr)) {
-    gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize))) << "[D3D11] 2 CreateTexture2D failure " << aSize << " Code: " << gfx::hexa(hr);
-    return false;
   }
 
   // Defer clearing to the next time we lock to avoid an extra (expensive) lock.
@@ -762,7 +825,11 @@ SyncObjectD3D11::FinalizeFrame()
   if (mD3D10SyncedTextures.size()) {
     RefPtr<IDXGIKeyedMutex> mutex;
     hr = mD3D10Texture->QueryInterface((IDXGIKeyedMutex**)byRef(mutex));
-    mutex->AcquireSync(0, INFINITE);
+    hr = mutex->AcquireSync(0, 10000);
+
+    if (hr == WAIT_TIMEOUT) {
+      MOZ_CRASH();
+    }
 
     D3D10_BOX box;
     box.front = box.top = box.left = 0;
@@ -782,7 +849,11 @@ SyncObjectD3D11::FinalizeFrame()
   if (mD3D11SyncedTextures.size()) {
     RefPtr<IDXGIKeyedMutex> mutex;
     hr = mD3D11Texture->QueryInterface((IDXGIKeyedMutex**)byRef(mutex));
-    mutex->AcquireSync(0, INFINITE);
+    hr = mutex->AcquireSync(0, 10000);
+
+    if (hr == WAIT_TIMEOUT) {
+      MOZ_CRASH();
+    }
 
     D3D11_BOX box;
     box.front = box.top = box.left = 0;

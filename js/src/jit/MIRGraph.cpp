@@ -202,40 +202,9 @@ MIRGraph::unmarkBlocks()
         i->unmark();
 }
 
-MDefinition *
-MIRGraph::forkJoinContext()
-{
-    // Search the entry block to find a ForkJoinContext instruction. If we do
-    // not find one, add one after the Start instruction.
-    //
-    // Note: the original design used a field in MIRGraph to cache the
-    // forkJoinContext rather than searching for it again.  However, this
-    // could become out of date due to DCE.  Given that we do not generally
-    // have to search very far to find the ForkJoinContext instruction if it
-    // exists, and that we don't look for it that often, I opted to simply
-    // eliminate the cache and search anew each time, so that it is that much
-    // easier to keep the IR coherent. - nmatsakis
-
-    MBasicBlock *entry = entryBlock();
-    MOZ_ASSERT(entry->info().executionMode() == ParallelExecution);
-
-    MInstruction *start = nullptr;
-    for (MInstructionIterator ins(entry->begin()); ins != entry->end(); ins++) {
-        if (ins->isForkJoinContext())
-            return *ins;
-        else if (ins->isStart())
-            start = *ins;
-    }
-    MOZ_ASSERT(start);
-
-    MForkJoinContext *cx = MForkJoinContext::New(alloc());
-    entry->insertAfter(start, cx);
-    return cx;
-}
-
 MBasicBlock *
 MBasicBlock::New(MIRGraph &graph, BytecodeAnalysis *analysis, CompileInfo &info,
-                 MBasicBlock *pred, const BytecodeSite *site, Kind kind)
+                 MBasicBlock *pred, BytecodeSite *site, Kind kind)
 {
     MOZ_ASSERT(site->pc() != nullptr);
 
@@ -251,7 +220,7 @@ MBasicBlock::New(MIRGraph &graph, BytecodeAnalysis *analysis, CompileInfo &info,
 
 MBasicBlock *
 MBasicBlock::NewPopN(MIRGraph &graph, CompileInfo &info,
-                     MBasicBlock *pred, const BytecodeSite *site, Kind kind, uint32_t popped)
+                     MBasicBlock *pred, BytecodeSite *site, Kind kind, uint32_t popped)
 {
     MBasicBlock *block = new(graph.alloc()) MBasicBlock(graph, info, site, kind);
     if (!block->init())
@@ -265,7 +234,7 @@ MBasicBlock::NewPopN(MIRGraph &graph, CompileInfo &info,
 
 MBasicBlock *
 MBasicBlock::NewWithResumePoint(MIRGraph &graph, CompileInfo &info,
-                                MBasicBlock *pred, const BytecodeSite *site,
+                                MBasicBlock *pred, BytecodeSite *site,
                                 MResumePoint *resumePoint)
 {
     MBasicBlock *block = new(graph.alloc()) MBasicBlock(graph, info, site, NORMAL);
@@ -287,7 +256,7 @@ MBasicBlock::NewWithResumePoint(MIRGraph &graph, CompileInfo &info,
 
 MBasicBlock *
 MBasicBlock::NewPendingLoopHeader(MIRGraph &graph, CompileInfo &info,
-                                  MBasicBlock *pred, const BytecodeSite *site,
+                                  MBasicBlock *pred, BytecodeSite *site,
                                   unsigned stackPhiCount)
 {
     MOZ_ASSERT(site->pc() != nullptr);
@@ -355,7 +324,7 @@ MBasicBlock::NewAsmJS(MIRGraph &graph, CompileInfo &info, MBasicBlock *pred, Kin
     return block;
 }
 
-MBasicBlock::MBasicBlock(MIRGraph &graph, CompileInfo &info, const BytecodeSite *site, Kind kind)
+MBasicBlock::MBasicBlock(MIRGraph &graph, CompileInfo &info, BytecodeSite *site, Kind kind)
   : unreachable_(false),
     graph_(graph),
     info_(info),
@@ -807,7 +776,6 @@ MBasicBlock::safeInsertTop(MDefinition *ins, IgnoreTop ignore)
                                     : begin(ins->toInstruction());
     while (insertIter->isBeta() ||
            insertIter->isInterruptCheck() ||
-           insertIter->isInterruptCheckPar() ||
            insertIter->isConstant() ||
            (!(ignore & IgnoreRecover) && insertIter->isRecoveredOnBailout()))
     {

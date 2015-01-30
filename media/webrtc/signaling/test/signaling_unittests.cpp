@@ -270,25 +270,25 @@ public:
   }
 
   NS_DECL_THREADSAFE_ISUPPORTS
-  NS_IMETHODIMP OnCreateOfferSuccess(const char* offer, ER&);
-  NS_IMETHODIMP OnCreateOfferError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP OnCreateAnswerSuccess(const char* answer, ER&);
-  NS_IMETHODIMP OnCreateAnswerError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP OnSetLocalDescriptionSuccess(ER&);
-  NS_IMETHODIMP OnSetRemoteDescriptionSuccess(ER&);
-  NS_IMETHODIMP OnSetLocalDescriptionError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP OnSetRemoteDescriptionError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP NotifyDataChannel(nsIDOMDataChannel *channel, ER&);
-  NS_IMETHODIMP OnStateChange(PCObserverStateType state_type, ER&, void*);
-  NS_IMETHODIMP OnAddStream(DOMMediaStream *stream, ER&);
-  NS_IMETHODIMP OnRemoveStream(ER&);
-  NS_IMETHODIMP OnAddTrack(ER&);
-  NS_IMETHODIMP OnRemoveTrack(ER&);
-  NS_IMETHODIMP OnReplaceTrackSuccess(ER&);
-  NS_IMETHODIMP OnReplaceTrackError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP OnAddIceCandidateSuccess(ER&);
-  NS_IMETHODIMP OnAddIceCandidateError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP OnIceCandidate(uint16_t level, const char *mid, const char *cand, ER&);
+  NS_IMETHOD OnCreateOfferSuccess(const char* offer, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnCreateOfferError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnCreateAnswerSuccess(const char* answer, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnCreateAnswerError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnSetLocalDescriptionSuccess(ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnSetRemoteDescriptionSuccess(ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnSetLocalDescriptionError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnSetRemoteDescriptionError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD NotifyDataChannel(nsIDOMDataChannel *channel, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnStateChange(PCObserverStateType state_type, ER&, void*) MOZ_OVERRIDE;
+  NS_IMETHOD OnAddStream(DOMMediaStream *stream, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnRemoveStream(ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnAddTrack(ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnRemoveTrack(ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnReplaceTrackSuccess(ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnReplaceTrackError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnAddIceCandidateSuccess(ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnAddIceCandidateError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnIceCandidate(uint16_t level, const char *mid, const char *cand, ER&) MOZ_OVERRIDE;
 
   // Hack because add_ice_candidates can happen asynchronously with respect
   // to the API calls. The whole test suite needs a refactor.
@@ -1327,8 +1327,14 @@ class SignalingAgent {
     }
   }
 
+  // Right now we have no convenient way for this unit-test to learn the track
+  // ids of the tracks, so they can be queried later. We could either expose
+  // the JsepSessionImpl in some way, or we could parse the identifiers out of
+  // the SDP. For now, we just specify audio/video, since a given DOMMediaStream
+  // can have only one of each anyway. Once this is fixed, we will need to
+  // pass a real track id if we want to test that case.
   mozilla::RefPtr<mozilla::MediaPipeline> GetMediaPipeline(
-    bool local, size_t stream, int track) {
+    bool local, size_t stream, bool video) {
     SourceStreamInfo* streamInfo;
     if (local) {
       mozilla::SyncRunnable::DispatchToThread(
@@ -1348,11 +1354,16 @@ class SignalingAgent {
 
     const auto &pipelines = streamInfo->GetPipelines();
 
-    auto it = pipelines.find(track);
-    return (it == pipelines.end())? nullptr : it->second;
+    for (auto i = pipelines.begin(); i != pipelines.end(); ++i) {
+      if (i->second->IsVideo() == video) {
+        std::cout << "Got MediaPipeline " << i->second->trackid();
+        return i->second;
+      }
+    }
+    return nullptr;
   }
 
-  void CheckMediaPipeline(int stream, int track, uint32_t flags,
+  void CheckMediaPipeline(int stream, bool video, uint32_t flags,
     VideoSessionConduit::FrameRequestType frameRequestMethod =
       VideoSessionConduit::FrameRequestNone) {
 
@@ -1361,13 +1372,13 @@ class SignalingAgent {
               << ((flags & PIPELINE_SEND) ? "sending " : "receiving ")
               << ((flags & PIPELINE_VIDEO) ? "video" : "audio")
               << " pipeline (stream " << stream
-              << ", track " << track << "); expect "
+              << ", track " << video << "); expect "
               << ((flags & PIPELINE_RTCP_MUX) ? "MUX, " : "no MUX, ")
               << ((flags & PIPELINE_RTCP_NACK) ? "NACK." : "no NACK.")
               << std::endl;
 
     mozilla::RefPtr<mozilla::MediaPipeline> pipeline =
-      GetMediaPipeline((flags & PIPELINE_LOCAL), stream, track);
+      GetMediaPipeline((flags & PIPELINE_LOCAL), stream, video);
     ASSERT_TRUE(pipeline);
     ASSERT_EQ(pipeline->IsDoingRtcpMux(), !!(flags & PIPELINE_RTCP_MUX));
     // We cannot yet test send/recv with video.
@@ -1938,12 +1949,12 @@ public:
     a2_->CloseReceiveStreams();
 
     // Check caller video settings for remote pipeline
-    a1_->CheckMediaPipeline(0, 1, (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
+    a1_->CheckMediaPipeline(0, true, (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
       PIPELINE_VIDEO | rtcpFbFlags, frameRequestMethod);
 
     // Check caller video settings for remote pipeline
     // (Should use pli and nack, regardless of what was in the offer)
-    a2_->CheckMediaPipeline(0, 1,
+    a2_->CheckMediaPipeline(0, true,
                             (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
                             PIPELINE_VIDEO |
                             PIPELINE_SEND |
@@ -1978,12 +1989,12 @@ public:
     a2_->CloseReceiveStreams();
 
     // Check callee video settings for remote pipeline
-    a2_->CheckMediaPipeline(0, 1, (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
+    a2_->CheckMediaPipeline(0, true, (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
       PIPELINE_VIDEO | rtcpFbFlags, frameRequestMethod);
 
     // Check caller video settings for remote pipeline
     // (Should use pli and nack, regardless of what was in the offer)
-    a1_->CheckMediaPipeline(0, 1,
+    a1_->CheckMediaPipeline(0, true,
                             (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
                             PIPELINE_VIDEO |
                             PIPELINE_SEND |
@@ -2559,12 +2570,12 @@ TEST_P(SignalingTest, FullCall)
   // Check the low-level media pipeline
   // for RTP and RTCP flows
   // The first Local pipeline gets stored at 0
-  a1_->CheckMediaPipeline(0, 0, fRtcpMux ?
+  a1_->CheckMediaPipeline(0, false, fRtcpMux ?
     PIPELINE_LOCAL | PIPELINE_RTCP_MUX | PIPELINE_SEND :
     PIPELINE_LOCAL | PIPELINE_SEND);
 
   // The first Remote pipeline gets stored at 0
-  a2_->CheckMediaPipeline(0, 0, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
+  a2_->CheckMediaPipeline(0, false, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
 }
 
 TEST_P(SignalingTest, FullCallAudioOnly)
@@ -3397,10 +3408,8 @@ TEST_P(SignalingTest, AudioOnlyCalleeNoRtcpMux)
   // Check the low-level media pipeline
   // for RTP and RTCP flows
   // The first Local pipeline gets stored at 0
-  a1_->CheckMediaPipeline(0, 0, PIPELINE_LOCAL | PIPELINE_SEND);
-
-  // The first Remote pipeline gets stored at 1
-  a2_->CheckMediaPipeline(0, 0, 0);
+  a1_->CheckMediaPipeline(0, false, PIPELINE_LOCAL | PIPELINE_SEND);
+  a2_->CheckMediaPipeline(0, false, 0);
 }
 
 
@@ -3537,18 +3546,18 @@ TEST_P(SignalingTest, FullCallAudioNoMuxVideoMux)
   // Check the low-level media pipeline
   // for RTP and RTCP flows
   // The first Local pipeline gets stored at 0
-  a1_->CheckMediaPipeline(0, 0, PIPELINE_LOCAL | PIPELINE_SEND);
+  a1_->CheckMediaPipeline(0, false, PIPELINE_LOCAL | PIPELINE_SEND);
 
   // Now check video mux.
-  a1_->CheckMediaPipeline(0, 1,
+  a1_->CheckMediaPipeline(0, true,
     PIPELINE_LOCAL | (fRtcpMux ? PIPELINE_RTCP_MUX : 0) | PIPELINE_SEND |
     PIPELINE_VIDEO);
 
   // The first Remote pipeline gets stored at 0
-  a2_->CheckMediaPipeline(0, 0, 0);
+  a2_->CheckMediaPipeline(0, false, 0);
 
   // Now check video mux.
-  a2_->CheckMediaPipeline(0, 1, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0) |
+  a2_->CheckMediaPipeline(0, true, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0) |
     PIPELINE_VIDEO | PIPELINE_RTCP_NACK, VideoSessionConduit::FrameRequestPli);
 }
 

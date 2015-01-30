@@ -10,11 +10,12 @@
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/TimeStamp.h"
+#include "nsIGlobalObject.h"
 #include "js/TypeDecls.h"
 #include "nsIDocument.h"
+#include "nsRefreshDriver.h"
 
 struct JSContext;
-class nsRefreshDriver;
 
 namespace mozilla {
 namespace dom {
@@ -24,7 +25,9 @@ class AnimationTimeline MOZ_FINAL : public nsWrapperCache
 public:
   explicit AnimationTimeline(nsIDocument* aDocument)
     : mDocument(aDocument)
+    , mWindow(aDocument->GetParentObject())
   {
+    MOZ_ASSERT(mWindow);
   }
 
 protected:
@@ -36,7 +39,7 @@ public:
 
   nsIGlobalObject* GetParentObject() const
   {
-    return mDocument->GetParentObject();
+    return mWindow;
   }
   virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
 
@@ -47,39 +50,40 @@ public:
   // script.
   Nullable<double> GetCurrentTimeAsDouble() const;
 
+  // Converts a TimeStamp to the equivalent value in timeline time.
+  // Note that when IsUnderTestControl() is true, there is no correspondence
+  // between timeline time and wallclock time. In such a case, passing a
+  // timestamp from TimeStamp::Now() to this method will not return a
+  // meaningful result.
   Nullable<TimeDuration> ToTimelineTime(const TimeStamp& aTimeStamp) const;
   TimeStamp ToTimeStamp(const TimeDuration& aTimelineTime) const;
 
-  // Force the timeline to advance to |aTimeStamp|.
-  //
-  // Normally the timeline uses the refresh driver time but when we have
-  // animations that are timed from when their first frame is rendered we need
-  // to bring the timeline forward to that moment. If we don't, calling
-  // IsRunning() will incorrectly return false (because GetCurrentTime() will
-  // return a negative time) until the next refresh driver tick causes the
-  // timeline to catch up.
-  //
-  // |aTimeStamp| must be greater or equal to the current refresh driver
-  // time for the document with which this timeline is associated unless the
-  // refresh driver is under test control, in which case this method will
-  // be a no-op.
-  void FastForward(const TimeStamp& aTimeStamp);
-
   nsRefreshDriver* GetRefreshDriver() const;
+  // Returns true if this timeline is driven by a refresh driver that is
+  // under test control. In such a case, there is no correspondence between
+  // TimeStamp values returned by the refresh driver and wallclock time.
+  // As a result, passing a value from TimeStamp::Now() to ToTimelineTime()
+  // would not return a meaningful result.
+  bool IsUnderTestControl() const
+  {
+    nsRefreshDriver* refreshDriver = GetRefreshDriver();
+    return refreshDriver && refreshDriver->IsTestControllingRefreshesEnabled();
+  }
 
 protected:
   TimeStamp GetCurrentTimeStamp() const;
 
+  // Sometimes documents can be given a new window, or windows can be given a
+  // new document (e.g. document.open()). Since GetParentObject is required to
+  // _always_ return the same object it can't get the window from our
+  // mDocument, which is why we have pointers to both our document and window.
   nsCOMPtr<nsIDocument> mDocument;
+  nsCOMPtr<nsIGlobalObject> mWindow;
 
   // The most recently used refresh driver time. This is used in cases where
   // we don't have a refresh driver (e.g. because we are in a display:none
   // iframe).
   mutable TimeStamp mLastRefreshDriverTime;
-
-  // The time to which the timeline has been forced-to in order to account for
-  // animations that are started in-between frames.
-  mutable TimeStamp mFastForwardTime;
 };
 
 } // namespace dom

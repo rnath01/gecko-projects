@@ -3,6 +3,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "MediaEngineGonkVideoSource.h"
 
+#undef LOG_TAG
 #define LOG_TAG "MediaEngineGonkVideoSource"
 
 #include <utils/Log.h>
@@ -23,6 +24,7 @@ using namespace mozilla::dom;
 using namespace mozilla::gfx;
 using namespace android;
 
+#undef LOG
 #ifdef PR_LOGGING
 extern PRLogModuleInfo* GetMediaManagerLog();
 #define LOG(msg) PR_LOG(GetMediaManagerLog(), PR_LOG_DEBUG, msg)
@@ -136,7 +138,12 @@ nsresult
 MediaEngineGonkVideoSource::Deallocate()
 {
   LOG((__FUNCTION__));
-  if (mSources.IsEmpty()) {
+  bool empty;
+  {
+    MonitorAutoLock lock(mMonitor);
+    empty = mSources.IsEmpty();
+  }
+  if (empty) {
 
     ReentrantMonitorAutoEnter sync(mCallbackMonitor);
 
@@ -169,7 +176,10 @@ MediaEngineGonkVideoSource::Start(SourceMediaStream* aStream, TrackID aID)
     return NS_ERROR_FAILURE;
   }
 
-  mSources.AppendElement(aStream);
+  {
+    MonitorAutoLock lock(mMonitor);
+    mSources.AppendElement(aStream);
+  }
 
   aStream->AddTrack(aID, 0, new VideoSegment());
   aStream->AdvanceKnownTracksTime(STREAM_TIME_MAX);
@@ -237,12 +247,16 @@ nsresult
 MediaEngineGonkVideoSource::Stop(SourceMediaStream* aSource, TrackID aID)
 {
   LOG((__FUNCTION__));
-  if (!mSources.RemoveElement(aSource)) {
-    // Already stopped - this is allowed
-    return NS_OK;
-  }
-  if (!mSources.IsEmpty()) {
-    return NS_OK;
+  {
+    MonitorAutoLock lock(mMonitor);
+
+    if (!mSources.RemoveElement(aSource)) {
+      // Already stopped - this is allowed
+      return NS_OK;
+    }
+    if (!mSources.IsEmpty()) {
+      return NS_OK;
+    }
   }
 
   ReentrantMonitorAutoEnter sync(mCallbackMonitor);
@@ -293,8 +307,19 @@ MediaEngineGonkVideoSource::Shutdown()
   ReentrantMonitorAutoEnter sync(mCallbackMonitor);
 
   if (mState == kStarted) {
-    while (!mSources.IsEmpty()) {
-      Stop(mSources[0], kVideoTrack); // XXX change to support multiple tracks
+    SourceMediaStream *source;
+    bool empty;
+
+    while (1) {
+      {
+        MonitorAutoLock lock(mMonitor);
+        empty = mSources.IsEmpty();
+        if (empty) {
+          break;
+        }
+        source = mSources[0];
+      }
+      Stop(source, kVideoTrack); // XXX change to support multiple tracks
     }
     MOZ_ASSERT(mState == kStopped);
   }
@@ -800,7 +825,7 @@ MediaEngineGonkVideoSource::OnNewMediaBufferFrame(MediaBuffer* aBuffer)
       // MediaEngineGonkVideoSource expects that GrallocImage is GonkCameraImage.
       // See Bug 938034.
       GonkCameraImage* cameraImage = static_cast<GonkCameraImage*>(mImage.get());
-      cameraImage->SetBuffer(aBuffer);
+      cameraImage->SetMediaBuffer(aBuffer);
     } else {
       LOG(("mImage is non-GrallocImage"));
     }
@@ -821,7 +846,7 @@ MediaEngineGonkVideoSource::OnNewMediaBufferFrame(MediaBuffer* aBuffer)
       GonkCameraImage* cameraImage = static_cast<GonkCameraImage*>(mImage.get());
       // Clear MediaBuffer immediately, it prevents MediaBuffer is kept in
       // MediaStreamGraph thread.
-      cameraImage->ClearBuffer();
+      cameraImage->ClearMediaBuffer();
     }
   }
 

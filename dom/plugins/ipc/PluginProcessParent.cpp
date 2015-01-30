@@ -14,6 +14,10 @@
 #include "mozilla/Telemetry.h"
 #include "nsThreadUtils.h"
 
+#if defined(XP_WIN) && defined(MOZ_SANDBOX)
+#include "mozilla/Preferences.h"
+#endif
+
 using std::vector;
 using std::string;
 
@@ -43,8 +47,20 @@ PluginProcessParent::~PluginProcessParent()
 }
 
 bool
-PluginProcessParent::Launch(mozilla::UniquePtr<LaunchCompleteTask> aLaunchCompleteTask)
+PluginProcessParent::Launch(mozilla::UniquePtr<LaunchCompleteTask> aLaunchCompleteTask,
+                            bool aEnableSandbox)
 {
+#if defined(XP_WIN) && defined(MOZ_SANDBOX)
+    mEnableNPAPISandbox = aEnableSandbox;
+    mMoreStrictSandbox =
+      Preferences::GetBool("dom.ipc.plugins.moreStrictSandbox");
+#else
+    if (aEnableSandbox) {
+        MOZ_ASSERT(false,
+                   "Can't enable an NPAPI process sandbox for platform/build.");
+    }
+#endif
+
     ProcessArchitecture currentArchitecture = base::GetCurrentProcessArchitecture();
     uint32_t containerArchitectures = GetSupportedArchitecturesForProcessType(GeckoProcessType_Plugin);
 
@@ -111,6 +127,22 @@ PluginProcessParent::SetCallRunnableImmediately(bool aCallImmediately)
     mRunCompleteTaskImmediately = aCallImmediately;
 }
 
+/**
+ * This function exists so that we may provide an additional level of
+ * indirection between the task being posted to main event loop (a
+ * RunnableMethod) and the launch complete task itself. This is needed
+ * for cases when both WaitUntilConnected or OnChannel* race to invoke the
+ * task.
+ */
+void
+PluginProcessParent::RunLaunchCompleteTask()
+{
+    if (mLaunchCompleteTask) {
+        mLaunchCompleteTask->Run();
+        mLaunchCompleteTask = nullptr;
+    }
+}
+
 bool
 PluginProcessParent::WaitUntilConnected(int32_t aTimeoutMs)
 {
@@ -119,8 +151,7 @@ PluginProcessParent::WaitUntilConnected(int32_t aTimeoutMs)
         if (result) {
             mLaunchCompleteTask->SetLaunchSucceeded();
         }
-        mLaunchCompleteTask->Run();
-        mLaunchCompleteTask = nullptr;
+        RunLaunchCompleteTask();
     }
     return result;
 }
@@ -131,7 +162,8 @@ PluginProcessParent::OnChannelConnected(int32_t peer_pid)
     GeckoChildProcessHost::OnChannelConnected(peer_pid);
     if (mLaunchCompleteTask && !mRunCompleteTaskImmediately) {
         mLaunchCompleteTask->SetLaunchSucceeded();
-        mMainMsgLoop->PostTask(FROM_HERE, mLaunchCompleteTask.release());
+        mMainMsgLoop->PostTask(FROM_HERE, NewRunnableMethod(this,
+                                   &PluginProcessParent::RunLaunchCompleteTask));
     }
 }
 
@@ -140,7 +172,8 @@ PluginProcessParent::OnChannelError()
 {
     GeckoChildProcessHost::OnChannelError();
     if (mLaunchCompleteTask && !mRunCompleteTaskImmediately) {
-        mMainMsgLoop->PostTask(FROM_HERE, mLaunchCompleteTask.release());
+        mMainMsgLoop->PostTask(FROM_HERE, NewRunnableMethod(this,
+                                   &PluginProcessParent::RunLaunchCompleteTask));
     }
 }
 

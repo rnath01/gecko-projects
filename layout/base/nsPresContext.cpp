@@ -56,6 +56,7 @@
 #include "mozilla/dom/TabParent.h"
 #include "nsRefreshDriver.h"
 #include "Layers.h"
+#include "ClientLayerManager.h"
 #include "nsIDOMEvent.h"
 #include "gfxPrefs.h"
 #include "nsIDOMChromeWindow.h"
@@ -64,6 +65,7 @@
 #include "nsContentUtils.h"
 #include "nsPIWindowRoot.h"
 #include "mozilla/Preferences.h"
+#include "gfxTextRun.h"
 
 // Needed for Start/Stop of Image Animation
 #include "imgIContainer.h"
@@ -249,6 +251,10 @@ nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
   if (log && log->level >= PR_LOG_WARNING) {
     mTextPerf = new gfxTextPerfMetrics();
   }
+
+  if (Preferences::GetBool(GFX_MISSING_FONTS_NOTIFY_PREF)) {
+    mMissingFonts = new gfxMissingFontRecorder();
+  }
 }
 
 void
@@ -340,6 +346,9 @@ nsPresContext::LastRelease()
 {
   if (IsRoot()) {
     static_cast<nsRootPresContext*>(this)->CancelDidPaintTimer();
+  }
+  if (mMissingFonts) {
+    mMissingFonts->Clear();
   }
 }
 
@@ -872,6 +881,20 @@ nsPresContext::PreferenceChanged(const char* aPrefName)
       AppUnitsPerDevPixelChanged();
     }
     return;
+  }
+  if (prefName.EqualsLiteral(GFX_MISSING_FONTS_NOTIFY_PREF)) {
+    if (Preferences::GetBool(GFX_MISSING_FONTS_NOTIFY_PREF)) {
+      if (!mMissingFonts) {
+        mMissingFonts = new gfxMissingFontRecorder();
+        // trigger reflow to detect missing fonts on the current page
+        mPrefChangePendingNeedsReflow = true;
+      }
+    } else {
+      if (mMissingFonts) {
+        mMissingFonts->Clear();
+      }
+      mMissingFonts = nullptr;
+    }
   }
   if (StringBeginsWith(prefName, NS_LITERAL_CSTRING("font."))) {
     // Changes to font family preferences don't change anything in the
@@ -2195,6 +2218,14 @@ nsPresContext::RebuildCounterStyles()
 }
 
 void
+nsPresContext::NotifyMissingFonts()
+{
+  if (mMissingFonts) {
+    mMissingFonts->Flush();
+  }
+}
+
+void
 nsPresContext::EnsureSafeToHandOutCSSRules()
 {
   CSSStyleSheet::EnsureUniqueInnerResult res =
@@ -3050,6 +3081,28 @@ nsRootPresContext::ApplyPluginGeometryUpdates()
 #endif  // #ifndef XP_MACOSX
 
   mRegisteredPlugins.EnumerateEntries(PluginDidSetGeometryEnumerator, nullptr);
+}
+
+void
+nsRootPresContext::CollectPluginGeometryUpdates(LayerManager* aLayerManager)
+{
+#ifndef XP_MACOSX
+  // Collect and pass plugin widget configurations down to the compositor
+  // for transmission to the chrome process.
+  NS_ASSERTION(aLayerManager, "layer manager is invalid!");
+  mozilla::layers::ClientLayerManager* clm = aLayerManager->AsClientLayerManager();
+  PluginGetGeometryUpdateClosure closure;
+  mRegisteredPlugins.EnumerateEntries(PluginGetGeometryUpdate, &closure);
+  if (closure.mConfigurations.IsEmpty()) {
+    mRegisteredPlugins.EnumerateEntries(PluginDidSetGeometryEnumerator, nullptr);
+    return;
+  }
+  SortConfigurations(&closure.mConfigurations);
+  if (clm) {
+    clm->StorePluginWidgetConfigurations(closure.mConfigurations);
+  }
+  mRegisteredPlugins.EnumerateEntries(PluginDidSetGeometryEnumerator, nullptr);
+#endif  // #ifndef XP_MACOSX
 }
 
 static void

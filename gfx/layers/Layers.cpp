@@ -208,6 +208,7 @@ Layer::Layer(LayerManager* aManager, void* aImplData) :
   mStickyPositionData(nullptr),
   mScrollbarTargetId(FrameMetrics::NULL_SCROLL_ID),
   mScrollbarDirection(ScrollDirection::NONE),
+  mIsScrollbarContainer(false),
   mDebugColorIndex(0),
   mAnimationGeneration(0)
 {}
@@ -737,7 +738,7 @@ const Matrix4x4
 Layer::GetTransform() const
 {
   Matrix4x4 transform = mTransform;
-  transform.PostScale(mPostXScale, mPostYScale, 1.0f);
+  transform.PostScale(GetPostXScale(), GetPostYScale(), 1.0f);
   if (const ContainerLayer* c = AsContainerLayer()) {
     transform.PreScale(c->GetPreXScale(), c->GetPreYScale(), 1.0f);
   }
@@ -753,7 +754,7 @@ Layer::GetLocalTransform()
   else
     transform = mTransform;
 
-  transform.PostScale(mPostXScale, mPostYScale, 1.0f);
+  transform.PostScale(GetPostXScale(), GetPostYScale(), 1.0f);
   if (ContainerLayer* c = AsContainerLayer()) {
     transform.PreScale(c->GetPreXScale(), c->GetPreYScale(), 1.0f);
   }
@@ -850,6 +851,66 @@ Layer::TransformRectToRenderTarget(const LayerIntRect& aRect)
   return quad;
 }
 
+bool
+Layer::GetVisibleRegionRelativeToRootLayer(nsIntRegion& aResult,
+                                           nsIntPoint* aLayerOffset)
+{
+  MOZ_ASSERT(aLayerOffset, "invalid offset pointer");
+
+  IntPoint offset;
+  aResult = GetEffectiveVisibleRegion();
+  for (Layer* layer = this; layer; layer = layer->GetParent()) {
+    gfx::Matrix matrix;
+    if (!layer->GetLocalTransform().Is2D(&matrix) ||
+        !matrix.IsTranslation()) {
+      return false;
+    }
+
+    // The offset of |layer| to its parent.
+    IntPoint currentLayerOffset = RoundedToInt(matrix.GetTranslation());
+
+    // Translate the accumulated visible region of |this| by the offset of
+    // |layer|.
+    aResult.MoveBy(currentLayerOffset.x, currentLayerOffset.y);
+
+    // If the parent layer clips its lower layers, clip the visible region
+    // we're accumulating.
+    if (layer->GetEffectiveClipRect()) {
+      aResult.AndWith(*layer->GetEffectiveClipRect());
+    }
+
+    // Now we need to walk across the list of siblings for this parent layer,
+    // checking to see if any of these layer trees obscure |this|. If so,
+    // remove these areas from the visible region as well. This will pick up
+    // chrome overlays like a tab modal prompt.
+    Layer* sibling;
+    for (sibling = layer->GetNextSibling(); sibling;
+         sibling = sibling->GetNextSibling()) {
+      gfx::Matrix siblingMatrix;
+      if (!sibling->GetLocalTransform().Is2D(&siblingMatrix) ||
+          !siblingMatrix.IsTranslation()) {
+        return false;
+      }
+
+      // Retreive the translation from sibling to |layer|. The accumulated
+      // visible region is currently oriented with |layer|.
+      IntPoint siblingOffset = RoundedToInt(siblingMatrix.GetTranslation());
+      nsIntRegion siblingVisibleRegion(sibling->GetEffectiveVisibleRegion());
+      // Translate the siblings region to |layer|'s origin.
+      siblingVisibleRegion.MoveBy(-siblingOffset.x, -siblingOffset.y);
+      // Subtract the sibling visible region from the visible region of |this|.
+      aResult.SubOut(siblingVisibleRegion);
+    }
+
+    // Keep track of the total offset for aLayerOffset.  We use this in plugin
+    // positioning code.
+    offset += currentLayerOffset;
+  }
+
+  *aLayerOffset = nsIntPoint(offset.x, offset.y);
+  return true;
+}
+
 ContainerLayer::ContainerLayer(LayerManager* aManager, void* aImplData)
   : Layer(aManager, aImplData),
     mFirstChild(nullptr),
@@ -858,6 +919,8 @@ ContainerLayer::ContainerLayer(LayerManager* aManager, void* aImplData)
     mPreYScale(1.0f),
     mInheritedXScale(1.0f),
     mInheritedYScale(1.0f),
+    mPresShellResolution(1.0f),
+    mScaleToResolution(false),
     mUseIntermediateSurface(false),
     mSupportsComponentAlphaChildren(false),
     mMayHaveReadbackChild(false),
@@ -1017,6 +1080,7 @@ ContainerLayer::FillSpecificAttributes(SpecificLayerAttributes& aAttrs)
 {
   aAttrs = ContainerLayerAttributes(mPreXScale, mPreYScale,
                                     mInheritedXScale, mInheritedYScale,
+                                    mPresShellResolution, mScaleToResolution,
                                     reinterpret_cast<uint64_t>(mHMDInfo.get()));
 }
 
@@ -1680,6 +1744,9 @@ ContainerLayer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   }
   if (1.0 != mPreXScale || 1.0 != mPreYScale) {
     aStream << nsPrintfCString(" [preScale=%g, %g]", mPreXScale, mPreYScale).get();
+  }
+  if (mScaleToResolution) {
+    aStream << nsPrintfCString(" [presShellResolution=%g]", mPresShellResolution).get();
   }
   if (mHMDInfo) {
     aStream << nsPrintfCString(" [hmd=%p]", mHMDInfo.get()).get();

@@ -232,6 +232,8 @@ struct ContainerLayerAttributes {
   float preYScale;
   float inheritedXScale;
   float inheritedYScale;
+  float presShellResolution;
+  bool scaleToResolution;
   // This is a bare pointer; LayerTransactionParent::RecvUpdate prevents this
   // from being used when !IsSameProcess(), but we should make this truly
   // cross process at some point by passing the HMDConfig
@@ -255,6 +257,14 @@ union SpecificLayerAttributes {
 struct LayerAttributes {
   CommonLayerAttributes common;
   SpecificLayerAttributes specific;
+};
+
+// See nsIWidget Configurations
+struct PluginWindowData {
+  uintptr_t windowId;
+  nsIntRect[] clip;
+  nsIntRect bounds;
+  bool visible;
 };
 
 struct OpSetLayerAttributes {

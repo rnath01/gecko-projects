@@ -164,7 +164,6 @@ public:
                   LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT,
                   bool* aAllowRetaining = nullptr) MOZ_OVERRIDE;
 
-  NS_IMETHOD NotifyIME(const IMENotification& aIMENotification) MOZ_OVERRIDE;
   NS_IMETHOD_(void) SetInputContext(const InputContext& aContext,
                                     const InputContextAction& aAction) MOZ_OVERRIDE;
   NS_IMETHOD_(InputContext) GetInputContext() MOZ_OVERRIDE;
@@ -205,6 +204,9 @@ protected:
   bool mEnabled;
   bool mVisible;
 
+  virtual nsresult NotifyIMEInternal(
+                     const IMENotification& aIMENotification) MOZ_OVERRIDE;
+
 private:
   nsresult Paint();
 
@@ -216,6 +218,15 @@ private:
   nsresult NotifyIMEOfUpdateComposition();
   nsresult NotifyIMEOfTextChange(const IMENotification& aIMENotification);
   nsresult NotifyIMEOfMouseButtonEvent(const IMENotification& aIMENotification);
+  nsresult NotifyIMEOfEditorRect();
+  nsresult NotifyIMEOfPositionChange();
+
+  bool GetEditorRect(nsIntRect& aEditorRect);
+  bool GetCompositionRects(uint32_t& aStartOffset,
+                           nsTArray<nsIntRect>& aRectArray,
+                           uint32_t& aTargetCauseOffset);
+  bool GetCaretRect(nsIntRect& aCaretRect, uint32_t aCaretOffset);
+  uint32_t GetCaretOffset();
 
   class PaintTask : public nsRunnable {
   public:

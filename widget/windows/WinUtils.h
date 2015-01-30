@@ -11,6 +11,14 @@
 #include <shobjidl.h>
 #include <uxtheme.h>
 #include <dwmapi.h>
+
+// Undo the windows.h damage
+#undef GetMessage
+#undef CreateEvent
+#undef GetClassName
+#undef GetBinaryType
+#undef RemoveDirectory
+
 #include "nsAutoPtr.h"
 #include "nsString.h"
 #include "nsRegion.h"
@@ -342,6 +350,12 @@ public:
    * returns the nsIntRect.
    */
   static nsIntRect ToIntRect(const RECT& aRect);
+
+  /**
+   * Helper used in invalidating flash plugin windows owned
+   * by low rights flash containers.
+   */
+  static void InvalidatePluginAsWorkaround(nsIWidget *aWidget, const nsIntRect &aRect);
 
   /**
    * Returns true if the context or IME state is enabled.  Otherwise, false.
