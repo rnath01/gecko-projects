@@ -304,6 +304,11 @@ NetworkManager.prototype = {
     }
     this.networkInterfaces[networkId] = network;
 
+    if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_DUN) {
+      debug("Force setting " + SETTINGS_DUN_REQUIRED + " to true.");
+      this.tetheringSettings[SETTINGS_DUN_REQUIRED] = true;
+    }
+
     Services.obs.notifyObservers(network, TOPIC_INTERFACE_REGISTERED, null);
     debug("Network '" + networkId + "' registered.");
   },
@@ -344,14 +349,16 @@ NetworkManager.prototype = {
             gNetworkService.removeHostRoutes(network.name);
             this.setHostRoutes(network);
           }
+
+          // Remove pre-created default route and let setAndConfigureActive()
+          // to set default route only on preferred network
+          gNetworkService.removeDefaultRoute(network);
+
           // Dun type is a special case where we add the default route to a
           // secondary table.
           if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_DUN) {
             this.setSecondaryDefaultRoute(network);
           }
-          // Remove pre-created default route and let setAndConfigureActive()
-          // to set default route only on preferred network
-          gNetworkService.removeDefaultRoute(network);
 
           this._addSubnetRoutes(network);
           this.setAndConfigureActive();
@@ -425,6 +432,11 @@ NetworkManager.prototype = {
                                  Cr.NS_ERROR_INVALID_ARG);
     }
     delete this.networkInterfaces[networkId];
+
+    if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_DUN) {
+      this.tetheringSettings[SETTINGS_DUN_REQUIRED] =
+        libcutils.property_get("ro.tethering.dun_required") === "1";
+    }
 
     Services.obs.notifyObservers(network, TOPIC_INTERFACE_UNREGISTERED, null);
     debug("Network '" + networkId + "' unregistered.");

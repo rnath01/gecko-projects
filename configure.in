@@ -52,7 +52,7 @@ dnl ========================================================
 MOZJPEG=62
 MOZPNG=10616
 NSPR_VERSION=4
-NSPR_MINVER=4.10.3
+NSPR_MINVER=4.10.8
 NSS_VERSION=3
 
 dnl Set the minimum version of toolkit libs used by mozilla
@@ -71,7 +71,7 @@ GCONF_VERSION=1.2.1
 GIO_VERSION=2.20
 STARTUP_NOTIFICATION_VERSION=0.8
 DBUS_VERSION=0.60
-SQLITE_VERSION=3.8.7.4
+SQLITE_VERSION=3.8.8.1
 
 MSMANIFEST_TOOL=
 
@@ -296,6 +296,7 @@ if test -n "$gonkdir" ; then
         if test -d "$gonkdir/system/bluetoothd"; then
             MOZ_B2G_BT_DAEMON=1
         fi
+        MOZ_NFC=1
         ;;
     *)
         AC_MSG_ERROR([Unsupported platform version: $ANDROID_VERSION])
@@ -496,6 +497,24 @@ case "$target" in
             MSVS_VERSION=2013
             MSVC_C_RUNTIME_DLL=msvcr120.dll
             MSVC_CXX_RUNTIME_DLL=msvcp120.dll
+        elif test "$_CC_MAJOR_VERSION" = "19"; then
+            _CC_SUITE=14
+            MSVS_VERSION=2015
+            MSVC_C_RUNTIME_DLL=vcruntime140.dll
+            MSVC_CXX_RUNTIME_DLL=msvcp140.dll
+            MSVC_APPCRT_DLL=appcrt140.dll
+            MSVC_DESKTOPCRT_DLL=desktopcrt140.dll
+
+            # -Wv:18 disables all warnings introduced after VS2013
+            # See http://blogs.msdn.com/b/vcblog/archive/2014/11/12/improvements-to-warnings-in-the-c-compiler.aspx
+            CFLAGS="$CFLAGS -Wv:18"
+            CXXFLAGS="$CXXFLAGS -Wv:18"
+
+            # https://connect.microsoft.com/VisualStudio/feedback/details/888527/warnings-on-dbghelp-h
+            # for dbghelp.h, imagehlp.h, and shobj.h
+            # C4091: 'typedef ': ignored on left of '' when no variable is declared
+            CFLAGS="$CFLAGS -wd4091"
+            CXXFLAGS="$CXXFLAGS -wd4091"
         else
             AC_MSG_ERROR([This version (${_CC_MAJOR_VERSION}.${_CC_MINOR_VERSION}.${_CC_BUILD_VERSION}) of the MSVC compiler is unsupported.
 You must install Visual C++ 2013 Update 3 or newer in order to build.
@@ -504,6 +523,8 @@ See https://developer.mozilla.org/en/Windows_Build_Prerequisites.])
         AC_SUBST(MSVS_VERSION)
         AC_SUBST(MSVC_C_RUNTIME_DLL)
         AC_SUBST(MSVC_CXX_RUNTIME_DLL)
+        AC_SUBST(MSVC_APPCRT_DLL)
+        AC_SUBST(MSVC_DESKTOPCRT_DLL)
 
         # Disable SEH on clang-cl because it doesn't implement them yet.
         if test -z "$CLANG_CL"; then
@@ -3005,7 +3026,7 @@ dnl Checks for library functions.
 dnl ========================================================
 AC_PROG_GCC_TRADITIONAL
 AC_FUNC_MEMCMP
-AC_CHECK_FUNCS(stat64 lstat64 truncate64 statvfs64 statvfs statfs64 statfs getpagesize localtime_r arc4random arc4random_buf)
+AC_CHECK_FUNCS(stat64 lstat64 truncate64 statvfs64 statvfs statfs64 statfs getpagesize gmtime_r localtime_r arc4random arc4random_buf)
 
 dnl check for clock_gettime(), the CLOCK_MONOTONIC clock
 AC_CACHE_CHECK(for clock_gettime(CLOCK_MONOTONIC),
@@ -3595,7 +3616,7 @@ MOZ_ARG_WITH_BOOL(system-nss,
     _USE_SYSTEM_NSS=1 )
 
 if test -n "$_USE_SYSTEM_NSS"; then
-    AM_PATH_NSS(3.17.3, [MOZ_NATIVE_NSS=1], [AC_MSG_ERROR([you don't have NSS installed or your version is too old])])
+    AM_PATH_NSS(3.17.4, [MOZ_NATIVE_NSS=1], [AC_MSG_ERROR([you don't have NSS installed or your version is too old])])
 fi
 
 if test -n "$MOZ_NATIVE_NSS"; then
@@ -3916,6 +3937,7 @@ MOZ_ANDROID_HISTORY=
 MOZ_WEBSMS_BACKEND=
 MOZ_ANDROID_BEAM=
 MOZ_LOCALE_SWITCHER=
+MOZ_ANDROID_READING_LIST_SERVICE=
 MOZ_ANDROID_SEARCH_ACTIVITY=
 MOZ_ANDROID_DOWNLOADS_INTEGRATION=
 MOZ_ANDROID_MLS_STUMBLER=
@@ -4104,23 +4126,6 @@ elif test "$EARLY_BETA_OR_EARLIER"; then
   AC_DEFINE(EARLY_BETA_OR_EARLIER)
 fi
 AC_SUBST(EARLY_BETA_OR_EARLIER)
-
-# Allow the application to provide a subconfigure script
-if test -f "${srcdir}/${MOZ_BUILD_APP}/configure.in" ; then
-  do_output_subdirs() {
-    if test -n "$_subconfigure_subdirs"; then
-      AC_MSG_ERROR([Cannot specify more than one sub-sub-configure])
-     fi
-    _subconfigure_subdir="$1"
-    _subconfigure_config_args="$ac_configure_args"
-  }
-  tmpscript=`$PYTHON -c 'import os, tempfile; print tempfile.mktemp(prefix="subscript.").replace(os.sep, "/")'` || exit 1
-  m4 "${srcdir}/build/autoconf/subconfigure.m4" \
-     "${srcdir}/build/autoconf/altoptions.m4" \
-     "${srcdir}/${MOZ_BUILD_APP}/configure.in" > $tmpscript
-  . $tmpscript
-  rm -f $tmpscript
-fi
 
 # Allow someone to change MOZ_APP_NAME and MOZ_APP_BASENAME in mozconfig
 MOZ_ARG_WITH_STRING(app-name,
@@ -4990,6 +4995,13 @@ dnl = Include Search Activity on Android
 dnl ========================================================
 if test -n "$MOZ_ANDROID_SEARCH_ACTIVITY"; then
     AC_DEFINE(MOZ_ANDROID_SEARCH_ACTIVITY)
+fi
+
+dnl ========================================================
+dnl = Include Reading List service on Android
+dnl ========================================================
+if test -n "$MOZ_ANDROID_READING_LIST_SERVICE"; then
+    AC_DEFINE(MOZ_ANDROID_READING_LIST_SERVICE)
 fi
 
 dnl ========================================================
@@ -5956,7 +5968,6 @@ if test -n "$MOZ_ANGLE_RENDERER"; then
       fi
     else
       AC_MSG_RESULT([Couldn't find an acceptable DirectX SDK for ANGLE, needed for d3dcompiler_43.])
-      AC_MSG_RESULT([  Either ignore, install DirectX SDK (June 2010 version or newer), or reconfigure with --disable-webgl.])
     fi
   fi
 
@@ -5982,7 +5993,6 @@ if test -n "$MOZ_ANGLE_RENDERER"; then
   if test -z "$CROSS_COMPILE"; then
     if test -z "MOZ_FOUND_A_D3D_COMPILER"; then
       AC_MSG_ERROR([Couldn't find an acceptable D3D compiler DLL.])
-      AC_MSG_ERROR([  Either install Windows SDK 8.0+, install DirectX SDK (June 2010 version or newer), or reconfigure with --disable-webgl.])
     fi
 
     if test -n "$MOZ_REQUIRE_ALL_D3DCS" -a -z "$MOZ_FOUND_BOTH_D3D_COMPILERS"; then
@@ -7249,6 +7259,25 @@ export MOZ_CRT
 AC_SUBST(MOZ_GLUE_IN_PROGRAM)
 AC_SUBST_LIST(WIN32_CRT_LIBS)
 
+# Allow the application to provide a subconfigure script.
+# This should be after 'export MOZ_NO_DEBUG_RTL=1' since
+# ldap/c-sdk/configure refers to the enviroment value.
+if test -f "${srcdir}/${MOZ_BUILD_APP}/configure.in" ; then
+  do_output_subdirs() {
+    if test -n "$_subconfigure_subdirs"; then
+      AC_MSG_ERROR([Cannot specify more than one sub-sub-configure])
+     fi
+    _subconfigure_subdir="$1"
+    _subconfigure_config_args="$ac_configure_args"
+  }
+  tmpscript=`$PYTHON -c 'import os, tempfile; print tempfile.mktemp(prefix="subscript.").replace(os.sep, "/")'` || exit 1
+  m4 "${srcdir}/build/autoconf/subconfigure.m4" \
+     "${srcdir}/build/autoconf/altoptions.m4" \
+     "${srcdir}/${MOZ_BUILD_APP}/configure.in" > $tmpscript
+  . $tmpscript
+  rm -f $tmpscript
+fi
+
 dnl We need to wrap dlopen and related functions on Android because we use
 dnl our own linker.
 if test "$OS_TARGET" = Android; then
@@ -8494,6 +8523,7 @@ AC_SUBST(MOZ_WEBSMS_BACKEND)
 AC_SUBST(MOZ_ANDROID_BEAM)
 AC_SUBST(MOZ_LOCALE_SWITCHER)
 AC_SUBST(MOZ_DISABLE_GECKOVIEW)
+AC_SUBST(MOZ_ANDROID_READING_LIST_SERVICE)
 AC_SUBST(MOZ_ANDROID_SEARCH_ACTIVITY)
 AC_SUBST(MOZ_ANDROID_SHARE_OVERLAY)
 AC_SUBST(MOZ_ANDROID_NEW_TABLET_UI)

@@ -86,7 +86,7 @@
  *
  * To find the Shape for a particular property of an object initially requires
  * a linear search. But if the number of searches starting at any particular
- * Shape in the property tree exceeds MAX_LINEAR_SEARCHES and the Shape's
+ * Shape in the property tree exceeds LINEAR_SEARCHES_MAX and the Shape's
  * lineage has (excluding the EmptyShape) at least MIN_ENTRIES, we create an
  * auxiliary hash table -- the ShapeTable -- that allows faster lookup.
  * Furthermore, a ShapeTable is always created for dictionary mode lists,
@@ -406,7 +406,11 @@ class BaseShape : public gc::TenuredCell
         QUALIFIED_VAROBJ    = 0x2000,
         UNQUALIFIED_VAROBJ  = 0x4000,
 
-        OBJECT_FLAG_MASK    = 0x7ff8
+        // For a function used as an interpreted constructor, whether a 'new'
+        // type had constructor information cleared.
+        NEW_SCRIPT_CLEARED  = 0x8000,
+
+        OBJECT_FLAG_MASK    = 0xfff8
     };
 
   private:
@@ -529,6 +533,7 @@ class BaseShape : public gc::TenuredCell
     }
 
     void fixupAfterMovingGC();
+    bool fixupBaseShapeTableEntry();
 
   private:
     static void staticAsserts() {
@@ -917,7 +922,6 @@ class Shape : public gc::TenuredCell
                setter() == rawSetter;
     }
 
-    bool get(JSContext* cx, HandleObject receiver, JSObject *obj, JSObject *pobj, MutableHandleValue vp);
     bool set(JSContext* cx, HandleObject obj, HandleObject receiver, bool strict, MutableHandleValue vp);
 
     BaseShape *base() const { return base_.get(); }

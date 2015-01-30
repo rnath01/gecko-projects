@@ -123,6 +123,7 @@ pref("browser.sessionstore.interval", 10000); // milliseconds
 pref("browser.sessionstore.max_tabs_undo", 5);
 pref("browser.sessionstore.max_resumed_crashes", 1);
 pref("browser.sessionstore.recent_crashes", 0);
+pref("browser.sessionstore.privacy_level", 0); // saving data: 0 = all, 1 = unencrypted sites, 2 = never
 
 /* these should help performance */
 pref("mozilla.widget.force-24bpp", true);
@@ -256,6 +257,13 @@ pref("browser.search.order.1", "chrome://browser/locale/region.properties");
 pref("browser.search.order.2", "chrome://browser/locale/region.properties");
 pref("browser.search.order.3", "chrome://browser/locale/region.properties");
 
+// Market-specific search defaults (US market only)
+pref("browser.search.geoSpecificDefaults", true);
+pref("browser.search.defaultenginename.US", "chrome://browser/locale/region.properties");
+pref("browser.search.order.US.1", "chrome://browser/locale/region.properties");
+pref("browser.search.order.US.2", "chrome://browser/locale/region.properties");
+pref("browser.search.order.US.3", "chrome://browser/locale/region.properties");
+
 // disable updating
 pref("browser.search.update", false);
 
@@ -269,9 +277,6 @@ pref("browser.search.jarURIs", "chrome://browser/locale/searchplugins/");
 
 // tell the search service that we don't really expose the "current engine"
 pref("browser.search.noCurrentEngine", true);
-
-// disable the search service geoIP check
-pref("browser.search.geoip.url", "");
 
 // Control media casting & mirroring features
 pref("browser.casting.enabled", true);
@@ -393,6 +398,8 @@ pref("font.size.inflation.minTwips", 120);
 
 // When true, zooming will be enabled on all sites, even ones that declare user-scalable=no.
 pref("browser.ui.zoom.force-user-scalable", false);
+
+pref("ui.zoomedview.enabled", false);
 
 pref("ui.touch.radius.enabled", false);
 pref("ui.touch.radius.leftmm", 3);
@@ -537,7 +544,6 @@ pref("dom.webnotifications.enabled", true);
 
 // prevent tooltips from showing up
 pref("browser.chrome.toolbar_tips", false);
-pref("dom.indexedDB.warningQuota", 5);
 
 // prevent video elements from preloading too much data
 pref("media.preload.default", 1); // default to preload none
@@ -844,3 +850,8 @@ pref("dom.meta-viewport.enabled", true);
 
 // Enable the OpenH264 plugin support in the addon manager.
 pref("media.gmp-gmpopenh264.provider.enabled", true);
+
+// The default color scheme in reader mode (light, dark, print, auto)
+// auto = color automatically adjusts according to ambient light level
+// (auto only works on platforms where the 'devicelight' event is enabled)
+pref("reader.color_scheme", "auto");

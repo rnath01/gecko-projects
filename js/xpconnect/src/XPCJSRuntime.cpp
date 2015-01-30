@@ -1156,7 +1156,7 @@ class WatchdogManager : public nsIObserver
   public:
 
     NS_IMETHOD Observe(nsISupports* aSubject, const char* aTopic,
-                       const char16_t* aData)
+                       const char16_t* aData) MOZ_OVERRIDE
     {
         RefreshWatchdog();
         return NS_OK;
@@ -1792,7 +1792,7 @@ class JSMainRuntimeTemporaryPeakReporter MOZ_FINAL : public nsIMemoryReporter
     NS_DECL_ISUPPORTS
 
     NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                              nsISupports* aData, bool aAnonymize)
+                              nsISupports* aData, bool aAnonymize) MOZ_OVERRIDE
     {
         return MOZ_COLLECT_REPORT("js-main-runtime-temporary-peak",
             KIND_OTHER, UNITS_BYTES,
@@ -2630,7 +2630,7 @@ class JSMainRuntimeCompartmentsReporter MOZ_FINAL : public nsIMemoryReporter
     }
 
     NS_IMETHOD CollectReports(nsIMemoryReporterCallback *cb,
-                              nsISupports *closure, bool anonymize)
+                              nsISupports *closure, bool anonymize) MOZ_OVERRIDE
     {
         // First we collect the compartment paths.  Then we report them.  Doing
         // the two steps interleaved is a bad idea, because calling |cb|
@@ -2702,8 +2702,7 @@ class OrphanReporter : public JS::ObjectPrivateVisitor
 static bool
 StartsWithExplicit(nsACString& s)
 {
-    const char* e = "explicit/";
-    return Substring(s, 0, strlen(e)).Equals(e);
+    return StringBeginsWith(s, NS_LITERAL_CSTRING("explicit/"));
 }
 #endif
 
@@ -3293,7 +3292,7 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     // 1MB is the default stack size on Windows, so use 900k.
     // Windows PGO stack frames have unfortunately gotten pretty large lately. :-(
     const size_t kStackQuota = 900 * 1024;
-    const size_t kTrustedScriptBuffer = (sizeof(size_t) == 8) ? 120 * 1024
+    const size_t kTrustedScriptBuffer = (sizeof(size_t) == 8) ? 140 * 1024
                                                               : 80 * 1024;
     // The following two configurations are linux-only. Given the numbers above,
     // we use 50k and 100k trusted buffers on 32-bit and 64-bit respectively.

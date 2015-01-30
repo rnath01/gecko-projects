@@ -139,6 +139,16 @@ MacroAssembler::guardTypeSet(const Source &address, const TypeSet *types, Barrie
         guardObjectType(obj, types, scratch, &fail);
         jump(&matched);
         bind(&fail);
+
+        // Type set guards might miss when an object's type changes and its
+        // properties become unknown, so check for this case.
+        if (obj == scratch)
+            extractObject(address, scratch);
+        loadPtr(Address(obj, JSObject::offsetOfType()), scratch);
+        branchTestPtr(Assembler::NonZero,
+                      Address(scratch, types::TypeObject::offsetOfFlags()),
+                      Imm32(types::OBJECT_FLAG_UNKNOWN_PROPERTIES), &matched);
+
         assumeUnreachable("Unexpected object type");
 #endif
     }
@@ -1345,6 +1355,20 @@ MacroAssembler::assumeUnreachable(const char *output)
 
     breakpoint();
 }
+
+template<typename T>
+void
+MacroAssembler::assertTestInt32(Condition cond, const T &value, const char *output)
+{
+#ifdef DEBUG
+    Label ok;
+    branchTestInt32(cond, value, &ok);
+    assumeUnreachable(output);
+    bind(&ok);
+#endif
+}
+
+template void MacroAssembler::assertTestInt32(Condition, const Address &, const char *);
 
 static void
 Printf0_(const char *output) {

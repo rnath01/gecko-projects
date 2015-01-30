@@ -391,17 +391,28 @@ PluginModuleChromeParent::LoadModule(const char* aFilePath, uint32_t aPluginId,
 {
     PLUGIN_LOG_DEBUG_FUNCTION;
 
+    bool enableSandbox = false;
+#if defined(XP_WIN) && defined(MOZ_SANDBOX)
+    nsAutoCString sandboxPref("dom.ipc.plugins.sandbox.");
+    sandboxPref.Append(aPluginTag->GetNiceFileName());
+    if (NS_FAILED(Preferences::GetBool(sandboxPref.get(), &enableSandbox))) {
+      enableSandbox = Preferences::GetBool("dom.ipc.plugins.sandbox.default");
+    }
+#endif
+
     nsAutoPtr<PluginModuleChromeParent> parent(new PluginModuleChromeParent(aFilePath, aPluginId));
     UniquePtr<LaunchCompleteTask> onLaunchedRunnable(new LaunchedTask(parent));
     parent->mSubprocess->SetCallRunnableImmediately(!parent->mIsStartingAsync);
     TimeStamp launchStart = TimeStamp::Now();
-    bool launched = parent->mSubprocess->Launch(Move(onLaunchedRunnable));
+    bool launched = parent->mSubprocess->Launch(Move(onLaunchedRunnable),
+                                                enableSandbox);
     if (!launched) {
         // We never reached open
         parent->mShutdown = true;
         return nullptr;
     }
     parent->mIsFlashPlugin = aPluginTag->mIsFlashPlugin;
+    parent->mIsBlocklisted = aPluginTag->GetBlocklistState() != 0;
     if (!parent->mIsStartingAsync) {
         int32_t launchTimeoutSecs = Preferences::GetInt(kLaunchTimeoutPref, 0);
         if (!parent->mSubprocess->WaitUntilConnected(launchTimeoutSecs * 1000)) {
@@ -460,7 +471,7 @@ PluginModuleChromeParent::OnProcessLaunched(const bool aSucceeded)
 #endif
 
 #ifdef XP_WIN
-    if (mIsFlashPlugin &&
+    if (!mIsBlocklisted && mIsFlashPlugin &&
         Preferences::GetBool("dom.ipc.plugins.flash.disable-protected-mode", false)) {
         SendDisableFlashProtectedMode();
     }

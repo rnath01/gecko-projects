@@ -305,15 +305,9 @@ SVGSVGElement::UnsuspendRedrawAll()
 }
 
 void
-SVGSVGElement::ForceRedraw(ErrorResult& rv)
+SVGSVGElement::ForceRedraw()
 {
-  nsIDocument* doc = GetComposedDoc();
-  if (!doc) {
-    rv.Throw(NS_ERROR_FAILURE);
-    return;
-  }
-
-  doc->FlushPendingNotifications(Flush_Display);
+  // no-op
 }
 
 void
@@ -453,9 +447,7 @@ SVGSVGElement::ViewBox()
 already_AddRefed<DOMSVGAnimatedPreserveAspectRatio>
 SVGSVGElement::PreserveAspectRatio()
 {
-  nsRefPtr<DOMSVGAnimatedPreserveAspectRatio> ratio;
-  mPreserveAspectRatio.ToDOMAnimatedPreserveAspectRatio(getter_AddRefs(ratio), this);
-  return ratio.forget();
+  return mPreserveAspectRatio.ToDOMAnimatedPreserveAspectRatio(this);
 }
 
 uint16_t

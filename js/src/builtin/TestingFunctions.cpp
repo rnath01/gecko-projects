@@ -51,7 +51,7 @@ static bool
 GetBuildConfiguration(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    RootedObject info(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
+    RootedObject info(cx, JS_NewPlainObject(cx));
     if (!info)
         return false;
 
@@ -652,7 +652,7 @@ StartGC(JSContext *cx, unsigned argc, Value *vp)
     JSRuntime *rt = cx->runtime();
     if (rt->gc.isIncrementalGCInProgress()) {
         RootedObject callee(cx, &args.callee());
-        ReportUsageError(cx, callee, "Incremental GC already in progress");
+        JS_ReportError(cx, "Incremental GC already in progress");
         return false;
     }
 
@@ -1353,11 +1353,11 @@ js::testingFunc_assertFloat32(JSContext *cx, unsigned argc, jsval *vp)
 }
 
 static bool
-TestingFunc_assertValidJitStack(JSContext *cx, unsigned argc, jsval *vp)
+TestingFunc_assertJitStackInvariants(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    jit::AssertValidJitStack(cx);
+    jit::AssertJitStackInvariants(cx);
     args.rval().setUndefined();
     return true;
 }
@@ -1425,7 +1425,7 @@ static bool
 GetJitCompilerOptions(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    RootedObject info(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
+    RootedObject info(cx, JS_NewPlainObject(cx));
     if (!info)
         return false;
 
@@ -2499,8 +2499,8 @@ gc::ZealModeHelpText),
 "bailout()",
 "  Force a bailout out of ionmonkey (if running in ionmonkey)."),
 
-    JS_FN_HELP("assertValidJitStack", TestingFunc_assertValidJitStack, 0, 0,
-"assertValidJitStack()",
+    JS_FN_HELP("assertJitStackInvariants", TestingFunc_assertJitStackInvariants, 0, 0,
+"assertJitStackInvariants()",
 "  Iterates the Jit stack and check that stack invariants hold."),
 
     JS_FN_HELP("setJitCompilerOption", SetJitCompilerOption, 2, 0,

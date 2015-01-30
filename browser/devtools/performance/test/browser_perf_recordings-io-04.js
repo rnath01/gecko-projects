@@ -8,7 +8,9 @@
 
 let test = Task.async(function*() {
   let { target, panel, toolbox } = yield initPerformance(SIMPLE_URL);
-  let { EVENTS, PerformanceController } = panel.panelWin;
+  let { EVENTS, PerformanceController, DetailsSubview } = panel.panelWin;
+
+  DetailsSubview.canUpdateWhileHidden = true;
 
   yield startRecording(panel);
   yield stopRecording(panel);
@@ -20,9 +22,9 @@ let test = Task.async(function*() {
   // Different name for `ticks`, different way of storing time,
   // and no memory, markers data.
   let oldProfilerData = {
-    recordingDuration: data.interval.endTime - data.interval.startTime,
+    profilerData: { profile: data.profile },
     ticksData: data.ticks,
-    profilerData: data.profilerData,
+    recordingDuration: data.duration,
     fileType: "Recorded Performance Data",
     version: 1
   };
@@ -48,18 +50,20 @@ let test = Task.async(function*() {
 
   let importedData = PerformanceController.getCurrentRecording().getAllData();
 
-  is(importedData.startTime, data.startTime,
+  is(importedData.label, data.label,
     "The imported legacy data was successfully converted for the current tool (1).");
-  is(importedData.endTime, data.endTime,
+  is(importedData.duration, data.duration,
     "The imported legacy data was successfully converted for the current tool (2).");
   is(importedData.markers.toSource(), [].toSource(),
     "The imported legacy data was successfully converted for the current tool (3).");
-  is(importedData.memory.toSource(), [].toSource(),
+  is(importedData.frames.toSource(), [].toSource(),
     "The imported legacy data was successfully converted for the current tool (4).");
-  is(importedData.ticks.toSource(), data.ticks.toSource(),
+  is(importedData.memory.toSource(), [].toSource(),
     "The imported legacy data was successfully converted for the current tool (5).");
-  is(importedData.profilerData.toSource(), data.profilerData.toSource(),
+  is(importedData.ticks.toSource(), data.ticks.toSource(),
     "The imported legacy data was successfully converted for the current tool (6).");
+  is(importedData.profile.toSource(), data.profile.toSource(),
+    "The imported legacy data was successfully converted for the current tool (7).");
 
   yield teardown(panel);
   finish();

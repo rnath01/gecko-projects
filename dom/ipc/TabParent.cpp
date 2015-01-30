@@ -18,6 +18,7 @@
 #include "mozilla/EventStateManager.h"
 #include "mozilla/Hal.h"
 #include "mozilla/ipc/DocumentRendererParent.h"
+#include "mozilla/jsipc/CrossProcessObjectWrappers.h"
 #include "mozilla/layers/CompositorParent.h"
 #include "mozilla/layers/InputAPZContext.h"
 #include "mozilla/layout/RenderFrameParent.h"
@@ -65,7 +66,6 @@
 #include "PermissionMessageUtils.h"
 #include "StructuredCloneUtils.h"
 #include "ColorPickerParent.h"
-#include "JavaScriptParent.h"
 #include "FilePickerParent.h"
 #include "TabChild.h"
 #include "LoadContext.h"
@@ -273,7 +273,7 @@ TabParent::TabParent(nsIContentParent* aManager,
   , mChromeFlags(aChromeFlags)
   , mInitedByParent(false)
   , mTabId(aTabId)
-  , mSkipLoad(false)
+  , mCreatingWindow(false)
 {
   MOZ_ASSERT(aManager);
 }
@@ -366,6 +366,15 @@ TabParent::Destroy()
   if (XRE_GetProcessType() == GeckoProcessType_Default) {
     Manager()->AsContentParent()->NotifyTabDestroying(this);
   }
+
+  // Let all PluginWidgets know we are tearing down. Prevents
+  // these objects from sending async events after the child side
+  // is shut down.
+  const nsTArray<PPluginWidgetParent*>& kids = ManagedPPluginWidgetParent();
+  for (uint32_t idx = 0; idx < kids.Length(); ++idx) {
+      static_cast<mozilla::plugins::PluginWidgetParent*>(kids[idx])->ParentDestroy();
+  }
+
   mMarkedDestroying = true;
 }
 
@@ -454,17 +463,21 @@ TabParent::RecvEvent(const RemoteDOMEvent& aEvent)
 struct MOZ_STACK_CLASS TabParent::AutoUseNewTab MOZ_FINAL
 {
 public:
-  AutoUseNewTab(TabParent* aNewTab, bool* aWindowIsNew)
-   : mNewTab(aNewTab), mWindowIsNew(aWindowIsNew)
+  AutoUseNewTab(TabParent* aNewTab, bool* aWindowIsNew, nsCString* aURLToLoad)
+   : mNewTab(aNewTab), mWindowIsNew(aWindowIsNew), mURLToLoad(aURLToLoad)
   {
     MOZ_ASSERT(!TabParent::sNextTabParent);
+    MOZ_ASSERT(!aNewTab->mCreatingWindow);
+
     TabParent::sNextTabParent = aNewTab;
-    aNewTab->mSkipLoad = true;
+    aNewTab->mCreatingWindow = true;
+    aNewTab->mDelayedURL.Truncate();
   }
 
   ~AutoUseNewTab()
   {
-    mNewTab->mSkipLoad = false;
+    mNewTab->mCreatingWindow = false;
+    *mURLToLoad = mNewTab->mDelayedURL;
 
     if (TabParent::sNextTabParent) {
       MOZ_ASSERT(TabParent::sNextTabParent == mNewTab);
@@ -476,6 +489,7 @@ public:
 private:
   TabParent* mNewTab;
   bool* mWindowIsNew;
+  nsCString* mURLToLoad;
 };
 
 bool
@@ -489,7 +503,8 @@ TabParent::RecvCreateWindow(PBrowserParent* aNewTab,
                             const nsString& aFeatures,
                             const nsString& aBaseURI,
                             bool* aWindowIsNew,
-                            InfallibleTArray<FrameScriptInfo>* aFrameScripts)
+                            InfallibleTArray<FrameScriptInfo>* aFrameScripts,
+                            nsCString* aURLToLoad)
 {
   // We always expect to open a new window here. If we don't, it's an error.
   *aWindowIsNew = true;
@@ -530,7 +545,7 @@ TabParent::RecvCreateWindow(PBrowserParent* aNewTab,
     params->SetReferrer(aBaseURI);
     params->SetIsPrivate(isPrivate);
 
-    AutoUseNewTab aunt(newTab, aWindowIsNew);
+    AutoUseNewTab aunt(newTab, aWindowIsNew, aURLToLoad);
 
     nsCOMPtr<nsIFrameLoaderOwner> frameLoaderOwner;
     mBrowserDOMWindow->OpenURIInFrame(nullptr, params,
@@ -564,7 +579,7 @@ TabParent::RecvCreateWindow(PBrowserParent* aNewTab,
 
   nsCOMPtr<nsIDOMWindow> window;
 
-  AutoUseNewTab aunt(newTab, aWindowIsNew);
+  AutoUseNewTab aunt(newTab, aWindowIsNew, aURLToLoad);
 
   rv = pwwatch->OpenWindow2(parent, finalURIString.get(),
                             NS_ConvertUTF16toUTF8(aName).get(),
@@ -601,7 +616,7 @@ bool
 TabParent::SendLoadRemoteScript(const nsString& aURL,
                                 const bool& aRunInGlobalScope)
 {
-  if (mSkipLoad) {
+  if (mCreatingWindow) {
     mDelayedFrameScripts.AppendElement(FrameScriptInfo(aURL, aRunInGlobalScope));
     return true;
   }
@@ -615,17 +630,19 @@ TabParent::LoadURL(nsIURI* aURI)
 {
     MOZ_ASSERT(aURI);
 
-    if (mSkipLoad) {
-        // Don't send the message if the child wants to load its own URL.
-        return;
-    }
-
     if (mIsDestroyed) {
         return;
     }
 
     nsCString spec;
     aURI->GetSpec(spec);
+
+    if (mCreatingWindow) {
+        // Don't send the message if the child wants to load its own URL.
+        MOZ_ASSERT(mDelayedURL.IsEmpty());
+        mDelayedURL = spec;
+        return;
+    }
 
     if (!mShown) {
         NS_WARNING(nsPrintfCString("TabParent::LoadURL(%s) called before "
@@ -1340,7 +1357,7 @@ TabParent::RecvSyncMessage(const nsString& aMessage,
   }
 
   StructuredCloneData cloneData = ipc::UnpackClonedMessageDataForParent(aData);
-  CpowIdHolder cpows(Manager(), aCpows);
+  CrossProcessCpowHolder cpows(Manager(), aCpows);
   return ReceiveMessage(aMessage, true, &cloneData, &cpows, aPrincipal, aJSONRetVal);
 }
 
@@ -1362,7 +1379,7 @@ TabParent::RecvRpcMessage(const nsString& aMessage,
   }
 
   StructuredCloneData cloneData = ipc::UnpackClonedMessageDataForParent(aData);
-  CpowIdHolder cpows(Manager(), aCpows);
+  CrossProcessCpowHolder cpows(Manager(), aCpows);
   return ReceiveMessage(aMessage, true, &cloneData, &cpows, aPrincipal, aJSONRetVal);
 }
 
@@ -1383,7 +1400,7 @@ TabParent::RecvAsyncMessage(const nsString& aMessage,
   }
 
   StructuredCloneData cloneData = ipc::UnpackClonedMessageDataForParent(aData);
-  CpowIdHolder cpows(Manager(), aCpows);
+  CrossProcessCpowHolder cpows(Manager(), aCpows);
   return ReceiveMessage(aMessage, false, &cloneData, &cpows, aPrincipal, nullptr);
 }
 
@@ -2500,6 +2517,13 @@ NS_IMETHODIMP
 TabParent::SetIsDocShellActive(bool isActive)
 {
   unused << SendSetIsDocShellActive(isActive);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+TabParent::GetTabId(uint64_t* aId)
+{
+  *aId = GetTabId();
   return NS_OK;
 }
 

@@ -7,7 +7,9 @@
 
 let test = Task.async(function*() {
   let { target, panel, toolbox } = yield initPerformance(SIMPLE_URL);
-  let { EVENTS, PerformanceController } = panel.panelWin;
+  let { EVENTS, PerformanceController, DetailsSubview } = panel.panelWin;
+
+  DetailsSubview.canUpdateWhileHidden = true;
 
   yield startRecording(panel);
   yield stopRecording(panel);
@@ -44,18 +46,17 @@ let test = Task.async(function*() {
 
   let importedData = PerformanceController.getCurrentRecording().getAllData();
 
-  is(importedData.startTime, originalData.startTime,
+  is(importedData.label, originalData.label,
     "The impored data is identical to the original data (1).");
-  is(importedData.endTime, originalData.endTime,
+  is(importedData.duration, originalData.duration,
     "The impored data is identical to the original data (2).");
-
   is(importedData.markers.toSource(), originalData.markers.toSource(),
     "The impored data is identical to the original data (3).");
   is(importedData.memory.toSource(), originalData.memory.toSource(),
     "The impored data is identical to the original data (4).");
   is(importedData.ticks.toSource(), originalData.ticks.toSource(),
     "The impored data is identical to the original data (5).");
-  is(importedData.profilerData.toSource(), originalData.profilerData.toSource(),
+  is(importedData.profile.toSource(), originalData.profile.toSource(),
     "The impored data is identical to the original data (6).");
 
   yield teardown(panel);

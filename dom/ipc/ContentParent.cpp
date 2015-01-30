@@ -67,6 +67,7 @@
 #include "mozilla/ipc/PFileDescriptorSetParent.h"
 #include "mozilla/ipc/TestShellParent.h"
 #include "mozilla/ipc/InputStreamUtils.h"
+#include "mozilla/jsipc/CrossProcessObjectWrappers.h"
 #include "mozilla/layers/CompositorParent.h"
 #include "mozilla/layers/ImageBridgeParent.h"
 #include "mozilla/layers/SharedBufferManagerParent.h"
@@ -177,8 +178,6 @@ using namespace mozilla::system;
 #include "BluetoothParent.h"
 #include "BluetoothService.h"
 #endif
-
-#include "JavaScriptParent.h"
 
 #include "mozilla/RemoteSpellCheckEngineParent.h"
 
@@ -673,6 +672,8 @@ ContentParent::GetNewOrPreallocatedAppProcess(mozIApplication* aApp,
             }
             process->TransformPreallocatedIntoApp(aOpener,
                                                   manifestURL);
+            process->ForwardKnownInfo();
+
             if (aTookPreAllocated) {
                 *aTookPreAllocated = true;
             }
@@ -689,6 +690,7 @@ ContentParent::GetNewOrPreallocatedAppProcess(mozIApplication* aApp,
                                 /* isForPreallocated = */ false,
                                 aInitialPriority);
     process->Init();
+    process->ForwardKnownInfo();
 
     if (aTookPreAllocated) {
         *aTookPreAllocated = false;
@@ -832,6 +834,7 @@ ContentParent::GetNewOrUsedBrowserProcess(bool aForBrowserElement,
                               aPriority);
         p->Init();
     }
+    p->ForwardKnownInfo();
 
     sNonAppContentParents->AppendElement(p);
     return p.forget();
@@ -1309,6 +1312,23 @@ ContentParent::Init()
     NS_ASSERTION(observer, "FileUpdateDispatcher is null");
 }
 
+void
+ContentParent::ForwardKnownInfo()
+{
+    MOZ_ASSERT(mMetamorphosed);
+    if (!mMetamorphosed) {
+        return;
+    }
+#ifdef MOZ_WIDGET_GONK
+    InfallibleTArray<VolumeInfo> volumeInfo;
+    nsRefPtr<nsVolumeService> vs = nsVolumeService::GetSingleton();
+    if (vs) {
+        vs->GetVolumesForIPC(&volumeInfo);
+        unused << SendVolumes(volumeInfo);
+    }
+#endif /* MOZ_WIDGET_GONK */
+}
+
 namespace {
 
 class SystemMessageHandledListener MOZ_FINAL
@@ -1498,6 +1518,7 @@ ContentParent::TransformPreallocatedIntoApp(ContentParent* aOpener,
                                             const nsAString& aAppManifestURL)
 {
     MOZ_ASSERT(IsPreallocated());
+    mMetamorphosed = true;
     mOpener = aOpener;
     mAppManifestURL = aAppManifestURL;
     TryGetNameFromManifestURL(aAppManifestURL, mAppName);
@@ -1507,6 +1528,7 @@ void
 ContentParent::TransformPreallocatedIntoBrowser(ContentParent* aOpener)
 {
     // Reset mAppManifestURL, mIsForBrowser and mOSPrivileges for browser.
+    mMetamorphosed = true;
     mOpener = aOpener;
     mAppManifestURL.Truncate();
     mIsForBrowser = true;
@@ -1996,11 +2018,11 @@ ContentParent::NotifyTabDestroyed(PBrowserParent* aTab,
     }
 }
 
-jsipc::JavaScriptShared*
+jsipc::CPOWManager*
 ContentParent::GetCPOWManager()
 {
     if (ManagedPJavaScriptParent().Length()) {
-        return static_cast<JavaScriptParent*>(ManagedPJavaScriptParent()[0]);
+        return CPOWManagerFor(ManagedPJavaScriptParent()[0]);
     }
     return nullptr;
 }
@@ -2033,6 +2055,7 @@ ContentParent::InitializeMembers()
     mGeolocationWatchID = -1;
     mNumDestroyingTabs = 0;
     mIsAlive = true;
+    mMetamorphosed = false;
     mSendPermissionUpdates = false;
     mSendDataStoreInfos = false;
     mCalledClose = false;
@@ -2063,6 +2086,10 @@ ContentParent::ContentParent(mozIApplication* aApp,
 
     // Only the preallocated process uses Nuwa.
     MOZ_ASSERT_IF(aIsNuwaProcess, aIsForPreallocated);
+
+    if (!aIsNuwaProcess && !aIsForPreallocated) {
+        mMetamorphosed = true;
+    }
 
     // Insert ourselves into the global linked list of ContentParent objects.
     if (!sContentParents) {
@@ -2670,19 +2697,6 @@ ContentParent::RecvDataStoreGetStores(
 
   mSendDataStoreInfos = true;
   return true;
-}
-
-bool
-ContentParent::RecvGetVolumes(InfallibleTArray<VolumeInfo>* aResult)
-{
-#ifdef MOZ_WIDGET_GONK
-    nsRefPtr<nsVolumeService> vs = nsVolumeService::GetSingleton();
-    vs->GetVolumesForIPC(aResult);
-    return true;
-#else
-    NS_WARNING("ContentParent::RecvGetVolumes shouldn't be called when MOZ_WIDGET_GONK is not defined");
-    return false;
-#endif
 }
 
 bool

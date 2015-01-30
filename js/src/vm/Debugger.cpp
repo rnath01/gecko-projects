@@ -664,30 +664,11 @@ Debugger::slowPathOnLeaveFrame(JSContext *cx, AbstractFramePtr frame, bool frame
     }
 
     /*
-     * Clean up all Debugger.Frame instances. Use a fresh FrameRange, as one
-     * debugger's onPop handler could have caused another debugger to create its
-     * own Debugger.Frame instance.
+     * Clean up all Debugger.Frame instances. This call creates a fresh
+     * FrameRange, as one debugger's onPop handler could have caused another
+     * debugger to create its own Debugger.Frame instance.
      */
-    for (FrameRange r(frame, global); !r.empty(); r.popFront()) {
-        RootedNativeObject frameobj(cx, r.frontFrame());
-        Debugger *dbg = r.frontDebugger();
-        MOZ_ASSERT(dbg == Debugger::fromChildJSObject(frameobj));
-
-        FreeOp *fop = cx->runtime()->defaultFreeOp();
-        DebuggerFrame_freeScriptFrameIterData(fop, frameobj);
-        DebuggerFrame_maybeDecrementFrameScriptStepModeCount(fop, frame, frameobj);
-
-        dbg->frames.remove(frame);
-    }
-
-    /*
-     * If this is an eval frame, then from the debugger's perspective the
-     * script is about to be destroyed. Remove any breakpoints in it.
-     */
-    if (frame.isEvalFrame()) {
-        RootedScript script(cx, frame.script());
-        script->clearBreakpointsIn(cx->runtime()->defaultFreeOp(), nullptr, nullptr);
-    }
+    removeFromFrameMapsAndClearBreakpointsIn(cx, frame);
 
     /* Establish (status, value) as our resumption value. */
     switch (status) {
@@ -1084,6 +1065,42 @@ Debugger::receiveCompletionValue(Maybe<AutoCompartment> &ac, bool ok,
     return newCompletionValue(cx, status, value, vp);
 }
 
+static bool
+GetStatusProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, JSTrapStatus status,
+                  JSTrapStatus *statusOut, MutableHandleValue vp, int *hits)
+{
+    bool found;
+    if (!HasProperty(cx, obj, name, &found))
+        return false;
+    if (found) {
+        ++*hits;
+        *statusOut = status;
+        if (!GetProperty(cx, obj, obj, name, vp))
+            return false;
+    }
+    return true;
+}
+
+static bool
+ParseResumptionValueAsObject(JSContext *cx, HandleValue rv, JSTrapStatus *statusp,
+                             MutableHandleValue vp)
+{
+    int hits = 0;
+    if (rv.isObject()) {
+        RootedObject obj(cx, &rv.toObject());
+        if (!GetStatusProperty(cx, obj, cx->names().return_, JSTRAP_RETURN, statusp, vp, &hits))
+            return false;
+        if (!GetStatusProperty(cx, obj, cx->names().throw_, JSTRAP_THROW, statusp, vp, &hits))
+            return false;
+    }
+
+    if (hits != 1) {
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEBUG_BAD_RESUMPTION);
+        return false;
+    }
+    return true;
+}
+
 JSTrapStatus
 Debugger::parseResumptionValue(Maybe<AutoCompartment> &ac, bool ok, const Value &rv, MutableHandleValue vp,
                                bool callHook)
@@ -1100,34 +1117,15 @@ Debugger::parseResumptionValue(Maybe<AutoCompartment> &ac, bool ok, const Value 
         return JSTRAP_ERROR;
     }
 
-    /* Check that rv is {return: val} or {throw: val}. */
     JSContext *cx = ac->context()->asJSContext();
-    Rooted<JSObject*> obj(cx);
-    RootedShape shape(cx);
-    RootedId returnId(cx, NameToId(cx->names().return_));
-    RootedId throwId(cx, NameToId(cx->names().throw_));
-    bool okResumption = rv.isObject();
-    if (okResumption) {
-        obj = &rv.toObject();
-        okResumption = obj->is<PlainObject>();
-    }
-    if (okResumption) {
-        shape = obj->lastProperty();
-        okResumption = shape->previous() &&
-             !shape->previous()->previous() &&
-             (shape->propid() == returnId || shape->propid() == throwId) &&
-             shape->isDataDescriptor();
-    }
-    if (!okResumption) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEBUG_BAD_RESUMPTION);
+    JSTrapStatus status = JSTRAP_CONTINUE;
+    RootedValue v(cx);
+    RootedValue rvRoot(cx, rv);
+    if (!ParseResumptionValueAsObject(cx, rvRoot, &status, &v) ||
+        !unwrapDebuggeeValue(cx, &v))
+    {
         return handleUncaughtException(ac, vp, callHook);
     }
-
-    HandleNativeObject nobj = obj.as<NativeObject>();
-
-    RootedValue v(cx, vp.get());
-    if (!NativeGetExistingProperty(cx, obj, nobj, shape, &v) || !unwrapDebuggeeValue(cx, &v))
-        return handleUncaughtException(ac, &v, callHook);
 
     ac.reset();
     if (!cx->compartment()->wrap(cx, &v)) {
@@ -1136,7 +1134,7 @@ Debugger::parseResumptionValue(Maybe<AutoCompartment> &ac, bool ok, const Value 
     }
     vp.set(v);
 
-    return shape->propid() == returnId ? JSTRAP_RETURN : JSTRAP_THROW;
+    return status;
 }
 
 static bool
@@ -2640,6 +2638,14 @@ Debugger::getMemory(JSContext *cx, unsigned argc, Value *vp)
     return true;
 }
 
+/*
+ * Given a value used to designate a global (there's quite a variety; see the
+ * docs), return the actual designee.
+ *
+ * Note that this does not check whether the designee is marked "invisible to
+ * Debugger" or not; different callers need to handle invisible-to-Debugger
+ * globals in different ways.
+ */
 GlobalObject *
 Debugger::unwrapDebuggeeArgument(JSContext *cx, const Value &v)
 {
@@ -3781,6 +3787,16 @@ Debugger::makeGlobalObjectReference(JSContext *cx, unsigned argc, Value *vp)
     if (!global)
         return false;
 
+    // If we create a D.O referring to a global in an invisible compartment,
+    // then from it we can reach function objects, scripts, environments, etc.,
+    // none of which we're ever supposed to see.
+    JSCompartment *globalCompartment = global->compartment();
+    if (globalCompartment->options().invisibleToDebugger()) {
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr,
+                             JSMSG_DEBUG_INVISIBLE_COMPARTMENT);
+        return false;
+    }
+
     args.rval().setObject(*global);
     return dbg->wrapDebuggeeValue(cx, args.rval());
 }
@@ -4831,6 +4847,42 @@ Debugger::replaceFrameGuts(JSContext *cx, AbstractFramePtr from, AbstractFramePt
     return true;
 }
 
+/* static */ void
+Debugger::assertNotInFrameMaps(AbstractFramePtr frame)
+{
+#ifdef DEBUG
+    FrameRange r(frame);
+    MOZ_ASSERT(r.empty());
+#endif
+}
+
+/* static */ void
+Debugger::removeFromFrameMapsAndClearBreakpointsIn(JSContext *cx, AbstractFramePtr frame)
+{
+    Handle<GlobalObject *> global = cx->global();
+
+    for (FrameRange r(frame, global); !r.empty(); r.popFront()) {
+        RootedNativeObject frameobj(cx, r.frontFrame());
+        Debugger *dbg = r.frontDebugger();
+        MOZ_ASSERT(dbg == Debugger::fromChildJSObject(frameobj));
+
+        FreeOp *fop = cx->runtime()->defaultFreeOp();
+        DebuggerFrame_freeScriptFrameIterData(fop, frameobj);
+        DebuggerFrame_maybeDecrementFrameScriptStepModeCount(fop, frame, frameobj);
+
+        dbg->frames.remove(frame);
+    }
+
+    /*
+     * If this is an eval frame, then from the debugger's perspective the
+     * script is about to be destroyed. Remove any breakpoints in it.
+     */
+    if (frame.isEvalFrame()) {
+        RootedScript script(cx, frame.script());
+        script->clearBreakpointsIn(cx->runtime()->defaultFreeOp(), nullptr, nullptr);
+    }
+}
+
 /* static */ bool
 Debugger::handleBaselineOsr(JSContext *cx, InterpreterFrame *from, jit::BaselineFrame *to)
 {
@@ -4854,6 +4906,15 @@ Debugger::handleIonBailout(JSContext *cx, jit::RematerializedFrame *from, jit::B
     while (iter.abstractFramePtr() != to)
         ++iter;
     return replaceFrameGuts(cx, from, to, iter);
+}
+
+/* static */ void
+Debugger::handleUnrecoverableIonBailoutError(JSContext *cx, jit::RematerializedFrame *frame)
+{
+    // Ion bailout can fail due to overrecursion. In such cases we cannot
+    // honor any further Debugger hooks on the frame, and need to ensure that
+    // its Debugger.Frame entry is cleaned up.
+    removeFromFrameMapsAndClearBreakpointsIn(cx, frame);
 }
 
 /* static */ void
@@ -5384,7 +5445,7 @@ UpdateFrameIterPc(FrameIter &iter)
         jit::JitFrameLayout *jsFrame = (jit::JitFrameLayout *)frame->top();
         jit::JitActivation *activation = iter.activation()->asJit();
 
-        ActivationIterator activationIter(activation->cx()->perThreadData);
+        ActivationIterator activationIter(activation->cx()->runtime());
         while (activationIter.activation() != activation)
             ++activationIter;
 
@@ -5907,10 +5968,10 @@ DebuggerFrame_setOnPop(JSContext *cx, unsigned argc, Value *vp)
  * environment; either way, |frame|'s scope is where newly declared variables
  * go. In this case, |frame| must have a computed 'this' value, equal to |thisv|.
  */
-bool
-js::EvaluateInEnv(JSContext *cx, Handle<Env*> env, HandleValue thisv, AbstractFramePtr frame,
-                  jsbytecode *pc, mozilla::Range<const char16_t> chars, const char *filename,
-                  unsigned lineno, MutableHandleValue rval)
+static bool
+EvaluateInEnv(JSContext *cx, Handle<Env*> env, HandleValue thisv, AbstractFramePtr frame,
+              jsbytecode *pc, mozilla::Range<const char16_t> chars, const char *filename,
+              unsigned lineno, MutableHandleValue rval)
 {
     assertSameCompartment(cx, env, frame);
     MOZ_ASSERT_IF(frame, thisv.get() == frame.thisValue());
@@ -5923,10 +5984,15 @@ js::EvaluateInEnv(JSContext *cx, Handle<Env*> env, HandleValue thisv, AbstractFr
      * calls and properly compute a static level. In practice, any non-zero
      * static level will suffice.
      *
-     * Pass in NullPtr for evalStaticScope, as ScopeIter should stop at any
-     * non-ScopeObject boundaries, and we are putting a DebugScopeProxy on the
-     * scope chain.
+     * Pass in a StaticEvalObject *not* linked to env for evalStaticScope, as
+     * ScopeIter should stop at any non-ScopeObject boundaries, and we are
+     * putting a DebugScopeProxy on the scope chain.
      */
+    Rooted<StaticEvalObject *> staticScope(cx, StaticEvalObject::create(cx, js::NullPtr()));
+    if (!staticScope)
+        return false;
+    if (frame && frame.script()->strict())
+        staticScope->setStrict();
     CompileOptions options(cx);
     options.setCompileAndGo(true)
            .setForEval(true)
@@ -5938,8 +6004,8 @@ js::EvaluateInEnv(JSContext *cx, Handle<Env*> env, HandleValue thisv, AbstractFr
     RootedScript callerScript(cx, frame ? frame.script() : nullptr);
     SourceBufferHolder srcBuf(chars.start().get(), chars.length(), SourceBufferHolder::NoOwnership);
     RootedScript script(cx, frontend::CompileScript(cx, &cx->tempLifoAlloc(), env, callerScript,
-                                                    /* evalStaticScope = */ js::NullPtr(),
-                                                    options, srcBuf, /* source = */ nullptr,
+                                                    staticScope, options, srcBuf,
+                                                    /* source = */ nullptr,
                                                     /* staticLevel = */ frame ? 1 : 0));
     if (!script)
         return false;
@@ -6993,6 +7059,16 @@ DebuggerObject_unwrap(JSContext *cx, unsigned argc, Value *vp)
         return true;
     }
 
+    // Don't allow unwrapping to create a D.O whose referent is in an
+    // invisible-to-Debugger global. (If our referent is a *wrapper* to such,
+    // and the wrapper is in a visible compartment, that's fine.)
+    JSCompartment *unwrappedCompartment = unwrapped->compartment();
+    if (unwrappedCompartment->options().invisibleToDebugger()) {
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr,
+                             JSMSG_DEBUG_INVISIBLE_COMPARTMENT);
+        return false;
+    }
+
     args.rval().setObject(*unwrapped);
     if (!dbg->wrapDebuggeeValue(cx, args.rval()))
         return false;
@@ -7321,12 +7397,11 @@ DebuggerEnv_find(JSContext *cx, unsigned argc, Value *vp)
 
         /* This can trigger resolve hooks. */
         ErrorCopier ec(ac);
-        RootedShape prop(cx);
-        RootedObject pobj(cx);
-        for (; env && !prop; env = env->enclosingScope()) {
-            if (!LookupProperty(cx, env, id, &pobj, &prop))
+        bool found;
+        for (; env; env = env->enclosingScope()) {
+            if (!HasProperty(cx, env, id, &found))
                 return false;
-            if (prop)
+            if (found)
                 break;
         }
     }

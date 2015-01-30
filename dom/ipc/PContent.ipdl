@@ -341,7 +341,7 @@ union OptionalContentId
   void_t;
 };
 
-prio(normal upto urgent) intr protocol PContent
+prio(normal upto urgent) sync protocol PContent
 {
     parent spawns PPluginModule;
 
@@ -470,6 +470,8 @@ child:
     AddPermission(Permission permission);
 
     ScreenSizeChanged(gfxIntSize size);
+
+    Volumes(VolumeInfo[] volumes);
 
     FlushMemory(nsString reason);
 
@@ -763,8 +765,6 @@ parent:
                                nsString aStorageName,
                                nsString aFilepath,
                                nsCString aReason);
-
-    sync GetVolumes() returns (VolumeInfo[] volumes);
 
     // Notify the parent that the child has finished handling a system message.
     async SystemMessageHandled();

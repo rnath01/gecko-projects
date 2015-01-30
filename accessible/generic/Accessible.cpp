@@ -109,24 +109,7 @@ Accessible::Accessible(nsIContent* aContent, DocAccessible* aDoc) :
   mStateFlags(0), mContextFlags(0), mType(0), mGenericTypes(0),
   mIndexOfEmbeddedChild(-1), mRoleMapEntry(nullptr)
 {
-#ifdef NS_DEBUG_X
-   {
-     nsCOMPtr<nsIPresShell> shell(do_QueryReferent(aShell));
-     printf(">>> %p Created Acc - DOM: %p  PS: %p",
-            (void*)static_cast<nsIAccessible*>(this), (void*)aNode,
-            (void*)shell.get());
-    nsCOMPtr<nsIContent> content = do_QueryInterface(aNode);
-    if (content) {
-      printf(" Con: %s@%p",
-             NS_ConvertUTF16toUTF8(content->NodeInfo()->QualifiedName()).get(),
-             (void *)content.get());
-      nsAutoString buf;
-      Name(buf);
-      printf(" Name:[%s]", NS_ConvertUTF16toUTF8(buf).get());
-     }
-     printf("\n");
-   }
-#endif
+  mBits.groupInfo = nullptr;
 }
 
 Accessible::~Accessible()
@@ -525,11 +508,8 @@ Accessible::ChildAtPoint(int32_t aX, int32_t aY,
 {
   // If we can't find the point in a child, we will return the fallback answer:
   // we return |this| if the point is within it, otherwise nullptr.
-  nsIntRect rect = Bounds();
-  if (rect.IsEmpty())
-   return nullptr;
-
   Accessible* fallbackAnswer = nullptr;
+  nsIntRect rect = Bounds();
   if (aX >= rect.x && aX < rect.x + rect.width &&
       aY >= rect.y && aY < rect.y + rect.height)
     fallbackAnswer = this;
@@ -1952,7 +1932,11 @@ Accessible::UnbindFromParent()
   mParent = nullptr;
   mIndexInParent = -1;
   mIndexOfEmbeddedChild = -1;
-  mGroupInfo = nullptr;
+  if (IsProxy())
+    MOZ_CRASH("this should never be called on proxy wrappers");
+
+  delete mBits.groupInfo;
+  mBits.groupInfo = nullptr;
   mContextFlags &= ~eHasNameDependentParent;
 }
 
@@ -2528,17 +2512,20 @@ Accessible::GetActionRule() const
 AccGroupInfo*
 Accessible::GetGroupInfo()
 {
-  if (mGroupInfo){
+  if (IsProxy())
+    MOZ_CRASH("This should never be called on proxy wrappers");
+
+  if (mBits.groupInfo){
     if (HasDirtyGroupInfo()) {
-      mGroupInfo->Update();
+      mBits.groupInfo->Update();
       SetDirtyGroupInfo(false);
     }
 
-    return mGroupInfo;
+    return mBits.groupInfo;
   }
 
-  mGroupInfo = AccGroupInfo::CreateGroupInfo(this);
-  return mGroupInfo;
+  mBits.groupInfo = AccGroupInfo::CreateGroupInfo(this);
+  return mBits.groupInfo;
 }
 
 void

@@ -100,8 +100,6 @@ function handleRequest(req, res) {
     res.setHeader('X-Connection-Spdy', 'no');
   }
 
-console.log(u.pathname);
-
   if (u.pathname === '/750ms') {
     var rl = new runlater();
     rl.req = req;

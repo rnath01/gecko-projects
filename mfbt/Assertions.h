@@ -131,7 +131,7 @@ extern "C" {
  * method is primarily for internal use in this header, and only secondarily
  * for use in implementing release-build assertions.
  */
-static MOZ_ALWAYS_INLINE void
+static MOZ_COLD MOZ_ALWAYS_INLINE void
 MOZ_ReportAssertionFailure(const char* aStr, const char* aFilename, int aLine)
   MOZ_PRETEND_NORETURN_FOR_STATIC_ANALYSIS
 {
@@ -148,7 +148,7 @@ MOZ_ReportAssertionFailure(const char* aStr, const char* aFilename, int aLine)
 #endif
 }
 
-static MOZ_ALWAYS_INLINE void
+static MOZ_COLD MOZ_ALWAYS_INLINE void
 MOZ_ReportCrash(const char* aStr, const char* aFilename, int aLine)
   MOZ_PRETEND_NORETURN_FOR_STATIC_ANALYSIS
 {
@@ -302,14 +302,6 @@ __declspec(noreturn) __inline void MOZ_NoReturn() {}
  */
 
 #ifdef __cplusplus
-#  if defined(__clang__) || defined(__GNUC__)
-#    define MOZ_SUPPORT_ASSERT_CONDITION_TYPE_VALIDATION
-#  elif defined(_MSC_VER)
-//   Disabled for now because of insufficient decltype support. Bug 1004028.
-#  endif
-#endif
-
-#ifdef MOZ_SUPPORT_ASSERT_CONDITION_TYPE_VALIDATION
 #  include "mozilla/TypeTraits.h"
 namespace mozilla {
 namespace detail {

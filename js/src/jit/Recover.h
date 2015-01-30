@@ -57,6 +57,7 @@ namespace jit {
     _(TypeOf)                                   \
     _(ToDouble)                                 \
     _(ToFloat32)                                \
+    _(TruncateToInt32)                          \
     _(NewObject)                                \
     _(NewArray)                                 \
     _(NewDerivedTypedObject)                    \
@@ -476,11 +477,14 @@ class RAtan2 MOZ_FINAL : public RInstruction
 
 class RHypot MOZ_FINAL : public RInstruction
 {
+   private:
+     uint32_t numOperands_;
+
    public:
      RINSTRUCTION_HEADER_(Hypot)
 
      virtual uint32_t numOperands() const {
-         return 2;
+         return numOperands_;
      }
 
      bool recover(JSContext *cx, SnapshotIterator &iter) const;
@@ -597,10 +601,22 @@ class RToFloat32 MOZ_FINAL : public RInstruction
     bool recover(JSContext *cx, SnapshotIterator &iter) const;
 };
 
+class RTruncateToInt32 MOZ_FINAL : public RInstruction
+{
+  public:
+    RINSTRUCTION_HEADER_(TruncateToInt32)
+
+    virtual uint32_t numOperands() const {
+        return 1;
+    }
+
+    bool recover(JSContext *cx, SnapshotIterator &iter) const;
+};
+
 class RNewObject MOZ_FINAL : public RInstruction
 {
   private:
-    bool templateObjectIsClassPrototype_;
+    MNewObject::Mode mode_;
 
   public:
     RINSTRUCTION_HEADER_(NewObject)

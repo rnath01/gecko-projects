@@ -1881,15 +1881,12 @@ CASE(JSOP_IN)
     obj = &rref.toObject();
     RootedId &id = rootId0;
     FETCH_ELEMENT_ID(-2, id);
-    RootedObject &obj2 = rootObject1;
-    RootedShape &prop = rootShape0;
-    if (!LookupProperty(cx, obj, id, &obj2, &prop))
+    bool found;
+    if (!HasProperty(cx, obj, id, &found))
         goto error;
-    bool cond = prop != nullptr;
-    prop = nullptr;
-    TRY_BRANCH_AFTER_COND(cond, 2);
+    TRY_BRANCH_AFTER_COND(found, 2);
     REGS.sp--;
-    REGS.sp[-1].setBoolean(cond);
+    REGS.sp[-1].setBoolean(found);
 }
 END_CASE(JSOP_IN)
 
@@ -3725,8 +3722,16 @@ js::DefFunOperation(JSContext *cx, HandleScript script, HandleObject scopeChain,
     if (!shape || pobj != parent)
         return DefineProperty(cx, parent, name, rval, nullptr, nullptr, attrs);
 
-    /* Step 5e. */
-    MOZ_ASSERT(parent->isNative());
+    /*
+     * Step 5e.
+     *
+     * A DebugScopeObject is okay here, and sometimes necessary. If
+     * Debugger.Frame.prototype.eval defines a function with the same name as an
+     * extant variable in the frame, the DebugScopeObject takes care of storing
+     * the function in the stack frame (for non-aliased variables) or on the
+     * scope object (for aliased).
+     */
+    MOZ_ASSERT(parent->isNative() || parent->is<DebugScopeObject>());
     if (parent->is<GlobalObject>()) {
         if (shape->configurable())
             return DefineProperty(cx, parent, name, rval, nullptr, nullptr, attrs);

@@ -129,7 +129,6 @@
 #include "nsString.h"
 #include "nsReadableUtils.h"
 #include "nsXPIDLString.h"
-#include "nsAutoJSValHolder.h"
 
 #include "MainThreadUtils.h"
 
@@ -305,12 +304,12 @@ public:
     nsresult GetInfoForName(const char * name, nsIInterfaceInfo** info);
 
     virtual nsIPrincipal* GetPrincipal(JSObject* obj,
-                                       bool allowShortCircuit) const;
+                                       bool allowShortCircuit) const MOZ_OVERRIDE;
 
     void RecordTraversal(void *p, nsISupports *s);
     virtual char* DebugPrintJSStack(bool showArgs,
                                     bool showLocals,
-                                    bool showThisProps);
+                                    bool showThisProps) MOZ_OVERRIDE;
 
 
     static bool ReportAllJSExceptions()
@@ -986,7 +985,7 @@ XPC_WN_JSOp_ThisObject(JSContext *cx, JS::HandleObject obj);
         nullptr, /* setGeneric    */                                          \
         nullptr, /* setProperty    */                                         \
         nullptr, /* setElement    */                                          \
-        nullptr, /* getGenericAttributes  */                                  \
+        nullptr, /* getOwnPropertyDescriptor */                               \
         nullptr, /* setGenericAttributes  */                                  \
         nullptr, /* deleteGeneric */                                          \
         nullptr, nullptr, /* watch/unwatch */                                 \
@@ -1009,7 +1008,7 @@ XPC_WN_JSOp_ThisObject(JSContext *cx, JS::HandleObject obj);
         nullptr, /* setGeneric    */                                          \
         nullptr, /* setProperty    */                                         \
         nullptr, /* setElement    */                                          \
-        nullptr, /* getGenericAttributes  */                                  \
+        nullptr, /* getOwnPropertyDescriptor */                               \
         nullptr, /* setGenericAttributes  */                                  \
         nullptr, /* deleteGeneric */                                          \
         nullptr, nullptr, /* watch/unwatch */                                 \
@@ -2322,7 +2321,7 @@ class nsXPCWrappedJSClass : public nsIXPCWrappedJSClass
 {
     // all the interface method declarations...
     NS_DECL_ISUPPORTS
-    NS_IMETHOD DebugDump(int16_t depth);
+    NS_IMETHOD DebugDump(int16_t depth) MOZ_OVERRIDE;
 public:
 
     static already_AddRefed<nsXPCWrappedJSClass>
@@ -2428,7 +2427,7 @@ public:
 
     NS_IMETHOD CallMethod(uint16_t methodIndex,
                           const XPTMethodDescriptor *info,
-                          nsXPTCMiniVariant* params);
+                          nsXPTCMiniVariant* params) MOZ_OVERRIDE;
 
     /*
     * This is rarely called directly. Instead one usually calls

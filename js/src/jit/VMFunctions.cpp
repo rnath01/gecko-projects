@@ -60,6 +60,8 @@ VMFunction::addToFunctions()
 bool
 InvokeFunction(JSContext *cx, HandleObject obj0, uint32_t argc, Value *argv, Value *rval)
 {
+    AutoArrayRooter argvRoot(cx, argc + 1, argv);
+
     RootedObject obj(cx, obj0);
     if (obj->is<JSFunction>()) {
         RootedFunction fun(cx, &obj->as<JSFunction>());
@@ -295,27 +297,6 @@ NewInitObject(JSContext *cx, HandlePlainObject templateObject)
 
     if (!templateObject->hasSingletonType())
         obj->setType(templateObject->type());
-
-    return obj;
-}
-
-JSObject *
-NewInitObjectWithClassPrototype(JSContext *cx, HandlePlainObject templateObject)
-{
-    MOZ_ASSERT(!templateObject->hasSingletonType());
-    MOZ_ASSERT(!templateObject->hasLazyType());
-
-    NewObjectKind newKind = templateObject->type()->shouldPreTenure()
-                            ? TenuredObject
-                            : GenericObject;
-    PlainObject *obj = NewObjectWithGivenProto<PlainObject>(cx,
-                                                            templateObject->getProto(),
-                                                            cx->global(),
-                                                            newKind);
-    if (!obj)
-        return nullptr;
-
-    obj->setType(templateObject->type());
 
     return obj;
 }
@@ -580,16 +561,8 @@ bool
 OperatorIn(JSContext *cx, HandleValue key, HandleObject obj, bool *out)
 {
     RootedId id(cx);
-    if (!ValueToId<CanGC>(cx, key, &id))
-        return false;
-
-    RootedObject obj2(cx);
-    RootedShape prop(cx);
-    if (!LookupProperty(cx, obj, id, &obj2, &prop))
-        return false;
-
-    *out = !!prop;
-    return true;
+    return ValueToId<CanGC>(cx, key, &id) &&
+           HasProperty(cx, obj, id, out);
 }
 
 bool
@@ -796,7 +769,7 @@ DebugEpilogue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool ok)
 
         JitFrameLayout *prefix = frame->framePrefix();
         EnsureExitFrame(prefix);
-        cx->mainThread().jitTop = (uint8_t *)prefix;
+        cx->runtime()->jitTop = (uint8_t *)prefix;
         return false;
     }
 

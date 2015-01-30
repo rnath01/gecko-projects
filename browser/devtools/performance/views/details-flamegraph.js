@@ -7,72 +7,68 @@
  * FlameGraph view containing a pyramid-like visualization of a profile,
  * controlled by DetailsView.
  */
-let FlameGraphView = {
+let FlameGraphView = Heritage.extend(DetailsSubview, {
   /**
    * Sets up the view with event binding.
    */
   initialize: Task.async(function* () {
-    this._onRecordingStoppedOrSelected = this._onRecordingStoppedOrSelected.bind(this);
-    this._onRangeChange = this._onRangeChange.bind(this);
+    DetailsSubview.initialize.call(this);
 
     this.graph = new FlameGraph($("#flamegraph-view"));
     this.graph.timelineTickUnits = L10N.getStr("graphs.ms");
     yield this.graph.ready();
 
-    PerformanceController.on(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
-    PerformanceController.on(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
-    OverviewView.on(EVENTS.OVERVIEW_RANGE_SELECTED, this._onRangeChange);
-    OverviewView.on(EVENTS.OVERVIEW_RANGE_CLEARED, this._onRangeChange);
+    this._onRangeChangeInGraph = this._onRangeChangeInGraph.bind(this);
+
+    this.graph.on("selecting", this._onRangeChangeInGraph);
   }),
 
   /**
    * Unbinds events.
    */
   destroy: function () {
-    PerformanceController.off(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
-    PerformanceController.off(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
-    OverviewView.off(EVENTS.OVERVIEW_RANGE_SELECTED, this._onRangeChange);
-    OverviewView.off(EVENTS.OVERVIEW_RANGE_CLEARED, this._onRangeChange);
+    DetailsSubview.destroy.call(this);
+
+    this.graph.off("selecting", this._onRangeChangeInGraph);
   },
 
   /**
    * Method for handling all the set up for rendering a new flamegraph.
+   *
+   * @param object interval [optional]
+   *        The { startTime, endTime }, in milliseconds.
    */
-  render: function (profilerData) {
-    // Empty recordings might yield no profiler data.
-    if (profilerData.profile == null) {
-      return;
-    }
-    let samples = profilerData.profile.threads[0].samples;
-    let dataSrc = FlameGraphUtils.createFlameGraphDataFromSamples(samples, {
+  render: function (interval={}) {
+    let recording = PerformanceController.getCurrentRecording();
+    let duration = recording.getDuration();
+    let profile = recording.getProfile();
+    let samples = profile.threads[0].samples;
+
+    let data = FlameGraphUtils.createFlameGraphDataFromSamples(samples, {
       flattenRecursion: Prefs.flattenTreeRecursion,
       filterFrames: !Prefs.showPlatformData && FrameNode.isContent,
       showIdleBlocks: Prefs.showIdleBlocks && L10N.getStr("table.idle")
     });
-    this.graph.setData(dataSrc);
+
+    this.graph.setData({ data,
+      bounds: {
+        startTime: 0,
+        endTime: duration
+      },
+      visible: {
+        startTime: interval.startTime || 0,
+        endTime: interval.endTime || duration
+      }
+    });
+
     this.emit(EVENTS.FLAMEGRAPH_RENDERED);
   },
 
   /**
-   * Called when recording is stopped or selected.
+   * Fired when a range is selected or cleared in the FlameGraph.
    */
-  _onRecordingStoppedOrSelected: function (_, recording) {
-    // If not recording, then this recording is done and we can render all of it
-    if (!recording.isRecording()) {
-      let profilerData = recording.getProfilerData();
-      this.render(profilerData);
-    }
-  },
-
-  /**
-   * Fired when a range is selected or cleared in the OverviewView.
-   */
-  _onRangeChange: function (_, params) {
-    // TODO bug 1105014
+  _onRangeChangeInGraph: function () {
+    let interval = this.graph.getViewRange();
+    OverviewView.setTimeInterval(interval, { stopPropagation: true });
   }
-};
-
-/**
- * Convenient way of emitting events from the view.
- */
-EventEmitter.decorate(FlameGraphView);
+});

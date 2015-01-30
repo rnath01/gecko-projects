@@ -1195,27 +1195,21 @@ ThreadActor.prototype = {
   },
 
   /**
-   * Set a breakpoint on the first bytecode offset in the provided script.
+   * Set a breakpoint on the first line of the given script that has an entry
+   * point.
    */
   _breakOnEnter: function(script) {
     let offsets = script.getAllOffsets();
-    let sourceActor = this.sources.createNonSourceMappedActor(script.source);
-
     for (let line = 0, n = offsets.length; line < n; line++) {
       if (offsets[line]) {
-        let location = { line: line };
-        let resp = sourceActor.setBreakpoint(location);
-        dbg_assert(!resp.actualLocation, "No actualLocation should be returned");
-        if (resp.error) {
-          reportError(new Error("Unable to set breakpoint on event listener"));
-          return;
-        }
-        let bpActor = this.breakpointActorMap.getActor({
-          sourceActor: sourceActor,
-          line: location.line
-        });
-        dbg_assert(bpActor, "Breakpoint actor must be created");
-        this._hiddenBreakpoints.set(bpActor.actorID, bpActor);
+        // N.B. Hidden breakpoints do not have an original location, and are not
+        // stored in the breakpoint actor map.
+        let actor = new BreakpointActor(this);
+        this.threadLifetimePool.addActor(actor);
+        let scripts = this.scripts.getScriptsBySourceAndLine(script.source, line);
+        let entryPoints = findEntryPointsForLine(scripts, line);
+        setBreakpointOnEntryPoints(this, actor, entryPoints);
+        this._hiddenBreakpoints.set(actor.actorID, actor);
         break;
       }
     }
@@ -1982,14 +1976,14 @@ ThreadActor.prototype = {
     // inside _addScript, we can accidentally set a breakpoint in a top level
     // script as a "closest match" because we wouldn't have added the child
     // scripts to the ScriptStore yet.
-    this.scripts.addScript(aScript);
-    this.scripts.addScripts(aScript.getChildScripts());
+    this.scripts.addScripts(this.dbg.findScripts({ source: aScript.source }));
 
     this._addScript(aScript);
 
-    // |onNewScript| is only fired for top level scripts (AKA staticLevel == 0),
-    // so we have to make sure to call |_addScript| on every child script as
-    // well to restore breakpoints in those scripts.
+    // `onNewScript` is only fired for top-level scripts (AKA staticLevel == 0),
+    // but top-level scripts have the wrong `lineCount` sometimes (bug 979094),
+    // so iterate over the immediate children to activate breakpoints for now
+    // (TODO bug 1124258: don't do this when `lineCount` bug is fixed)
     for (let s of aScript.getChildScripts()) {
       this._addScript(s);
     }
@@ -2047,7 +2041,7 @@ ThreadActor.prototype = {
       // Limit the search to the line numbers contained in the new script.
       if (bpActor.location.line >= aScript.startLine
           && bpActor.location.line <= endLine) {
-        source.setBreakpoint(bpActor.location);
+        source.setBreakpoint(bpActor.location, bpActor.condition);
       }
     }
 
@@ -2736,13 +2730,10 @@ SourceActor.prototype = {
   },
 
   _createBreakpoint: function(loc, originalLoc, condition) {
-    return resolve(null).then(() => {
-      return this.setBreakpoint({
-        line: loc.line,
-        column: loc.column,
-        condition: condition
-      });
-    }).then(response => {
+    return this.setBreakpoint({
+      line: loc.line,
+      column: loc.column,
+    }, condition).then(response => {
       var actual = response.actualLocation;
       if (actual) {
         if (this.source) {
@@ -2810,21 +2801,20 @@ SourceActor.prototype = {
    *        for more information.
    * @returns BreakpointActor
    */
-  _getOrCreateBreakpointActor: function (location) {
+  _getOrCreateBreakpointActor: function (location, condition) {
     let actor = this.breakpointActorMap.getActor(location);
     if (!actor) {
       actor = new BreakpointActor(this.threadActor, {
         sourceActor: this,
         line: location.line,
         column: location.column,
-        condition: location.condition
-      });
+      }, condition);
       this.threadActor.threadLifetimePool.addActor(actor);
       this.breakpointActorMap.setActor(location, actor);
       return actor;
     }
 
-    actor.condition = location.condition;
+    actor.condition = condition;
     return actor;
   },
 
@@ -2861,30 +2851,6 @@ SourceActor.prototype = {
   },
 
   /**
-   * Find the scripts which contain offsets that are an entry point to the given
-   * line.
-   *
-   * @param Array scripts
-   *        The set of Debugger.Scripts to consider.
-   * @param Number line
-   *        The line we are searching for entry points into.
-   * @returns Array of objects of the form { script, offsets } where:
-   *          - script is a Debugger.Script
-   *          - offsets is an array of offsets that are entry points into the
-   *            given line.
-   */
-  _findEntryPointsForLine: function (scripts, line) {
-    const entryPoints = [];
-    for (let script of scripts) {
-      const offsets = script.getLineOffsets(line);
-      if (offsets.length) {
-        entryPoints.push({ script, offsets });
-      }
-    }
-    return entryPoints;
-  },
-
-  /**
    * Find the first line that is associated with bytecode offsets, and is
    * greater than or equal to the given start line.
    *
@@ -2907,7 +2873,7 @@ SourceActor.prototype = {
     const maxLine = Math.max(...scripts.map(s => s.startLine + s.lineCount));
 
     for (let line = startLine; line < maxLine; line++) {
-      const entryPoints = this._findEntryPointsForLine(scripts, line);
+      const entryPoints = findEntryPointsForLine(scripts, line);
       if (entryPoints.length) {
         return { line, entryPoints };
       }
@@ -2941,14 +2907,13 @@ SourceActor.prototype = {
    *        The location of the breakpoint (in the generated source, if source
    *        mapping).
    */
-  setBreakpoint: function (aLocation) {
+  setBreakpoint: function (aLocation, aCondition) {
     const location = {
       sourceActor: this,
       line: aLocation.line,
-      column: aLocation.column,
-      condition: aLocation.condition
+      column: aLocation.column
     };
-    const actor = location.actor = this._getOrCreateBreakpointActor(location);
+    const actor = location.actor = this._getOrCreateBreakpointActor(location, aCondition);
 
     // Find all scripts matching the given location. We will almost always have
     // a `source` object to query, but multiple inline HTML scripts are all
@@ -2965,9 +2930,9 @@ SourceActor.prototype = {
       // store and the breakpoint will be set at that time. This is similar to
       // GDB's "pending" breakpoints for shared libraries that aren't loaded
       // yet.
-      return {
+      return Promise.resolve({
         actor: actor.actorID
-      }
+      });
     }
 
     // Ignore scripts for which the BreakpointActor is already a breakpoint
@@ -2975,7 +2940,7 @@ SourceActor.prototype = {
     scripts = scripts.filter((script) => !actor.hasScript(script));
 
     if (location.column) {
-      return this._setBreakpointAtColumn(scripts, location, actor);
+      return Promise.resolve(this._setBreakpointAtColumn(scripts, location, actor));
     }
 
     let result;
@@ -2989,7 +2954,7 @@ SourceActor.prototype = {
       // If the BreakpointActor is a breakpoint handler for at least one script,
       // breakpoint sliding has already been carried out, so select the
       // requested line, even if it does not have any offsets.
-      let entryPoints = this._findEntryPointsForLine(scripts, location.line)
+      let entryPoints = findEntryPointsForLine(scripts, location.line)
       if (entryPoints) {
         result = {
           line: location.line,
@@ -2999,10 +2964,10 @@ SourceActor.prototype = {
     }
 
     if (!result) {
-      return {
+      return Promise.resolve({
         error: "noCodeAtLineColumn",
         actor: actor.actorID
-      };
+      });
     }
 
     const { line, entryPoints } = result;
@@ -3020,10 +2985,10 @@ SourceActor.prototype = {
       if (existingActor) {
         actor.onDelete();
         this.breakpointActorMap.deleteActor(location);
-        return {
+        return Promise.resolve({
           actor: existingActor.actorID,
           actualLocation
-        };
+        });
       } else {
         actor.location = actualLocation;
         actor.location = {
@@ -3035,30 +3000,12 @@ SourceActor.prototype = {
       }
     }
 
-    this._setBreakpointOnEntryPoints(actor, entryPoints);
+    setBreakpointOnEntryPoints(this.threadActor, actor, entryPoints);
 
-    return {
+    return Promise.resolve({
       actor: actor.actorID,
       actualLocation
-    };
-  },
-
-  /**
-   * Set breakpoints on all the given entry points with the given
-   * BreakpointActor as the handler.
-   *
-   * @param BreakpointActor actor
-   *        The actor handling the breakpoint hits.
-   * @param Array entryPoints
-   *        An array of objects of the form `{ script, offsets }`.
-   */
-  _setBreakpointOnEntryPoints: function (actor, entryPoints) {
-    for (let { script, offsets } of entryPoints) {
-      for (let offset of offsets) {
-        script.setBreakpoint(offset, actor);
-      }
-      actor.addScript(script, this.threadActor);
-    }
+    });
   },
 
   /**
@@ -4711,22 +4658,24 @@ FrameActor.prototype.requestTypes = {
  *
  * @param ThreadActor aThreadActor
  *        The parent thread actor that contains this breakpoint.
- * @param object aProperties
- *        An object with the following properties:
- *        - sourceActor: A SourceActor that represents the script
+ * @param object aLocation
+ *        Optional. An object with the following properties:
+ *        - sourceActor: A SourceActor that represents the source
  *        - line: the specified line
  *        - column: the specified column
- *        - condition: a condition which, when false, will skip the breakpoint
+ * @param string aCondition
+ *        Optional. A condition which, when false, will cause the breakpoint to
+ *        be skipped.
  */
-function BreakpointActor(aThreadActor, { sourceActor, line, column, condition })
+function BreakpointActor(aThreadActor, aLocation, aCondition)
 {
   // The set of Debugger.Script instances that this breakpoint has been set
   // upon.
   this.scripts = new Set();
 
   this.threadActor = aThreadActor;
-  this.location = { sourceActor, line, column };
-  this.condition = condition;
+  this.location = aLocation;
+  this.condition = aCondition;
 }
 
 BreakpointActor.prototype = {
@@ -4746,8 +4695,7 @@ BreakpointActor.prototype = {
    * @param ThreadActor aThreadActor
    *        The parent thread actor that contains this breakpoint.
    */
-  addScript: function (aScript, aThreadActor) {
-    this.threadActor = aThreadActor;
+  addScript: function (aScript) {
     this.scripts.add(aScript);
   },
 
@@ -4815,9 +4763,11 @@ BreakpointActor.prototype = {
    */
   onDelete: function (aRequest) {
     // Remove from the breakpoint store.
-    this.threadActor.breakpointActorMap.deleteActor(
-      update({}, this.location, { source: this.location.sourceActor.form() })
-    );
+    if (this.location) {
+      this.threadActor.breakpointActorMap.deleteActor(
+        update({}, this.location, { source: this.location.sourceActor.form() })
+      );
+    }
     this.threadActor.threadLifetimePool.removeActor(this);
     // Remove the actual breakpoint from the associated scripts.
     this.removeScripts();
@@ -5916,3 +5866,46 @@ function getSourceURL(source) {
   }
   return source.url;
 }
+
+/**
+ * Find the scripts which contain offsets that are an entry point to the given
+ * line.
+ *
+ * @param Array scripts
+ *        The set of Debugger.Scripts to consider.
+ * @param Number line
+ *        The line we are searching for entry points into.
+ * @returns Array of objects of the form { script, offsets } where:
+ *          - script is a Debugger.Script
+ *          - offsets is an array of offsets that are entry points into the
+ *            given line.
+ */
+function findEntryPointsForLine(scripts, line) {
+  const entryPoints = [];
+  for (let script of scripts) {
+    const offsets = script.getLineOffsets(line);
+    if (offsets.length) {
+      entryPoints.push({ script, offsets });
+    }
+  }
+  return entryPoints;
+}
+
+/**
+ * Set breakpoints on all the given entry points with the given
+ * BreakpointActor as the handler.
+ *
+ * @param BreakpointActor actor
+ *        The actor handling the breakpoint hits.
+ * @param Array entryPoints
+ *        An array of objects of the form `{ script, offsets }`.
+ */
+function setBreakpointOnEntryPoints(threadActor, actor, entryPoints) {
+  for (let { script, offsets } of entryPoints) {
+    for (let offset of offsets) {
+      script.setBreakpoint(offset, actor);
+    }
+    actor.addScript(script);
+  }
+}
+

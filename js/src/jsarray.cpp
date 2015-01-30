@@ -7,6 +7,7 @@
 #include "jsarray.h"
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/CheckedInt.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/MathAlgorithms.h"
@@ -48,6 +49,7 @@ using namespace js::types;
 using mozilla::Abs;
 using mozilla::ArrayLength;
 using mozilla::CeilingLog2;
+using mozilla::CheckedInt;
 using mozilla::DebugOnly;
 using mozilla::IsNaN;
 
@@ -177,19 +179,17 @@ DoGetElement(JSContext *cx, HandleObject obj, HandleObject receiver,
     if (!ToId(cx, index, &id))
         return false;
 
-    RootedObject obj2(cx);
-    RootedShape prop(cx);
-    if (!LookupProperty(cx, obj, id, &obj2, &prop))
+    bool found;
+    if (!HasProperty(cx, obj, id, &found))
         return false;
 
-    if (!prop) {
-        vp.setUndefined();
-        *hole = true;
-    } else {
+    if (found) {
         if (!GetProperty(cx, obj, receiver, id, vp))
             return false;
-        *hole = false;
+    } else {
+        vp.setUndefined();
     }
+    *hole = !found;
     return true;
 }
 
@@ -1072,7 +1072,13 @@ js::ArrayJoin(JSContext *cx, HandleObject obj, HandleLinearString sepstr, uint32
     // The separator will be added |length - 1| times, reserve space for that
     // so that we don't have to unnecessarily grow the buffer.
     size_t seplen = sepstr->length();
-    if (length > 0 && !sb.reserve(seplen * (length - 1)))
+    CheckedInt<uint32_t> res = CheckedInt<uint32_t>(seplen) * (length - 1);
+    if (length > 0 && !res.isValid()) {
+        js_ReportAllocationOverflow(cx);
+        return nullptr;
+    }
+
+    if (length > 0 && !sb.reserve(res.value()))
         return nullptr;
 
     // Various optimized versions of steps 7-10.
@@ -2668,7 +2674,8 @@ js::array_concat(JSContext *cx, unsigned argc, Value *vp)
         HandleValue v = HandleValue::fromMarkedLocation(&p[i]);
         if (v.isObject()) {
             RootedObject obj(cx, &v.toObject());
-            if (ObjectClassIs(obj, ESClass_Array, cx)) {
+            // This should be IsConcatSpreadable
+            if (IsArray(obj, cx)) {
                 uint32_t alength;
                 if (!GetLengthProperty(cx, obj, &alength))
                     return false;
@@ -3031,7 +3038,11 @@ static bool
 array_isArray(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    bool isArray = args.length() > 0 && IsObjectWithClass(args[0], ESClass_Array, cx);
+    bool isArray = false;
+    if (args.get(0).isObject()) {
+        RootedObject obj(cx, &args[0].toObject());
+        isArray = IsArray(obj, cx);
+    }
     args.rval().setBoolean(isArray);
     return true;
 }

@@ -245,6 +245,10 @@ public:
   // Check if the media element had crossorigin set when loading started
   bool ShouldCheckAllowOrigin();
 
+  // Returns true if the currently loaded resource is CORS same-origin with
+  // respect to the document.
+  bool IsCORSSameOrigin();
+
   // Is the media element potentially playing as defined by the HTML 5 specification.
   // http://www.whatwg.org/specs/web-apps/current-work/#potentially-playing
   bool IsPotentiallyPlaying() const;
@@ -340,7 +344,11 @@ public:
 
   MediaStream* GetSrcMediaStream() const
   {
-    NS_ASSERTION(mPlaybackStream, "Don't call this when not playing a stream");
+    NS_ASSERTION(mSrcStream, "Don't call this when not playing a stream");
+    if (!mPlaybackStream) {
+      // XXX Remove this check with CameraPreviewMediaStream per bug 1124630.
+      return mSrcStream->GetStream();
+    }
     return mPlaybackStream->GetStream();
   }
 
@@ -406,6 +414,11 @@ public:
   void FastSeek(double aTime, ErrorResult& aRv);
 
   double Duration() const;
+
+  bool IsEncrypted() const
+  {
+    return mIsEncrypted;
+  }
 
   bool Paused() const
   {
@@ -520,6 +533,7 @@ public:
     mIsCasting = aShow;
   }
 
+  already_AddRefed<MediaSource> GetMozMediaSourceObject() const;
   already_AddRefed<DOMMediaStream> GetMozSrcObject() const;
 
   void SetMozSrcObject(DOMMediaStream& aValue);
@@ -1293,6 +1307,9 @@ protected:
 
   // True if the media has a video track
   bool mHasVideo;
+
+  // True if the media has encryption information.
+  bool mIsEncrypted;
 
   // True if the media's channel's download has been suspended.
   bool mDownloadSuspendedByCache;

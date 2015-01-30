@@ -115,8 +115,6 @@ pref("dom.quotaManager.testing", false);
 
 // Whether or not indexedDB is enabled.
 pref("dom.indexedDB.enabled", true);
-// Space to allow indexedDB databases before prompting (in MB).
-pref("dom.indexedDB.warningQuota", 50);
 // Whether or not indexedDB experimental features are enabled.
 pref("dom.indexedDB.experimental", false);
 // Enable indexedDB logging.
@@ -263,6 +261,11 @@ pref("media.wakelock_timeout", 2000);
 // Whether we should play videos opened in a "video document", i.e. videos
 // opened as top-level documents, as opposed to inside a media element.
 pref("media.play-stand-alone", true);
+
+#if defined(XP_WIN)
+pref("media.decoder.heuristic.dormant.enabled", true);
+pref("media.decoder.heuristic.dormant.timeout", 60000);
+#endif
 
 #ifdef MOZ_WMF
 pref("media.windows-media-foundation.enabled", true);
@@ -573,6 +576,12 @@ pref("apz.test.logging_enabled", false);
 pref("gfx.hidpi.enabled", 2);
 #endif
 
+#if !defined(MOZ_WIDGET_GONK) && !defined(MOZ_WIDGET_ANDROID)
+// Containerless scrolling for root frames does not yet pass tests on Android
+// or B2G.
+pref("layout.scroll.root-frame-containers", false);
+#endif
+
 // Whether to enable LayerScope tool and default listening port
 pref("gfx.layerscope.enabled", false);
 pref("gfx.layerscope.port", 23456);
@@ -794,6 +803,7 @@ pref("devtools.chrome.enabled", false);
 
 // Disable remote debugging protocol logging
 pref("devtools.debugger.log", false);
+pref("devtools.debugger.log.verbose", false);
 // Disable remote debugging connections
 #ifdef MOZ_DEV_EDITION
 pref("devtools.debugger.remote-enabled", true);
@@ -1314,6 +1324,7 @@ pref("network.http.spdy.ping-timeout", 8);
 pref("network.http.spdy.send-buffer-size", 131072);
 pref("network.http.spdy.allow-push", true);
 pref("network.http.spdy.push-allowance", 131072);
+pref("network.http.spdy.default-concurrent", 100);
 
 // alt-svc allows separation of transport routing from
 // the origin host without using a proxy.
@@ -3779,6 +3790,9 @@ pref("image.high_quality_downscaling.min_factor", 1000);
 // interpreted as number of decoded bytes.
 pref("image.high_quality_upscaling.max_size", 20971520);
 
+// Should we optimize away the surfaces of single-color images?
+pref("image.single-color-optimization.enabled", true);
+
 //
 // Image memory management prefs
 //
@@ -4522,9 +4536,10 @@ pref("reader.parse-on-load.force-enabled", false);
 // The default relative font size in reader mode (1-5)
 pref("reader.font_size", 3);
 
-// The default color scheme in reader mode (light, dark, auto)
+// The default color scheme in reader mode (light, dark, print, auto)
 // auto = color automatically adjusts according to ambient light level
-pref("reader.color_scheme", "auto");
+// (auto only works on platforms where the 'devicelight' event is enabled)
+pref("reader.color_scheme", "light");
 
 // The font type in reader (sans-serif, serif)
 pref("reader.font_type", "sans-serif");
@@ -4532,3 +4547,10 @@ pref("reader.font_type", "sans-serif");
 // Whether or not the user has interacted with the reader mode toolbar.
 // This is used to show a first-launch tip in reader mode.
 pref("reader.has_used_toolbar", false);
+
+#if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
+// Whether to allow, on a Linux system that doesn't support the necessary sandboxing
+// features, loading Gecko Media Plugins unsandboxed.  However, EME CDMs will not be
+// loaded without sandboxing even if this pref is changed.
+pref("media.gmp.insecure.allow", false);
+#endif

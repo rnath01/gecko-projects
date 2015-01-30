@@ -397,10 +397,10 @@ EventListenerManagerHashClearEntry(PLDHashTable *table, PLDHashEntryHdr *entry)
   lm->~EventListenerManagerMapEntry();
 }
 
-class SameOriginChecker MOZ_FINAL : public nsIChannelEventSink,
-                                    public nsIInterfaceRequestor
+class SameOriginCheckerImpl MOZ_FINAL : public nsIChannelEventSink,
+                                        public nsIInterfaceRequestor
 {
-  ~SameOriginChecker() {}
+  ~SameOriginCheckerImpl() {}
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSICHANNELEVENTSINK
@@ -3941,8 +3941,8 @@ nsContentUtils::TraverseListenerManager(nsINode *aNode,
 
   EventListenerManagerMapEntry *entry =
     static_cast<EventListenerManagerMapEntry *>
-               (PL_DHashTableLookup(&sEventListenerManagersHash, aNode));
-  if (PL_DHASH_ENTRY_IS_BUSY(entry)) {
+               (PL_DHashTableSearch(&sEventListenerManagersHash, aNode));
+  if (entry) {
     CycleCollectionNoteChild(cb, entry->mListenerManager.get(),
                              "[via hash] mListenerManager");
   }
@@ -3981,7 +3981,7 @@ nsContentUtils::GetExistingListenerManagerForNode(const nsINode *aNode)
   if (!aNode->HasFlag(NODE_HAS_LISTENERMANAGER)) {
     return nullptr;
   }
-  
+
   if (!sEventListenerManagersHash.IsInitialized()) {
     // We're already shut down, don't bother creating an event listener
     // manager.
@@ -3991,8 +3991,8 @@ nsContentUtils::GetExistingListenerManagerForNode(const nsINode *aNode)
 
   EventListenerManagerMapEntry *entry =
     static_cast<EventListenerManagerMapEntry *>
-               (PL_DHashTableLookup(&sEventListenerManagersHash, aNode));
-  if (PL_DHASH_ENTRY_IS_BUSY(entry)) {
+               (PL_DHashTableSearch(&sEventListenerManagersHash, aNode));
+  if (entry) {
     return entry->mListenerManager;
   }
 
@@ -4006,8 +4006,8 @@ nsContentUtils::RemoveListenerManager(nsINode *aNode)
   if (sEventListenerManagersHash.IsInitialized()) {
     EventListenerManagerMapEntry *entry =
       static_cast<EventListenerManagerMapEntry *>
-                 (PL_DHashTableLookup(&sEventListenerManagersHash, aNode));
-    if (PL_DHASH_ENTRY_IS_BUSY(entry)) {
+                 (PL_DHashTableSearch(&sEventListenerManagersHash, aNode));
+    if (entry) {
       nsRefPtr<EventListenerManager> listenerManager;
       listenerManager.swap(entry->mListenerManager);
       // Remove the entry and *then* do operations that could cause further
@@ -5648,11 +5648,11 @@ nsContentUtils::StringContainsASCIIUpper(const nsAString& aStr)
 
 /* static */
 nsIInterfaceRequestor*
-nsContentUtils::GetSameOriginChecker()
+nsContentUtils::SameOriginChecker()
 {
   if (!sSameOriginChecker) {
-    sSameOriginChecker = new SameOriginChecker();
-    NS_IF_ADDREF(sSameOriginChecker);
+    sSameOriginChecker = new SameOriginCheckerImpl();
+    NS_ADDREF(sSameOriginChecker);
   }
   return sSameOriginChecker;
 }
@@ -5683,15 +5683,15 @@ nsContentUtils::CheckSameOrigin(nsIChannel *aOldChannel, nsIChannel *aNewChannel
   return rv;
 }
 
-NS_IMPL_ISUPPORTS(SameOriginChecker,
+NS_IMPL_ISUPPORTS(SameOriginCheckerImpl,
                   nsIChannelEventSink,
                   nsIInterfaceRequestor)
 
 NS_IMETHODIMP
-SameOriginChecker::AsyncOnChannelRedirect(nsIChannel *aOldChannel,
-                                          nsIChannel *aNewChannel,
-                                          uint32_t aFlags,
-                                          nsIAsyncVerifyRedirectCallback *cb)
+SameOriginCheckerImpl::AsyncOnChannelRedirect(nsIChannel* aOldChannel,
+                                              nsIChannel* aNewChannel,
+                                              uint32_t aFlags,
+                                              nsIAsyncVerifyRedirectCallback* cb)
 {
   NS_PRECONDITION(aNewChannel, "Redirecting to null channel?");
 
@@ -5704,7 +5704,7 @@ SameOriginChecker::AsyncOnChannelRedirect(nsIChannel *aOldChannel,
 }
 
 NS_IMETHODIMP
-SameOriginChecker::GetInterface(const nsIID & aIID, void **aResult)
+SameOriginCheckerImpl::GetInterface(const nsIID& aIID, void** aResult)
 {
   return QueryInterface(aIID, aResult);
 }

@@ -14,6 +14,7 @@
 #include "jstypes.h"
 
 #include "builtin/Eval.h"
+#include "builtin/SIMD.h"
 #include "jit/BaselineDebugModeOSR.h"
 #include "jit/BaselineHelpers.h"
 #include "jit/BaselineJIT.h"
@@ -1013,8 +1014,16 @@ ICWarmUpCounter_Fallback::Compiler::generateStubCode(MacroAssembler &masm)
         Label checkOk;
         AbsoluteAddress addressOfEnabled(cx->runtime()->spsProfiler.addressOfEnabled());
         masm.branch32(Assembler::Equal, addressOfEnabled, Imm32(0), &checkOk);
-        masm.loadPtr(AbsoluteAddress((void*)&cx->mainThread().jitActivation), scratchReg);
+        masm.loadPtr(AbsoluteAddress((void*)&cx->runtime()->jitActivation), scratchReg);
         masm.loadPtr(Address(scratchReg, JitActivation::offsetOfLastProfilingFrame()), scratchReg);
+
+        // It may be the case that we entered the baseline frame with
+        // profiling turned off on, then in a call within a loop (i.e. a
+        // callee frame), turn on profiling, then return to this frame,
+        // and then OSR with profiling turned on.  In this case, allow for
+        // lastProfilingFrame to be null.
+        masm.branchPtr(Assembler::Equal, scratchReg, Imm32(0), &checkOk);
+
         masm.branchPtr(Assembler::Equal, scratchReg, BaselineStackReg, &checkOk);
         masm.assumeUnreachable("Baseline OSR lastProfilingFrame mismatch.");
         masm.bind(&checkOk);
@@ -7524,6 +7533,8 @@ ICGetPropCallDOMProxyNativeCompiler::getStub(ICStubSpace *space)
     Value expandoVal;
     if (kind == ICStub::GetProp_CallDOMProxyNative) {
         expandoVal = expandoSlot;
+        expandoAndGeneration = nullptr;  // initialize to silence GCC warning
+        generation = 0;  // initialize to silence GCC warning
     } else {
         MOZ_ASSERT(kind == ICStub::GetProp_CallDOMProxyWithGenerationNative);
         MOZ_ASSERT(!expandoSlot.isObject() && !expandoSlot.isUndefined());
@@ -8832,7 +8843,7 @@ TryAttachFunCallStub(JSContext *cx, ICCall_Fallback *stub, HandleScript script, 
 
 static bool
 GetTemplateObjectForNative(JSContext *cx, HandleScript script, jsbytecode *pc,
-                           Native native, const CallArgs &args, MutableHandleNativeObject res)
+                           Native native, const CallArgs &args, MutableHandleObject res)
 {
     // Check for natives to which template objects can be attached. This is
     // done to provide templates to Ion for inlining these natives later on.
@@ -8896,6 +8907,22 @@ GetTemplateObjectForNative(JSContext *cx, HandleScript script, jsbytecode *pc,
     if (native == js_String) {
         RootedString emptyString(cx, cx->runtime()->emptyString);
         res.set(StringObject::create(cx, emptyString, TenuredObject));
+        if (!res)
+            return false;
+        return true;
+    }
+
+    if (native == obj_create && args.length() == 1 && args[0].isObjectOrNull()) {
+        RootedObject proto(cx, args[0].toObjectOrNull());
+        res.set(ObjectCreateImpl(cx, proto, TenuredObject));
+        if (!res)
+            return false;
+        return true;
+    }
+
+    if (native == js::simd_int32x4_add && JitSupportsSimd()) {
+        Rooted<TypeDescr *> descr(cx, &Int32x4::GetTypeDescr(*cx->global()));
+        res.set(TypedObject::createZeroed(cx, descr, 0, gc::TenuredHeap));
         if (!res)
             return false;
         return true;
@@ -9058,23 +9085,27 @@ TryAttachCallStub(JSContext *cx, ICCall_Fallback *stub, HandleScript script, jsb
         // as a constructor, for later use during Ion compilation.
         RootedPlainObject templateObject(cx);
         if (constructing) {
-            templateObject = CreateThisForFunction(cx, fun, MaybeSingletonObject);
-            if (!templateObject)
+            JSObject *thisObject = CreateThisForFunction(cx, fun, MaybeSingletonObject);
+            if (!thisObject)
                 return false;
 
-            // If we are calling a constructor for which the new script
-            // properties analysis has not been performed yet, don't attach a
-            // stub. After the analysis is performed, CreateThisForFunction may
-            // start returning objects with a different type, and the Ion
-            // compiler might get confused.
-            if (templateObject->type()->newScript() &&
-                !templateObject->type()->newScript()->analyzed())
-            {
-                // Clear the object just created from the preliminary objects
-                // on the TypeNewScript, as it will not be used or filled in by
-                // running code.
-                templateObject->type()->newScript()->unregisterNewObject(templateObject);
-                return true;
+            if (thisObject->is<PlainObject>()) {
+                templateObject = &thisObject->as<PlainObject>();
+
+                // If we are calling a constructor for which the new script
+                // properties analysis has not been performed yet, don't attach a
+                // stub. After the analysis is performed, CreateThisForFunction may
+                // start returning objects with a different type, and the Ion
+                // compiler might get confused.
+                if (templateObject->type()->newScript() &&
+                    !templateObject->type()->newScript()->analyzed())
+                {
+                    // Clear the object just created from the preliminary objects
+                    // on the TypeNewScript, as it will not be used or filled in by
+                    // running code.
+                    templateObject->type()->newScript()->unregisterNewObject(templateObject);
+                    return true;
+                }
             }
         }
 
@@ -9135,7 +9166,7 @@ TryAttachCallStub(JSContext *cx, ICCall_Fallback *stub, HandleScript script, jsb
             return true;
         }
 
-        RootedNativeObject templateObject(cx);
+        RootedObject templateObject(cx);
         if (MOZ_LIKELY(!isSpread)) {
             CallArgs args = CallArgsFromVp(argc, vp);
             if (!GetTemplateObjectForNative(cx, script, pc, fun->native(), args, &templateObject))
@@ -11725,7 +11756,7 @@ ICCall_AnyScripted::Clone(JSContext *, ICStubSpace *space, ICStub *firstMonitorS
 }
 
 ICCall_Native::ICCall_Native(JitCode *stubCode, ICStub *firstMonitorStub,
-                             HandleFunction callee, HandleNativeObject templateObject,
+                             HandleFunction callee, HandleObject templateObject,
                              uint32_t pcOffset)
   : ICMonitoredStub(ICStub::Call_Native, stubCode, firstMonitorStub),
     callee_(callee),
@@ -11746,7 +11777,7 @@ ICCall_Native::Clone(JSContext *cx, ICStubSpace *space, ICStub *firstMonitorStub
                      ICCall_Native &other)
 {
     RootedFunction callee(cx, other.callee_);
-    RootedNativeObject templateObject(cx, other.templateObject_);
+    RootedObject templateObject(cx, other.templateObject_);
     return New(space, other.jitCode(), firstMonitorStub, callee, templateObject,
                other.pcOffset_);
 }

@@ -1306,13 +1306,34 @@ LIRGenerator::visitAtan2(MAtan2 *ins)
 void
 LIRGenerator::visitHypot(MHypot *ins)
 {
-    MDefinition *x = ins->x();
-    MOZ_ASSERT(x->type() == MIRType_Double);
+    LHypot *lir = nullptr;
+    uint32_t length = ins->numOperands();
+    for (uint32_t i = 0; i < length; ++i)
+        MOZ_ASSERT(ins->getOperand(i)->type() == MIRType_Double);
 
-    MDefinition *y = ins->y();
-    MOZ_ASSERT(y->type() == MIRType_Double);
+    switch(length) {
+      case 2:
+        lir = new(alloc()) LHypot(useRegisterAtStart(ins->getOperand(0)),
+                                  useRegisterAtStart(ins->getOperand(1)),
+                                  tempFixed(CallTempReg0));
+        break;
+      case 3:
+        lir = new(alloc()) LHypot(useRegisterAtStart(ins->getOperand(0)),
+                                  useRegisterAtStart(ins->getOperand(1)),
+                                  useRegisterAtStart(ins->getOperand(2)),
+                                  tempFixed(CallTempReg0));
+        break;
+      case 4:
+        lir = new(alloc()) LHypot(useRegisterAtStart(ins->getOperand(0)),
+                                  useRegisterAtStart(ins->getOperand(1)),
+                                  useRegisterAtStart(ins->getOperand(2)),
+                                  useRegisterAtStart(ins->getOperand(3)),
+                                  tempFixed(CallTempReg0));
+        break;
+      default:
+        MOZ_CRASH("Unexpected number of arguments to LHypot.");
+    }
 
-    LHypot *lir = new(alloc()) LHypot(useRegisterAtStart(x), useRegisterAtStart(y), tempFixed(CallTempReg0));
     defineReturn(lir, ins);
 }
 
@@ -3731,6 +3752,30 @@ LIRGenerator::visitSimdBox(MSimdBox *ins)
     LSimdBox *lir = new(alloc()) LSimdBox(in, temp());
     // :TODO: Cannot spill SIMD registers (Bug 1112164)
     assignSnapshot(lir, Bailout_Inevitable);
+    define(lir, ins);
+}
+
+void
+LIRGenerator::visitSimdUnbox(MSimdUnbox *ins)
+{
+    MOZ_ASSERT(ins->input()->type() == MIRType_Object);
+    MOZ_ASSERT(IsSimdType(ins->type()));
+    LUse in = useRegister(ins->input());
+
+    BailoutKind kind;
+    switch (ins->type()) {
+      case MIRType_Int32x4:
+        kind = Bailout_NonSimdInt32x4Input;
+        break;
+      case MIRType_Float32x4:
+        kind = Bailout_NonSimdFloat32x4Input;
+        break;
+      default:
+        MOZ_CRASH("Unexpected SIMD Type.");
+    };
+
+    LSimdUnbox *lir = new(alloc()) LSimdUnbox(in, temp());
+    assignSnapshot(lir, kind);
     define(lir, ins);
 }
 

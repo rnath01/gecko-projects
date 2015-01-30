@@ -101,9 +101,7 @@ SVGImageElement::Height()
 already_AddRefed<DOMSVGAnimatedPreserveAspectRatio>
 SVGImageElement::PreserveAspectRatio()
 {
-  nsRefPtr<DOMSVGAnimatedPreserveAspectRatio> ratio;
-  mPreserveAspectRatio.ToDOMAnimatedPreserveAspectRatio(getter_AddRefs(ratio), this);
-  return ratio.forget();
+  return mPreserveAspectRatio.ToDOMAnimatedPreserveAspectRatio(this);
 }
 
 already_AddRefed<SVGAnimatedString>
@@ -228,7 +226,7 @@ SVGImageElement::IsAttributeMapped(const nsIAtom* name) const
    be a rectangle. */
 bool
 SVGImageElement::GetGeometryBounds(Rect* aBounds, Float aStrokeWidth,
-                                   const Matrix& aTransform)
+                                   CapStyle aCapStyle, const Matrix& aTransform)
 {
   Rect rect;
   GetAnimatedLengthValues(&rect.x, &rect.y, &rect.width,

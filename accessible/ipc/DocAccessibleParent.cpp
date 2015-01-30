@@ -51,7 +51,7 @@ DocAccessibleParent::RecvShowEvent(const ShowEventData& aData)
   }
 #endif
 
-  return consumed;
+  return consumed != 0;
 }
 
 uint32_t
@@ -158,7 +158,7 @@ void
 DocAccessibleParent::Destroy()
 {
   MOZ_ASSERT(mChildDocs.IsEmpty(),
-      "why wheren't the child docs destroyed already?");
+      "why weren't the child docs destroyed already?");
   MOZ_ASSERT(!mShutdown);
   mShutdown = true;
 

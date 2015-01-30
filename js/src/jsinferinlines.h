@@ -22,6 +22,7 @@
 #include "vm/SharedTypedArrayObject.h"
 #include "vm/StringObject.h"
 #include "vm/TypedArrayObject.h"
+#include "vm/UnboxedObject.h"
 
 #include "jscntxtinlines.h"
 
@@ -309,6 +310,7 @@ inline const Class *
 GetClassForProtoKey(JSProtoKey key)
 {
     switch (key) {
+      case JSProto_Null:
       case JSProto_Object:
         return &PlainObject::class_;
       case JSProto_Array:
@@ -369,7 +371,7 @@ inline TypeObject *
 GetTypeNewObject(JSContext *cx, JSProtoKey key)
 {
     RootedObject proto(cx);
-    if (!GetBuiltinPrototype(cx, key, &proto))
+    if (key != JSProto_Null && !GetBuiltinPrototype(cx, key, &proto))
         return nullptr;
     return cx->getNewType(GetClassForProtoKey(key), TaggedProto(proto.get()));
 }
@@ -1081,18 +1083,12 @@ HeapTypeSet::newPropertyState(ExclusiveContext *cxArg)
 }
 
 inline void
-HeapTypeSet::setNonDataPropertyIgnoringConstraints()
-{
-    flags |= TYPE_FLAG_NON_DATA_PROPERTY;
-}
-
-inline void
 HeapTypeSet::setNonDataProperty(ExclusiveContext *cx)
 {
     if (flags & TYPE_FLAG_NON_DATA_PROPERTY)
         return;
 
-    setNonDataPropertyIgnoringConstraints();
+    flags |= TYPE_FLAG_NON_DATA_PROPERTY;
     newPropertyState(cx);
 }
 
@@ -1199,6 +1195,7 @@ inline void
 TypeObject::finalize(FreeOp *fop)
 {
     fop->delete_(newScriptDontCheckGeneration());
+    fop->delete_(maybeUnboxedLayoutDontCheckGeneration());
 }
 
 inline uint32_t
@@ -1293,10 +1290,10 @@ TypeObject::getProperty(unsigned i)
 inline void
 TypeNewScript::writeBarrierPre(TypeNewScript *newScript)
 {
-    if (!newScript->fun->runtimeFromAnyThread()->needsIncrementalBarrier())
+    if (!newScript->function()->runtimeFromAnyThread()->needsIncrementalBarrier())
         return;
 
-    JS::Zone *zone = newScript->fun->zoneFromAnyThread();
+    JS::Zone *zone = newScript->function()->zoneFromAnyThread();
     if (zone->needsIncrementalBarrier())
         newScript->trace(zone->barrierTracer());
 }
