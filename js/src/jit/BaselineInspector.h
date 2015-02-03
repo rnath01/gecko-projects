@@ -93,8 +93,10 @@ class BaselineInspector
 
   public:
     typedef Vector<Shape *, 4, JitAllocPolicy> ShapeVector;
-    typedef Vector<types::TypeObject *, 4, JitAllocPolicy> TypeObjectVector;
-    bool maybeInfoForPropertyOp(jsbytecode *pc, ShapeVector &nativeShapes, TypeObjectVector &unboxedTypes);
+    typedef Vector<types::ObjectGroup *, 4, JitAllocPolicy> ObjectGroupVector;
+    bool maybeInfoForPropertyOp(jsbytecode *pc,
+                                ShapeVector &nativeShapes,
+                                ObjectGroupVector &unboxedGroups);
 
     SetElemICInspector setElemICInspector(jsbytecode *pc) {
         return makeICInspector<SetElemICInspector>(pc, ICStub::SetElem_Fallback);
@@ -117,9 +119,12 @@ class BaselineInspector
     DeclEnvObject *templateDeclEnvObject();
     CallObject *templateCallObject();
 
-    JSObject *commonGetPropFunction(jsbytecode *pc, Shape **lastProperty, JSFunction **commonGetter,
-                                    Shape **globalShape);
-    JSObject *commonSetPropFunction(jsbytecode *pc, Shape **lastProperty, JSFunction **commonSetter);
+    bool commonGetPropFunction(jsbytecode *pc, JSObject **holder, Shape **holderShape,
+                               JSFunction **commonGetter, Shape **globalShape, bool *isOwnProperty,
+                               ShapeVector &receiverShapes);
+    bool commonSetPropFunction(jsbytecode *pc, JSObject **holder, Shape **holderShape,
+                               JSFunction **commonSetter, bool *isOwnProperty,
+                               ShapeVector &receiverShapes);
 
     bool instanceOfData(jsbytecode *pc, Shape **shape, uint32_t *slot, JSObject **prototypeObject);
 };
