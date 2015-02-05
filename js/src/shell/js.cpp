@@ -1035,7 +1035,7 @@ CacheEntry(JSContext* cx, unsigned argc, JS::Value *vp)
         return false;
     }
 
-    RootedObject obj(cx, JS_NewObject(cx, &CacheEntry_class, JS::NullPtr(), JS::NullPtr()));
+    RootedObject obj(cx, JS_NewObject(cx, &CacheEntry_class));
     if (!obj)
         return false;
 
@@ -3928,26 +3928,6 @@ ThisFilename(JSContext *cx, unsigned argc, Value *vp)
 }
 
 static bool
-Wrap(JSContext *cx, unsigned argc, jsval *vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    Value v = args.get(0);
-    if (v.isPrimitive()) {
-        args.rval().set(v);
-        return true;
-    }
-
-    RootedObject obj(cx, v.toObjectOrNull());
-    JSObject *wrapped = Wrapper::New(cx, obj, &obj->global(),
-                                     &Wrapper::singleton);
-    if (!wrapped)
-        return false;
-
-    args.rval().setObject(*wrapped);
-    return true;
-}
-
-static bool
 WrapWithProto(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -4039,7 +4019,7 @@ ObjectEmulatingUndefined(JSContext *cx, unsigned argc, jsval *vp)
         JSCLASS_EMULATES_UNDEFINED
     };
 
-    RootedObject obj(cx, JS_NewObject(cx, &cls, JS::NullPtr(), JS::NullPtr()));
+    RootedObject obj(cx, JS_NewObject(cx, &cls));
     if (!obj)
         return false;
     args.rval().setObject(*obj);
@@ -4170,6 +4150,10 @@ static void
 SingleStepCallback(void *arg, jit::Simulator *sim, void *pc)
 {
     JSRuntime *rt = reinterpret_cast<JSRuntime*>(arg);
+
+    // If profiling is not enabled, don't do anything.
+    if (!rt->spsProfiler.enabled())
+        return;
 
     JS::ProfilingFrameIterator::RegisterState state;
     state.pc = pc;
@@ -4560,14 +4544,6 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 "thisFilename()",
 "  Return the filename of the current script"),
 
-    JS_FN_HELP("wrap", Wrap, 1, 0,
-"wrap(obj)",
-"  Wrap an object into a noop wrapper."),
-
-    JS_FN_HELP("wrapWithProto", WrapWithProto, 2, 0,
-"wrapWithProto(obj)",
-"  Wrap an object into a noop wrapper with prototype semantics."),
-
     JS_FN_HELP("newGlobal", NewGlobal, 1, 0,
 "newGlobal([options])",
 "  Return a new global object in a new compartment. If options\n"
@@ -4693,6 +4669,12 @@ static const JSFunctionSpecWithHelp fuzzing_unsafe_functions[] = {
 "  original hook, that we reinstate after the call to |fun| completes,\n"
 "  might be asked for the source code of compilations that |fun|\n"
 "  performed, and which, presumably, only |hook| knows how to find.\n"),
+
+    JS_FN_HELP("wrapWithProto", WrapWithProto, 2, 0,
+"wrapWithProto(obj)",
+"  Wrap an object into a noop wrapper with prototype semantics.\n"
+"  Note: This is not fuzzing safe because it can be used to construct\n"
+"        deeply nested wrapper chains that cannot exist in the wild."),
 
     JS_FS_HELP_END
 };
@@ -5092,7 +5074,7 @@ dom_constructor(JSContext* cx, unsigned argc, JS::Value *vp)
     }
 
     RootedObject proto(cx, &protov.toObject());
-    RootedObject domObj(cx, JS_NewObject(cx, &dom_class, proto, JS::NullPtr()));
+    RootedObject domObj(cx, JS_NewObjectWithGivenProto(cx, &dom_class, proto, JS::NullPtr()));
     if (!domObj)
         return false;
 
@@ -5646,18 +5628,9 @@ SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
         jit::js_JitOptions.baselineWarmUpThreshold = 0;
 
     if (const char *str = op.getStringOption("ion-regalloc")) {
-        if (strcmp(str, "lsra") == 0) {
-            jit::js_JitOptions.forceRegisterAllocator = true;
-            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_LSRA;
-        } else if (strcmp(str, "backtracking") == 0) {
-            jit::js_JitOptions.forceRegisterAllocator = true;
-            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_Backtracking;
-        } else if (strcmp(str, "stupid") == 0) {
-            jit::js_JitOptions.forceRegisterAllocator = true;
-            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_Stupid;
-        } else {
+        jit::js_JitOptions.forcedRegisterAllocator = jit::LookupRegisterAllocator(str);
+        if (!jit::js_JitOptions.forcedRegisterAllocator.isSome())
             return OptionFailure("ion-regalloc", str);
-        }
     }
 
     if (op.getBoolOption("ion-eager"))

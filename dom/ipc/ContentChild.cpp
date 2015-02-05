@@ -1805,9 +1805,9 @@ ContentChild::ActorDestroy(ActorDestroyReason why)
 }
 
 void
-ContentChild::ProcessingError(Result what)
+ContentChild::ProcessingError(Result aCode, const char* aReason)
 {
-    switch (what) {
+    switch (aCode) {
     case MsgDropped:
         NS_WARNING("MsgDropped in ContentChild");
         return;
@@ -2496,7 +2496,10 @@ ContentChild::RecvGetProfile(nsCString* aProfile)
 bool
 ContentChild::RecvLoadPluginResult(const uint32_t& aPluginId, const bool& aResult)
 {
-    bool finalResult = aResult && SendConnectPluginBridge(aPluginId);
+    nsresult rv;
+    bool finalResult = aResult &&
+                       SendConnectPluginBridge(aPluginId, &rv) &&
+                       NS_SUCCEEDED(rv);
     plugins::PluginModuleContentParent::OnLoadPluginResult(aPluginId,
                                                            finalResult);
     return true;

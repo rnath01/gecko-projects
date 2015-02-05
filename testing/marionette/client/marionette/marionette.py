@@ -1135,6 +1135,19 @@ class Marionette(object):
         return response
 
     def timeouts(self, timeout_type, ms):
+        """An interface for managing timeout behaviour of a Marionette instance.
+
+        Setting timeouts specifies the type and amount of time the Marionette instance should wait during requests.
+
+        There are three types of timeouts that can be set: implicit, script and page load.
+
+        * An implicit  timeout specifies the amount of time a Marionette instance should wait when searching for elements. Here, marionette polls a page until an element is found or the timeout expires, whichever occurs first. When searching for multiple elements, the driver should poll the page until at least one element is found or the timeout expires, at which point it should return an empty list.
+        * A script timeout specifies the amount of time the Marionette instance should wait after calling executeAsyncScript for the callback to have executed before returning a timeout response.
+        * A page load timeout specifies the amount of time the Marionette instance should wait for a page load operation to complete. If this limit is exceeded, the Marionette instance will return a "timeout" response status.
+
+        :param timeout_type: A string value specifying the timeout type. This must be one of three types: 'implicit', 'script' or 'page load'
+        :param ms: A number value specifying the timeout length in milliseconds (ms)
+        """
         assert(timeout_type == self.TIMEOUT_SEARCH or timeout_type == self.TIMEOUT_SCRIPT or timeout_type == self.TIMEOUT_PAGE)
         response = self._send_message('timeouts', 'ok', type=timeout_type, ms=ms)
         return response
@@ -1541,7 +1554,8 @@ class Marionette(object):
     def application_cache(self):
         return ApplicationCache(self)
 
-    def screenshot(self, element=None, highlights=None, format="base64"):
+    def screenshot(self, element=None, highlights=None, format="base64",
+                   full=True):
         """Takes a screenshot of a web element or the current frame.
 
         The screen capture is returned as a lossless PNG image encoded
@@ -1560,6 +1574,9 @@ class Marionette(object):
             as a base64-string. If "binary", the data is decoded and
             returned as raw binary.
 
+        :param full: If True (the default), the capture area will be the
+            complete frame. Else only the viewport is captured. Only applies
+            when `element` is None.
         """
 
         if element:
@@ -1568,7 +1585,8 @@ class Marionette(object):
         if highlights:
             lights = [highlight.id for highlight in highlights]
         screenshot_data = self._send_message("takeScreenshot", "value",
-                                  id=element, highlights=lights)
+                                             id=element, highlights=lights,
+                                             full=full)
         if format == 'base64':
             return screenshot_data
         elif format == 'binary':

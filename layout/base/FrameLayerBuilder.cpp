@@ -32,6 +32,7 @@
 #include "mozilla/gfx/Tools.h"
 #include "mozilla/gfx/2D.h"
 #include "gfxPrefs.h"
+#include "LayersLogging.h"
 
 #include <algorithm>
 
@@ -1649,11 +1650,11 @@ ResetScrollPositionForLayerPixelAlignment(const nsIFrame* aAnimatedGeometryRoot)
 }
 
 static void
-InvalidateEntirePaintedLayer(PaintedLayer* aLayer, const nsIFrame* aAnimatedGeometryRoot)
+InvalidateEntirePaintedLayer(PaintedLayer* aLayer, const nsIFrame* aAnimatedGeometryRoot, const char *aReason)
 {
 #ifdef MOZ_DUMP_PAINTING
   if (nsLayoutUtils::InvalidationDebuggingIsEnabled()) {
-    printf_stderr("Invalidating entire layer %p\n", aLayer);
+    printf_stderr("Invalidating entire layer %p: %s\n", aLayer, aReason);
   }
 #endif
   nsIntRect invalidate = aLayer->GetValidRegion().GetBounds();
@@ -1722,7 +1723,7 @@ ContainerState::CreateOrRecyclePaintedLayer(const nsIFrame* aAnimatedGeometryRoo
         printf_stderr("Recycled layer %p changed scale\n", layer.get());
       }
 #endif
-        InvalidateEntirePaintedLayer(layer, aAnimatedGeometryRoot);
+        InvalidateEntirePaintedLayer(layer, aAnimatedGeometryRoot, "recycled layer changed state");
 #ifndef MOZ_WIDGET_ANDROID
         didResetScrollPositionForLayerPixelAlignment = true;
 #endif
@@ -1798,7 +1799,7 @@ ContainerState::CreateOrRecyclePaintedLayer(const nsIFrame* aAnimatedGeometryRoo
   // from what we need.
   if (!animatedGeometryRootTopLeft.WithinEpsilonOf(data->mAnimatedGeometryRootPosition, SUBPIXEL_OFFSET_EPSILON)) {
     data->mAnimatedGeometryRootPosition = animatedGeometryRootTopLeft;
-    InvalidateEntirePaintedLayer(layer, aAnimatedGeometryRoot);
+    InvalidateEntirePaintedLayer(layer, aAnimatedGeometryRoot, "subpixel offset");
   } else if (didResetScrollPositionForLayerPixelAlignment) {
     data->mAnimatedGeometryRootPosition = animatedGeometryRootTopLeft;
   }
@@ -4729,6 +4730,31 @@ FrameLayerBuilder::CheckDOMModified()
 FrameLayerBuilder::DumpRetainedLayerTree(LayerManager* aManager, std::stringstream& aStream, bool aDumpHtml)
 {
   aManager->Dump(aStream, "", aDumpHtml);
+}
+
+nsDisplayItemGeometry*
+FrameLayerBuilder::GetMostRecentGeometry(nsDisplayItem* aItem)
+{
+  typedef nsTArray<DisplayItemData*> DataArray;
+
+  // Retrieve the array of DisplayItemData associated with our frame.
+  FrameProperties properties = aItem->Frame()->Properties();
+  auto dataArray =
+    static_cast<DataArray*>(properties.Get(LayerManagerDataProperty()));
+  if (!dataArray) {
+    return nullptr;
+  }
+
+  // Find our display item data, if it exists, and return its geometry.
+  uint32_t itemPerFrameKey = aItem->GetPerFrameKey();
+  for (uint32_t i = 0; i < dataArray->Length(); i++) {
+    DisplayItemData* data = dataArray->ElementAt(i);
+    if (data->GetDisplayItemKey() == itemPerFrameKey) {
+      return data->GetGeometry();
+    }
+  }
+
+  return nullptr;
 }
 
 gfx::Rect

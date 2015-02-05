@@ -116,7 +116,8 @@ js::StartOffThreadIonCompile(JSContext *cx, jit::IonBuilder *builder)
 static void
 FinishOffThreadIonCompile(jit::IonBuilder *builder)
 {
-    HelperThreadState().ionFinishedList().append(builder);
+    if (!HelperThreadState().ionFinishedList().append(builder))
+        CrashAtUnhandlableOOM("FinishOffThreadIonCompile");
 }
 
 static inline bool
@@ -891,12 +892,12 @@ GlobalHelperThreadState::finishParseTask(JSContext *maybecx, JSRuntime *rt, void
     // to the corresponding prototype in the new compartment. This will briefly
     // create cross compartment pointers, which will be fixed by the
     // MergeCompartments call below.
-    for (gc::ZoneCellIter iter(parseTask->cx->zone(), gc::FINALIZE_TYPE_OBJECT);
+    for (gc::ZoneCellIter iter(parseTask->cx->zone(), gc::FINALIZE_OBJECT_GROUP);
          !iter.done();
          iter.next())
     {
-        types::TypeObject *object = iter.get<types::TypeObject>();
-        TaggedProto proto(object->proto());
+        types::ObjectGroup *group = iter.get<types::ObjectGroup>();
+        TaggedProto proto(group->proto());
         if (!proto.isObject())
             continue;
 
@@ -910,7 +911,7 @@ GlobalHelperThreadState::finishParseTask(JSContext *maybecx, JSRuntime *rt, void
         JSObject *newProto = GetBuiltinPrototypePure(global, key);
         MOZ_ASSERT(newProto);
 
-        object->setProtoUnchecked(TaggedProto(newProto));
+        group->setProtoUnchecked(TaggedProto(newProto));
     }
 
     // Move the parsed script and all its contents into the desired compartment.
@@ -932,10 +933,7 @@ GlobalHelperThreadState::finishParseTask(JSContext *maybecx, JSRuntime *rt, void
 
     if (script) {
         // The Debugger only needs to be told about the topmost script that was compiled.
-        GlobalObject *compileAndGoGlobal = nullptr;
-        if (script->compileAndGo())
-            compileAndGoGlobal = &script->global();
-        Debugger::onNewScript(cx, script, compileAndGoGlobal);
+        Debugger::onNewScript(cx, script);
 
         // Update the compressed source table with the result. This is normally
         // called by setCompressedSource when compilation occurs on the main thread.

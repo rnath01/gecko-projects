@@ -109,7 +109,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitTest(MTest *test);
     void visitGotoWithFake(MGotoWithFake *ins);
     void visitFunctionDispatch(MFunctionDispatch *ins);
-    void visitTypeObjectDispatch(MTypeObjectDispatch *ins);
+    void visitObjectGroupDispatch(MObjectGroupDispatch *ins);
     void visitCompare(MCompare *comp);
     void visitTypeOf(MTypeOf *ins);
     void visitToId(MToId *ins);
@@ -287,6 +287,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitLexicalCheck(MLexicalCheck *ins);
     void visitThrowUninitializedLexical(MThrowUninitializedLexical *ins);
     void visitDebugger(MDebugger *ins);
+    void visitNurseryObject(MNurseryObject *ins);
 };
 
 } // namespace jit

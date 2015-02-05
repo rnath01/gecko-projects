@@ -1096,10 +1096,10 @@ void nsPluginInstanceOwner::AddToCARefreshTimer() {
 
   // Flash invokes InvalidateRect for us.
   const char* mime = nullptr;
-  if (NS_SUCCEEDED(mInstance->GetMIMEType(&mime)) && mime) {
-    if (strcmp(mime, "application/x-shockwave-flash") == 0) {
-      return;
-    }
+  if (NS_SUCCEEDED(mInstance->GetMIMEType(&mime)) && mime &&
+      nsPluginHost::GetSpecialType(nsDependentCString(mime)) ==
+      nsPluginHost::eSpecialType_Flash) {
+    return;
   }
 
   if (!sCARefreshListeners) {
@@ -1381,13 +1381,8 @@ nsPluginInstanceOwner::GetImageContainerForVideo(nsNPAPIPluginInstance::VideoInf
   nsRefPtr<Image> img = container->CreateImage(ImageFormat::SURFACE_TEXTURE);
 
   SurfaceTextureImage::Data data;
-
   data.mSurfTex = aVideoInfo->mSurfaceTexture;
-
-  // The logic below for Honeycomb is just a guess, but seems to work. We don't have a separate
-  // inverted flag for video.
-  data.mOriginPos = AndroidBridge::Bridge()->IsHoneycomb() ? gl::OriginPos::BottomLeft
-                                                           : mInstance->OriginPos();
+  data.mOriginPos = gl::OriginPos::BottomLeft;
   data.mSize = gfx::IntSize(aVideoInfo->mDimensions.width, aVideoInfo->mDimensions.height);
 
   SurfaceTextureImage* typedImg = static_cast<SurfaceTextureImage*>(img.get());
@@ -2121,8 +2116,7 @@ nsEventStatus nsPluginInstanceOwner::ProcessEvent(const WidgetGUIEvent& anEvent)
         // Get reference point relative to screen:
         LayoutDeviceIntPoint rootPoint(-1, -1);
         if (widget)
-          rootPoint = anEvent.refPoint +
-            LayoutDeviceIntPoint::FromUntyped(widget->WidgetToScreenOffset());
+          rootPoint = anEvent.refPoint + widget->WidgetToScreenOffset();
 #ifdef MOZ_WIDGET_GTK
         Window root = GDK_ROOT_WINDOW();
 #elif defined(MOZ_WIDGET_QT)

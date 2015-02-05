@@ -630,7 +630,7 @@ nsWindow::BringToFront()
 NS_IMETHODIMP
 nsWindow::GetScreenBounds(nsIntRect &aRect)
 {
-    nsIntPoint p = WidgetToScreenOffset();
+    LayoutDeviceIntPoint p = WidgetToScreenOffset();
 
     aRect.x = p.x;
     aRect.y = p.y;
@@ -640,10 +640,10 @@ nsWindow::GetScreenBounds(nsIntRect &aRect)
     return NS_OK;
 }
 
-nsIntPoint
+LayoutDeviceIntPoint
 nsWindow::WidgetToScreenOffset()
 {
-    nsIntPoint p(0, 0);
+    LayoutDeviceIntPoint p(0, 0);
     nsWindow *w = this;
 
     while (w && !w->IsTopLevel()) {
@@ -1041,8 +1041,7 @@ nsWindow::OnContextmenuEvent(AndroidGeckoEvent *ae)
     WidgetMouseEvent contextMenuEvent(true, NS_CONTEXTMENU, this,
                                       WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
     contextMenuEvent.refPoint =
-        LayoutDeviceIntPoint(RoundedToInt(pt * GetDefaultScale())) -
-        LayoutDeviceIntPoint::FromUntyped(WidgetToScreenOffset());
+        RoundedToInt(pt * GetDefaultScale()) - WidgetToScreenOffset();
     contextMenuEvent.ignoreRootScrollFrame = true;
     contextMenuEvent.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
 
@@ -1095,7 +1094,7 @@ bool nsWindow::OnMultitouchEvent(AndroidGeckoEvent *ae)
         // retargeted. The Fennec browser.js code can use this to activate the
         // highlight element in case the this touchstart is the start of a tap.
         WidgetMouseEvent hittest(true, NS_MOUSE_MOZHITTEST, this, WidgetMouseEvent::eReal);
-        hittest.refPoint = LayoutDeviceIntPoint::FromUntyped(event.touches[0]->mRefPoint);
+        hittest.refPoint = event.touches[0]->mRefPoint;
         hittest.ignoreRootScrollFrame = true;
         hittest.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
         nsEventStatus status;
@@ -1140,8 +1139,8 @@ bool nsWindow::OnMultitouchEvent(AndroidGeckoEvent *ae)
 void
 nsWindow::OnNativeGestureEvent(AndroidGeckoEvent *ae)
 {
-  nsIntPoint pt(ae->Points()[0].x,
-                ae->Points()[0].y);
+  LayoutDeviceIntPoint pt(ae->Points()[0].x,
+                          ae->Points()[0].y);
   double delta = ae->X();
   int msg = 0;
 
@@ -1170,7 +1169,7 @@ nsWindow::OnNativeGestureEvent(AndroidGeckoEvent *ae)
 
 void
 nsWindow::DispatchGestureEvent(uint32_t msg, uint32_t direction, double delta,
-                               const nsIntPoint &refPoint, uint64_t time)
+                               const LayoutDeviceIntPoint &refPoint, uint64_t time)
 {
     WidgetSimpleGestureEvent event(true, msg, this);
 
@@ -1178,7 +1177,7 @@ nsWindow::DispatchGestureEvent(uint32_t msg, uint32_t direction, double delta,
     event.delta = delta;
     event.modifiers = 0;
     event.time = time;
-    event.refPoint = LayoutDeviceIntPoint::FromUntyped(refPoint);
+    event.refPoint = refPoint;
 
     DispatchEvent(&event);
 }

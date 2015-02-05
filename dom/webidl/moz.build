@@ -9,7 +9,6 @@ GENERATED_WEBIDL_FILES = [
 ]
 
 PREPROCESSED_WEBIDL_FILES = [
-    'Crypto.webidl',
     'HTMLMediaElement.webidl',
     'Navigator.webidl',
     'Window.webidl',
@@ -81,6 +80,7 @@ WEBIDL_FILES = [
     'ContainerBoxObject.webidl',
     'ConvolverNode.webidl',
     'Coordinates.webidl',
+    'Crypto.webidl',
     'CSPReport.webidl',
     'CSS.webidl',
     'CSSPrimitiveValue.webidl',
@@ -320,6 +320,8 @@ WEBIDL_FILES = [
     'ParentNode.webidl',
     'Performance.webidl',
     'PerformanceEntry.webidl',
+    'PerformanceMark.webidl',
+    'PerformanceMeasure.webidl',
     'PerformanceNavigation.webidl',
     'PerformanceResourceTiming.webidl',
     'PerformanceTiming.webidl',
@@ -807,6 +809,7 @@ if CONFIG['MOZ_EME']:
         'MediaKeyMessageEvent.webidl',
         'MediaKeys.webidl',
         'MediaKeySession.webidl',
+        'MediaKeyStatusMap.webidl',
         'MediaKeySystemAccess.webidl',
     ]
 

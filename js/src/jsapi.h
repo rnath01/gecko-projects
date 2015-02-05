@@ -619,15 +619,13 @@ class PerRuntimeFutexAPI
     // Release the GLOBAL lock.
     virtual void unlock() = 0;
 
-    // Return true iff the calling thread is a worker thread.  This must be
-    // used to guard calls to wait().  The lock need not be held.
-    virtual bool isOnWorkerThread() = 0;
-
     enum WakeResult {
         Woken,                  // Woken by futexWait
         Timedout,               // Woken by timeout
-        InterruptForTerminate,  // Woken by a request to terminate the worker
-        ErrorTooLong            // Implementation constraint on the timer (for now)
+        ErrorException,         // Propagate a pending exception
+        InterruptForTerminate,  // Woken by a request to terminate the worker, throw an uncatchable
+        WaitingNotAllowed,      // wait() was not allowed to block on this thread (permanently)
+        ErrorTooLong            // Implementation limit
     };
 
     // Block the thread.
@@ -1757,16 +1755,6 @@ extern JS_PUBLIC_API(void)
 JS_SetCTypesCallbacks(JSObject *ctypesObj, const JSCTypesCallbacks *callbacks);
 #endif
 
-typedef bool
-(* JSEnumerateDiagnosticMemoryCallback)(void *ptr, size_t length);
-
-/*
- * Enumerate memory regions that contain diagnostic information
- * intended to be included in crash report minidumps.
- */
-extern JS_PUBLIC_API(void)
-JS_EnumerateDiagnosticMemoryRegions(JSEnumerateDiagnosticMemoryCallback callback);
-
 extern JS_PUBLIC_API(void *)
 JS_malloc(JSContext *cx, size_t nbytes);
 
@@ -1957,7 +1945,10 @@ typedef enum JSGCParamKey {
     JSGC_MIN_EMPTY_CHUNK_COUNT = 21,
 
     /* We never keep more than this many unused chunks in the free chunk pool. */
-    JSGC_MAX_EMPTY_CHUNK_COUNT = 22
+    JSGC_MAX_EMPTY_CHUNK_COUNT = 22,
+
+    /* Whether compacting GC is enabled. */
+    JSGC_COMPACTING_ENABLED = 23
 } JSGCParamKey;
 
 extern JS_PUBLIC_API(void)
@@ -2569,8 +2560,7 @@ extern JS_PUBLIC_API(void)
 JS_FireOnNewGlobalObject(JSContext *cx, JS::HandleObject global);
 
 extern JS_PUBLIC_API(JSObject *)
-JS_NewObject(JSContext *cx, const JSClass *clasp, JS::Handle<JSObject*> proto,
-             JS::Handle<JSObject*> parent);
+JS_NewObject(JSContext *cx, const JSClass *clasp, JS::Handle<JSObject*> parent = JS::NullPtr());
 
 /* Queries the [[Extensible]] property of the object. */
 extern JS_PUBLIC_API(bool)
@@ -2583,12 +2573,12 @@ extern JS_PUBLIC_API(JSRuntime *)
 JS_GetObjectRuntime(JSObject *obj);
 
 /*
- * Unlike JS_NewObject, JS_NewObjectWithGivenProto does not compute a default
- * proto if proto's actual parameter value is null.
+ * Unlike JS_NewObject, JS_NewObjectWithGivenProto does not compute a default proto.
+ * If proto is JS::NullPtr, the JS object will have `null` as [[Prototype]].
  */
 extern JS_PUBLIC_API(JSObject *)
 JS_NewObjectWithGivenProto(JSContext *cx, const JSClass *clasp, JS::Handle<JSObject*> proto,
-                           JS::Handle<JSObject*> parent);
+                           JS::Handle<JSObject*> parent = JS::NullPtr());
 
 // Creates a new plain object, like `new Object()`, with Object.prototype as [[Prototype]].
 extern JS_PUBLIC_API(JSObject *)
@@ -2623,8 +2613,7 @@ JS_New(JSContext *cx, JS::HandleObject ctor, const JS::HandleValueArray& args);
 
 extern JS_PUBLIC_API(JSObject *)
 JS_DefineObject(JSContext *cx, JS::HandleObject obj, const char *name,
-                const JSClass *clasp = nullptr, JS::HandleObject proto = JS::NullPtr(),
-                unsigned attrs = 0);
+                const JSClass *clasp = nullptr, unsigned attrs = 0);
 
 extern JS_PUBLIC_API(bool)
 JS_DefineConstDoubles(JSContext *cx, JS::HandleObject obj, const JSConstDoubleSpec *cds);
@@ -4557,6 +4546,37 @@ GetWeakMapEntry(JSContext *cx, JS::HandleObject mapObj, JS::HandleObject key,
 extern JS_PUBLIC_API(bool)
 SetWeakMapEntry(JSContext *cx, JS::HandleObject mapObj, JS::HandleObject key,
                 JS::HandleValue val);
+
+/*
+ * Map
+ */
+extern JS_PUBLIC_API(JSObject *)
+NewMapObject(JSContext *cx);
+
+extern JS_PUBLIC_API(uint32_t)
+MapSize(JSContext *cx, HandleObject obj);
+
+extern JS_PUBLIC_API(bool)
+MapGet(JSContext *cx, HandleObject obj,
+       HandleValue key, MutableHandleValue rval);
+
+extern JS_PUBLIC_API(bool)
+MapHas(JSContext *cx, HandleObject obj, HandleValue key, bool *rval);
+
+extern JS_PUBLIC_API(bool)
+MapSet(JSContext *cx, HandleObject obj, HandleValue key, HandleValue val);
+
+extern JS_PUBLIC_API(bool)
+MapClear(JSContext *cx, HandleObject obj);
+
+extern JS_PUBLIC_API(bool)
+MapKeys(JSContext *cx, HandleObject obj, MutableHandleValue rval);
+
+extern JS_PUBLIC_API(bool)
+MapValues(JSContext *cx, HandleObject obj, MutableHandleValue rval);
+
+extern JS_PUBLIC_API(bool)
+MapEntries(JSContext *cx, HandleObject obj, MutableHandleValue rval);
 
 } /* namespace JS */
 

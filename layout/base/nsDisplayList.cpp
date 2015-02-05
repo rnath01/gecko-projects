@@ -362,10 +362,11 @@ AddAnimationForProperty(nsIFrame* aFrame, nsCSSProperty aProperty,
     aLayer->AddAnimation();
 
   const AnimationTiming& timing = aPlayer->GetSource()->Timing();
-  animation->startTime() = aPlayer->GetStartTime().IsNull()
-                         ? TimeStamp()
-                         : aPlayer->Timeline()->ToTimeStamp(
-                             aPlayer->GetStartTime().Value() + timing.mDelay);
+  Nullable<TimeDuration> startTime = aPlayer->GetCurrentOrPendingStartTime();
+  animation->startTime() = startTime.IsNull()
+                           ? TimeStamp()
+                           : aPlayer->Timeline()->ToTimeStamp(
+                              startTime.Value() + timing.mDelay);
   animation->initialCurrentTime() = aPlayer->GetCurrentTime().Value()
                                     - timing.mDelay;
   animation->duration() = timing.mIterationDuration;
@@ -581,13 +582,15 @@ nsDisplayListBuilder::nsDisplayListBuilder(nsIFrame* aReferenceFrame,
       mAllowMergingAndFlattening(true),
       mWillComputePluginGeometry(false),
       mInTransform(false),
+      mIsInRootChromeDocument(false),
       mSyncDecodeImages(false),
       mIsPaintingToWindow(false),
       mIsCompositingCheap(false),
       mContainsPluginItem(false),
       mAncestorHasTouchEventHandler(false),
       mAncestorHasScrollEventHandler(false),
-      mHaveScrollableDisplayPort(false)
+      mHaveScrollableDisplayPort(false),
+      mWindowDraggingAllowed(false)
 {
   MOZ_COUNT_CTOR(nsDisplayListBuilder);
   PL_InitArenaPool(&mPool, "displayListArena", 1024,
@@ -697,7 +700,6 @@ nsDisplayScrollLayer::ComputeFrameMetrics(nsIFrame* aForFrame,
                                           Layer* aLayer,
                                           ViewID aScrollParentId,
                                           const nsRect& aViewport,
-                                          bool aForceNullScrollId,
                                           bool aIsRoot,
                                           const ContainerLayerParameters& aContainerParameters)
 {
@@ -711,9 +713,7 @@ nsDisplayScrollLayer::ComputeFrameMetrics(nsIFrame* aForFrame,
   ViewID scrollId = FrameMetrics::NULL_SCROLL_ID;
   nsIContent* content = aScrollFrame ? aScrollFrame->GetContent() : nullptr;
   if (content) {
-    if (!aForceNullScrollId) {
-      scrollId = nsLayoutUtils::FindOrCreateIDFor(content);
-    }
+    scrollId = nsLayoutUtils::FindOrCreateIDFor(content);
     nsRect dp;
     if (nsLayoutUtils::GetDisplayPort(content, &dp)) {
       metrics.SetDisplayPort(CSSRect::FromAppUnits(dp));
@@ -970,7 +970,8 @@ nsDisplayListBuilder::GetCaret() {
 }
 
 void
-nsDisplayListBuilder::EnterPresShell(nsIFrame* aReferenceFrame)
+nsDisplayListBuilder::EnterPresShell(nsIFrame* aReferenceFrame,
+                                     bool aPointerEventsNoneDoc)
 {
   PresShellState* state = mPresShellStates.AppendElement();
   state->mPresShell = aReferenceFrame->PresContext()->PresShell();
@@ -996,6 +997,12 @@ nsDisplayListBuilder::EnterPresShell(nsIFrame* aReferenceFrame)
     buildCaret = false;
   }
 
+  bool pointerEventsNone = aPointerEventsNoneDoc;
+  if (IsInSubdocument()) {
+    pointerEventsNone |= mPresShellStates[mPresShellStates.Length() - 2].mInsidePointerEventsNoneDoc;
+  }
+  state->mInsidePointerEventsNoneDoc = pointerEventsNone;
+
   if (!buildCaret)
     return;
 
@@ -1005,6 +1012,11 @@ nsDisplayListBuilder::EnterPresShell(nsIFrame* aReferenceFrame)
     mFramesMarkedForDisplay.AppendElement(state->mCaretFrame);
     MarkFrameForDisplay(state->mCaretFrame, nullptr);
   }
+
+  nsPresContext* pc = aReferenceFrame->PresContext();
+  pc->GetDocShell()->GetWindowDraggingAllowed(&mWindowDraggingAllowed);
+
+  mIsInRootChromeDocument = !IsInSubdocument() && pc->IsChrome();
 }
 
 void
@@ -1013,8 +1025,15 @@ nsDisplayListBuilder::LeavePresShell(nsIFrame* aReferenceFrame)
   NS_ASSERTION(CurrentPresShellState()->mPresShell ==
       aReferenceFrame->PresContext()->PresShell(),
       "Presshell mismatch");
+
   ResetMarkedFramesForDisplayList();
   mPresShellStates.SetLength(mPresShellStates.Length() - 1);
+
+  if (!mPresShellStates.IsEmpty()) {
+    nsPresContext* pc = CurrentPresContext();
+    pc->GetDocShell()->GetWindowDraggingAllowed(&mWindowDraggingAllowed);
+    mIsInRootChromeDocument = !IsInSubdocument() && pc->IsChrome();
+  }
 }
 
 void
@@ -1236,7 +1255,7 @@ nsDisplayListBuilder::RecomputeCurrentAnimatedGeometryRoot()
 void
 nsDisplayListBuilder::AdjustWindowDraggingRegion(nsIFrame* aFrame)
 {
-  if (!IsForPainting() || IsInSubdocument()) {
+  if (!mWindowDraggingAllowed || !IsForPainting()) {
     return;
   }
 
@@ -1623,7 +1642,7 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
       nsDisplayScrollLayer::ComputeFrameMetrics(frame, rootScrollFrame,
                          aBuilder->FindReferenceFrameFor(frame),
                          root, FrameMetrics::NULL_SCROLL_ID, viewport,
-                         !isRoot, isRoot, containerParameters));
+                         isRoot, containerParameters));
   }
 
   // NS_WARNING is debug-only, so don't even bother checking the conditions in
@@ -1676,7 +1695,7 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
   aBuilder->SetIsCompositingCheap(temp);
   layerBuilder->DidEndTransaction();
 
-  if (document) {
+  if (document && widgetTransaction) {
     StartPendingAnimations(document, layerManager->GetAnimationReadyTime());
   }
 
@@ -2095,12 +2114,13 @@ nsDisplaySolidColor::WriteDebugInfo(std::stringstream& aStream)
 }
 
 static void
-RegisterThemeGeometry(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
+RegisterThemeGeometry(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
+                      nsITheme::ThemeGeometryType aType)
 {
-  if (!aBuilder->IsInSubdocument() && !aBuilder->IsInTransform()) {
+  if (aBuilder->IsInRootChromeDocument() && !aBuilder->IsInTransform()) {
     nsIFrame* displayRoot = nsLayoutUtils::GetDisplayRootFrame(aFrame);
     nsRect borderBox(aFrame->GetOffsetTo(displayRoot), aFrame->GetSize());
-    aBuilder->RegisterThemeGeometry(aFrame->StyleDisplay()->mAppearance,
+    aBuilder->RegisterThemeGeometry(aType,
         borderBox.ToNearestPixels(aFrame->PresContext()->AppUnitsPerDevPixel()));
   }
 }
@@ -2236,7 +2256,8 @@ nsDisplayBackgroundImage::AppendBackgroundItemsToTop(nsDisplayListBuilder* aBuil
 
   if (isThemed) {
     nsITheme* theme = presContext->GetTheme();
-    if (theme->NeedToClearBackgroundBehindWidget(aFrame->StyleDisplay()->mAppearance)) {
+    if (theme->NeedToClearBackgroundBehindWidget(aFrame->StyleDisplay()->mAppearance) &&
+        aBuilder->IsInRootChromeDocument() && !aBuilder->IsInTransform()) {
       bgItemList.AppendNewToTop(
         new (aBuilder) nsDisplayClearBackground(aBuilder, aFrame));
     }
@@ -2772,22 +2793,16 @@ nsDisplayThemedBackground::nsDisplayThemedBackground(nsDisplayListBuilder* aBuil
   mFrame->IsThemed(disp, &mThemeTransparency);
 
   // Perform necessary RegisterThemeGeometry
-  switch (disp->mAppearance) {
-    case NS_THEME_MOZ_MAC_UNIFIED_TOOLBAR:
-    case NS_THEME_TOOLBAR:
-    case NS_THEME_TOOLTIP:
-    case NS_THEME_WINDOW_TITLEBAR:
-    case NS_THEME_WINDOW_BUTTON_BOX:
-    case NS_THEME_MOZ_MAC_FULLSCREEN_BUTTON:
-    case NS_THEME_WINDOW_BUTTON_BOX_MAXIMIZED:
-    case NS_THEME_MAC_VIBRANCY_LIGHT:
-    case NS_THEME_MAC_VIBRANCY_DARK:
-      RegisterThemeGeometry(aBuilder, aFrame);
-      break;
-    case NS_THEME_WIN_BORDERLESS_GLASS:
-    case NS_THEME_WIN_GLASS:
-      aBuilder->SetGlassDisplayItem(this);
-      break;
+  nsITheme* theme = mFrame->PresContext()->GetTheme();
+  nsITheme::ThemeGeometryType type =
+    theme->ThemeGeometryTypeForWidget(mFrame, disp->mAppearance);
+  if (type != nsITheme::eThemeGeometryTypeUnknown) {
+    RegisterThemeGeometry(aBuilder, aFrame, type);
+  }
+
+  if (disp->mAppearance == NS_THEME_WIN_BORDERLESS_GLASS ||
+      disp->mAppearance == NS_THEME_WIN_GLASS) {
+    aBuilder->SetGlassDisplayItem(this);
   }
 
   mBounds = GetBoundsInternal();
@@ -3087,6 +3102,11 @@ nsDisplayLayerEventRegions::AddFrame(nsDisplayListBuilder* aBuilder,
 {
   NS_ASSERTION(aBuilder->FindReferenceFrameFor(aFrame) == aBuilder->FindReferenceFrameFor(mFrame),
                "Reference frame mismatch");
+  if (aBuilder->IsInsidePointerEventsNoneDoc()) {
+    // Somewhere up the parent document chain is a subdocument with pointer-
+    // events:none set on it (and without a mozpasspointerevents).
+    return;
+  }
   if (!aFrame->GetParent()) {
     MOZ_ASSERT(aFrame->GetType() == nsGkAtoms::viewportFrame);
     nsSubDocumentFrame* subdoc = static_cast<nsSubDocumentFrame*>(
@@ -4088,7 +4108,7 @@ nsDisplaySubDocument::ComputeFrameMetrics(Layer* aLayer,
   return MakeUnique<FrameMetrics>(
     nsDisplayScrollLayer::ComputeFrameMetrics(mFrame, rootScrollFrame, ReferenceFrame(),
                        aLayer, mScrollParentId, viewport,
-                       false, isRootContentDocument, params));
+                       isRootContentDocument, params));
 }
 
 static bool
@@ -4422,7 +4442,7 @@ nsDisplayScrollLayer::ComputeFrameMetrics(Layer* aLayer,
 
   return UniquePtr<FrameMetrics>(new FrameMetrics(
     ComputeFrameMetrics(mScrolledFrame, mScrollFrame, ReferenceFrame(), aLayer,
-                        mScrollParentId, viewport, false, false, params)));
+                        mScrollParentId, viewport, false, params)));
 }
 
 bool
@@ -5210,11 +5230,13 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
                                           aAppUnitsPerPixel, nullptr,
                                           aOutAncestor, !frame->IsTransformed());
 
-    result.ChangeBasis(offsetBetweenOrigins);
-    result = result * parent;
     if (aOffsetByOrigin) {
-      result.Translate(roundedOrigin);
+      result.Translate(-aProperties.mToTransformOrigin);
+      result.TranslatePost(offsetBetweenOrigins);
+    } else {
+      result.ChangeBasis(offsetBetweenOrigins);
     }
+    result = result * parent;
     return result;
   }
 

@@ -732,7 +732,7 @@ nsContentUtils::Atob(const nsAString& aAsciiBase64String,
   const char16_t* start = aAsciiBase64String.BeginReading();
   const char16_t* end = aAsciiBase64String.EndReading();
   nsString trimmedString;
-  if (!trimmedString.SetCapacity(aAsciiBase64String.Length(), fallible_t())) {
+  if (!trimmedString.SetCapacity(aAsciiBase64String.Length(), fallible)) {
     return NS_ERROR_DOM_INVALID_CHARACTER_ERR;
   }
   while (start < end) {
@@ -1241,18 +1241,36 @@ nsContentUtils::GetParserService()
   return sParserService;
 }
 
+static nsIAtom** sSandboxFlagAttrs[] = {
+  &nsGkAtoms::allowsameorigin,     // SANDBOXED_ORIGIN
+  &nsGkAtoms::allowforms,          // SANDBOXED_FORMS
+  &nsGkAtoms::allowscripts,        // SANDBOXED_SCRIPTS | SANDBOXED_AUTOMATIC_FEATURES
+  &nsGkAtoms::allowtopnavigation,  // SANDBOXED_TOPLEVEL_NAVIGATION
+  &nsGkAtoms::allowpointerlock,    // SANDBOXED_POINTER_LOCK
+  &nsGkAtoms::allowpopups          // SANDBOXED_AUXILIARY_NAVIGATION
+};
+
+static const uint32_t sSandboxFlagValues[] = {
+  SANDBOXED_ORIGIN,                                 // allow-same-origin
+  SANDBOXED_FORMS,                                  // allow-forms
+  SANDBOXED_SCRIPTS | SANDBOXED_AUTOMATIC_FEATURES, // allow-scripts
+  SANDBOXED_TOPLEVEL_NAVIGATION,                    // allow-top-navigation
+  SANDBOXED_POINTER_LOCK,                           // allow-pointer-lock
+  SANDBOXED_AUXILIARY_NAVIGATION                    // allow-popups
+};
+
 /**
  * A helper function that parses a sandbox attribute (of an <iframe> or
  * a CSP directive) and converts it to the set of flags used internally.
  *
- * @param sandboxAttr   the sandbox attribute
- * @return              the set of flags (0 if sandboxAttr is null)
+ * @param aSandboxAttr  the sandbox attribute
+ * @return              the set of flags (SANDBOXED_NONE if aSandboxAttr is null)
  */
 uint32_t
-nsContentUtils::ParseSandboxAttributeToFlags(const nsAttrValue* sandboxAttr)
+nsContentUtils::ParseSandboxAttributeToFlags(const nsAttrValue* aSandboxAttr)
 {
   // No sandbox attribute, no sandbox flags.
-  if (!sandboxAttr) { return 0; }
+  if (!aSandboxAttr) { return SANDBOXED_NONE; }
 
   //  Start off by setting all the restriction flags.
   uint32_t out = SANDBOXED_NAVIGATION
@@ -1266,19 +1284,70 @@ nsContentUtils::ParseSandboxAttributeToFlags(const nsAttrValue* sandboxAttr)
                | SANDBOXED_POINTER_LOCK
                | SANDBOXED_DOMAIN;
 
-// Macro for updating the flag according to the keywords
-#define IF_KEYWORD(atom, flags) \
-  if (sandboxAttr->Contains(nsGkAtoms::atom, eIgnoreCase)) { out &= ~(flags); }
+  MOZ_ASSERT(ArrayLength(sSandboxFlagAttrs) == ArrayLength(sSandboxFlagValues),
+             "Lengths of SandboxFlagAttrs and SandboxFlagvalues do not match");
 
-  IF_KEYWORD(allowsameorigin, SANDBOXED_ORIGIN)
-  IF_KEYWORD(allowforms,  SANDBOXED_FORMS)
-  IF_KEYWORD(allowscripts, SANDBOXED_SCRIPTS | SANDBOXED_AUTOMATIC_FEATURES)
-  IF_KEYWORD(allowtopnavigation, SANDBOXED_TOPLEVEL_NAVIGATION)
-  IF_KEYWORD(allowpointerlock, SANDBOXED_POINTER_LOCK)
-  IF_KEYWORD(allowpopups, SANDBOXED_AUXILIARY_NAVIGATION)
+  // For each flag: if it's in the attribute, update the (out) flag
+  for (uint32_t i = 0; i <  ArrayLength(sSandboxFlagAttrs); i++) {
+    if (aSandboxAttr->Contains(*sSandboxFlagAttrs[i], eIgnoreCase)) {
+        out &= ~(sSandboxFlagValues[i]);
+    }
+  }
 
   return out;
-#undef IF_KEYWORD
+}
+
+/**
+ * A helper function that checks if a string matches (case-insensitive) a valid
+ * sandbox flag.
+ *
+ * @param aFlag  the potential sandbox flag
+ * @return       true if the flag is a sandbox flag
+ */
+bool
+nsContentUtils::IsValidSandboxFlag(const nsAString& aFlag)
+{
+  for (uint32_t i = 0; i < ArrayLength(sSandboxFlagAttrs); i++) {
+    if (EqualsIgnoreASCIICase(nsDependentAtomString(*sSandboxFlagAttrs[i]), aFlag)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A helper function that returns a string attribute corresponding to the
+ * sandbox flags.
+ *
+ * @param aFlags  the sandbox flags
+ * @param aString the attribute corresponding to the flags (null if flags is 0)
+ */
+void
+nsContentUtils::SandboxFlagsToString(uint32_t aFlags, nsAString& aString)
+{
+  if (!aFlags) {
+    SetDOMStringToNull(aString);
+    return;
+  }
+
+  aString.Truncate();
+
+// Macro for updating the string according to set flags
+#define IF_FLAG(flag, atom)                                 \
+  if (!(aFlags & flag)) {                                   \
+    if (!aString.IsEmpty()) {                               \
+      aString.Append(NS_LITERAL_STRING(" "));               \
+    }                                                       \
+    aString.Append(nsDependentAtomString(nsGkAtoms::atom)); \
+  }
+
+  IF_FLAG(SANDBOXED_ORIGIN, allowsameorigin)
+  IF_FLAG(SANDBOXED_FORMS, allowforms)
+  IF_FLAG(SANDBOXED_SCRIPTS, allowscripts)
+  IF_FLAG(SANDBOXED_TOPLEVEL_NAVIGATION, allowtopnavigation)
+  IF_FLAG(SANDBOXED_POINTER_LOCK, allowpointerlock)
+  IF_FLAG(SANDBOXED_AUXILIARY_NAVIGATION, allowpopups)
+#undef IF_FLAG
 }
 
 nsIBidiKeyboard*
@@ -3960,7 +4029,7 @@ nsContentUtils::GetListenerManagerForNode(nsINode *aNode)
 
   EventListenerManagerMapEntry *entry =
     static_cast<EventListenerManagerMapEntry *>
-               (PL_DHashTableAdd(&sEventListenerManagersHash, aNode));
+      (PL_DHashTableAdd(&sEventListenerManagersHash, aNode, fallible));
 
   if (!entry) {
     return nullptr;
@@ -4425,20 +4494,20 @@ nsContentUtils::SetNodeTextContent(nsIContent* aContent,
 
 static bool
 AppendNodeTextContentsRecurse(nsINode* aNode, nsAString& aResult,
-                              const mozilla::fallible_t&)
+                              const fallible_t& aFallible)
 {
   for (nsIContent* child = aNode->GetFirstChild();
        child;
        child = child->GetNextSibling()) {
     if (child->IsElement()) {
       bool ok = AppendNodeTextContentsRecurse(child, aResult,
-                                              mozilla::fallible_t());
+                                              aFallible);
       if (!ok) {
         return false;
       }
     }
     else if (child->IsNodeOfType(nsINode::eTEXT)) {
-      bool ok = child->AppendTextTo(aResult, mozilla::fallible_t());
+      bool ok = child->AppendTextTo(aResult, aFallible);
       if (!ok) {
         return false;
       }
@@ -4452,21 +4521,21 @@ AppendNodeTextContentsRecurse(nsINode* aNode, nsAString& aResult,
 bool
 nsContentUtils::AppendNodeTextContent(nsINode* aNode, bool aDeep,
                                       nsAString& aResult,
-                                      const mozilla::fallible_t&)
+                                      const fallible_t& aFallible)
 {
   if (aNode->IsNodeOfType(nsINode::eTEXT)) {
     return static_cast<nsIContent*>(aNode)->AppendTextTo(aResult,
-                                                         mozilla::fallible_t());
+                                                         aFallible);
   }
   else if (aDeep) {
-    return AppendNodeTextContentsRecurse(aNode, aResult, mozilla::fallible_t());
+    return AppendNodeTextContentsRecurse(aNode, aResult, aFallible);
   }
   else {
     for (nsIContent* child = aNode->GetFirstChild();
          child;
          child = child->GetNextSibling()) {
       if (child->IsNodeOfType(nsINode::eTEXT)) {
-        bool ok = child->AppendTextTo(aResult, mozilla::fallible_t());
+        bool ok = child->AppendTextTo(aResult, fallible);
         if (!ok) {
             return false;
         }
@@ -6242,7 +6311,7 @@ void nsContentUtils::RemoveNewlines(nsString &aString)
 void
 nsContentUtils::PlatformToDOMLineBreaks(nsString &aString)
 {
-  if (!PlatformToDOMLineBreaks(aString, mozilla::fallible_t())) {
+  if (!PlatformToDOMLineBreaks(aString, fallible)) {
     aString.AllocFailed(aString.Length());
   }
 }
@@ -6962,7 +7031,7 @@ bool
 nsContentUtils::GetNodeTextContent(nsINode* aNode, bool aDeep, nsAString& aResult)
 {
   aResult.Truncate();
-  return AppendNodeTextContent(aNode, aDeep, aResult, mozilla::fallible_t());
+  return AppendNodeTextContent(aNode, aDeep, aResult, fallible);
 }
 
 void
@@ -7095,8 +7164,7 @@ nsContentUtils::CallOnAllRemoteChildren(nsIMessageBroadcaster* aManager,
      static_cast<nsFrameMessageManager*>(tabMM.get())->GetCallback();
     if (cb) {
       nsFrameLoader* fl = static_cast<nsFrameLoader*>(cb);
-      PBrowserParent* remoteBrowser = fl->GetRemoteBrowser();
-      TabParent* remote = static_cast<TabParent*>(remoteBrowser);
+      TabParent* remote = TabParent::GetFrom(fl);
       if (remote && aCallback) {
         aCallback(remote, aArg);
       }

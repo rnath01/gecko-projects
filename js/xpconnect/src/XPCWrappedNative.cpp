@@ -808,7 +808,7 @@ XPCWrappedNative::Init(HandleObject parent,
         return false;
     }
 
-    mFlatJSObject = JS_NewObject(cx, jsclazz, protoJSObject, parent);
+    mFlatJSObject = JS_NewObjectWithGivenProto(cx, jsclazz, protoJSObject, parent);
     if (!mFlatJSObject) {
         mFlatJSObject.unsetFlags(FLAT_JS_OBJECT_VALID);
         return false;
@@ -1573,9 +1573,7 @@ XPCWrappedNative::InitTearOffJSObject(XPCWrappedNativeTearOff* to)
     AutoJSContext cx;
 
     RootedObject parent(cx, mFlatJSObject);
-    RootedObject proto(cx, JS_GetObjectPrototype(cx, parent));
-    JSObject* obj = JS_NewObject(cx, Jsvalify(&XPC_WN_Tearoff_JSClass),
-                                 proto, parent);
+    JSObject* obj = JS_NewObject(cx, Jsvalify(&XPC_WN_Tearoff_JSClass), parent);
     if (!obj)
         return false;
 
@@ -2656,6 +2654,7 @@ XPCJSObjectHolder::GetJSObject()
 XPCJSObjectHolder::XPCJSObjectHolder(JSObject* obj)
     : mJSObj(obj)
 {
+    MOZ_ASSERT(obj);
     XPCJSRuntime::Get()->AddObjectHolderRoot(this);
 }
 
@@ -2677,15 +2676,4 @@ XPCJSObjectHolder::GetTraceName(JSTracer* trc, char *buf, size_t bufsize)
 {
     JS_snprintf(buf, bufsize, "XPCJSObjectHolder[0x%p].mJSObj",
                 trc->debugPrintArg());
-}
-
-// static
-XPCJSObjectHolder*
-XPCJSObjectHolder::newHolder(JSObject* obj)
-{
-    if (!obj) {
-        NS_ERROR("bad param");
-        return nullptr;
-    }
-    return new XPCJSObjectHolder(obj);
 }

@@ -12,6 +12,7 @@
 #include "mozilla/BasicEvents.h"
 #include "mozilla/EventForwards.h" // for KeyNameIndex, temporarily
 #include "mozilla/TextRange.h"
+#include "mozilla/FontRange.h"
 #include "nsCOMPtr.h"
 #include "nsIDOMKeyEvent.h"
 #include "nsITransferable.h"
@@ -399,6 +400,7 @@ public:
     , mSucceeded(false)
     , mWasAsync(false)
     , mUseNativeLineBreak(true)
+    , mWithFontRanges(false)
   {
   }
 
@@ -447,6 +449,13 @@ public:
     refPoint = aPoint;
   }
 
+  void RequestFontRanges()
+  {
+    NS_ASSERTION(message == NS_QUERY_TEXT_CONTENT,
+                 "not querying text content");
+    mWithFontRanges = true;
+  }
+
   uint32_t GetSelectionStart(void) const
   {
     NS_ASSERTION(message == NS_QUERY_SELECTED_TEXT,
@@ -471,6 +480,7 @@ public:
   bool mSucceeded;
   bool mWasAsync;
   bool mUseNativeLineBreak;
+  bool mWithFontRanges;
   struct
   {
     uint32_t mOffset;
@@ -482,7 +492,7 @@ public:
     uint32_t mOffset;
     nsString mString;
     // Finally, the coordinates is system coordinates.
-    nsIntRect mRect;
+    mozilla::LayoutDeviceIntRect mRect;
     // The return widget has the caret. This is set at all query events.
     nsIWidget* mFocusedWidget;
     // true if selection is reversed (end < start)
@@ -495,6 +505,8 @@ public:
     mozilla::WritingMode mWritingMode;
     // used by NS_QUERY_SELECTION_AS_TRANSFERABLE
     nsCOMPtr<nsITransferable> mTransferable;
+    // used by NS_QUERY_TEXT_CONTENT with font ranges requested
+    nsAutoTArray<mozilla::FontRange, 1> mFontRanges;
   } mReply;
 
   enum

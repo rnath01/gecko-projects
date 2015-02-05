@@ -1601,7 +1601,7 @@ CodeGeneratorX86Shared::visitFloor(LFloor *lir)
         bailoutFrom(&bailout, lir->snapshot());
 
         // Round toward -Infinity.
-        masm.vroundsd(X86Assembler::RoundDown, input, scratch, scratch);
+        masm.vroundsd(X86Encoding::RoundDown, input, scratch, scratch);
 
         bailoutCvttsd2si(scratch, output, lir->snapshot());
     } else {
@@ -1658,7 +1658,7 @@ CodeGeneratorX86Shared::visitFloorF(LFloorF *lir)
         bailoutFrom(&bailout, lir->snapshot());
 
         // Round toward -Infinity.
-        masm.vroundss(X86Assembler::RoundDown, input, scratch, scratch);
+        masm.vroundss(X86Encoding::RoundDown, input, scratch, scratch);
 
         bailoutCvttss2si(scratch, output, lir->snapshot());
     } else {
@@ -1723,7 +1723,7 @@ CodeGeneratorX86Shared::visitCeil(LCeil *lir)
         // x <= -1 or x > -0
         masm.bind(&lessThanMinusOne);
         // Round toward +Infinity.
-        masm.vroundsd(X86Assembler::RoundUp, input, scratch, scratch);
+        masm.vroundsd(X86Encoding::RoundUp, input, scratch, scratch);
         bailoutCvttsd2si(scratch, output, lir->snapshot());
         return;
     }
@@ -1775,7 +1775,7 @@ CodeGeneratorX86Shared::visitCeilF(LCeilF *lir)
         // x <= -1 or x > -0
         masm.bind(&lessThanMinusOne);
         // Round toward +Infinity.
-        masm.vroundss(X86Assembler::RoundUp, input, scratch, scratch);
+        masm.vroundss(X86Encoding::RoundUp, input, scratch, scratch);
         bailoutCvttss2si(scratch, output, lir->snapshot());
         return;
     }
@@ -1850,7 +1850,7 @@ CodeGeneratorX86Shared::visitRound(LRound *lir)
         // Add 0.5 and round toward -Infinity. The result is stored in the temp
         // register (currently contains 0.5).
         masm.addDouble(input, temp);
-        masm.vroundsd(X86Assembler::RoundDown, temp, scratch, scratch);
+        masm.vroundsd(X86Encoding::RoundDown, temp, scratch, scratch);
 
         // Truncate.
         bailoutCvttsd2si(scratch, output, lir->snapshot());
@@ -1933,7 +1933,7 @@ CodeGeneratorX86Shared::visitRoundF(LRoundF *lir)
         // Add 0.5 and round toward -Infinity. The result is stored in the temp
         // register (currently contains 0.5).
         masm.addFloat32(input, temp);
-        masm.vroundss(X86Assembler::RoundDown, temp, scratch, scratch);
+        masm.vroundss(X86Encoding::RoundDown, temp, scratch, scratch);
 
         // Truncate.
         bailoutCvttss2si(scratch, output, lir->snapshot());
@@ -1978,10 +1978,10 @@ CodeGeneratorX86Shared::visitGuardShape(LGuardShape *guard)
 }
 
 void
-CodeGeneratorX86Shared::visitGuardObjectType(LGuardObjectType *guard)
+CodeGeneratorX86Shared::visitGuardObjectGroup(LGuardObjectGroup *guard)
 {
     Register obj = ToRegister(guard->input());
-    masm.cmpPtr(Operand(obj, JSObject::offsetOfType()), ImmGCPtr(guard->mir()->typeObject()));
+    masm.cmpPtr(Operand(obj, JSObject::offsetOfGroup()), ImmGCPtr(guard->mir()->group()));
 
     Assembler::Condition cond =
         guard->mir()->bailOnEquality() ? Assembler::Equal : Assembler::NotEqual;
@@ -1994,8 +1994,8 @@ CodeGeneratorX86Shared::visitGuardClass(LGuardClass *guard)
     Register obj = ToRegister(guard->input());
     Register tmp = ToRegister(guard->tempInt());
 
-    masm.loadPtr(Address(obj, JSObject::offsetOfType()), tmp);
-    masm.cmpPtr(Operand(tmp, types::TypeObject::offsetOfClasp()), ImmPtr(guard->mir()->getClass()));
+    masm.loadPtr(Address(obj, JSObject::offsetOfGroup()), tmp);
+    masm.cmpPtr(Operand(tmp, types::ObjectGroup::offsetOfClasp()), ImmPtr(guard->mir()->getClass()));
     bailoutIf(Assembler::NotEqual, guard->snapshot());
 }
 

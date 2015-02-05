@@ -1090,10 +1090,8 @@ js::XDRScript(XDRState<mode> *xdr, HandleObject enclosingScope, HandleScript enc
         scriptp.set(script);
 
         /* see BytecodeEmitter::tellDebuggerAboutCompiledScript */
-        if (!fun) {
-            RootedGlobalObject global(cx, script->compileAndGo() ? &script->global() : nullptr);
-            Debugger::onNewScript(cx, script, global);
-        }
+        if (!fun)
+            Debugger::onNewScript(cx, script);
     }
 
     return true;
@@ -3191,8 +3189,7 @@ js::CloneFunctionScript(JSContext *cx, HandleFunction original, HandleFunction c
     cscript->setFunction(clone);
 
     script = clone->nonLazyScript();
-    RootedGlobalObject global(cx, script->compileAndGo() ? &script->global() : nullptr);
-    Debugger::onNewScript(cx, script, global);
+    Debugger::onNewScript(cx, script);
 
     return true;
 }
@@ -3740,6 +3737,12 @@ LazyScript::sourceObject() const
     return sourceObject_ ? &sourceObject_->as<ScriptSourceObject>() : nullptr;
 }
 
+ScriptSource *
+LazyScript::maybeForwardedScriptSource() const
+{
+    return UncheckedUnwrap(MaybeForwarded(sourceObject()))->as<ScriptSourceObject>().source();
+}
+
 /* static */ LazyScript *
 LazyScript::CreateRaw(ExclusiveContext *cx, HandleFunction fun,
                       uint64_t packedFields, uint32_t begin, uint32_t end,
@@ -3964,7 +3967,7 @@ LazyScriptHashPolicy::match(JSScript *script, const Lookup &lookup)
     if (!scriptChars)
         return false;
 
-    const char16_t *lazyChars = lazy->source()->chars(cx, holder);
+    const char16_t *lazyChars = lazy->scriptSource()->chars(cx, holder);
     if (!lazyChars)
         return false;
 

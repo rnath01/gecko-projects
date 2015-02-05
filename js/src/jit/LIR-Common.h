@@ -108,6 +108,11 @@ class LMoveGroup : public LInstructionHelper<0, 0, 0>
 {
     js::Vector<LMove, 2, JitAllocPolicy> moves_;
 
+#ifdef JS_CODEGEN_X86
+    // Optional general register available for use when executing moves.
+    LAllocation scratchRegister_;
+#endif
+
     explicit LMoveGroup(TempAllocator &alloc)
       : moves_(alloc)
     { }
@@ -132,6 +137,19 @@ class LMoveGroup : public LInstructionHelper<0, 0, 0>
     }
     const LMove &getMove(size_t i) const {
         return moves_[i];
+    }
+
+#ifdef JS_CODEGEN_X86
+    void setScratchRegister(Register reg) {
+        scratchRegister_ = LGeneralReg(reg);
+    }
+#endif
+    LAllocation maybeScratchRegister() {
+#ifdef JS_CODEGEN_X86
+        return scratchRegister_;
+#else
+        return LAllocation();
+#endif
     }
 };
 
@@ -662,6 +680,16 @@ class LValue : public LInstructionHelper<BOX_PIECES, 0, 0>
 
     Value value() const {
         return v_;
+    }
+};
+
+class LNurseryObject : public LInstructionHelper<1, 0, 0>
+{
+  public:
+    LIR_HEADER(NurseryObject);
+
+    MNurseryObject *mir() const {
+        return mir_->toNurseryObject();
     }
 };
 
@@ -2070,15 +2098,15 @@ class LFunctionDispatch : public LInstructionHelper<0, 1, 0>
     }
 };
 
-class LTypeObjectDispatch : public LInstructionHelper<0, 1, 1>
+class LObjectGroupDispatch : public LInstructionHelper<0, 1, 1>
 {
-    // Dispatch is performed based on a TypeObject -> block
+    // Dispatch is performed based on an ObjectGroup -> block
     // map inferred by the MIR.
 
   public:
-    LIR_HEADER(TypeObjectDispatch);
+    LIR_HEADER(ObjectGroupDispatch);
 
-    LTypeObjectDispatch(const LAllocation &in, const LDefinition &temp) {
+    LObjectGroupDispatch(const LAllocation &in, const LDefinition &temp) {
         setOperand(0, in);
         setTemp(0, temp);
     }
@@ -2087,8 +2115,8 @@ class LTypeObjectDispatch : public LInstructionHelper<0, 1, 1>
         return getTemp(0);
     }
 
-    MTypeObjectDispatch *mir() {
-        return mir_->toTypeObjectDispatch();
+    MObjectGroupDispatch *mir() {
+        return mir_->toObjectGroupDispatch();
     }
 };
 

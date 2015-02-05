@@ -519,7 +519,7 @@ already_AddRefed<MediaSource>
 HTMLMediaElement::GetMozMediaSourceObject() const
 {
   nsRefPtr<MediaSource> source;
-  if (IsMediaSourceURI(mLoadingSrc)) {
+  if (mLoadingSrc && IsMediaSourceURI(mLoadingSrc)) {
     NS_GetSourceForMediaSourceURI(mLoadingSrc, getter_AddRefs(source));
   }
   return source.forget();
@@ -1889,7 +1889,6 @@ HTMLMediaElement::CaptureStreamInternal(bool aFinishWhenEnded)
   // back into the output stream.
   out->mStream->GetStream()->ChangeExplicitBlockerCount(1);
   if (mDecoder) {
-    mDecoder->SetAudioCaptured(true);
     mDecoder->AddOutputStream(
         out->mStream->GetStream()->AsProcessedStream(), aFinishWhenEnded);
   }
@@ -2705,7 +2704,6 @@ nsresult HTMLMediaElement::FinishDecoderSetup(MediaDecoder* aDecoder,
   // available immediately.
   mDecoder->SetResource(aStream);
   mDecoder->SetAudioChannel(mAudioChannel);
-  mDecoder->SetAudioCaptured(mAudioCaptured);
   mDecoder->SetVolume(mMuted ? 0.0 : mVolume);
   mDecoder->SetPreservesPitch(mPreservesPitch);
   mDecoder->SetPlaybackRate(mPlaybackRate);
@@ -3018,6 +3016,12 @@ void HTMLMediaElement::MetadataLoaded(const MediaInfo* aInfo,
   mTags = aTags.forget();
   mLoadedDataFired = false;
   ChangeReadyState(nsIDOMHTMLMediaElement::HAVE_METADATA);
+
+  if (mIsEncrypted) {
+    nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+    obs->NotifyObservers(static_cast<nsIContent*>(this), "media-eme-metadataloaded", nullptr);
+  }
+
   DispatchAsyncEvent(NS_LITERAL_STRING("durationchange"));
   if (IsVideo() && mHasVideo) {
     mMediaSize = aInfo->mVideo.mDisplay;

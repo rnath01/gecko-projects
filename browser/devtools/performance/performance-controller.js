@@ -21,6 +21,8 @@ devtools.lazyRequireGetter(this, "TIMELINE_BLUEPRINT",
   "devtools/timeline/global", true);
 devtools.lazyRequireGetter(this, "L10N",
   "devtools/profiler/global", true);
+devtools.lazyRequireGetter(this, "RecordingUtils",
+  "devtools/performance/recording-utils", true);
 devtools.lazyRequireGetter(this, "RecordingModel",
   "devtools/performance/recording-model", true);
 devtools.lazyRequireGetter(this, "MarkersOverview",
@@ -62,6 +64,9 @@ const EVENTS = {
   // when a recording model is selected
   RECORDING_SELECTED: "Performance:RecordingSelected",
 
+  // Emitted by the PerformanceView on clear button click
+  UI_CLEAR_RECORDINGS: "Performance:UI:ClearRecordings",
+
   // Emitted by the PerformanceView on record button click
   UI_START_RECORDING: "Performance:UI:StartRecording",
   UI_STOP_RECORDING: "Performance:UI:StopRecording",
@@ -76,6 +81,9 @@ const EVENTS = {
   RECORDING_STOPPED: "Performance:RecordingStopped",
   RECORDING_WILL_START: "Performance:RecordingWillStart",
   RECORDING_WILL_STOP: "Performance:RecordingWillStop",
+
+  // When recordings have been cleared out
+  RECORDINGS_CLEARED: "Performance:RecordingsCleared",
 
   // When a recording is imported or exported via the PerformanceController
   RECORDING_IMPORTED: "Performance:RecordingImported",
@@ -98,14 +106,20 @@ const EVENTS = {
   // Emitted by the DetailsView when a subview is selected
   DETAILS_VIEW_SELECTED: "Performance:UI:DetailsViewSelected",
 
-  // Emitted by the CallTreeView when a call tree has been rendered
-  CALL_TREE_RENDERED: "Performance:UI:CallTreeRendered",
-
   // Emitted by the WaterfallView when it has been rendered
   WATERFALL_RENDERED: "Performance:UI:WaterfallRendered",
 
-  // Emitted by the FlameGraphView when it has been rendered
-  FLAMEGRAPH_RENDERED: "Performance:UI:FlameGraphRendered",
+  // Emitted by the JsCallTreeView when a call tree has been rendered
+  JS_CALL_TREE_RENDERED: "Performance:UI:JsCallTreeRendered",
+
+  // Emitted by the JsFlameGraphView when it has been rendered
+  JS_FLAMEGRAPH_RENDERED: "Performance:UI:JsFlameGraphRendered",
+
+  // Emitted by the MemoryCallTreeView when a call tree has been rendered
+  MEMORY_CALL_TREE_RENDERED: "Performance:UI:MemoryCallTreeRendered",
+
+  // Emitted by the MemoryFlameGraphView when it has been rendered
+  MEMORY_FLAMEGRAPH_RENDERED: "Performance:UI:MemoryFlameGraphRendered",
 
   // When a source is shown in the JavaScript Debugger at a specific location.
   SOURCE_SHOWN_IN_JS_DEBUGGER: "Performance:UI:SourceShownInJsDebugger",
@@ -122,7 +136,6 @@ let gToolbox, gTarget, gFront;
  */
 let startupPerformance = Task.async(function*() {
   yield promise.all([
-    PrefObserver.register(),
     PerformanceController.initialize(),
     PerformanceView.initialize()
   ]);
@@ -133,28 +146,10 @@ let startupPerformance = Task.async(function*() {
  */
 let shutdownPerformance = Task.async(function*() {
   yield promise.all([
-    PrefObserver.unregister(),
     PerformanceController.destroy(),
     PerformanceView.destroy()
   ]);
 });
-
-/**
- * Observes pref changes on the devtools.profiler branch and triggers the
- * required frontend modifications.
- */
-let PrefObserver = {
-  register: function() {
-    this.branch = Services.prefs.getBranch("devtools.profiler.");
-    this.branch.addObserver("", this, false);
-  },
-  unregister: function() {
-    this.branch.removeObserver("", this);
-  },
-  observe: function(subject, topic, pref) {
-    Prefs.refresh();
-  }
-};
 
 /**
  * Functions handling target-related lifetime events and
@@ -173,6 +168,7 @@ let PerformanceController = {
     this.stopRecording = this.stopRecording.bind(this);
     this.importRecording = this.importRecording.bind(this);
     this.exportRecording = this.exportRecording.bind(this);
+    this.clearRecordings = this.clearRecordings.bind(this);
     this._onTimelineData = this._onTimelineData.bind(this);
     this._onRecordingSelectFromView = this._onRecordingSelectFromView.bind(this);
     this._onPrefChanged = this._onPrefChanged.bind(this);
@@ -181,13 +177,15 @@ let PerformanceController = {
     PerformanceView.on(EVENTS.UI_START_RECORDING, this.startRecording);
     PerformanceView.on(EVENTS.UI_STOP_RECORDING, this.stopRecording);
     PerformanceView.on(EVENTS.UI_IMPORT_RECORDING, this.importRecording);
+    PerformanceView.on(EVENTS.UI_CLEAR_RECORDINGS, this.clearRecordings);
     RecordingsView.on(EVENTS.UI_EXPORT_RECORDING, this.exportRecording);
     RecordingsView.on(EVENTS.RECORDING_SELECTED, this._onRecordingSelectFromView);
 
-    gFront.on("ticks", this._onTimelineData); // framerate
     gFront.on("markers", this._onTimelineData); // timeline markers
     gFront.on("frames", this._onTimelineData); // stack frames
     gFront.on("memory", this._onTimelineData); // memory measurements
+    gFront.on("ticks", this._onTimelineData); // framerate
+    gFront.on("allocations", this._onTimelineData); // memory allocations
   }),
 
   /**
@@ -198,13 +196,15 @@ let PerformanceController = {
     PerformanceView.off(EVENTS.UI_START_RECORDING, this.startRecording);
     PerformanceView.off(EVENTS.UI_STOP_RECORDING, this.stopRecording);
     PerformanceView.off(EVENTS.UI_IMPORT_RECORDING, this.importRecording);
+    PerformanceView.off(EVENTS.UI_CLEAR_RECORDINGS, this.clearRecordings);
     RecordingsView.off(EVENTS.UI_EXPORT_RECORDING, this.exportRecording);
     RecordingsView.off(EVENTS.RECORDING_SELECTED, this._onRecordingSelectFromView);
 
-    gFront.off("ticks", this._onTimelineData);
     gFront.off("markers", this._onTimelineData);
     gFront.off("frames", this._onTimelineData);
     gFront.off("memory", this._onTimelineData);
+    gFront.off("ticks", this._onTimelineData);
+    gFront.off("allocations", this._onTimelineData);
   },
 
   /**
@@ -222,9 +222,13 @@ let PerformanceController = {
   startRecording: Task.async(function *() {
     let recording = this._createRecording();
 
+    let withMemory = this.getPref("enable-memory");
+    let withTicks = this.getPref("enable-framerate");
+    let withAllocations = true;
+
     this.emit(EVENTS.RECORDING_WILL_START, recording);
-    yield recording.startRecording({ withTicks: true, withMemory: true });
-    this.emit(EVENTS.RECORDING_STARTED, recording);
+    yield recording.startRecording({ withTicks, withMemory, withAllocations });
+    this.emit(EVENTS.RECORDING_STARTED, recording, { withTicks, withMemory, withAllocations });
 
     this.setCurrentRecording(recording);
   }),
@@ -237,7 +241,9 @@ let PerformanceController = {
     let recording = this._getLatestRecording();
 
     this.emit(EVENTS.RECORDING_WILL_STOP, recording);
-    yield recording.stopRecording();
+    yield recording.stopRecording({
+      withAllocations: true
+    });
     this.emit(EVENTS.RECORDING_STOPPED, recording);
   }),
 
@@ -253,6 +259,22 @@ let PerformanceController = {
   exportRecording: Task.async(function*(_, recording, file) {
     yield recording.exportRecording(file);
     this.emit(EVENTS.RECORDING_EXPORTED, recording);
+  }),
+
+  /**
+   * Clears all recordings from the list as well as the current recording.
+   * Emits `EVENTS.RECORDINGS_CLEARED` when complete so other components can clean up.
+   */
+  clearRecordings: Task.async(function* () {
+    let latest = this._getLatestRecording();
+
+    if (latest && latest.isRecording()) {
+      yield this.stopRecording();
+    }
+
+    this._recordings.length = 0;
+    this.setCurrentRecording(null);
+    this.emit(EVENTS.RECORDINGS_CLEARED);
   }),
 
   /**
@@ -318,7 +340,7 @@ let PerformanceController = {
    * Fired whenever the PerformanceFront emits markers, memory or ticks.
    */
   _onTimelineData: function (...data) {
-    this._recordings.forEach(profile => profile.addTimelineData.apply(profile, data));
+    this._recordings.forEach(e => e.addTimelineData.apply(e, data));
     this.emit(EVENTS.TIMELINE_DATA, ...data);
   },
 
@@ -343,15 +365,6 @@ let PerformanceController = {
  * Convenient way of emitting events from the controller.
  */
 EventEmitter.decorate(PerformanceController);
-
-/**
- * Shortcuts for accessing various profiler preferences.
- */
-const Prefs = new ViewHelpers.Prefs("devtools.profiler", {
-  flattenTreeRecursion: ["Bool", "ui.flatten-tree-recursion"],
-  showPlatformData: ["Bool", "ui.show-platform-data"],
-  showIdleBlocks: ["Bool", "ui.show-idle-blocks"],
-});
 
 /**
  * DOM query helpers.

@@ -2032,12 +2032,12 @@ JS_FireOnNewGlobalObject(JSContext *cx, JS::HandleObject global)
 }
 
 JS_PUBLIC_API(JSObject *)
-JS_NewObject(JSContext *cx, const JSClass *jsclasp, HandleObject proto, HandleObject parent)
+JS_NewObject(JSContext *cx, const JSClass *jsclasp, HandleObject parent)
 {
     MOZ_ASSERT(!cx->runtime()->isAtomsCompartment(cx->compartment()));
     AssertHeapIsIdle(cx);
     CHECK_REQUEST(cx);
-    assertSameCompartment(cx, proto, parent);
+    assertSameCompartment(cx, parent);
 
     const Class *clasp = Valueify(jsclasp);
     if (!clasp)
@@ -2046,7 +2046,7 @@ JS_NewObject(JSContext *cx, const JSClass *jsclasp, HandleObject proto, HandleOb
     MOZ_ASSERT(clasp != &JSFunction::class_);
     MOZ_ASSERT(!(clasp->flags & JSCLASS_IS_GLOBAL));
 
-    JSObject *obj = NewObjectWithClassProto(cx, clasp, proto, parent);
+    JSObject *obj = NewObjectWithClassProto(cx, clasp, nullptr, parent);
     MOZ_ASSERT_IF(obj, obj->getParent());
     return obj;
 }
@@ -2066,10 +2066,7 @@ JS_NewObjectWithGivenProto(JSContext *cx, const JSClass *jsclasp, HandleObject p
     MOZ_ASSERT(clasp != &JSFunction::class_);
     MOZ_ASSERT(!(clasp->flags & JSCLASS_IS_GLOBAL));
 
-    JSObject *obj = NewObjectWithGivenProto(cx, clasp, proto, parent);
-    if (obj)
-        MarkTypeObjectUnknownProperties(cx, obj->type());
-    return obj;
+    return NewObjectWithGivenProto(cx, clasp, proto, parent);
 }
 
 JS_PUBLIC_API(JSObject *)
@@ -2662,17 +2659,17 @@ JS_DefineUCProperty(JSContext *cx, HandleObject obj, const char16_t *name, size_
 
 JS_PUBLIC_API(JSObject *)
 JS_DefineObject(JSContext *cx, HandleObject obj, const char *name, const JSClass *jsclasp,
-                HandleObject proto, unsigned attrs)
+                unsigned attrs)
 {
     AssertHeapIsIdle(cx);
     CHECK_REQUEST(cx);
-    assertSameCompartment(cx, obj, proto);
+    assertSameCompartment(cx, obj);
 
     const Class *clasp = Valueify(jsclasp);
     if (!clasp)
         clasp = &PlainObject::class_;    /* default class is Object */
 
-    RootedObject nobj(cx, NewObjectWithClassProto(cx, clasp, proto, obj));
+    RootedObject nobj(cx, NewObjectWithClassProto(cx, clasp, nullptr, obj));
     if (!nobj)
         return nullptr;
 
@@ -4273,8 +4270,7 @@ JS::CloneAndExecuteScript(JSContext *cx, HandleObject obj, HandleScript scriptAr
         if (!script)
             return false;
 
-        Rooted<GlobalObject *> global(cx, script->compileAndGo() ? &script->global() : nullptr);
-        js::Debugger::onNewScript(cx, script, global);
+        js::Debugger::onNewScript(cx, script);
     }
     return ExecuteScript(cx, obj, script, nullptr);
 }
@@ -5742,7 +5738,9 @@ JS_GetGlobalJitCompilerOption(JSRuntime *rt, JSJitCompilerOption opt)
       case JSJITCOMPILER_BASELINE_WARMUP_TRIGGER:
         return jit::js_JitOptions.baselineWarmUpThreshold;
       case JSJITCOMPILER_ION_WARMUP_TRIGGER:
-        return jit::js_JitOptions.forcedDefaultIonWarmUpThreshold;
+        return jit::js_JitOptions.forcedDefaultIonWarmUpThreshold.isSome()
+             ? jit::js_JitOptions.forcedDefaultIonWarmUpThreshold.ref()
+             : jit::OptimizationInfo::CompilerWarmupThreshold;
       case JSJITCOMPILER_ION_ENABLE:
         return JS::RuntimeOptionsRef(rt).ion();
       case JSJITCOMPILER_BASELINE_ENABLE:

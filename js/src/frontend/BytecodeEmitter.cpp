@@ -2197,10 +2197,7 @@ BytecodeEmitter::tellDebuggerAboutCompiledScript(ExclusiveContext *cx)
     // Lazy scripts are never top level (despite always being invoked with a
     // nullptr parent), and so the hook should never be fired.
     if (emitterMode != LazyFunction && !parent) {
-        GlobalObject *compileAndGoGlobal = nullptr;
-        if (script->compileAndGo())
-            compileAndGoGlobal = &script->global();
-        Debugger::onNewScript(cx->asJSContext(), script, compileAndGoGlobal);
+        Debugger::onNewScript(cx->asJSContext(), script);
     }
 }
 
@@ -4298,7 +4295,7 @@ ParseNode::getConstantValue(ExclusiveContext *cx, AllowConstantObjects allowObje
         }
         MOZ_ASSERT(idx == count);
 
-        types::FixArrayType(cx, obj);
+        types::FixArrayGroup(cx, obj);
         vp.setObject(*obj);
         return true;
       }
@@ -4361,7 +4358,7 @@ ParseNode::getConstantValue(ExclusiveContext *cx, AllowConstantObjects allowObje
             }
         }
 
-        types::FixObjectType(cx, obj);
+        types::FixObjectGroup(cx, obj);
         vp.setObject(*obj);
         return true;
       }
@@ -4379,7 +4376,7 @@ EmitSingletonInitialiser(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *
         return false;
 
     RootedNativeObject obj(cx, &value.toObject().as<NativeObject>());
-    if (!obj->is<ArrayObject>() && !JSObject::setSingletonType(cx, obj))
+    if (!obj->is<ArrayObject>() && !JSObject::setSingleton(cx, obj))
         return false;
 
     ObjectBox *objbox = bce->parser->newObjectBox(obj);

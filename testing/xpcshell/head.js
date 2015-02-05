@@ -398,10 +398,9 @@ function _setupDebuggerServer(breakpointFiles, callback) {
         try {
           // Add a breakpoint for the first line in our test files.
           let threadActor = subject.wrappedJSObject;
-          let location = { line: 1 };
           for (let file of breakpointFiles) {
             let sourceActor = threadActor.sources.source({originalUrl: file});
-            sourceActor.setBreakpoint(location);
+            sourceActor.setBreakpoint(1);
           }
         } catch (ex) {
           do_print("Failed to initialize breakpoints: " + ex + "\n" + ex.stack);
@@ -654,8 +653,8 @@ function do_execute_soon(callback, aName) {
           let stack = e.stack ? _format_stack(e.stack) : null;
           _testLogger.testStatus(_TEST_NAME,
                                  funcName,
-                                 'ERROR',
-                                 'OK',
+                                 'FAIL',
+                                 'PASS',
                                  _exception_message(e),
                                  stack);
           _do_quit();

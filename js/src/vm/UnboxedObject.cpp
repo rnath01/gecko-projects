@@ -158,10 +158,10 @@ UnboxedPlainObject::trace(JSTracer *trc, JSObject *obj)
 bool
 UnboxedPlainObject::convertToNative(JSContext *cx)
 {
-    // Immediately clear any new script on this object's type,
+    // Immediately clear any new script on this object's group,
     // as rollbackPartiallyInitializedObjects() will be confused by the type
     // changes we make in this function.
-    type()->clearNewScript(cx);
+    group()->clearNewScript(cx);
 
     // clearNewScript() can reentrantly invoke this method.
     if (!is<UnboxedPlainObject>())
@@ -174,7 +174,7 @@ UnboxedPlainObject::convertToNative(JSContext *cx)
 
     AutoValueVector values(cx);
     RootedShape shape(cx, EmptyShape::getInitialShape(cx, &PlainObject::class_, proto,
-                                                      getMetadata(), getParent(), nfixed,
+                                                      getParent(), getMetadata(), nfixed,
                                                       lastProperty()->getObjectFlags()));
     if (!shape)
         return false;
@@ -196,28 +196,24 @@ UnboxedPlainObject::convertToNative(JSContext *cx)
     if (!SetClassAndProto(cx, obj, &PlainObject::class_, proto))
         return false;
 
-    // Any failures after this point will leave the object as a mutant, and we
-    // can't recover.
-
-    RootedPlainObject nobj(cx, &obj->as<PlainObject>());
-    if (!nobj->setLastProperty(cx, nobj, shape))
-        CrashAtUnhandlableOOM("UnboxedPlainObject::convertToNative");
+    RootedNativeObject nobj(cx, &obj->as<PlainObject>());
+    NativeObject::setLastPropertyMakeNative(cx, nobj, shape);
 
     for (size_t i = 0; i < values.length(); i++)
-        nobj->initSlot(i, values[i]);
+        nobj->initSlotUnchecked(i, values[i]);
 
     return true;
 }
 
 /* static */
 UnboxedPlainObject *
-UnboxedPlainObject::create(JSContext *cx, HandleTypeObject type, NewObjectKind newKind)
+UnboxedPlainObject::create(JSContext *cx, HandleObjectGroup group, NewObjectKind newKind)
 {
-    MOZ_ASSERT(type->clasp() == &class_);
-    gc::AllocKind allocKind = type->unboxedLayout().getAllocKind();
+    MOZ_ASSERT(group->clasp() == &class_);
+    gc::AllocKind allocKind = group->unboxedLayout().getAllocKind();
 
-    UnboxedPlainObject *res = NewObjectWithType<UnboxedPlainObject>(cx, type, cx->global(),
-                                                                    allocKind, newKind);
+    UnboxedPlainObject *res = NewObjectWithGroup<UnboxedPlainObject>(cx, group, cx->global(),
+                                                                     allocKind, newKind);
     if (!res)
         return nullptr;
 
@@ -245,12 +241,12 @@ UnboxedPlainObject::create(JSContext *cx, HandleTypeObject type, NewObjectKind n
 }
 
 /* static */ bool
-UnboxedPlainObject::obj_lookupGeneric(JSContext *cx, HandleObject obj,
-                                      HandleId id, MutableHandleObject objp,
-                                      MutableHandleShape propp)
+UnboxedPlainObject::obj_lookupProperty(JSContext *cx, HandleObject obj,
+                                       HandleId id, MutableHandleObject objp,
+                                       MutableHandleShape propp)
 {
     if (obj->as<UnboxedPlainObject>().layout().lookup(id)) {
-        MarkNonNativePropertyFound(propp);
+        MarkNonNativePropertyFound<CanGC>(propp);
         objp.set(obj);
         return true;
     }
@@ -266,29 +262,8 @@ UnboxedPlainObject::obj_lookupGeneric(JSContext *cx, HandleObject obj,
 }
 
 /* static */ bool
-UnboxedPlainObject::obj_lookupProperty(JSContext *cx, HandleObject obj,
-                                       HandlePropertyName name,
-                                       MutableHandleObject objp,
-                                       MutableHandleShape propp)
-{
-    RootedId id(cx, NameToId(name));
-    return obj_lookupGeneric(cx, obj, id, objp, propp);
-}
-
-/* static */ bool
-UnboxedPlainObject::obj_lookupElement(JSContext *cx, HandleObject obj,
-                                      uint32_t index, MutableHandleObject objp,
-                                      MutableHandleShape propp)
-{
-    RootedId id(cx);
-    if (!IndexToId(cx, index, &id))
-        return false;
-    return obj_lookupGeneric(cx, obj, id, objp, propp);
-}
-
-/* static */ bool
-UnboxedPlainObject::obj_defineGeneric(JSContext *cx, HandleObject obj, HandleId id, HandleValue v,
-                                      PropertyOp getter, StrictPropertyOp setter, unsigned attrs)
+UnboxedPlainObject::obj_defineProperty(JSContext *cx, HandleObject obj, HandleId id, HandleValue v,
+                                       PropertyOp getter, StrictPropertyOp setter, unsigned attrs)
 {
     if (!obj->as<UnboxedPlainObject>().convertToNative(cx))
         return false;
@@ -297,28 +272,8 @@ UnboxedPlainObject::obj_defineGeneric(JSContext *cx, HandleObject obj, HandleId 
 }
 
 /* static */ bool
-UnboxedPlainObject::obj_defineProperty(JSContext *cx, HandleObject obj,
-                                       HandlePropertyName name, HandleValue v,
-                                       PropertyOp getter, StrictPropertyOp setter, unsigned attrs)
-{
-    Rooted<jsid> id(cx, NameToId(name));
-    return obj_defineGeneric(cx, obj, id, v, getter, setter, attrs);
-}
-
-/* static */ bool
-UnboxedPlainObject::obj_defineElement(JSContext *cx, HandleObject obj, uint32_t index, HandleValue v,
-                                      PropertyOp getter, StrictPropertyOp setter, unsigned attrs)
-{
-    AutoRooterGetterSetter gsRoot(cx, attrs, &getter, &setter);
-    RootedId id(cx);
-    if (!IndexToId(cx, index, &id))
-        return false;
-    return obj_defineGeneric(cx, obj, id, v, getter, setter, attrs);
-}
-
-/* static */ bool
-UnboxedPlainObject::obj_getGeneric(JSContext *cx, HandleObject obj, HandleObject receiver,
-                                   HandleId id, MutableHandleValue vp)
+UnboxedPlainObject::obj_getProperty(JSContext *cx, HandleObject obj, HandleObject receiver,
+                                    HandleId id, MutableHandleValue vp)
 {
     const UnboxedLayout &layout = obj->as<UnboxedPlainObject>().layout();
 
@@ -337,26 +292,8 @@ UnboxedPlainObject::obj_getGeneric(JSContext *cx, HandleObject obj, HandleObject
 }
 
 /* static */ bool
-UnboxedPlainObject::obj_getProperty(JSContext *cx, HandleObject obj, HandleObject receiver,
-                                    HandlePropertyName name, MutableHandleValue vp)
-{
-    RootedId id(cx, NameToId(name));
-    return obj_getGeneric(cx, obj, receiver, id, vp);
-}
-
-/* static */ bool
-UnboxedPlainObject::obj_getElement(JSContext *cx, HandleObject obj, HandleObject receiver,
-                                   uint32_t index, MutableHandleValue vp)
-{
-    RootedId id(cx);
-    if (!IndexToId(cx, index, &id))
-        return false;
-    return obj_getGeneric(cx, obj, receiver, id, vp);
-}
-
-/* static */ bool
-UnboxedPlainObject::obj_setGeneric(JSContext *cx, HandleObject obj, HandleId id,
-                                   MutableHandleValue vp, bool strict)
+UnboxedPlainObject::obj_setProperty(JSContext *cx, HandleObject obj, HandleId id,
+                                    MutableHandleValue vp, bool strict)
 {
     const UnboxedLayout &layout = obj->as<UnboxedPlainObject>().layout();
 
@@ -380,24 +317,6 @@ UnboxedPlainObject::obj_setGeneric(JSContext *cx, HandleObject obj, HandleId id,
 }
 
 /* static */ bool
-UnboxedPlainObject::obj_setProperty(JSContext *cx, HandleObject obj, HandlePropertyName name,
-                                    MutableHandleValue vp, bool strict)
-{
-    RootedId id(cx, NameToId(name));
-    return obj_setGeneric(cx, obj, id, vp, strict);
-}
-
-/* static */ bool
-UnboxedPlainObject::obj_setElement(JSContext *cx, HandleObject obj, uint32_t index,
-                                   MutableHandleValue vp, bool strict)
-{
-    RootedId id(cx);
-    if (!IndexToId(cx, index, &id))
-        return false;
-    return obj_setGeneric(cx, obj, id, vp, strict);
-}
-
-/* static */ bool
 UnboxedPlainObject::obj_getOwnPropertyDescriptor(JSContext *cx, HandleObject obj, HandleId id,
                                                  MutableHandle<JSPropertyDescriptor> desc)
 {
@@ -415,8 +334,8 @@ UnboxedPlainObject::obj_getOwnPropertyDescriptor(JSContext *cx, HandleObject obj
 }
 
 /* static */ bool
-UnboxedPlainObject::obj_setGenericAttributes(JSContext *cx, HandleObject obj,
-                                             HandleId id, unsigned *attrsp)
+UnboxedPlainObject::obj_setPropertyAttributes(JSContext *cx, HandleObject obj,
+                                              HandleId id, unsigned *attrsp)
 {
     if (!obj->as<UnboxedPlainObject>().convertToNative(cx))
         return false;
@@ -424,7 +343,8 @@ UnboxedPlainObject::obj_setGenericAttributes(JSContext *cx, HandleObject obj,
 }
 
 /* static */ bool
-UnboxedPlainObject::obj_deleteGeneric(JSContext *cx, HandleObject obj, HandleId id, bool *succeeded)
+UnboxedPlainObject::obj_deleteProperty(JSContext *cx, HandleObject obj, HandleId id,
+                                       bool *succeeded)
 {
     if (!obj->as<UnboxedPlainObject>().convertToNative(cx))
         return false;
@@ -468,21 +388,13 @@ const Class UnboxedPlainObject::class_ = {
     JS_NULL_CLASS_SPEC,
     JS_NULL_CLASS_EXT,
     {
-        UnboxedPlainObject::obj_lookupGeneric,
         UnboxedPlainObject::obj_lookupProperty,
-        UnboxedPlainObject::obj_lookupElement,
-        UnboxedPlainObject::obj_defineGeneric,
         UnboxedPlainObject::obj_defineProperty,
-        UnboxedPlainObject::obj_defineElement,
-        UnboxedPlainObject::obj_getGeneric,
         UnboxedPlainObject::obj_getProperty,
-        UnboxedPlainObject::obj_getElement,
-        UnboxedPlainObject::obj_setGeneric,
         UnboxedPlainObject::obj_setProperty,
-        UnboxedPlainObject::obj_setElement,
         UnboxedPlainObject::obj_getOwnPropertyDescriptor,
-        UnboxedPlainObject::obj_setGenericAttributes,
-        UnboxedPlainObject::obj_deleteGeneric,
+        UnboxedPlainObject::obj_setPropertyAttributes,
+        UnboxedPlainObject::obj_deleteProperty,
         UnboxedPlainObject::obj_watch,
         nullptr,   /* No unwatch needed, as watch() converts the object to native */
         nullptr,   /* getElements */
@@ -507,7 +419,7 @@ UnboxedTypeIncludes(JSValueType supertype, JSValueType subtype)
 
 bool
 js::TryConvertToUnboxedLayout(JSContext *cx, Shape *templateShape,
-                              types::TypeObject *type, types::PreliminaryObjectArray *objects)
+                              types::ObjectGroup *group, types::PreliminaryObjectArray *objects)
 {
     if (!cx->runtime()->options().unboxedObjects())
         return true;
@@ -608,7 +520,7 @@ js::TryConvertToUnboxedLayout(JSContext *cx, Shape *templateShape,
     if (sizeof(JSObject) + offset > JSObject::MAX_BYTE_SIZE)
         return true;
 
-    UnboxedLayout *layout = type->zone()->new_<UnboxedLayout>(properties, offset);
+    UnboxedLayout *layout = group->zone()->new_<UnboxedLayout>(properties, offset);
     if (!layout)
         return false;
 
@@ -623,7 +535,7 @@ js::TryConvertToUnboxedLayout(JSContext *cx, Shape *templateShape,
         {
             return false;
         }
-        int32_t *traceList = type->zone()->pod_malloc<int32_t>(entries.length());
+        int32_t *traceList = group->zone()->pod_malloc<int32_t>(entries.length());
         if (!traceList)
             return false;
         PodCopy(traceList, entries.begin(), entries.length());
@@ -631,16 +543,16 @@ js::TryConvertToUnboxedLayout(JSContext *cx, Shape *templateShape,
     }
 
     // We've determined that all the preliminary objects can use the new layout
-    // just constructed, so convert the existing type to be an
+    // just constructed, so convert the existing group to be an
     // UnboxedPlainObject rather than a PlainObject, and update the preliminary
     // objects to use the new layout. Do the fallible stuff first before
     // modifying any objects.
 
     // Get an empty shape which we can use for the preliminary objects.
     Shape *newShape = EmptyShape::getInitialShape(cx, &UnboxedPlainObject::class_,
-                                                  type->proto(),
-                                                  templateShape->getObjectMetadata(),
+                                                  group->proto(),
                                                   templateShape->getObjectParent(),
+                                                  templateShape->getObjectMetadata(),
                                                   templateShape->getObjectFlags());
     if (!newShape) {
         cx->clearPendingException();
@@ -666,11 +578,11 @@ js::TryConvertToUnboxedLayout(JSContext *cx, Shape *templateShape,
         obj->setLastPropertyMakeNonNative(newShape);
     }
 
-    if (types::TypeNewScript *newScript = type->newScript())
+    if (types::TypeNewScript *newScript = group->newScript())
         layout->setNewScript(newScript);
 
-    type->setClasp(&UnboxedPlainObject::class_);
-    type->setUnboxedLayout(layout);
+    group->setClasp(&UnboxedPlainObject::class_);
+    group->setUnboxedLayout(layout);
 
     size_t valueCursor = 0;
     for (size_t i = 0; i < types::PreliminaryObjectArray::COUNT; i++) {
