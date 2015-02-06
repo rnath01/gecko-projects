@@ -129,10 +129,10 @@ MediaSourceDecoder::DetachMediaSource()
 }
 
 already_AddRefed<SourceBufferDecoder>
-MediaSourceDecoder::CreateSubDecoder(const nsACString& aType)
+MediaSourceDecoder::CreateSubDecoder(const nsACString& aType, int64_t aTimestampOffset)
 {
   MOZ_ASSERT(mReader);
-  return mReader->CreateSubDecoder(aType);
+  return mReader->CreateSubDecoder(aType, aTimestampOffset);
 }
 
 void
@@ -173,9 +173,9 @@ MediaSourceDecoder::IsExpectingMoreData()
 
 class DurationChangedRunnable : public nsRunnable {
 public:
-  explicit DurationChangedRunnable(MediaSourceDecoder* aDecoder,
-                                   double aOldDuration,
-                                   double aNewDuration)
+  DurationChangedRunnable(MediaSourceDecoder* aDecoder,
+                          double aOldDuration,
+                          double aNewDuration)
     : mDecoder(aDecoder)
     , mOldDuration(aOldDuration)
     , mNewDuration(aNewDuration)
@@ -205,7 +205,7 @@ MediaSourceDecoder::DurationChanged(double aOldDuration, double aNewDuration)
 }
 
 void
-MediaSourceDecoder::SetDecodedDuration(int64_t aDuration)
+MediaSourceDecoder::SetInitialDuration(int64_t aDuration)
 {
   // Only use the decoded duration if one wasn't already
   // set.
@@ -214,23 +214,52 @@ MediaSourceDecoder::SetDecodedDuration(int64_t aDuration)
     return;
   }
   double duration = aDuration;
-  duration /= USECS_PER_S;
-  SetMediaSourceDuration(duration);
+  // A duration of -1 is +Infinity.
+  if (aDuration >= 0) {
+    duration /= USECS_PER_S;
+  }
+  SetMediaSourceDuration(duration, MSRangeRemovalAction::SKIP);
 }
 
 void
-MediaSourceDecoder::SetMediaSourceDuration(double aDuration)
+MediaSourceDecoder::SetMediaSourceDuration(double aDuration, MSRangeRemovalAction aAction)
 {
   ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   double oldDuration = mMediaSourceDuration;
-  mMediaSourceDuration = aDuration;
-  mDecoderStateMachine->SetDuration(aDuration * USECS_PER_S);
-  if (NS_IsMainThread()) {
-    DurationChanged(oldDuration, aDuration);
+  if (aDuration >= 0) {
+    mDecoderStateMachine->SetDuration(aDuration * USECS_PER_S);
+    mMediaSourceDuration = aDuration;
   } else {
-    nsRefPtr<nsIRunnable> task =
-      new DurationChangedRunnable(this, oldDuration, aDuration);
-    NS_DispatchToMainThread(task);
+    mDecoderStateMachine->SetDuration(INT64_MAX);
+    mMediaSourceDuration = PositiveInfinity<double>();
+  }
+  if (mReader) {
+    mReader->SetMediaSourceDuration(mMediaSourceDuration);
+  }
+  ScheduleDurationChange(oldDuration, aDuration, aAction);
+}
+
+void
+MediaSourceDecoder::ScheduleDurationChange(double aOldDuration,
+                                           double aNewDuration,
+                                           MSRangeRemovalAction aAction)
+{
+  if (aAction == MSRangeRemovalAction::SKIP) {
+    if (NS_IsMainThread()) {
+      MediaDecoder::DurationChanged();
+    } else {
+      nsCOMPtr<nsIRunnable> task =
+        NS_NewRunnableMethod(this, &MediaDecoder::DurationChanged);
+      NS_DispatchToMainThread(task);
+    }
+  } else {
+    if (NS_IsMainThread()) {
+      DurationChanged(aOldDuration, aNewDuration);
+    } else {
+      nsRefPtr<nsIRunnable> task =
+        new DurationChangedRunnable(this, aOldDuration, aNewDuration);
+      NS_DispatchToMainThread(task);
+    }
   }
 }
 
@@ -255,6 +284,12 @@ MediaSourceDecoder::PrepareReaderInitialization()
   mReader->PrepareInitialization();
 }
 
+void
+MediaSourceDecoder::GetMozDebugReaderData(nsAString& aString)
+{
+  mReader->GetMozDebugReaderData(aString);
+}
+
 #ifdef MOZ_EME
 nsresult
 MediaSourceDecoder::SetCDMProxy(CDMProxy* aProxy)
@@ -267,5 +302,11 @@ MediaSourceDecoder::SetCDMProxy(CDMProxy* aProxy)
   return NS_OK;
 }
 #endif
+
+bool
+MediaSourceDecoder::IsActiveReader(MediaDecoderReader* aReader)
+{
+  return mReader->IsActiveReader(aReader);
+}
 
 } // namespace mozilla

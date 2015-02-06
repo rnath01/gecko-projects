@@ -7,8 +7,6 @@
 #ifndef js_TracingAPI_h
 #define js_TracingAPI_h
 
-#include "mozilla/NullPtr.h"
-
 #include "jsalloc.h"
 #include "jspubtd.h"
 
@@ -53,9 +51,9 @@ enum JSGCTraceKind
     JSTRACE_BASE_SHAPE = 0x0F,
     JSTRACE_JITCODE = 0x1F,
     JSTRACE_LAZY_SCRIPT = 0x2F,
-    JSTRACE_TYPE_OBJECT = 0x3F,
+    JSTRACE_OBJECT_GROUP = 0x3F,
 
-    JSTRACE_LAST = JSTRACE_TYPE_OBJECT
+    JSTRACE_LAST = JSTRACE_OBJECT_GROUP
 };
 
 namespace JS {

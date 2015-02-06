@@ -411,7 +411,7 @@ DrawTargetD2D1::Stroke(const Path *aPath,
                        const StrokeOptions &aStrokeOptions,
                        const DrawOptions &aOptions)
 {
-  if (aPath->GetBackendType() != BackendType::DIRECT2D) {
+  if (aPath->GetBackendType() != BackendType::DIRECT2D1_1) {
     gfxDebug() << *this << ": Ignoring drawing call for incompatible path.";
     return;
   }
@@ -434,7 +434,7 @@ DrawTargetD2D1::Fill(const Path *aPath,
                      const Pattern &aPattern,
                      const DrawOptions &aOptions)
 {
-  if (aPath->GetBackendType() != BackendType::DIRECT2D) {
+  if (aPath->GetBackendType() != BackendType::DIRECT2D1_1) {
     gfxDebug() << *this << ": Ignoring drawing call for incompatible path.";
     return;
   }
@@ -560,7 +560,7 @@ DrawTargetD2D1::Mask(const Pattern &aSource,
 void
 DrawTargetD2D1::PushClip(const Path *aPath)
 {
-  if (aPath->GetBackendType() != BackendType::DIRECT2D) {
+  if (aPath->GetBackendType() != BackendType::DIRECT2D1_1) {
     gfxDebug() << *this << ": Ignoring clipping call for incompatible path.";
     return;
   }
@@ -694,7 +694,7 @@ DrawTargetD2D1::CreatePathBuilder(FillRule aFillRule) const
     sink->SetFillMode(D2D1_FILL_MODE_WINDING);
   }
 
-  return new PathBuilderD2D(sink, path, aFillRule);
+  return new PathBuilderD2D(sink, path, aFillRule, BackendType::DIRECT2D1_1);
 }
 
 TemporaryRef<GradientStops>
@@ -725,7 +725,7 @@ DrawTargetD2D1::CreateGradientStops(GradientStop *rawStops, uint32_t aNumStops, 
     return nullptr;
   }
 
-  return new GradientStopsD2D(stopCollection);
+  return new GradientStopsD2D(stopCollection, Factory::GetDirect3D11Device());
 }
 
 TemporaryRef<FilterNode>
@@ -859,7 +859,12 @@ DrawTargetD2D1::factory()
     return mFactory;
   }
 
-  HRESULT hr = D2DFactory()->QueryInterface((ID2D1Factory1**)&mFactory);
+  ID2D1Factory* d2dFactory = D2DFactory();
+  if (!d2dFactory) {
+    return nullptr;
+  }
+
+  HRESULT hr = d2dFactory->QueryInterface((ID2D1Factory1**)&mFactory);
 
   if (FAILED(hr)) {
     return nullptr;
@@ -963,6 +968,8 @@ DrawTargetD2D1::FinalizeDrawing(CompositionOp aOp, const Pattern &aPattern)
     mDC->CreateBitmap(D2DIntSize(mSize), D2D1::BitmapProperties(D2DPixelFormat(mFormat)), byRef(tmpBitmap));
 
     // This flush is important since the copy method will not know about the context drawing to the surface.
+    // We also need to pop all the clips to make sure any drawn content will have made it to the final bitmap.
+    PopAllClips();
     mDC->Flush();
 
     // We need to use a copy here because affects don't accept a surface on
@@ -972,6 +979,9 @@ DrawTargetD2D1::FinalizeDrawing(CompositionOp aOp, const Pattern &aPattern)
     mBlendEffect->SetInput(0, tmpBitmap);
     mBlendEffect->SetInput(1, mTempBitmap);
     mBlendEffect->SetValue(D2D1_BLEND_PROP_MODE, D2DBlendMode(aOp));
+
+    PushClipsToDC(mDC);
+    mClipsArePushed = true;
 
     mDC->DrawImage(mBlendEffect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_COMPOSITE_MODE_BOUNDED_SOURCE_COPY);
     return;
@@ -1223,6 +1233,12 @@ DrawTargetD2D1::CreateBrushForPattern(const Pattern &aPattern, Float aAlpha)
                                    D2D1::BrushProperties(aAlpha, D2DMatrix(pat->mMatrix)),
                                    stops->mStopCollection,
                                    byRef(gradBrush));
+
+    if (!gradBrush) {
+      gfxWarning() << "Couldn't create gradient brush.";
+      return CreateTransparentBlackBrush();
+    }
+
     return gradBrush.forget();
   }
   if (aPattern.GetType() == PatternType::RADIAL_GRADIENT) {
@@ -1245,6 +1261,11 @@ DrawTargetD2D1::CreateBrushForPattern(const Pattern &aPattern, Float aAlpha)
       D2D1::BrushProperties(aAlpha, D2DMatrix(pat->mMatrix)),
                             stops->mStopCollection,
                             byRef(gradBrush));
+
+    if (!gradBrush) {
+      gfxWarning() << "Couldn't create gradient brush.";
+      return CreateTransparentBlackBrush();
+    }
 
     return gradBrush.forget();
   }
@@ -1273,6 +1294,8 @@ DrawTargetD2D1::CreateBrushForPattern(const Pattern &aPattern, Float aAlpha)
                                    Float(pat->mSurface->GetSize().width),
                                    Float(pat->mSurface->GetSize().height));
     }
+
+    MOZ_ASSERT(pat->mSurface->IsValid());
 
     RefPtr<ID2D1ImageBrush> imageBrush;
     RefPtr<ID2D1Image> image = GetImageForSurface(pat->mSurface, mat, pat->mExtendMode, !pat->mSamplingRect.IsEmpty() ? &pat->mSamplingRect : nullptr);

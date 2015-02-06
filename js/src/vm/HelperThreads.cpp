@@ -9,6 +9,7 @@
 #include "mozilla/DebugOnly.h"
 
 #include "jsnativestack.h"
+#include "jsnum.h" // For FIX_FPU()
 #include "prmjtime.h"
 
 #include "frontend/BytecodeCompiler.h"
@@ -115,7 +116,8 @@ js::StartOffThreadIonCompile(JSContext *cx, jit::IonBuilder *builder)
 static void
 FinishOffThreadIonCompile(jit::IonBuilder *builder)
 {
-    HelperThreadState().ionFinishedList().append(builder);
+    if (!HelperThreadState().ionFinishedList().append(builder))
+        CrashAtUnhandlableOOM("FinishOffThreadIonCompile");
 }
 
 static inline bool
@@ -360,7 +362,7 @@ js::StartOffThreadParseScript(JSContext *cx, const ReadOnlyCompileOptions &optio
 
     ScopedJSDeletePtr<ExclusiveContext> helpercx(
         cx->new_<ExclusiveContext>(cx->runtime(), (PerThreadData *) nullptr,
-                                   ThreadSafeContext::Context_Exclusive));
+                                   ExclusiveContext::Context_Exclusive));
     if (!helpercx)
         return false;
 
@@ -468,7 +470,7 @@ GlobalHelperThreadState::GlobalHelperThreadState()
    threads(nullptr),
    asmJSCompilationInProgress(false),
    helperLock(nullptr),
-#ifdef DEbUG
+#ifdef DEBUG
    lockOwner(nullptr),
 #endif
    consumerWakeup(nullptr),
@@ -890,12 +892,12 @@ GlobalHelperThreadState::finishParseTask(JSContext *maybecx, JSRuntime *rt, void
     // to the corresponding prototype in the new compartment. This will briefly
     // create cross compartment pointers, which will be fixed by the
     // MergeCompartments call below.
-    for (gc::ZoneCellIter iter(parseTask->cx->zone(), gc::FINALIZE_TYPE_OBJECT);
+    for (gc::ZoneCellIter iter(parseTask->cx->zone(), gc::FINALIZE_OBJECT_GROUP);
          !iter.done();
          iter.next())
     {
-        types::TypeObject *object = iter.get<types::TypeObject>();
-        TaggedProto proto(object->proto());
+        types::ObjectGroup *group = iter.get<types::ObjectGroup>();
+        TaggedProto proto(group->proto());
         if (!proto.isObject())
             continue;
 
@@ -909,7 +911,7 @@ GlobalHelperThreadState::finishParseTask(JSContext *maybecx, JSRuntime *rt, void
         JSObject *newProto = GetBuiltinPrototypePure(global, key);
         MOZ_ASSERT(newProto);
 
-        object->setProtoUnchecked(TaggedProto(newProto));
+        group->setProtoUnchecked(TaggedProto(newProto));
     }
 
     // Move the parsed script and all its contents into the desired compartment.
@@ -926,13 +928,12 @@ GlobalHelperThreadState::finishParseTask(JSContext *maybecx, JSRuntime *rt, void
         parseTask->errors[i]->throwError(cx);
     if (parseTask->overRecursed)
         js_ReportOverRecursed(cx);
+    if (cx->isExceptionPending())
+        return nullptr;
 
     if (script) {
         // The Debugger only needs to be told about the topmost script that was compiled.
-        GlobalObject *compileAndGoGlobal = nullptr;
-        if (script->compileAndGo())
-            compileAndGoGlobal = &script->global();
-        Debugger::onNewScript(cx, script, compileAndGoGlobal);
+        Debugger::onNewScript(cx, script);
 
         // Update the compressed source table with the result. This is normally
         // called by setCompressedSource when compilation occurs on the main thread.
@@ -980,6 +981,12 @@ HelperThread::ThreadMain(void *arg)
         NuwaMarkCurrentThread(nullptr, nullptr);
     }
 #endif
+
+    //See bug 1104658.
+    //Set the FPU control word to be the same as the main thread's, or math
+    //computations on this thread may use incorrect precision rules during
+    //Ion compilation.
+    FIX_FPU();
 
     static_cast<HelperThread *>(arg)->threadLoop();
 }
@@ -1181,7 +1188,7 @@ HelperThread::handleParseWorkload()
         SourceBufferHolder srcBuf(parseTask->chars, parseTask->length,
                                   SourceBufferHolder::NoOwnership);
         parseTask->script = frontend::CompileScript(parseTask->cx, &parseTask->alloc,
-                                                    NullPtr(), NullPtr(),
+                                                    NullPtr(), NullPtr(), NullPtr(),
                                                     parseTask->options,
                                                     srcBuf);
     }

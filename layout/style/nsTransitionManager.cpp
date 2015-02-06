@@ -229,7 +229,8 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
                                      &startedAny, &whichStarted);
         }
       } else if (nsCSSProps::IsShorthand(property)) {
-        CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(subprop, property) {
+        CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(
+            subprop, property, nsCSSProps::eEnabledForAllContent) {
           ConsiderStartingTransition(*subprop, t, aElement, collection,
                                      aOldStyleContext, aNewStyleContext,
                                      &startedAny, &whichStarted);
@@ -268,7 +269,8 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
             allTransitionProperties.AddProperty(p);
           }
         } else if (nsCSSProps::IsShorthand(property)) {
-          CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(subprop, property) {
+          CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(
+              subprop, property, nsCSSProps::eEnabledForAllContent) {
             allTransitionProperties.AddProperty(*subprop);
           }
         } else {
@@ -279,7 +281,7 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
 
     AnimationPlayerPtrArray& players = collection->mPlayers;
     size_t i = players.Length();
-    NS_ABORT_IF_FALSE(i != 0, "empty transitions list?");
+    MOZ_ASSERT(i != 0, "empty transitions list?");
     StyleAnimationValue currentValue;
     do {
       --i;
@@ -316,8 +318,8 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
     return nullptr;
   }
 
-  NS_ABORT_IF_FALSE(collection, "must have element transitions if we started "
-                                "any transitions");
+  MOZ_ASSERT(collection,
+             "must have element transitions if we started any transitions");
 
   // In the CSS working group discussion (2009 Jul 15 telecon,
   // http://www.w3.org/mid/4A5E1470.4030904@inkedblade.net ) of
@@ -369,8 +371,8 @@ nsTransitionManager::ConsiderStartingTransition(
   nsCSSPropertySet* aWhichStarted)
 {
   // IsShorthand itself will assert if aProperty is not a property.
-  NS_ABORT_IF_FALSE(!nsCSSProps::IsShorthand(aProperty),
-                    "property out of range");
+  MOZ_ASSERT(!nsCSSProps::IsShorthand(aProperty),
+             "property out of range");
   NS_ASSERTION(!aElementTransitions ||
                aElementTransitions->mElement == aElement, "Element mismatch");
 
@@ -452,6 +454,7 @@ nsTransitionManager::ConsiderStartingTransition(
       // currently in the 'transition-delay').  It also might happen because we
       // just got a style change to a value that can't be interpolated.
       AnimationPlayerPtrArray& players = aElementTransitions->mPlayers;
+      players[currentIndex]->Cancel();
       oldPT = nullptr; // Clear pointer so it doesn't dangle
       players.RemoveElementAt(currentIndex);
       aElementTransitions->UpdateAnimationGeneration(mPresContext);
@@ -540,8 +543,12 @@ nsTransitionManager::ConsiderStartingTransition(
   segment.mTimingFunction.Init(tf);
 
   nsRefPtr<CSSTransitionPlayer> player = new CSSTransitionPlayer(timeline);
-  player->PlayFromStyle();
+  // The order of the following two calls is important since PlayFromStyle
+  // will add the player to the PendingPlayerTracker of its source content's
+  // document. When we come to make source writeable (bug 1049975) we should
+  // remove this dependency.
   player->SetSource(pt);
+  player->PlayFromStyle();
 
   if (!aElementTransitions) {
     aElementTransitions =
@@ -555,14 +562,14 @@ nsTransitionManager::ConsiderStartingTransition(
   AnimationPlayerPtrArray& players = aElementTransitions->mPlayers;
 #ifdef DEBUG
   for (size_t i = 0, i_end = players.Length(); i < i_end; ++i) {
-    NS_ABORT_IF_FALSE(players[i]->GetSource() &&
-                      players[i]->GetSource()->Properties().Length() == 1,
-                      "Should have one animation property for a transition");
-    NS_ABORT_IF_FALSE(i == currentIndex ||
-                      (players[i]->GetSource() &&
-                       players[i]->GetSource()->Properties()[0].mProperty
-                       != aProperty),
-                      "duplicate transitions for property");
+    MOZ_ASSERT(players[i]->GetSource() &&
+               players[i]->GetSource()->Properties().Length() == 1,
+               "Should have one animation property for a transition");
+    MOZ_ASSERT(
+      i == currentIndex ||
+      (players[i]->GetSource() &&
+       players[i]->GetSource()->Properties()[0].mProperty != aProperty),
+      "duplicate transitions for property");
   }
 #endif
   if (haveCurrentTransition) {
@@ -625,9 +632,9 @@ struct TransitionEventInfo {
 /* virtual */ void
 nsTransitionManager::WillRefresh(mozilla::TimeStamp aTime)
 {
-  NS_ABORT_IF_FALSE(mPresContext,
-                    "refresh driver should not notify additional observers "
-                    "after pres context has been destroyed");
+  MOZ_ASSERT(mPresContext,
+             "refresh driver should not notify additional observers "
+             "after pres context has been destroyed");
   if (!mPresContext->GetPresShell()) {
     // Someone might be keeping mPresContext alive past the point
     // where it has been torn down; don't bother doing anything in
@@ -666,13 +673,13 @@ nsTransitionManager::FlushTransitions(FlushFlags aFlags)
           AnimationPlayerCollection::CanAnimateFlags(0)) &&
         collection->CanThrottleAnimation(now);
 
-      NS_ABORT_IF_FALSE(collection->mElement->GetCrossShadowCurrentDoc() ==
-                          mPresContext->Document(),
-                        "Element::UnbindFromTree should have "
-                        "destroyed the element transitions object");
+      MOZ_ASSERT(collection->mElement->GetCrossShadowCurrentDoc() ==
+                   mPresContext->Document(),
+                 "Element::UnbindFromTree should have "
+                 "destroyed the element transitions object");
 
       size_t i = collection->mPlayers.Length();
-      NS_ABORT_IF_FALSE(i != 0, "empty transitions list?");
+      MOZ_ASSERT(i != 0, "empty transitions list?");
       bool transitionStartedOrEnded = false;
       do {
         --i;
@@ -695,10 +702,6 @@ nsTransitionManager::FlushTransitions(FlushFlags aFlags)
             MOZ_ASSERT(player->GetSource()->Properties().Length() == 1,
                        "Should have one animation property for a transition");
             nsCSSProperty prop = player->GetSource()->Properties()[0].mProperty;
-            if (nsCSSProps::PropHasFlags(prop, CSS_PROPERTY_REPORT_OTHER_NAME))
-            {
-              prop = nsCSSProps::OtherNameFor(prop);
-            }
             TimeDuration duration =
               player->GetSource()->Timing().mIterationDuration;
             events.AppendElement(

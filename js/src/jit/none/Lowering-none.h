@@ -32,7 +32,6 @@ class LIRGeneratorNone : public LIRGeneratorShared
     LDefinition tempByteOpRegister() { MOZ_CRASH(); }
     LDefinition tempToUnbox() { MOZ_CRASH(); }
     bool needTempForPostBarrier() { MOZ_CRASH(); }
-    LDefinition tempForDispatchCache(MIRType v = MIRType_None) { MOZ_CRASH(); }
     void lowerUntypedPhiInput(MPhi *, uint32_t, LBlock *, size_t) { MOZ_CRASH(); }
     void defineUntypedPhi(MPhi *, size_t) { MOZ_CRASH(); }
     void lowerForShift(LInstructionHelper<1, 2, 0> *, MDefinition *, MDefinition *, MDefinition *) {
@@ -71,14 +70,13 @@ class LIRGeneratorNone : public LIRGeneratorShared
     void visitPowHalf(MPowHalf *) { MOZ_CRASH(); }
     void visitAsmJSNeg(MAsmJSNeg *) { MOZ_CRASH(); }
     void visitGuardShape(MGuardShape *ins) { MOZ_CRASH(); }
-    void visitGuardObjectType(MGuardObjectType *ins) { MOZ_CRASH(); }
+    void visitGuardObjectGroup(MGuardObjectGroup *ins) { MOZ_CRASH(); }
     void visitAsmJSUnsignedToDouble(MAsmJSUnsignedToDouble *ins) { MOZ_CRASH(); }
     void visitAsmJSUnsignedToFloat32(MAsmJSUnsignedToFloat32 *ins) { MOZ_CRASH(); }
     void visitAsmJSLoadHeap(MAsmJSLoadHeap *ins) { MOZ_CRASH(); }
     void visitAsmJSStoreHeap(MAsmJSStoreHeap *ins) { MOZ_CRASH(); }
     void visitAsmJSLoadFuncPtr(MAsmJSLoadFuncPtr *ins) { MOZ_CRASH(); }
     void visitStoreTypedArrayElementStatic(MStoreTypedArrayElementStatic *ins) { MOZ_CRASH(); }
-    void visitForkJoinGetSlice(MForkJoinGetSlice *ins) { MOZ_CRASH(); }
     void visitAtomicTypedArrayElementBinop(MAtomicTypedArrayElementBinop *ins) { MOZ_CRASH(); }
     void visitCompareExchangeTypedArrayElement(MCompareExchangeTypedArrayElement *ins) { MOZ_CRASH(); }
     void visitAsmJSCompareExchangeHeap(MAsmJSCompareExchangeHeap *ins) { MOZ_CRASH(); }

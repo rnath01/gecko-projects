@@ -193,66 +193,26 @@ PropertyTree::getChild(ExclusiveContext *cx, Shape *parentArg, StackShape &unroo
     return shape;
 }
 
-Shape *
-PropertyTree::lookupChild(ThreadSafeContext *cx, Shape *parent, const StackShape &child)
-{
-    /* Keep this in sync with the logic of getChild above. */
-    Shape *shape = nullptr;
-
-    MOZ_ASSERT(parent);
-
-    KidsPointer *kidp = &parent->kids;
-    if (kidp->isShape()) {
-        Shape *kid = kidp->toShape();
-        if (kid->matches(child))
-            shape = kid;
-    } else if (kidp->isHash()) {
-        if (KidsHash::Ptr p = kidp->toHash()->readonlyThreadsafeLookup(child))
-            shape = *p;
-    } else {
-        return nullptr;
-    }
-
-    if (shape) {
-        DebugOnly<JS::Zone *> zone = shape->arenaHeader()->zone;
-        MOZ_ASSERT(!zone->needsIncrementalBarrier());
-        MOZ_ASSERT(!(zone->isGCSweeping() && !shape->isMarked() &&
-                     !shape->arenaHeader()->allocatedDuringIncremental));
-    }
-
-    return shape;
-}
-
 void
 Shape::sweep()
 {
-    if (inDictionary())
-        return;
-
     /*
      * We detach the child from the parent if the parent is reachable.
      *
-     * Note that due to incremental sweeping, the parent pointer may point
-     * to the original reachable parent, or it may point to a new live
-     * object allocated in the same cell that used to hold the parent.
-     *
-     * There are three cases:
-     *
-     * Case 1: parent is not marked - parent is unreachable, may have been
-     *         finalized, and the cell may subsequently have been
-     *         reallocated to a compartment that is not being marked (cells
-     *         are marked when allocated in a compartment that is currenly
-     *         being marked by the collector).
-     *
-     * Case 2: parent is marked and is in a different compartment - parent
-     *         has been freed and reallocated to compartment that was being
-     *         marked.
-     *
-     * Case 3: parent is marked and is in the same compartment - parent is
-     *         stil reachable and we need to detach from it.
+     * This test depends on shape arenas not being freed until after we finish
+     * incrementally sweeping them. If that were not the case the parent pointer
+     * could point to a marked cell that had been deallocated and then
+     * reallocated, since allocating a cell in a zone that is being marked will
+     * set the mark bit for that cell.
      */
-    if (parent && parent->isMarked() && parent->compartment() == compartment())
-        parent->removeChild(this);
+    if (parent && parent->isMarked()) {
+        if (inDictionary()) {
+            if (parent->listp == &parent)
+                parent->listp = nullptr;
+        } else {
+            parent->removeChild(this);
+        }
+    }
 }
 
 void
@@ -261,8 +221,6 @@ Shape::finalize(FreeOp *fop)
     if (!inDictionary() && kids.isHash())
         fop->delete_(kids.toHash());
 }
-
-#ifdef JSGC_COMPACTING
 
 void
 Shape::fixupDictionaryShapeAfterMovingGC()
@@ -348,8 +306,6 @@ Shape::fixupAfterMovingGC()
     else
         fixupShapeTreeAfterMovingGC();
 }
-
-#endif // JSGC_COMPACTING
 
 void
 ShapeGetterSetterRef::mark(JSTracer *trc)

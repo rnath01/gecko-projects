@@ -7,6 +7,7 @@
 #ifndef mozilla_dom_SourceBuffer_h_
 #define mozilla_dom_SourceBuffer_h_
 
+#include "MediaPromise.h"
 #include "MediaSource.h"
 #include "js/RootingAPI.h"
 #include "mozilla/Assertions.h"
@@ -29,8 +30,10 @@ struct JSContext;
 namespace mozilla {
 
 class ErrorResult;
+class LargeDataBuffer;
 class TrackBuffer;
 template <typename T> class AsyncEventRunner;
+typedef MediaPromise<bool, nsresult, /* IsExclusive = */ true> TrackBufferAppendPromise;
 
 namespace dom {
 
@@ -79,6 +82,7 @@ public:
   void AppendBuffer(const ArrayBufferView& aData, ErrorResult& aRv);
 
   void Abort(ErrorResult& aRv);
+  void AbortBufferAppend();
 
   void Remove(double aStart, double aEnd, ErrorResult& aRv);
   /** End WebIDL Methods. */
@@ -109,7 +113,9 @@ public:
   double GetBufferedEnd();
 
   // Runs the range removal algorithm as defined by the MSE spec.
+  // RangeRemoval will queue a call to DoRangeRemoval.
   void RangeRemoval(double aStart, double aEnd);
+  void DoRangeRemoval(double aStart, double aEnd);
 
 #if defined(DEBUG)
   void Dump(const char* aPath);
@@ -119,6 +125,7 @@ private:
   ~SourceBuffer();
 
   friend class AsyncEventRunner<SourceBuffer>;
+  friend class AppendDataRunnable;
   void DispatchSimpleEvent(const char* aName);
   void QueueAsyncSimpleEvent(const char* aName);
 
@@ -127,12 +134,30 @@ private:
   void StopUpdating();
   void AbortUpdating();
 
+  // If the media segment contains data beyond the current duration,
+  // then run the duration change algorithm with new duration set to the
+  // maximum of the current duration and the group end timestamp.
+  void CheckEndTime();
+
   // Shared implementation of AppendBuffer overloads.
   void AppendData(const uint8_t* aData, uint32_t aLength, ErrorResult& aRv);
+  void AppendData(LargeDataBuffer* aData, double aTimestampOffset,
+                  uint32_t aAppendID);
 
-  // Implements the "Prepare Append Algorithm".  Returns true if the append
-  // may continue, or false (with aRv set) on error.
-  bool PrepareAppend(ErrorResult& aRv);
+  // Implement the "Append Error Algorithm".
+  // Will call endOfStream() with "decode" error if aDecodeError is true.
+  // 3.5.3 Append Error Algorithm
+  // http://w3c.github.io/media-source/#sourcebuffer-append-error
+  void AppendError(bool aDecoderError);
+
+  // Implements the "Prepare Append Algorithm". Returns LargeDataBuffer object
+  // on success or nullptr (with aRv set) on error.
+  already_AddRefed<LargeDataBuffer> PrepareAppend(const uint8_t* aData,
+                                                uint32_t aLength,
+                                                ErrorResult& aRv);
+
+  void AppendDataCompletedWithSuccess(bool aValue);
+  void AppendDataErrored(nsresult aError);
 
   nsRefPtr<MediaSource> mMediaSource;
 
@@ -147,6 +172,13 @@ private:
 
   SourceBufferAppendMode mAppendMode;
   bool mUpdating;
+
+  // Each time mUpdating is set to true, mUpdateID will be incremented.
+  // This allows for a queued AppendData task to identify if it was earlier
+  // aborted and another AppendData queued.
+  uint32_t mUpdateID;
+
+  MediaPromiseConsumerHolder<TrackBufferAppendPromise> mPendingAppend;
 };
 
 } // namespace dom

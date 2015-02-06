@@ -80,7 +80,7 @@ enum AllocatingBehaviour {
  * contents if the length is not excessive.
  */
 extern ArrayObject *
-NewDenseArray(ExclusiveContext *cx, uint32_t length, HandleTypeObject type,
+NewDenseArray(ExclusiveContext *cx, uint32_t length, HandleObjectGroup group,
               AllocatingBehaviour allocating);
 
 /* Create a dense array with a copy of the dense array elements in src. */
@@ -107,20 +107,16 @@ NewDenseCopyOnWriteArray(JSContext *cx, HandleArrayObject templateObject, gc::In
  * increase the length of the array.
  */
 extern bool
-WouldDefinePastNonwritableLength(ThreadSafeContext *cx,
+WouldDefinePastNonwritableLength(ExclusiveContext *cx,
                                  HandleObject obj, uint32_t index, bool strict,
                                  bool *definesPast);
 
 /*
  * Canonicalize |vp| to a uint32_t value potentially suitable for use as an
  * array length.
- *
- * For parallel execution we can only canonicalize non-object values.
  */
-template <ExecutionMode mode>
 extern bool
-CanonicalizeArrayLengthValue(typename ExecutionModeTraits<mode>::ContextType cx,
-                             HandleValue v, uint32_t *canonicalized);
+CanonicalizeArrayLengthValue(JSContext *cx, HandleValue v, uint32_t *canonicalized);
 
 extern bool
 GetLengthProperty(JSContext *cx, HandleObject obj, uint32_t *lengthp);
@@ -197,7 +193,7 @@ extern bool
 NewbornArrayPush(JSContext *cx, HandleObject obj, const Value &v);
 
 extern ArrayObject *
-ArrayConstructorOneArg(JSContext *cx, HandleTypeObject type, int32_t lengthInt);
+ArrayConstructorOneArg(JSContext *cx, HandleObjectGroup group, int32_t lengthInt);
 
 } /* namespace js */
 

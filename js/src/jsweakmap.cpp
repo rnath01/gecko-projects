@@ -20,6 +20,7 @@
 #include "jsobjinlines.h"
 
 #include "vm/Interpreter-inl.h"
+#include "vm/NativeObject-inl.h"
 
 using namespace js;
 using namespace js::gc;
@@ -526,11 +527,16 @@ WeakMap_construct(JSContext *cx, unsigned argc, Value *vp)
     if (!obj)
         return false;
 
-    // ES6 23.3.1.1 steps 5-6, 11.
+    // ES6 draft rev 31 (15 Jan 2015) 23.3.1.1 step 1.
+    // FIXME: bug 1083752
+    if (!WarnIfNotConstructing(cx, args, "WeakMap"))
+        return false;
+
+    // Steps 5-6, 11.
     if (!args.get(0).isNullOrUndefined()) {
         // Steps 7a-b.
         RootedValue adderVal(cx);
-        if (!JSObject::getProperty(cx, obj, obj, cx->names().set, &adderVal))
+        if (!GetProperty(cx, obj, obj, cx->names().set, &adderVal))
             return false;
 
         // Step 7c.
@@ -572,11 +578,11 @@ WeakMap_construct(JSContext *cx, unsigned argc, Value *vp)
                 return false;
 
             // Steps 12g-h.
-            if (!JSObject::getElement(cx, pairObject, pairObject, 0, &keyVal))
+            if (!GetElement(cx, pairObject, pairObject, 0, &keyVal))
                 return false;
 
             // Steps 12i-j.
-            if (!JSObject::getElement(cx, pairObject, pairObject, 1, &val))
+            if (!GetElement(cx, pairObject, pairObject, 1, &val))
                 return false;
 
             // Steps 12k-l.

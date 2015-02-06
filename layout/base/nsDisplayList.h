@@ -100,8 +100,8 @@ typedef mozilla::EnumSet<mozilla::gfx::CompositionOp> BlendModeSet;
 
 // All types are defined in nsDisplayItemTypes.h
 #define NS_DISPLAY_DECL_NAME(n, e) \
-  virtual const char* Name() { return n; } \
-  virtual Type GetType() { return e; }
+  virtual const char* Name() MOZ_OVERRIDE { return n; } \
+  virtual Type GetType() MOZ_OVERRIDE { return e; }
 
 /**
  * This manages a display list and is passed as a parameter to
@@ -340,6 +340,10 @@ public:
   {
     return (gfxPrefs::LayoutEventRegionsEnabled() && mMode == PAINTING);
   }
+  bool IsInsidePointerEventsNoneDoc()
+  {
+    return CurrentPresShellState()->mInsidePointerEventsNoneDoc;
+  }
 
   bool GetAncestorHasTouchEventHandler() { return mAncestorHasTouchEventHandler; }
   void SetAncestorHasTouchEventHandler(bool aValue)
@@ -391,8 +395,11 @@ public:
   /**
    * Notify the display list builder that we're entering a presshell.
    * aReferenceFrame should be a frame in the new presshell.
+   * aPointerEventsNoneDoc should be set to true if the frame generating this
+   * document is pointer-events:none without mozpasspointerevents.
    */
-  void EnterPresShell(nsIFrame* aReferenceFrame);
+  void EnterPresShell(nsIFrame* aReferenceFrame,
+                      bool aPointerEventsNoneDoc = false);
   /**
    * For print-preview documents, we sometimes need to build display items for
    * the same frames multiple times in the same presentation, with different
@@ -422,6 +429,12 @@ public:
    * nested presshell.
    */
   bool IsInSubdocument() { return mPresShellStates.Length() > 1; }
+
+  /**
+   * Return true if we're currently building a display list for the root
+   * presshell which is the presshell of a chrome document.
+   */
+  bool IsInRootChromeDocument() { return mIsInRootChromeDocument; }
 
   /**
    * @return true if images have been set to decode synchronously.
@@ -513,7 +526,7 @@ public:
    */
   void AdjustWindowDraggingRegion(nsIFrame* aFrame);
 
-  const nsRegion& GetWindowDraggingRegion() { return mWindowDraggingRegion; }
+  const nsIntRegion& GetWindowDraggingRegion() { return mWindowDraggingRegion; }
 
   /**
    * Allocate memory in our arena. It will only be freed when this display list
@@ -701,13 +714,10 @@ public:
     DisplayItemClip mContainingBlockClip;
     nsRect mDirtyRect;
   };
-  static void DestroyOutOfFlowDisplayData(void* aPropertyValue)
-  {
-    delete static_cast<OutOfFlowDisplayData*>(aPropertyValue);
-  }
 
-  NS_DECLARE_FRAME_PROPERTY(OutOfFlowDisplayDataProperty, DestroyOutOfFlowDisplayData)
-  NS_DECLARE_FRAME_PROPERTY(Preserve3DDirtyRectProperty, nsIFrame::DestroyRect)
+  NS_DECLARE_FRAME_PROPERTY(OutOfFlowDisplayDataProperty,
+                            DeleteValue<OutOfFlowDisplayData>)
+  NS_DECLARE_FRAME_PROPERTY(Preserve3DDirtyRectProperty, DeleteValue<nsRect>)
 
   nsPresContext* CurrentPresContext() {
     return CurrentPresShellState()->mPresShell->GetPresContext();
@@ -809,6 +819,10 @@ private:
     nsRect        mCaretRect;
     uint32_t      mFirstFrameMarkedForDisplay;
     bool          mIsBackgroundOnly;
+    // This is a per-document flag turning off event handling for all content
+    // in the document, and is set when we enter a subdocument for a pointer-
+    // events:none frame that doesn't have mozpasspointerevents set.
+    bool          mInsidePointerEventsNoneDoc;
   };
 
   PresShellState* CurrentPresShellState() {
@@ -875,7 +889,7 @@ private:
   nsRect                         mDirtyRect;
   nsRegion                       mWindowExcludeGlassRegion;
   nsRegion                       mWindowOpaqueRegion;
-  nsRegion                       mWindowDraggingRegion;
+  nsIntRegion                    mWindowDraggingRegion;
   // The display item for the Windows window glass background, if any
   nsDisplayItem*                 mGlassDisplayItem;
   nsTArray<DisplayItemClip*>     mDisplayItemClipsToDestroy;
@@ -897,6 +911,7 @@ private:
   // True when we're building a display list that's directly or indirectly
   // under an nsDisplayTransform
   bool                           mInTransform;
+  bool                           mIsInRootChromeDocument;
   bool                           mSyncDecodeImages;
   bool                           mIsPaintingToWindow;
   bool                           mIsCompositingCheap;
@@ -907,6 +922,7 @@ private:
   // display list has a display port. An async-scrollable scroll frame is one
   // which WantsAsyncScroll().
   bool                           mHaveScrollableDisplayPort;
+  bool                           mWindowDraggingAllowed;
 };
 
 class nsDisplayItem;
@@ -1959,14 +1975,6 @@ public:
   }
   NS_DISPLAY_DECL_NAME(mName, mType)
 
-  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE {
-    if (mType == nsDisplayItem::TYPE_HEADER_FOOTER) {
-      bool snap;
-      return GetBounds(aBuilder, &snap);
-    }
-    return nsRect();
-  }
-
 protected:
   PaintCallback mPaint;
   const char*   mName;
@@ -2693,6 +2701,7 @@ public:
     : nsDisplayItem(aBuilder, aFrame), mOverrideZIndex(0), mHasZIndexOverride(false)
   {
     MOZ_COUNT_CTOR(nsDisplayWrapList);
+    mBaseVisibleRect = mVisibleRect;
   }
   virtual ~nsDisplayWrapList();
   /**
@@ -2701,6 +2710,14 @@ public:
   virtual void UpdateBounds(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE
   {
     mBounds = mList.GetBounds(aBuilder);
+    // The display list may contain content that's visible outside the visible
+    // rect (i.e. the current dirty rect) passed in when the item was created.
+    // This happens when the dirty rect has been restricted to the visual
+    // overflow rect of a frame for some reason (e.g. when setting up dirty
+    // rects in nsDisplayListBuilder::MarkOutOfFlowFrameForDisplay), but that
+    // frame contains placeholders for out-of-flows that aren't descendants of
+    // the frame.
+    mVisibleRect.UnionRect(mBaseVisibleRect, mList.GetVisibleRect());
   }
   virtual void HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
                        HitTestState* aState, nsTArray<nsIFrame*> *aOutFrames) MOZ_OVERRIDE;
@@ -2718,7 +2735,7 @@ public:
   {
     aFrames->AppendElements(mMergedFrames);
   }
-  virtual bool ShouldFlattenAway(nsDisplayListBuilder* aBuilder) {
+  virtual bool ShouldFlattenAway(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE {
     return true;
   }
   virtual bool IsInvalid(nsRect& aRect) MOZ_OVERRIDE
@@ -2795,6 +2812,9 @@ protected:
   // this item's own frame.
   nsTArray<nsIFrame*> mMergedFrames;
   nsRect mBounds;
+  // Visible rect contributed by this display item itself.
+  // Our mVisibleRect may include the visible areas of children.
+  nsRect mBaseVisibleRect;
   int32_t mOverrideZIndex;
   bool mHasZIndexOverride;
 };
@@ -2951,7 +2971,8 @@ public:
     GENERATE_SUBDOC_INVALIDATIONS = 0x01,
     VERTICAL_SCROLLBAR = 0x02,
     HORIZONTAL_SCROLLBAR = 0x04,
-    GENERATE_SCROLLABLE_LAYER = 0x08
+    GENERATE_SCROLLABLE_LAYER = 0x08,
+    SCROLLBAR_CONTAINER = 0x10
   };
 
   /**
@@ -3166,7 +3187,6 @@ public:
                                           Layer* aLayer,
                                           ViewID aScrollParentId,
                                           const nsRect& aViewport,
-                                          bool aForceNullScrollId,
                                           bool aIsRoot,
                                           const ContainerLayerParameters& aContainerParameters);
 
@@ -3205,6 +3225,10 @@ public:
 
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) MOZ_OVERRIDE;
 
+  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
+                                             LayerManager* aManager,
+                                             const ContainerLayerParameters& aContainerParameters) MOZ_OVERRIDE;
+
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
                                    const ContainerLayerParameters& aParameters) MOZ_OVERRIDE;
@@ -3214,6 +3238,11 @@ public:
                           nsDisplayItem* aItem) MOZ_OVERRIDE;
 
   virtual bool ShouldFlattenAway(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE;
+
+  void MarkHoisted() { mHoisted = true; }
+
+private:
+  bool mHoisted;
 };
 
 /**

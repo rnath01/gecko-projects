@@ -62,7 +62,7 @@ public:
 
 private:
   // Hide default constructor.
-  TouchCaret() MOZ_DELETE;
+  TouchCaret() = delete;
 
   ~TouchCaret();
 
@@ -86,6 +86,11 @@ private:
    * Find the nsCanvasFrame which holds the touch caret.
    */
   nsCanvasFrame* GetCanvasFrame();
+
+  /**
+   * Find the root frame to update the touch caret's position.
+   */
+  nsIFrame* GetRootFrame();
 
   /**
    * Retrieve the bounding rectangle of the touch caret.

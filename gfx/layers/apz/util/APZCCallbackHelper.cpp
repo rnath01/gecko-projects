@@ -4,7 +4,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "APZCCallbackHelper.h"
+
 #include "gfxPlatform.h" // For gfxPlatform::UseTiling
+#include "mozilla/dom/TabParent.h"
 #include "nsIScrollableFrame.h"
 #include "nsLayoutUtils.h"
 #include "nsIDOMElement.h"
@@ -13,8 +15,13 @@
 #include "nsIDocument.h"
 #include "nsIDOMWindow.h"
 
+#define APZCCH_LOG(...)
+// #define APZCCH_LOG(...) printf_stderr("APZCCH: " __VA_ARGS__)
+
 namespace mozilla {
 namespace layers {
+
+using dom::TabParent;
 
 bool
 APZCCallbackHelper::HasValidPresShellId(nsIDOMWindowUtils* aUtils,
@@ -143,9 +150,9 @@ APZCCallbackHelper::UpdateRootFrame(nsIDOMWindowUtils* aUtils,
 
     // The pres shell resolution is updated by the the async zoom since the
     // last paint.
-    float presShellResolution = aMetrics.mPresShellResolution
+    float presShellResolution = aMetrics.GetPresShellResolution()
                               * aMetrics.GetAsyncZoom().scale;
-    aUtils->SetResolution(presShellResolution, presShellResolution);
+    aUtils->SetResolutionAndScaleTo(presShellResolution, presShellResolution);
 
     // Finally, we set the displayport.
     nsCOMPtr<nsIContent> content = nsLayoutUtils::FindContentFor(aMetrics.GetScrollId());
@@ -312,8 +319,18 @@ APZCCallbackHelper::UpdateCallbackTransform(const FrameMetrics& aApzcMetrics, co
 }
 
 CSSPoint
-APZCCallbackHelper::ApplyCallbackTransform(const CSSPoint& aInput, const ScrollableLayerGuid& aGuid)
+APZCCallbackHelper::ApplyCallbackTransform(const CSSPoint& aInput,
+                                           const ScrollableLayerGuid& aGuid,
+                                           float aPresShellResolution)
 {
+    // First, scale inversely by the pres shell resolution to cancel the
+    // scale-to-resolution transform that the compositor adds to the layer with
+    // the pres shell resolution. The points sent to Gecko by APZ don't have
+    // this transform unapplied (unlike other compositor-side transforms)
+    // because APZ doesn't know about it.
+    CSSPoint input = aInput / aPresShellResolution;
+
+    // Now apply the callback-transform.
     // XXX: technically we need to walk all the way up the layer tree from the layer
     // represented by |aGuid.mScrollId| up to the root of the layer tree and apply
     // the input transforms at each level in turn. However, it is quite difficult
@@ -331,22 +348,84 @@ APZCCallbackHelper::ApplyCallbackTransform(const CSSPoint& aInput, const Scrolla
             void* property = content->GetProperty(nsGkAtoms::apzCallbackTransform);
             if (property) {
                 CSSPoint delta = (*static_cast<CSSPoint*>(property));
-                return aInput + delta;
+                return input + delta;
             }
         }
     }
-    return aInput;
+    return input;
 }
 
-nsIntPoint
-APZCCallbackHelper::ApplyCallbackTransform(const nsIntPoint& aPoint,
-                                        const ScrollableLayerGuid& aGuid,
-                                        const CSSToLayoutDeviceScale& aScale)
+LayoutDeviceIntPoint
+APZCCallbackHelper::ApplyCallbackTransform(const LayoutDeviceIntPoint& aPoint,
+                                           const ScrollableLayerGuid& aGuid,
+                                           const CSSToLayoutDeviceScale& aScale,
+                                           float aPresShellResolution)
 {
     LayoutDevicePoint point = LayoutDevicePoint(aPoint.x, aPoint.y);
-    point = ApplyCallbackTransform(point / aScale, aGuid) * aScale;
-    LayoutDeviceIntPoint ret = gfx::RoundedToInt(point);
-    return nsIntPoint(ret.x, ret.y);
+    point = ApplyCallbackTransform(point / aScale, aGuid, aPresShellResolution) * aScale;
+    return gfx::RoundedToInt(point);
+}
+
+nsEventStatus
+APZCCallbackHelper::DispatchWidgetEvent(WidgetGUIEvent& aEvent)
+{
+  if (!aEvent.widget)
+    return nsEventStatus_eConsumeNoDefault;
+
+  // A nested process may be capturing events.
+  if (TabParent* capturer = TabParent::GetEventCapturer()) {
+    if (capturer->TryCapture(aEvent)) {
+      // Only touch events should be captured, and touch events from a parent
+      // process should not make it here. Capture for those is done elsewhere
+      // (for gonk, in nsWindow::DispatchTouchInputViaAPZ).
+      MOZ_ASSERT(!XRE_IsParentProcess());
+
+      return nsEventStatus_eConsumeNoDefault;
+    }
+  }
+  nsEventStatus status;
+  NS_ENSURE_SUCCESS(aEvent.widget->DispatchEvent(&aEvent, status),
+                    nsEventStatus_eConsumeNoDefault);
+  return status;
+}
+
+nsEventStatus
+APZCCallbackHelper::DispatchSynthesizedMouseEvent(uint32_t aMsg,
+                                                  uint64_t aTime,
+                                                  const LayoutDevicePoint& aRefPoint,
+                                                  nsIWidget* aWidget)
+{
+  MOZ_ASSERT(aMsg == NS_MOUSE_MOVE || aMsg == NS_MOUSE_BUTTON_DOWN ||
+             aMsg == NS_MOUSE_BUTTON_UP || aMsg == NS_MOUSE_MOZLONGTAP);
+
+  WidgetMouseEvent event(true, aMsg, nullptr,
+                         WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
+  event.refPoint = LayoutDeviceIntPoint(aRefPoint.x, aRefPoint.y);
+  event.time = aTime;
+  event.button = WidgetMouseEvent::eLeftButton;
+  event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
+  event.ignoreRootScrollFrame = true;
+  if (aMsg != NS_MOUSE_MOVE) {
+    event.clickCount = 1;
+  }
+  event.widget = aWidget;
+
+  return DispatchWidgetEvent(event);
+}
+
+void
+APZCCallbackHelper::FireSingleTapEvent(const LayoutDevicePoint& aPoint,
+                                       nsIWidget* aWidget)
+{
+  if (aWidget->Destroyed()) {
+    return;
+  }
+  APZCCH_LOG("Dispatching single-tap component events to %s\n",
+    Stringify(aPoint).c_str());
+  int time = 0;
+  DispatchSynthesizedMouseEvent(NS_MOUSE_MOVE, time, aPoint, aWidget);
+  DispatchSynthesizedMouseEvent(NS_MOUSE_BUTTON_DOWN, time, aPoint, aWidget);
+  DispatchSynthesizedMouseEvent(NS_MOUSE_BUTTON_UP, time, aPoint, aWidget);
 }
 
 }

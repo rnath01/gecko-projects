@@ -6,21 +6,28 @@ describe("loop.roomViews", function () {
   "use strict";
 
   var ROOM_STATES = loop.store.ROOM_STATES;
+  var SCREEN_SHARE_STATES = loop.shared.utils.SCREEN_SHARE_STATES;
 
   var sandbox, dispatcher, roomStore, activeRoomStore, fakeWindow;
+  var fakeMozLoop;
 
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
 
     dispatcher = new loop.Dispatcher();
 
+    fakeMozLoop = {
+      getAudioBlob: sinon.stub(),
+      getLoopPref: sinon.stub()
+    };
+
     fakeWindow = {
       document: {},
       navigator: {
-        mozLoop: {
-          getAudioBlob: sinon.stub()
-        }
-      }
+        mozLoop: fakeMozLoop
+      },
+      addEventListener: function() {},
+      removeEventListener: function() {}
     };
     loop.shared.mixins.setRootObject(fakeWindow);
 
@@ -55,18 +62,15 @@ describe("loop.roomViews", function () {
         render: function() { return React.DOM.div(); }
       });
 
-      var testView = TestUtils.renderIntoDocument(TestView({
-        roomStore: roomStore
-      }));
+      var testView = TestUtils.renderIntoDocument(
+        React.createElement(TestView, {
+          roomStore: roomStore
+        }));
 
-      expect(testView.state).eql({
-        roomState: ROOM_STATES.INIT,
-        audioMuted: false,
-        videoMuted: false,
-        failureReason: undefined,
-        used: false,
-        foo: "bar"
-      });
+      var expectedState = _.extend({foo: "bar"},
+        activeRoomStore.getInitialStoreState());
+
+      expect(testView.state).eql(expectedState);
     });
 
     it("should listen to store changes", function() {
@@ -74,9 +78,10 @@ describe("loop.roomViews", function () {
         mixins: [loop.roomViews.ActiveRoomStoreMixin],
         render: function() { return React.DOM.div(); }
       });
-      var testView = TestUtils.renderIntoDocument(TestView({
-        roomStore: roomStore
-      }));
+      var testView = TestUtils.renderIntoDocument(
+        React.createElement(TestView, {
+          roomStore: roomStore
+        }));
 
       activeRoomStore.setStoreState({roomState: ROOM_STATES.READY});
 
@@ -97,10 +102,11 @@ describe("loop.roomViews", function () {
 
     function mountTestComponent() {
       return TestUtils.renderIntoDocument(
-        new loop.roomViews.DesktopRoomInvitationView({
-          dispatcher: dispatcher,
-          roomStore: roomStore
-        }));
+        React.createElement(
+          loop.roomViews.DesktopRoomInvitationView, {
+            dispatcher: dispatcher,
+            roomStore: roomStore
+          }));
     }
 
     it("should dispatch an EmailRoomUrl action when the email button is " +
@@ -197,17 +203,20 @@ describe("loop.roomViews", function () {
     var view;
 
     beforeEach(function() {
+      loop.store.StoreMixin.register({
+        feedbackStore: new loop.store.FeedbackStore(dispatcher, {
+          feedbackClient: {}
+        })
+      });
       sandbox.stub(dispatcher, "dispatch");
     });
 
     function mountTestComponent() {
       return TestUtils.renderIntoDocument(
-        new loop.roomViews.DesktopRoomConversationView({
+        React.createElement(loop.roomViews.DesktopRoomConversationView, {
           dispatcher: dispatcher,
           roomStore: roomStore,
-          feedbackStore: new loop.store.FeedbackStore(dispatcher, {
-            feedbackClient: {}
-          })
+          mozLoop: fakeMozLoop
         }));
     }
 
@@ -267,6 +276,20 @@ describe("loop.roomViews", function () {
       expect(muteBtn.classList.contains("muted")).eql(true);
     });
 
+    it("should dispatch a `StartScreenShare` action when sharing is not active " +
+       "and the screen share button is pressed", function() {
+      view = mountTestComponent();
+
+      view.setState({screenSharingState: SCREEN_SHARE_STATES.INACTIVE});
+
+      var muteBtn = view.getDOMNode().querySelector('.btn-mute-video');
+
+      React.addons.TestUtils.Simulate.click(muteBtn);
+
+      sinon.assert.calledWithMatch(dispatcher.dispatch,
+        sinon.match.hasOwn("name", "setMute"));
+    });
+
     describe("#componentWillUpdate", function() {
       function expectActionDispatched(view) {
         sinon.assert.calledOnce(dispatcher.dispatch);
@@ -321,7 +344,7 @@ describe("loop.roomViews", function () {
           view = mountTestComponent();
 
           TestUtils.findRenderedComponentWithType(view,
-            loop.conversation.GenericFailureView);
+            loop.conversationViews.GenericFailureView);
         });
 
       it("should render the GenericFailureView if the roomState is `FULL`",
@@ -331,7 +354,7 @@ describe("loop.roomViews", function () {
           view = mountTestComponent();
 
           TestUtils.findRenderedComponentWithType(view,
-            loop.conversation.GenericFailureView);
+            loop.conversationViews.GenericFailureView);
         });
 
       it("should render the DesktopRoomInvitationView if roomState is `JOINED`",

@@ -67,6 +67,7 @@ EXPORTS.js += [
     '../public/CallNonGenericMethod.h',
     '../public/CharacterEncoding.h',
     '../public/Class.h',
+    '../public/Conversions.h',
     '../public/Date.h',
     '../public/Debug.h',
     '../public/GCAPI.h',
@@ -83,6 +84,7 @@ EXPORTS.js += [
     '../public/SliceBudget.h',
     '../public/StructuredClone.h',
     '../public/TracingAPI.h',
+    '../public/TrackedOptimizationInfo.h',
     '../public/TypeDecls.h',
     '../public/UbiNode.h',
     '../public/UbiNodeTraverse.h',
@@ -119,7 +121,6 @@ UNIFIED_SOURCES += [
     'frontend/ParseNode.cpp',
     'frontend/TokenStream.cpp',
     'gc/Barrier.cpp',
-    'gc/ForkJoinNursery.cpp',
     'gc/GCTrace.cpp',
     'gc/Iteration.cpp',
     'gc/Marking.cpp',
@@ -154,6 +155,7 @@ UNIFIED_SOURCES += [
     'jit/C1Spewer.cpp',
     'jit/CodeGenerator.cpp',
     'jit/CompileWrappers.cpp',
+    'jit/Disassembler.cpp',
     'jit/EdgeCaseAnalysis.cpp',
     'jit/EffectiveAddressAnalysis.cpp',
     'jit/ExecutableAllocator.cpp',
@@ -178,8 +180,7 @@ UNIFIED_SOURCES += [
     'jit/MIR.cpp',
     'jit/MIRGraph.cpp',
     'jit/MoveResolver.cpp',
-    'jit/ParallelFunctions.cpp',
-    'jit/ParallelSafetyAnalysis.cpp',
+    'jit/OptimizationTracking.cpp',
     'jit/PerfSpewer.cpp',
     'jit/RangeAnalysis.cpp',
     'jit/Recover.cpp',
@@ -202,7 +203,6 @@ UNIFIED_SOURCES += [
     'jsbool.cpp',
     'jscntxt.cpp',
     'jscompartment.cpp',
-    'jscrashreport.cpp',
     'jsdate.cpp',
     'jsdtoa.cpp',
     'jsexn.cpp',
@@ -243,7 +243,6 @@ UNIFIED_SOURCES += [
     'vm/Debugger.cpp',
     'vm/DebuggerMemory.cpp',
     'vm/ErrorObject.cpp',
-    'vm/ForkJoin.cpp',
     'vm/ForOfIterator.cpp',
     'vm/GeneratorObject.cpp',
     'vm/GlobalObject.cpp',
@@ -272,9 +271,9 @@ UNIFIED_SOURCES += [
     'vm/StringBuffer.cpp',
     'vm/StructuredClone.cpp',
     'vm/Symbol.cpp',
-    'vm/ThreadPool.cpp',
     'vm/TypedArrayObject.cpp',
     'vm/UbiNode.cpp',
+    'vm/UnboxedObject.cpp',
     'vm/Unicode.cpp',
     'vm/Value.cpp',
     'vm/WeakMapPtr.cpp',
@@ -324,9 +323,11 @@ if not CONFIG['ENABLE_ION']:
 elif CONFIG['JS_CODEGEN_X86'] or CONFIG['JS_CODEGEN_X64']:
     UNIFIED_SOURCES += [
         'jit/shared/Assembler-x86-shared.cpp',
+        'jit/shared/AssemblerBuffer-x86-shared.cpp',
         'jit/shared/BaselineCompiler-x86-shared.cpp',
         'jit/shared/BaselineIC-x86-shared.cpp',
         'jit/shared/CodeGenerator-x86-shared.cpp',
+        'jit/shared/Disassembler-x86-shared.cpp',
         'jit/shared/Lowering-x86-shared.cpp',
         'jit/shared/MacroAssembler-x86-shared.cpp',
         'jit/shared/MoveEmitter-x86-shared.cpp',
@@ -471,11 +472,8 @@ if CONFIG['MOZ_ETW']:
     RESFILE = 'ETWProvider.res'
 
 if CONFIG['NIGHTLY_BUILD']:
-    DEFINES['ENABLE_PARALLEL_JS'] = True
     DEFINES['ENABLE_BINARYDATA'] = True
     DEFINES['ENABLE_SHARED_ARRAY_BUFFER'] = True
-    if CONFIG['ENABLE_ION']:
-        DEFINES['JSGC_FJGENERATIONAL'] = True
 
 DEFINES['EXPORT_JS_API'] = True
 
@@ -518,3 +516,6 @@ if CONFIG['OS_ARCH'] == 'SunOS':
         'nsl',
         'socket',
     ]
+
+if CONFIG['GNU_CXX']:
+    FAIL_ON_WARNINGS = True

@@ -15,6 +15,7 @@
 #include "nsAutoPtr.h"
 #include "nsWidgetInitData.h"
 #include "nsTArray.h"
+#include "nsITheme.h"
 #include "nsITimer.h"
 #include "nsXULAppAPI.h"
 #include "mozilla/EventForwards.h"
@@ -53,6 +54,9 @@ class PLayerTransactionChild;
 namespace gfx {
 class DrawTarget;
 }
+namespace widget {
+class TextEventDispatcher;
+}
 }
 
 /**
@@ -73,8 +77,7 @@ typedef nsEventStatus (* EVENT_CALLBACK)(mozilla::WidgetGUIEvent* aEvent);
 typedef void* nsNativeWidget;
 
 /**
- * Flags for the getNativeData function.
- * See getNativeData()
+ * Flags for the GetNativeData and SetNativeData functions
  */
 #define NS_NATIVE_WINDOW      0
 #define NS_NATIVE_GRAPHIC     1
@@ -91,6 +94,7 @@ typedef void* nsNativeWidget;
 // Has to match to NPNVnetscapeWindow, and shareable across processes
 // HWND on Windows and XID on X11
 #define NS_NATIVE_SHAREABLE_WINDOW 11
+#define NS_NATIVE_OPENGL_CONTEXT   12
 #ifdef XP_MACOSX
 #define NS_NATIVE_PLUGIN_PORT_QD    100
 #define NS_NATIVE_PLUGIN_PORT_CG    101
@@ -101,10 +105,16 @@ typedef void* nsNativeWidget;
 #define NS_NATIVE_TSF_DISPLAY_ATTR_MGR 102
 #define NS_NATIVE_ICOREWINDOW          103 // winrt specific
 #endif
+#if defined(MOZ_WIDGET_GTK)
+// set/get nsPluginNativeWindowGtk, e10s specific
+#define NS_NATIVE_PLUGIN_OBJECT_PTR    104
+#endif
+// See RegisterPluginWindowForRemoteUpdates
+#define NS_NATIVE_PLUGIN_ID            105
 
 #define NS_IWIDGET_IID \
-{ 0x13239ca, 0xaf3f, 0x4f27, \
-  { 0xaf, 0x83, 0x47, 0xa9, 0x82, 0x3d, 0x99, 0xee } };
+{ 0xa7db3e01, 0xb8fe, 0x4122, \
+  { 0xbe, 0xa6, 0x45, 0x6c, 0xdd, 0x85, 0x30, 0x64 } };
 
 /*
  * Window shadow styles
@@ -224,7 +234,7 @@ struct nsIMEUpdatePreference {
 
   typedef uint8_t Notifications;
 
-  enum MOZ_ENUM_TYPE(Notifications)
+  enum : Notifications
   {
     NOTIFY_NOTHING                       = 0,
     NOTIFY_SELECTION_CHANGE              = 1 << 0,
@@ -407,7 +417,10 @@ struct IMEState {
 };
 
 struct InputContext {
-  InputContext() : mNativeIMEContext(nullptr) {}
+  InputContext()
+    : mNativeIMEContext(nullptr)
+    , mOrigin(XRE_IsParentProcess() ? ORIGIN_MAIN : ORIGIN_CONTENT)
+  {}
 
   bool IsPasswordEditor() const
   {
@@ -429,6 +442,37 @@ struct InputContext {
      SetInputContext().  If there is only one context in the process, this may
      be nullptr. */
   void* mNativeIMEContext;
+
+
+  /**
+   * mOrigin indicates whether this focus event refers to main or remote content.
+   */
+  enum Origin
+  {
+    // Adjusting focus of content on the main process
+    ORIGIN_MAIN,
+    // Adjusting focus of content in a remote process
+    ORIGIN_CONTENT
+  };
+  Origin mOrigin;
+
+  bool IsOriginMainProcess() const
+  {
+    return mOrigin == ORIGIN_MAIN;
+  }
+
+  bool IsOriginContentProcess() const
+  {
+    return mOrigin == ORIGIN_CONTENT;
+  }
+
+  bool IsOriginCurrentProcess() const
+  {
+    if (XRE_IsParentProcess()) {
+      return IsOriginMainProcess();
+    }
+    return IsOriginContentProcess();
+  }
 };
 
 struct InputContextAction {
@@ -515,7 +559,7 @@ struct SizeConstraints {
 // Update values in GeckoEditable.java if you make changes here.
 // XXX Negative values are used in Android...
 typedef int8_t IMEMessageType;
-enum IMEMessage MOZ_ENUM_TYPE(IMEMessageType)
+enum IMEMessage : IMEMessageType
 {
   // An editable content is getting focus
   NOTIFY_IME_OF_FOCUS = 1,
@@ -692,18 +736,20 @@ class nsIWidget : public nsISupports {
     typedef mozilla::widget::InputContext InputContext;
     typedef mozilla::widget::InputContextAction InputContextAction;
     typedef mozilla::widget::SizeConstraints SizeConstraints;
+    typedef mozilla::widget::TextEventDispatcher TextEventDispatcher;
     typedef mozilla::CompositorVsyncDispatcher CompositorVsyncDispatcher;
 
     // Used in UpdateThemeGeometries.
     struct ThemeGeometry {
-      // The -moz-appearance value for the themed widget
-      uint8_t mWidgetType;
+      // The ThemeGeometryType value for the themed widget, see
+      // nsITheme::ThemeGeometryTypeForWidget.
+      nsITheme::ThemeGeometryType mType;
       // The device-pixel rect within the window for the themed widget
       nsIntRect mRect;
 
-      ThemeGeometry(uint8_t aWidgetType, const nsIntRect& aRect)
-       : mWidgetType(aWidgetType)
-       , mRect(aRect)
+      ThemeGeometry(nsITheme::ThemeGeometryType aType, const nsIntRect& aRect)
+        : mType(aType)
+        , mRect(aRect)
       { }
     };
 
@@ -1324,6 +1370,8 @@ class nsIWidget : public nsISupports {
      */
     struct Configuration {
         nsIWidget* mChild;
+        uintptr_t mWindowID; // e10s specific, the unique plugin port id
+        bool mVisible; // e10s specific, widget visibility
         nsIntRect mBounds;
         nsTArray<nsIntRect> mClipRegion;
     };
@@ -1334,12 +1382,12 @@ class nsIWidget : public nsISupports {
      * mClipRegion, all relative to the top-left of the child
      * widget. Clip regions are not implemented on all platforms and only
      * need to actually work for children that are plugins.
-     * 
+     *
      * Also sets the bounds of each child to mBounds.
-     * 
+     *
      * This will invalidate areas of the children that have changed, but
      * does not need to invalidate any part of this widget.
-     * 
+     *
      * Children should be moved in the order given; the array is
      * sorted so to minimize unnecessary invalidation if children are
      * moved in that order.
@@ -1354,6 +1402,30 @@ class nsIWidget : public nsISupports {
      * (0, 0, bounds.width, bounds.height).
      */
     virtual void GetWindowClipRegion(nsTArray<nsIntRect>* aRects) = 0;
+
+    /**
+     * Register or unregister native plugin widgets which receive Configuration
+     * data from the content process via the compositor.
+     *
+     * Lookups are used by the main thread via the compositor to lookup widgets
+     * based on a unique window id. On Windows and Linux this is the
+     * NS_NATIVE_PLUGIN_PORT (hwnd/XID). This tracking maintains a reference to
+     * widgets held. Consumers are responsible for removing widgets from this
+     * list.
+     */
+    virtual void RegisterPluginWindowForRemoteUpdates() = 0;
+    virtual void UnregisterPluginWindowForRemoteUpdates() = 0;
+    static nsIWidget* LookupRegisteredPluginWindow(uintptr_t aWindowID);
+
+    /**
+     * Iterates across the list of registered plugin widgets and updates thier
+     * visibility based on which plugins are included in the 'visible' list.
+     *
+     * The compositor knows little about tabs, but it does know which plugin
+     * widgets are currently included in the visible layer tree. It calls this
+     * helper to hide widgets it knows nothing about.
+     */
+    static void UpdateRegisteredPluginWindowVisibility(nsTArray<uintptr_t>& aVisibleList);
 
     /**
      * Set the shadow style of the window.
@@ -1561,7 +1633,7 @@ class nsIWidget : public nsISupports {
      */
     virtual void UpdateWindowDraggingRegion(const nsIntRegion& aRegion) {}
 
-    /** 
+    /**
      * Internal methods
      */
 
@@ -1569,6 +1641,7 @@ class nsIWidget : public nsISupports {
     virtual void AddChild(nsIWidget* aChild) = 0;
     virtual void RemoveChild(nsIWidget* aChild) = 0;
     virtual void* GetNativeData(uint32_t aDataType) = 0;
+    virtual void SetNativeData(uint32_t aDataType, uintptr_t aVal) = 0;
     virtual void FreeNativeData(void * data, uint32_t aDataType) = 0;//~~~
 
     // GetDeviceContext returns a weak pointer to this widget's device context
@@ -1597,12 +1670,16 @@ class nsIWidget : public nsISupports {
     NS_IMETHOD SetIcon(const nsAString& anIconSpec) = 0;
 
     /**
-     * Return this widget's origin in screen coordinates.
+     * Return this widget's origin in screen coordinates. The untyped version
+     * exists temporarily to ease conversion to typed coordinates.
      *
      * @return screen coordinates stored in the x,y members
      */
 
-    virtual nsIntPoint WidgetToScreenOffset() = 0;
+    virtual mozilla::LayoutDeviceIntPoint WidgetToScreenOffset() = 0;
+    virtual nsIntPoint WidgetToScreenOffsetUntyped() {
+      return mozilla::LayoutDeviceIntPoint::ToUntyped(WidgetToScreenOffset());
+    }
 
     /**
      * Given the specified client size, return the corresponding window size,
@@ -2165,6 +2242,12 @@ public:
      */
     virtual int32_t RoundsWidgetCoordinatesTo() { return 1; }
 
+    /**
+     * GetTextEventDispatcher() returns TextEventDispatcher belonging to the
+     * widget.  Note that this never returns nullptr.
+     */
+    NS_IMETHOD_(TextEventDispatcher*) GetTextEventDispatcher() = 0;
+
 protected:
     /**
      * Like GetDefaultScale, but taking into account only the system settings
@@ -2179,9 +2262,9 @@ protected:
     // lastchild pointers are weak, which is fine as long as they are
     // maintained properly.
     nsCOMPtr<nsIWidget> mFirstChild;
-    nsIWidget* mLastChild;
+    nsIWidget* MOZ_NON_OWNING_REF mLastChild;
     nsCOMPtr<nsIWidget> mNextSibling;
-    nsIWidget* mPrevSibling;
+    nsIWidget* MOZ_NON_OWNING_REF mPrevSibling;
     // When Destroy() is called, the sub class should set this true.
     bool mOnDestroyCalled;
     nsWindowType mWindowType;

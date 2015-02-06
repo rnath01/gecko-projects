@@ -36,7 +36,6 @@ parent:
   async Create();
   async Destroy();
   async SetFocus(bool aRaise);
-  async Invalidate(nsIntRect aRect);
 
   /**
    * Returns NS_NATIVE_PLUGIN_PORT and its variants: a sharable native
@@ -46,14 +45,18 @@ parent:
    */
   sync GetNativePluginPort() returns (uintptr_t value);
 
+child:
   /**
-   * nsIWidget interfaces we'll need until this information flows
-   * over the compositor connection.
+   * Sent from chrome when the chrome side widget is getting torn down.
+   * @param aParentInitiated - indicates if the shutdown is associated
+   * with a tab closure vs. content reload.
    */
-  async Show(bool aState);
-  async Resize(nsIntRect aRect);
-  async Move(double aX, double aY);
-  async SetWindowClipRegion(nsIntRect[] Regions, bool aIntersectWithExisting);
+  async ParentShutdown(bool aParentInitiated);
+
+  /**
+   * Requests a full update of the plugin window.
+   */
+  async UpdateWindow(uintptr_t aChildId);
 };
 
 }

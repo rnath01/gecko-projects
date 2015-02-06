@@ -840,7 +840,7 @@ nsPlaintextEditor::BeginIMEComposition(WidgetCompositionEvent* aEvent)
 nsresult
 nsPlaintextEditor::UpdateIMEComposition(nsIDOMEvent* aDOMTextEvent)
 {
-  NS_ABORT_IF_FALSE(aDOMTextEvent, "aDOMTextEvent must not be nullptr");
+  MOZ_ASSERT(aDOMTextEvent, "aDOMTextEvent must not be nullptr");
 
   WidgetCompositionEvent* compositionChangeEvent =
     aDOMTextEvent->GetInternalNSEvent()->AsCompositionEvent();
@@ -1153,14 +1153,15 @@ nsPlaintextEditor::Redo(uint32_t aCount)
 }
 
 bool
-nsPlaintextEditor::CanCutOrCopy()
+nsPlaintextEditor::CanCutOrCopy(PasswordFieldAllowed aPasswordFieldAllowed)
 {
   nsRefPtr<Selection> selection = GetSelection();
   if (!selection) {
     return false;
   }
 
-  if (IsPasswordEditor())
+  if (aPasswordFieldAllowed == ePasswordFieldNotAllowed &&
+      IsPasswordEditor())
     return false;
 
   return !selection->Collapsed();
@@ -1198,7 +1199,7 @@ NS_IMETHODIMP nsPlaintextEditor::Cut()
 NS_IMETHODIMP nsPlaintextEditor::CanCut(bool *aCanCut)
 {
   NS_ENSURE_ARG_POINTER(aCanCut);
-  *aCanCut = IsModifiable() && CanCutOrCopy();
+  *aCanCut = IsModifiable() && CanCutOrCopy(ePasswordFieldNotAllowed);
   return NS_OK;
 }
 
@@ -1211,7 +1212,14 @@ NS_IMETHODIMP nsPlaintextEditor::Copy()
 NS_IMETHODIMP nsPlaintextEditor::CanCopy(bool *aCanCopy)
 {
   NS_ENSURE_ARG_POINTER(aCanCopy);
-  *aCanCopy = CanCutOrCopy();
+  *aCanCopy = CanCutOrCopy(ePasswordFieldNotAllowed);
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsPlaintextEditor::CanDelete(bool *aCanDelete)
+{
+  NS_ENSURE_ARG_POINTER(aCanDelete);
+  *aCanDelete = IsModifiable() && CanCutOrCopy(ePasswordFieldAllowed);
   return NS_OK;
 }
 
@@ -1576,6 +1584,7 @@ nsPlaintextEditor::SelectEntireDocument(Selection* aSelection)
     return aSelection->Collapse(rootElement, 0);
   }
 
+  SelectionBatcher selectionBatcher(aSelection);
   nsresult rv = nsEditor::SelectEntireDocument(aSelection);
   NS_ENSURE_SUCCESS(rv, rv);
 

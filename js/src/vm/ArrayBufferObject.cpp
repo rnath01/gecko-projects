@@ -38,10 +38,10 @@
 #include "gc/Barrier.h"
 #include "gc/Marking.h"
 #include "gc/Memory.h"
+#include "js/Conversions.h"
 #include "js/MemoryMetrics.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
-#include "vm/NumericConversions.h"
 #include "vm/WrapperObject.h"
 
 #include "jsatominlines.h"
@@ -50,6 +50,8 @@
 
 #include "vm/NativeObject-inl.h"
 #include "vm/Shape-inl.h"
+
+using JS::ToInt32;
 
 using mozilla::DebugOnly;
 using mozilla::UniquePtr;
@@ -517,11 +519,11 @@ ArrayBufferObject::neuter(JSContext *cx, Handle<ArrayBufferObject*> buffer,
     // performed. This is done by setting a compartment wide flag indicating
     // that buffers with typed object views have been neutered.
     if (buffer->hasTypedObjectViews()) {
-        // Make sure the global object's type has been instantiated, so the
+        // Make sure the global object's group has been instantiated, so the
         // flag change will be observed.
-        if (!cx->global()->getType(cx))
+        if (!cx->global()->getGroup(cx))
             CrashAtUnhandlableOOM("ArrayBufferObject::neuter");
-        types::MarkTypeObjectFlags(cx, cx->global(), types::OBJECT_FLAG_TYPED_OBJECT_NEUTERED);
+        types::MarkObjectGroupFlags(cx, cx->global(), types::OBJECT_FLAG_TYPED_OBJECT_NEUTERED);
         cx->compartment()->neuteredTypedObjects = 1;
     }
 
@@ -1549,12 +1551,12 @@ js_InitArrayBufferClass(JSContext *cx, HandleObject obj)
 
     RootedId byteLengthId(cx, NameToId(cx->names().byteLength));
     unsigned attrs = JSPROP_SHARED | JSPROP_GETTER;
-    JSObject *getter = NewFunction(cx, NullPtr(), ArrayBufferObject::byteLengthGetter, 0,
-                                   JSFunction::NATIVE_FUN, global, NullPtr());
+    JSObject *getter = NewFunction(cx, js::NullPtr(), ArrayBufferObject::byteLengthGetter, 0,
+                                   JSFunction::NATIVE_FUN, global, js::NullPtr());
     if (!getter)
         return nullptr;
 
-    if (!DefineNativeProperty(cx, arrayBufferProto, byteLengthId, UndefinedHandleValue,
+    if (!NativeDefineProperty(cx, arrayBufferProto, byteLengthId, UndefinedHandleValue,
                               JS_DATA_TO_FUNC_PTR(PropertyOp, getter), nullptr, attrs))
         return nullptr;
 

@@ -5,7 +5,18 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 UNIFIED_SOURCES += [
+    'TestCRT.cpp',
+    'TestEncoding.cpp',
+    'TestExpirationTracker.cpp',
+    'TestPipes.cpp',
+    'TestPriorityQueue.cpp',
     'TestSnappyStreams.cpp',
+    'TestStorageStream.cpp',
+    'TestStrings.cpp',
+    'TestSynchronization.cpp',
+    'TestThreadPool.cpp',
+    'TestTimeStamp.cpp',
+    'TestUTF.cpp',
 ]
 
 FINAL_LIBRARY = 'xul-gtest'

@@ -195,7 +195,7 @@ class CodeGeneratorARM : public CodeGeneratorShared
     void visitFloat32(LFloat32 *ins);
 
     void visitGuardShape(LGuardShape *guard);
-    void visitGuardObjectType(LGuardObjectType *guard);
+    void visitGuardObjectGroup(LGuardObjectGroup *guard);
     void visitGuardClass(LGuardClass *guard);
 
     void visitNegI(LNegI *lir);
@@ -213,8 +213,6 @@ class CodeGeneratorARM : public CodeGeneratorShared
     void visitAsmJSLoadFuncPtr(LAsmJSLoadFuncPtr *ins);
     void visitAsmJSLoadFFIFunc(LAsmJSLoadFFIFunc *ins);
     void visitAsmJSPassStackArg(LAsmJSPassStackArg *ins);
-
-    void visitForkJoinGetSlice(LForkJoinGetSlice *ins);
 
     void visitMemoryBarrier(LMemoryBarrier *ins);
 

@@ -15,6 +15,8 @@ BEGIN_BLUETOOTH_NAMESPACE
 // Socket module
 //
 
+const int BluetoothDaemonSocketModule::MAX_NUM_CLIENTS = 1;
+
 // Commands
 //
 
@@ -34,7 +36,7 @@ BluetoothDaemonSocketModule::ListenCmd(BluetoothSocketType aType,
     aType,
     PackConversion<nsAString, BluetoothServiceName>(aServiceName),
     PackArray<uint8_t>(aServiceUuid, 16),
-    PackConversion<int, uint16_t>(aChannel),
+    PackConversion<int, int32_t>(aChannel),
     SocketFlags(aEncrypt, aAuth), *pdu);
   if (NS_FAILED(rv)) {
     return rv;
@@ -63,7 +65,7 @@ BluetoothDaemonSocketModule::ConnectCmd(const nsAString& aBdAddr,
     PackConversion<nsAString, BluetoothAddress>(aBdAddr),
     aType,
     PackArray<uint8_t>(aUuid, 16),
-    PackConversion<int, int16_t>(aChannel),
+    PackConversion<int, int32_t>(aChannel),
     SocketFlags(aEncrypt, aAuth), *pdu);
   if (NS_FAILED(rv)) {
     return rv;

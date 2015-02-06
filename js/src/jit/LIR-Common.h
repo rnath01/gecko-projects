@@ -7,6 +7,8 @@
 #ifndef jit_LIR_Common_h
 #define jit_LIR_Common_h
 
+#include "jsutil.h"
+
 #include "jit/AtomicOp.h"
 #include "jit/shared/Assembler-shared.h"
 
@@ -108,6 +110,11 @@ class LMoveGroup : public LInstructionHelper<0, 0, 0>
 {
     js::Vector<LMove, 2, JitAllocPolicy> moves_;
 
+#ifdef JS_CODEGEN_X86
+    // Optional general register available for use when executing moves.
+    LAllocation scratchRegister_;
+#endif
+
     explicit LMoveGroup(TempAllocator &alloc)
       : moves_(alloc)
     { }
@@ -132,6 +139,61 @@ class LMoveGroup : public LInstructionHelper<0, 0, 0>
     }
     const LMove &getMove(size_t i) const {
         return moves_[i];
+    }
+
+#ifdef JS_CODEGEN_X86
+    void setScratchRegister(Register reg) {
+        scratchRegister_ = LGeneralReg(reg);
+    }
+#endif
+    LAllocation maybeScratchRegister() {
+#ifdef JS_CODEGEN_X86
+        return scratchRegister_;
+#else
+        return LAllocation();
+#endif
+    }
+};
+
+
+// Constructs a SIMD object (value type) based on the MIRType of its input.
+class LSimdBox : public LInstructionHelper<1, 1, 1>
+{
+  public:
+    LIR_HEADER(SimdBox)
+
+    explicit LSimdBox(const LAllocation &simd, const LDefinition &temp)
+    {
+        setOperand(0, simd);
+        setTemp(0, temp);
+    }
+
+    const LDefinition *temp() {
+        return getTemp(0);
+    }
+
+    MSimdBox *mir() const {
+        return mir_->toSimdBox();
+    }
+};
+
+class LSimdUnbox : public LInstructionHelper<1, 1, 1>
+{
+  public:
+    LIR_HEADER(SimdUnbox)
+
+    LSimdUnbox(const LAllocation &obj, const LDefinition &temp)
+    {
+        setOperand(0, obj);
+        setTemp(0, temp);
+    }
+
+    const LDefinition *temp() {
+        return getTemp(0);
+    }
+
+    MSimdUnbox *mir() const {
+        return mir_->toSimdUnbox();
     }
 };
 
@@ -623,6 +685,16 @@ class LValue : public LInstructionHelper<BOX_PIECES, 0, 0>
     }
 };
 
+class LNurseryObject : public LInstructionHelper<1, 0, 0>
+{
+  public:
+    LIR_HEADER(NurseryObject);
+
+    MNurseryObject *mir() const {
+        return mir_->toNurseryObject();
+    }
+};
+
 // Clone an object literal such as we are not modifying the object contained in
 // the sources.
 class LCloneLiteral : public LCallInstructionHelper<1, 1, 0>
@@ -801,74 +873,6 @@ class LNewTypedObject : public LInstructionHelper<1, 0, 1>
     }
 };
 
-class LNewPar : public LInstructionHelper<1, 1, 2>
-{
-  public:
-    LIR_HEADER(NewPar);
-
-    LNewPar(const LAllocation &cx, const LDefinition &temp1, const LDefinition &temp2) {
-        setOperand(0, cx);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-    }
-
-    MNewPar *mir() const {
-        return mir_->toNewPar();
-    }
-
-    const LAllocation *forkJoinContext() {
-        return getOperand(0);
-    }
-
-    const LDefinition *getTemp0() {
-        return getTemp(0);
-    }
-
-    const LDefinition *getTemp1() {
-        return getTemp(1);
-    }
-};
-
-class LNewDenseArrayPar : public LInstructionHelper<1, 2, 3>
-{
-  public:
-    LIR_HEADER(NewDenseArrayPar);
-
-    LNewDenseArrayPar(const LAllocation &cx, const LAllocation &length,
-                      const LDefinition &temp1, const LDefinition &temp2, const LDefinition &temp3)
-    {
-        setOperand(0, cx);
-        setOperand(1, length);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-        setTemp(2, temp3);
-    }
-
-    MNewDenseArrayPar *mir() const {
-        return mir_->toNewDenseArrayPar();
-    }
-
-    const LAllocation *forkJoinContext() {
-        return getOperand(0);
-    }
-
-    const LAllocation *length() {
-        return getOperand(1);
-    }
-
-    const LDefinition *getTemp0() {
-        return getTemp(0);
-    }
-
-    const LDefinition *getTemp1() {
-        return getTemp(1);
-    }
-
-    const LDefinition *getTemp2() {
-        return getTemp(2);
-    }
-};
-
 // Allocates a new DeclEnvObject.
 //
 // This instruction generates two possible instruction sets:
@@ -942,40 +946,6 @@ class LNewSingletonCallObject : public LInstructionHelper<1, 0, 1>
     MNewCallObjectBase *mir() const {
         MOZ_ASSERT(mir_->isNewCallObject() || mir_->isNewRunOnceCallObject());
         return static_cast<MNewCallObjectBase *>(mir_);
-    }
-};
-
-class LNewCallObjectPar : public LInstructionHelper<1, 1, 2>
-{
-    LNewCallObjectPar(const LAllocation &cx, const LDefinition &temp1, const LDefinition &temp2) {
-        setOperand(0, cx);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-    }
-
-public:
-    LIR_HEADER(NewCallObjectPar);
-
-    static LNewCallObjectPar *New(TempAllocator &alloc, const LAllocation &cx,
-                                  const LDefinition &temp1, const LDefinition &temp2)
-    {
-        return new(alloc) LNewCallObjectPar(cx, temp1, temp2);
-    }
-
-    const LAllocation *forkJoinContext() {
-        return getOperand(0);
-    }
-
-    const MNewCallObjectPar *mir() const {
-        return mir_->toNewCallObjectPar();
-    }
-
-    const LDefinition *getTemp0() {
-        return getTemp(0);
-    }
-
-    const LDefinition *getTemp1() {
-        return getTemp(1);
     }
 };
 
@@ -1148,29 +1118,6 @@ class LCheckOverRecursed : public LInstructionHelper<0, 0, 0>
     }
 };
 
-class LCheckOverRecursedPar : public LInstructionHelper<0, 1, 1>
-{
-  public:
-    LIR_HEADER(CheckOverRecursedPar);
-
-    LCheckOverRecursedPar(const LAllocation &cx, const LDefinition &tempReg) {
-        setOperand(0, cx);
-        setTemp(0, tempReg);
-    }
-
-    const LAllocation *forkJoinContext() {
-        return getOperand(0);
-    }
-
-    const LDefinition *getTempReg() {
-        return getTemp(0);
-    }
-
-    MCheckOverRecursedPar *mir() const {
-        return mir_->toCheckOverRecursedPar();
-    }
-};
-
 class LAsmJSInterruptCheck : public LInstructionHelper<0, 0, 0>
 {
     Label *interruptExit_;
@@ -1225,28 +1172,6 @@ class LInterruptCheckImplicit : public LInstructionHelper<0, 0, 0>
     }
     MInterruptCheck *mir() const {
         return mir_->toInterruptCheck();
-    }
-};
-
-class LInterruptCheckPar : public LInstructionHelper<0, 1, 1>
-{
-  public:
-    LIR_HEADER(InterruptCheckPar);
-
-    LInterruptCheckPar(const LAllocation &cx, const LDefinition &tempReg) {
-        setOperand(0, cx);
-        setTemp(0, tempReg);
-    }
-
-    const LAllocation *forkJoinContext() {
-        return getOperand(0);
-    }
-
-    const LDefinition *getTempReg() {
-        return getTemp(0);
-    }
-    MInterruptCheckPar *mir() const {
-        return mir_->toInterruptCheckPar();
     }
 };
 
@@ -1559,6 +1484,9 @@ class LJSCallInstructionHelper : public LCallInstructionHelper<Defs, Operands, T
 {
   public:
     uint32_t argslot() const {
+        static const uint32_t alignment = JitStackAlignment / sizeof(Value);
+        if (alignment > 1)
+            return AlignBytes(mir()->numStackArgs(), alignment);
         return mir()->numStackArgs();
     }
     MCall *mir() const {
@@ -1750,11 +1678,28 @@ class LGetDOMProperty : public LDOMPropertyInstructionHelper<BOX_PIECES, 0>
     }
 };
 
-class LGetDOMMember : public LInstructionHelper<BOX_PIECES, 1, 0>
+class LGetDOMMemberV : public LInstructionHelper<BOX_PIECES, 1, 0>
 {
   public:
-    LIR_HEADER(GetDOMMember);
-    explicit LGetDOMMember(const LAllocation &object) {
+    LIR_HEADER(GetDOMMemberV);
+    explicit LGetDOMMemberV(const LAllocation &object) {
+        setOperand(0, object);
+    }
+
+    const LAllocation *object() {
+        return getOperand(0);
+    }
+
+    MGetDOMMember *mir() const {
+        return mir_->toGetDOMMember();
+    }
+};
+
+class LGetDOMMemberT : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(GetDOMMemberT);
+    explicit LGetDOMMemberT(const LAllocation &object) {
         setOperand(0, object);
     }
 
@@ -2158,15 +2103,15 @@ class LFunctionDispatch : public LInstructionHelper<0, 1, 0>
     }
 };
 
-class LTypeObjectDispatch : public LInstructionHelper<0, 1, 1>
+class LObjectGroupDispatch : public LInstructionHelper<0, 1, 1>
 {
-    // Dispatch is performed based on a TypeObject -> block
+    // Dispatch is performed based on an ObjectGroup -> block
     // map inferred by the MIR.
 
   public:
-    LIR_HEADER(TypeObjectDispatch);
+    LIR_HEADER(ObjectGroupDispatch);
 
-    LTypeObjectDispatch(const LAllocation &in, const LDefinition &temp) {
+    LObjectGroupDispatch(const LAllocation &in, const LDefinition &temp) {
         setOperand(0, in);
         setTemp(0, temp);
     }
@@ -2175,8 +2120,8 @@ class LTypeObjectDispatch : public LInstructionHelper<0, 1, 1>
         return getTemp(0);
     }
 
-    MTypeObjectDispatch *mir() {
-        return mir_->toTypeObjectDispatch();
+    MObjectGroupDispatch *mir() {
+        return mir_->toObjectGroupDispatch();
     }
 };
 
@@ -3053,15 +2998,39 @@ class LAtan2D : public LCallInstructionHelper<1, 2, 1>
     }
 };
 
-class LHypot : public LCallInstructionHelper<1, 2, 1>
+class LHypot : public LCallInstructionHelper<1, 4, 1>
 {
+    uint32_t numOperands_;
   public:
     LIR_HEADER(Hypot)
-    LHypot(const LAllocation &x, const LAllocation &y, const LDefinition &temp) {
+    LHypot(const LAllocation &x, const LAllocation &y, const LDefinition &temp)
+      : numOperands_(2)
+    {
         setOperand(0, x);
         setOperand(1, y);
         setTemp(0, temp);
     }
+
+    LHypot(const LAllocation &x, const LAllocation &y, const LAllocation &z, const LDefinition &temp)
+      : numOperands_(3)
+    {
+        setOperand(0, x);
+        setOperand(1, y);
+        setOperand(2, z);
+        setTemp(0, temp);
+    }
+
+    LHypot(const LAllocation &x, const LAllocation &y, const LAllocation &z, const LAllocation &w, const LDefinition &temp)
+      : numOperands_(4)
+    {
+        setOperand(0, x);
+        setOperand(1, y);
+        setOperand(2, z);
+        setOperand(3, w);
+        setTemp(0, temp);
+    }
+
+    uint32_t numArgs() const { return numOperands_; }
 
     const LAllocation *x() {
         return getOperand(0);
@@ -3359,47 +3328,6 @@ class LConcat : public LInstructionHelper<1, 2, 5>
     }
     const LDefinition *temp5() {
         return this->getTemp(4);
-    }
-};
-
-class LConcatPar : public LInstructionHelper<1, 3, 4>
-{
-  public:
-    LIR_HEADER(ConcatPar)
-
-    LConcatPar(const LAllocation &cx, const LAllocation &lhs, const LAllocation &rhs,
-               const LDefinition &temp1, const LDefinition &temp2, const LDefinition &temp3,
-               const LDefinition &temp4)
-    {
-        setOperand(0, cx);
-        setOperand(1, lhs);
-        setOperand(2, rhs);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-        setTemp(2, temp3);
-        setTemp(3, temp4);
-    }
-
-    const LAllocation *forkJoinContext() {
-        return this->getOperand(0);
-    }
-    const LAllocation *lhs() {
-        return this->getOperand(1);
-    }
-    const LAllocation *rhs() {
-        return this->getOperand(2);
-    }
-    const LDefinition *temp1() {
-        return this->getTemp(0);
-    }
-    const LDefinition *temp2() {
-        return this->getTemp(1);
-    }
-    const LDefinition *temp3() {
-        return this->getTemp(2);
-    }
-    const LDefinition *temp4() {
-        return this->getTemp(3);
     }
 };
 
@@ -3815,7 +3743,7 @@ class LStart : public LInstructionHelper<0, 0, 0>
 
 // Passed the BaselineFrame address in the OsrFrameReg by SideCannon().
 // Forwards this object to the LOsrValues for Value materialization.
-class LOsrEntry : public LInstructionHelper<1, 0, 0>
+class LOsrEntry : public LInstructionHelper<1, 0, 1>
 {
   protected:
     Label label_;
@@ -3824,9 +3752,11 @@ class LOsrEntry : public LInstructionHelper<1, 0, 0>
   public:
     LIR_HEADER(OsrEntry)
 
-    LOsrEntry()
+    explicit LOsrEntry(const LDefinition &temp)
       : frameDepth_(0)
-    { }
+    {
+        setTemp(0, temp);
+    }
 
     void setFrameDepth(uint32_t depth) {
         frameDepth_ = depth;
@@ -3837,7 +3767,9 @@ class LOsrEntry : public LInstructionHelper<1, 0, 0>
     Label *label() {
         return &label_;
     }
-
+    const LDefinition *temp() {
+        return getTemp(0);
+    }
 };
 
 // Materialize a Value stored in an interpreter frame for OSR.
@@ -4071,36 +4003,6 @@ class LLambdaArrow : public LInstructionHelper<1, 1 + BOX_PIECES, 1>
     }
     const MLambdaArrow *mir() const {
         return mir_->toLambdaArrow();
-    }
-};
-
-class LLambdaPar : public LInstructionHelper<1, 2, 2>
-{
-  public:
-    LIR_HEADER(LambdaPar);
-
-    LLambdaPar(const LAllocation &cx, const LAllocation &scopeChain,
-               const LDefinition &temp1, const LDefinition &temp2)
-    {
-        setOperand(0, cx);
-        setOperand(1, scopeChain);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-    }
-    const LAllocation *forkJoinContext() {
-        return getOperand(0);
-    }
-    const LAllocation *scopeChain() {
-        return getOperand(1);
-    }
-    const MLambdaPar *mir() const {
-        return mir_->toLambdaPar();
-    }
-    const LDefinition *getTemp0() {
-        return getTemp(0);
-    }
-    const LDefinition *getTemp1() {
-        return getTemp(1);
     }
 };
 
@@ -5286,17 +5188,13 @@ class LGetPropertyCacheV : public LInstructionHelper<BOX_PIECES, 1, 0>
 
 // Patchable jump to stubs generated for a GetProperty cache, which loads a
 // value of a known type, possibly into an FP register.
-class LGetPropertyCacheT : public LInstructionHelper<1, 1, 1>
+class LGetPropertyCacheT : public LInstructionHelper<1, 1, 0>
 {
   public:
     LIR_HEADER(GetPropertyCacheT)
 
-    LGetPropertyCacheT(const LAllocation &object, const LDefinition &temp) {
+    explicit LGetPropertyCacheT(const LAllocation &object) {
         setOperand(0, object);
-        setTemp(0, temp);
-    }
-    const LDefinition *temp() {
-        return getTemp(0);
     }
     const MGetPropertyCache *mir() const {
         return mir_->toGetPropertyCache();
@@ -5424,16 +5322,14 @@ class LGetElementCacheV : public LInstructionHelper<BOX_PIECES, 1 + BOX_PIECES, 
     }
 };
 
-class LGetElementCacheT : public LInstructionHelper<1, 2, 1>
+class LGetElementCacheT : public LInstructionHelper<1, 2, 0>
 {
   public:
     LIR_HEADER(GetElementCacheT)
 
-    LGetElementCacheT(const LAllocation &object, const LAllocation &index,
-                      const LDefinition &temp) {
+    LGetElementCacheT(const LAllocation &object, const LAllocation &index) {
         setOperand(0, object);
         setOperand(1, index);
-        setTemp(0, temp);
     }
     const LAllocation *object() {
         return getOperand(0);
@@ -5443,9 +5339,6 @@ class LGetElementCacheT : public LInstructionHelper<1, 2, 1>
     }
     const LDefinition *output() {
         return getDef(0);
-    }
-    const LDefinition *temp() {
-        return getTemp(0);
     }
     const MGetElementCache *mir() const {
         return mir_->toGetElementCache();
@@ -5661,52 +5554,6 @@ class LFunctionEnvironment : public LInstructionHelper<1, 1, 0>
     }
 };
 
-class LForkJoinContext : public LCallInstructionHelper<1, 0, 1>
-{
-  public:
-    LIR_HEADER(ForkJoinContext);
-
-    explicit LForkJoinContext(const LDefinition &temp1) {
-        setTemp(0, temp1);
-    }
-
-    const LDefinition *getTempReg() {
-        return getTemp(0);
-    }
-};
-
-class LForkJoinGetSlice : public LInstructionHelper<1, 1, 4>
-{
-  public:
-    LIR_HEADER(ForkJoinGetSlice);
-
-    LForkJoinGetSlice(const LAllocation &cx,
-                      const LDefinition &temp1, const LDefinition &temp2,
-                      const LDefinition &temp3, const LDefinition &temp4) {
-        setOperand(0, cx);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-        setTemp(2, temp3);
-        setTemp(3, temp4);
-    }
-
-    const LAllocation *forkJoinContext() {
-        return getOperand(0);
-    }
-    const LDefinition *temp1() {
-        return getTemp(0);
-    }
-    const LDefinition *temp2() {
-        return getTemp(1);
-    }
-    const LDefinition *temp3() {
-        return getTemp(2);
-    }
-    const LDefinition *temp4() {
-        return getTemp(3);
-    }
-};
-
 class LCallGetProperty : public LCallInstructionHelper<BOX_PIECES, BOX_PIECES, 0>
 {
   public:
@@ -5804,16 +5651,14 @@ class LCallDeleteElement : public LCallInstructionHelper<1, 2 * BOX_PIECES, 0>
 
 // Patchable jump to stubs generated for a SetProperty cache, which stores a
 // boxed value.
-class LSetPropertyCacheV : public LInstructionHelper<0, 1 + BOX_PIECES, 2>
+class LSetPropertyCacheV : public LInstructionHelper<0, 1 + BOX_PIECES, 1>
 {
   public:
     LIR_HEADER(SetPropertyCacheV)
 
-    LSetPropertyCacheV(const LAllocation &object, const LDefinition &slots,
-                       const LDefinition &temp) {
+    LSetPropertyCacheV(const LAllocation &object, const LDefinition &slots) {
         setOperand(0, object);
         setTemp(0, slots);
-        setTemp(1, temp);
     }
 
     static const size_t Value = 1;
@@ -5821,15 +5666,11 @@ class LSetPropertyCacheV : public LInstructionHelper<0, 1 + BOX_PIECES, 2>
     const MSetPropertyCache *mir() const {
         return mir_->toSetPropertyCache();
     }
-
-    const LDefinition *tempForDispatchCache() {
-        return getTemp(1);
-    }
 };
 
 // Patchable jump to stubs generated for a SetProperty cache, which stores a
 // value of a known type.
-class LSetPropertyCacheT : public LInstructionHelper<0, 2, 2>
+class LSetPropertyCacheT : public LInstructionHelper<0, 2, 1>
 {
     MIRType valueType_;
 
@@ -5837,14 +5678,12 @@ class LSetPropertyCacheT : public LInstructionHelper<0, 2, 2>
     LIR_HEADER(SetPropertyCacheT)
 
     LSetPropertyCacheT(const LAllocation &object, const LDefinition &slots,
-                       const LAllocation &value, const LDefinition &temp,
-                       MIRType valueType)
+                       const LAllocation &value, MIRType valueType)
         : valueType_(valueType)
     {
         setOperand(0, object);
         setOperand(1, value);
         setTemp(0, slots);
-        setTemp(1, temp);
     }
 
     const MSetPropertyCache *mir() const {
@@ -5855,10 +5694,6 @@ class LSetPropertyCacheT : public LInstructionHelper<0, 2, 2>
     }
     const char *extraName() const {
         return StringFromMIRType(valueType_);
-    }
-
-    const LDefinition *tempForDispatchCache() {
-        return getTemp(1);
     }
 };
 
@@ -6167,55 +6002,6 @@ class LRest : public LCallInstructionHelper<1, 1, 3>
     }
 };
 
-class LRestPar : public LInstructionHelper<1, 2, 3>
-{
-  public:
-    LIR_HEADER(RestPar);
-
-    LRestPar(const LAllocation &cx, const LAllocation &numActuals,
-             const LDefinition &temp1, const LDefinition &temp2, const LDefinition &temp3)
-    {
-        setOperand(0, cx);
-        setOperand(1, numActuals);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-        setTemp(2, temp3);
-    }
-    const LAllocation *forkJoinContext() {
-        return getOperand(0);
-    }
-    const LAllocation *numActuals() {
-        return getOperand(1);
-    }
-    MRestPar *mir() const {
-        return mir_->toRestPar();
-    }
-};
-
-class LGuardThreadExclusive : public LCallInstructionHelper<0, 2, 1>
-{
-  public:
-    LIR_HEADER(GuardThreadExclusive);
-
-    LGuardThreadExclusive(const LAllocation &cx, const LAllocation &object, const LDefinition &temp1) {
-        setOperand(0, cx);
-        setOperand(1, object);
-        setTemp(0, temp1);
-    }
-
-    const LAllocation *forkJoinContext() {
-        return getOperand(0);
-    }
-
-    const LAllocation *object() {
-        return getOperand(1);
-    }
-
-    const LDefinition *getTempReg() {
-        return getTemp(0);
-    }
-};
-
 class LGuardShapePolymorphic : public LInstructionHelper<0, 1, 1>
 {
   public:
@@ -6454,28 +6240,6 @@ class LCallInstanceOf : public LCallInstructionHelper<1, BOX_PIECES+1, 0>
 
     static const size_t LHS = 0;
     static const size_t RHS = BOX_PIECES;
-};
-
-class LProfilerStackOp : public LInstructionHelper<0, 0, 1>
-{
-  public:
-    LIR_HEADER(ProfilerStackOp)
-
-    explicit LProfilerStackOp(const LDefinition &temp) {
-        setTemp(0, temp);
-    }
-
-    const LDefinition *temp() {
-        return getTemp(0);
-    }
-
-    JSScript *script() {
-        return mir_->toProfilerStackOp()->script();
-    }
-
-    MProfilerStackOp::Type type() {
-        return mir_->toProfilerStackOp()->type();
-    }
 };
 
 class LIsCallable : public LInstructionHelper<1, 1, 0>

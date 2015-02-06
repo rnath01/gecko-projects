@@ -142,8 +142,8 @@ struct nsStyleGradientStop {
   bool mIsInterpolationHint;
 
   // Use ==/!= on nsStyleGradient instead of on the gradient stop.
-  bool operator==(const nsStyleGradientStop&) const MOZ_DELETE;
-  bool operator!=(const nsStyleGradientStop&) const MOZ_DELETE;
+  bool operator==(const nsStyleGradientStop&) const = delete;
+  bool operator!=(const nsStyleGradientStop&) const = delete;
 };
 
 class nsStyleGradient MOZ_FINAL {
@@ -180,8 +180,8 @@ private:
   // Private destructor, to discourage deletion outside of Release():
   ~nsStyleGradient() {}
 
-  nsStyleGradient(const nsStyleGradient& aOther) MOZ_DELETE;
-  nsStyleGradient& operator=(const nsStyleGradient& aOther) MOZ_DELETE;
+  nsStyleGradient(const nsStyleGradient& aOther) = delete;
+  nsStyleGradient& operator=(const nsStyleGradient& aOther) = delete;
 };
 
 enum nsStyleImageType {
@@ -219,9 +219,9 @@ struct nsStyleImage {
     return mType;
   }
   imgRequestProxy* GetImageData() const {
-    NS_ABORT_IF_FALSE(mType == eStyleImageType_Image, "Data is not an image!");
-    NS_ABORT_IF_FALSE(mImageTracked,
-                      "Should be tracking any image we're going to use!");
+    MOZ_ASSERT(mType == eStyleImageType_Image, "Data is not an image!");
+    MOZ_ASSERT(mImageTracked,
+               "Should be tracking any image we're going to use!");
     return mImage;
   }
   nsStyleGradient* GetGradientData() const {
@@ -419,14 +419,14 @@ struct nsStyleBackground {
     Dimension mWidth, mHeight;
 
     nscoord ResolveWidthLengthPercentage(const nsSize& aBgPositioningArea) const {
-      NS_ABORT_IF_FALSE(mWidthType == eLengthPercentage,
-                        "resolving non-length/percent dimension!");
+      MOZ_ASSERT(mWidthType == eLengthPercentage,
+                 "resolving non-length/percent dimension!");
       return mWidth.ResolveLengthPercentage(aBgPositioningArea.width);
     }
 
     nscoord ResolveHeightLengthPercentage(const nsSize& aBgPositioningArea) const {
-      NS_ABORT_IF_FALSE(mHeightType == eLengthPercentage,
-                        "resolving non-length/percent dimension!");
+      MOZ_ASSERT(mHeightType == eLengthPercentage,
+                 "resolving non-length/percent dimension!");
       return mHeight.ResolveLengthPercentage(aBgPositioningArea.height);
     }
 
@@ -763,11 +763,11 @@ private:
 public:
     uint32_t Length() const { return mLength; }
     nsCSSShadowItem* ShadowAt(uint32_t i) {
-      NS_ABORT_IF_FALSE(i < mLength, "Accessing too high an index in the text shadow array!");
+      MOZ_ASSERT(i < mLength, "Accessing too high an index in the text shadow array!");
       return &mArray[i];
     }
     const nsCSSShadowItem* ShadowAt(uint32_t i) const {
-      NS_ABORT_IF_FALSE(i < mLength, "Accessing too high an index in the text shadow array!");
+      MOZ_ASSERT(i < mLength, "Accessing too high an index in the text shadow array!");
       return &mArray[i];
     }
 
@@ -1041,7 +1041,7 @@ protected:
 private:
   nscoord       mTwipsPerPixel;
 
-  nsStyleBorder& operator=(const nsStyleBorder& aOther) MOZ_DELETE;
+  nsStyleBorder& operator=(const nsStyleBorder& aOther) = delete;
 };
 
 
@@ -1203,7 +1203,7 @@ private:
   nsString  mListStyleType;             // [inherited]
   nsRefPtr<mozilla::CounterStyle> mCounterStyle; // [inherited]
   nsRefPtr<imgRequestProxy> mListStyleImage; // [inherited]
-  nsStyleList& operator=(const nsStyleList& aOther) MOZ_DELETE;
+  nsStyleList& operator=(const nsStyleList& aOther) = delete;
 public:
   nsRect        mImageRegion;           // [inherited] the rect to use within an image
 };
@@ -1507,8 +1507,8 @@ struct nsStyleTextReset {
 
   void SetDecorationStyle(uint8_t aStyle)
   {
-    NS_ABORT_IF_FALSE((aStyle & BORDER_STYLE_MASK) == aStyle,
-                      "style doesn't fit");
+    MOZ_ASSERT((aStyle & BORDER_STYLE_MASK) == aStyle,
+               "style doesn't fit");
     mTextDecorationStyle &= ~BORDER_STYLE_MASK;
     mTextDecorationStyle |= (aStyle & BORDER_STYLE_MASK);
   }
@@ -1816,7 +1816,7 @@ struct nsTimingFunction {
   nsTimingFunction(Type aType, uint32_t aSteps)
     : mType(aType)
   {
-    NS_ABORT_IF_FALSE(mType == StepStart || mType == StepEnd, "wrong type");
+    MOZ_ASSERT(mType == StepStart || mType == StepEnd, "wrong type");
     mSteps = aSteps;
   }
 
@@ -2316,9 +2316,9 @@ struct nsStyleContentData {
 
   void SetImage(imgRequestProxy* aRequest)
   {
-    NS_ABORT_IF_FALSE(!mImageTracked,
-                      "Setting a new image without untracking the old one!");
-    NS_ABORT_IF_FALSE(mType == eStyleContentType_Image, "Wrong type!");
+    MOZ_ASSERT(!mImageTracked,
+               "Setting a new image without untracking the old one!");
+    MOZ_ASSERT(mType == eStyleContentType_Image, "Wrong type!");
     NS_IF_ADDREF(mContent.mImage = aRequest);
   }
 private:
@@ -2974,7 +2974,7 @@ struct nsStyleClipPath
 
 private:
   void ReleaseRef();
-  void* operator new(size_t) MOZ_DELETE;
+  void* operator new(size_t) = delete;
 
   int32_t mType; // see NS_STYLE_CLIP_PATH_* constants in nsStyleConsts.h
   union {

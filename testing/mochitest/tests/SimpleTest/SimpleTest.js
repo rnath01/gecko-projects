@@ -259,8 +259,8 @@ SimpleTest.ok = function (condition, name, diag) {
         SimpleTest.num_failed++;
         test.result = !test.result;
       }
-      var successInfo = {status:"PASS", expected:"PASS", message:"TEST-PASS"};
-      var failureInfo = {status:"FAIL", expected:"FAIL", message:"TEST-KNOWN-FAIL"};
+      var successInfo = {status:"FAIL", expected:"FAIL", message:"TEST-KNOWN-FAIL"};
+      var failureInfo = {status:"PASS", expected:"FAIL", message:"TEST-UNEXPECTED-PASS"};
     } else {
       var successInfo = {status:"PASS", expected:"PASS", message:"TEST-PASS"};
       var failureInfo = {status:"FAIL", expected:"PASS", message:"TEST-UNEXPECTED-FAIL"};
@@ -619,20 +619,22 @@ SimpleTest.expectAssertions = function(min, max) {
 SimpleTest._flakyTimeoutIsOK = false;
 SimpleTest._originalSetTimeout = window.setTimeout;
 window.setTimeout = function SimpleTest_setTimeoutShim() {
-    var testSuiteSupported = false;
-    // Right now, we only enable these checks for mochitest-plain.
-    switch (SimpleTest.harnessParameters.testRoot) {
-    case "browser":
-    case "chrome":
-    case "a11y":
-    case "webapprtContent":
-        break;
-    default:
-        if (!SimpleTest._alreadyFinished && arguments.length > 1 && arguments[1] > 0) {
-            if (SimpleTest._flakyTimeoutIsOK) {
-                SimpleTest.todo(false, "The author of the test has indicated that flaky timeouts are expected.  Reason: " + SimpleTest._flakyTimeoutReason);
-            } else {
-                SimpleTest.ok(false, "Test attempted to use a flaky timeout value " + arguments[1]);
+    // Don't break tests that are loaded without a parent runner.
+    if (parentRunner) {
+        // Right now, we only enable these checks for mochitest-plain.
+        switch (SimpleTest.harnessParameters.testRoot) {
+        case "browser":
+        case "chrome":
+        case "a11y":
+        case "webapprtContent":
+            break;
+        default:
+            if (!SimpleTest._alreadyFinished && arguments.length > 1 && arguments[1] > 0) {
+                if (SimpleTest._flakyTimeoutIsOK) {
+                    SimpleTest.todo(false, "The author of the test has indicated that flaky timeouts are expected.  Reason: " + SimpleTest._flakyTimeoutReason);
+                } else {
+                    SimpleTest.ok(false, "Test attempted to use a flaky timeout value " + arguments[1]);
+                }
             }
         }
     }
@@ -787,7 +789,7 @@ SimpleTest.waitForFocus = function (callback, targetWindow, expectBlankPage) {
           focused = (focusedWindow() == childDesiredWindow);
           if (!focused) {
               info("must wait for focus");
-              desiredWindow.addEventListener("focus", focusedOrLoaded, true);
+              childDesiredWindow.addEventListener("focus", focusedOrLoaded, true);
               if (isChildProcess) {
                   childDesiredWindow.focus();
               }
@@ -971,8 +973,8 @@ SimpleTest.finish = function() {
     if (SimpleTest.expected == 'fail' && SimpleTest.num_failed <= 0) {
         msg = 'We expected at least one failure';
         var test = {'result': false, 'name': 'fail-if condition in manifest', 'diag': msg};
-        var successInfo = {status:"PASS", expected:"PASS", message:"TEST-PASS"};
-        var failureInfo = {status:"FAIL", expected:"FAIL", message:"TEST-KNOWN-FAIL"};
+        var successInfo = {status:"FAIL", expected:"FAIL", message:"TEST-KNOWN-FAIL"};
+        var failureInfo = {status:"PASS", expected:"FAIL", message:"TEST-UNEXPECTED-PASS"};
 
         SimpleTest._logResult(test, successInfo, failureInfo);
         SimpleTest._tests.push(test);

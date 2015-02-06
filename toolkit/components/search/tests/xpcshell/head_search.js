@@ -24,6 +24,7 @@ const MODE_TRUNCATE = FileUtils.MODE_TRUNCATE;
 // nsSearchService.js uses Services.appinfo.name to build a salt for a hash.
 var XULRuntime = Components.classesByID["{95d89e3e-a169-41a3-8e56-719978e15b12}"]
                            .getService(Ci.nsIXULRuntime);
+
 var XULAppInfo = {
   vendor: "Mozilla",
   name: "XPCShell",
@@ -34,7 +35,8 @@ var XULAppInfo = {
   platformBuildID: "2007010101",
   inSafeMode: false,
   logConsoleErrors: true,
-  OS: "XPCShell",
+  // mirror OS from the base impl as some of the "location" tests rely on it
+  OS: XULRuntime.OS,
   XPCOMABI: "noarch-spidermonkey",
   // mirror processType from the base implementation
   processType: XULRuntime.processType,
@@ -302,3 +304,75 @@ let addTestEngines = Task.async(function* (aItems) {
 
   return engines;
 });
+
+/**
+ * Installs a test engine into the test profile.
+ */
+function installTestEngine() {
+  removeMetadata();
+  removeCacheFile();
+
+  do_check_false(Services.search.isInitialized);
+
+  let engineDummyFile = gProfD.clone();
+  engineDummyFile.append("searchplugins");
+  engineDummyFile.append("test-search-engine.xml");
+  let engineDir = engineDummyFile.parent;
+  engineDir.create(Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
+
+  do_get_file("data/engine.xml").copyTo(engineDir, "engine.xml");
+
+  do_register_cleanup(function() {
+    removeMetadata();
+    removeCacheFile();
+  });
+}
+
+
+/**
+ * Returns a promise that is resolved when an observer notification from the
+ * search service fires with the specified data.
+ *
+ * @param aExpectedData
+ *        The value the observer notification sends that causes us to resolve
+ *        the promise.
+ */
+function waitForSearchNotification(aExpectedData) {
+  return new Promise(resolve => {
+    const SEARCH_SERVICE_TOPIC = "browser-search-service";
+    Services.obs.addObserver(function observer(aSubject, aTopic, aData) {
+      if (aData != aExpectedData)
+        return;
+
+      Services.obs.removeObserver(observer, SEARCH_SERVICE_TOPIC);
+      resolve(aSubject);
+    }, SEARCH_SERVICE_TOPIC, false);
+  });
+}
+
+// This "enum" from nsSearchService.js
+const TELEMETRY_RESULT_ENUM = {
+  SUCCESS: 0,
+  SUCCESS_WITHOUT_DATA: 1,
+  XHRTIMEOUT: 2,
+  ERROR: 3,
+};
+
+/**
+ * Checks the value of the SEARCH_SERVICE_COUNTRY_FETCH_RESULT probe.
+ *
+ * @param aExpectedValue
+ *        If a value from TELEMETRY_RESULT_ENUM, we expect to see this value
+ *        recorded exactly once in the probe.  If |null|, we expect to see
+ *        nothing recorded in the probe at all.
+ */
+function checkCountryResultTelemetry(aExpectedValue) {
+  let histogram = Services.telemetry.getHistogramById("SEARCH_SERVICE_COUNTRY_FETCH_RESULT");
+  let snapshot = histogram.snapshot();
+  // The probe is declared with 8 values, but we get 9 back from .counts
+  let expectedCounts = [0,0,0,0,0,0,0,0,0];
+  if (aExpectedValue != null) {
+    expectedCounts[aExpectedValue] = 1;
+  }
+  deepEqual(snapshot.counts, expectedCounts);
+}

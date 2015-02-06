@@ -20,6 +20,7 @@ describe("loop.shared.mixins", function() {
 
   afterEach(function() {
     sandbox.restore();
+    sharedMixins.setRootObject(window);
   });
 
   describe("loop.shared.mixins.UrlHashChangeMixin", function() {
@@ -31,7 +32,7 @@ describe("loop.shared.mixins", function() {
           return React.DOM.div();
         }
       });
-      return new TestComp();
+      return new React.createElement(TestComp);
     }
 
     it("should watch for hashchange event", function() {
@@ -83,7 +84,7 @@ describe("loop.shared.mixins", function() {
     });
 
     it("should call window.location.reload", function() {
-      var comp = TestUtils.renderIntoDocument(TestComp());
+      var comp = TestUtils.renderIntoDocument(React.createElement(TestComp));
 
       comp.locationReload();
 
@@ -109,7 +110,7 @@ describe("loop.shared.mixins", function() {
     });
 
     it("should set window.document.title", function() {
-      var comp = TestUtils.renderIntoDocument(TestComp());
+      var comp = TestUtils.renderIntoDocument(React.createElement(TestComp));
 
       comp.setTitle("It's a Fake!");
 
@@ -136,7 +137,7 @@ describe("loop.shared.mixins", function() {
     });
 
     it("should call window.close", function() {
-      var comp = TestUtils.renderIntoDocument(TestComp());
+      var comp = TestUtils.renderIntoDocument(React.createElement(TestComp));
 
       comp.closeWindow();
 
@@ -162,10 +163,6 @@ describe("loop.shared.mixins", function() {
       });
     });
 
-    afterEach(function() {
-      loop.shared.mixins.setRootObject(window);
-    });
-
     function setupFakeVisibilityEventDispatcher(event) {
       loop.shared.mixins.setRootObject({
         document: {
@@ -181,7 +178,7 @@ describe("loop.shared.mixins", function() {
       function() {
         setupFakeVisibilityEventDispatcher({target: {hidden: false}});
 
-        comp = TestUtils.renderIntoDocument(TestComp());
+        comp = TestUtils.renderIntoDocument(React.createElement(TestComp));
 
         sinon.assert.calledOnce(onDocumentVisibleStub);
       });
@@ -190,10 +187,203 @@ describe("loop.shared.mixins", function() {
       function() {
         setupFakeVisibilityEventDispatcher({target: {hidden: true}});
 
-        comp = TestUtils.renderIntoDocument(TestComp());
+        comp = TestUtils.renderIntoDocument(React.createElement(TestComp));
 
         sinon.assert.calledOnce(onDocumentHiddenStub);
       });
+  });
+
+  describe("loop.shared.mixins.MediaSetupMixin", function() {
+    var view, TestComp, rootObject;
+
+    beforeEach(function() {
+      TestComp = React.createClass({
+        mixins: [loop.shared.mixins.MediaSetupMixin],
+        render: function() {
+          return React.DOM.div();
+        }
+      });
+
+      sandbox.useFakeTimers();
+
+      rootObject = {
+        events: {},
+        setTimeout: function(func, timeout) {
+          return setTimeout(func, timeout);
+        },
+        clearTimeout: function(timer) {
+          return clearTimeout(timer);
+        },
+        addEventListener: function(eventName, listener) {
+          this.events[eventName] = listener;
+        },
+        removeEventListener: function(eventName) {
+          delete this.events[eventName];
+        }
+      };
+
+      sharedMixins.setRootObject(rootObject);
+
+      view = TestUtils.renderIntoDocument(React.createElement(TestComp));
+    });
+
+    describe("#getDefaultPublisherConfig", function() {
+      it("should provide a default publisher configuration", function() {
+        var defaultConfig = view.getDefaultPublisherConfig({publishVideo: true});
+
+        expect(defaultConfig.publishVideo).eql(true);
+      });
+    });
+
+    describe("Events", function() {
+      var localElement, remoteElement, screenShareElement;
+
+      beforeEach(function() {
+        sandbox.stub(view, "getDOMNode").returns({
+          querySelector: function(classSelector) {
+            if (classSelector.contains("local")) {
+                return localElement;
+            } else if (classSelector.contains("screen")) {
+                return screenShareElement;
+            }
+            return remoteElement;
+          }
+        });
+      });
+
+      describe("resize", function() {
+        it("should update the width on the local stream element", function() {
+          localElement = {
+            offsetWidth: 100,
+            offsetHeight: 100,
+            style: { width: "0%" }
+          };
+
+          rootObject.events.resize();
+          sandbox.clock.tick(10);
+
+          expect(localElement.style.width).eql("100%");
+        });
+
+        it("should update the height on the remote stream element", function() {
+          remoteElement = {
+            offsetWidth: 100,
+            offsetHeight: 100,
+            style: { height: "0%" }
+          };
+
+          rootObject.events.resize();
+          sandbox.clock.tick(10);
+
+          expect(remoteElement.style.height).eql("100%");
+        });
+
+        it("should update the height on the screen share stream element", function() {
+          screenShareElement = {
+            offsetWidth: 100,
+            offsetHeight: 100,
+            style: { height: "0%" }
+          };
+
+          rootObject.events.resize();
+          sandbox.clock.tick(10);
+
+          expect(screenShareElement.style.height).eql("100%");
+        });
+      });
+
+      describe("orientationchange", function() {
+        it("should update the width on the local stream element", function() {
+          localElement = {
+            offsetWidth: 100,
+            offsetHeight: 100,
+            style: { width: "0%" }
+          };
+
+          rootObject.events.orientationchange();
+          sandbox.clock.tick(10);
+
+          expect(localElement.style.width).eql("100%");
+        });
+
+        it("should update the height on the remote stream element", function() {
+          remoteElement = {
+            offsetWidth: 100,
+            offsetHeight: 100,
+            style: { height: "0%" }
+          };
+
+          rootObject.events.orientationchange();
+          sandbox.clock.tick(10);
+
+          expect(remoteElement.style.height).eql("100%");
+        });
+
+        it("should update the height on the screen share stream element", function() {
+          screenShareElement = {
+            offsetWidth: 100,
+            offsetHeight: 100,
+            style: { height: "0%" }
+          };
+
+          rootObject.events.orientationchange();
+          sandbox.clock.tick(10);
+
+          expect(screenShareElement.style.height).eql("100%");
+        });
+      });
+
+
+      describe("Video stream dimensions", function() {
+        var localVideoDimensions = {
+          camera: {
+            width: 640,
+            height: 480
+          }
+        };
+        var remoteVideoDimensions = {
+          camera: {
+            width: 420,
+            height: 138
+          }
+        };
+
+        beforeEach(function() {
+          view.updateVideoDimensions(localVideoDimensions, remoteVideoDimensions);
+        });
+
+        it("should register video dimension updates correctly", function() {
+          expect(view._videoDimensionsCache.local.camera.width)
+            .eql(localVideoDimensions.camera.width);
+          expect(view._videoDimensionsCache.local.camera.height)
+            .eql(localVideoDimensions.camera.height);
+          expect(view._videoDimensionsCache.local.camera.aspectRatio.width).eql(1);
+          expect(view._videoDimensionsCache.local.camera.aspectRatio.height).eql(0.75);
+          expect(view._videoDimensionsCache.remote.camera.width)
+            .eql(remoteVideoDimensions.camera.width);
+          expect(view._videoDimensionsCache.remote.camera.height)
+            .eql(remoteVideoDimensions.camera.height);
+          expect(view._videoDimensionsCache.remote.camera.aspectRatio.width).eql(1);
+          expect(view._videoDimensionsCache.remote.camera.aspectRatio.height)
+            .eql(0.32857142857142857);
+        });
+
+        it("should fetch remote video stream dimensions correctly", function() {
+          remoteElement = {
+            offsetWidth: 600,
+            offsetHeight: 320
+          };
+
+          var remoteVideoDimensions = view.getRemoteVideoDimensions();
+          expect(remoteVideoDimensions.width).eql(remoteElement.offsetWidth);
+          expect(remoteVideoDimensions.height).eql(remoteElement.offsetHeight);
+          expect(remoteVideoDimensions.streamWidth).eql(534.8571428571429);
+          expect(remoteVideoDimensions.streamHeight).eql(remoteElement.offsetHeight);
+          expect(remoteVideoDimensions.offsetX).eql(32.571428571428555);
+          expect(remoteVideoDimensions.offsetY).eql(0);
+        });
+      });
+    });
   });
 
   describe("loop.shared.mixins.AudioMixin", function() {
@@ -227,14 +417,14 @@ describe("loop.shared.mixins", function() {
     });
 
     it("should not play a failure sound when doNotDisturb true", function() {
-      view = TestUtils.renderIntoDocument(TestComp());
+      view = TestUtils.renderIntoDocument(React.createElement(TestComp));
       sinon.assert.notCalled(navigator.mozLoop.getAudioBlob);
       sinon.assert.notCalled(fakeAudio.play);
     });
 
     it("should play a failure sound, once", function() {
       navigator.mozLoop.doNotDisturb = false;
-      view = TestUtils.renderIntoDocument(TestComp());
+      view = TestUtils.renderIntoDocument(React.createElement(TestComp));
       sinon.assert.calledOnce(navigator.mozLoop.getAudioBlob);
       sinon.assert.calledWithExactly(navigator.mozLoop.getAudioBlob,
                                      "failure", sinon.match.func);
@@ -258,7 +448,8 @@ describe("loop.shared.mixins", function() {
         }
       });
 
-      var renderedComp = TestUtils.renderIntoDocument(TestComp());
+      var renderedComp = TestUtils.renderIntoDocument(
+        React.createElement(TestComp));
       sandbox.stub(renderedComp, "play");
       return renderedComp;
     }

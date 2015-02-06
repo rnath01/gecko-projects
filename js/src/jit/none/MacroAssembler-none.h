@@ -156,6 +156,12 @@ class MacroAssemblerNone : public Assembler
     static void TraceJumpRelocations(JSTracer *, JitCode *, CompactBufferReader &) { MOZ_CRASH(); }
     static void TraceDataRelocations(JSTracer *, JitCode *, CompactBufferReader &) { MOZ_CRASH(); }
 
+    static void FixupNurseryObjects(JSContext *, JitCode *, CompactBufferReader &,
+                                    const ObjectVector &)
+    {
+        MOZ_CRASH();
+    }
+
     static bool SupportsFloatingPoint() { return false; }
     static bool SupportsSimd() { return false; }
 
@@ -394,6 +400,7 @@ class MacroAssemblerNone : public Assembler
 
     template <typename T> void loadUnboxedValue(T, MIRType, AnyRegister) { MOZ_CRASH(); }
     template <typename T> void storeUnboxedValue(ConstantOrRegister, MIRType, T, MIRType) { MOZ_CRASH(); }
+    template <typename T> void storeUnboxedPayload(ValueOperand value, T, size_t) { MOZ_CRASH(); }
 
     void rshiftPtr(Imm32, Register) { MOZ_CRASH(); }
     void rshiftPtrArithmetic(Imm32, Register) { MOZ_CRASH(); }

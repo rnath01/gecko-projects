@@ -255,22 +255,12 @@ NetworkService.prototype = {
   },
 
   resetRoutingTable: function(network) {
-    let ips = {};
-    let prefixLengths = {};
-    let length = network.getAddresses(ips, prefixLengths);
+    let options = {
+      cmd: "removeNetworkRoute",
+      ifname: network.name
+    };
 
-    for (let i = 0; i < length; i++) {
-      let ip = ips.value[i];
-      let prefixLength = prefixLengths.value[i];
-
-      let options = {
-        cmd: "removeNetworkRoute",
-        ifname: network.name,
-        ip: ip,
-        prefixLength: prefixLength
-      };
-      this.controlMessage(options);
-    }
+    this.controlMessage(options);
   },
 
   setDNS: function(networkInterface, callback) {
@@ -312,8 +302,20 @@ NetworkService.prototype = {
     this.controlMessage(options);
   },
 
-  _setHostRoute: function(doAdd, interfaceName, gateway, host) {
-    let command = doAdd ? "addHostRoute" : "removeHostRoute";
+  modifyRoute: function(action, interfaceName, host, prefixLength, gateway) {
+    let command;
+
+    switch (action) {
+      case Ci.nsINetworkService.MODIFY_ROUTE_ADD:
+        command = 'addHostRoute';
+        break;
+      case Ci.nsINetworkService.MODIFY_ROUTE_REMOVE:
+        command = 'removeHostRoute';
+        break;
+      default:
+        if (DEBUG) debug('Unknown action: ' + action);
+        return Promise.reject();
+    }
 
     if (DEBUG) debug(command + " " + host + " on " + interfaceName);
     let deferred = Promise.defer();
@@ -321,6 +323,7 @@ NetworkService.prototype = {
       cmd: command,
       ifname: interfaceName,
       gateway: gateway,
+      prefixLength: prefixLength,
       ip: host
     };
     this.controlMessage(options, function(data) {
@@ -331,14 +334,6 @@ NetworkService.prototype = {
       deferred.resolve();
     });
     return deferred.promise;
-  },
-
-  addHostRoute: function(interfaceName, gateway, host) {
-    return this._setHostRoute(true, interfaceName, gateway, host);
-  },
-
-  removeHostRoute: function(interfaceName, gateway, host) {
-    return this._setHostRoute(false, interfaceName, gateway, host);
   },
 
   removeHostRoutes: function(ifname) {
@@ -378,17 +373,13 @@ NetworkService.prototype = {
     try {
       if (!network.httpProxyHost || network.httpProxyHost === "") {
         // Sets direct connection to internet.
-        Services.prefs.clearUserPref("network.proxy.type");
-        Services.prefs.clearUserPref("network.proxy.share_proxy_settings");
-        Services.prefs.clearUserPref("network.proxy.http");
-        Services.prefs.clearUserPref("network.proxy.http_port");
-        Services.prefs.clearUserPref("network.proxy.ssl");
-        Services.prefs.clearUserPref("network.proxy.ssl_port");
-        if(DEBUG) debug("No proxy support for " + network.name + " network interface.");
+        this.clearNetworkProxy();
+
+        if (DEBUG) debug("No proxy support for " + network.name + " network interface.");
         return;
       }
 
-      if(DEBUG) debug("Going to set proxy settings for " + network.name + " network interface.");
+      if (DEBUG) debug("Going to set proxy settings for " + network.name + " network interface.");
       // Sets manual proxy configuration.
       Services.prefs.setIntPref("network.proxy.type", MANUAL_PROXY_CONFIGURATION);
       // Do not use this proxy server for all protocols.
@@ -399,9 +390,20 @@ NetworkService.prototype = {
       Services.prefs.setIntPref("network.proxy.http_port", port);
       Services.prefs.setIntPref("network.proxy.ssl_port", port);
     } catch(ex) {
-        if(DEBUG) debug("Exception " + ex + ". Unable to set proxy setting for " +
+        if (DEBUG) debug("Exception " + ex + ". Unable to set proxy setting for " +
                          network.name + " network interface.");
     }
+  },
+
+  clearNetworkProxy: function() {
+    if (DEBUG) debug("Going to clear all network proxy.");
+
+    Services.prefs.clearUserPref("network.proxy.type");
+    Services.prefs.clearUserPref("network.proxy.share_proxy_settings");
+    Services.prefs.clearUserPref("network.proxy.http");
+    Services.prefs.clearUserPref("network.proxy.http_port");
+    Services.prefs.clearUserPref("network.proxy.ssl");
+    Services.prefs.clearUserPref("network.proxy.ssl_port");
   },
 
   // Enable/Disable DHCP server.
@@ -559,6 +561,28 @@ NetworkService.prototype = {
   resetConnections: function(interfaceName, callback) {
     let params = {
       cmd: "resetConnections",
+      ifname: interfaceName
+    };
+
+    this.controlMessage(params, function(result) {
+      callback.nativeCommandResult(!result.error);
+    });
+  },
+
+  createNetwork: function(interfaceName, callback) {
+    let params = {
+      cmd: "createNetwork",
+      ifname: interfaceName
+    };
+
+    this.controlMessage(params, function(result) {
+      callback.nativeCommandResult(!result.error);
+    });
+  },
+
+  destroyNetwork: function(interfaceName, callback) {
+    let params = {
+      cmd: "destroyNetwork",
       ifname: interfaceName
     };
 

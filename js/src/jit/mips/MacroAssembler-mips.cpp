@@ -476,6 +476,12 @@ MacroAssemblerMIPS::ma_addu(Register rd, Register rs, Imm32 imm)
 }
 
 void
+MacroAssemblerMIPS::ma_addu(Register rd, Register rs, Register rt)
+{
+    as_addu(rd, rs, rt);
+}
+
+void
 MacroAssemblerMIPS::ma_addu(Register rd, Register rs)
 {
     as_addu(rd, rd, rs);
@@ -918,6 +924,13 @@ MacroAssemblerMIPS::ma_b(Register lhs, Address addr, Label *label, Condition c, 
 
 void
 MacroAssemblerMIPS::ma_b(Address addr, Imm32 imm, Label *label, Condition c, JumpKind jumpKind)
+{
+    ma_lw(SecondScratchReg, addr);
+    ma_b(SecondScratchReg, imm, label, c, jumpKind);
+}
+
+void
+MacroAssemblerMIPS::ma_b(Address addr, ImmGCPtr imm, Label *label, Condition c, JumpKind jumpKind)
 {
     ma_lw(SecondScratchReg, addr);
     ma_b(SecondScratchReg, imm, label, c, jumpKind);
@@ -2562,6 +2575,13 @@ MacroAssemblerMIPSCompat::unboxNonDouble(const Address &src, Register dest)
 }
 
 void
+MacroAssemblerMIPSCompat::unboxNonDouble(const BaseIndex &src, Register dest)
+{
+    computeScaledAddress(src, SecondScratchReg);
+    ma_lw(dest, Address(SecondScratchReg, src.offset + PAYLOAD_OFFSET));
+}
+
+void
 MacroAssemblerMIPSCompat::unboxInt32(const ValueOperand &operand, Register dest)
 {
     ma_move(dest, operand.payloadReg());
@@ -3335,7 +3355,7 @@ MacroAssemblerMIPSCompat::checkStackAlignment()
     Label aligned;
     as_andi(ScratchRegister, sp, ABIStackAlignment - 1);
     ma_b(ScratchRegister, zero, &aligned, Equal, ShortJump);
-    as_break(MAX_BREAK_CODE);
+    as_break(BREAK_STACK_UNALIGNED);
     bind(&aligned);
 #endif
 }
@@ -3459,6 +3479,8 @@ AssertValidABIFunctionType(uint32_t passedArgTypes)
       case Args_Double_DoubleDouble:
       case Args_Double_IntDouble:
       case Args_Int_IntDouble:
+      case Args_Double_DoubleDoubleDouble:
+      case Args_Double_DoubleDoubleDoubleDouble:
         break;
       default:
         MOZ_CRASH("Unexpected type");
@@ -3597,6 +3619,18 @@ MacroAssemblerMIPSCompat::handleFailureWithHandlerTail(void *handler)
               JSReturnOperand);
     ma_move(StackPointer, BaselineFrameReg);
     pop(BaselineFrameReg);
+
+    // If profiling is enabled, then update the lastProfilingFrame to refer to caller
+    // frame before returning.
+    {
+        Label skipProfilingInstrumentation;
+        // Test if profiler enabled.
+        AbsoluteAddress addressOfEnabled(GetJitContext()->runtime->spsProfiler().addressOfEnabled());
+        branch32(Assembler::Equal, addressOfEnabled, Imm32(0), &skipProfilingInstrumentation);
+        profilerExitFrame();
+        bind(&skipProfilingInstrumentation);
+    }
+
     ret();
 
     // If we are bailing out to baseline to handle an exception, jump to
@@ -3661,4 +3695,19 @@ MacroAssemblerMIPSCompat::branchValueIsNurseryObject(Condition cond, ValueOperan
     branchPtrInNurseryRange(cond, value.payloadReg(), temp, label);
 
     bind(&done);
+}
+
+void
+MacroAssemblerMIPSCompat::profilerEnterFrame(Register framePtr, Register scratch)
+{
+    AbsoluteAddress activation(GetJitContext()->runtime->addressOfProfilingActivation());
+    loadPtr(activation, scratch);
+    storePtr(framePtr, Address(scratch, JitActivation::offsetOfLastProfilingFrame()));
+    storePtr(ImmPtr(nullptr), Address(scratch, JitActivation::offsetOfLastProfilingCallSite()));
+}
+
+void
+MacroAssemblerMIPSCompat::profilerExitFrame()
+{
+    branch(GetJitContext()->runtime->jitRuntime()->getProfilerExitFrameTail());
 }

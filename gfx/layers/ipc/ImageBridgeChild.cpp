@@ -86,7 +86,7 @@ struct CompositableTransaction
   }
   void AddNoSwapEdit(const CompositableOperation& op)
   {
-    NS_ABORT_IF_FALSE(!Finished(), "forgot BeginTransaction?");
+    MOZ_ASSERT(!Finished(), "forgot BeginTransaction?");
     mOperations.push_back(op);
   }
   void AddEdit(const CompositableOperation& op)
@@ -205,8 +205,8 @@ static void ImageBridgeShutdownStep1(ReentrantMonitor *aBarrier, bool *aDone)
 {
   ReentrantMonitorAutoEnter autoMon(*aBarrier);
 
-  NS_ABORT_IF_FALSE(InImageBridgeChildThread(),
-                    "Should be in ImageBridgeChild thread.");
+  MOZ_ASSERT(InImageBridgeChildThread(),
+             "Should be in ImageBridgeChild thread.");
   if (sImageBridgeChildSingleton) {
     // Force all managed protocols to shut themselves down cleanly
     InfallibleTArray<PCompositableChild*> compositables;
@@ -233,8 +233,8 @@ static void ImageBridgeShutdownStep2(ReentrantMonitor *aBarrier, bool *aDone)
 {
   ReentrantMonitorAutoEnter autoMon(*aBarrier);
 
-  NS_ABORT_IF_FALSE(InImageBridgeChildThread(),
-                    "Should be in ImageBridgeChild thread.");
+  MOZ_ASSERT(InImageBridgeChildThread(),
+             "Should be in ImageBridgeChild thread.");
 
   sImageBridgeChildSingleton->SendStop();
 
@@ -389,6 +389,10 @@ static void ReleaseTextureClientNow(TextureClient* aClient)
 // static
 void ImageBridgeChild::DispatchReleaseTextureClient(TextureClient* aClient)
 {
+  if (!aClient) {
+    return;
+  }
+
   if (!IsCreated()) {
     // TextureClient::Release should normally happen in the ImageBridgeChild
     // thread because it usually generate some IPDL messages.
@@ -632,7 +636,7 @@ void ImageBridgeChild::ShutDown()
 
 bool ImageBridgeChild::StartUpOnThread(Thread* aThread)
 {
-  NS_ABORT_IF_FALSE(aThread, "ImageBridge needs a thread.");
+  MOZ_ASSERT(aThread, "ImageBridge needs a thread.");
   if (sImageBridgeChildSingleton == nullptr) {
     sImageBridgeChildThread = aThread;
     if (!aThread->IsRunning()) {
@@ -845,7 +849,7 @@ ImageBridgeChild::DeallocPTextureChild(PTextureChild* actor)
 }
 
 bool
-ImageBridgeChild::RecvParentAsyncMessages(const InfallibleTArray<AsyncParentMessageData>& aMessages)
+ImageBridgeChild::RecvParentAsyncMessages(InfallibleTArray<AsyncParentMessageData>&& aMessages)
 {
   for (AsyncParentMessageArray::index_type i = 0; i < aMessages.Length(); ++i) {
     const AsyncParentMessageData& message = aMessages[i];

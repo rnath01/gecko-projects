@@ -51,6 +51,15 @@ class PluginInstanceParent : public PPluginInstanceParent
     friend class PluginStreamParent;
     friend class StreamNotifyParent;
 
+#if defined(XP_WIN)
+public:
+    /**
+     * Helper method for looking up instances based on a supplied id.
+     */
+    static PluginInstanceParent*
+    LookupPluginInstanceByID(uintptr_t aId);
+#endif // defined(XP_WIN)
+
 public:
     PluginInstanceParent(PluginModuleParent* parent,
                          NPP npp,
@@ -279,9 +288,9 @@ public:
                                  const nsIntRect& aRect);
     void DidComposite() { unused << SendNPP_DidComposite(); }
 
-    virtual PluginAsyncSurrogate* GetAsyncSurrogate();
+    virtual PluginAsyncSurrogate* GetAsyncSurrogate() MOZ_OVERRIDE;
 
-    virtual PluginInstanceParent* GetInstance() { return this; }
+    virtual PluginInstanceParent* GetInstance() MOZ_OVERRIDE { return this; }
 
     static PluginInstanceParent* Cast(NPP instance,
                                       PluginAsyncSurrogate** aSurrogate = nullptr);

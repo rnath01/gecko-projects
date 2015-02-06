@@ -113,6 +113,13 @@ GetObjectLog()
 #define LOG_ENABLED() PR_LOG_TEST(GetObjectLog(), PR_LOG_DEBUG)
 
 static bool
+IsJavaMIME(const nsACString & aMIMEType)
+{
+  return
+    nsPluginHost::GetSpecialType(aMIMEType) == nsPluginHost::eSpecialType_Java;
+}
+
+static bool
 InActiveDocument(nsIContent *aContent)
 {
   if (!aContent->IsInDoc()) {
@@ -361,10 +368,10 @@ public:
   }
 
   // nsRunnable
-  NS_IMETHOD Run();
+  NS_IMETHOD Run() MOZ_OVERRIDE;
 
   // nsITimerCallback
-  NS_IMETHOD Notify(nsITimer *timer);
+  NS_IMETHOD Notify(nsITimer* timer) MOZ_OVERRIDE;
 
 protected:
   virtual ~nsStopPluginRunnable() {}
@@ -992,7 +999,7 @@ nsObjectLoadingContent::BuildParametersArray()
     mCachedAttributes.AppendElement(param);
   }
 
-  bool isJava = nsPluginHost::IsJavaMIMEType(mContentType.get());
+  bool isJava = IsJavaMIME(mContentType);
 
   nsCString codebase;
   if (isJava) {
@@ -1197,6 +1204,12 @@ nsObjectLoadingContent::GetFrameLoader()
 {
   nsRefPtr<nsFrameLoader> loader = mFrameLoader;
   return loader.forget();
+}
+
+NS_IMETHODIMP
+nsObjectLoadingContent::SetIsPrerendered()
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 NS_IMETHODIMP
@@ -1578,8 +1591,8 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
   if (aJavaURI || thisContent->NodeInfo()->Equals(nsGkAtoms::applet)) {
     nsAdoptingCString javaMIME = Preferences::GetCString(kPrefJavaMIME);
     newMime = javaMIME;
-    NS_ASSERTION(nsPluginHost::IsJavaMIMEType(newMime.get()),
-                 "plugin.mime.java should be recognized by IsJavaMIMEType");
+    NS_ASSERTION(IsJavaMIME(newMime),
+                 "plugin.mime.java should be recognized as java");
     isJava = true;
   } else {
     nsAutoString rawTypeAttr;
@@ -1587,7 +1600,7 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
     if (!rawTypeAttr.IsEmpty()) {
       typeAttr = rawTypeAttr;
       CopyUTF16toUTF8(rawTypeAttr, newMime);
-      isJava = nsPluginHost::IsJavaMIMEType(newMime.get());
+      isJava = IsJavaMIME(newMime);
     }
   }
 
@@ -1601,8 +1614,8 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
     if (!classIDAttr.IsEmpty()) {
       // Our classid support is limited to 'java:' ids
       nsAdoptingCString javaMIME = Preferences::GetCString(kPrefJavaMIME);
-      NS_ASSERTION(nsPluginHost::IsJavaMIMEType(javaMIME.get()),
-                   "plugin.mime.java should be recognized by IsJavaMIMEType");
+      NS_ASSERTION(IsJavaMIME(javaMIME),
+                   "plugin.mime.java should be recognized as java");
       if (StringBeginsWith(classIDAttr, NS_LITERAL_STRING("java:")) &&
           PluginExistsForType(javaMIME)) {
         newMime = javaMIME;
@@ -1714,7 +1727,7 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
       (caps & eAllowPluginSkipChannel) &&
       IsPluginEnabledByExtension(newURI, newMime)) {
     LOG(("OBJLC [%p]: Using extension as type hint (%s)", this, newMime.get()));
-    if (!isJava && nsPluginHost::IsJavaMIMEType(newMime.get())) {
+    if (!isJava && IsJavaMIME(newMime)) {
       return UpdateObjectParameters(true);
     }
   }
@@ -1830,7 +1843,7 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
       }
     } else {
       newMime = channelType;
-      if (nsPluginHost::IsJavaMIMEType(newMime.get())) {
+      if (IsJavaMIME(newMime)) {
         // Java does not load with a channel, and being java retroactively
         // changes how we may have interpreted the codebase to construct this
         // URI above.  Because the behavior here is more or less undefined, play
@@ -2101,7 +2114,7 @@ nsObjectLoadingContent::LoadObject(bool aNotify,
 
   if (mType != eType_Null) {
     bool allowLoad = true;
-    if (nsPluginHost::IsJavaMIMEType(mContentType.get())) {
+    if (IsJavaMIME(mContentType)) {
       allowLoad = CheckJavaCodebase();
     }
     int16_t contentPolicy = nsIContentPolicy::ACCEPT;
@@ -3011,7 +3024,8 @@ nsObjectLoadingContent::StopPluginInstance()
   if (inst) {
     const char* mime = nullptr;
     if (NS_SUCCEEDED(inst->GetMIMEType(&mime)) && mime) {
-      if (strcmp(mime, "audio/x-pn-realaudio-plugin") == 0) {
+      if (nsPluginHost::GetSpecialType(nsDependentCString(mime)) ==
+          nsPluginHost::eSpecialType_RealPlayer) {
         delayedStop = true;
       }
     }
@@ -3151,6 +3165,17 @@ nsObjectLoadingContent::ShouldPlay(FallbackType &aReason, bool aIgnoreCurrentTyp
   nsCOMPtr<nsIPluginPlayPreviewInfo> playPreviewInfo;
   bool isPlayPreviewSpecified = NS_SUCCEEDED(pluginHost->GetPlayPreviewInfo(
     mContentType, getter_AddRefs(playPreviewInfo)));
+  if (isPlayPreviewSpecified) {
+    // Checking PlayPreview whitelist as well.
+    nsCString uriSpec, baseSpec;
+    if (mURI) {
+      mURI->GetSpec(uriSpec);
+    }
+    if (mBaseURI) {
+      mBaseURI->GetSpec(baseSpec);
+    }
+    playPreviewInfo->CheckWhitelist(baseSpec, uriSpec, &isPlayPreviewSpecified);
+  }
   bool ignoreCTP = false;
   if (isPlayPreviewSpecified) {
     playPreviewInfo->GetIgnoreCTP(&ignoreCTP);

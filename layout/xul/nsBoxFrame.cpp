@@ -97,13 +97,13 @@ nsIFrame* nsBoxFrame::mDebugChild = nullptr;
 nsIFrame*
 NS_NewBoxFrame(nsIPresShell* aPresShell, nsStyleContext* aContext, bool aIsRoot, nsBoxLayout* aLayoutManager)
 {
-  return new (aPresShell) nsBoxFrame(aPresShell, aContext, aIsRoot, aLayoutManager);
+  return new (aPresShell) nsBoxFrame(aContext, aIsRoot, aLayoutManager);
 }
 
 nsIFrame*
 NS_NewBoxFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 {
-  return new (aPresShell) nsBoxFrame(aPresShell, aContext);
+  return new (aPresShell) nsBoxFrame(aContext);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsBoxFrame)
@@ -114,8 +114,7 @@ NS_QUERYFRAME_HEAD(nsBoxFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 #endif
 
-nsBoxFrame::nsBoxFrame(nsIPresShell* aPresShell,
-                       nsStyleContext* aContext,
+nsBoxFrame::nsBoxFrame(nsStyleContext* aContext,
                        bool aIsRoot,
                        nsBoxLayout* aLayoutManager) :
   nsContainerFrame(aContext)
@@ -133,7 +132,7 @@ nsBoxFrame::nsBoxFrame(nsIPresShell* aPresShell,
   nsCOMPtr<nsBoxLayout> layout = aLayoutManager;
 
   if (layout == nullptr) {
-    NS_NewSprocketLayout(aPresShell, layout);
+    NS_NewSprocketLayout(PresContext()->PresShell(), layout);
   }
 
   SetLayoutManager(layout);
@@ -1333,8 +1332,6 @@ nsBoxFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       aBuilder->AddWindowExcludeGlassRegion(
           nsRect(aBuilder->ToReferenceFrame(this), GetSize()));
     }
-
-    aBuilder->AdjustWindowDraggingRegion(this);
   }
 
   nsDisplayListCollection tempLists;
@@ -1437,7 +1434,7 @@ nsBoxFrame::PaintXULDebugBackground(nsRenderingContext& aRenderingContext,
   int32_t appUnitsPerDevPixel = PresContext()->AppUnitsPerDevPixel();
 
   ColorPattern color(ToDeviceColor(isHorizontal ? Color(0.f, 0.f, 1.f, 1.f) :
-                                                  Color(1.f, 0.f, 0.f, 1.f));
+                                                  Color(1.f, 0.f, 0.f, 1.f)));
 
   DrawTarget* drawTarget = aRenderingContext.GetDrawTarget();
 
@@ -1467,13 +1464,14 @@ nsBoxFrame::PaintXULDebugBackground(nsRenderingContext& aRenderingContext,
   // place a green border around us.
   if (NS_SUBTREE_DIRTY(this)) {
     nsRect dirty(inner);
-    ColorPattern green(ToDeviceColor(Color0.f, 1.f, 0.f, 1.f)));
+    ColorPattern green(ToDeviceColor(Color(0.f, 1.f, 0.f, 1.f)));
     drawTarget->StrokeRect(NSRectToRect(dirty, appUnitsPerDevPixel), green);
   }
 }
 
 void
 nsBoxFrame::PaintXULDebugOverlay(DrawTarget& aDrawTarget, nsPoint aPt)
+{
   nsMargin border;
   GetBorder(border);
 
@@ -2095,14 +2093,15 @@ nsBoxFrame::WrapListsInRedirector(nsDisplayListBuilder*   aBuilder,
 
 bool
 nsBoxFrame::GetEventPoint(WidgetGUIEvent* aEvent, nsPoint &aPoint) {
-  nsIntPoint refPoint;
+  LayoutDeviceIntPoint refPoint;
   bool res = GetEventPoint(aEvent, refPoint);
-  aPoint = nsLayoutUtils::GetEventCoordinatesRelativeTo(aEvent, refPoint, this);
+  aPoint = nsLayoutUtils::GetEventCoordinatesRelativeTo(
+    aEvent, refPoint, this);
   return res;
 }
 
 bool
-nsBoxFrame::GetEventPoint(WidgetGUIEvent* aEvent, nsIntPoint &aPoint) {
+nsBoxFrame::GetEventPoint(WidgetGUIEvent* aEvent, LayoutDeviceIntPoint& aPoint) {
   NS_ENSURE_TRUE(aEvent, false);
 
   WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent();
@@ -2119,7 +2118,7 @@ nsBoxFrame::GetEventPoint(WidgetGUIEvent* aEvent, nsIntPoint &aPoint) {
     }
     aPoint = touch->mRefPoint;
   } else {
-    aPoint = LayoutDeviceIntPoint::ToUntyped(aEvent->refPoint);
+    aPoint = aEvent->refPoint;
   }
   return true;
 }

@@ -11,17 +11,15 @@ loop.store.ActiveRoomStore = (function() {
   "use strict";
 
   var sharedActions = loop.shared.actions;
-  var FAILURE_REASONS = loop.shared.utils.FAILURE_REASONS;
+  var FAILURE_DETAILS = loop.shared.utils.FAILURE_DETAILS;
+  var SCREEN_SHARE_STATES = loop.shared.utils.SCREEN_SHARE_STATES;
 
   // Error numbers taken from
   // https://github.com/mozilla-services/loop-server/blob/master/loop/errno.json
-  var SERVER_CODES = loop.store.SERVER_CODES = {
-    INVALID_TOKEN: 105,
-    EXPIRED: 111,
-    ROOM_FULL: 202
-  };
+  var REST_ERRNOS = loop.shared.utils.REST_ERRNOS;
 
   var ROOM_STATES = loop.store.ROOM_STATES;
+
   /**
    * Active room store.
    *
@@ -72,7 +70,11 @@ loop.store.ActiveRoomStore = (function() {
         // session. 'Used' means at least one call has been placed
         // with it. Entering and leaving the room without seeing
         // anyone is not considered as 'used'
-        used: false
+        used: false,
+        localVideoDimensions: {},
+        remoteVideoDimensions: {},
+        screenSharingState: SCREEN_SHARE_STATES.INACTIVE,
+        receivingScreenShare: false
       };
     },
 
@@ -84,11 +86,11 @@ loop.store.ActiveRoomStore = (function() {
     roomFailure: function(actionData) {
       function getReason(serverCode) {
         switch (serverCode) {
-          case SERVER_CODES.INVALID_TOKEN:
-          case SERVER_CODES.EXPIRED:
-            return FAILURE_REASONS.EXPIRED_OR_INVALID;
+          case REST_ERRNOS.INVALID_TOKEN:
+          case REST_ERRNOS.EXPIRED:
+            return FAILURE_DETAILS.EXPIRED_OR_INVALID;
           default:
-            return FAILURE_REASONS.UNKNOWN;
+            return FAILURE_DETAILS.UNKNOWN;
         }
       }
 
@@ -100,7 +102,7 @@ loop.store.ActiveRoomStore = (function() {
         failureReason: getReason(actionData.error.errno)
       });
 
-      this._leaveRoom(actionData.error.errno === SERVER_CODES.ROOM_FULL ?
+      this._leaveRoom(actionData.error.errno === REST_ERRNOS.ROOM_FULL ?
           ROOM_STATES.FULL : ROOM_STATES.FAILED);
     },
 
@@ -119,11 +121,14 @@ loop.store.ActiveRoomStore = (function() {
         "connectedToSdkServers",
         "connectionFailure",
         "setMute",
+        "screenSharingState",
+        "receivingScreenShare",
         "remotePeerDisconnected",
         "remotePeerConnected",
         "windowUnload",
         "leaveRoom",
-        "feedbackComplete"
+        "feedbackComplete",
+        "videoDimensionsChanged"
       ]);
     },
 
@@ -203,6 +208,11 @@ loop.store.ActiveRoomStore = (function() {
      * @param {sharedActions.SetupRoomInfo} actionData
      */
     setupRoomInfo: function(actionData) {
+      if (this._onUpdateListener) {
+        console.error("Room info already set up!");
+        return;
+      }
+
       this.setStoreState({
         roomName: actionData.roomName,
         roomOwner: actionData.roomOwner,
@@ -211,10 +221,11 @@ loop.store.ActiveRoomStore = (function() {
         roomUrl: actionData.roomUrl
       });
 
-      this._mozLoop.rooms.on("update:" + actionData.roomToken,
-        this._handleRoomUpdate.bind(this));
-      this._mozLoop.rooms.on("delete:" + actionData.roomToken,
-        this._handleRoomDelete.bind(this));
+      this._onUpdateListener = this._handleRoomUpdate.bind(this);
+      this._onDeleteListener = this._handleRoomDelete.bind(this);
+
+      this._mozLoop.rooms.on("update:" + actionData.roomToken, this._onUpdateListener);
+      this._mozLoop.rooms.on("delete:" + actionData.roomToken, this._onDeleteListener);
     },
 
     /**
@@ -273,6 +284,8 @@ loop.store.ActiveRoomStore = (function() {
      * granted and starts joining the room.
      */
     gotMediaPermission: function() {
+      this.setStoreState({roomState: ROOM_STATES.JOINING});
+
       this._mozLoop.rooms.join(this._storeState.roomToken,
         function(error, responseData) {
           if (error) {
@@ -363,6 +376,20 @@ loop.store.ActiveRoomStore = (function() {
     },
 
     /**
+     * Used to note the current screensharing state.
+     */
+    screenSharingState: function(actionData) {
+      this.setStoreState({screenSharingState: actionData.state});
+    },
+
+    /**
+     * Used to note the current state of receiving screenshare data.
+     */
+    receivingScreenShare: function(actionData) {
+      this.setStoreState({receivingScreenShare: actionData.receiving});
+    },
+
+    /**
      * Handles recording when a remote peer has connected to the servers.
      */
     remotePeerConnected: function() {
@@ -390,10 +417,16 @@ loop.store.ActiveRoomStore = (function() {
     windowUnload: function() {
       this._leaveRoom(ROOM_STATES.CLOSING);
 
+      if (!this._onUpdateListener) {
+        return;
+      }
+
       // If we're closing the window, we can stop listening to updates.
       var roomToken = this.getStoreState().roomToken;
-      this._mozLoop.rooms.off("update:" + roomToken);
-      this._mozLoop.rooms.off("delete:" + roomToken);
+      this._mozLoop.rooms.off("update:" + roomToken, this._onUpdateListener);
+      this._mozLoop.rooms.off("delete:" + roomToken, this._onDeleteListener);
+      delete this._onUpdateListener;
+      delete this._onDeleteListener;
     },
 
     /**
@@ -449,7 +482,8 @@ loop.store.ActiveRoomStore = (function() {
         delete this._timeout;
       }
 
-      if (this._storeState.roomState === ROOM_STATES.JOINED ||
+      if (this._storeState.roomState === ROOM_STATES.JOINING ||
+          this._storeState.roomState === ROOM_STATES.JOINED ||
           this._storeState.roomState === ROOM_STATES.SESSION_CONNECTED ||
           this._storeState.roomState === ROOM_STATES.HAS_PARTICIPANTS) {
         this._mozLoop.rooms.leave(this._storeState.roomToken,
@@ -466,6 +500,23 @@ loop.store.ActiveRoomStore = (function() {
       // Note, that we want some values, such as the windowId, so we don't
       // do a full reset here.
       this.setStoreState(this.getInitialStoreState());
+    },
+
+    /**
+     * Handles a change in dimensions of a video stream and updates the store data
+     * with the new dimensions of a local or remote stream.
+     *
+     * @param {sharedActions.VideoDimensionsChanged} actionData
+     */
+    videoDimensionsChanged: function(actionData) {
+      // NOTE: in the future, when multiple remote video streams are supported,
+      //       we'll need to make this support multiple remotes as well. Good
+      //       starting point for video tiling.
+      var storeProp = (actionData.isLocal ? "local" : "remote") + "VideoDimensions";
+      var nextState = {};
+      nextState[storeProp] = this.getStoreState()[storeProp];
+      nextState[storeProp][actionData.videoType] = actionData.dimensions;
+      this.setStoreState(nextState);
     }
   });
 

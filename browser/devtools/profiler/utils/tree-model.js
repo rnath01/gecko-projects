@@ -18,7 +18,7 @@ const CONTENT_SCHEMES = ["http://", "https://", "file://"];
 
 exports.ThreadNode = ThreadNode;
 exports.FrameNode = FrameNode;
-exports._isContent = isContent; // used in tests
+exports.FrameNode.isContent = isContent;
 
 /**
  * A call tree for a thread. This is essentially a linkage between all frames
@@ -44,23 +44,21 @@ exports._isContent = isContent; // used in tests
  *
  * @param object threadSamples
  *        The raw samples array received from the backend.
- * @param boolean contentOnly [optional]
- *        @see ThreadNode.prototype.insert
- * @param number beginAt [optional]
- *        @see ThreadNode.prototype.insert
- * @param number endAt [optional]
- *        @see ThreadNode.prototype.insert
- * @param boolean invert [optional]
- *        @see ThreadNode.prototype.insert
+ * @param object options
+ *        Additional supported options, @see ThreadNode.prototype.insert
+ *          - number startTime [optional]
+ *          - number endTime [optional]
+ *          - boolean contentOnly [optional]
+ *          - boolean invertTree [optional]
  */
-function ThreadNode(threadSamples, contentOnly, beginAt, endAt, invert) {
+function ThreadNode(threadSamples, options = {}) {
   this.samples = 0;
   this.duration = 0;
   this.calls = {};
   this._previousSampleTime = 0;
 
   for (let sample of threadSamples) {
-    this.insert(sample, contentOnly, beginAt, endAt, invert);
+    this.insert(sample, options);
   }
 }
 
@@ -72,19 +70,18 @@ ThreadNode.prototype = {
    *        The { frames, time } sample, containing an array of frames and
    *        the time the sample was taken. This sample is assumed to be older
    *        than the most recently inserted one.
-   * @param boolean contentOnly [optional]
-   *        Specifies if platform frames shouldn't be taken into consideration.
-   * @param number beginAt [optional]
-   *        The earliest sample to start at (in milliseconds).
-   * @param number endAt [optional]
-   *        The latest sample to end at (in milliseconds).
-   * @param boolean inverted [optional]
-   *        Specifies if the call tree should be inverted (youngest -> oldest
-   *        frames).
+   * @param object options [optional]
+   *        Additional supported options:
+   *          - number startTime: the earliest sample to start at (in milliseconds)
+   *          - number endTime: the latest sample to end at (in milliseconds)
+   *          - boolean contentOnly: if platform frames shouldn't be used
+   *          - boolean invertTree: if the call tree should be inverted
    */
-  insert: function(sample, contentOnly = false, beginAt = 0, endAt = Infinity, inverted = false) {
+  insert: function(sample, options = {}) {
+    let startTime = options.startTime || 0;
+    let endTime = options.endTime || Infinity;
     let sampleTime = sample.time;
-    if (!sampleTime || sampleTime < beginAt || sampleTime > endAt) {
+    if (!sampleTime || sampleTime < startTime || sampleTime > endTime) {
       return;
     }
 
@@ -92,17 +89,20 @@ ThreadNode.prototype = {
 
     // Filter out platform frames if only content-related function calls
     // should be taken into consideration.
-    if (contentOnly) {
+    if (options.contentOnly) {
       // The (root) node is not considered a content function, it'll be removed.
       sampleFrames = sampleFrames.filter(isContent);
     } else {
       // Remove the (root) node manually.
       sampleFrames = sampleFrames.slice(1);
     }
+    // If no frames remain after filtering, then this is a leaf node, no need
+    // to continue.
     if (!sampleFrames.length) {
       return;
     }
-    if (inverted) {
+    // Invert the tree after filtering, if preferred.
+    if (options.invertTree) {
       sampleFrames.reverse();
     }
 
@@ -136,13 +136,19 @@ ThreadNode.prototype = {
  *        so it may very well (not?) include the function name, url, etc.
  * @param number line
  *        The line number inside the source containing this function call.
+ * @param number column
+ *        The column number inside the source containing this function call.
  * @param number category
  *        The category type of this function call ("js", "graphics" etc.).
+ * @param number allocations
+ *        The number of memory allocations performed in this frame.
  */
-function FrameNode({ location, line, category }) {
+function FrameNode({ location, line, column, category, allocations }) {
   this.location = location;
   this.line = line;
+  this.column = column;
   this.category = category;
+  this.allocations = allocations || 0;
   this.sampleTimes = [];
   this.samples = 0;
   this.duration = 0;
@@ -200,24 +206,28 @@ FrameNode.prototype = {
     // default to an "unknown" category otherwise.
     let categoryData = CATEGORY_MAPPINGS[this.category] || {};
 
-    // Parse the `location` for the function name, source url and line.
-    let firstParen = this.location.indexOf("(");
-    let lastColon = this.location.lastIndexOf(":");
-    let resource = this.location.substring(firstParen + 1, lastColon);
-    let line = this.location.substring(lastColon + 1).replace(")", "");
+    // Parse the `location` for the function name, source url, line, column etc.
+    let lineAndColumn = this.location.match(/((:\d+)*)\)?$/)[1];
+    let [, line, column] = lineAndColumn.split(":");
+    line = line || this.line;
+    column = column || this.column;
+
+    let firstParenIndex = this.location.indexOf("(");
+    let lineAndColumnIndex = this.location.indexOf(lineAndColumn);
+    let resource = this.location.substring(firstParenIndex + 1, lineAndColumnIndex);
+
     let url = resource.split(" -> ").pop();
     let uri = nsIURL(url);
     let functionName, fileName, hostName;
 
     // If the URI digged out from the `location` is valid, this is a JS frame.
     if (uri) {
-      functionName = this.location.substring(0, firstParen - 1);
+      functionName = this.location.substring(0, firstParenIndex - 1);
       fileName = (uri.fileName + (uri.ref ? "#" + uri.ref : "")) || "/";
       hostName = uri.host;
     } else {
       functionName = this.location;
       url = null;
-      line = null;
     }
 
     return {
@@ -226,7 +236,8 @@ FrameNode.prototype = {
       fileName: fileName,
       hostName: hostName,
       url: url,
-      line: line || this.line,
+      line: line,
+      column: column,
       categoryData: categoryData,
       isContent: !!isContent(this)
     };

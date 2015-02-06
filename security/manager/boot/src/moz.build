@@ -9,12 +9,12 @@ EXPORTS.mozilla += [
 ]
 
 UNIFIED_SOURCES += [
+    'CertBlocklist.cpp',
     'DataStorage.cpp',
     'nsBOOTModule.cpp',
     'nsEntropyCollector.cpp',
     'nsSecureBrowserUIImpl.cpp',
     'nsSecurityHeaderParser.cpp',
-    'nsSecurityWarningDialogs.cpp',
     'nsSiteSecurityService.cpp',
     'PublicKeyPinningService.cpp',
     'RootCertificateTelemetryUtils.cpp',

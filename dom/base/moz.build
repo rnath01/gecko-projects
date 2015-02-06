@@ -61,7 +61,6 @@ EXPORTS += [
     'nsContentTypeParser.h',
     'nsContentUtils.h',
     'nsCopySupport.h',
-    'nsCrossSiteListenerProxy.h',
     'nsDeprecatedOperationList.h',
     'nsDocElementCreatedNotificationRunner.h',
     'nsDocumentWarningList.h',
@@ -139,6 +138,7 @@ if CONFIG['MOZ_WEBRTC']:
 EXPORTS.mozilla += [
     'CORSMode.h',
     'FeedWriterEnabled.h',
+    'TextInputProcessor.h',
 ]
 
 EXPORTS.mozilla.dom += [
@@ -181,6 +181,8 @@ EXPORTS.mozilla.dom += [
     'NodeInfoInlines.h',
     'NodeIterator.h',
     'PerformanceEntry.h',
+    'PerformanceMark.h',
+    'PerformanceMeasure.h',
     'PerformanceResourceTiming.h',
     'ResponsiveImageSelector.h',
     'ScreenOrientation.h',
@@ -202,7 +204,6 @@ UNIFIED_SOURCES += [
     'BarProps.cpp',
     'ChildIterator.cpp',
     'Comment.cpp',
-    'CompositionStringSynthesizer.cpp',
     'Console.cpp',
     'Crypto.cpp',
     'DirectionalityUtils.cpp',
@@ -245,7 +246,6 @@ UNIFIED_SOURCES += [
     'nsContentPolicy.cpp',
     'nsContentSink.cpp',
     'nsCopySupport.cpp',
-    'nsCrossSiteListenerProxy.cpp',
     'nsDataDocumentContentPolicy.cpp',
     'nsDocument.cpp',
     'nsDocumentEncoder.cpp',
@@ -264,7 +264,6 @@ UNIFIED_SOURCES += [
     'nsFocusManager.cpp',
     'nsFormData.cpp',
     'nsFrameLoader.cpp',
-    'nsFrameMessageManager.cpp',
     'nsGenConImageContent.cpp',
     'nsGenericDOMDataNode.cpp',
     'nsGkAtoms.cpp',
@@ -318,6 +317,8 @@ UNIFIED_SOURCES += [
     'nsXMLHttpRequest.cpp',
     'nsXMLNameSpaceMap.cpp',
     'PerformanceEntry.cpp',
+    'PerformanceMark.cpp',
+    'PerformanceMeasure.cpp',
     'PerformanceResourceTiming.cpp',
     'ResponsiveImageSelector.cpp',
     'ScriptSettings.cpp',
@@ -325,6 +326,7 @@ UNIFIED_SOURCES += [
     'StyleSheetList.cpp',
     'SubtleCrypto.cpp',
     'Text.cpp',
+    'TextInputProcessor.cpp',
     'ThirdPartyUtil.cpp',
     'TreeWalker.cpp',
     'URL.cpp',
@@ -346,6 +348,8 @@ SOURCES += [
     'nsContentUtils.cpp',
     # this file doesn't like windows.h
     'nsDOMWindowUtils.cpp',
+    # Conflicts with windows.h's definition of SendMessage.
+    'nsFrameMessageManager.cpp',
     # This file has a #error "Never include windows.h in this file!"
     'nsGlobalWindow.cpp',
     # Conflicts with windows.h's definition of LoadImage.
@@ -405,7 +409,6 @@ LOCAL_INCLUDES += [
     '/dom/xslt/xpath',
     '/dom/xul',
     '/image/src',
-    '/js/ipc',
     '/js/xpconnect/src',
     '/js/xpconnect/wrappers',
     '/layout/base',
@@ -413,7 +416,7 @@ LOCAL_INCLUDES += [
     '/layout/style',
     '/layout/svg',
     '/layout/xul',
-    '/netwerk/base/src',
+    '/netwerk/base',
     '/widget',
     '/xpcom/ds',
 ]

@@ -20,7 +20,8 @@
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nsTArrayForwardDeclare.h"     // for InfallibleTArray
- 
+#include "nsIWidget.h"
+
 struct nsIntPoint;
 struct nsIntRect;
 
@@ -142,7 +143,7 @@ public:
    * Setup the IPDL actor for aCompositable to be part of layers
    * transactions.
    */
-  void Connect(CompositableClient* aCompositable);
+  void Connect(CompositableClient* aCompositable) MOZ_OVERRIDE;
 
   virtual PTextureChild* CreateTexture(const SurfaceDescriptor& aSharedData,
                                        TextureFlags aFlags) MOZ_OVERRIDE;
@@ -269,7 +270,7 @@ public:
    * Communicate the picture rect of an image to the compositor
    */
   void UpdatePictureRect(CompositableClient* aCompositable,
-                         const nsIntRect& aRect);
+                         const nsIntRect& aRect) MOZ_OVERRIDE;
 
   /**
    * See CompositableForwarder::UpdatedTexture
@@ -313,13 +314,21 @@ public:
    */
   void SetShadowManager(PLayerTransactionChild* aShadowManager);
 
+  /**
+   * Layout calls here to cache current plugin widget configuration
+   * data. We ship this across with the rest of the layer updates when
+   * we update. Chrome handles applying these changes.
+   */
+  void StorePluginWidgetConfigurations(const nsTArray<nsIWidget::Configuration>&
+                                       aConfigurations);
+
   void StopReceiveAsyncParentMessge();
 
   void ClearCachedResources();
 
   void Composite();
 
-  virtual void SendPendingAsyncMessges();
+  virtual void SendPendingAsyncMessges() MOZ_OVERRIDE;
 
   /**
    * True if this is forwarding to a LayerManagerComposite.
@@ -407,6 +416,7 @@ private:
   DiagnosticTypes mDiagnosticTypes;
   bool mIsFirstPaint;
   bool mWindowOverlayChanged;
+  InfallibleTArray<PluginWindowData> mPluginWindowData;
 };
 
 class CompositableClient;

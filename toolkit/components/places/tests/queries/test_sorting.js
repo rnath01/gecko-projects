@@ -1266,12 +1266,12 @@ add_task(function test_sorting()
 {
   for (let [, test] in Iterator(tests)) {
     yield test.setup();
-    yield promiseAsyncUpdates();
+    yield PlacesTestUtils.promiseAsyncUpdates();
     test.check();
     // sorting reversed, usually SORT_BY have ASC and DESC
     test.check_reverse();
     // Execute cleanup tasks
     remove_all_bookmarks();
-    yield promiseClearHistory();
+    yield PlacesTestUtils.clearHistory();
   }
 });

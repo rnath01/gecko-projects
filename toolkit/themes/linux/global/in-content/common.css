@@ -13,6 +13,7 @@ xul|tab[selected] {
 }
 
 xul|button,
+html|button,
 xul|colorpicker[type="button"],
 xul|menulist {
   margin: 2px 4px;
@@ -29,6 +30,10 @@ xul|button[type="menu"] > xul|*.button-box > xul|*.button-menu-dropmarker {
 
 xul|*.help-button > xul|*.button-box > xul|*.button-icon {
   -moz-margin-end: 0;
+}
+
+xul|*.groupbox-body {
+  -moz-padding-start: 0;
 }
 
 xul|menulist {

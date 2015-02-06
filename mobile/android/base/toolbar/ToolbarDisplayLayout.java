@@ -23,6 +23,7 @@ import org.mozilla.gecko.animation.PropertyAnimator;
 import org.mozilla.gecko.animation.ViewHelper;
 import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.toolbar.BrowserToolbarTabletBase.ForwardButtonAnimation;
+import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.widget.ThemedLinearLayout;
 import org.mozilla.gecko.widget.ThemedTextView;
@@ -203,10 +204,6 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
         Button.OnClickListener faviconListener = new Button.OnClickListener() {
             @Override
             public void onClick(View view) {
-                if (mSiteSecurity.getVisibility() != View.VISIBLE) {
-                    return;
-                }
-
                 mSiteIdentityPopup.show();
             }
         };
@@ -357,6 +354,12 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
             return;
         }
 
+        // If the pref to show the title is set, use the tab's display title.
+        if (!mPrefs.shouldShowUrl() || url == null) {
+            setTitle(tab.getDisplayTitle());
+            return;
+        }
+
         CharSequence title = url;
         if (mPrefs.shouldTrimUrls()) {
             title = StringUtils.stripCommonSubdomains(StringUtils.stripScheme(url));
@@ -380,8 +383,8 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
     }
 
     private void updateFavicon(Tab tab) {
-        if (NewTabletUI.isEnabled(getContext())) {
-            // We don't display favicons in the toolbar for the new Tablet UI.
+        if (HardwareUtils.isTablet()) {
+            // We don't display favicons in the toolbar on tablet.
             return;
         }
 
@@ -496,8 +499,8 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
     }
 
     private void setSiteSecurityVisibility(boolean visible, EnumSet<UpdateFlags> flags) {
-        // We don't hide site security on new tablets.
-        if (visible == mSiteSecurityVisible || NewTabletUI.isEnabled(getContext())) {
+        // We don't hide site security on tablet.
+        if (visible == mSiteSecurityVisible || HardwareUtils.isTablet()) {
             return;
         }
 
@@ -542,7 +545,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
     }
 
     View getDoorHangerAnchor() {
-        if (!NewTabletUI.isEnabled(getContext())) {
+        if (!HardwareUtils.isTablet()) {
             return mFavicon;
         } else {
             return mSiteSecurity;

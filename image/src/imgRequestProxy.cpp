@@ -157,7 +157,7 @@ nsresult imgRequestProxy::Init(imgRequest* aOwner,
 
   LOG_SCOPE_WITH_PARAM(GetImgLog(), "imgRequestProxy::Init", "request", aOwner);
 
-  NS_ABORT_IF_FALSE(mAnimationConsumers == 0, "Cannot have animation before Init");
+  MOZ_ASSERT(mAnimationConsumers == 0, "Cannot have animation before Init");
 
   mBehaviour->SetOwner(aOwner);
   mListener = aObserver;
@@ -392,7 +392,7 @@ imgRequestProxy::LockImage()
 NS_IMETHODIMP
 imgRequestProxy::UnlockImage()
 {
-  NS_ABORT_IF_FALSE(mLockCount > 0, "calling unlock but no locks!");
+  MOZ_ASSERT(mLockCount > 0, "calling unlock but no locks!");
 
   mLockCount--;
   nsRefPtr<Image> image = GetImage();
@@ -734,98 +734,52 @@ void imgRequestProxy::OnStartDecode()
   }
 }
 
-void imgRequestProxy::OnSizeAvailable()
+static const char*
+NotificationTypeToString(int32_t aType)
 {
-  LOG_FUNC(GetImgLog(), "imgRequestProxy::OnStartContainer");
-
-  if (mListener && !mCanceled) {
-    // Hold a ref to the listener while we call it, just in case.
-    nsCOMPtr<imgINotificationObserver> kungFuDeathGrip(mListener);
-    mListener->Notify(this, imgINotificationObserver::SIZE_AVAILABLE, nullptr);
+  switch(aType)
+  {
+    case imgINotificationObserver::SIZE_AVAILABLE: return "SIZE_AVAILABLE";
+    case imgINotificationObserver::FRAME_UPDATE: return "FRAME_UPDATE";
+    case imgINotificationObserver::FRAME_COMPLETE: return "FRAME_COMPLETE";
+    case imgINotificationObserver::LOAD_COMPLETE: return "LOAD_COMPLETE";
+    case imgINotificationObserver::DECODE_COMPLETE: return "DECODE_COMPLETE";
+    case imgINotificationObserver::DISCARD: return "DISCARD";
+    case imgINotificationObserver::UNLOCKED_DRAW: return "UNLOCKED_DRAW";
+    case imgINotificationObserver::IS_ANIMATED: return "IS_ANIMATED";
+    case imgINotificationObserver::HAS_TRANSPARENCY: return "HAS_TRANSPARENCY";
+    default:
+      NS_NOTREACHED("Notification list should be exhaustive");
+      return "(unknown notification)";
   }
 }
 
-void imgRequestProxy::OnFrameUpdate(const nsIntRect * rect)
+void
+imgRequestProxy::Notify(int32_t aType, const nsIntRect* aRect)
 {
-  LOG_FUNC(GetImgLog(), "imgRequestProxy::OnFrameUpdate");
+  MOZ_ASSERT(aType != imgINotificationObserver::LOAD_COMPLETE,
+             "Should call OnLoadComplete");
 
-  if (mListener && !mCanceled) {
-    // Hold a ref to the listener while we call it, just in case.
-    nsCOMPtr<imgINotificationObserver> kungFuDeathGrip(mListener);
-    mListener->Notify(this, imgINotificationObserver::FRAME_UPDATE, rect);
+  LOG_FUNC_WITH_PARAM(GetImgLog(), "imgRequestProxy::Notify", "type",
+                      NotificationTypeToString(aType));
+
+  if (!mListener || mCanceled) {
+    return;
   }
+
+  // Make sure the listener stays alive while we notify.
+  nsCOMPtr<imgINotificationObserver> listener(mListener);
+
+  mListener->Notify(this, aType, aRect);
 }
 
-void imgRequestProxy::OnFrameComplete()
-{
-  LOG_FUNC(GetImgLog(), "imgRequestProxy::OnFrameComplete");
-
-  if (mListener && !mCanceled) {
-    // Hold a ref to the listener while we call it, just in case.
-    nsCOMPtr<imgINotificationObserver> kungFuDeathGrip(mListener);
-    mListener->Notify(this, imgINotificationObserver::FRAME_COMPLETE, nullptr);
-  }
-}
-
-void imgRequestProxy::OnDecodeComplete()
-{
-  LOG_FUNC(GetImgLog(), "imgRequestProxy::OnDecodeComplete");
-
-  if (mListener && !mCanceled) {
-    // Hold a ref to the listener while we call it, just in case.
-    nsCOMPtr<imgINotificationObserver> kungFuDeathGrip(mListener);
-    mListener->Notify(this, imgINotificationObserver::DECODE_COMPLETE, nullptr);
-  }
-}
-
-void imgRequestProxy::OnDiscard()
-{
-  LOG_FUNC(GetImgLog(), "imgRequestProxy::OnDiscard");
-
-  if (mListener && !mCanceled) {
-    // Hold a ref to the listener while we call it, just in case.
-    nsCOMPtr<imgINotificationObserver> kungFuDeathGrip(mListener);
-    mListener->Notify(this, imgINotificationObserver::DISCARD, nullptr);
-  }
-}
-
-void imgRequestProxy::OnUnlockedDraw()
-{
-  LOG_FUNC(GetImgLog(), "imgRequestProxy::OnUnlockedDraw");
-
-  if (mListener && !mCanceled) {
-    // Hold a ref to the listener while we call it, just in case.
-    nsCOMPtr<imgINotificationObserver> kungFuDeathGrip(mListener);
-    mListener->Notify(this, imgINotificationObserver::UNLOCKED_DRAW, nullptr);
-  }
-}
-
-void imgRequestProxy::OnImageHasTransparency()
-{
-  LOG_FUNC(GetImgLog(), "imgRequestProxy::OnImageHasTransparency");
-  if (mListener && !mCanceled) {
-    // Hold a ref to the listener while we call it, just in case.
-    nsCOMPtr<imgINotificationObserver> kungFuDeathGrip(mListener);
-    mListener->Notify(this, imgINotificationObserver::HAS_TRANSPARENCY, nullptr);
-  }
-}
-
-void imgRequestProxy::OnImageIsAnimated()
-{
-  LOG_FUNC(GetImgLog(), "imgRequestProxy::OnImageIsAnimated");
-  if (mListener && !mCanceled) {
-    // Hold a ref to the listener while we call it, just in case.
-    nsCOMPtr<imgINotificationObserver> kungFuDeathGrip(mListener);
-    mListener->Notify(this, imgINotificationObserver::IS_ANIMATED, nullptr);
-  }
-}
-
-void imgRequestProxy::OnLoadComplete(bool aLastPart)
+void
+imgRequestProxy::OnLoadComplete(bool aLastPart)
 {
 #ifdef PR_LOGGING
   nsAutoCString name;
   GetName(name);
-  LOG_FUNC_WITH_PARAM(GetImgLog(), "imgRequestProxy::OnStopRequest", "name", name.get());
+  LOG_FUNC_WITH_PARAM(GetImgLog(), "imgRequestProxy::OnLoadComplete", "name", name.get());
 #endif
   // There's all sorts of stuff here that could kill us (the OnStopRequest call
   // on the listener, the removal from the loadgroup, the release of the
@@ -863,7 +817,8 @@ void imgRequestProxy::OnLoadComplete(bool aLastPart)
   }
 }
 
-void imgRequestProxy::BlockOnload()
+void
+imgRequestProxy::BlockOnload()
 {
 #ifdef PR_LOGGING
   nsAutoCString name;
@@ -877,7 +832,8 @@ void imgRequestProxy::BlockOnload()
   }
 }
 
-void imgRequestProxy::UnblockOnload()
+void
+imgRequestProxy::UnblockOnload()
 {
 #ifdef PR_LOGGING
   nsAutoCString name;
@@ -965,8 +921,8 @@ void imgRequestProxy::NotifyListener()
   } else {
     // We don't have an imgRequest, so we can only notify the clone of our
     // current state, but we still have to do that asynchronously.
-    NS_ABORT_IF_FALSE(HasImage(),
-                      "if we have no imgRequest, we should have an Image");
+    MOZ_ASSERT(HasImage(),
+               "if we have no imgRequest, we should have an Image");
     progressTracker->NotifyCurrentState(this);
   }
 }

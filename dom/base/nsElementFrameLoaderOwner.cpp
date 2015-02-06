@@ -101,8 +101,7 @@ void
 nsElementFrameLoaderOwner::EnsureFrameLoader()
 {
   Element* thisElement = ThisFrameElement();
-  if (!thisElement->GetParent() ||
-      !thisElement->IsInDoc() ||
+  if (!thisElement->IsInDoc() ||
       mFrameLoader ||
       mFrameLoaderCreationDisallowed) {
     // If frame loader is there, we just keep it around, cached
@@ -112,6 +111,9 @@ nsElementFrameLoaderOwner::EnsureFrameLoader()
   // Strangely enough, this method doesn't actually ensure that the
   // frameloader exists.  It's more of a best-effort kind of thing.
   mFrameLoader = nsFrameLoader::Create(thisElement, mNetworkCreated);
+  if (mIsPrerendered) {
+    mFrameLoader->SetIsPrerendered();
+  }
 }
 
 NS_IMETHODIMP
@@ -133,6 +135,14 @@ nsElementFrameLoaderOwner::SwapFrameLoaders(nsIFrameLoaderOwner* aOtherOwner)
 {
   // We don't support this yet
   return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+nsElementFrameLoaderOwner::SetIsPrerendered()
+{
+  MOZ_ASSERT(!mFrameLoader, "Please call SetIsPrerendered before frameLoader is created");
+  mIsPrerendered = true;
+  return NS_OK;
 }
 
 nsresult

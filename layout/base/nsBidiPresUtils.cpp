@@ -2090,10 +2090,16 @@ public:
                                                *mTextRunConstructionContext);
   }
 
-  virtual void DrawText(nscoord aXOffset,
+  virtual void DrawText(nscoord aIOffset,
                         nscoord) MOZ_OVERRIDE
   {
-    mFontMetrics->DrawString(mText, mLength, mPt.x + aXOffset, mPt.y,
+    nsPoint pt(mPt);
+    if (mFontMetrics->GetVertical()) {
+      pt.y += aIOffset;
+    } else {
+      pt.x += aIOffset;
+    }
+    mFontMetrics->DrawString(mText, mLength, pt.x, pt.y,
                              mCtx, mTextRunConstructionContext);
   }
 
@@ -2214,7 +2220,7 @@ void nsBidiPresUtils::CopyLogicalToVisual(const nsAString& aSource,
   uint32_t srcLength = aSource.Length();
   if (srcLength == 0)
     return;
-  if (!aDest.SetLength(srcLength, fallible_t())) {
+  if (!aDest.SetLength(srcLength, fallible)) {
     return;
   }
   nsAString::const_iterator fromBegin, fromEnd;

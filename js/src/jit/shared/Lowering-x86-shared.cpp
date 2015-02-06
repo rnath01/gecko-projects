@@ -44,12 +44,12 @@ LIRGeneratorX86Shared::visitGuardShape(MGuardShape *ins)
 }
 
 void
-LIRGeneratorX86Shared::visitGuardObjectType(MGuardObjectType *ins)
+LIRGeneratorX86Shared::visitGuardObjectGroup(MGuardObjectGroup *ins)
 {
     MOZ_ASSERT(ins->obj()->type() == MIRType_Object);
 
-    LGuardObjectType *guard = new(alloc()) LGuardObjectType(useRegisterAtStart(ins->obj()));
-    assignSnapshot(guard, Bailout_ObjectIdentityOrTypeGuard);
+    LGuardObjectGroup *guard = new(alloc()) LGuardObjectGroup(useRegisterAtStart(ins->obj()));
+    assignSnapshot(guard, ins->bailoutKind());
     add(guard, ins);
     redefine(ins, ins->obj());
 }
@@ -356,19 +356,6 @@ LIRGeneratorX86Shared::lowerTruncateFToInt32(MTruncateToInt32 *ins)
 
     LDefinition maybeTemp = Assembler::HasSSE3() ? LDefinition::BogusTemp() : tempFloat32();
     define(new(alloc()) LTruncateFToInt32(useRegister(opd), maybeTemp), ins);
-}
-
-void
-LIRGeneratorX86Shared::visitForkJoinGetSlice(MForkJoinGetSlice *ins)
-{
-    // We fix eax and edx for cmpxchg and div.
-    LForkJoinGetSlice *lir = new(alloc())
-        LForkJoinGetSlice(useFixed(ins->forkJoinContext(), ForkJoinGetSliceReg_cx),
-                          tempFixed(eax),
-                          tempFixed(edx),
-                          tempFixed(ForkJoinGetSliceReg_temp0),
-                          tempFixed(ForkJoinGetSliceReg_temp1));
-    defineFixed(lir, ins, LAllocation(AnyRegister(ForkJoinGetSliceReg_output)));
 }
 
 void

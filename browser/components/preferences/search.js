@@ -180,12 +180,20 @@ var gSearchPane = {
       Services.search.currentEngine =
         document.getElementById("defaultEngine").selectedItem.engine;
     }
+  },
+
+  loadAddEngines: function () {
+    window.opener.BrowserSearch.loadAddEngines();
+    window.document.documentElement.acceptDialog();
   }
 };
 
 function onDragEngineStart(event) {
   var selectedIndex = gEngineView.selectedIndex;
-  if (selectedIndex >= 0) {
+  var tree = document.getElementById("engineList");
+  var row = { }, col = { }, child = { };
+  tree.treeBoxObject.getCellAt(event.clientX, event.clientY, row, col, child);
+  if (selectedIndex >= 0 && !gEngineView.isCheckBox(row.value, col.value)) {
     event.dataTransfer.setData(ENGINE_FLAVOR, selectedIndex.toString());
     event.dataTransfer.effectAllowed = "move";
   }
@@ -428,6 +436,10 @@ EngineView.prototype = {
 
   getSourceIndexFromDrag: function (dataTransfer) {
     return parseInt(dataTransfer.getData(ENGINE_FLAVOR));
+  },
+
+  isCheckBox: function(index, column) {
+    return column.id == "engineShown";
   },
 
   // nsITreeView

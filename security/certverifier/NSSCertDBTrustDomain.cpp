@@ -9,11 +9,12 @@
 #include <stdint.h>
 
 #include "ExtendedValidation.h"
-#include "nsNSSCertificate.h"
-#include "NSSErrorsService.h"
 #include "OCSPRequestor.h"
 #include "certdb.h"
+#include "nsNSSCertificate.h"
 #include "nss.h"
+#include "NSSErrorsService.h"
+#include "nsServiceManagerUtils.h"
 #include "pk11pub.h"
 #include "pkix/pkix.h"
 #include "pkix/pkixnss.h"
@@ -53,7 +54,7 @@ NSSCertDBTrustDomain::NSSCertDBTrustDomain(SECTrustType certDBTrustType,
                                            OCSPFetching ocspFetching,
                                            OCSPCache& ocspCache,
              /*optional but shouldn't be*/ void* pinArg,
-                                           CertVerifier::ocsp_get_config ocspGETConfig,
+                                           CertVerifier::OcspGetConfig ocspGETConfig,
                                            CertVerifier::PinningMode pinningMode,
                                            bool forEV,
                               /*optional*/ const char* hostname,
@@ -67,6 +68,7 @@ NSSCertDBTrustDomain::NSSCertDBTrustDomain(SECTrustType certDBTrustType,
   , mMinimumNonECCBits(forEV ? MINIMUM_NON_ECC_BITS_EV : MINIMUM_NON_ECC_BITS_DV)
   , mHostname(hostname)
   , mBuiltChain(builtChain)
+  , mCertBlocklist(do_GetService(NS_CERTBLOCKLIST_CONTRACTID))
   , mOCSPStaplingStatus(CertVerifier::OCSP_STAPLING_NEVER_CHECKED)
 {
 }
@@ -366,6 +368,27 @@ NSSCertDBTrustDomain::CheckRevocation(EndEntityOrCA endEntityOrCA,
     maxOCSPLifetimeInDays = 365;
   }
 
+  if (!mCertBlocklist) {
+    return Result::FATAL_ERROR_LIBRARY_FAILURE;
+  }
+
+  bool isCertRevoked;
+  nsresult nsrv = mCertBlocklist->IsCertRevoked(
+                    certID.issuer.UnsafeGetData(),
+                    certID.issuer.GetLength(),
+                    certID.serialNumber.UnsafeGetData(),
+                    certID.serialNumber.GetLength(),
+                    &isCertRevoked);
+  if (NS_FAILED(nsrv)) {
+    return Result::FATAL_ERROR_LIBRARY_FAILURE;
+  }
+
+  if (isCertRevoked) {
+    PR_LOG(gCertVerifierLog, PR_LOG_DEBUG,
+           ("NSSCertDBTrustDomain: certificate is in blocklist"));
+    return Result::ERROR_REVOKED_CERTIFICATE;
+  }
+
   // If we have a stapled OCSP response then the verification of that response
   // determines the result unless the OCSP response is expired. We make an
   // exception for expired responses because some servers, nginx in particular,
@@ -547,7 +570,7 @@ NSSCertDBTrustDomain::CheckRevocation(EndEntityOrCA endEntityOrCA,
     const SECItem* responseSECItem =
       DoOCSPRequest(arena.get(), url, &ocspRequestItem,
                     OCSPFetchingTypeToTimeoutTime(mOCSPFetching),
-                    mOCSPGetConfig == CertVerifier::ocsp_get_enabled);
+                    mOCSPGetConfig == CertVerifier::ocspGetEnabled);
     if (!responseSECItem) {
       rv = MapPRErrorCodeToResult(PR_GetError());
     } else if (response.Init(responseSECItem->data, responseSECItem->len)

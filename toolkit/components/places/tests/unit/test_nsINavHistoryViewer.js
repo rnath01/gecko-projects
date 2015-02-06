@@ -129,29 +129,30 @@ add_test(function check_history_query() {
         do_check_eq(resultObserver.invalidatedContainer, result.root);
 
         // nsINavHistoryResultObserver.invalidateContainer
-        bhist.removeAllPages();
-        do_check_eq(root.uri, resultObserver.invalidatedContainer.uri);
+        PlacesTestUtils.clearHistoryEnabled().then(() => {
+          do_check_eq(root.uri, resultObserver.invalidatedContainer.uri);
 
-        // nsINavHistoryResultObserver.batching
-        do_check_false(resultObserver.inBatchMode);
-        histsvc.runInBatchMode({
-          runBatched: function (aUserData) {
-            do_check_true(resultObserver.inBatchMode);
-          }
-        }, null);
-        do_check_false(resultObserver.inBatchMode);
-        bmsvc.runInBatchMode({
-          runBatched: function (aUserData) {
-            do_check_true(resultObserver.inBatchMode);
-          }
-        }, null);
-        do_check_false(resultObserver.inBatchMode);
+          // nsINavHistoryResultObserver.batching
+          do_check_false(resultObserver.inBatchMode);
+          histsvc.runInBatchMode({
+            runBatched: function (aUserData) {
+              do_check_true(resultObserver.inBatchMode);
+            }
+          }, null);
+          do_check_false(resultObserver.inBatchMode);
+          bmsvc.runInBatchMode({
+            runBatched: function (aUserData) {
+              do_check_true(resultObserver.inBatchMode);
+            }
+          }, null);
+          do_check_false(resultObserver.inBatchMode);
 
-        root.containerOpen = false;
-        do_check_eq(resultObserver.closedContainer, resultObserver.openedContainer);
-        result.removeObserver(resultObserver);
-        resultObserver.reset();
-        promiseAsyncUpdates().then(run_next_test);
+          root.containerOpen = false;
+          do_check_eq(resultObserver.closedContainer, resultObserver.openedContainer);
+          result.removeObserver(resultObserver);
+          resultObserver.reset();
+          PlacesTestUtils.promiseAsyncUpdates().then(run_next_test);
+        });
       });
     });
   });
@@ -218,7 +219,7 @@ add_test(function check_bookmarks_query() {
   do_check_eq(resultObserver.closedContainer, resultObserver.openedContainer);
   result.removeObserver(resultObserver);
   resultObserver.reset();
-  promiseAsyncUpdates().then(run_next_test);
+  PlacesTestUtils.promiseAsyncUpdates().then(run_next_test);
 });
 
 add_test(function check_mixed_query() {
@@ -251,5 +252,5 @@ add_test(function check_mixed_query() {
   do_check_eq(resultObserver.closedContainer, resultObserver.openedContainer);
   result.removeObserver(resultObserver);
   resultObserver.reset();
-  promiseAsyncUpdates().then(run_next_test);
+  PlacesTestUtils.promiseAsyncUpdates().then(run_next_test);
 });

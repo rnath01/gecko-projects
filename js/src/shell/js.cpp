@@ -61,6 +61,7 @@
 #include "jit/arm/Simulator-arm.h"
 #include "jit/Ion.h"
 #include "js/Debug.h"
+#include "js/GCAPI.h"
 #include "js/StructuredClone.h"
 #include "perf/jsperf.h"
 #include "shell/jsheaptools.h"
@@ -128,7 +129,7 @@ static size_t gMaxStackSize = 128 * sizeof(size_t) * 1024;
 static double MAX_TIMEOUT_INTERVAL = 1800.0;
 static double gTimeoutInterval = -1.0;
 static volatile bool gServiceInterrupt = false;
-static Maybe<JS::PersistentRootedValue> gInterruptFunc;
+static JS::PersistentRootedValue gInterruptFunc;
 
 static bool enableDisassemblyDumps = false;
 
@@ -356,8 +357,14 @@ ShellInterruptCallback(JSContext *cx)
     if (!gServiceInterrupt)
         return true;
 
+    // Reset gServiceInterrupt. CancelExecution or InterruptIf will set it to
+    // true to distinguish watchdog or user triggered interrupts.
+    // Do this first to prevent other interrupts that may occur while the
+    // user-supplied callback is executing from re-entering the handler.
+    gServiceInterrupt = false;
+
     bool result;
-    RootedValue interruptFunc(cx, *gInterruptFunc);
+    RootedValue interruptFunc(cx, gInterruptFunc);
     if (!interruptFunc.isNull()) {
         JS::AutoSaveExceptionState savedExc(cx);
         JSAutoCompartment ac(cx, &interruptFunc.toObject());
@@ -377,10 +384,6 @@ ShellInterruptCallback(JSContext *cx)
 
     if (!result && gExitCode == 0)
         gExitCode = EXITCODE_TIMEOUT;
-
-    // Reset gServiceInterrupt. CancelExecution or InterruptIf will set it to
-    // true to distinguish watchdog or user triggered interrupts.
-    gServiceInterrupt = false;
 
     return result;
 }
@@ -963,7 +966,7 @@ class AutoNewContext
     Maybe<JSAutoRequest> newRequest;
     Maybe<AutoCompartment> newCompartment;
 
-    AutoNewContext(const AutoNewContext &) MOZ_DELETE;
+    AutoNewContext(const AutoNewContext &) = delete;
 
   public:
     AutoNewContext() : oldcx(nullptr), newcx(nullptr) {}
@@ -991,7 +994,7 @@ class AutoNewContext
                 JS_GetPendingException(newcx, &exc);
             newCompartment.reset();
             newRequest.reset();
-            if (throwing)
+            if (throwing && JS_WrapValue(oldcx, &exc))
                 JS_SetPendingException(oldcx, exc);
             DestroyContext(newcx, false);
         }
@@ -1004,7 +1007,7 @@ my_LargeAllocFailCallback(void *data)
     JSContext *cx = (JSContext*)data;
     JSRuntime *rt = cx->runtime();
 
-    if (InParallelSection() || !cx->allowGC())
+    if (!cx->isJSContext())
         return;
 
     MOZ_ASSERT(!rt->isHeapBusy());
@@ -1032,7 +1035,7 @@ CacheEntry(JSContext* cx, unsigned argc, JS::Value *vp)
         return false;
     }
 
-    RootedObject obj(cx, JS_NewObject(cx, &CacheEntry_class, JS::NullPtr(), JS::NullPtr()));
+    RootedObject obj(cx, JS_NewObject(cx, &CacheEntry_class));
     if (!obj)
         return false;
 
@@ -1648,10 +1651,166 @@ Quit(JSContext *cx, unsigned argc, jsval *vp)
 #endif
 
     CallArgs args = CallArgsFromVp(argc, vp);
-    JS_ConvertArguments(cx, args, "/ i", &gExitCode);
+    int32_t code;
+    if (!ToInt32(cx, args.get(0), &code))
+        return false;
 
+    // The fuzzers check the shell's exit code and assume a value >= 128 means
+    // the process crashed (for instance, SIGSEGV will result in code 139). On
+    // POSIX platforms, the exit code is 8-bit and negative values can also
+    // result in an exit code >= 128. We restrict the value to range [0, 127] to
+    // avoid false positives.
+    if (code < 0 || code >= 128) {
+        JS_ReportError(cx, "quit exit code should be in range 0-127");
+        return false;
+    }
+
+    gExitCode = code;
     gQuitting = true;
     return false;
+}
+
+namespace gcCallback {
+
+struct MajorGC {
+    int32_t depth;
+    int32_t phases;
+};
+
+static void
+majorGC(JSRuntime *rt, JSGCStatus status, void *data)
+{
+    auto info = static_cast<MajorGC*>(data);
+    if (!(info->phases & (1 << status)))
+        return;
+
+    if (info->depth > 0) {
+        info->depth--;
+        JS::PrepareForFullGC(rt);
+        JS::GCForReason(rt, GC_NORMAL, JS::gcreason::API);
+        info->depth++;
+    }
+}
+
+struct MinorGC {
+    int32_t phases;
+    bool active;
+};
+
+static void
+minorGC(JSRuntime *rt, JSGCStatus status, void *data)
+{
+    auto info = static_cast<MinorGC*>(data);
+    if (!(info->phases & (1 << status)))
+        return;
+
+    if (info->active) {
+        info->active = false;
+        rt->gc.evictNursery(JS::gcreason::DEBUG_GC);
+        info->active = true;
+    }
+}
+
+// Process global, should really be runtime-local. Also, the final one of these
+// is currently leaked, since they are only deleted when changing.
+MajorGC *prevMajorGC = nullptr;
+MinorGC *prevMinorGC = nullptr;
+
+} /* namespace gcCallback */
+
+static bool
+SetGCCallback(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (args.length() != 1) {
+        JS_ReportError(cx, "Wrong number of arguments");
+        return false;
+    }
+
+    RootedObject opts(cx, ToObject(cx, args[0]));
+    if (!opts)
+        return false;
+
+    RootedValue v(cx);
+    if (!JS_GetProperty(cx, opts, "action", &v))
+        return false;
+
+    JSString *str = JS::ToString(cx, v);
+    if (!str)
+        return false;
+    JSAutoByteString action(cx, str);
+    if (!action)
+        return false;
+
+    int32_t phases = 0;
+    if ((strcmp(action.ptr(), "minorGC") == 0) || (strcmp(action.ptr(), "majorGC") == 0)) {
+        if (!JS_GetProperty(cx, opts, "phases", &v))
+            return false;
+        if (v.isUndefined()) {
+            phases = (1 << JSGC_END);
+        } else {
+            JSString *str = JS::ToString(cx, v);
+            if (!str)
+                return false;
+            JSAutoByteString phasesStr(cx, str);
+            if (!phasesStr)
+                return false;
+
+            if (strcmp(phasesStr.ptr(), "begin") == 0)
+                phases = (1 << JSGC_BEGIN);
+            else if (strcmp(phasesStr.ptr(), "end") == 0)
+                phases = (1 << JSGC_END);
+            else if (strcmp(phasesStr.ptr(), "both") == 0)
+                phases = (1 << JSGC_BEGIN) | (1 << JSGC_END);
+            else {
+                JS_ReportError(cx, "Invalid callback phase");
+                return false;
+            }
+        }
+    }
+
+    if (gcCallback::prevMajorGC) {
+        JS_SetGCCallback(cx->runtime(), nullptr, nullptr);
+        js_delete<gcCallback::MajorGC>(gcCallback::prevMajorGC);
+        gcCallback::prevMajorGC = nullptr;
+    }
+
+    if (gcCallback::prevMinorGC) {
+        JS_SetGCCallback(cx->runtime(), nullptr, nullptr);
+        js_delete<gcCallback::MinorGC>(gcCallback::prevMinorGC);
+        gcCallback::prevMinorGC = nullptr;
+    }
+
+    if (strcmp(action.ptr(), "minorGC") == 0) {
+        auto info = js_new<gcCallback::MinorGC>();
+        info->phases = phases;
+        info->active = true;
+        JS_SetGCCallback(cx->runtime(), gcCallback::minorGC, info);
+    } else if (strcmp(action.ptr(), "majorGC") == 0) {
+        if (!JS_GetProperty(cx, opts, "depth", &v))
+            return false;
+        int32_t depth = 1;
+        if (!v.isUndefined()) {
+            if (!ToInt32(cx, v, &depth))
+                return false;
+        }
+        if (depth > int32_t(gcstats::Statistics::MAX_NESTING - 4)) {
+            JS_ReportError(cx, "Nesting depth too large, would overflow");
+            return false;
+        }
+
+        auto info = js_new<gcCallback::MajorGC>();
+        info->phases = phases;
+        info->depth = depth;
+        JS_SetGCCallback(cx->runtime(), gcCallback::majorGC, info);
+    } else {
+        JS_ReportError(cx, "Unknown GC callback action");
+        return false;
+    }
+
+    args.rval().setUndefined();
+    return true;
 }
 
 static bool
@@ -2326,6 +2485,8 @@ DisassWithSrc(JSContext *cx, unsigned argc, jsval *vp)
             pc += len;
         }
 
+        fprintf(stdout, "%s\n", sprinter.string());
+
       bail:
         fclose(file);
     }
@@ -2519,11 +2680,19 @@ static bool
 EvalInContext(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-
-    RootedString str(cx);
-    RootedObject sobj(cx);
-    if (!JS_ConvertArguments(cx, args, "S / o", str.address(), sobj.address()))
+    if (!args.requireAtLeast(cx, "evalcx", 1))
         return false;
+
+    RootedString str(cx, ToString(cx, args[0]));
+    if (!str)
+        return false;
+
+    RootedObject sobj(cx);
+    if (args.hasDefined(1)) {
+        sobj = ToObject(cx, args[1]);
+        if (!sobj)
+            return false;
+    }
 
     AutoStableStringChars strChars(cx);
     if (!strChars.initTwoByte(cx, str))
@@ -2739,7 +2908,7 @@ Sleep_fn(JSContext *cx, unsigned argc, Value *vp)
     PR_Lock(gWatchdogLock);
     int64_t to_wakeup = PRMJ_Now() + t_ticks;
     for (;;) {
-        PR_WaitCondVar(gSleepWakeup, t_ticks);
+        PR_WaitCondVar(gSleepWakeup, PR_MillisecondsToInterval(t_ticks / 1000));
         if (gServiceInterrupt)
             break;
         int64_t now = PRMJ_Now();
@@ -2748,6 +2917,7 @@ Sleep_fn(JSContext *cx, unsigned argc, Value *vp)
         t_ticks = to_wakeup - now;
     }
     PR_Unlock(gWatchdogLock);
+    args.rval().setUndefined();
     return !gServiceInterrupt;
 }
 
@@ -2875,7 +3045,7 @@ CancelExecution(JSRuntime *rt)
     gServiceInterrupt = true;
     JS_RequestInterruptCallback(rt);
 
-    if (!gInterruptFunc->get().isNull()) {
+    if (!gInterruptFunc.isNull()) {
         static const char msg[] = "Script runs for too long, terminating.\n";
         fputs(msg, stderr);
     }
@@ -2922,7 +3092,7 @@ Timeout(JSContext *cx, unsigned argc, Value *vp)
             JS_ReportError(cx, "Second argument must be a timeout function");
             return false;
         }
-        *gInterruptFunc = value;
+        gInterruptFunc = value;
     }
 
     args.rval().setUndefined();
@@ -2993,7 +3163,7 @@ SetInterruptCallback(JSContext *cx, unsigned argc, Value *vp)
         JS_ReportError(cx, "Argument must be a function");
         return false;
     }
-    *gInterruptFunc = value;
+    gInterruptFunc = value;
 
     args.rval().setUndefined();
     return true;
@@ -3766,26 +3936,6 @@ ThisFilename(JSContext *cx, unsigned argc, Value *vp)
 }
 
 static bool
-Wrap(JSContext *cx, unsigned argc, jsval *vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    Value v = args.get(0);
-    if (v.isPrimitive()) {
-        args.rval().set(v);
-        return true;
-    }
-
-    RootedObject obj(cx, v.toObjectOrNull());
-    JSObject *wrapped = Wrapper::New(cx, obj, &obj->global(),
-                                     &Wrapper::singleton);
-    if (!wrapped)
-        return false;
-
-    args.rval().setObject(*wrapped);
-    return true;
-}
-
-static bool
 WrapWithProto(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -3877,7 +4027,7 @@ ObjectEmulatingUndefined(JSContext *cx, unsigned argc, jsval *vp)
         JSCLASS_EMULATES_UNDEFINED
     };
 
-    RootedObject obj(cx, JS_NewObject(cx, &cls, JS::NullPtr(), JS::NullPtr()));
+    RootedObject obj(cx, JS_NewObject(cx, &cls));
     if (!obj)
         return false;
     args.rval().setObject(*obj);
@@ -4009,6 +4159,10 @@ SingleStepCallback(void *arg, jit::Simulator *sim, void *pc)
 {
     JSRuntime *rt = reinterpret_cast<JSRuntime*>(arg);
 
+    // If profiling is not enabled, don't do anything.
+    if (!rt->spsProfiler.enabled())
+        return;
+
     JS::ProfilingFrameIterator::RegisterState state;
     state.pc = pc;
     state.sp = (void*)sim->get_register(jit::Simulator::sp);
@@ -4016,12 +4170,19 @@ SingleStepCallback(void *arg, jit::Simulator *sim, void *pc)
 
     DebugOnly<void*> lastStackAddress = nullptr;
     StackChars stack;
+    uint32_t frameNo = 0;
     for (JS::ProfilingFrameIterator i(rt, state); !i.done(); ++i) {
         MOZ_ASSERT(i.stackAddress() != nullptr);
         MOZ_ASSERT(lastStackAddress <= i.stackAddress());
         lastStackAddress = i.stackAddress();
-        const char *label = i.label();
-        stack.append(label, strlen(label));
+        JS::ProfilingFrameIterator::Frame frames[16];
+        uint32_t nframes = i.extractStack(frames, 0, 16);
+        for (uint32_t i = 0; i < nframes; i++) {
+            if (frameNo > 0)
+                stack.append(",", 1);
+            stack.append(frames[i].label, strlen(frames[i].label));
+            frameNo++;
+        }
     }
 
     // Only append the stack if it differs from the last stack.
@@ -4040,7 +4201,7 @@ EnableSingleStepProfiling(JSContext *cx, unsigned argc, Value *vp)
 #if defined(JS_ARM_SIMULATOR)
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    jit::Simulator *sim = cx->runtime()->mainThread.simulator();
+    jit::Simulator *sim = cx->runtime()->simulator();
     sim->enable_single_stepping(SingleStepCallback, cx->runtime());
 
     args.rval().setUndefined();
@@ -4057,7 +4218,7 @@ DisableSingleStepProfiling(JSContext *cx, unsigned argc, Value *vp)
 #if defined(JS_ARM_SIMULATOR)
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    jit::Simulator *sim = cx->runtime()->mainThread.simulator();
+    jit::Simulator *sim = cx->runtime()->simulator();
     sim->disable_single_stepping();
 
     AutoValueVector elems(cx);
@@ -4189,6 +4350,12 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 "  Throw if the first two arguments are not the same (both +0 or both -0,\n"
 "  both NaN, or non-zero and ===)."),
 
+    JS_FN_HELP("setGCCallback", SetGCCallback, 1, 0,
+"setGCCallback({action:\"...\", options...})",
+"  Set the GC callback. action may be:\n"
+"    'minorGC' - run a nursery collection\n"
+"    'majorGC' - run a major collection, nesting up to a given 'depth'\n"),
+
     JS_FN_HELP("startTimingMutator", StartTimingMutator, 0, 0,
 "startTimingMutator()",
 "  Start accounting time to mutator vs GC."),
@@ -4251,9 +4418,9 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 "  themselves from roots that keep |thing| from being collected. (We could make\n"
 "  this distinction if it is useful.)\n"
 "\n"
-"  If any references are found by the conservative scanner, the references\n"
-"  object will have a property named \"edge: machine stack\"; the referrers will\n"
-"  be 'null', because they are roots."),
+"  If there are any references on the native stack, the references\n"
+"  object will have properties named like \"edge: exact-value \"; the referrers\n"
+"  will be 'null', because they are roots."),
 
 #endif
     JS_FN_HELP("build", BuildDate, 0, 0,
@@ -4385,14 +4552,6 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 "thisFilename()",
 "  Return the filename of the current script"),
 
-    JS_FN_HELP("wrap", Wrap, 1, 0,
-"wrap(obj)",
-"  Wrap an object into a noop wrapper."),
-
-    JS_FN_HELP("wrapWithProto", WrapWithProto, 2, 0,
-"wrapWithProto(obj)",
-"  Wrap an object into a noop wrapper with prototype semantics."),
-
     JS_FN_HELP("newGlobal", NewGlobal, 1, 0,
 "newGlobal([options])",
 "  Return a new global object in a new compartment. If options\n"
@@ -4519,8 +4678,31 @@ static const JSFunctionSpecWithHelp fuzzing_unsafe_functions[] = {
 "  might be asked for the source code of compilations that |fun|\n"
 "  performed, and which, presumably, only |hook| knows how to find.\n"),
 
+    JS_FN_HELP("wrapWithProto", WrapWithProto, 2, 0,
+"wrapWithProto(obj)",
+"  Wrap an object into a noop wrapper with prototype semantics.\n"
+"  Note: This is not fuzzing safe because it can be used to construct\n"
+"        deeply nested wrapper chains that cannot exist in the wild."),
+
     JS_FS_HELP_END
 };
+
+static const JSFunctionSpecWithHelp console_functions[] = {
+    JS_FN_HELP("log", Print, 0, 0,
+"log([exp ...])",
+"  Evaluate and print expressions to stdout.\n"
+"  This function is an alias of the print() function."),
+    JS_FS_HELP_END
+};
+
+bool
+DefineConsole(JSContext *cx, HandleObject global)
+{
+    RootedObject obj(cx, JS_NewPlainObject(cx));
+    return obj &&
+           JS_DefineFunctionsWithHelp(cx, obj, console_functions) &&
+           JS_DefineProperty(cx, global, "console", obj, 0);
+}
 
 #ifdef MOZ_PROFILING
 # define PROFILING_FUNCTION_COUNT 5
@@ -4891,7 +5073,7 @@ dom_constructor(JSContext* cx, unsigned argc, JS::Value *vp)
 
     RootedObject callee(cx, &args.callee());
     RootedValue protov(cx);
-    if (!JSObject::getProperty(cx, callee, callee, cx->names().prototype, &protov))
+    if (!GetProperty(cx, callee, callee, cx->names().prototype, &protov))
         return false;
 
     if (!protov.isObject()) {
@@ -4900,7 +5082,7 @@ dom_constructor(JSContext* cx, unsigned argc, JS::Value *vp)
     }
 
     RootedObject proto(cx, &protov.toObject());
-    RootedObject domObj(cx, JS_NewObject(cx, &dom_class, proto, JS::NullPtr()));
+    RootedObject domObj(cx, JS_NewObjectWithGivenProto(cx, &dom_class, proto, JS::NullPtr()));
     if (!domObj)
         return false;
 
@@ -5219,6 +5401,8 @@ NewGlobalObject(JSContext *cx, JS::CompartmentOptions &options,
                 return nullptr;
             if (!js::DefineOS(cx, glob))
                 return nullptr;
+            if (!DefineConsole(cx, glob))
+                return nullptr;
         }
 
         /* Initialize FakeDOMObject. */
@@ -5335,11 +5519,13 @@ SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
     bool enableIon = !op.getBoolOption("no-ion");
     bool enableAsmJS = !op.getBoolOption("no-asmjs");
     bool enableNativeRegExp = !op.getBoolOption("no-native-regexp");
+    bool enableUnboxedObjects = op.getBoolOption("unboxed-objects");
 
     JS::RuntimeOptionsRef(rt).setBaseline(enableBaseline)
                              .setIon(enableIon)
                              .setAsmJS(enableAsmJS)
-                             .setNativeRegExp(enableNativeRegExp);
+                             .setNativeRegExp(enableNativeRegExp)
+                             .setUnboxedObjects(enableUnboxedObjects);
 
     if (const char *str = op.getStringOption("ion-scalar-replacement")) {
         if (strcmp(str, "on") == 0)
@@ -5450,18 +5636,9 @@ SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
         jit::js_JitOptions.baselineWarmUpThreshold = 0;
 
     if (const char *str = op.getStringOption("ion-regalloc")) {
-        if (strcmp(str, "lsra") == 0) {
-            jit::js_JitOptions.forceRegisterAllocator = true;
-            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_LSRA;
-        } else if (strcmp(str, "backtracking") == 0) {
-            jit::js_JitOptions.forceRegisterAllocator = true;
-            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_Backtracking;
-        } else if (strcmp(str, "stupid") == 0) {
-            jit::js_JitOptions.forceRegisterAllocator = true;
-            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_Stupid;
-        } else {
+        jit::js_JitOptions.forcedRegisterAllocator = jit::LookupRegisterAllocator(str);
+        if (!jit::js_JitOptions.forcedRegisterAllocator.isSome())
             return OptionFailure("ion-regalloc", str);
-        }
     }
 
     if (op.getBoolOption("ion-eager"))
@@ -5540,6 +5717,14 @@ SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
 static int
 Shell(JSContext *cx, OptionParser *op, char **envp)
 {
+    Maybe<JS::AutoDisableGenerationalGC> noggc;
+    if (op->getBoolOption("no-ggc"))
+        noggc.emplace(cx->runtime());
+
+    Maybe<AutoDisableCompactingGC> nocgc;
+    if (op->getBoolOption("no-cgc"))
+        nocgc.emplace(cx->runtime());
+
     JSAutoRequest ar(cx);
 
     if (op->getBoolOption("fuzzing-safe"))
@@ -5681,6 +5866,7 @@ main(int argc, char **argv, char **envp)
         || !op.addBoolOption('\0', "no-ion", "Disable IonMonkey")
         || !op.addBoolOption('\0', "no-asmjs", "Disable asm.js compilation")
         || !op.addBoolOption('\0', "no-native-regexp", "Disable native regexp compilation")
+        || !op.addBoolOption('\0', "unboxed-objects", "Allow creating unboxed objects")
         || !op.addStringOption('\0', "ion-scalar-replacement", "on/off",
                                "Scalar Replacement (default: on, off to disable)")
         || !op.addStringOption('\0', "ion-gvn", "[mode]",
@@ -5730,16 +5916,18 @@ main(int argc, char **argv, char **envp)
                              "to test JIT codegen (no-op on platforms other than x86 and x64).")
         || !op.addBoolOption('\0', "no-sse4", "Pretend CPU does not support SSE4 instructions"
                              "to test JIT codegen (no-op on platforms other than x86 and x64).")
-        || !op.addBoolOption('\0', "no-avx", "Pretend CPU does not support AVX instructions"
-                             "to test JIT codegen (no-op on platforms other than x86 and x64).")
+        || !op.addBoolOption('\0', "enable-avx", "AVX is disabled by default. Enable AVX. "
+                             "(no-op on platforms other than x86 and x64).")
+        || !op.addBoolOption('\0', "no-avx", "No-op. AVX is currently disabled by default.")
         || !op.addBoolOption('\0', "fuzzing-safe", "Don't expose functions that aren't safe for "
                              "fuzzers to call")
-        || !op.addBoolOption('\0', "no-threads", "Disable helper threads and PJS threads")
+        || !op.addBoolOption('\0', "no-threads", "Disable helper threads")
 #ifdef DEBUG
         || !op.addBoolOption('\0', "dump-entrained-variables", "Print variables which are "
                              "unnecessarily entrained by inner functions")
 #endif
         || !op.addBoolOption('\0', "no-ggc", "Disable Generational GC")
+        || !op.addBoolOption('\0', "no-cgc", "Disable Compacting GC")
         || !op.addBoolOption('\0', "no-incremental-gc", "Disable Incremental GC")
         || !op.addIntOption('\0', "available-memory", "SIZE",
                             "Select GC settings based on available memory (MB)", 0)
@@ -5813,9 +6001,9 @@ main(int argc, char **argv, char **envp)
         js::jit::CPUInfo::SetSSE4Disabled();
         PropagateFlagToNestedShells("--no-sse4");
     }
-    if (op.getBoolOption("no-avx")) {
-        js::jit::CPUInfo::SetAVXDisabled();
-        PropagateFlagToNestedShells("--no-avx");
+    if (op.getBoolOption("enable-avx")) {
+        js::jit::CPUInfo::SetAVXEnabled();
+        PropagateFlagToNestedShells("--enable-avx");
     }
 #endif
 
@@ -5845,12 +6033,9 @@ main(int argc, char **argv, char **envp)
     if (!SetRuntimeOptions(rt, op))
         return 1;
 
-    gInterruptFunc.emplace(rt, NullValue());
+    gInterruptFunc.init(rt, NullValue());
 
     JS_SetGCParameter(rt, JSGC_MAX_BYTES, 0xffffffff);
-    Maybe<JS::AutoDisableGenerationalGC> noggc;
-    if (op.getBoolOption("no-ggc"))
-        noggc.emplace(rt);
 
     size_t availMem = op.getIntOption("available-memory");
     if (availMem > 0)
@@ -5908,13 +6093,9 @@ main(int argc, char **argv, char **envp)
 
     KillWatchdog();
 
-    gInterruptFunc.reset();
-
     MOZ_ASSERT_IF(!CanUseExtraThreads(), workerThreads.empty());
     for (size_t i = 0; i < workerThreads.length(); i++)
         PR_JoinThread(workerThreads[i]);
-
-    noggc.reset();
 
     JS_DestroyRuntime(rt);
     JS_ShutDown();

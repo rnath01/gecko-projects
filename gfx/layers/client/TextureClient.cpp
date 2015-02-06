@@ -93,7 +93,7 @@ public:
 
   bool Recv__delete__() MOZ_OVERRIDE;
 
-  bool RecvCompositorRecycle()
+  bool RecvCompositorRecycle() MOZ_OVERRIDE
   {
     RECYCLE_LOG("Receive recycle %p (%p)\n", mTextureClient, mWaitForRecycle.get());
     mWaitForRecycle = nullptr;
@@ -503,10 +503,11 @@ TextureClient::KeepUntilFullDeallocation(KeepAlive* aKeep)
   mActor->mKeep = aKeep;
 }
 
-void TextureClient::ForceRemove()
+void TextureClient::ForceRemove(bool sync)
 {
   if (mValid && mActor) {
-    if (GetFlags() & TextureFlags::DEALLOCATE_CLIENT) {
+    if (sync || GetFlags() & TextureFlags::DEALLOCATE_CLIENT) {
+      MOZ_PERFORMANCE_WARNING("gfx", "TextureClient/Host pair requires synchronous deallocation");
       if (mActor->IPCOpen()) {
         mActor->SendClearTextureHostSync();
         mActor->SendRemoveTexture();
@@ -673,8 +674,7 @@ bool
 MemoryTextureClient::Allocate(uint32_t aSize)
 {
   MOZ_ASSERT(!mBuffer);
-  static const fallible_t fallible = fallible_t();
-  mBuffer = new(fallible) uint8_t[aSize];
+  mBuffer = new (fallible) uint8_t[aSize];
   if (!mBuffer) {
     NS_WARNING("Failed to allocate buffer");
     return false;
@@ -908,6 +908,7 @@ SharedSurfaceTextureClient::SharedSurfaceTextureClient(ISurfaceAllocator* aAlloc
   , mSurf(surf)
   , mGL(mSurf->mGL)
 {
+  AddFlags(TextureFlags::DEALLOCATE_CLIENT);
 }
 
 SharedSurfaceTextureClient::~SharedSurfaceTextureClient()

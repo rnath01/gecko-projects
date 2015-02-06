@@ -606,16 +606,16 @@ JSONParserBase::createFinishedObject(PropertyVector &properties)
     for (size_t i = 0; i < properties.length(); i++) {
         propid = properties[i].id;
         value = properties[i].value;
-        if (!DefineNativeProperty(cx, obj, propid, value, nullptr, nullptr, JSPROP_ENUMERATE))
+        if (!NativeDefineProperty(cx, obj, propid, value, nullptr, nullptr, JSPROP_ENUMERATE))
             return nullptr;
     }
 
     /*
      * Try to assign a new type to the object with type information for its
-     * properties, and update the initializer type object cache with this
+     * properties, and update the initializer object group cache with this
      * object's final shape.
      */
-    cx->compartment()->types.fixObjectType(cx, obj);
+    cx->compartment()->types.fixObjectGroup(cx, obj);
 
     return obj;
 }
@@ -646,7 +646,7 @@ JSONParserBase::finishArray(MutableHandleValue vp, ElementVector &elements)
         return false;
 
     /* Try to assign a new type to the array according to its elements. */
-    cx->compartment()->types.fixArrayType(cx, obj);
+    cx->compartment()->types.fixArrayGroup(cx, obj);
 
     vp.setObject(*obj);
     if (!freeElements.append(&elements))

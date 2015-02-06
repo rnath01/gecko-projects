@@ -545,10 +545,10 @@ JSCompartment::sweepInnerViews()
 }
 
 void
-JSCompartment::sweepTypeObjectTables()
+JSCompartment::sweepObjectGroupTables()
 {
-    sweepNewTypeObjectTable(newTypeObjects);
-    sweepNewTypeObjectTable(lazyTypeObjects);
+    sweepNewObjectGroupTable(newObjectGroups);
+    sweepNewObjectGroupTable(lazyObjectGroups);
 }
 
 void
@@ -649,14 +649,13 @@ JSCompartment::sweepCrossCompartmentWrappers()
     }
 }
 
-#ifdef JSGC_COMPACTING
-
 void JSCompartment::fixupAfterMovingGC()
 {
     fixupGlobal();
-    fixupNewTypeObjectTable(newTypeObjects);
-    fixupNewTypeObjectTable(lazyTypeObjects);
+    fixupNewObjectGroupTable(newObjectGroups);
+    fixupNewObjectGroupTable(lazyObjectGroups);
     fixupInitialShapeTable();
+    fixupBaseShapeTable();
 }
 
 void
@@ -666,8 +665,6 @@ JSCompartment::fixupGlobal()
     if (global)
         global_.set(MaybeForwarded(global));
 }
-
-#endif // JSGC_COMPACTING
 
 void
 JSCompartment::purge()
@@ -696,10 +693,10 @@ JSCompartment::clearTables()
         baseShapes.clear();
     if (initialShapes.initialized())
         initialShapes.clear();
-    if (newTypeObjects.initialized())
-        newTypeObjects.clear();
-    if (lazyTypeObjects.initialized())
-        lazyTypeObjects.clear();
+    if (newObjectGroups.initialized())
+        newObjectGroups.clear();
+    if (lazyObjectGroups.initialized())
+        lazyObjectGroups.clear();
     if (savedStacks_.initialized())
         savedStacks_.clear();
 }
@@ -823,18 +820,12 @@ JSCompartment::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
                                  tiArrayTypeTables, tiObjectTypeTables);
     *compartmentTables += baseShapes.sizeOfExcludingThis(mallocSizeOf)
                         + initialShapes.sizeOfExcludingThis(mallocSizeOf)
-                        + newTypeObjects.sizeOfExcludingThis(mallocSizeOf)
-                        + lazyTypeObjects.sizeOfExcludingThis(mallocSizeOf);
+                        + newObjectGroups.sizeOfExcludingThis(mallocSizeOf)
+                        + lazyObjectGroups.sizeOfExcludingThis(mallocSizeOf);
     *innerViewsArg += innerViews.sizeOfExcludingThis(mallocSizeOf);
     if (lazyArrayBuffers)
         *lazyArrayBuffersArg += lazyArrayBuffers->sizeOfIncludingThis(mallocSizeOf);
     *crossCompartmentWrappersArg += crossCompartmentWrappers.sizeOfExcludingThis(mallocSizeOf);
     *regexpCompartment += regExps.sizeOfExcludingThis(mallocSizeOf);
     *savedStacksSet += savedStacks_.sizeOfExcludingThis(mallocSizeOf);
-}
-
-void
-JSCompartment::adoptWorkerAllocator(Allocator *workerAllocator)
-{
-    zone()->allocator.arenas.adoptArenas(runtimeFromMainThread(), &workerAllocator->arenas);
 }

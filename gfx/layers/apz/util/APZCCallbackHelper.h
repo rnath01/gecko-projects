@@ -7,10 +7,12 @@
 #define mozilla_layers_APZCCallbackHelper_h
 
 #include "FrameMetrics.h"
+#include "mozilla/EventForwards.h"
 #include "nsIDOMWindowUtils.h"
 
 class nsIContent;
 class nsIDocument;
+class nsIWidget;
 template<class T> struct already_AddRefed;
 
 namespace mozilla {
@@ -89,16 +91,39 @@ public:
     /* Apply an "input transform" to the given |aInput| and return the transformed value.
        The input transform applied is the one for the content element corresponding to
        |aGuid|; this is populated in a previous call to UpdateCallbackTransform. See that
-       method's documentations for details. */
+       method's documentations for details.
+       This method additionally adjusts |aInput| by inversely scaling by the provided
+       pres shell resolution, to cancel out a compositor-side transform (added in
+       bug 1076241) that APZ doesn't unapply. */
     static CSSPoint ApplyCallbackTransform(const CSSPoint& aInput,
-                                           const ScrollableLayerGuid& aGuid);
+                                           const ScrollableLayerGuid& aGuid,
+                                           float aPresShellResolution);
 
-    /* Same as above, but operates on nsIntPoint that are assumed to be in LayoutDevice
-       pixel space. Requires an additonal |aScale| parameter to convert between CSS and
+    /* Same as above, but operates on LayoutDeviceIntPoint.
+       Requires an additonal |aScale| parameter to convert between CSS and
        LayoutDevice space. */
-    static nsIntPoint ApplyCallbackTransform(const nsIntPoint& aPoint,
-                                             const ScrollableLayerGuid& aGuid,
-                                             const CSSToLayoutDeviceScale& aScale);
+    static mozilla::LayoutDeviceIntPoint
+    ApplyCallbackTransform(const LayoutDeviceIntPoint& aPoint,
+                           const ScrollableLayerGuid& aGuid,
+                           const CSSToLayoutDeviceScale& aScale,
+                           float aPresShellResolution);
+
+    /* Dispatch a widget event via the widget stored in the event, if any.
+     * In a child process, allows the TabParent event-capture mechanism to
+     * intercept the event. */
+    static nsEventStatus DispatchWidgetEvent(WidgetGUIEvent& aEvent);
+
+    /* Synthesize a mouse event with the given parameters, and dispatch it
+     * via the given widget. */
+    static nsEventStatus DispatchSynthesizedMouseEvent(uint32_t aMsg,
+                                                       uint64_t aTime,
+                                                       const LayoutDevicePoint& aRefPoint,
+                                                       nsIWidget* aWidget);
+
+    /* Fire a single-tap event at the given point. The event is dispatched
+     * via the given widget. */
+    static void FireSingleTapEvent(const LayoutDevicePoint& aPoint,
+                                   nsIWidget* aWidget);
 };
 
 }

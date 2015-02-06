@@ -38,13 +38,13 @@ using namespace mozilla;
 nsIFrame*
 NS_NewResizerFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 {
-  return new (aPresShell) nsResizerFrame(aPresShell, aContext);
+  return new (aPresShell) nsResizerFrame(aContext);
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsResizerFrame)
 
-nsResizerFrame::nsResizerFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
-:nsTitleBarFrame(aPresShell, aContext)
+nsResizerFrame::nsResizerFrame(nsStyleContext* aContext)
+:nsTitleBarFrame(aContext)
 {
 }
 
@@ -114,7 +114,7 @@ nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
         }
 
         // remember current mouse coordinates
-        nsIntPoint refPoint;
+        LayoutDeviceIntPoint refPoint;
         if (!GetEventPoint(aEvent, refPoint))
           return NS_OK;
         mMouseDownPoint = refPoint + aEvent->widget->WidgetToScreenOffset();
@@ -162,11 +162,11 @@ nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
 
       // retrieve the offset of the mousemove event relative to the mousedown.
       // The difference is how much the resize needs to be
-      nsIntPoint refPoint;
+      LayoutDeviceIntPoint refPoint;
       if (!GetEventPoint(aEvent, refPoint))
         return NS_OK;
-      nsIntPoint screenPoint(refPoint + aEvent->widget->WidgetToScreenOffset());
-      nsIntPoint mouseMove(screenPoint - mMouseDownPoint);
+      LayoutDeviceIntPoint screenPoint = refPoint + aEvent->widget->WidgetToScreenOffset();
+      LayoutDeviceIntPoint mouseMove(screenPoint - mMouseDownPoint);
 
       // Determine which direction to resize by checking the dir attribute.
       // For windows and menus, ensure that it can be resized in that direction.

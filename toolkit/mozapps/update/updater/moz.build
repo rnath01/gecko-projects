@@ -112,6 +112,7 @@ LOCAL_INCLUDES += [
 
 DELAYLOAD_DLLS += [
     'crypt32.dll',
+    'comctl32.dll',
     'userenv.dll',
     'wsock32.dll',
 ]
@@ -126,3 +127,4 @@ if CONFIG['MOZ_WIDGET_GTK']:
     OS_LIBS += CONFIG['TK_LIBS']
 
 DIRS += ['updater-xpcshell']
+FAIL_ON_WARNINGS = True

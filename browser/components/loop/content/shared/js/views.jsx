@@ -8,11 +8,13 @@
 /* global loop:true, React */
 var loop = loop || {};
 loop.shared = loop.shared || {};
-loop.shared.views = (function(_, OT, l10n) {
+loop.shared.views = (function(_, l10n) {
   "use strict";
 
+  var sharedActions = loop.shared.actions;
   var sharedModels = loop.shared.models;
   var sharedMixins = loop.shared.mixins;
+  var SCREEN_SHARE_STATES = loop.shared.utils.SCREEN_SHARE_STATES;
 
   /**
    * Media control button.
@@ -46,6 +48,7 @@ loop.shared.views = (function(_, OT, l10n) {
       var classesObj = {
         "btn": true,
         "media-control": true,
+        "transparent-button": true,
         "local-media": this.props.scope === "local",
         "muted": !this.props.enabled,
         "hide": !this.props.visible
@@ -73,6 +76,60 @@ loop.shared.views = (function(_, OT, l10n) {
   });
 
   /**
+   * Screen sharing control button.
+   *
+   * Required props:
+   * - {loop.Dispatcher} dispatcher  The dispatcher instance
+   * - {Boolean}         visible     Set to true to display the button
+   * - {String}          state       One of the screen sharing states, see
+   *                                 loop.shared.utils.SCREEN_SHARE_STATES
+   */
+  var ScreenShareControlButton = React.createClass({
+    propTypes: {
+      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
+      visible: React.PropTypes.bool.isRequired,
+      state: React.PropTypes.string.isRequired,
+    },
+
+    handleClick: function() {
+      if (this.props.state === SCREEN_SHARE_STATES.ACTIVE) {
+        this.props.dispatcher.dispatch(
+          new sharedActions.EndScreenShare({}));
+      } else {
+        this.props.dispatcher.dispatch(
+          new sharedActions.StartScreenShare({}));
+      }
+    },
+
+    _getTitle: function() {
+      var prefix = this.props.state === SCREEN_SHARE_STATES.ACTIVE ?
+        "active" : "inactive";
+
+      return l10n.get(prefix + "_screenshare_button_title");
+    },
+
+    render: function() {
+      if (!this.props.visible) {
+        return null;
+      }
+
+      var screenShareClasses = React.addons.classSet({
+        "btn": true,
+        "btn-screen-share": true,
+        "transparent-button": true,
+        "active": this.props.state === SCREEN_SHARE_STATES.ACTIVE,
+        "disabled": this.props.state === SCREEN_SHARE_STATES.PENDING
+      });
+
+      return (
+        <button className={screenShareClasses}
+                onClick={this.handleClick}
+                title={this._getTitle()}></button>
+      );
+    }
+  });
+
+  /**
    * Conversation controls.
    */
   var ConversationToolbar = React.createClass({
@@ -80,13 +137,16 @@ loop.shared.views = (function(_, OT, l10n) {
       return {
         video: {enabled: true, visible: true},
         audio: {enabled: true, visible: true},
+        screenShare: {state: SCREEN_SHARE_STATES.INACTIVE, visible: false},
         enableHangup: true
       };
     },
 
     propTypes: {
+      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
       video: React.PropTypes.object.isRequired,
       audio: React.PropTypes.object.isRequired,
+      screenShare: React.PropTypes.object,
       hangup: React.PropTypes.func.isRequired,
       publishStream: React.PropTypes.func.isRequired,
       hangupButtonLabel: React.PropTypes.string,
@@ -110,7 +170,6 @@ loop.shared.views = (function(_, OT, l10n) {
     },
 
     render: function() {
-      var cx = React.addons.classSet;
       return (
         <ul className="conversation-toolbar">
           <li className="conversation-toolbar-btn-box btn-hangup-entry">
@@ -132,6 +191,11 @@ loop.shared.views = (function(_, OT, l10n) {
                                 visible={this.props.audio.visible}
                                 scope="local" type="audio" />
           </li>
+          <li className="conversation-toolbar-btn-box btn-screen-share-entry">
+            <ScreenShareControlButton dispatcher={this.props.dispatcher}
+                                      visible={this.props.screenShare.visible}
+                                      state={this.props.screenShare.state} />
+          </li>
         </ul>
       );
     }
@@ -141,28 +205,17 @@ loop.shared.views = (function(_, OT, l10n) {
    * Conversation view.
    */
   var ConversationView = React.createClass({
-    mixins: [Backbone.Events, sharedMixins.AudioMixin],
+    mixins: [
+      Backbone.Events,
+      sharedMixins.AudioMixin,
+      sharedMixins.MediaSetupMixin
+    ],
 
     propTypes: {
       sdk: React.PropTypes.object.isRequired,
       video: React.PropTypes.object,
       audio: React.PropTypes.object,
       initiate: React.PropTypes.bool
-    },
-
-    // height set to 100%" to fix video layout on Google Chrome
-    // @see https://bugzilla.mozilla.org/show_bug.cgi?id=1020445
-    publisherConfig: {
-      insertMode: "append",
-      width: "100%",
-      height: "100%",
-      style: {
-        audioLevelDisplayMode: "off",
-        bugDisplayMode: "off",
-        buttonDisplayMode: "off",
-        nameDisplayMode: "off",
-        videoDisabledDisplayMode: "off"
-      }
     },
 
     getDefaultProps: function() {
@@ -180,12 +233,6 @@ loop.shared.views = (function(_, OT, l10n) {
       };
     },
 
-    componentWillMount: function() {
-      if (this.props.initiate) {
-        this.publisherConfig.publishVideo = this.props.video.enabled;
-      }
-    },
-
     componentDidMount: function() {
       if (this.props.initiate) {
         this.listenTo(this.props.model, "session:connected",
@@ -197,26 +244,6 @@ loop.shared.views = (function(_, OT, l10n) {
                                          "session:ended"].join(" "),
                                          this.stopPublishing);
         this.props.model.startSession();
-      }
-
-      /**
-       * OT inserts inline styles into the markup. Using a listener for
-       * resize events helps us trigger a full width/height on the element
-       * so that they update to the correct dimensions.
-       * XXX: this should be factored as a mixin.
-       */
-      window.addEventListener('orientationchange', this.updateVideoContainer);
-      window.addEventListener('resize', this.updateVideoContainer);
-    },
-
-    updateVideoContainer: function() {
-      var localStreamParent = document.querySelector('.local .OT_publisher');
-      var remoteStreamParent = document.querySelector('.remote .OT_subscriber');
-      if (localStreamParent) {
-        localStreamParent.style.width = "100%";
-      }
-      if (remoteStreamParent) {
-        remoteStreamParent.style.height = "100%";
       }
     },
 
@@ -248,7 +275,10 @@ loop.shared.views = (function(_, OT, l10n) {
      */
     _streamCreated: function(event) {
       var incoming = this.getDOMNode().querySelector(".remote");
-      this.props.model.subscribe(event.stream, incoming, this.publisherConfig);
+      this.props.model.subscribe(event.stream, incoming,
+        this.getDefaultPublisherConfig({
+          publishVideo: this.props.video.enabled
+        }));
     },
 
     /**
@@ -263,7 +293,7 @@ loop.shared.views = (function(_, OT, l10n) {
 
       // XXX move this into its StreamingVideo component?
       this.publisher = this.props.sdk.initPublisher(
-        outgoing, this.publisherConfig);
+        outgoing, this.getDefaultPublisherConfig({publishVideo: this.props.video.enabled}));
 
       // Suppress OT GuM custom dialog, see bug 1018875
       this.listenTo(this.publisher, "accessDialogOpened accessDenied",
@@ -328,7 +358,7 @@ loop.shared.views = (function(_, OT, l10n) {
           <div className="conversation">
             <div className="media nested">
               <div className="video_wrapper remote_wrapper">
-                <div className="video_inner remote"></div>
+                <div className="video_inner remote remote-stream"></div>
               </div>
               <div className={localStreamClasses}></div>
             </div>
@@ -495,6 +525,7 @@ loop.shared.views = (function(_, OT, l10n) {
     ConversationView: ConversationView,
     ConversationToolbar: ConversationToolbar,
     MediaControlButton: MediaControlButton,
+    ScreenShareControlButton: ScreenShareControlButton,
     NotificationListView: NotificationListView
   };
-})(_, window.OT, navigator.mozL10n || document.mozL10n);
+})(_, navigator.mozL10n || document.mozL10n);

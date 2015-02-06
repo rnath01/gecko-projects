@@ -37,6 +37,7 @@
 #include <media/stagefright/MediaSource.h>
 #include <media/stagefright/MetaData.h>
 #include <utils/String8.h>
+#include "nsTArray.h"
 
 namespace stagefright {
 
@@ -103,6 +104,7 @@ private:
     bool mWantsNALFragments;
 
     uint8_t *mSrcBuffer;
+    FallibleTArray<uint8_t> mSrcBackend;
 
     size_t parseNALSize(const uint8_t *data) const;
     status_t parseChunk(off64_t *offset);
@@ -111,7 +113,7 @@ private:
     status_t parseTrackFragmentRun(off64_t offset, off64_t size);
     status_t parseSampleAuxiliaryInformationSizes(off64_t offset, off64_t size);
     status_t parseSampleAuxiliaryInformationOffsets(off64_t offset, off64_t size);
-    void lookForMoof();
+    status_t lookForMoof();
     status_t moveToNextFragment();
 
     struct TrackFragmentHeaderInfo {
@@ -163,6 +165,8 @@ private:
 
     MPEG4Source(const MPEG4Source &);
     MPEG4Source &operator=(const MPEG4Source &);
+
+    bool ensureSrcBufferAllocated(int32_t size);
 };
 
 // This custom data source wraps an existing one and satisfies requests
@@ -721,6 +725,13 @@ static void convertTimeToDate(int64_t time_1904, String8 *s) {
     strftime(tmp, sizeof(tmp), "%Y%m%dT%H%M%S.000Z", gmtime(&time_1970));
 
     s->setTo(tmp);
+}
+
+static bool ValidInputSize(int32_t size) {
+  // Reject compressed samples larger than an uncompressed UHD
+  // frame. This is a reasonable cut-off for a lossy codec,
+  // combined with the current Firefox limit to 5k video.
+  return (size > 0 && size <= 4 * (1920 * 1080) * 3 / 2);
 }
 
 status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
@@ -1697,6 +1708,46 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
             break;
         }
 
+        case FOURCC('m', 'e', 'h', 'd'):
+        {
+            if (chunk_data_size < 8) {
+                return ERROR_MALFORMED;
+            }
+
+            uint8_t version;
+            if (mDataSource->readAt(
+                        data_offset, &version, sizeof(version))
+                    < (ssize_t)sizeof(version)) {
+                return ERROR_IO;
+            }
+            if (version > 1) {
+                break;
+            }
+            int64_t duration = 0;
+            if (version == 1) {
+                if (mDataSource->readAt(
+                            data_offset + 4, &duration, sizeof(duration))
+                        < (ssize_t)sizeof(duration)) {
+                    return ERROR_IO;
+                }
+                duration = ntoh64(duration);
+            } else {
+                uint32_t duration32;
+                if (mDataSource->readAt(
+                            data_offset + 4, &duration32, sizeof(duration32))
+                        < (ssize_t)sizeof(duration32)) {
+                    return ERROR_IO;
+                }
+                duration = ntohl(duration32);
+            }
+            if (duration) {
+              mFileMetaData->setInt64(kKeyMovieDuration, duration * 1000LL);
+            }
+
+            *offset += chunk_size;
+            break;
+        }
+
         case FOURCC('m', 'd', 'a', 't'):
         {
             ALOGV("mdat chunk, drm: %d", mIsDrm);
@@ -2508,13 +2559,6 @@ MPEG4Source::~MPEG4Source() {
     free(mCurrentSampleInfoOffsets);
 }
 
-static bool ValidInputSize(int32_t size) {
-  // Reject compressed samples larger than an uncompressed UHD
-  // frame. This is a reasonable cut-off for a lossy codec,
-  // combined with the current Firefox limit to 5k video.
-  return (size > 0 && size <= 4 * (1920 * 1080) * 3 / 2);
-}
-
 status_t MPEG4Source::start(MetaData *params) {
     Mutex::Autolock autoLock(mLock);
 
@@ -2528,14 +2572,7 @@ status_t MPEG4Source::start(MetaData *params) {
         mWantsNALFragments = false;
     }
 
-    int32_t max_size;
-    CHECK(mFormat->findInt32(kKeyMaxInputSize, &max_size));
-    if (!ValidInputSize(max_size)) {
-      ALOGE("Invalid max input size %d", max_size);
-      return ERROR_MALFORMED;
-    }
-
-    mSrcBuffer = new uint8_t[max_size];
+    mSrcBuffer = mSrcBackend.Elements();
 
     mStarted = true;
 
@@ -2552,8 +2589,7 @@ status_t MPEG4Source::stop() {
         mBuffer = NULL;
     }
 
-    delete[] mSrcBuffer;
-    mSrcBuffer = NULL;
+    mSrcBackend.Clear();
 
     mStarted = false;
     mCurrentSampleIndex = 0;
@@ -3204,14 +3240,14 @@ size_t MPEG4Source::parseNALSize(const uint8_t *data) const {
     return 0;
 }
 
-void MPEG4Source::lookForMoof() {
+status_t MPEG4Source::lookForMoof() {
     off64_t offset = 0;
     off64_t size;
     while (true) {
         uint32_t hdr[2];
         auto x = mDataSource->readAt(offset, hdr, 8);
         if (x < 8) {
-            break;
+            return NOT_ENOUGH_DATA;
         }
         uint32_t chunk_size = ntohl(hdr[0]);
         uint32_t chunk_type = ntohl(hdr[1]);
@@ -3220,15 +3256,25 @@ void MPEG4Source::lookForMoof() {
         if (chunk_type == FOURCC('m', 'o', 'o', 'f')) {
             mFirstMoofOffset = mCurrentMoofOffset = offset;
             parseChunk(&offset);
-            break;
+            return OK;
         }
         if (chunk_type == FOURCC('m', 'd', 'a', 't')) {
-            break;
+            return OK;
         }
         offset += chunk_size;
     }
 }
 
+bool MPEG4Source::ensureSrcBufferAllocated(int32_t aSize) {
+    if (mSrcBackend.Length() >= aSize) {
+        return true;
+    }
+    if (!mSrcBackend.SetLength(aSize)) {
+        return false;
+    }
+    mSrcBuffer = mSrcBackend.Elements();
+    return true;
+}
 
 status_t MPEG4Source::read(
         MediaBuffer **out, const ReadOptions *options) {
@@ -3237,8 +3283,7 @@ status_t MPEG4Source::read(
     CHECK(mStarted);
 
     if (!mLookedForMoof) {
-      mLookedForMoof = true;
-      lookForMoof();
+        mLookedForMoof = lookForMoof() == OK;
     }
 
     if (mFirstMoofOffset > 0) {
@@ -3475,6 +3520,9 @@ status_t MPEG4Source::read(
             num_bytes_read =
                 mDataSource->readAt(offset, (uint8_t*)mBuffer->data(), size);
         } else {
+            if (!ensureSrcBufferAllocated(size)) {
+                return ERROR_MALFORMED;
+            }
             num_bytes_read = mDataSource->readAt(offset, mSrcBuffer, size);
         }
 
@@ -3827,6 +3875,9 @@ status_t MPEG4Source::fragmentedRead(
             num_bytes_read =
                 mDataSource->readAt(offset, (uint8_t*)mBuffer->data(), size);
         } else {
+            if (!ensureSrcBufferAllocated(size)) {
+                return ERROR_MALFORMED;
+            }
             num_bytes_read = mDataSource->readAt(offset, mSrcBuffer, size);
         }
 

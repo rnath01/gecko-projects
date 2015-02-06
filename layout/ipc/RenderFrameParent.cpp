@@ -8,6 +8,7 @@
 #include "base/basictypes.h"
 
 #include "BasicLayers.h"
+#include "gfxPrefs.h"
 #ifdef MOZ_ENABLE_D3D9_LAYER
 # include "LayerManagerD3D9.h"
 #endif //MOZ_ENABLE_D3D9_LAYER
@@ -18,6 +19,7 @@
 #include "mozilla/layers/CompositorParent.h"
 #include "mozilla/layers/LayerTransactionParent.h"
 #include "nsContentUtils.h"
+#include "nsFocusManager.h"
 #include "nsFrameLoader.h"
 #include "nsIObserver.h"
 #include "nsSubDocumentFrame.h"
@@ -91,7 +93,7 @@ public:
   {
     MOZ_ASSERT(NS_IsMainThread());
     if (mRenderFrame) {
-      TabParent* browser = static_cast<TabParent*>(mRenderFrame->Manager());
+      TabParent* browser = TabParent::GetFrom(mRenderFrame->Manager());
       browser->UpdateFrame(aFrameMetrics);
     }
   }
@@ -109,7 +111,7 @@ public:
       return;
     }
     if (mRenderFrame) {
-      TabParent* browser = static_cast<TabParent*>(mRenderFrame->Manager());
+      TabParent* browser = TabParent::GetFrom(mRenderFrame->Manager());
       browser->AcknowledgeScrollUpdate(aScrollId, aScrollGeneration);
     }
   }
@@ -128,7 +130,7 @@ public:
       return;
     }
     if (mRenderFrame) {
-      TabParent* browser = static_cast<TabParent*>(mRenderFrame->Manager());
+      TabParent* browser = TabParent::GetFrom(mRenderFrame->Manager());
       browser->HandleDoubleTap(aPoint, aModifiers, aGuid);
     }
   }
@@ -147,7 +149,8 @@ public:
       return;
     }
     if (mRenderFrame) {
-      TabParent* browser = static_cast<TabParent*>(mRenderFrame->Manager());
+      mRenderFrame->TakeFocusForClick();
+      TabParent* browser = TabParent::GetFrom(mRenderFrame->Manager());
       browser->HandleSingleTap(aPoint, aModifiers, aGuid);
     }
   }
@@ -167,7 +170,7 @@ public:
       return;
     }
     if (mRenderFrame) {
-      TabParent* browser = static_cast<TabParent*>(mRenderFrame->Manager());
+      TabParent* browser = TabParent::GetFrom(mRenderFrame->Manager());
       browser->HandleLongTap(aPoint, aModifiers, aGuid, aInputBlockId);
     }
   }
@@ -186,7 +189,7 @@ public:
       return;
     }
     if (mRenderFrame) {
-      TabParent* browser = static_cast<TabParent*>(mRenderFrame->Manager());
+      TabParent* browser = TabParent::GetFrom(mRenderFrame->Manager());
       browser->HandleLongTapUp(aPoint, aModifiers, aGuid);
     }
   }
@@ -206,7 +209,7 @@ public:
       return;
     }
     if (mRenderFrame && aIsRoot) {
-      TabParent* browser = static_cast<TabParent*>(mRenderFrame->Manager());
+      TabParent* browser = TabParent::GetFrom(mRenderFrame->Manager());
       BrowserElementParent::DispatchAsyncScrollEvent(browser, aContentRect,
                                                      aContentSize);
     }
@@ -217,7 +220,7 @@ public:
     MessageLoop::current()->PostDelayedTask(FROM_HERE, aTask, aDelayMs);
   }
 
-  virtual bool GetRootZoomConstraints(ZoomConstraints* aOutConstraints)
+  virtual bool GetRootZoomConstraints(ZoomConstraints* aOutConstraints) MOZ_OVERRIDE
   {
     if (mHaveZoomConstraints && aOutConstraints) {
       *aOutConstraints = mZoomConstraints;
@@ -225,7 +228,7 @@ public:
     return mHaveZoomConstraints;
   }
 
-  virtual bool GetTouchSensitiveRegion(CSSRect* aOutRegion)
+  virtual bool GetTouchSensitiveRegion(CSSRect* aOutRegion) MOZ_OVERRIDE
   {
     if (mTouchSensitiveRegion.IsEmpty())
       return false;
@@ -236,7 +239,7 @@ public:
 
   virtual void NotifyAPZStateChange(const ScrollableLayerGuid& aGuid,
                                     APZStateChange aChange,
-                                    int aArg)
+                                    int aArg) MOZ_OVERRIDE
   {
     if (MessageLoop::current() != mUILoop) {
       mUILoop->PostTask(
@@ -246,7 +249,7 @@ public:
       return;
     }
     if (mRenderFrame) {
-      TabParent* browser = static_cast<TabParent*>(mRenderFrame->Manager());
+      TabParent* browser = TabParent::GetFrom(mRenderFrame->Manager());
       browser->NotifyAPZStateChange(aGuid.mScrollId, aChange, aArg);
     }
   }
@@ -328,7 +331,7 @@ RenderFrameParent::GetApzcTreeManager()
   // created and the static getter knows which CompositorParent is
   // instantiated with this layers ID. That's why try to fetch it when
   // we first need it and cache the result.
-  if (!mApzcTreeManager) {
+  if (!mApzcTreeManager && gfxPrefs::AsyncPanZoomEnabled()) {
     mApzcTreeManager = CompositorParent::GetAPZCTreeManager(mLayersId);
   }
   return mApzcTreeManager.get();
@@ -351,21 +354,21 @@ RenderFrameParent::BuildLayer(nsDisplayListBuilder* aBuilder,
                               nsDisplayItem* aItem,
                               const ContainerLayerParameters& aContainerParameters)
 {
-  NS_ABORT_IF_FALSE(aFrame,
-                    "makes no sense to have a shadow tree without a frame");
-  NS_ABORT_IF_FALSE(!mContainer ||
-                    IsTempLayerManager(aManager) ||
-                    mContainer->Manager() == aManager,
-                    "retaining manager changed out from under us ... HELP!");
+  MOZ_ASSERT(aFrame,
+             "makes no sense to have a shadow tree without a frame");
+  MOZ_ASSERT(!mContainer ||
+             IsTempLayerManager(aManager) ||
+             mContainer->Manager() == aManager,
+             "retaining manager changed out from under us ... HELP!");
 
   if (IsTempLayerManager(aManager) ||
       (mContainer && mContainer->Manager() != aManager)) {
     // This can happen if aManager is a "temporary" manager, or if the
     // widget's layer manager changed out from under us.  We need to
     // FIXME handle the former case somehow, probably with an API to
-    // draw a manager's subtree.  The latter is bad bad bad, but the
-    // the NS_ABORT_IF_FALSE() above will flag it.  Returning nullptr
-    // here will just cause the shadow subtree not to be rendered.
+    // draw a manager's subtree.  The latter is bad bad bad, but the the
+    // MOZ_ASSERT() above will flag it.  Returning nullptr here will just
+    // cause the shadow subtree not to be rendered.
     NS_WARNING("Remote iframe not rendered");
     return nullptr;
   }
@@ -403,8 +406,8 @@ RenderFrameParent::BuildLayer(nsDisplayListBuilder* aBuilder,
 void
 RenderFrameParent::OwnerContentChanged(nsIContent* aContent)
 {
-  NS_ABORT_IF_FALSE(mFrameLoader->GetOwnerContent() == aContent,
-                    "Don't build new map if owner is same!");
+  MOZ_ASSERT(mFrameLoader->GetOwnerContent() == aContent,
+             "Don't build new map if owner is same!");
 
   nsRefPtr<LayerManager> lm = GetFrom(mFrameLoader);
   // Perhaps the document containing this frame currently has no presentation?
@@ -592,6 +595,25 @@ RenderFrameParent::GetTextureFactoryIdentifier(TextureFactoryIdentifier* aTextur
   } else {
     *aTextureFactoryIdentifier = TextureFactoryIdentifier();
   }
+}
+
+void
+RenderFrameParent::TakeFocusForClick()
+{
+  nsIFocusManager* fm = nsFocusManager::GetFocusManager();
+  if (!fm) {
+    return;
+  }
+  nsCOMPtr<nsIContent> owner = mFrameLoader->GetOwnerContent();
+  if (!owner) {
+    return;
+  }
+  nsCOMPtr<nsIDOMElement> element = do_QueryInterface(owner);
+  if (!element) {
+    return;
+  }
+  fm->SetFocus(element, nsIFocusManager::FLAG_BYMOUSE |
+                        nsIFocusManager::FLAG_NOSCROLL);
 }
 
 }  // namespace layout

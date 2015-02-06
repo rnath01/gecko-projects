@@ -6,22 +6,14 @@ const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
 let { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
 
-// Enable logging for all the tests. Both the debugger server and frontend will
-// be affected by this pref.
-let gEnableLogging = Services.prefs.getBoolPref("devtools.debugger.log");
-Services.prefs.setBoolPref("devtools.debugger.log", false);
-
-// Enable the new performance panel for all tests. Remove this after
-// bug 1075567 is resolved.
-let gToolEnabled = Services.prefs.getBoolPref("devtools.performance_dev.enabled");
-
 let { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
 let { Promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
+let { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 let { gDevTools } = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
 let { DevToolsUtils } = Cu.import("resource://gre/modules/devtools/DevToolsUtils.jsm", {});
-let { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 let { DebuggerServer } = Cu.import("resource://gre/modules/devtools/dbg-server.jsm", {});
 let { getPerformanceActorsConnection, PerformanceFront } = devtools.require("devtools/performance/front");
+
 let nsIProfilerModule = Cc["@mozilla.org/tools/profiler;1"].getService(Ci.nsIProfiler);
 let TargetFactory = devtools.TargetFactory;
 let mm = null;
@@ -34,6 +26,29 @@ const SIMPLE_URL = EXAMPLE_URL + "doc_simple-test.html";
 waitForExplicitFinish();
 
 gDevTools.testing = true;
+
+let DEFAULT_PREFS = [
+  "devtools.debugger.log",
+  "devtools.performance.ui.invert-call-tree",
+  "devtools.performance.ui.flatten-tree-recursion",
+  "devtools.performance.ui.show-platform-data",
+  "devtools.performance.ui.show-idle-blocks",
+  "devtools.performance.ui.enable-memory",
+  "devtools.performance.ui.enable-framerate",
+
+  // remove after bug 1075567 is resolved.
+  "devtools.performance_dev.enabled"
+].reduce((prefs, pref) => {
+  prefs[pref] = Services.prefs.getBoolPref(pref);
+  return prefs;
+}, {});
+
+// Enable the new performance panel for all tests. Remove this after
+// bug 1075567 is resolved.
+Services.prefs.setBoolPref("devtools.performance_dev.enabled", true);
+// Enable logging for all the tests. Both the debugger server and frontend will
+// be affected by this pref.
+Services.prefs.setBoolPref("devtools.debugger.log", false);
 
 /**
  * Call manually in tests that use frame script utils after initializing
@@ -50,8 +65,10 @@ registerCleanupFunction(() => {
   gDevTools.testing = false;
   info("finish() was called, cleaning up...");
 
-  Services.prefs.setBoolPref("devtools.debugger.log", gEnableLogging);
-  Services.prefs.setBoolPref("devtools.performance_dev.enabled", gToolEnabled);
+  // Rollback any pref changes
+  Object.keys(DEFAULT_PREFS).forEach(pref => {
+    Services.prefs.setBoolPref(pref, DEFAULT_PREFS[pref]);
+  });
 
   // Make sure the profiler module is stopped when the test finishes.
   nsIProfilerModule.StopProfiler();
@@ -154,6 +171,7 @@ function initBackend(aUrl) {
 
     let connection = getPerformanceActorsConnection(target);
     yield connection.open();
+
     let front = new PerformanceFront(connection);
     return { target, front };
   });
@@ -168,7 +186,6 @@ function initPerformance(aUrl, selectedTool="performance") {
 
     yield target.makeRemote();
 
-    Services.prefs.setBoolPref("devtools.performance_dev.enabled", true);
     let toolbox = yield gDevTools.showToolbox(target, selectedTool);
     let panel = toolbox.getCurrentPanel();
     return { target, panel, toolbox };
@@ -225,8 +242,9 @@ function click (win, button) {
 function* startRecording(panel) {
   let win = panel.panelWin;
   let clicked = panel.panelWin.PerformanceView.once(win.EVENTS.UI_START_RECORDING);
-  let started = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_STARTED);
-  let button = win.$("#record-button");
+  let willStart = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_WILL_START);
+  let hasStarted = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_STARTED);
+  let button = win.$("#main-record-button");
 
   ok(!button.hasAttribute("checked"),
     "The record button should not be checked yet.");
@@ -243,7 +261,8 @@ function* startRecording(panel) {
   ok(button.hasAttribute("locked"),
     "The record button should be locked.");
 
-  yield started;
+  yield willStart;
+  yield hasStarted;
 
   ok(button.hasAttribute("checked"),
     "The record button should still be checked.");
@@ -254,8 +273,9 @@ function* startRecording(panel) {
 function* stopRecording(panel) {
   let win = panel.panelWin;
   let clicked = panel.panelWin.PerformanceView.once(win.EVENTS.UI_STOP_RECORDING);
-  let ended = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_STOPPED);
-  let button = win.$("#record-button");
+  let willStop = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_WILL_STOP);
+  let hasStopped = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_STOPPED);
+  let button = win.$("#main-record-button");
 
   ok(button.hasAttribute("checked"),
     "The record button should already be checked.");
@@ -271,7 +291,8 @@ function* stopRecording(panel) {
   ok(button.hasAttribute("locked"),
     "The record button should be locked.");
 
-  yield ended;
+  yield willStop;
+  yield hasStopped;
 
   ok(!button.hasAttribute("checked"),
     "The record button should not be checked.");
@@ -280,15 +301,22 @@ function* stopRecording(panel) {
 }
 
 function waitForWidgetsRendered(panel) {
-  let { EVENTS, OverviewView, CallTreeView, WaterfallView } = panel.panelWin;
+  let {
+    EVENTS,
+    OverviewView,
+    WaterfallView,
+    JsCallTreeView,
+    JsFlameGraphView
+  } = panel.panelWin;
 
   return Promise.all([
-    once(OverviewView, EVENTS.FRAMERATE_GRAPH_RENDERED),
     once(OverviewView, EVENTS.MARKERS_GRAPH_RENDERED),
     once(OverviewView, EVENTS.MEMORY_GRAPH_RENDERED),
+    once(OverviewView, EVENTS.FRAMERATE_GRAPH_RENDERED),
     once(OverviewView, EVENTS.OVERVIEW_RENDERED),
-    once(CallTreeView, EVENTS.CALL_TREE_RENDERED),
-    once(WaterfallView, EVENTS.WATERFALL_RENDERED)
+    once(WaterfallView, EVENTS.WATERFALL_RENDERED),
+    once(JsCallTreeView, EVENTS.JS_CALL_TREE_RENDERED),
+    once(JsFlameGraphView, EVENTS.JS_FLAMEGRAPH_RENDERED)
   ]);
 }
 
@@ -329,7 +357,7 @@ function dragStop(graph, x, y = 1) {
 
 function dropSelection(graph) {
   graph.dropSelection();
-  graph.emit("mouseup");
+  graph.emit("selecting");
 }
 
 function getSourceActor(aSources, aURL) {

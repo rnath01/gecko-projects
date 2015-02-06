@@ -438,6 +438,7 @@ class MochitestUtilsMixin(object):
 
   # Path to the test script on the server
   TEST_PATH = "tests"
+  NESTED_OOP_TEST_PATH = "nested_oop"
   CHROME_PATH = "redirect.html"
   urlOpts = []
   log = None
@@ -669,6 +670,8 @@ class MochitestUtilsMixin(object):
       testURL = "/".join([testHost, self.CHROME_PATH])
     elif options.browserChrome or options.jetpackPackage or options.jetpackAddon:
       testURL = "about:blank"
+    if options.nested_oop:
+      testURL = "/".join([testHost, self.NESTED_OOP_TEST_PATH])
     return testURL
 
   def buildTestPath(self, options, testsToFilter=None, disabled=True):
@@ -794,6 +797,8 @@ class MochitestUtilsMixin(object):
       # Register chrome directory.
       chrometestDir = self.getChromeTestDir(options)
       manifestFile.write("content mochitests %s contentaccessible=yes\n" % chrometestDir)
+      manifestFile.write("content mochitests-any %s contentaccessible=yes remoteenabled=yes\n" % chrometestDir)
+      manifestFile.write("content mochitests-content %s contentaccessible=yes remoterequired=yes\n" % chrometestDir)
 
       if options.testingModulesDir is not None:
         manifestFile.write("resource testing-common file:///%s\n" %
@@ -914,7 +919,7 @@ class SSLTunnel:
         config.write("redirhost:%s:%s:%s:%s\n" %
                      (loc.host, loc.port, self.sslPort, redirhost))
 
-      if self.useSSLTunnelExts and option in ('ssl3', 'rc4'):
+      if self.useSSLTunnelExts and option in ('ssl3', 'rc4', 'failHandshake'):
         config.write("%s:%s:%s:%s\n" % (option, loc.host, loc.port, self.sslPort))
 
   def buildConfig(self, locations):
@@ -1183,6 +1188,7 @@ class Mochitest(MochitestUtilsMixin):
     options.extraPrefs.append("browser.tabs.remote.autostart=%s" % ('true' if options.e10s else 'false'))
     if options.strictContentSandbox:
         options.extraPrefs.append("security.sandbox.windows.content.moreStrict=true")
+    options.extraPrefs.append("dom.ipc.tabs.nested.enabled=%s" % ('true' if options.nested_oop else 'false'))
 
     # get extensions to install
     extensions = self.getExtensionsToInstall(options)
@@ -1624,7 +1630,6 @@ class Mochitest(MochitestUtilsMixin):
     """
     self.setTestRoot(options)
     manifest = self.getTestManifest(options)
-
     if manifest:
       # Python 2.6 doesn't allow unicode keys to be used for keyword
       # arguments. This gross hack works around the problem until we
@@ -1645,13 +1650,20 @@ class Mochitest(MochitestUtilsMixin):
           # In the case where we have a single file, we don't want to filter based on options such as subsuite.
           tests = manifest.active_tests(disabled=disabled, options=None, **info)
           for test in tests:
-              if 'disabled' in test:
-                  del test['disabled']
+            if 'disabled' in test:
+              del test['disabled']
+
       else:
-          tests = manifest.active_tests(disabled=disabled, options=options, **info)
+        tests = manifest.active_tests(disabled=disabled, options=options, **info)
+        if len(tests) == 0:
+          tests = manifest.active_tests(disabled=True, options=options, **info)
+
     paths = []
 
     for test in tests:
+      if len(tests) == 1 and 'disabled' in test:
+        del test['disabled']
+
       pathAbs = os.path.abspath(test['path'])
       assert pathAbs.startswith(self.testRootAbs)
       tp = pathAbs[len(self.testRootAbs):].replace('\\', '/').strip('/')
@@ -1742,8 +1754,8 @@ class Mochitest(MochitestUtilsMixin):
 
     self.setTestRoot(options)
 
-    # Until we have all green, this only runs on bc* jobs (not dt* jobs)
-    if options.browserChrome and not options.subsuite:
+    # Until we have all green, this only runs on bc*/dt* jobs
+    if options.browserChrome:
       options.runByDir = True
 
     if not options.runByDir:
@@ -1924,7 +1936,7 @@ class Mochitest(MochitestUtilsMixin):
     processLeakLog(self.leak_report_file, options)
 
     if self.nsprLogs:
-      with zipfile.ZipFile("%s/nsprlog.zip" % browserEnv["MOZ_UPLOAD_DIR"], "w", zipfile.ZIP_DEFLATED) as logzip:
+      with zipfile.ZipFile("%s/nsprlog.zip" % self.browserEnv["MOZ_UPLOAD_DIR"], "w", zipfile.ZIP_DEFLATED) as logzip:
         for logfile in glob.glob("%s/nspr*.log*" % tempfile.gettempdir()):
           logzip.write(logfile)
           os.remove(logfile)

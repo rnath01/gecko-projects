@@ -198,6 +198,8 @@ gc::GCRuntime::startVerifyPreBarriers()
     if (!trc)
         return;
 
+    gcstats::AutoPhase ap(stats, gcstats::PHASE_TRACE_HEAP);
+
     /*
      * Passing a function pointer directly to js_new trips a compiler bug in
      * MSVC. Work around by filling the pointer after allocating with nullptr.
@@ -217,7 +219,6 @@ gc::GCRuntime::startVerifyPreBarriers()
     /* Create the root node. */
     trc->curnode = MakeNode(trc, nullptr, JSGCTraceKind(0));
 
-    /* We want MarkRuntime to save the roots to gcSavedRoots. */
     incrementalState = MARK_ROOTS;
 
     /* Make all the roots be edges emanating from the root node. */
@@ -252,7 +253,7 @@ gc::GCRuntime::startVerifyPreBarriers()
     for (ZonesIter zone(rt, WithAtoms); !zone.done(); zone.next()) {
         PurgeJITCaches(zone);
         zone->setNeedsIncrementalBarrier(true, Zone::UpdateJit);
-        zone->allocator.arenas.purge();
+        zone->arenas.purge();
     }
 
     return;
@@ -403,7 +404,7 @@ struct VerifyPostTracer : JSTracer
 void
 gc::GCRuntime::startVerifyPostBarriers()
 {
-    if (verifyPostData || isIncrementalGCInProgress())
+    if (!JS::IsGenerationalGCEnabled(rt) || verifyPostData || isIncrementalGCInProgress())
         return;
 
     evictNursery();
@@ -495,10 +496,7 @@ js::gc::GCRuntime::endVerifyPostBarriers()
     if (!edges.init())
         goto oom;
     trc->edges = &edges;
-    {
-        gcstats::AutoPhase ap(stats, gcstats::PHASE_MINOR_GC);
-        storeBuffer.markAll(trc);
-    }
+    storeBuffer.markAll(trc);
 
     /* Walk the heap to find any edges not the the |edges| set. */
     trc->setTraceCallback(PostVerifierVisitEdge);

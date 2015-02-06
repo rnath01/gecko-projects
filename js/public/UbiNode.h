@@ -207,8 +207,8 @@ class Base {
     virtual JSCompartment *compartment() const { return nullptr; }
 
   private:
-    Base(const Base &rhs) MOZ_DELETE;
-    Base &operator=(const Base &rhs) MOZ_DELETE;
+    Base(const Base &rhs) = delete;
+    Base &operator=(const Base &rhs) = delete;
 };
 
 // A traits template with a specialization for each referent type that
@@ -249,9 +249,6 @@ class Node {
                       "ubi::Base specializations must be the same size as ubi::Base");
         Concrete<T>::construct(base(), ptr);
     }
-
-    typedef void (Node::* ConvertibleToBool)();
-    void nonNull() {}
 
   public:
     Node() { construct<void>(nullptr); }
@@ -304,8 +301,8 @@ class Node {
     bool operator==(const Node &rhs) const { return *base() == *rhs.base(); }
     bool operator!=(const Node &rhs) const { return *base() != *rhs.base(); }
 
-    operator ConvertibleToBool() const {
-        return base()->ptr ? &Node::nonNull : 0;
+    explicit operator bool() const {
+        return base()->ptr != nullptr;
     }
 
     template<typename T>
@@ -385,8 +382,8 @@ class Edge {
     Node referent;
 
   private:
-    Edge(const Edge &) MOZ_DELETE;
-    Edge &operator=(const Edge &) MOZ_DELETE;
+    Edge(const Edge &) = delete;
+    Edge &operator=(const Edge &) = delete;
 };
 
 
@@ -421,16 +418,16 @@ class EdgeRange {
     virtual void popFront() = 0;
 
   private:
-    EdgeRange(const EdgeRange &) MOZ_DELETE;
-    EdgeRange &operator=(const EdgeRange &) MOZ_DELETE;
+    EdgeRange(const EdgeRange &) = delete;
+    EdgeRange &operator=(const EdgeRange &) = delete;
 };
 
 
 // A dumb Edge concrete class. All but the most essential members have the
 // default behavior.
 class SimpleEdge : public Edge {
-    SimpleEdge(SimpleEdge &) MOZ_DELETE;
-    SimpleEdge &operator=(const SimpleEdge &) MOZ_DELETE;
+    SimpleEdge(SimpleEdge &) = delete;
+    SimpleEdge &operator=(const SimpleEdge &) = delete;
 
   public:
     SimpleEdge() : Edge() { }

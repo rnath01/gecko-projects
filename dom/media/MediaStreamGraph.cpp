@@ -1713,9 +1713,6 @@ MediaStreamGraphImpl::RunInStableState(bool aSourceIsMSG)
     mPostedRunInStableState = false;
   }
 
-  for (uint32_t i = 0; i < runnables.Length(); ++i) {
-    runnables[i]->Run();
-  }
   for (uint32_t i = 0; i < controlMessagesToRunDuringShutdown.Length(); ++i) {
     controlMessagesToRunDuringShutdown[i]->RunDuringShutdown();
   }
@@ -1724,6 +1721,10 @@ MediaStreamGraphImpl::RunInStableState(bool aSourceIsMSG)
   mCanRunMessagesSynchronously = mDetectedNotRunning &&
     mLifecycleState >= LIFECYCLE_WAITING_FOR_THREAD_SHUTDOWN;
 #endif
+
+  for (uint32_t i = 0; i < runnables.Length(); ++i) {
+    runnables[i]->Run();
+  }
 }
 
 
@@ -2476,12 +2477,9 @@ void
 SourceMediaStream::EndTrack(TrackID aID)
 {
   MutexAutoLock lock(mMutex);
-  // ::EndAllTrackAndFinished() can end these before the sources call this
-  if (!mFinished) {
-    TrackData *track = FindDataForTrack(aID);
-    if (track) {
-      track->mCommands |= TRACK_END;
-    }
+  TrackData *track = FindDataForTrack(aID);
+  if (track) {
+    track->mCommands |= TRACK_END;
   }
   if (auto graph = GraphImpl()) {
     graph->EnsureNextIteration();
@@ -2741,7 +2739,7 @@ MediaStreamGraphImpl::MediaStreamGraphImpl(bool aRealtime,
   , mFarendObserverRef(nullptr)
 #endif
   , mMemoryReportMonitor("MSGIMemory")
-  , mSelfRef(MOZ_THIS_IN_INITIALIZER_LIST())
+  , mSelfRef(this)
   , mAudioStreamSizes()
   , mNeedsMemoryReport(false)
 #ifdef DEBUG

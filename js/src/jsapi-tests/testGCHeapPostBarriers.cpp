@@ -10,6 +10,10 @@
 
 BEGIN_TEST(testGCHeapPostBarriers)
 {
+#ifdef JS_GC_ZEAL
+    AutoLeaveZeal nozeal(cx);
+#endif /* JS_GC_ZEAL */
+
     /* Sanity check - objects start in the nursery and then become tenured. */
     JS_GC(cx->runtime());
     JS::RootedObject obj(cx, NurseryObject());
@@ -66,7 +70,7 @@ TestHeapPostBarriers(T initialObj)
 
 JSObject *NurseryObject()
 {
-    JS::RootedObject obj(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
+    JS::RootedObject obj(cx, JS_NewPlainObject(cx));
     if (!obj)
         return nullptr;
     JS_DefineProperty(cx, obj, "x", 42, 0);

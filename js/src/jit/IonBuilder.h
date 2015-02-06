@@ -12,19 +12,20 @@
 
 #include "mozilla/LinkedList.h"
 
+#include "jit/BaselineInspector.h"
 #include "jit/BytecodeAnalysis.h"
 #include "jit/IonAnalysis.h"
 #include "jit/IonOptimizationLevels.h"
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
 #include "jit/MIRGraph.h"
+#include "jit/OptimizationTracking.h"
 
 namespace js {
 namespace jit {
 
 class CodeGenerator;
 class CallInfo;
-class BaselineInspector;
 class BaselineFrameInspector;
 
 // Records information about a baseline frame for compilation that is stable
@@ -234,11 +235,14 @@ class IonBuilder
     uint32_t readIndex(jsbytecode *pc);
     JSAtom *readAtom(jsbytecode *pc);
     bool abort(const char *message, ...);
+    void trackActionableAbort(const char *message);
     void spew(const char *message);
+
+    MInstruction *constantMaybeNursery(JSObject *obj);
 
     JSFunction *getSingleCallTarget(types::TemporaryTypeSet *calleeTypes);
     bool getPolyCallTargets(types::TemporaryTypeSet *calleeTypes, bool constructing,
-                            ObjectVector &targets, uint32_t maxTargets, bool *gotLambda);
+                            ObjectVector &targets, uint32_t maxTargets);
 
     void popCfgStack();
     DeferredEdge *filterDeadDeferredEdges(DeferredEdge *edge);
@@ -390,6 +394,8 @@ class IonBuilder
     MDefinition *addMaybeCopyElementsForWrite(MDefinition *object);
     MInstruction *addBoundsCheck(MDefinition *index, MDefinition *length);
     MInstruction *addShapeGuard(MDefinition *obj, Shape *const shape, BailoutKind bailoutKind);
+    MInstruction *addShapeGuardPolymorphic(MDefinition *obj,
+                                           const BaselineInspector::ShapeVector &shapes);
 
     MDefinition *convertShiftToMaskForStaticTypedArray(MDefinition *id,
                                                        Scalar::Type viewType);
@@ -419,6 +425,8 @@ class IonBuilder
                             types::TemporaryTypeSet *types);
     bool getPropTryDefiniteSlot(bool *emitted, MDefinition *obj, PropertyName *name,
                                 BarrierKind barrier, types::TemporaryTypeSet *types);
+    bool getPropTryUnboxed(bool *emitted, MDefinition *obj, PropertyName *name,
+                           BarrierKind barrier, types::TemporaryTypeSet *types);
     bool getPropTryCommonGetter(bool *emitted, MDefinition *obj, PropertyName *name,
                                 types::TemporaryTypeSet *types);
     bool getPropTryInlineAccess(bool *emitted, MDefinition *obj, PropertyName *name,
@@ -439,20 +447,22 @@ class IonBuilder
                             types::TemporaryTypeSet *types);
     bool getPropTryCache(bool *emitted, MDefinition *obj, PropertyName *name,
                          BarrierKind barrier, types::TemporaryTypeSet *types);
-    bool needsToMonitorMissingProperties(types::TemporaryTypeSet *types);
 
     // jsop_setprop() helpers.
     bool setPropTryCommonSetter(bool *emitted, MDefinition *obj,
                                 PropertyName *name, MDefinition *value);
     bool setPropTryCommonDOMSetter(bool *emitted, MDefinition *obj,
                                    MDefinition *value, JSFunction *setter,
-                                   bool isDOM);
+                                   types::TemporaryTypeSet *objTypes);
     bool setPropTryDefiniteSlot(bool *emitted, MDefinition *obj,
                                 PropertyName *name, MDefinition *value,
-                                types::TemporaryTypeSet *objTypes);
+                                bool barrier, types::TemporaryTypeSet *objTypes);
+    bool setPropTryUnboxed(bool *emitted, MDefinition *obj,
+                           PropertyName *name, MDefinition *value,
+                           bool barrier, types::TemporaryTypeSet *objTypes);
     bool setPropTryInlineAccess(bool *emitted, MDefinition *obj,
                                 PropertyName *name, MDefinition *value,
-                                types::TemporaryTypeSet *objTypes);
+                                bool barrier, types::TemporaryTypeSet *objTypes);
     bool setPropTryTypedObject(bool *emitted, MDefinition *obj,
                                PropertyName *name, MDefinition *value);
     bool setPropTryReferencePropOfTypedObject(bool *emitted,
@@ -519,6 +529,7 @@ class IonBuilder
                                           ReferenceTypeDescr::Type type,
                                           PropertyName *name);
     MDefinition *neuterCheck(MDefinition *obj);
+    JSObject *getStaticTypedArrayObject(MDefinition *obj, MDefinition *index);
 
     // jsop_setelem() helpers.
     bool setElemTryTypedArray(bool *emitted, MDefinition *object,
@@ -709,11 +720,14 @@ class IonBuilder
     // Oracles.
     InliningDecision canInlineTarget(JSFunction *target, CallInfo &callInfo);
     InliningDecision makeInliningDecision(JSObject *target, CallInfo &callInfo);
-    bool selectInliningTargets(ObjectVector &targets, CallInfo &callInfo,
+    bool selectInliningTargets(const ObjectVector &targets, CallInfo &callInfo,
                                BoolVector &choiceSet, uint32_t *numInlineable);
 
     // Native inlining helpers.
+    // The typeset for the return value of our function.  These are
+    // the types it's been observed returning in the past.
     types::TemporaryTypeSet *getInlineReturnTypeSet();
+    // The known MIR type of getInlineReturnTypeSet.
     MIRType getInlineReturnType();
 
     // Array natives.
@@ -753,6 +767,9 @@ class IonBuilder
     InliningStatus inlineRegExpExec(CallInfo &callInfo);
     InliningStatus inlineRegExpTest(CallInfo &callInfo);
 
+    // Object natives.
+    InliningStatus inlineObjectCreate(CallInfo &callInfo);
+
     // Atomics natives.
     InliningStatus inlineAtomicsCompareExchange(CallInfo &callInfo);
     InliningStatus inlineAtomicsLoad(CallInfo &callInfo);
@@ -767,16 +784,11 @@ class IonBuilder
                                           ScalarTypeDescr::Type arrayType);
     bool inlineUnsafeSetTypedObjectArrayElement(CallInfo &callInfo, uint32_t base,
                                                 ScalarTypeDescr::Type arrayType);
-    InliningStatus inlineNewDenseArray(CallInfo &callInfo);
-    InliningStatus inlineNewDenseArrayForSequentialExecution(CallInfo &callInfo);
-    InliningStatus inlineNewDenseArrayForParallelExecution(CallInfo &callInfo);
 
     // Slot intrinsics.
     InliningStatus inlineUnsafeSetReservedSlot(CallInfo &callInfo);
-    InliningStatus inlineUnsafeGetReservedSlot(CallInfo &callInfo);
-
-    // ForkJoin intrinsics
-    InliningStatus inlineForkJoinGetSlice(CallInfo &callInfo);
+    InliningStatus inlineUnsafeGetReservedSlot(CallInfo &callInfo,
+                                               MIRType knownValueType);
 
     // TypedArray intrinsics.
     InliningStatus inlineIsTypedArray(CallInfo &callInfo);
@@ -788,6 +800,13 @@ class IonBuilder
     bool elementAccessIsTypedObjectArrayOfScalarType(MDefinition* obj, MDefinition* id,
                                                      ScalarTypeDescr::Type *arrayType);
     InliningStatus inlineConstructTypedObject(CallInfo &callInfo, TypeDescr *target);
+
+    // SIMD intrinsics and natives.
+    InliningStatus inlineConstructSimdObject(CallInfo &callInfo, SimdTypeDescr *target);
+    InliningStatus inlineSimdInt32x4BinaryArith(CallInfo &callInfo, JSNative native,
+                                                MSimdBinaryArith::Operation op);
+    InliningStatus inlineSimdInt32x4BinaryBitwise(CallInfo &callInfo, JSNative native,
+                                                  MSimdBinaryBitwise::Operation op);
 
     // Utility intrinsics.
     InliningStatus inlineIsCallable(CallInfo &callInfo);
@@ -804,7 +823,6 @@ class IonBuilder
     InliningStatus inlineSubstringKernel(CallInfo &callInfo);
 
     // Testing functions.
-    InliningStatus inlineForceSequentialOrInParallelSection(CallInfo &callInfo);
     InliningStatus inlineBailout(CallInfo &callInfo);
     InliningStatus inlineAssertFloat32(CallInfo &callInfo);
 
@@ -819,17 +837,17 @@ class IonBuilder
     InliningStatus inlineSingleCall(CallInfo &callInfo, JSObject *target);
 
     // Call functions
-    InliningStatus inlineCallsite(ObjectVector &targets, ObjectVector &originals,
-                                  bool lambda, CallInfo &callInfo);
-    bool inlineCalls(CallInfo &callInfo, ObjectVector &targets, ObjectVector &originals,
+    InliningStatus inlineCallsite(const ObjectVector &targets, ObjectVector &originals,
+                                  CallInfo &callInfo);
+    bool inlineCalls(CallInfo &callInfo, const ObjectVector &targets, ObjectVector &originals,
                      BoolVector &choiceSet, MGetPropertyCache *maybeCache);
 
     // Inlining helpers.
     bool inlineGenericFallback(JSFunction *target, CallInfo &callInfo, MBasicBlock *dispatchBlock,
                                bool clonedAtCallsite);
-    bool inlineTypeObjectFallback(CallInfo &callInfo, MBasicBlock *dispatchBlock,
-                                  MTypeObjectDispatch *dispatch, MGetPropertyCache *cache,
-                                  MBasicBlock **fallbackTarget);
+    bool inlineObjectGroupFallback(CallInfo &callInfo, MBasicBlock *dispatchBlock,
+                                   MObjectGroupDispatch *dispatch, MGetPropertyCache *cache,
+                                   MBasicBlock **fallbackTarget);
 
     bool atomicsMeetsPreconditions(CallInfo &callInfo, Scalar::Type *arrayElementType);
     void atomicsCheckBounds(CallInfo &callInfo, MInstruction **elements, MDefinition **index);
@@ -859,6 +877,10 @@ class IonBuilder
     bool testShouldDOMCall(types::TypeSet *inTypes,
                            JSFunction *func, JSJitInfo::OpType opType);
 
+    MDefinition *addShapeGuardsForGetterSetter(MDefinition *obj, JSObject *holder, Shape *holderShape,
+                                               const BaselineInspector::ShapeVector &receiverShapes,
+                                               bool isOwnProperty);
+
     bool annotateGetPropertyCache(MDefinition *obj, MGetPropertyCache *getPropCache,
                                   types::TemporaryTypeSet *objTypes,
                                   types::TemporaryTypeSet *pushedTypes);
@@ -869,8 +891,16 @@ class IonBuilder
     bool testSingletonPropertyTypes(MDefinition *obj, JSObject *singleton, PropertyName *name,
                                     bool *testObject, bool *testString);
     uint32_t getDefiniteSlot(types::TemporaryTypeSet *types, PropertyName *name);
+    uint32_t getUnboxedOffset(types::TemporaryTypeSet *types, PropertyName *name,
+                              JSValueType *punboxedType);
+    MInstruction *loadUnboxedProperty(MDefinition *obj, size_t offset, JSValueType unboxedType,
+                                      BarrierKind barrier, types::TemporaryTypeSet *types);
+    MInstruction *storeUnboxedProperty(MDefinition *obj, size_t offset, JSValueType unboxedType,
+                                       MDefinition *value);
     bool freezePropTypeSets(types::TemporaryTypeSet *types,
                             JSObject *foundProto, PropertyName *name);
+    bool canInlinePropertyOpShapes(const BaselineInspector::ShapeVector &nativeShapes,
+                                   const BaselineInspector::ObjectGroupVector &unboxedGroups);
 
     types::TemporaryTypeSet *bytecodeTypes(jsbytecode *pc);
 
@@ -900,6 +930,14 @@ class IonBuilder
     // performed by FinishOffThreadBuilder().
     CodeGenerator *backgroundCodegen_;
 
+    // Some aborts are actionable (e.g., using an unsupported bytecode). When
+    // optimization tracking is enabled, the location and message of the abort
+    // are recorded here so they may be propagated to the script's
+    // corresponding JitcodeGlobalEntry::BaselineEntry.
+    JSScript *actionableAbortScript_;
+    jsbytecode *actionableAbortPc_;
+    const char *actionableAbortMessage_;
+
   public:
     void clearForBackEnd();
 
@@ -917,6 +955,21 @@ class IonBuilder
     }
 
     const JSAtomState &names() { return compartment->runtime()->names(); }
+
+    bool hadActionableAbort() const {
+        MOZ_ASSERT(!actionableAbortScript_ ||
+                   (actionableAbortPc_ && actionableAbortMessage_));
+        return actionableAbortScript_ != nullptr;
+    }
+
+    void actionableAbortLocationAndMessage(JSScript **abortScript, jsbytecode **abortPc,
+                                           const char **abortMessage)
+    {
+        MOZ_ASSERT(hadActionableAbort());
+        *abortScript = actionableAbortScript_;
+        *abortPc = actionableAbortPc_;
+        *abortMessage = actionableAbortMessage_;
+    }
 
   private:
     bool init();
@@ -944,10 +997,19 @@ class IonBuilder
     MBasicBlock *current;
     uint32_t loopDepth_;
 
+    Vector<BytecodeSite *, 0, JitAllocPolicy> trackedOptimizationSites_;
+
     BytecodeSite *bytecodeSite(jsbytecode *pc) {
         MOZ_ASSERT(info().inlineScriptTree()->script()->containsPC(pc));
+        // See comment in maybeTrackedOptimizationSite.
+        if (isOptimizationTrackingEnabled()) {
+            if (BytecodeSite *site = maybeTrackedOptimizationSite(pc))
+                return site;
+        }
         return new(alloc()) BytecodeSite(info().inlineScriptTree(), pc);
     }
+
+    BytecodeSite *maybeTrackedOptimizationSite(jsbytecode *pc);
 
     MDefinition *lexicalCheck_;
 
@@ -967,6 +1029,8 @@ class IonBuilder
         return callerResumePoint_ ? callerResumePoint_->pc() : nullptr;
     }
     IonBuilder *callerBuilder_;
+
+    IonBuilder *outermostBuilder();
 
     bool oom() {
         abortReason_ = AbortReason_Alloc;
@@ -1022,7 +1086,7 @@ class IonBuilder
     // In such cases we do not have read the property, except when the type
     // object is unknown.
     //
-    // As an optimization, we can dispatch a call based on the type object,
+    // As an optimization, we can dispatch a call based on the object group,
     // without doing the MGetPropertyCache.  This is what is achieved by
     // |IonBuilder::inlineCalls|.  As we might not know all the functions, we
     // are adding a fallback path, where this MGetPropertyCache would be moved
@@ -1047,6 +1111,59 @@ class IonBuilder
     }
 
     MGetPropertyCache *maybeFallbackFunctionGetter_;
+
+    // Used in tracking outcomes of optimization strategies for devtools.
+    void startTrackingOptimizations();
+
+    // The track* methods below are called often. Do not combine them with the
+    // unchecked variants, despite the unchecked variants having no other
+    // callers.
+    void trackTypeInfo(JS::TrackedTypeSite site, MIRType mirType,
+                       types::TemporaryTypeSet *typeSet)
+    {
+        if (MOZ_UNLIKELY(current->trackedSite()->hasOptimizations()))
+            trackTypeInfoUnchecked(site, mirType, typeSet);
+    }
+    void trackTypeInfo(JS::TrackedTypeSite site, JSObject *obj) {
+        if (MOZ_UNLIKELY(current->trackedSite()->hasOptimizations()))
+            trackTypeInfoUnchecked(site, obj);
+    }
+    void trackTypeInfo(CallInfo &callInfo) {
+        if (MOZ_UNLIKELY(current->trackedSite()->hasOptimizations()))
+            trackTypeInfoUnchecked(callInfo);
+    }
+    void trackOptimizationAttempt(JS::TrackedStrategy strategy) {
+        if (MOZ_UNLIKELY(current->trackedSite()->hasOptimizations()))
+            trackOptimizationAttemptUnchecked(strategy);
+    }
+    void amendOptimizationAttempt(uint32_t index) {
+        if (MOZ_UNLIKELY(current->trackedSite()->hasOptimizations()))
+            amendOptimizationAttemptUnchecked(index);
+    }
+    void trackOptimizationOutcome(JS::TrackedOutcome outcome) {
+        if (MOZ_UNLIKELY(current->trackedSite()->hasOptimizations()))
+            trackOptimizationOutcomeUnchecked(outcome);
+    }
+    void trackOptimizationSuccess() {
+        if (MOZ_UNLIKELY(current->trackedSite()->hasOptimizations()))
+            trackOptimizationSuccessUnchecked();
+    }
+    void trackInlineSuccess(InliningStatus status = InliningStatus_Inlined) {
+        if (MOZ_UNLIKELY(current->trackedSite()->hasOptimizations()))
+            trackInlineSuccessUnchecked(status);
+    }
+
+    // Out-of-line variants that don't check if optimization tracking is
+    // enabled.
+    void trackTypeInfoUnchecked(JS::TrackedTypeSite site, MIRType mirType,
+                                types::TemporaryTypeSet *typeSet);
+    void trackTypeInfoUnchecked(JS::TrackedTypeSite site, JSObject *obj);
+    void trackTypeInfoUnchecked(CallInfo &callInfo);
+    void trackOptimizationAttemptUnchecked(JS::TrackedStrategy strategy);
+    void amendOptimizationAttemptUnchecked(uint32_t index);
+    void trackOptimizationOutcomeUnchecked(JS::TrackedOutcome outcome);
+    void trackOptimizationSuccessUnchecked();
+    void trackInlineSuccessUnchecked(InliningStatus status);
 };
 
 class CallInfo
@@ -1115,9 +1232,9 @@ class CallInfo
         return argc() + 2;
     }
 
-    void setArgs(MDefinitionVector *args) {
+    bool setArgs(const MDefinitionVector &args) {
         MOZ_ASSERT(args_.empty());
-        args_.appendAll(*args);
+        return args_.appendAll(args);
     }
 
     MDefinitionVector &argv() {

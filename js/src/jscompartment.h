@@ -104,7 +104,7 @@ struct CrossCompartmentKey
     }
 
   private:
-    CrossCompartmentKey() MOZ_DELETE;
+    CrossCompartmentKey() = delete;
 };
 
 struct WrapperHasher : public DefaultHasher<CrossCompartmentKey>
@@ -220,13 +220,6 @@ struct JSCompartment
     inline void initGlobal(js::GlobalObject &global);
 
   public:
-    /*
-     * Moves all data from the allocator |workerAllocator|, which was
-     * in use by a parallel worker, into the compartment's main
-     * allocator.  This is used at the end of a parallel section.
-     */
-    void adoptWorkerAllocator(js::Allocator *workerAllocator);
-
     /* Type information about the scripts and objects in this compartment. */
     js::types::TypeCompartment   types;
 
@@ -283,16 +276,17 @@ struct JSCompartment
     js::InitialShapeSet          initialShapes;
     void sweepInitialShapeTable();
 
-    /* Set of default 'new' or lazy types in the compartment. */
-    js::types::NewTypeObjectTable newTypeObjects;
-    js::types::NewTypeObjectTable lazyTypeObjects;
-    void sweepNewTypeObjectTable(js::types::NewTypeObjectTable &table);
+    /* Set of default 'new' or lazy groups in the compartment. */
+    js::types::NewObjectGroupTable newObjectGroups;
+    js::types::NewObjectGroupTable lazyObjectGroups;
+    void sweepNewObjectGroupTable(js::types::NewObjectGroupTable &table);
 
 #ifdef JSGC_HASH_TABLE_CHECKS
-    void checkTypeObjectTablesAfterMovingGC();
-    void checkTypeObjectTableAfterMovingGC(js::types::NewTypeObjectTable &table);
+    void checkObjectGroupTablesAfterMovingGC();
+    void checkObjectGroupTableAfterMovingGC(js::types::NewObjectGroupTable &table);
     void checkInitialShapesTableAfterMovingGC();
     void checkWrapperMapAfterMovingGC();
+    void checkBaseShapeTableAfterMovingGC();
 #endif
 
     /*
@@ -392,7 +386,7 @@ struct JSCompartment
 
     void sweepInnerViews();
     void sweepCrossCompartmentWrappers();
-    void sweepTypeObjectTables();
+    void sweepObjectGroupTables();
     void sweepSavedStacks();
     void sweepGlobalObject(js::FreeOp *fop);
     void sweepSelfHostingScriptSource();
@@ -405,12 +399,11 @@ struct JSCompartment
     void purge();
     void clearTables();
 
-#ifdef JSGC_COMPACTING
     void fixupInitialShapeTable();
-    void fixupNewTypeObjectTable(js::types::NewTypeObjectTable &table);
+    void fixupNewObjectGroupTable(js::types::NewObjectGroupTable &table);
     void fixupAfterMovingGC();
     void fixupGlobal();
-#endif
+    void fixupBaseShapeTable();
 
     bool hasObjectMetadataCallback() const { return objectMetadataCallback; }
     void setObjectMetadataCallback(js::ObjectMetadataCallback callback);
@@ -597,8 +590,8 @@ class AutoCompartment
     JSCompartment *origin() const { return origin_; }
 
   private:
-    AutoCompartment(const AutoCompartment &) MOZ_DELETE;
-    AutoCompartment & operator=(const AutoCompartment &) MOZ_DELETE;
+    AutoCompartment(const AutoCompartment &) = delete;
+    AutoCompartment & operator=(const AutoCompartment &) = delete;
 };
 
 /*

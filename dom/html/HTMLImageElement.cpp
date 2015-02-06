@@ -149,6 +149,12 @@ NS_IMPL_STRING_ATTR(HTMLImageElement, UseMap, usemap)
 NS_IMPL_INT_ATTR(HTMLImageElement, Vspace, vspace)
 
 bool
+HTMLImageElement::IsInteractiveHTMLContent() const
+{
+  return HasAttr(kNameSpaceID_None, nsGkAtoms::usemap);
+}
+
+bool
 HTMLImageElement::IsSrcsetEnabled()
 {
   return Preferences::GetBool(kPrefSrcsetEnabled, false);
@@ -199,6 +205,10 @@ HTMLImageElement::Complete()
 {
   if (!mCurrentRequest) {
     return true;
+  }
+
+  if (mPendingRequest) {
+    return false;
   }
 
   uint32_t status;
@@ -391,8 +401,8 @@ HTMLImageElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
       (aName == nsGkAtoms::name || aName == nsGkAtoms::id) &&
       aValue && !aValue->IsEmptyString()) {
     // add the image to the hashtable as needed
-    NS_ABORT_IF_FALSE(aValue->Type() == nsAttrValue::eAtom,
-      "Expected atom value for name/id");
+    MOZ_ASSERT(aValue->Type() == nsAttrValue::eAtom,
+               "Expected atom value for name/id");
     mForm->AddImageElementToTable(this,
       nsDependentAtomString(aValue->GetAtomValue()));
   }

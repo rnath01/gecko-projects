@@ -550,6 +550,9 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     void cmpPtr(const Address &lhs, const ImmPtr rhs) {
         cmpPtr(lhs, ImmWord(uintptr_t(rhs.value)));
     }
+    void cmpPtr(const Address &lhs, const ImmGCPtr rhs) {
+        cmpPtr(Operand(lhs), rhs);
+    }
     void cmpPtr(Register lhs, Register rhs) {
         cmp32(lhs, rhs);
     }
@@ -1065,6 +1068,19 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     void storeUnboxedValue(ConstantOrRegister value, MIRType valueType, const T &dest,
                            MIRType slotType);
 
+    template <typename T>
+    void storeUnboxedPayload(ValueOperand value, T address, size_t nbytes) {
+        switch (nbytes) {
+          case 4:
+            storePtr(value.payloadReg(), address);
+            return;
+          case 1:
+            store8(value.payloadReg(), address);
+            return;
+          default: MOZ_CRASH("Bad payload width");
+        }
+    }
+
     void rshiftPtr(Imm32 imm, Register dest) {
         shrl(imm, dest);
     }
@@ -1195,6 +1211,10 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
 
     void branchPtrInNurseryRange(Condition cond, Register ptr, Register temp, Label *label);
     void branchValueIsNurseryObject(Condition cond, ValueOperand value, Register temp, Label *label);
+
+    // Instrumentation for entering and leaving the profiler.
+    void profilerEnterFrame(Register framePtr, Register scratch);
+    void profilerExitFrame();
 };
 
 typedef MacroAssemblerX86 MacroAssemblerSpecific;

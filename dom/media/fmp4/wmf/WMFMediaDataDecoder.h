@@ -46,6 +46,9 @@ public:
 
   // Destroys all resources.
   virtual void Shutdown() = 0;
+
+  virtual bool IsHardwareAccelerated() const { return false; }
+
 };
 
 // Decodes audio and video using Windows Media Foundation. Samples are decoded
@@ -70,6 +73,13 @@ public:
 
   virtual nsresult Shutdown() MOZ_OVERRIDE;
 
+  virtual bool IsWaitingMediaResources() { return false; };
+  virtual bool IsDormantNeeded() { return true; };
+  virtual void AllocateMediaResources() MOZ_OVERRIDE;
+  virtual void ReleaseMediaResources() MOZ_OVERRIDE;
+  virtual void ReleaseDecoder() MOZ_OVERRIDE;
+  virtual bool IsHardwareAccelerated() const MOZ_OVERRIDE;
+
 private:
 
   // Called on the task queue. Inserts the sample into the decoder, and
@@ -85,6 +95,7 @@ private:
   void ProcessDrain();
 
   void ProcessShutdown();
+  void ProcessReleaseDecoder();
 
   RefPtr<MediaTaskQueue> mTaskQueue;
   MediaDataDecoderCallback* mCallback;

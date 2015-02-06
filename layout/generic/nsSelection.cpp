@@ -112,6 +112,7 @@ nsPeekOffsetStruct::nsPeekOffsetStruct(nsSelectionAmount aAmount,
                                        bool aScrollViewStop,
                                        bool aIsKeyboardSelect,
                                        bool aVisual,
+                                       bool aExtend,
                                        EWordMovementType aWordMovementType)
   : mAmount(aAmount)
   , mDirection(aDirection)
@@ -122,6 +123,7 @@ nsPeekOffsetStruct::nsPeekOffsetStruct(nsSelectionAmount aAmount,
   , mScrollViewStop(aScrollViewStop)
   , mIsKeyboardSelect(aIsKeyboardSelect)
   , mVisual(aVisual)
+  , mExtend(aExtend)
   , mResultContent()
   , mResultFrame(nullptr)
   , mContentOffset(0)
@@ -141,22 +143,6 @@ struct CachedOffsetForFrame {
   nsIFrame*    mLastCaretFrame;         // store the frame the caret was last drawn in.
   int32_t      mLastContentOffset;      // store last content offset
   bool mCanCacheFrameOffset;    // cached frame offset is valid?
-};
-
-// Stack-class to turn on/off selection batching for table selection
-class MOZ_STACK_CLASS nsSelectionBatcher MOZ_FINAL
-{
-private:
-  nsCOMPtr<nsISelectionPrivate> mSelection;
-public:
-  explicit nsSelectionBatcher(nsISelectionPrivate *aSelection) : mSelection(aSelection)
-  {
-    if (mSelection) mSelection->StartBatchChanges();
-  }
-  ~nsSelectionBatcher() 
-  { 
-    if (mSelection) mSelection->EndBatchChanges();
-  }
 };
 
 class nsAutoScrollTimer MOZ_FINAL : public nsITimerCallback
@@ -358,6 +344,8 @@ nsFrameSelection::nsFrameSelection()
   
   mHint = CARET_ASSOCIATE_BEFORE;
   mCaretBidiLevel = BIDI_LEVEL_UNDEFINED;
+  mKbdBidiLevel = NSBIDI_LTR;
+
   mDragSelectingCells = false;
   mSelectingTableCellMode = 0;
   mSelectedCellIndex = 0;
@@ -850,7 +838,8 @@ nsFrameSelection::MoveCaret(nsDirection       aDirection,
   //set data using mLimiter to stop on scroll views.  If we have a limiter then we stop peeking
   //when we hit scrollable views.  If no limiter then just let it go ahead
   nsPeekOffsetStruct pos(aAmount, eDirPrevious, offsetused, desiredPos,
-                         true, mLimiter != nullptr, true, visualMovement);
+                         true, mLimiter != nullptr, true, visualMovement,
+                         aContinueSelection);
 
   nsBidiDirection paraDir = nsBidiPresUtils::ParagraphDirection(frame);
 
@@ -1137,10 +1126,11 @@ nsFrameSelection::GetPrevNextBidiLevels(nsIContent*        aNode,
 
   nsIFrame *newFrame;
   int32_t offset;
-  bool jumpedLine;
+  bool jumpedLine, movedOverNonSelectableText;
   nsresult rv = currentFrame->GetFrameFromDirection(direction, false,
                                                     aJumpLines, true,
-                                                    &newFrame, &offset, &jumpedLine);
+                                                    &newFrame, &offset, &jumpedLine,
+                                                    &movedOverNonSelectableText);
   if (NS_FAILED(rv))
     newFrame = nullptr;
 
@@ -1442,7 +1432,7 @@ nsFrameSelection::HandleDrag(nsIFrame *aFrame, nsPoint aPoint)
       // first move one character forward.
       nsPeekOffsetStruct charPos(eSelectCharacter, eDirNext, offset,
                                  nsPoint(0, 0), false, mLimiter != nullptr,
-                                 false, false);
+                                 false, false, false);
       if (NS_SUCCEEDED(frame->PeekOffset(&charPos))) {
         frame = charPos.mResultFrame;
         offset = charPos.mContentOffset;
@@ -1450,7 +1440,7 @@ nsFrameSelection::HandleDrag(nsIFrame *aFrame, nsPoint aPoint)
     }
 
     nsPeekOffsetStruct pos(amount, direction, offset, nsPoint(0, 0),
-                           false, mLimiter != nullptr, false, false);
+                           false, mLimiter != nullptr, false, false, false);
 
     if (frame && NS_SUCCEEDED(frame->PeekOffset(&pos)) && pos.mResultContent) {
       offsets.content = pos.mResultContent;
@@ -2169,7 +2159,7 @@ nsFrameSelection::HandleTableSelection(nsINode* aParentContent,
 
   // Stack-class to wrap all table selection changes in 
   //  BeginBatchChanges() / EndBatchChanges()
-  nsSelectionBatcher selectionBatcher(mDomSelections[index]);
+  SelectionBatcher selectionBatcher(mDomSelections[index]);
 
   int32_t startRowIndex, startColIndex, curRowIndex, curColIndex;
   if (mDragState && mDragSelectingCells)
@@ -3512,6 +3502,16 @@ Selection::AddItem(nsRange* aItem, int32_t* aOutIndex)
   if (mApplyUserSelectStyle) {
     nsAutoTArray<nsRefPtr<nsRange>, 4> rangesToAdd;
     aItem->ExcludeNonSelectableNodes(&rangesToAdd);
+    if (rangesToAdd.IsEmpty()) {
+      ErrorResult err;
+      nsINode* node = aItem->GetStartContainer(err);
+      if (node && node->IsContent() && node->AsContent()->GetEditingHost()) {
+        // A contenteditable node with user-select:none, for example.
+        // Allow it to have a collapsed selection (for the caret).
+        aItem->Collapse(GetDirection() == eDirPrevious);
+        rangesToAdd.AppendElement(aItem);
+      }
+    }
     for (size_t i = 0; i < rangesToAdd.Length(); ++i) {
       nsresult rv = AddItemInternal(rangesToAdd[i], aOutIndex);
       NS_ENSURE_SUCCESS(rv, rv);
@@ -5920,6 +5920,15 @@ Selection::SelectionLanguageChange(bool aLangRTL)
 {
   if (!mFrameSelection)
     return NS_ERROR_NOT_INITIALIZED; // Can't do selection
+
+  // if the direction of the language hasn't changed, nothing to do
+  nsBidiLevel kbdBidiLevel = aLangRTL ? NSBIDI_RTL : NSBIDI_LTR;
+  if (kbdBidiLevel == mFrameSelection->mKbdBidiLevel) {
+    return NS_OK;
+  }
+
+  mFrameSelection->mKbdBidiLevel = kbdBidiLevel;
+
   nsresult result;
   nsIFrame *focusFrame = 0;
 
@@ -5963,7 +5972,7 @@ Selection::SelectionLanguageChange(bool aLangRTL)
     //  (if the new language corresponds to the opposite orientation)
     if ((level != levelBefore) && (level != levelAfter))
       level = std::min(levelBefore, levelAfter);
-    if (IS_LEVEL_RTL(level) == aLangRTL)
+    if (IS_SAME_DIRECTION(level, kbdBidiLevel))
       mFrameSelection->SetCaretBidiLevel(level);
     else
       mFrameSelection->SetCaretBidiLevel(level + 1);
@@ -5971,7 +5980,7 @@ Selection::SelectionLanguageChange(bool aLangRTL)
   else {
     // if cursor is between characters with opposite orientations, changing the keyboard language must change
     //  the cursor level to that of the adjacent character with the orientation corresponding to the new language.
-    if (IS_LEVEL_RTL(levelBefore) == aLangRTL)
+    if (IS_SAME_DIRECTION(levelBefore, kbdBidiLevel))
       mFrameSelection->SetCaretBidiLevel(levelBefore);
     else
       mFrameSelection->SetCaretBidiLevel(levelAfter);

@@ -98,7 +98,7 @@ TimeRanges::GetEndTime()
 }
 
 void
-TimeRanges::Normalize(double aError)
+TimeRanges::Normalize(double aTolerance)
 {
   if (mRanges.Length() >= 2) {
     nsAutoTArray<TimeRange,4> normalized;
@@ -112,7 +112,7 @@ TimeRanges::Normalize(double aError)
           current.mEnd >= mRanges[i].mEnd) {
         continue;
       }
-      if (current.mEnd + aError >= mRanges[i].mStart) {
+      if (current.mEnd + aTolerance >= mRanges[i].mStart) {
         current.mEnd = mRanges[i].mEnd;
       } else {
         normalized.AppendElement(current);
@@ -127,10 +127,10 @@ TimeRanges::Normalize(double aError)
 }
 
 void
-TimeRanges::Union(const TimeRanges* aOtherRanges, double aError)
+TimeRanges::Union(const TimeRanges* aOtherRanges, double aTolerance)
 {
   mRanges.AppendElements(aOtherRanges->mRanges);
-  Normalize(aError);
+  Normalize(aTolerance);
 }
 
 void
@@ -156,20 +156,20 @@ TimeRanges::Intersection(const TimeRanges* aOtherRanges)
 }
 
 TimeRanges::index_type
-TimeRanges::Find(double aTime)
+TimeRanges::Find(double aTime, double aTolerance /* = 0 */)
 {
   for (index_type i = 0; i < mRanges.Length(); ++i) {
-    if (aTime >= mRanges[i].mStart && aTime < mRanges[i].mEnd) {
+    if (aTime < mRanges[i].mEnd && (aTime + aTolerance) >= mRanges[i].mStart) {
       return i;
     }
   }
   return NoIndex;
 }
 
-JSObject*
-TimeRanges::WrapObject(JSContext* aCx)
+bool
+TimeRanges::WrapObject(JSContext* aCx, JS::MutableHandle<JSObject*> aReflector)
 {
-  return TimeRangesBinding::Wrap(aCx, this);
+  return TimeRangesBinding::Wrap(aCx, this, aReflector);
 }
 
 } // namespace dom

@@ -399,6 +399,8 @@ nsStyleContext::GetUniqueStyleData(const nsStyleStructID& aSID)
 
   UNIQUE_CASE(Display)
   UNIQUE_CASE(Background)
+  UNIQUE_CASE(Border)
+  UNIQUE_CASE(Padding)
   UNIQUE_CASE(Text)
   UNIQUE_CASE(TextReset)
 
@@ -576,6 +578,30 @@ nsStyleContext::ApplyStyleFixups(bool aSkipParentDisplayBasedStyleFixup)
     }
   }
 
+  // Suppress border/padding of ruby level containers
+  if (disp->mDisplay == NS_STYLE_DISPLAY_RUBY_BASE_CONTAINER ||
+      disp->mDisplay == NS_STYLE_DISPLAY_RUBY_TEXT_CONTAINER) {
+    if (StyleBorder()->GetComputedBorder() != nsMargin(0, 0, 0, 0)) {
+      nsStyleBorder* border =
+        static_cast<nsStyleBorder*>(GetUniqueStyleData(eStyleStruct_Border));
+      NS_FOR_CSS_SIDES(side) {
+        border->SetBorderWidth(side, 0);
+      }
+    }
+
+    nsMargin computedPadding;
+    if (!StylePadding()->GetPadding(computedPadding) ||
+        computedPadding != nsMargin(0, 0, 0, 0)) {
+      const nsStyleCoord zero(0, nsStyleCoord::CoordConstructor);
+      nsStylePadding* padding =
+        static_cast<nsStylePadding*>(GetUniqueStyleData(eStyleStruct_Padding));
+      NS_FOR_CSS_SIDES(side) {
+        padding->mPadding.Set(side, zero);
+      }
+      padding->RecalcData();
+    }
+  }
+
   // Compute User Interface style, to trigger loads of cursors
   StyleUserInterface();
 }
@@ -588,9 +614,9 @@ nsStyleContext::CalcStyleDifference(nsStyleContext* aOther,
   PROFILER_LABEL("nsStyleContext", "CalcStyleDifference",
     js::ProfileEntry::Category::CSS);
 
-  NS_ABORT_IF_FALSE(NS_IsHintSubset(aParentHintsNotHandledForDescendants,
-                                    nsChangeHint_Hints_NotHandledForDescendants),
-                    "caller is passing inherited hints, but shouldn't be");
+  MOZ_ASSERT(NS_IsHintSubset(aParentHintsNotHandledForDescendants,
+                             nsChangeHint_Hints_NotHandledForDescendants),
+             "caller is passing inherited hints, but shouldn't be");
 
   static_assert(nsStyleStructID_Length <= 32,
                 "aEqualStructs is not big enough");
@@ -769,7 +795,10 @@ nsStyleContext::CalcStyleDifference(nsStyleContext* aOther,
       const nsStyleBorder *otherVisBorder = otherVis->StyleBorder();
       NS_FOR_CSS_SIDES(side) {
         bool thisFG, otherFG;
-        nscolor thisColor, otherColor;
+        // Dummy initialisations to keep Valgrind/Memcheck happy.
+        // See bug 1122375 comment 4.
+        nscolor thisColor = NS_RGBA(0, 0, 0, 0);
+        nscolor otherColor = NS_RGBA(0, 0, 0, 0);
         thisVisBorder->GetBorderColor(side, thisColor, thisFG);
         otherVisBorder->GetBorderColor(side, otherColor, otherFG);
         if (thisFG != otherFG || (!thisFG && thisColor != otherColor)) {
@@ -809,7 +838,10 @@ nsStyleContext::CalcStyleDifference(nsStyleContext* aOther,
     if (!change && PeekStyleTextReset()) {
       const nsStyleTextReset *thisVisTextReset = thisVis->StyleTextReset();
       const nsStyleTextReset *otherVisTextReset = otherVis->StyleTextReset();
-      nscolor thisVisDecColor, otherVisDecColor;
+      // Dummy initialisations to keep Valgrind/Memcheck happy.
+      // See bug 1122375 comment 4.
+      nscolor thisVisDecColor = NS_RGBA(0, 0, 0, 0);
+      nscolor otherVisDecColor = NS_RGBA(0, 0, 0, 0);
       bool thisVisDecColorIsFG, otherVisDecColorIsFG;
       thisVisTextReset->GetDecorationColor(thisVisDecColor,
                                            thisVisDecColorIsFG);
@@ -967,8 +999,8 @@ ExtractAnimationValue(nsCSSProperty aProperty,
   DebugOnly<bool> success =
     StyleAnimationValue::ExtractComputedValue(aProperty, aStyleContext,
                                               aResult);
-  NS_ABORT_IF_FALSE(success,
-                    "aProperty must be extractable by StyleAnimationValue");
+  MOZ_ASSERT(success,
+             "aProperty must be extractable by StyleAnimationValue");
 }
 
 static nscolor
@@ -1004,9 +1036,9 @@ nsStyleContext::GetVisitedDependentColor(nsCSSProperty aProperty)
   NS_ASSERTION(aProperty == eCSSProperty_color ||
                aProperty == eCSSProperty_background_color ||
                aProperty == eCSSProperty_border_top_color ||
-               aProperty == eCSSProperty_border_right_color_value ||
+               aProperty == eCSSProperty_border_right_color ||
                aProperty == eCSSProperty_border_bottom_color ||
-               aProperty == eCSSProperty_border_left_color_value ||
+               aProperty == eCSSProperty_border_left_color ||
                aProperty == eCSSProperty_outline_color ||
                aProperty == eCSSProperty__moz_column_rule_color ||
                aProperty == eCSSProperty_text_decoration_color ||

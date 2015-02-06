@@ -6,9 +6,10 @@ var sharedActions = loop.shared.actions;
 describe("loop.store.ActiveRoomStore", function () {
   "use strict";
 
-  var SERVER_CODES = loop.store.SERVER_CODES;
+  var REST_ERRNOS = loop.shared.utils.REST_ERRNOS;
   var ROOM_STATES = loop.store.ROOM_STATES;
-  var FAILURE_REASONS = loop.shared.utils.FAILURE_REASONS;
+  var FAILURE_DETAILS = loop.shared.utils.FAILURE_DETAILS;
+  var SCREEN_SHARE_STATES = loop.shared.utils.SCREEN_SHARE_STATES;
   var sandbox, dispatcher, store, fakeMozLoop, fakeSdkDriver;
   var fakeMultiplexGum;
 
@@ -94,7 +95,7 @@ describe("loop.store.ActiveRoomStore", function () {
     });
 
     it("should set the state to `FULL` on server error room full", function() {
-      fakeError.errno = SERVER_CODES.ROOM_FULL;
+      fakeError.errno = REST_ERRNOS.ROOM_FULL;
 
       store.roomFailure({error: fakeError});
 
@@ -105,27 +106,27 @@ describe("loop.store.ActiveRoomStore", function () {
       store.roomFailure({error: fakeError});
 
       expect(store._storeState.roomState).eql(ROOM_STATES.FAILED);
-      expect(store._storeState.failureReason).eql(FAILURE_REASONS.UNKNOWN);
+      expect(store._storeState.failureReason).eql(FAILURE_DETAILS.UNKNOWN);
     });
 
     it("should set the failureReason to EXPIRED_OR_INVALID on server error: " +
       "invalid token", function() {
-        fakeError.errno = SERVER_CODES.INVALID_TOKEN;
+        fakeError.errno = REST_ERRNOS.INVALID_TOKEN;
 
         store.roomFailure({error: fakeError});
 
         expect(store._storeState.roomState).eql(ROOM_STATES.FAILED);
-        expect(store._storeState.failureReason).eql(FAILURE_REASONS.EXPIRED_OR_INVALID);
+        expect(store._storeState.failureReason).eql(FAILURE_DETAILS.EXPIRED_OR_INVALID);
       });
 
     it("should set the failureReason to EXPIRED_OR_INVALID on server error: " +
       "expired", function() {
-        fakeError.errno = SERVER_CODES.EXPIRED;
+        fakeError.errno = REST_ERRNOS.EXPIRED;
 
         store.roomFailure({error: fakeError});
 
         expect(store._storeState.roomState).eql(ROOM_STATES.FAILED);
-        expect(store._storeState.failureReason).eql(FAILURE_REASONS.EXPIRED_OR_INVALID);
+        expect(store._storeState.failureReason).eql(FAILURE_DETAILS.EXPIRED_OR_INVALID);
       });
 
     it("should reset the multiplexGum", function() {
@@ -282,6 +283,31 @@ describe("loop.store.ActiveRoomStore", function () {
     });
   });
 
+  describe("#videoDimensionsChanged", function() {
+    it("should not contain any video dimensions at the very start", function() {
+      expect(store.getStoreState()).eql(store.getInitialStoreState());
+    });
+
+    it("should update the store with new video dimensions", function() {
+      var actionData = {
+        isLocal: true,
+        videoType: "camera",
+        dimensions: { width: 640, height: 480 }
+      };
+
+      store.videoDimensionsChanged(new sharedActions.VideoDimensionsChanged(actionData));
+
+      expect(store.getStoreState().localVideoDimensions)
+        .to.have.property(actionData.videoType, actionData.dimensions);
+
+      actionData.isLocal = false;
+      store.videoDimensionsChanged(new sharedActions.VideoDimensionsChanged(actionData));
+
+      expect(store.getStoreState().remoteVideoDimensions)
+        .to.have.property(actionData.videoType, actionData.dimensions);
+    });
+  });
+
   describe("#setupRoomInfo", function() {
     var fakeRoomInfo;
 
@@ -353,6 +379,12 @@ describe("loop.store.ActiveRoomStore", function () {
   describe("#gotMediaPermission", function() {
     beforeEach(function() {
       store.setStoreState({roomToken: "tokenFake"});
+    });
+
+    it("should set the room state to JOINING", function() {
+      store.gotMediaPermission();
+
+      expect(store.getStoreState().roomState).eql(ROOM_STATES.JOINING);
     });
 
     it("should call rooms.join on mozLoop", function() {
@@ -615,6 +647,26 @@ describe("loop.store.ActiveRoomStore", function () {
     });
   });
 
+  describe("#screenSharingState", function() {
+    it("should save the state", function() {
+      store.screenSharingState(new sharedActions.ScreenSharingState({
+        state: SCREEN_SHARE_STATES.ACTIVE
+      }));
+
+      expect(store.getStoreState().screenSharingState).eql(SCREEN_SHARE_STATES.ACTIVE);
+    });
+  });
+
+  describe("#receivingScreenShare", function() {
+    it("should save the state", function() {
+      store.receivingScreenShare(new sharedActions.ReceivingScreenShare({
+        receiving: true
+      }));
+
+      expect(store.getStoreState().receivingScreenShare).eql(true);
+    });
+  });
+
   describe("#remotePeerConnected", function() {
     it("should set the state to `HAS_PARTICIPANTS`", function() {
       store.remotePeerConnected();
@@ -676,6 +728,17 @@ describe("loop.store.ActiveRoomStore", function () {
       sinon.assert.calledWithExactly(fakeMozLoop.rooms.leave,
         "fakeToken", "1627384950");
     });
+
+    it("should call mozLoop.rooms.leave if the room state is JOINING",
+      function() {
+        store.setStoreState({roomState: ROOM_STATES.JOINING});
+
+        store.windowUnload();
+
+        sinon.assert.calledOnce(fakeMozLoop.rooms.leave);
+        sinon.assert.calledWithExactly(fakeMozLoop.rooms.leave,
+          "fakeToken", "1627384950");
+      });
 
     it("should set the state to CLOSING", function() {
       store.windowUnload();

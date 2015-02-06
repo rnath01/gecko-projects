@@ -34,8 +34,8 @@ ABIArgGenerator::next(MIRType type)
       case MIRType_Float32x4:
         // SIMD values aren't passed in or out of C++, so we can make up
         // whatever internal ABI we like. visitAsmJSPassArg assumes
-        // SimdStackAlignment.
-        stackOffset_ = AlignBytes(stackOffset_, SimdStackAlignment);
+        // SimdMemoryAlignment.
+        stackOffset_ = AlignBytes(stackOffset_, SimdMemoryAlignment);
         current_ = ABIArg(stackOffset_);
         stackOffset_ += Simd128DataSize;
         break;
@@ -58,7 +58,7 @@ Assembler::executableCopy(uint8_t *buffer)
 
     for (size_t i = 0; i < jumps_.length(); i++) {
         RelativePatch &rp = jumps_[i];
-        X86Assembler::setRel32(buffer + rp.offset, rp.target);
+        X86Encoding::SetRel32(buffer + rp.offset, rp.target);
     }
 }
 
@@ -87,7 +87,7 @@ class RelocationIterator
 static inline JitCode *
 CodeFromJump(uint8_t *jump)
 {
-    uint8_t *target = (uint8_t *)X86Assembler::getRel32Target(jump);
+    uint8_t *target = (uint8_t *)X86Encoding::GetRel32Target(jump);
     return JitCode::FromExecutable(target);
 }
 

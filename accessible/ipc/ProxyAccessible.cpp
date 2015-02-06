@@ -15,7 +15,7 @@ namespace a11y {
 void
 ProxyAccessible::Shutdown()
 {
-  MOZ_ASSERT(!mOuterDoc);
+  NS_ASSERTION(!mOuterDoc, "Why do we still have a child doc?");
 
   // XXX Ideally  this wouldn't be necessary, but it seems OuterDoc accessibles
   // can be destroyed before the doc they own.
@@ -23,6 +23,11 @@ ProxyAccessible::Shutdown()
     uint32_t childCount = mChildren.Length();
     for (uint32_t idx = 0; idx < childCount; idx++)
       mChildren[idx]->Shutdown();
+  } else {
+    if (mChildren.Length() != 1)
+      MOZ_CRASH("outer doc doesn't own adoc!");
+
+    static_cast<DocAccessibleParent*>(mChildren[0])->Destroy();
   }
 
   mChildren.Clear();
@@ -68,6 +73,13 @@ void
 ProxyAccessible::Attributes(nsTArray<Attribute> *aAttrs) const
 {
   unused << mDoc->SendAttributes(mID, aAttrs);
+}
+
+void
+ProxyAccessible::TextSubstring(int32_t aStartOffset, int32_t aEndOfset,
+                               nsString& aText) const
+{
+  unused << mDoc->SendTextSubstring(mID, aStartOffset, aEndOfset, &aText);
 }
 }
 }

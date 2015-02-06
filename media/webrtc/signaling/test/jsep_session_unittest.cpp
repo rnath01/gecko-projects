@@ -246,6 +246,20 @@ protected:
     if (checkFlags & CHECK_TRACKS) {
       // Check that the transports exist.
       ASSERT_EQ(types.size(), mSessionOff.GetTransportCount());
+      for (size_t i = 0; i < types.size(); ++i) {
+        RefPtr<JsepTrack> ltrack;
+        ASSERT_EQ(NS_OK, mSessionOff.GetLocalTrack(i, &ltrack));
+        ASSERT_NE("", ltrack->GetStreamId());
+        ASSERT_NE("", ltrack->GetTrackId());
+        if (ltrack->GetMediaType() != SdpMediaSection::kApplication) {
+          std::string msidAttr("a=msid:");
+          msidAttr += ltrack->GetStreamId();
+          msidAttr += " ";
+          msidAttr += ltrack->GetTrackId();
+          ASSERT_NE(std::string::npos, offer.find(msidAttr))
+            << "Did not find " << msidAttr << " in offer";
+        }
+      }
     }
   }
 
@@ -265,6 +279,16 @@ protected:
         RefPtr<JsepTrack> rtrack;
         ASSERT_EQ(NS_OK, mSessionAns.GetRemoteTrack(i, &rtrack));
         ASSERT_EQ(types[i], rtrack->GetMediaType());
+        ASSERT_NE("", rtrack->GetStreamId());
+        ASSERT_NE("", rtrack->GetTrackId());
+        if (rtrack->GetMediaType() != SdpMediaSection::kApplication) {
+          std::string msidAttr("a=msid:");
+          msidAttr += rtrack->GetStreamId();
+          msidAttr += " ";
+          msidAttr += rtrack->GetTrackId();
+          ASSERT_NE(std::string::npos, offer.find(msidAttr))
+            << "Did not find " << msidAttr << " in offer";
+        }
       }
     }
   }
@@ -287,6 +311,21 @@ protected:
         ASSERT_EQ(types[i], pair->mSending->GetMediaType());
         ASSERT_TRUE(pair->mReceiving);
         ASSERT_EQ(types[i], pair->mReceiving->GetMediaType());
+        ASSERT_NE("", pair->mSending->GetStreamId());
+        ASSERT_NE("", pair->mSending->GetTrackId());
+        // These might have been in the SDP, or might have been randomly
+        // chosen by JsepSessionImpl
+        ASSERT_NE("", pair->mReceiving->GetStreamId());
+        ASSERT_NE("", pair->mReceiving->GetTrackId());
+
+        if (pair->mReceiving->GetMediaType() != SdpMediaSection::kApplication) {
+          std::string msidAttr("a=msid:");
+          msidAttr += pair->mSending->GetStreamId();
+          msidAttr += " ";
+          msidAttr += pair->mSending->GetTrackId();
+          ASSERT_NE(std::string::npos, answer.find(msidAttr))
+            << "Did not find " << msidAttr << " in offer";
+        }
       }
     }
     DumpTrackPairs(mSessionOff);
@@ -302,14 +341,29 @@ protected:
 
     if (checkFlags & CHECK_TRACKS) {
       // Verify that the right stuff is in the tracks.
-      ASSERT_EQ(types.size(), mSessionAns.GetNegotiatedTrackPairCount());
+      ASSERT_EQ(types.size(), mSessionOff.GetNegotiatedTrackPairCount());
       for (size_t i = 0; i < types.size(); ++i) {
         const JsepTrackPair* pair;
-        ASSERT_EQ(NS_OK, mSessionAns.GetNegotiatedTrackPair(i, &pair));
+        ASSERT_EQ(NS_OK, mSessionOff.GetNegotiatedTrackPair(i, &pair));
         ASSERT_TRUE(pair->mSending);
         ASSERT_EQ(types[i], pair->mSending->GetMediaType());
         ASSERT_TRUE(pair->mReceiving);
         ASSERT_EQ(types[i], pair->mReceiving->GetMediaType());
+        ASSERT_NE("", pair->mSending->GetStreamId());
+        ASSERT_NE("", pair->mSending->GetTrackId());
+        // These might have been in the SDP, or might have been randomly
+        // chosen by JsepSessionImpl
+        ASSERT_NE("", pair->mReceiving->GetStreamId());
+        ASSERT_NE("", pair->mReceiving->GetTrackId());
+
+        if (pair->mReceiving->GetMediaType() != SdpMediaSection::kApplication) {
+          std::string msidAttr("a=msid:");
+          msidAttr += pair->mReceiving->GetStreamId();
+          msidAttr += " ";
+          msidAttr += pair->mReceiving->GetTrackId();
+          ASSERT_NE(std::string::npos, answer.find(msidAttr))
+            << "Did not find " << msidAttr << " in offer";
+        }
       }
     }
     DumpTrackPairs(mSessionAns);
@@ -379,8 +433,8 @@ protected:
         local ? session.GetLocalDescription() : session.GetRemoteDescription();
     SipccSdpParser parser;
     UniquePtr<Sdp> parsed = parser.Parse(sdp);
-    ASSERT_TRUE(parsed) << "Parse failed on " << std::endl << sdp << std::endl
-                        << "Errors were: " << GetParseErrors(parser);
+    ASSERT_TRUE(!!parsed) << "Parse failed on " << std::endl << sdp << std::endl
+                          << "Errors were: " << GetParseErrors(parser);
     ASSERT_LT(0U, parsed->GetMediaSectionCount());
 
     auto& msection_0 = parsed->GetMediaSection(0);
@@ -477,8 +531,8 @@ private:
   {
     SipccSdpParser parser;
     auto sdp = mozilla::Move(parser.Parse(sdp_str));
-    ASSERT_TRUE(sdp) << "Should have valid SDP" << std::endl
-                     << "Errors were: " << GetParseErrors(parser);
+    ASSERT_TRUE(!!sdp) << "Should have valid SDP" << std::endl
+                       << "Errors were: " << GetParseErrors(parser);
     size_t num_m_sections = sdp->GetMediaSectionCount();
     for (size_t i = 0; i < num_m_sections; ++i) {
       auto& msection = sdp->GetMediaSection(i);
@@ -619,8 +673,8 @@ TEST_F(JsepSessionTest, OfferAnswerRecvOnlyLines)
 
   SipccSdpParser parser;
   auto outputSdp = mozilla::Move(parser.Parse(offer));
-  ASSERT_TRUE(outputSdp) << "Should have valid SDP" << std::endl
-                         << "Errors were: " << GetParseErrors(parser);
+  ASSERT_TRUE(!!outputSdp) << "Should have valid SDP" << std::endl
+                           << "Errors were: " << GetParseErrors(parser);
 
   ASSERT_EQ(3U, outputSdp->GetMediaSectionCount());
   ASSERT_EQ(SdpMediaSection::kAudio,
@@ -678,8 +732,8 @@ TEST_F(JsepSessionTest, OfferAnswerSendOnlyLines)
 
   SipccSdpParser parser;
   auto outputSdp = mozilla::Move(parser.Parse(offer));
-  ASSERT_TRUE(outputSdp) << "Should have valid SDP" << std::endl
-                         << "Errors were: " << GetParseErrors(parser);
+  ASSERT_TRUE(!!outputSdp) << "Should have valid SDP" << std::endl
+                           << "Errors were: " << GetParseErrors(parser);
 
   ASSERT_EQ(3U, outputSdp->GetMediaSectionCount());
   ASSERT_EQ(SdpMediaSection::kAudio,
@@ -739,8 +793,8 @@ TEST_F(JsepSessionTest, CreateOfferNoDatachannelDefault)
 
   SipccSdpParser parser;
   auto outputSdp = mozilla::Move(parser.Parse(offer));
-  ASSERT_TRUE(outputSdp) << "Should have valid SDP" << std::endl
-                         << "Errors were: " << GetParseErrors(parser);
+  ASSERT_TRUE(!!outputSdp) << "Should have valid SDP" << std::endl
+                           << "Errors were: " << GetParseErrors(parser);
 
   ASSERT_EQ(2U, outputSdp->GetMediaSectionCount());
   ASSERT_EQ(SdpMediaSection::kAudio,
@@ -765,8 +819,8 @@ TEST_F(JsepSessionTest, ValidateOfferedCodecParams)
 
   SipccSdpParser parser;
   auto outputSdp = mozilla::Move(parser.Parse(offer));
-  ASSERT_TRUE(outputSdp) << "Should have valid SDP" << std::endl
-                         << "Errors were: " << GetParseErrors(parser);
+  ASSERT_TRUE(!!outputSdp) << "Should have valid SDP" << std::endl
+                           << "Errors were: " << GetParseErrors(parser);
 
   ASSERT_EQ(2U, outputSdp->GetMediaSectionCount());
   auto& video_section = outputSdp->GetMediaSection(1);
@@ -802,7 +856,7 @@ TEST_F(JsepSessionTest, ValidateOfferedCodecParams)
 
   // VP8
   ASSERT_EQ("120", fmtps[0].format);
-  ASSERT_TRUE(fmtps[0].parameters);
+  ASSERT_TRUE(!!fmtps[0].parameters);
   ASSERT_EQ(SdpRtpmapAttributeList::kVP8, fmtps[0].parameters->codec_type);
 
   auto& parsed_vp8_params =
@@ -814,7 +868,7 @@ TEST_F(JsepSessionTest, ValidateOfferedCodecParams)
 
   // H264 packetization mode 1
   ASSERT_EQ("126", fmtps[1].format);
-  ASSERT_TRUE(fmtps[1].parameters);
+  ASSERT_TRUE(!!fmtps[1].parameters);
   ASSERT_EQ(SdpRtpmapAttributeList::kH264, fmtps[1].parameters->codec_type);
 
   auto& parsed_h264_1_params =
@@ -827,7 +881,7 @@ TEST_F(JsepSessionTest, ValidateOfferedCodecParams)
 
   // H264 packetization mode 0
   ASSERT_EQ("97", fmtps[2].format);
-  ASSERT_TRUE(fmtps[2].parameters);
+  ASSERT_TRUE(!!fmtps[2].parameters);
   ASSERT_EQ(SdpRtpmapAttributeList::kH264, fmtps[2].parameters->codec_type);
 
   auto& parsed_h264_0_params =
@@ -883,8 +937,8 @@ TEST_F(JsepSessionTest, ValidateAnsweredCodecParams)
 
   SipccSdpParser parser;
   auto outputSdp = mozilla::Move(parser.Parse(answer));
-  ASSERT_TRUE(outputSdp) << "Should have valid SDP" << std::endl
-                         << "Errors were: " << GetParseErrors(parser);
+  ASSERT_TRUE(!!outputSdp) << "Should have valid SDP" << std::endl
+                           << "Errors were: " << GetParseErrors(parser);
 
   ASSERT_EQ(2U, outputSdp->GetMediaSectionCount());
   auto& video_section = outputSdp->GetMediaSection(1);
@@ -923,7 +977,7 @@ TEST_F(JsepSessionTest, ValidateAnsweredCodecParams)
 
   // VP8
   ASSERT_EQ("120", fmtps[0].format);
-  ASSERT_TRUE(fmtps[0].parameters);
+  ASSERT_TRUE(!!fmtps[0].parameters);
   ASSERT_EQ(SdpRtpmapAttributeList::kVP8, fmtps[0].parameters->codec_type);
 
   auto& parsed_vp8_params =
@@ -1040,8 +1094,8 @@ TEST_P(JsepSessionTest, TestRejectMline)
 
   SipccSdpParser parser;
   auto outputSdp = mozilla::Move(parser.Parse(answer));
-  ASSERT_TRUE(outputSdp) << "Should have valid SDP" << std::endl
-                         << "Errors were: " << GetParseErrors(parser);
+  ASSERT_TRUE(!!outputSdp) << "Should have valid SDP" << std::endl
+                           << "Errors were: " << GetParseErrors(parser);
 
   ASSERT_NE(0U, outputSdp->GetMediaSectionCount());
   SdpMediaSection* failed_section = nullptr;

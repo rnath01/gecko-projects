@@ -7,8 +7,8 @@
 #ifndef MOZILLA_TRACKBUFFER_H_
 #define MOZILLA_TRACKBUFFER_H_
 
+#include "SourceBuffer.h"
 #include "SourceBufferDecoder.h"
-#include "MediaPromise.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/mozalloc.h"
@@ -21,6 +21,7 @@ namespace mozilla {
 
 class ContainerParser;
 class MediaSourceDecoder;
+class LargeDataBuffer;
 
 namespace dom {
 
@@ -39,8 +40,19 @@ public:
   // Append data to the current decoder.  Also responsible for calling
   // NotifyDataArrived on the decoder to keep buffered range computation up
   // to date.  Returns false if the append failed.
-  bool AppendData(const uint8_t* aData, uint32_t aLength);
-  bool EvictData(uint32_t aThreshold);
+  nsRefPtr<TrackBufferAppendPromise> AppendData(LargeDataBuffer* aData,
+                                                int64_t aTimestampOffset /* microseconds */);
+
+  // Evicts data held in the current decoders SourceBufferResource from the
+  // start of the buffer through to aPlaybackTime. aThreshold is used to
+  // bound the data being evicted. It will not evict more than aThreshold
+  // bytes. aBufferStartTime contains the new start time of the current
+  // decoders buffered data after the eviction. Returns true if data was
+  // evicted.
+  bool EvictData(double aPlaybackTime, uint32_t aThreshold, double* aBufferStartTime);
+
+  // Evicts data held in all the decoders SourceBufferResource from the start
+  // of the buffer through to aTime.
   void EvictBefore(double aTime);
 
   // Returns the highest end time of all of the buffered ranges in the
@@ -50,7 +62,9 @@ public:
 
   // Mark the current decoder's resource as ended, clear mCurrentDecoder and
   // reset mLast{Start,End}Timestamp.
-  void DiscardDecoder();
+  void DiscardCurrentDecoder();
+  // Mark the current decoder's resource as ended.
+  void EndCurrentDecoder();
 
   void Detach();
 
@@ -63,17 +77,32 @@ public:
 
   // Returns true if any of the decoders managed by this track buffer
   // contain aTime in their buffered ranges.
-  bool ContainsTime(int64_t aTime);
+  bool ContainsTime(int64_t aTime, int64_t aTolerance);
 
   void BreakCycles();
 
   // Call ResetDecode() on each decoder in mDecoders.
   void ResetDecode();
 
+  // Run MSE Reset Parser State Algorithm.
+  // 3.5.2 Reset Parser State
+  // http://w3c.github.io/media-source/#sourcebuffer-reset-parser-state
+  void ResetParserState();
+
   // Returns a reference to mInitializedDecoders, used by MediaSourceReader
   // to select decoders.
   // TODO: Refactor to a cleaner interface between TrackBuffer and MediaSourceReader.
   const nsTArray<nsRefPtr<SourceBufferDecoder>>& Decoders();
+
+  // Runs MSE range removal algorithm.
+  // http://w3c.github.io/media-source/#sourcebuffer-coded-frame-removal
+  // Implementation is only partial, we can only trim a buffer.
+  // Returns true if data was evicted.
+  // Times are in microseconds.
+  bool RangeRemoval(int64_t aStart, int64_t aEnd);
+
+  // Abort any pending appendBuffer by rejecting any pending promises.
+  void AbortAppendData();
 
 #ifdef MOZ_EME
   nsresult SetCDMProxy(CDMProxy* aProxy);
@@ -92,11 +121,12 @@ private:
   // for initialization.
   // The decoder is not considered initialized until it is added to
   // mInitializedDecoders.
-  already_AddRefed<SourceBufferDecoder> NewDecoder();
+  already_AddRefed<SourceBufferDecoder> NewDecoder(int64_t aTimestampOffset /* microseconds */);
 
   // Helper for AppendData, ensures NotifyDataArrived is called whenever
   // data is appended to the current decoder's SourceBufferResource.
-  bool AppendDataToCurrentResource(const uint8_t* aData, uint32_t aLength);
+  bool AppendDataToCurrentResource(LargeDataBuffer* aData,
+                                   uint32_t aDuration /* microseconds */);
 
   // Queue execution of InitializeDecoder on mTaskQueue.
   bool QueueInitializeDecoder(SourceBufferDecoder* aDecoder);
@@ -104,6 +134,11 @@ private:
   // Runs decoder initialization including calling ReadMetadata.  Runs as an
   // event on the decode thread pool.
   void InitializeDecoder(SourceBufferDecoder* aDecoder);
+  // Once decoder has been initialized, set mediasource duration if required
+  // and resolve any pending InitializationPromise.
+  // Setting the mediasource duration must be done on the main thread.
+  // TODO: Why is that so?
+  void CompleteInitializeDecoder(SourceBufferDecoder* aDecoder);
 
   // Adds a successfully initialized decoder to mDecoders and (if it's the
   // first decoder initialized), initializes mHasAudio/mHasVideo.  Called
@@ -156,6 +191,9 @@ private:
   int64_t mLastStartTimestamp;
   Maybe<int64_t> mLastEndTimestamp;
 
+  // The timestamp offset used by our current decoder, in microseconds.
+  int64_t mLastTimestampOffset;
+
   // Set when the first decoder used by this TrackBuffer is initialized.
   // Protected by mParentDecoder's monitor.
   MediaInfo mInfo;
@@ -164,6 +202,9 @@ private:
   MediaPromiseHolder<ShutdownPromise> mShutdownPromise;
   bool mDecoderPerSegment;
   bool mShutdown;
+
+  MediaPromiseHolder<TrackBufferAppendPromise> mInitializationPromise;
+
 };
 
 } // namespace mozilla

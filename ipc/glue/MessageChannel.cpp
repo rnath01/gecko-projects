@@ -177,6 +177,11 @@ public:
         return INTR_SEMS == mMesageSemantics && OUT_MESSAGE == mDirection;
     }
 
+    bool IsOutgoingSync() const {
+        return (mMesageSemantics == INTR_SEMS || mMesageSemantics == SYNC_SEMS) &&
+               mDirection == OUT_MESSAGE;
+    }
+
     void Describe(int32_t* id, const char** dir, const char** sems,
                   const char** name) const
     {
@@ -196,8 +201,8 @@ private:
     DebugOnly<bool> mMoved;
 
     // Disable harmful methods.
-    InterruptFrame(const InterruptFrame& aOther) MOZ_DELETE;
-    InterruptFrame& operator=(const InterruptFrame&) MOZ_DELETE;
+    InterruptFrame(const InterruptFrame& aOther) = delete;
+    InterruptFrame& operator=(const InterruptFrame&) = delete;
 };
 
 class MOZ_STACK_CLASS MessageChannel::CxxStackFrame
@@ -218,6 +223,9 @@ public:
         if (frame.IsInterruptIncall())
             mThat.EnteredCall();
 
+        if (frame.IsOutgoingSync())
+            mThat.EnteredSyncSend();
+
         mThat.mSawInterruptOutMsg |= frame.IsInterruptOutcall();
     }
 
@@ -226,7 +234,9 @@ public:
 
         MOZ_ASSERT(!mThat.mCxxStackFrames.empty());
 
-        bool exitingCall = mThat.mCxxStackFrames.back().IsInterruptIncall();
+        const InterruptFrame& frame = mThat.mCxxStackFrames.back();
+        bool exitingSync = frame.IsOutgoingSync();
+        bool exitingCall = frame.IsInterruptIncall();
         mThat.mCxxStackFrames.shrinkBy(1);
 
         bool exitingStack = mThat.mCxxStackFrames.empty();
@@ -239,6 +249,9 @@ public:
         if (exitingCall)
             mThat.ExitedCall();
 
+        if (exitingSync)
+            mThat.ExitedSyncSend();
+
         if (exitingStack)
             mThat.ExitedCxxStack();
     }
@@ -246,9 +259,9 @@ private:
     MessageChannel& mThat;
 
     // Disable harmful methods.
-    CxxStackFrame() MOZ_DELETE;
-    CxxStackFrame(const CxxStackFrame&) MOZ_DELETE;
-    CxxStackFrame& operator=(const CxxStackFrame&) MOZ_DELETE;
+    CxxStackFrame() = delete;
+    CxxStackFrame(const CxxStackFrame&) = delete;
+    CxxStackFrame& operator=(const CxxStackFrame&) = delete;
 };
 
 namespace {
@@ -718,6 +731,9 @@ MessageChannel::Send(Message* aMsg, Message* aReply)
     // Sanity checks.
     AssertWorkerThread();
     mMonitor->AssertNotCurrentThreadOwns();
+
+    if (mCurrentTransaction == 0)
+        mListener->OnBeginSyncTransaction();
 
 #ifdef OS_WIN
     SyncStackFrame frame(this, false);
@@ -1490,7 +1506,7 @@ void
 MessageChannel::ReportMessageRouteError(const char* channelName) const
 {
     PrintErrorMessage(mSide, channelName, "Need a route");
-    mListener->OnProcessingError(MsgRouteError);
+    mListener->OnProcessingError(MsgRouteError, "MsgRouteError");
 }
 
 void
@@ -1524,7 +1540,7 @@ MessageChannel::ReportConnectionError(const char* aChannelName) const
     PrintErrorMessage(mSide, aChannelName, errorMsg);
 
     MonitorAutoUnlock unlock(*mMonitor);
-    mListener->OnProcessingError(MsgDropped);
+    mListener->OnProcessingError(MsgDropped, errorMsg);
 }
 
 bool
@@ -1559,14 +1575,14 @@ MessageChannel::MaybeHandleError(Result code, const Message& aMsg, const char* c
         return false;
     }
 
-    char printedMsg[512];
-    PR_snprintf(printedMsg, sizeof(printedMsg),
+    char reason[512];
+    PR_snprintf(reason, sizeof(reason),
                 "(msgtype=0x%lX,name=%s) %s",
                 aMsg.type(), aMsg.name(), errorMsg);
 
-    PrintErrorMessage(mSide, channelName, printedMsg);
+    PrintErrorMessage(mSide, channelName, reason);
 
-    mListener->OnProcessingError(code);
+    mListener->OnProcessingError(code, reason);
 
     return false;
 }

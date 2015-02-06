@@ -209,6 +209,14 @@ nsHostRecord::SetExpiration(const mozilla::TimeStamp& now, unsigned int valid, u
     mValidEnd = now + TimeDuration::FromSeconds(valid + grace);
 }
 
+void
+nsHostRecord::CopyExpirationTimesFrom(const nsHostRecord *aFromHostRecord)
+{
+    mValidStart = aFromHostRecord->mValidStart;
+    mValidEnd = aFromHostRecord->mValidEnd;
+    mGraceStart = aFromHostRecord->mGraceStart;
+}
+
 nsHostRecord::~nsHostRecord()
 {
     Telemetry::Accumulate(Telemetry::DNS_BLACKLIST_COUNT, mBlacklistedCount);
@@ -463,13 +471,10 @@ HostDB_InitEntry(PLDHashTable *table,
 
 static const PLDHashTableOps gHostDB_ops =
 {
-    PL_DHashAllocTable,
-    PL_DHashFreeTable,
     HostDB_HashKey,
     HostDB_MatchEntry,
     HostDB_MoveEntry,
     HostDB_ClearEntry,
-    PL_DHashFinalizeStub,
     HostDB_InitEntry,
 };
 
@@ -557,7 +562,7 @@ nsHostResolver::Init()
         return NS_ERROR_FAILURE;
     }
 
-    PL_DHashTableInit(&mDB, &gHostDB_ops, nullptr, sizeof(nsHostDBEnt), 0);
+    PL_DHashTableInit(&mDB, &gHostDB_ops, sizeof(nsHostDBEnt), 0);
 
     mShutdown = false;
 
@@ -627,7 +632,7 @@ nsHostResolver::FlushCache()
           nsHostRecord *rec = static_cast<nsHostRecord *>(node);
           node = node->next;
           PR_REMOVE_AND_INIT_LINK(rec);
-          PL_DHashTableOperate(&mDB, (nsHostKey *) rec, PL_DHASH_REMOVE);
+          PL_DHashTableRemove(&mDB, (nsHostKey *) rec);
           NS_RELEASE(rec);
       }
   }
@@ -759,10 +764,10 @@ nsHostResolver::ResolveHost(const char            *host,
 
             nsHostKey key = { host, flags, af };
             nsHostDBEnt *he = static_cast<nsHostDBEnt *>
-                                         (PL_DHashTableOperate(&mDB, &key, PL_DHASH_ADD));
+                (PL_DHashTableAdd(&mDB, &key, fallible));
 
-            // if the record is null, then HostDB_InitEntry failed.
-            if (!he || !he->rec) {
+            // if the record is null, the hash table OOM'd.
+            if (!he) {
                 LOG(("  Out of memory: no cache entry for [%s].\n", host));
                 rv = NS_ERROR_OUT_OF_MEMORY;
             }
@@ -832,13 +837,11 @@ nsHostResolver::ResolveHost(const char            *host,
                     // First, search for an entry with AF_UNSPEC
                     const nsHostKey unspecKey = { host, flags, PR_AF_UNSPEC };
                     nsHostDBEnt *unspecHe = static_cast<nsHostDBEnt *>
-                        (PL_DHashTableOperate(&mDB, &unspecKey, PL_DHASH_LOOKUP));
-                    NS_ASSERTION(PL_DHASH_ENTRY_IS_FREE(unspecHe) ||
-                                 (PL_DHASH_ENTRY_IS_BUSY(unspecHe) &&
-                                  unspecHe->rec),
+                        (PL_DHashTableSearch(&mDB, &unspecKey));
+                    NS_ASSERTION(!unspecHe ||
+                                 (unspecHe && unspecHe->rec),
                                 "Valid host entries should contain a record");
-                    if (PL_DHASH_ENTRY_IS_BUSY(unspecHe) &&
-                        unspecHe->rec &&
+                    if (unspecHe &&
                         unspecHe->rec->HasUsableResult(TimeStamp::NowLoRes(), flags)) {
 
                         MOZ_ASSERT(unspecHe->rec->addr_info || unspecHe->rec->negative,
@@ -850,6 +853,7 @@ nsHostResolver::ResolveHost(const char            *host,
                         he->rec->addr_info = nullptr;
                         if (unspecHe->rec->negative) {
                             he->rec->negative = unspecHe->rec->negative;
+                            he->rec->CopyExpirationTimesFrom(unspecHe->rec);
                         } else if (unspecHe->rec->addr_info) {
                             // Search for any valid address in the AF_UNSPEC entry
                             // in the cache (not blacklisted and from the right
@@ -863,6 +867,7 @@ nsHostResolver::ResolveHost(const char            *host,
                                         he->rec->addr_info = new AddrInfo(
                                             unspecHe->rec->addr_info->mHostName,
                                             unspecHe->rec->addr_info->mCanonicalName);
+                                        he->rec->CopyExpirationTimesFrom(unspecHe->rec);
                                     }
                                     he->rec->addr_info->AddAddress(
                                         new NetAddrElement(*addrIter));
@@ -960,8 +965,8 @@ nsHostResolver::DetachCallback(const char            *host,
 
         nsHostKey key = { host, flags, af };
         nsHostDBEnt *he = static_cast<nsHostDBEnt *>
-                                     (PL_DHashTableOperate(&mDB, &key, PL_DHASH_LOOKUP));
-        if (he && he->rec) {
+                                     (PL_DHashTableSearch(&mDB, &key));
+        if (he) {
             // walk list looking for |callback|... we cannot assume
             // that it will be there!
             PRCList *node = he->rec->callbacks.next;
@@ -1252,7 +1257,7 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* r
                 nsHostRecord *head =
                     static_cast<nsHostRecord *>(PR_LIST_HEAD(&mEvictionQ));
                 PR_REMOVE_AND_INIT_LINK(head);
-                PL_DHashTableOperate(&mDB, (nsHostKey *) head, PL_DHASH_REMOVE);
+                PL_DHashTableRemove(&mDB, (nsHostKey *) head);
 
                 if (!head->negative) {
                     // record the age of the entry upon eviction.
@@ -1308,8 +1313,8 @@ nsHostResolver::CancelAsyncRequest(const char            *host,
     // Lookup the host record associated with host, flags & address family
     nsHostKey key = { host, flags, af };
     nsHostDBEnt *he = static_cast<nsHostDBEnt *>
-                      (PL_DHashTableOperate(&mDB, &key, PL_DHASH_LOOKUP));
-    if (he && he->rec) {
+                      (PL_DHashTableSearch(&mDB, &key));
+    if (he) {
         nsHostRecord* recPtr = nullptr;
         PRCList *node = he->rec->callbacks.next;
         // Remove the first nsDNSAsyncRequest callback which matches the
@@ -1329,7 +1334,7 @@ nsHostResolver::CancelAsyncRequest(const char            *host,
 
         // If there are no more callbacks, remove the hash table entry
         if (recPtr && PR_CLIST_IS_EMPTY(&recPtr->callbacks)) {
-            PL_DHashTableOperate(&mDB, (nsHostKey *)recPtr, PL_DHASH_REMOVE);
+            PL_DHashTableRemove(&mDB, (nsHostKey *)recPtr);
             // If record is on a Queue, remove it and then deref it
             if (recPtr->next != recPtr) {
                 PR_REMOVE_LINK(recPtr);
@@ -1383,10 +1388,6 @@ nsHostResolver::ThreadFunc(void *arg)
         LOG(("DNS lookup thread - Calling getaddrinfo for host [%s].\n",
              rec->host));
 
-        int flags = PR_AI_ADDRCONFIG;
-        if (!(rec->flags & RES_CANON_NAME))
-            flags |= PR_AI_NOCANONNAME;
-
         TimeStamp startTime = TimeStamp::Now();
         MOZ_EVENT_TRACER_EXEC(rec, "net::dns::resolve");
 
@@ -1400,10 +1401,10 @@ nsHostResolver::ThreadFunc(void *arg)
         // because PR_GetAddrInfoByName doesn't support PR_AF_INET6.
         bool disableIPv4 = rec->af == PR_AF_INET6;
         uint16_t af = disableIPv4 ? PR_AF_UNSPEC : rec->af;
-        nsresult status = GetAddrInfo(rec->host, af, flags, &ai, getTtl);
+        nsresult status = GetAddrInfo(rec->host, af, rec->flags, &ai, getTtl);
 #if defined(RES_RETRY_ON_FAILURE)
         if (NS_FAILED(status) && rs.Reset()) {
-            status = GetAddrInfo(rec->host, af, flags, &ai, getTtl);
+            status = GetAddrInfo(rec->host, af, rec->flags, &ai, getTtl);
         }
 #endif
 

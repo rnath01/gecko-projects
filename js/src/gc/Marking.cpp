@@ -10,6 +10,7 @@
 
 #include "jsprf.h"
 
+#include "gc/GCInternals.h"
 #include "jit/IonCode.h"
 #include "js/SliceBudget.h"
 #include "vm/ArgumentsObject.h"
@@ -18,6 +19,7 @@
 #include "vm/Shape.h"
 #include "vm/Symbol.h"
 #include "vm/TypedArrayObject.h"
+#include "vm/UnboxedObject.h"
 
 #include "jscompartmentinlines.h"
 #include "jsinferinlines.h"
@@ -85,7 +87,7 @@ static inline void
 PushMarkStack(GCMarker *gcmarker, JS::Symbol *sym);
 
 static inline void
-PushMarkStack(GCMarker *gcmarker, types::TypeObject *thing);
+PushMarkStack(GCMarker *gcmarker, types::ObjectGroup *thing);
 
 namespace js {
 namespace gc {
@@ -96,7 +98,7 @@ static void MarkChildren(JSTracer *trc, JSScript *script);
 static void MarkChildren(JSTracer *trc, LazyScript *lazy);
 static void MarkChildren(JSTracer *trc, Shape *shape);
 static void MarkChildren(JSTracer *trc, BaseShape *base);
-static void MarkChildren(JSTracer *trc, types::TypeObject *type);
+static void MarkChildren(JSTracer *trc, types::ObjectGroup *group);
 static void MarkChildren(JSTracer *trc, jit::JitCode *code);
 
 } /* namespace gc */
@@ -160,28 +162,14 @@ CheckMarkedThing(JSTracer *trc, T **thingp)
     T *thing = *thingp;
     MOZ_ASSERT(*thingp);
 
-#ifdef JSGC_COMPACTING
     thing = MaybeForwarded(thing);
-#endif
-
-# ifdef JSGC_FJGENERATIONAL
-    /*
-     * The code below (runtimeFromMainThread(), etc) makes assumptions
-     * not valid for the ForkJoin worker threads during ForkJoin GGC,
-     * so just bail.
-     */
-    if (ForkJoinContext::current())
-        return;
-# endif
 
     /* This function uses data that's not available in the nursery. */
     if (IsInsideNursery(thing))
         return;
 
-#ifdef JSGC_COMPACTING
     MOZ_ASSERT_IF(!MovingTracer::IsMovingTracer(trc) && !Nursery::IsMinorCollectionTracer(trc),
                   !IsForwarded(*thingp));
-#endif
 
     /*
      * Permanent atoms are not associated with this runtime, but will be ignored
@@ -193,13 +181,8 @@ CheckMarkedThing(JSTracer *trc, T **thingp)
     Zone *zone = thing->zoneFromAnyThread();
     JSRuntime *rt = trc->runtime();
 
-#ifdef JSGC_COMPACTING
     MOZ_ASSERT_IF(!MovingTracer::IsMovingTracer(trc), CurrentThreadCanAccessZone(zone));
     MOZ_ASSERT_IF(!MovingTracer::IsMovingTracer(trc), CurrentThreadCanAccessRuntime(rt));
-#else
-    MOZ_ASSERT(CurrentThreadCanAccessZone(zone));
-    MOZ_ASSERT(CurrentThreadCanAccessRuntime(rt));
-#endif
 
     MOZ_ASSERT(zone->runtimeFromAnyThread() == trc->runtime());
     MOZ_ASSERT(trc->hasTracingDetails());
@@ -227,9 +210,11 @@ CheckMarkedThing(JSTracer *trc, T **thingp)
      * Try to assert that the thing is allocated.  This is complicated by the
      * fact that allocated things may still contain the poison pattern if that
      * part has not been overwritten, and that the free span list head in the
-     * ArenaHeader may not be synced with the real one in ArenaLists.
+     * ArenaHeader may not be synced with the real one in ArenaLists.  Also,
+     * background sweeping may be running and concurrently modifiying the free
+     * list.
      */
-    MOZ_ASSERT_IF(IsThingPoisoned(thing) && rt->isHeapBusy(),
+    MOZ_ASSERT_IF(IsThingPoisoned(thing) && rt->isHeapBusy() && !rt->gc.isBackgroundSweeping(),
                   !InFreeList(thing->asTenured().arenaHeader(), thing));
 #endif
 }
@@ -276,16 +261,6 @@ MarkInternal(JSTracer *trc, T **thingp)
     T *thing = *thingp;
 
     if (!trc->callback) {
-#ifdef JSGC_FJGENERATIONAL
-        /*
-         * This case should never be reached from PJS collections as
-         * those should all be using a ForkJoinNurseryCollectionTracer
-         * that carries a callback.
-         */
-        MOZ_ASSERT(!ForkJoinContext::current());
-        MOZ_ASSERT(!trc->runtime()->isFJMinorCollecting());
-#endif
-
         /*
          * We may mark a Nursery thing outside the context of the
          * MinorCollectionTracer because of a pre-barrier. The pre-barrier is
@@ -447,31 +422,17 @@ IsMarkedFromAnyThread(T **thingp)
     MOZ_ASSERT(thingp);
     MOZ_ASSERT(*thingp);
     JSRuntime* rt = (*thingp)->runtimeFromAnyThread();
-#ifdef JSGC_FJGENERATIONAL
-    // Must precede the case for GGC because IsInsideNursery()
-    // will also be true for the ForkJoinNursery.
-    if (rt->isFJMinorCollecting()) {
-        ForkJoinContext *ctx = ForkJoinContext::current();
-        ForkJoinNursery &nursery = ctx->nursery();
-        if (nursery.isInsideFromspace(*thingp))
-            return nursery.getForwardedPointer(thingp);
-    }
-    else
-#endif
-    {
-        if (IsInsideNursery(*thingp)) {
-            Nursery &nursery = rt->gc.nursery;
-            return nursery.getForwardedPointer(thingp);
-        }
+
+    if (IsInsideNursery(*thingp)) {
+        Nursery &nursery = rt->gc.nursery;
+        return nursery.getForwardedPointer(thingp);
     }
 
     Zone *zone = (*thingp)->asTenured().zoneFromAnyThread();
     if (!zone->isCollectingFromAnyThread() || zone->isGCFinished())
         return true;
-#ifdef JSGC_COMPACTING
     if (zone->isGCCompacting() && IsForwarded(*thingp))
         *thingp = Forwarded(*thingp);
-#endif
     return (*thingp)->asTenured().isMarked();
 }
 
@@ -498,23 +459,12 @@ IsAboutToBeFinalizedFromAnyThread(T **thingp)
     if (ThingIsPermanentAtom(thing) && !TlsPerThreadData.get()->associatedWith(rt))
         return false;
 
-#ifdef JSGC_FJGENERATIONAL
-    if (rt->isFJMinorCollecting()) {
-        ForkJoinContext *ctx = ForkJoinContext::current();
-        ForkJoinNursery &nursery = ctx->nursery();
-        if (nursery.isInsideFromspace(thing))
+    Nursery &nursery = rt->gc.nursery;
+    MOZ_ASSERT_IF(!rt->isHeapMinorCollecting(), !IsInsideNursery(thing));
+    if (rt->isHeapMinorCollecting()) {
+        if (IsInsideNursery(thing))
             return !nursery.getForwardedPointer(thingp);
-    }
-    else
-#endif
-    {
-        Nursery &nursery = rt->gc.nursery;
-        MOZ_ASSERT_IF(!rt->isHeapMinorCollecting(), !IsInsideNursery(thing));
-        if (rt->isHeapMinorCollecting()) {
-            if (IsInsideNursery(thing))
-                return !nursery.getForwardedPointer(thingp);
-            return false;
-        }
+        return false;
     }
 
     Zone *zone = thing->asTenured().zoneFromAnyThread();
@@ -523,12 +473,10 @@ IsAboutToBeFinalizedFromAnyThread(T **thingp)
             return false;
         return !thing->asTenured().isMarked();
     }
-#ifdef JSGC_COMPACTING
     else if (zone->isGCCompacting() && IsForwarded(thing)) {
         *thingp = Forwarded(thing);
         return false;
     }
-#endif
 
     return false;
 }
@@ -541,26 +489,15 @@ UpdateIfRelocated(JSRuntime *rt, T **thingp)
     if (!*thingp)
         return nullptr;
 
-#ifdef JSGC_FJGENERATIONAL
-    if (rt->isFJMinorCollecting()) {
-        ForkJoinContext *ctx = ForkJoinContext::current();
-        ForkJoinNursery &nursery = ctx->nursery();
-        if (nursery.isInsideFromspace(*thingp))
-            nursery.getForwardedPointer(thingp);
-        return *thingp;
-    }
-#endif
-
     if (rt->isHeapMinorCollecting() && IsInsideNursery(*thingp)) {
         rt->gc.nursery.getForwardedPointer(thingp);
         return *thingp;
     }
 
-#ifdef JSGC_COMPACTING
     Zone *zone = (*thingp)->zone();
     if (zone->isGCCompacting() && IsForwarded(*thingp))
         *thingp = Forwarded(*thingp);
-#endif
+
     return *thingp;
 }
 
@@ -677,7 +614,7 @@ DeclMarkerImpl(String, JSFlatString)
 DeclMarkerImpl(String, JSLinearString)
 DeclMarkerImpl(String, PropertyName)
 DeclMarkerImpl(Symbol, JS::Symbol)
-DeclMarkerImpl(TypeObject, js::types::TypeObject)
+DeclMarkerImpl(ObjectGroup, js::types::ObjectGroup)
 
 } /* namespace gc */
 } /* namespace js */
@@ -717,8 +654,8 @@ gc::MarkKind(JSTracer *trc, void **thingp, JSGCTraceKind kind)
       case JSTRACE_SHAPE:
         MarkInternal(trc, reinterpret_cast<Shape **>(thingp));
         break;
-      case JSTRACE_TYPE_OBJECT:
-        MarkInternal(trc, reinterpret_cast<types::TypeObject **>(thingp));
+      case JSTRACE_OBJECT_GROUP:
+        MarkInternal(trc, reinterpret_cast<types::ObjectGroup **>(thingp));
         break;
       default:
         MOZ_CRASH("Invalid trace kind in MarkKind.");
@@ -854,14 +791,14 @@ gc::MarkTypeRoot(JSTracer *trc, types::Type *v, const char *name)
 {
     JS_ROOT_MARKING_ASSERT(trc);
     trc->setTracingName(name);
-    if (v->isSingleObject()) {
-        JSObject *obj = v->singleObject();
+    if (v->isSingleton()) {
+        JSObject *obj = v->singleton();
         MarkInternal(trc, &obj);
         *v = types::Type::ObjectType(obj);
-    } else if (v->isTypeObject()) {
-        types::TypeObject *typeObj = v->typeObject();
-        MarkInternal(trc, &typeObj);
-        *v = types::Type::ObjectType(typeObj);
+    } else if (v->isGroup()) {
+        types::ObjectGroup *group = v->group();
+        MarkInternal(trc, &group);
+        *v = types::Type::ObjectType(group);
     }
 }
 
@@ -1129,7 +1066,7 @@ PushMarkStack(GCMarker *gcmarker, JSFunction *thing)
 }
 
 static void
-PushMarkStack(GCMarker *gcmarker, types::TypeObject *thing)
+PushMarkStack(GCMarker *gcmarker, types::ObjectGroup *thing)
 {
     JS_COMPARTMENT_ASSERT(gcmarker->runtime(), thing);
     MOZ_ASSERT(!IsInsideNursery(thing));
@@ -1485,48 +1422,64 @@ gc::MarkCycleCollectorChildren(JSTracer *trc, Shape *shape)
 }
 
 static void
-ScanTypeObject(GCMarker *gcmarker, types::TypeObject *type)
+ScanObjectGroup(GCMarker *gcmarker, types::ObjectGroup *group)
 {
-    unsigned count = type->getPropertyCount();
+    unsigned count = group->getPropertyCount();
     for (unsigned i = 0; i < count; i++) {
-        if (types::Property *prop = type->getProperty(i))
-            MarkId(gcmarker, &prop->id, "TypeObject property id");
+        if (types::Property *prop = group->getProperty(i))
+            MarkId(gcmarker, &prop->id, "ObjectGroup property id");
     }
 
-    if (type->proto().isObject())
-        PushMarkStack(gcmarker, type->proto().toObject());
+    if (group->proto().isObject())
+        PushMarkStack(gcmarker, group->proto().toObject());
 
-    if (type->singleton() && !type->lazy())
-        PushMarkStack(gcmarker, type->singleton());
+    if (group->singleton() && !group->lazy())
+        PushMarkStack(gcmarker, group->singleton());
 
-    if (type->newScript())
-        type->newScript()->trace(gcmarker);
+    if (group->newScript())
+        group->newScript()->trace(gcmarker);
 
-    if (type->interpretedFunction)
-        PushMarkStack(gcmarker, type->interpretedFunction);
+    if (group->maybeUnboxedLayout())
+        group->unboxedLayout().trace(gcmarker);
+
+    if (TypeDescr *descr = group->maybeTypeDescr())
+        PushMarkStack(gcmarker, descr);
+
+    if (JSFunction *fun = group->maybeInterpretedFunction())
+        PushMarkStack(gcmarker, fun);
 }
 
 static void
-gc::MarkChildren(JSTracer *trc, types::TypeObject *type)
+gc::MarkChildren(JSTracer *trc, types::ObjectGroup *group)
 {
-    unsigned count = type->getPropertyCount();
+    unsigned count = group->getPropertyCount();
     for (unsigned i = 0; i < count; i++) {
-        types::Property *prop = type->getProperty(i);
+        types::Property *prop = group->getProperty(i);
         if (prop)
-            MarkId(trc, &prop->id, "type_prop");
+            MarkId(trc, &prop->id, "group_property");
     }
 
-    if (type->proto().isObject())
-        MarkObject(trc, &type->protoRaw(), "type_proto");
+    if (group->proto().isObject())
+        MarkObject(trc, &group->protoRaw(), "group_proto");
 
-    if (type->singleton() && !type->lazy())
-        MarkObject(trc, &type->singletonRaw(), "type_singleton");
+    if (group->singleton() && !group->lazy())
+        MarkObject(trc, &group->singletonRaw(), "group_singleton");
 
-    if (type->newScript())
-        type->newScript()->trace(trc);
+    if (group->newScript())
+        group->newScript()->trace(trc);
 
-    if (type->interpretedFunction)
-        MarkObject(trc, &type->interpretedFunction, "type_function");
+    if (group->maybeUnboxedLayout())
+        group->unboxedLayout().trace(trc);
+
+    if (JSObject *descr = group->maybeTypeDescr()) {
+        MarkObjectUnbarriered(trc, &descr, "group_type_descr");
+        group->setTypeDescr(&descr->as<TypeDescr>());
+    }
+
+    if (JSObject *fun = group->maybeInterpretedFunction()) {
+        MarkObjectUnbarriered(trc, &fun, "group_function");
+        group->setInterpretedFunction(&fun->as<JSFunction>());
+    }
 }
 
 static void
@@ -1579,8 +1532,8 @@ gc::PushArena(GCMarker *gcmarker, ArenaHeader *aheader)
         PushArenaTyped<js::Shape>(gcmarker, aheader);
         break;
 
-      case JSTRACE_TYPE_OBJECT:
-        PushArenaTyped<js::types::TypeObject>(gcmarker, aheader);
+      case JSTRACE_OBJECT_GROUP:
+        PushArenaTyped<js::types::ObjectGroup>(gcmarker, aheader);
         break;
 
       default:
@@ -1698,8 +1651,8 @@ GCMarker::restoreValueArray(NativeObject *obj, void **vpp, void **endp)
 void
 GCMarker::processMarkStackOther(uintptr_t tag, uintptr_t addr)
 {
-    if (tag == TypeTag) {
-        ScanTypeObject(this, reinterpret_cast<types::TypeObject *>(addr));
+    if (tag == GroupTag) {
+        ScanObjectGroup(this, reinterpret_cast<types::ObjectGroup *>(addr));
     } else if (tag == SavedValueArrayTag) {
         MOZ_ASSERT(!(addr & CellMask));
         NativeObject *obj = reinterpret_cast<NativeObject *>(addr);
@@ -1754,6 +1707,9 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
     HeapSlot *vp, *end;
     JSObject *obj;
 
+    const int32_t *unboxedTraceList;
+    uint8_t *unboxedMemory;
+
     uintptr_t addr = stack.pop();
     uintptr_t tag = addr & StackTagMask;
     addr &= ~StackTagMask;
@@ -1783,6 +1739,12 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
   scan_value_array:
     MOZ_ASSERT(vp <= end);
     while (vp != end) {
+        budget.step();
+        if (budget.isOverBudget()) {
+            pushValueArray(obj, vp, end);
+            return;
+        }
+
         const Value &v = *vp++;
         if (v.isString()) {
             markAndScanString(obj, v.toString());
@@ -1799,28 +1761,23 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
     }
     return;
 
-  scan_typed_obj:
+  scan_unboxed:
     {
-        TypeDescr *descr = &obj->as<InlineOpaqueTypedObject>().typeDescr();
-        if (!descr->hasTraceList())
-            return;
-        const int32_t *list = descr->traceList();
-        uint8_t *memory = obj->as<InlineOpaqueTypedObject>().inlineTypedMem();
-        while (*list != -1) {
-            JSString *str = *reinterpret_cast<JSString **>(memory + *list);
+        while (*unboxedTraceList != -1) {
+            JSString *str = *reinterpret_cast<JSString **>(unboxedMemory + *unboxedTraceList);
             markAndScanString(obj, str);
-            list++;
+            unboxedTraceList++;
         }
-        list++;
-        while (*list != -1) {
-            JSObject *obj2 = *reinterpret_cast<JSObject **>(memory + *list);
+        unboxedTraceList++;
+        while (*unboxedTraceList != -1) {
+            JSObject *obj2 = *reinterpret_cast<JSObject **>(unboxedMemory + *unboxedTraceList);
             if (obj2 && markObject(obj, obj2))
                 pushObject(obj2);
-            list++;
+            unboxedTraceList++;
         }
-        list++;
-        while (*list != -1) {
-            const Value &v = *reinterpret_cast<Value *>(memory + *list);
+        unboxedTraceList++;
+        while (*unboxedTraceList != -1) {
+            const Value &v = *reinterpret_cast<Value *>(unboxedMemory + *unboxedTraceList);
             if (v.isString()) {
                 markAndScanString(obj, v.toString());
             } else if (v.isObject()) {
@@ -1830,7 +1787,7 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
             } else if (v.isSymbol()) {
                 markAndScanSymbol(obj, v.toSymbol());
             }
-            list++;
+            unboxedTraceList++;
         }
         return;
     }
@@ -1845,25 +1802,37 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
             return;
         }
 
-        types::TypeObject *type = obj->typeFromGC();
-        PushMarkStack(this, type);
+        types::ObjectGroup *group = obj->groupFromGC();
+        PushMarkStack(this, group);
 
         Shape *shape = obj->lastProperty();
         PushMarkStack(this, shape);
 
         /* Call the trace hook if necessary. */
-        const Class *clasp = type->clasp();
+        const Class *clasp = group->clasp();
         if (clasp->trace) {
             // Global objects all have the same trace hook. That hook is safe without barriers
             // if the global has no custom trace hook of its own, or has been moved to a different
             // compartment, and so can't have one.
-            MOZ_ASSERT_IF(runtime()->gc.isIncrementalGCEnabled() &&
-                          !(clasp->trace == JS_GlobalObjectTraceHook &&
-                            (!obj->compartment()->options().getTrace() ||
-                             !obj->isOwnGlobal())),
+            MOZ_ASSERT_IF(!(clasp->trace == JS_GlobalObjectTraceHook &&
+                            (!obj->compartment()->options().getTrace() || !obj->isOwnGlobal())),
                           clasp->flags & JSCLASS_IMPLEMENTS_BARRIERS);
-            if (clasp->trace == InlineTypedObject::obj_trace)
-                goto scan_typed_obj;
+            if (clasp->trace == InlineTypedObject::obj_trace) {
+                TypeDescr *descr = &obj->as<InlineOpaqueTypedObject>().typeDescr();
+                if (!descr->hasTraceList())
+                    return;
+                unboxedTraceList = descr->traceList();
+                unboxedMemory = obj->as<InlineOpaqueTypedObject>().inlineTypedMem();
+                goto scan_unboxed;
+            }
+            if (clasp == &UnboxedPlainObject::class_) {
+                const UnboxedLayout &layout = obj->as<UnboxedPlainObject>().layout();
+                unboxedTraceList = layout.traceList();
+                if (!unboxedTraceList)
+                    return;
+                unboxedMemory = obj->as<UnboxedPlainObject>().data();
+                goto scan_unboxed;
+            }
             clasp->trace(this, obj);
         }
 
@@ -1987,8 +1956,8 @@ js::TraceChildren(JSTracer *trc, void *thing, JSGCTraceKind kind)
         MarkChildren(trc, static_cast<Shape *>(thing));
         break;
 
-      case JSTRACE_TYPE_OBJECT:
-        MarkChildren(trc, (types::TypeObject *)thing);
+      case JSTRACE_OBJECT_GROUP:
+        MarkChildren(trc, (types::ObjectGroup *)thing);
         break;
 
       default:

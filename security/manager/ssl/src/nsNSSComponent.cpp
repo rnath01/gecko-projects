@@ -9,11 +9,14 @@
 #include "ExtendedValidation.h"
 #include "NSSCertDBTrustDomain.h"
 #include "mozilla/Telemetry.h"
+#include "nsAppDirectoryServiceDefs.h"
 #include "nsCertVerificationThread.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsComponentManagerUtils.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsICertOverrideService.h"
+#include "NSSCertDBTrustDomain.h"
+#include "nsThreadUtils.h"
 #include "mozilla/Preferences.h"
 #include "nsThreadUtils.h"
 #include "mozilla/PublicSSL.h"
@@ -154,6 +157,7 @@ bool EnsureNSSInitialized(EnsureNSSOperator op)
     // call do_GetService for nss component to ensure it.
   case nssEnsure:
   case nssEnsureOnChromeOnly:
+  case nssEnsureChromeOrContent:
     // We are reentered during nss component creation or nss component is already up
     if (PR_AtomicAdd(&haveLoaded, 0) || loading)
       return true;
@@ -179,9 +183,9 @@ bool EnsureNSSInitialized(EnsureNSSOperator op)
 }
 
 static void
-GetOCSPBehaviorFromPrefs(/*out*/ CertVerifier::ocsp_download_config* odc,
-                         /*out*/ CertVerifier::ocsp_strict_config* osc,
-                         /*out*/ CertVerifier::ocsp_get_config* ogc,
+GetOCSPBehaviorFromPrefs(/*out*/ CertVerifier::OcspDownloadConfig* odc,
+                         /*out*/ CertVerifier::OcspStrictConfig* osc,
+                         /*out*/ CertVerifier::OcspGetConfig* ogc,
                          const MutexAutoLock& /*proofOfLock*/)
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -191,17 +195,17 @@ GetOCSPBehaviorFromPrefs(/*out*/ CertVerifier::ocsp_download_config* odc,
 
   // 0 = disabled, otherwise enabled
   *odc = Preferences::GetInt("security.OCSP.enabled", 1)
-       ? CertVerifier::ocsp_on
-       : CertVerifier::ocsp_off;
+       ? CertVerifier::ocspOn
+       : CertVerifier::ocspOff;
 
   *osc = Preferences::GetBool("security.OCSP.require", false)
-       ? CertVerifier::ocsp_strict
-       : CertVerifier::ocsp_relaxed;
+       ? CertVerifier::ocspStrict
+       : CertVerifier::ocspRelaxed;
 
   // XXX: Always use POST for OCSP; see bug 871954 for undoing this.
   *ogc = Preferences::GetBool("security.OCSP.GET.enabled", false)
-       ? CertVerifier::ocsp_get_enabled
-       : CertVerifier::ocsp_get_disabled;
+       ? CertVerifier::ocspGetEnabled
+       : CertVerifier::ocspGetDisabled;
 
   SSL_ClearSessionCache();
 }
@@ -730,7 +734,6 @@ nsNSSComponent::FillTLSVersionRange(SSLVersionRange& rangeOut,
 
 static const int32_t OCSP_ENABLED_DEFAULT = 1;
 static const bool REQUIRE_SAFE_NEGOTIATION_DEFAULT = false;
-static const bool ALLOW_UNRESTRICTED_RENEGO_DEFAULT = false;
 static const bool FALSE_START_ENABLED_DEFAULT = true;
 static const bool NPN_ENABLED_DEFAULT = true;
 static const bool ALPN_ENABLED_DEFAULT = false;
@@ -872,9 +875,9 @@ void nsNSSComponent::setValidationOptions(bool isInitialSetting,
     pinningMode = CertVerifier::pinningDisabled;
   }
 
-  CertVerifier::ocsp_download_config odc;
-  CertVerifier::ocsp_strict_config osc;
-  CertVerifier::ocsp_get_config ogc;
+  CertVerifier::OcspDownloadConfig odc;
+  CertVerifier::OcspStrictConfig osc;
+  CertVerifier::OcspGetConfig ogc;
 
   GetOCSPBehaviorFromPrefs(&odc, &osc, &ogc, lock);
   mDefaultCertVerifier = new SharedCertVerifier(odc, osc, ogc, pinningMode);
@@ -1050,13 +1053,7 @@ nsNSSComponent::InitializeNSS()
                          REQUIRE_SAFE_NEGOTIATION_DEFAULT);
   SSL_OptionSetDefault(SSL_REQUIRE_SAFE_NEGOTIATION, requireSafeNegotiation);
 
-  bool allowUnrestrictedRenego =
-    Preferences::GetBool("security.ssl.allow_unrestricted_renego_everywhere__temporarily_available_pref",
-                         ALLOW_UNRESTRICTED_RENEGO_DEFAULT);
-  SSL_OptionSetDefault(SSL_ENABLE_RENEGOTIATION,
-                       allowUnrestrictedRenego ?
-                         SSL_RENEGOTIATE_UNRESTRICTED :
-                         SSL_RENEGOTIATE_REQUIRES_XTN);
+  SSL_OptionSetDefault(SSL_ENABLE_RENEGOTIATION, SSL_RENEGOTIATE_REQUIRES_XTN);
 
   SSL_OptionSetDefault(SSL_ENABLE_FALSE_START,
                        Preferences::GetBool("security.ssl.enable_false_start",
@@ -1075,6 +1072,12 @@ nsNSSComponent::InitializeNSS()
 
   if (NS_FAILED(InitializeCipherSuite())) {
     PR_LOG(gPIPNSSLog, PR_LOG_ERROR, ("Unable to initialize cipher suite settings\n"));
+    return NS_ERROR_FAILURE;
+  }
+
+  // ensure the CertBlocklist is initialised
+  nsCOMPtr<nsICertBlocklist> certList = do_GetService(NS_CERTBLOCKLIST_CONTRACTID);
+  if (!certList) {
     return NS_ERROR_FAILURE;
   }
 
@@ -1142,8 +1145,6 @@ nsNSSComponent::ShutdownNSS()
   }
 }
 
-static const bool SEND_LM_DEFAULT = false;
-
 NS_IMETHODIMP
 nsNSSComponent::Init()
 {
@@ -1178,10 +1179,6 @@ nsNSSComponent::Init()
     mNSSErrorsBundle->GetStringFromName(dummy_name.get(),
                                         getter_Copies(result));
   }
-
-  bool sendLM = Preferences::GetBool("network.ntlm.send-lm-response",
-                                     SEND_LM_DEFAULT);
-  nsNTLMAuthModule::SetSendLM(sendLM);
 
   // Do that before NSS init, to make sure we won't get unloaded.
   RegisterObservers();
@@ -1333,14 +1330,6 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
         Preferences::GetBool("security.ssl.require_safe_negotiation",
                              REQUIRE_SAFE_NEGOTIATION_DEFAULT);
       SSL_OptionSetDefault(SSL_REQUIRE_SAFE_NEGOTIATION, requireSafeNegotiation);
-    } else if (prefName.EqualsLiteral("security.ssl.allow_unrestricted_renego_everywhere__temporarily_available_pref")) {
-      bool allowUnrestrictedRenego =
-        Preferences::GetBool("security.ssl.allow_unrestricted_renego_everywhere__temporarily_available_pref",
-                             ALLOW_UNRESTRICTED_RENEGO_DEFAULT);
-      SSL_OptionSetDefault(SSL_ENABLE_RENEGOTIATION,
-                           allowUnrestrictedRenego ?
-                             SSL_RENEGOTIATE_UNRESTRICTED :
-                             SSL_RENEGOTIATE_REQUIRES_XTN);
     } else if (prefName.EqualsLiteral("security.ssl.enable_false_start")) {
       SSL_OptionSetDefault(SSL_ENABLE_FALSE_START,
                            Preferences::GetBool("security.ssl.enable_false_start",
@@ -1362,11 +1351,6 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
                prefName.EqualsLiteral("security.cert_pinning.enforcement_level")) {
       MutexAutoLock lock(mutex);
       setValidationOptions(false, lock);
-    } else if (prefName.EqualsLiteral("network.ntlm.send-lm-response")) {
-      bool sendLM = Preferences::GetBool("network.ntlm.send-lm-response",
-                                         SEND_LM_DEFAULT);
-      nsNTLMAuthModule::SetSendLM(sendLM);
-      clearSessionCache = false;
     } else {
       clearSessionCache = false;
     }

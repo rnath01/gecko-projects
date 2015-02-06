@@ -27,6 +27,8 @@ import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
+import android.net.wifi.WifiManager.WifiLock;
 import android.os.Environment;
 import android.support.v4.net.ConnectivityManagerCompat;
 import android.support.v4.app.NotificationCompat;
@@ -70,6 +72,7 @@ public class UpdateService extends IntentService {
     private static final String KEY_LAST_FILE_NAME = "UpdateService.lastFileName";
     private static final String KEY_LAST_ATTEMPT_DATE = "UpdateService.lastAttemptDate";
     private static final String KEY_AUTODOWNLOAD_POLICY = "UpdateService.autoDownloadPolicy";
+    private static final String KEY_UPDATE_URL = "UpdateService.updateUrl";
 
     private SharedPreferences mPrefs;
 
@@ -77,11 +80,55 @@ public class UpdateService extends IntentService {
     private ConnectivityManager mConnectivityManager;
     private Builder mBuilder;
 
+    private volatile WifiLock mWifiLock;
+
     private boolean mDownloading;
     private boolean mCancelDownload;
     private boolean mApplyImmediately;
 
     private CrashHandler mCrashHandler;
+
+    public enum AutoDownloadPolicy {
+        NONE(-1),
+        WIFI(0),
+        DISABLED(1),
+        ENABLED(2);
+
+        public final int value;
+
+        private AutoDownloadPolicy(int value) {
+            this.value = value;
+        }
+
+        private final static AutoDownloadPolicy[] sValues = AutoDownloadPolicy.values();
+
+        public static AutoDownloadPolicy get(int value) {
+            for (AutoDownloadPolicy id: sValues) {
+                if (id.value == value) {
+                    return id;
+                }
+            }
+            return NONE;
+        }
+
+        public static AutoDownloadPolicy get(String name) {
+            for (AutoDownloadPolicy id: sValues) {
+                if (name.equalsIgnoreCase(id.toString())) {
+                    return id;
+                }
+            }
+            return NONE;
+        }
+    }
+
+    private enum CheckUpdateResult {
+        // Keep these in sync with mobile/android/chrome/content/about.xhtml
+        NOT_AVAILABLE,
+        AVAILABLE,
+        DOWNLOADING,
+        DOWNLOADED
+    }
+
 
     public UpdateService() {
         super("updater");
@@ -96,6 +143,8 @@ public class UpdateService extends IntentService {
         mPrefs = getSharedPreferences(PREFS_NAME, 0);
         mNotificationManager = (NotificationManager)getSystemService(Context.NOTIFICATION_SERVICE);
         mConnectivityManager = (ConnectivityManager)getSystemService(Context.CONNECTIVITY_SERVICE);
+        mWifiLock = ((WifiManager)getSystemService(Context.WIFI_SERVICE))
+                    .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, PREFS_NAME);
         mCancelDownload = false;
     }
 
@@ -103,6 +152,10 @@ public class UpdateService extends IntentService {
     public void onDestroy() {
         mCrashHandler.unregister();
         mCrashHandler = null;
+
+        if (mWifiLock.isHeld()) {
+            mWifiLock.release();
+        }
     }
 
     @Override
@@ -118,11 +171,6 @@ public class UpdateService extends IntentService {
         } else if (UpdateServiceHelper.ACTION_CANCEL_DOWNLOAD.equals(intent.getAction())) {
             mCancelDownload = true;
         } else {
-            if (!UpdateServiceHelper.ACTION_APPLY_UPDATE.equals(intent.getAction())) {
-                // Delete the update package used to install the current version.
-                deleteUpdatePackage(getLastFileName());
-            }
-
             super.onStartCommand(intent, flags, startId);
         }
 
@@ -132,9 +180,17 @@ public class UpdateService extends IntentService {
     @Override
     protected void onHandleIntent (Intent intent) {
         if (UpdateServiceHelper.ACTION_REGISTER_FOR_UPDATES.equals(intent.getAction())) {
-            int policy = intent.getIntExtra(UpdateServiceHelper.EXTRA_AUTODOWNLOAD_NAME, -1);
-            if (policy >= 0) {
+            AutoDownloadPolicy policy = AutoDownloadPolicy.get(
+                intent.getIntExtra(UpdateServiceHelper.EXTRA_AUTODOWNLOAD_NAME,
+                                   AutoDownloadPolicy.NONE.value));
+
+            if (policy != AutoDownloadPolicy.NONE) {
                 setAutoDownloadPolicy(policy);
+            }
+
+            String url = intent.getStringExtra(UpdateServiceHelper.EXTRA_UPDATE_URL_NAME);
+            if (url != null) {
+                setUpdateUrl(url);
             }
 
             registerForUpdates(false);
@@ -155,7 +211,7 @@ public class UpdateService extends IntentService {
         return (flags & flag) == flag;
     }
 
-    private void sendCheckUpdateResult(UpdateServiceHelper.CheckUpdateResult result) {
+    private void sendCheckUpdateResult(CheckUpdateResult result) {
         Intent resultIntent = new Intent(UpdateServiceHelper.ACTION_CHECK_UPDATE_RESULT);
         resultIntent.putExtra("result", result.toString());
         sendBroadcast(resultIntent);
@@ -208,7 +264,7 @@ public class UpdateService extends IntentService {
         if (netInfo == null || !netInfo.isConnected()) {
             Log.i(LOGTAG, "not connected to the network");
             registerForUpdates(true);
-            sendCheckUpdateResult(UpdateServiceHelper.CheckUpdateResult.NOT_AVAILABLE);
+            sendCheckUpdateResult(CheckUpdateResult.NOT_AVAILABLE);
             return;
         }
 
@@ -219,30 +275,28 @@ public class UpdateService extends IntentService {
 
         if (!haveUpdate) {
             Log.i(LOGTAG, "no update available");
-            sendCheckUpdateResult(UpdateServiceHelper.CheckUpdateResult.NOT_AVAILABLE);
+            sendCheckUpdateResult(CheckUpdateResult.NOT_AVAILABLE);
             return;
         }
 
         Log.i(LOGTAG, "update available, buildID = " + info.buildID);
 
-        int autoDownloadPolicy = getAutoDownloadPolicy();
+        AutoDownloadPolicy policy = getAutoDownloadPolicy();
 
-
-        /**
-         * We only start a download automatically if one of following criteria are met:
-         *
-         * - We have a FORCE_DOWNLOAD flag passed in
-         * - The preference is set to 'always'
-         * - The preference is set to 'wifi' and we are using a non-metered network (i.e. the user
-         *   is OK with large data transfers occurring)
-         */
+        // We only start a download automatically if one of following criteria are met:
+        //
+        // - We have a FORCE_DOWNLOAD flag passed in
+        // - The preference is set to 'always'
+        // - The preference is set to 'wifi' and we are using a non-metered network (i.e. the user
+        //   is OK with large data transfers occurring)
+        //
         boolean shouldStartDownload = hasFlag(flags, UpdateServiceHelper.FLAG_FORCE_DOWNLOAD) ||
-            autoDownloadPolicy == UpdateServiceHelper.AUTODOWNLOAD_ENABLED ||
-            (autoDownloadPolicy == UpdateServiceHelper.AUTODOWNLOAD_WIFI && !ConnectivityManagerCompat.isActiveNetworkMetered(mConnectivityManager));
+            policy == AutoDownloadPolicy.ENABLED ||
+            (policy == AutoDownloadPolicy.WIFI && !ConnectivityManagerCompat.isActiveNetworkMetered(mConnectivityManager));
 
         if (!shouldStartDownload) {
-            Log.i(LOGTAG, "not initiating automatic update download due to policy " + autoDownloadPolicy);
-            sendCheckUpdateResult(UpdateServiceHelper.CheckUpdateResult.AVAILABLE);
+            Log.i(LOGTAG, "not initiating automatic update download due to policy " + policy.toString());
+            sendCheckUpdateResult(CheckUpdateResult.AVAILABLE);
 
             // We aren't autodownloading here, so prompt to start the update
             Notification notification = new Notification(R.drawable.ic_status_logo, null, System.currentTimeMillis());
@@ -264,14 +318,14 @@ public class UpdateService extends IntentService {
 
         File pkg = downloadUpdatePackage(info, hasFlag(flags, UpdateServiceHelper.FLAG_OVERWRITE_EXISTING));
         if (pkg == null) {
-            sendCheckUpdateResult(UpdateServiceHelper.CheckUpdateResult.NOT_AVAILABLE);
+            sendCheckUpdateResult(CheckUpdateResult.NOT_AVAILABLE);
             return;
         }
 
         Log.i(LOGTAG, "have update package at " + pkg);
 
         saveUpdateInfo(info, pkg);
-        sendCheckUpdateResult(UpdateServiceHelper.CheckUpdateResult.DOWNLOADED);
+        sendCheckUpdateResult(CheckUpdateResult.DOWNLOADED);
 
         if (mApplyImmediately) {
             applyUpdate(pkg);
@@ -311,7 +365,12 @@ public class UpdateService extends IntentService {
 
     private UpdateInfo findUpdate(boolean force) {
         try {
-            URL url = UpdateServiceHelper.getUpdateUrl(this, force);
+            URL url = getUpdateUrl(force);
+
+            if (url == null) {
+              Log.e(LOGTAG, "failed to get update URL");
+              return null;
+            }
 
             DocumentBuilder builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
             Document dom = builder.parse(openConnectionWithProxy(url).getInputStream());
@@ -465,8 +524,13 @@ public class UpdateService extends IntentService {
             }
         }
 
+        if (!info.buildID.equals(getLastBuildID())) {
+            // Delete the previous package when a new version becomes available.
+            deleteUpdatePackage(getLastFileName());
+        }
+
         Log.i(LOGTAG, "downloading update package");
-        sendCheckUpdateResult(UpdateServiceHelper.CheckUpdateResult.DOWNLOADING);
+        sendCheckUpdateResult(CheckUpdateResult.DOWNLOADING);
 
         OutputStream output = null;
         InputStream input = null;
@@ -476,6 +540,12 @@ public class UpdateService extends IntentService {
         showDownloadNotification(downloadFile);
 
         try {
+            NetworkInfo netInfo = mConnectivityManager.getActiveNetworkInfo();
+            if (netInfo != null && netInfo.isConnected() &&
+                netInfo.getType() == ConnectivityManager.TYPE_WIFI) {
+                mWifiLock.acquire();
+            }
+
             URLConnection conn = openConnectionWithProxy(info.url);
             int length = conn.getContentLength();
 
@@ -530,6 +600,10 @@ public class UpdateService extends IntentService {
             } catch (java.io.IOException e) {}
 
             mDownloading = false;
+
+            if (mWifiLock.isHeld()) {
+                mWifiLock.release();
+            }
         }
     }
 
@@ -625,13 +699,23 @@ public class UpdateService extends IntentService {
         editor.commit();
     }
 
-    private int getAutoDownloadPolicy() {
-        return mPrefs.getInt(KEY_AUTODOWNLOAD_POLICY, UpdateServiceHelper.AUTODOWNLOAD_WIFI);
+    private AutoDownloadPolicy getAutoDownloadPolicy() {
+        return AutoDownloadPolicy.get(mPrefs.getInt(KEY_AUTODOWNLOAD_POLICY, AutoDownloadPolicy.WIFI.value));
     }
 
-    private void setAutoDownloadPolicy(int policy) {
+    private void setAutoDownloadPolicy(AutoDownloadPolicy policy) {
         SharedPreferences.Editor editor = mPrefs.edit();
-        editor.putInt(KEY_AUTODOWNLOAD_POLICY, policy);
+        editor.putInt(KEY_AUTODOWNLOAD_POLICY, policy.value);
+        editor.commit();
+    }
+
+    private URL getUpdateUrl(boolean force) {
+        return UpdateServiceHelper.expandUpdateUrl(this, mPrefs.getString(KEY_UPDATE_URL, null), force);
+    }
+
+    private void setUpdateUrl(String url) {
+        SharedPreferences.Editor editor = mPrefs.edit();
+        editor.putString(KEY_UPDATE_URL, url);
         editor.commit();
     }
 

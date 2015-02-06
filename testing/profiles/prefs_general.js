@@ -14,6 +14,8 @@ user_pref("dom.forms.color", true); // on for testing
 user_pref("dom.max_script_run_time", 0); // no slow script dialogs
 user_pref("hangmonitor.timeout", 0); // no hang monitor
 user_pref("dom.max_chrome_script_run_time", 0);
+user_pref("dom.max_child_script_run_time", 0);
+user_pref("dom.ipc.reportProcessHangs", false); // process hang monitor
 user_pref("dom.popup_maximum", -1);
 user_pref("dom.send_after_paint_to_content", true);
 user_pref("dom.successive_dialog_time_limit", 0);
@@ -41,6 +43,7 @@ user_pref("media.volume_scale", "0.01");
 user_pref("security.warn_viewing_mixed", false);
 user_pref("app.update.enabled", false);
 user_pref("app.update.staging.enabled", false);
+user_pref("app.update.url.android", "");
 // Make sure GMPInstallManager won't hit the network.
 user_pref("media.gmp-manager.url.override", "http://%(server)s/dummy-gmp-manager.xml");
 user_pref("browser.panorama.experienced_first_run", true); // Assume experienced
@@ -157,6 +160,7 @@ user_pref("layout.spammy_warnings.enabled", false);
 
 // Enable Media Source Extensions for testing
 user_pref("media.mediasource.enabled", true);
+user_pref("media.mediasource.youtubeonly", false);
 user_pref("media.mediasource.mp4.enabled", true);
 user_pref("media.mediasource.webm.enabled", true);
 
@@ -259,6 +263,7 @@ user_pref("browser.newtabpage.directory.source", 'data:application/json,{"testin
 user_pref("browser.newtabpage.directory.ping", "");
 
 // Enable Loop
+user_pref("loop.debug.loglevel", "All");
 user_pref("loop.enabled", true);
 user_pref("loop.throttled", false);
 user_pref("loop.oauth.google.URL", "http://%(server)s/browser/browser/components/loop/test/mochitest/google_service.sjs?action=");
@@ -279,6 +284,10 @@ user_pref("browser.search.isUS", true);
 user_pref("browser.search.countryCode", "US");
 
 user_pref("media.eme.enabled", true);
+
+#if defined(XP_WIN)
+user_pref("media.decoder.heuristic.dormant.timeout", 0);
+#endif
 
 // Don't prompt about e10s
 user_pref("browser.displayedE10SPrompt.1", 5);

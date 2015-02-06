@@ -809,16 +809,24 @@ js::atomics_futexWait(JSContext *cx, unsigned argc, Value *vp)
       case JS::PerRuntimeFutexAPI::Timedout:
         r.setInt32(AtomicsObject::FutexTimedout);
         break;
-      case JS::PerRuntimeFutexAPI::ErrorTooLong:
-        // This is a hack, but it's serviceable.
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_ATOMICS_TOO_LONG);
+      case JS::PerRuntimeFutexAPI::ErrorException:
+        MOZ_ASSERT(JS_IsExceptionPending(cx));
         retval = false;
         break;
       case JS::PerRuntimeFutexAPI::InterruptForTerminate:
-        // Throw an uncatchable exception.
         JS_ClearPendingException(cx);
         retval = false;
         break;
+      case JS::PerRuntimeFutexAPI::WaitingNotAllowed:
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_ATOMICS_WAIT_NOT_ALLOWED);
+        retval = false;
+        break;
+      case JS::PerRuntimeFutexAPI::ErrorTooLong:
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_ATOMICS_TOO_LONG);
+        retval = false;
+        break;
+      default:
+        MOZ_CRASH();
     }
 
     if (w.lower_pri == &w) {
@@ -1059,7 +1067,7 @@ AtomicsObject::initClass(JSContext *cx, Handle<GlobalObject *> global)
     RootedValue AtomicsValue(cx, ObjectValue(*Atomics));
 
     // Everything is set up, install Atomics on the global object.
-    if (!JSObject::defineProperty(cx, global, cx->names().Atomics, AtomicsValue, nullptr, nullptr, 0))
+    if (!DefineProperty(cx, global, cx->names().Atomics, AtomicsValue, nullptr, nullptr, 0))
         return nullptr;
 
     global->setConstructor(JSProto_Atomics, AtomicsValue);

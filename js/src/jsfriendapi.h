@@ -9,7 +9,6 @@
 
 #include "mozilla/Casting.h"
 #include "mozilla/MemoryReporting.h"
-#include "mozilla/TypedEnum.h"
 #include "mozilla/UniquePtr.h"
 
 #include "jsapi.h" // For JSAutoByteString.  See bug 1033916.
@@ -92,7 +91,7 @@ JS_IsDeadWrapper(JSObject *obj);
  * process. Uses bounded stack space.
  */
 extern JS_FRIEND_API(void)
-JS_TraceShapeCycleCollectorChildren(JSTracer *trc, void *shape);
+JS_TraceShapeCycleCollectorChildren(JSTracer *trc, JS::GCCellPtr shape);
 
 enum {
     JS_TELEMETRY_GC_REASON,
@@ -224,10 +223,19 @@ JS_CopyPropertiesFrom(JSContext *cx, JS::HandleObject target, JS::HandleObject o
  * property of the given name exists on |obj|.
  *
  * On entry, |cx| must be same-compartment with |obj|.
+ *
+ * The copyBehavior argument controls what happens with
+ * non-configurable properties.
  */
+typedef enum  {
+    MakeNonConfigurableIntoConfigurable,
+    CopyNonConfigurableAsIs
+} PropertyCopyBehavior;
+
 extern JS_FRIEND_API(bool)
 JS_CopyPropertyFrom(JSContext *cx, JS::HandleId id, JS::HandleObject target,
-                    JS::HandleObject obj);
+                    JS::HandleObject obj,
+                    PropertyCopyBehavior copyBehavior = CopyNonConfigurableAsIs);
 
 extern JS_FRIEND_API(bool)
 JS_WrapPropertyDescriptor(JSContext *cx, JS::MutableHandle<JSPropertyDescriptor> desc);
@@ -289,21 +297,13 @@ namespace js {
         JS_NULL_CLASS_SPEC,                                                             \
         ext,                                                                            \
         {                                                                               \
-            js::proxy_LookupGeneric,                                                    \
             js::proxy_LookupProperty,                                                   \
-            js::proxy_LookupElement,                                                    \
-            js::proxy_DefineGeneric,                                                    \
             js::proxy_DefineProperty,                                                   \
-            js::proxy_DefineElement,                                                    \
-            js::proxy_GetGeneric,                                                       \
             js::proxy_GetProperty,                                                      \
-            js::proxy_GetElement,                                                       \
-            js::proxy_SetGeneric,                                                       \
             js::proxy_SetProperty,                                                      \
-            js::proxy_SetElement,                                                       \
-            js::proxy_GetGenericAttributes,                                             \
-            js::proxy_SetGenericAttributes,                                             \
-            js::proxy_DeleteGeneric,                                                    \
+            js::proxy_GetOwnPropertyDescriptor,                                         \
+            js::proxy_SetPropertyAttributes,                                            \
+            js::proxy_DeleteProperty,                                                   \
             js::proxy_Watch, js::proxy_Unwatch,                                         \
             js::proxy_GetElements,                                                      \
             nullptr,             /* enumerate       */                                  \
@@ -327,48 +327,25 @@ namespace js {
  */
 
 extern JS_FRIEND_API(bool)
-proxy_LookupGeneric(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::MutableHandleObject objp,
+proxy_LookupProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::MutableHandleObject objp,
                     JS::MutableHandle<Shape*> propp);
 extern JS_FRIEND_API(bool)
-proxy_LookupProperty(JSContext *cx, JS::HandleObject obj, JS::Handle<PropertyName*> name,
-                     JS::MutableHandleObject objp, JS::MutableHandle<Shape*> propp);
+proxy_DefineProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::HandleValue value,
+                     JSPropertyOp getter, JSStrictPropertyOp setter, unsigned attrs);
 extern JS_FRIEND_API(bool)
-proxy_LookupElement(JSContext *cx, JS::HandleObject obj, uint32_t index, JS::MutableHandleObject objp,
-                    JS::MutableHandle<Shape*> propp);
+proxy_GetProperty(JSContext *cx, JS::HandleObject obj, JS::HandleObject receiver, JS::HandleId id,
+                  JS::MutableHandleValue vp);
 extern JS_FRIEND_API(bool)
-proxy_DefineGeneric(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::HandleValue value,
-                    JSPropertyOp getter, JSStrictPropertyOp setter, unsigned attrs);
-extern JS_FRIEND_API(bool)
-proxy_DefineProperty(JSContext *cx, JS::HandleObject obj, JS::Handle<PropertyName*> name,
-                     JS::HandleValue value, JSPropertyOp getter, JSStrictPropertyOp setter,
-                     unsigned attrs);
-extern JS_FRIEND_API(bool)
-proxy_DefineElement(JSContext *cx, JS::HandleObject obj, uint32_t index, JS::HandleValue value,
-                    JSPropertyOp getter, JSStrictPropertyOp setter, unsigned attrs);
-extern JS_FRIEND_API(bool)
-proxy_GetGeneric(JSContext *cx, JS::HandleObject obj, JS::HandleObject receiver, JS::HandleId id,
-                 JS::MutableHandleValue vp);
-extern JS_FRIEND_API(bool)
-proxy_GetProperty(JSContext *cx, JS::HandleObject obj, JS::HandleObject receiver,
-                  JS::Handle<PropertyName*> name, JS::MutableHandleValue vp);
-extern JS_FRIEND_API(bool)
-proxy_GetElement(JSContext *cx, JS::HandleObject obj, JS::HandleObject receiver, uint32_t index,
-                 JS::MutableHandleValue vp);
-extern JS_FRIEND_API(bool)
-proxy_SetGeneric(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
-                 JS::MutableHandleValue bp, bool strict);
-extern JS_FRIEND_API(bool)
-proxy_SetProperty(JSContext *cx, JS::HandleObject obj, JS::Handle<PropertyName*> name,
+proxy_SetProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
                   JS::MutableHandleValue bp, bool strict);
 extern JS_FRIEND_API(bool)
-proxy_SetElement(JSContext *cx, JS::HandleObject obj, uint32_t index, JS::MutableHandleValue vp,
-                 bool strict);
+proxy_GetOwnPropertyDescriptor(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
+                               JS::MutableHandle<JSPropertyDescriptor> desc);
 extern JS_FRIEND_API(bool)
-proxy_GetGenericAttributes(JSContext *cx, JS::HandleObject obj, JS::HandleId id, unsigned *attrsp);
+proxy_SetPropertyAttributes(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
+                            unsigned *attrsp);
 extern JS_FRIEND_API(bool)
-proxy_SetGenericAttributes(JSContext *cx, JS::HandleObject obj, JS::HandleId id, unsigned *attrsp);
-extern JS_FRIEND_API(bool)
-proxy_DeleteGeneric(JSContext *cx, JS::HandleObject obj, JS::HandleId id, bool *succeeded);
+proxy_DeleteProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id, bool *succeeded);
 
 extern JS_FRIEND_API(void)
 proxy_Trace(JSTracer *trc, JSObject *obj);
@@ -542,7 +519,7 @@ GetAnyCompartmentInZone(JS::Zone *zone);
  */
 namespace shadow {
 
-struct TypeObject {
+struct ObjectGroup {
     const Class *clasp;
     JSObject    *proto;
 };
@@ -564,12 +541,12 @@ public:
 };
 
 // This layout is shared by all objects except for Typed Objects (which still
-// have a shape and type).
+// have a shape and group).
 struct Object {
-    shadow::Shape      *shape;
-    shadow::TypeObject *type;
-    JS::Value          *slots;
-    void               *_1;
+    shadow::Shape       *shape;
+    shadow::ObjectGroup *group;
+    JS::Value           *slots;
+    void                *_1;
 
     size_t numFixedSlots() const { return shape->slotInfo >> Shape::FIXED_SLOTS_SHIFT; }
     JS::Value *fixedSlots() const {
@@ -619,7 +596,7 @@ extern JS_FRIEND_DATA(const js::Class* const) ObjectClassPtr;
 inline const js::Class *
 GetObjectClass(JSObject *obj)
 {
-    return reinterpret_cast<const shadow::Object*>(obj)->type->clasp;
+    return reinterpret_cast<const shadow::Object*>(obj)->group->clasp;
 }
 
 inline const JSClass *
@@ -1333,8 +1310,8 @@ class MOZ_STACK_CLASS AutoStableStringChars
     }
 
   private:
-    AutoStableStringChars(const AutoStableStringChars &other) MOZ_DELETE;
-    void operator=(const AutoStableStringChars &other) MOZ_DELETE;
+    AutoStableStringChars(const AutoStableStringChars &other) = delete;
+    void operator=(const AutoStableStringChars &other) = delete;
 };
 
 // Creates a string of the form |ErrorType: ErrorMessage| for a JSErrorReport,
@@ -1363,8 +1340,11 @@ struct MOZ_STACK_CLASS JS_FRIEND_API(ErrorReport)
     // More or less an equivalent of JS_ReportErrorNumber/js_ReportErrorNumberVA
     // but fills in an ErrorReport instead of reporting it.  Uses varargs to
     // make it simpler to call js_ExpandErrorArguments.
-    void populateUncaughtExceptionReport(JSContext *cx, ...);
-    void populateUncaughtExceptionReportVA(JSContext *cx, va_list ap);
+    //
+    // Returns false if we fail to actually populate the ErrorReport
+    // for some reason (probably out of memory).
+    bool populateUncaughtExceptionReport(JSContext *cx, ...);
+    bool populateUncaughtExceptionReportVA(JSContext *cx, va_list ap);
 
     // We may have a provided JSErrorReport, so need a way to represent that.
     JSErrorReport *reportp;
@@ -2165,7 +2145,6 @@ struct JSJitInfo {
         Getter,
         Setter,
         Method,
-        ParallelNative,
         StaticMethod,
         // Must be last
         OpTypeCount
@@ -2220,11 +2199,6 @@ struct JSJitInfo {
         AliasSetCount
     };
 
-    bool hasParallelNative() const
-    {
-        return type() == ParallelNative;
-    }
-
     bool needsOuterizedThisObject() const
     {
         return type() != Getter && type() != Setter;
@@ -2254,8 +2228,6 @@ struct JSJitInfo {
         JSJitGetterOp getter;
         JSJitSetterOp setter;
         JSJitMethodOp method;
-        /* An alternative native that's safe to call in parallel mode. */
-        JSParallelNative parallelNative;
         /* A DOM static method, used for Promise wrappers */
         JSNative staticMethod;
     };
@@ -2339,45 +2311,6 @@ struct JSTypedMethodJitInfo
                                                  when argument coercions can
                                                  have side-effects. */
 };
-
-namespace JS {
-namespace detail {
-
-/* NEVER DEFINED, DON'T USE.  For use by JS_CAST_PARALLEL_NATIVE_TO only. */
-inline int CheckIsParallelNative(JSParallelNative parallelNative);
-
-} // namespace detail
-} // namespace JS
-
-#define JS_CAST_PARALLEL_NATIVE_TO(v, To) \
-    (static_cast<void>(sizeof(JS::detail::CheckIsParallelNative(v))), \
-     reinterpret_cast<To>(v))
-
-/*
- * You may ask yourself: why do we define a wrapper around a wrapper here?
- * The answer is that some compilers don't understand initializing a union
- * as we do below with a construct like:
- *
- * reinterpret_cast<JSJitGetterOp>(JSParallelNativeThreadSafeWrapper<op>)
- *
- * (We need the reinterpret_cast because we must initialize the union with
- * a datum of the type of the union's first member.)
- *
- * Presumably this has something to do with template instantiation.
- * Initializing with a normal function pointer seems to work fine. Hence
- * the ugliness that you see before you.
- */
-#define JS_JITINFO_NATIVE_PARALLEL(infoName, parallelOp)                \
-    const JSJitInfo infoName =                                          \
-        {{JS_CAST_PARALLEL_NATIVE_TO(parallelOp, JSJitGetterOp)},0,0,JSJitInfo::ParallelNative,JSJitInfo::AliasEverything,JSVAL_TYPE_MISSING,false,false,false,false,false,0}
-
-#define JS_JITINFO_NATIVE_PARALLEL_THREADSAFE(infoName, wrapperName, serialOp) \
-    bool wrapperName##_ParallelNativeThreadSafeWrapper(js::ForkJoinContext *cx, unsigned argc, \
-                                                       JS::Value *vp)   \
-    {                                                                   \
-        return JSParallelNativeThreadSafeWrapper<serialOp>(cx, argc, vp); \
-    }                                                                   \
-    JS_JITINFO_NATIVE_PARALLEL(infoName, wrapperName##_ParallelNativeThreadSafeWrapper)
 
 static MOZ_ALWAYS_INLINE const JSJitInfo *
 FUNCTION_VALUE_TO_JITINFO(const JS::Value& v)
@@ -2577,10 +2510,6 @@ GetElementsWithAdder(JSContext *cx, JS::HandleObject obj, JS::HandleObject recei
 JS_FRIEND_API(bool)
 ForwardToNative(JSContext *cx, JSNative native, const JS::CallArgs &args);
 
-/* ES5 8.12.8. */
-extern JS_FRIEND_API(bool)
-DefaultValue(JSContext *cx, JS::HandleObject obj, JSType hint, JS::MutableHandleValue vp);
-
 /*
  * Helper function. To approximate a call to the [[DefineOwnProperty]] internal
  * method described in ES5, first call this, then call JS_DefinePropertyById.
@@ -2670,6 +2599,14 @@ SetJitExceptionHandler(JitExceptionHandler handler);
  */
 extern JS_FRIEND_API(JSObject *)
 GetObjectEnvironmentObjectForFunction(JSFunction *fun);
+
+/*
+ * Get the stored principal of the stack frame this SavedFrame object
+ * represents.  note that this is not the same thing as the object principal of
+ * the object itself.  Do NOT pass a non-SavedFrame object here.
+ */
+extern JS_FRIEND_API(JSPrincipals *)
+GetSavedFramePrincipals(JS::HandleObject savedFrame);
 
 } /* namespace js */
 

@@ -78,7 +78,7 @@ SVGIFrameElement::PrependLocalTransformsTo(const gfxMatrix &aMatrix,
   if (aWhich == eChildToUserSpace) {
     return toUserSpace;
   }
-  NS_ABORT_IF_FALSE(aWhich == eAllTransforms, "Unknown TransformTypes");
+  MOZ_ASSERT(aWhich == eAllTransforms, "Unknown TransformTypes");
   return toUserSpace * fromUserSpace;
 }
   
@@ -149,10 +149,7 @@ SVGIFrameElement::Height()
 already_AddRefed<DOMSVGAnimatedPreserveAspectRatio>
 SVGIFrameElement::PreserveAspectRatio()
 {
-  nsRefPtr<DOMSVGAnimatedPreserveAspectRatio> ratio;
-  mPreserveAspectRatio.ToDOMAnimatedPreserveAspectRatio(getter_AddRefs(ratio),
-                                                        this);
-  return ratio.forget();
+  return mPreserveAspectRatio.ToDOMAnimatedPreserveAspectRatio(this);
 }
 
 void

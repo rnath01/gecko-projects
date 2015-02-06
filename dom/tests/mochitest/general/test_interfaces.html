@@ -200,6 +200,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "BoxObject", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "BroadcastChannel", pref: "dom.broadcastChannel.enabled"},
+// IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "CallEvent", b2g: true, pref: "dom.telephony.enabled"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "CallGroupErrorEvent", b2g: true, pref: "dom.telephony.enabled"},
@@ -340,9 +342,9 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "DeviceProximityEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "DeviceStorage",
+    { name: "DeviceStorage", pref: "device.storage.enabled" },
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "DeviceStorageChangeEvent",
+    { name: "DeviceStorageChangeEvent", pref: "device.storage.enabled" },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Document",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -363,8 +365,6 @@ var interfaceNamesInGlobalScope =
     "DOMMatrix",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "DOMMatrixReadOnly",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "DOMMMIError", b2g: true, pref: "dom.mobileconnection.enabled"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "DOMMobileMessageError", b2g: true, pref: "dom.sms.enabled"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -670,6 +670,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "MediaKeyMessageEvent", pref: "media.eme.enabled"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "MediaKeyStatusMap", pref: "media.eme.enabled"},
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "MediaList",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MediaQueryList",
@@ -860,6 +862,10 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PerformanceEntry",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "PerformanceMark",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "PerformanceMeasure",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "PerformanceNavigation",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PerformanceResourceTiming",
@@ -885,6 +891,10 @@ var interfaceNamesInGlobalScope =
     {name: "PopupBoxObject", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "PositionSensorVRDevice", pref: "dom.vr.enabled"},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "PresentationDeviceInfoManager",
+     pref: "dom.presentation.enabled",
+     permission: ["presentation-device-manage"]},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ProcessingInstruction",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1209,6 +1219,12 @@ var interfaceNamesInGlobalScope =
     "SVGZoomAndPan",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "SVGZoomEvent",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "RequestSyncManager", b2g: true, pref: "dom.requestSync.enabled", permission: ["requestsync-manager"] },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "RequestSyncApp", b2g: true, pref: "dom.requestSync.enabled", permission: ["requestsync-manager"] },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "RequestSyncTask", b2g: true, pref: "dom.requestSync.enabled", permission: ["requestsync-manager"] },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "Telephony", b2g: true, pref: "dom.telephony.enabled"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
