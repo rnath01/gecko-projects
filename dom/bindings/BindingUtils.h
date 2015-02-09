@@ -103,8 +103,8 @@ ThrowMethodFailedWithDetails(JSContext* cx, ErrorResult& rv,
                              const char* memberName,
                              bool reportJSContentExceptions = false)
 {
-  if (rv.IsTypeError()) {
-    rv.ReportTypeError(cx);
+  if (rv.IsErrorWithMessage()) {
+    rv.ReportErrorWithMessage(cx);
     return false;
   }
   if (rv.IsJSException()) {
@@ -2798,7 +2798,7 @@ public:
                JS::Handle<JSObject*> aProto, JS::Handle<JSObject*> aParent,
                T* aNative, JS::MutableHandle<JSObject*> aReflector)
   {
-    aReflector.set(JS_NewObject(aCx, aClass, aProto, aParent));
+    aReflector.set(JS_NewObjectWithGivenProto(aCx, aClass, aProto, aParent));
     if (aReflector) {
       js::SetReservedSlot(aReflector, DOM_OBJECT_SLOT, JS::PrivateValue(aNative));
       mNative = aNative;

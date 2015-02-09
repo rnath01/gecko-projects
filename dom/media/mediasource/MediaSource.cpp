@@ -248,13 +248,11 @@ MediaSource::RemoveSourceBuffer(SourceBuffer& aSourceBuffer, ErrorResult& aRv)
     aRv.Throw(NS_ERROR_DOM_NOT_FOUND_ERR);
     return;
   }
-  if (sourceBuffer->Updating()) {
-    // TODO:
-    // abort stream append loop (if running)
-    // set updating to false
-    // fire "abort" at sourceBuffer
-    // fire "updateend" at sourceBuffer
-  }
+
+  sourceBuffer->AbortBufferAppend();
+  // TODO:
+  // abort stream append loop (if running)
+
   // TODO:
   // For all sourceBuffer audioTracks, videoTracks, textTracks:
   //     set sourceBuffer to null
@@ -341,16 +339,11 @@ MediaSource::Enabled(JSContext* cx, JSObject* aGlobal)
   }
 
   // We want to restrict to YouTube only.
-  // We define that as the origin being https://*.youtube.com.
-  // We also support https://*.youtube-nocookie.com.
+  // We define that as the origin being *.youtube.com.
+  // We also support *.youtube-nocookie.com
   nsIPrincipal* principal = nsContentUtils::ObjectPrincipal(global);
   nsCOMPtr<nsIURI> uri;
   if (NS_FAILED(principal->GetURI(getter_AddRefs(uri))) || !uri) {
-    return false;
-  }
-
-  bool isHttps = false;
-  if (NS_FAILED(uri->SchemeIs("https", &isHttps)) || !isHttps) {
     return false;
   }
 
@@ -539,6 +532,12 @@ MediaSource::Dump(const char* aPath)
   }
 }
 #endif
+
+void
+MediaSource::GetMozDebugReaderData(nsAString& aString)
+{
+  mDecoder->GetMozDebugReaderData(aString);
+}
 
 nsPIDOMWindow*
 MediaSource::GetParentObject() const

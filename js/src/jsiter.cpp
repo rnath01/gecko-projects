@@ -483,8 +483,9 @@ static inline PropertyIteratorObject *
 NewPropertyIteratorObject(JSContext *cx, unsigned flags)
 {
     if (flags & JSITER_ENUMERATE) {
-        RootedTypeObject type(cx, cx->getNewType(&PropertyIteratorObject::class_, TaggedProto(nullptr)));
-        if (!type)
+        RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, &PropertyIteratorObject::class_,
+                                                                 TaggedProto(nullptr)));
+        if (!group)
             return nullptr;
 
         JSObject *metadata = nullptr;
@@ -498,7 +499,7 @@ NewPropertyIteratorObject(JSContext *cx, unsigned flags)
             return nullptr;
 
         JSObject *obj = JSObject::create(cx, ITERATOR_FINALIZE_KIND,
-                                         GetInitialHeap(GenericObject, clasp), shape, type);
+                                         GetInitialHeap(GenericObject, clasp), shape, group);
         if (!obj)
             return nullptr;
         PropertyIteratorObject *res = &obj->as<PropertyIteratorObject>();
@@ -577,9 +578,9 @@ VectorToKeyIterator(JSContext *cx, HandleObject obj, unsigned flags, AutoIdVecto
 {
     MOZ_ASSERT(!(flags & JSITER_FOREACH));
 
-    if (obj->hasSingletonType() && !obj->setIteratedSingleton(cx))
+    if (obj->isSingleton() && !obj->setIteratedSingleton(cx))
         return false;
-    types::MarkTypeObjectFlags(cx, obj, types::OBJECT_FLAG_ITERATED);
+    MarkObjectGroupFlags(cx, obj, OBJECT_FLAG_ITERATED);
 
     Rooted<PropertyIteratorObject *> iterobj(cx, NewPropertyIteratorObject(cx, flags));
     if (!iterobj)
@@ -620,9 +621,9 @@ VectorToValueIterator(JSContext *cx, HandleObject obj, unsigned flags, AutoIdVec
 {
     MOZ_ASSERT(flags & JSITER_FOREACH);
 
-    if (obj->hasSingletonType() && !obj->setIteratedSingleton(cx))
+    if (obj->isSingleton() && !obj->setIteratedSingleton(cx))
         return false;
-    types::MarkTypeObjectFlags(cx, obj, types::OBJECT_FLAG_ITERATED);
+    MarkObjectGroupFlags(cx, obj, OBJECT_FLAG_ITERATED);
 
     Rooted<PropertyIteratorObject*> iterobj(cx, NewPropertyIteratorObject(cx, flags));
     if (!iterobj)
@@ -1172,7 +1173,7 @@ SuppressDeletedPropertyHelper(JSContext *cx, HandleObject obj, StringPredicate p
                             return false;
 
                         Rooted<PropertyDescriptor> desc(cx);
-                        if (!JS_GetPropertyDescriptorById(cx, proto, id, &desc))
+                        if (!GetPropertyDescriptor(cx, proto, id, &desc))
                             return false;
 
                         if (desc.object()) {
@@ -1182,7 +1183,7 @@ SuppressDeletedPropertyHelper(JSContext *cx, HandleObject obj, StringPredicate p
                     }
 
                     /*
-                     * If JS_GetPropertyDescriptorById above removed a property from
+                     * If GetPropertyDescriptorById above removed a property from
                      * ni, start over.
                      */
                     if (props_end != ni->props_end || props_cursor != ni->props_cursor)

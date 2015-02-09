@@ -155,7 +155,7 @@ public:
   // Set the audio volume. The decoder monitor must be obtained before
   // calling this.
   void SetVolume(double aVolume);
-  void SetAudioCaptured(bool aCapture);
+  void SetAudioCaptured();
 
   // Check if the decoder needs to become dormant state.
   bool IsDormantNeeded();
@@ -241,6 +241,7 @@ public:
   // Called from the main thread to get the current frame time. The decoder
   // monitor must be obtained before calling this.
   double GetCurrentTime() const;
+  int64_t GetCurrentTimeUs() const;
 
   // Clear the flag indicating that a playback position change event
   // is currently queued. This is called from the main thread and must
@@ -421,7 +422,6 @@ public:
 
   void OnWaitForDataRejected(WaitForDataRejectValue aRejection)
   {
-    MOZ_ASSERT(aRejection.mReason == WaitForDataRejectValue::SHUTDOWN);
     if (RequestStatusRef(aRejection.mType) == RequestStatus::Waiting) {
       RequestStatusRef(aRejection.mType) = RequestStatus::Idle;
     }
@@ -488,15 +488,9 @@ protected:
   // decode more.
   bool NeedToDecodeAudio();
 
-  // Decodes some audio. This should be run on the decode task queue.
-  void DecodeAudio();
-
   // True if our buffers of decoded video are not full, and we should
   // decode more.
   bool NeedToDecodeVideo();
-
-  // Decodes some video. This should be run on the decode task queue.
-  void DecodeVideo();
 
   // Returns true if we've got less than aAudioUsecs microseconds of decoded
   // and playable data. The decoder monitor must be held.

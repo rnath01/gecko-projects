@@ -52,10 +52,10 @@ add_task(function* test_searchEngine_autoFill() {
   }
   yield promiseAddVisits(visits);
   addBookmark({ uri: uri, title: "Example bookmark" });
-  yield promiseAsyncUpdates();
+  yield PlacesTestUtils.promiseAsyncUpdates();
   ok(frecencyForUrl(uri) > 10000, "Added URI should have expected high frecency");
 
-  do_log_info("Check search domain is autoFilled even if there's an higher frecency match");
+  do_print("Check search domain is autoFilled even if there's an higher frecency match");
   yield check_autocomplete({
     search: "my",
     autofilled: "my.search.com",

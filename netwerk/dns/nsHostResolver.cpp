@@ -209,6 +209,14 @@ nsHostRecord::SetExpiration(const mozilla::TimeStamp& now, unsigned int valid, u
     mValidEnd = now + TimeDuration::FromSeconds(valid + grace);
 }
 
+void
+nsHostRecord::CopyExpirationTimesFrom(const nsHostRecord *aFromHostRecord)
+{
+    mValidStart = aFromHostRecord->mValidStart;
+    mValidEnd = aFromHostRecord->mValidEnd;
+    mGraceStart = aFromHostRecord->mGraceStart;
+}
+
 nsHostRecord::~nsHostRecord()
 {
     Telemetry::Accumulate(Telemetry::DNS_BLACKLIST_COUNT, mBlacklistedCount);
@@ -756,7 +764,7 @@ nsHostResolver::ResolveHost(const char            *host,
 
             nsHostKey key = { host, flags, af };
             nsHostDBEnt *he = static_cast<nsHostDBEnt *>
-                                         (PL_DHashTableAdd(&mDB, &key));
+                (PL_DHashTableAdd(&mDB, &key, fallible));
 
             // if the record is null, the hash table OOM'd.
             if (!he) {
@@ -845,6 +853,7 @@ nsHostResolver::ResolveHost(const char            *host,
                         he->rec->addr_info = nullptr;
                         if (unspecHe->rec->negative) {
                             he->rec->negative = unspecHe->rec->negative;
+                            he->rec->CopyExpirationTimesFrom(unspecHe->rec);
                         } else if (unspecHe->rec->addr_info) {
                             // Search for any valid address in the AF_UNSPEC entry
                             // in the cache (not blacklisted and from the right
@@ -858,6 +867,7 @@ nsHostResolver::ResolveHost(const char            *host,
                                         he->rec->addr_info = new AddrInfo(
                                             unspecHe->rec->addr_info->mHostName,
                                             unspecHe->rec->addr_info->mCanonicalName);
+                                        he->rec->CopyExpirationTimesFrom(unspecHe->rec);
                                     }
                                     he->rec->addr_info->AddAddress(
                                         new NetAddrElement(*addrIter));

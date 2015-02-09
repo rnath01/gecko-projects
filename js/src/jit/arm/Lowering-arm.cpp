@@ -387,13 +387,13 @@ LIRGeneratorARM::visitGuardShape(MGuardShape *ins)
 }
 
 void
-LIRGeneratorARM::visitGuardObjectType(MGuardObjectType *ins)
+LIRGeneratorARM::visitGuardObjectGroup(MGuardObjectGroup *ins)
 {
     MOZ_ASSERT(ins->obj()->type() == MIRType_Object);
 
     LDefinition tempObj = temp(LDefinition::OBJECT);
-    LGuardObjectType *guard = new(alloc()) LGuardObjectType(useRegister(ins->obj()), tempObj);
-    assignSnapshot(guard, Bailout_ObjectIdentityOrTypeGuard);
+    LGuardObjectGroup *guard = new(alloc()) LGuardObjectGroup(useRegister(ins->obj()), tempObj);
+    assignSnapshot(guard, ins->bailoutKind());
     add(guard, ins);
     redefine(ins, ins->obj());
 }
@@ -644,7 +644,7 @@ LIRGeneratorARM::visitCompareExchangeTypedArrayElement(MCompareExchangeTypedArra
 void
 LIRGeneratorARM::visitAsmJSCompareExchangeHeap(MAsmJSCompareExchangeHeap *ins)
 {
-    MOZ_ASSERT(ins->viewType() < Scalar::Float32);
+    MOZ_ASSERT(ins->accessType() < Scalar::Float32);
 
     MDefinition *ptr = ins->ptr();
     MOZ_ASSERT(ptr->type() == MIRType_Int32);
@@ -660,7 +660,7 @@ LIRGeneratorARM::visitAsmJSCompareExchangeHeap(MAsmJSCompareExchangeHeap *ins)
 void
 LIRGeneratorARM::visitAsmJSAtomicBinopHeap(MAsmJSAtomicBinopHeap *ins)
 {
-    MOZ_ASSERT(ins->viewType() < Scalar::Float32);
+    MOZ_ASSERT(ins->accessType() < Scalar::Float32);
 
     MDefinition *ptr = ins->ptr();
     MOZ_ASSERT(ptr->type() == MIRType_Int32);

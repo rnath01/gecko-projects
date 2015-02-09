@@ -158,17 +158,12 @@ JSRuntime::JSRuntime(JSRuntime *parentRuntime)
     gcInitialized(false),
 #if defined(JS_ARM_SIMULATOR) || defined(JS_MIPS_SIMULATOR)
     simulator_(nullptr),
-    simulatorStackLimit_(0),
-    simulatorRuntime_(nullptr),
 #endif
     scriptAndCountsVector(nullptr),
     NaNValue(DoubleNaNValue()),
     negativeInfinityValue(DoubleValue(NegativeInfinity<double>())),
     positiveInfinityValue(DoubleValue(PositiveInfinity<double>())),
     emptyString(nullptr),
-#ifdef NIGHTLY_BUILD
-    assertOnScriptEntryHook_(nullptr),
-#endif
     spsProfiler(thisFromCtor()),
     profilingScripts(false),
     suppressProfilerSampling(false),
@@ -318,8 +313,8 @@ JSRuntime::init(uint32_t maxbytes, uint32_t maxNurseryBytes)
     dateTimeInfo.updateTimeZoneAdjustment();
 
 #if defined(JS_ARM_SIMULATOR) || defined(JS_MIPS_SIMULATOR)
-    simulatorRuntime_ = js::jit::CreateSimulatorRuntime();
-    if (!simulatorRuntime_)
+    simulator_ = js::jit::Simulator::Create();
+    if (!simulator_)
         return false;
 #endif
 
@@ -435,8 +430,7 @@ JSRuntime::~JSRuntime()
     gc.nursery.disable();
 
 #if defined(JS_ARM_SIMULATOR) || defined(JS_MIPS_SIMULATOR)
-    js::jit::DestroySimulatorRuntime(simulatorRuntime_);
-    js_delete(simulator_);
+    js::jit::Simulator::Destroy(simulator_);
 #endif
 
     DebugOnly<size_t> oldCount = liveRuntimesCount--;

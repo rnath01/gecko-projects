@@ -56,10 +56,10 @@ var stacks;
 var ffi = function(enable) {
     if (enable == +1)
         enableSPSProfiling();
-    if (enable == -1)
-        disableSPSProfiling();
     enableSingleStepProfiling();
     stacks = disableSingleStepProfiling();
+    if (enable == -1)
+        disableSPSProfiling();
 }
 var f = asmLink(asmCompile('global','ffis',USE_ASM + "var ffi=ffis.ffi; function g(i) { i=i|0; ffi(i|0) } function f(i) { i=i|0; g(i|0) } return f"), null, {ffi});
 f(0);
@@ -171,6 +171,20 @@ enableSingleStepProfiling();
 assertThrowsInstanceOf(f, InternalError);
 var stacks = disableSingleStepProfiling();
 assertStackContainsSeq(stacks, ">,f,>,<,f,>,inline stub,f,>,<,f,>,inline stub,f,>");
+
+
+if (isSimdAvailable() && typeof SIMD !== 'undefined') {
+    // SIMD out-of-bounds exit
+    var buf = new ArrayBuffer(0x10000);
+    var f = asmLink(asmCompile('g','ffi','buf', USE_ASM + 'var f4=g.SIMD.float32x4; var f4l=f4.load; var u8=new g.Uint8Array(buf); function f(i) { i=i|0; return f4l(u8, 0xFFFF + i | 0); } return f'), this, {}, buf);
+    enableSingleStepProfiling();
+    assertThrowsInstanceOf(() => f(4), RangeError);
+    var stacks = disableSingleStepProfiling();
+    // TODO check that expected is actually the correctly expected string, when
+    // SIMD is implemented on ARM.
+    assertStackContainsSeq(stacks, ">,f,>,inline stub,f,>");
+}
+
 
 // This takes forever to run.
 // Stack-overflow exit test

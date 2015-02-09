@@ -88,6 +88,13 @@ CompositorParent::LayerTreeState::LayerTreeState()
 {
 }
 
+CompositorParent::LayerTreeState::~LayerTreeState()
+{
+  if (mController) {
+    mController->Destroy();
+  }
+}
+
 typedef map<uint64_t, CompositorParent::LayerTreeState> LayerTreeMap;
 static LayerTreeMap sIndirectLayerTrees;
 static StaticAutoPtr<mozilla::Monitor> sIndirectLayerTreesLock;
@@ -409,6 +416,7 @@ CompositorParent::CompositorParent(nsIWidget* aWidget,
   , mOverrideComposeReadiness(false)
   , mForceCompositionTask(nullptr)
   , mCompositorThreadHolder(sCompositorThreadHolder)
+  , mCompositorVsyncObserver(nullptr)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(CompositorThread(),
@@ -570,7 +578,7 @@ CompositorParent::RecvMakeSnapshot(const SurfaceDescriptor& aInSnapshot,
 bool
 CompositorParent::RecvFlushRendering()
 {
-  if (gfxPrefs::VsyncAlignedCompositor() && mCompositorVsyncObserver->NeedsComposite()) {
+  if (mCompositorVsyncObserver && mCompositorVsyncObserver->NeedsComposite()) {
     mCompositorVsyncObserver->SetNeedsComposite(false);
     CancelCurrentCompositeTask();
     ForceComposeToTarget(nullptr);
@@ -711,7 +719,7 @@ CompositorParent::ForceComposition()
 void
 CompositorParent::CancelCurrentCompositeTask()
 {
-  if (gfxPrefs::VsyncAlignedCompositor()) {
+  if (mCompositorVsyncObserver) {
     mCompositorVsyncObserver->CancelCurrentCompositeTask();
   } else if (mCurrentCompositeTask) {
     mCurrentCompositeTask->Cancel();
@@ -824,7 +832,7 @@ CalculateCompositionFrameRate()
 void
 CompositorParent::ScheduleSoftwareTimerComposition()
 {
-  MOZ_ASSERT(!gfxPrefs::VsyncAlignedCompositor());
+  MOZ_ASSERT(!mCompositorVsyncObserver);
 
   if (mCurrentCompositeTask) {
     return;
@@ -867,7 +875,7 @@ CompositorParent::ScheduleComposition()
     return;
   }
 
-  if (gfxPrefs::VsyncAlignedCompositor()) {
+  if (mCompositorVsyncObserver) {
     mCompositorVsyncObserver->SetNeedsComposite(true);
   } else {
     ScheduleSoftwareTimerComposition();
@@ -877,7 +885,7 @@ CompositorParent::ScheduleComposition()
 void
 CompositorParent::CompositeCallback(TimeStamp aScheduleTime)
 {
-  if (gfxPrefs::VsyncAlignedCompositor()) {
+  if (mCompositorVsyncObserver) {
     // Align OMTA to vsync time.
     // TODO: ensure it aligns with the refresh / start time of
     // animations
@@ -965,8 +973,7 @@ CompositorParent::CompositeToTarget(DrawTarget* aTarget, const nsIntRect* aRect)
   RenderTraceLayers(mLayerManager->GetRoot(), "0000");
 
 #ifdef MOZ_DUMP_PAINTING
-  static bool gDumpCompositorTree = false;
-  if (gDumpCompositorTree) {
+  if (gfxPrefs::DumpHostLayers()) {
     printf_stderr("Painting --- compositing layer tree:\n");
     mLayerManager->Dump();
   }
@@ -1091,7 +1098,7 @@ CompositorParent::ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
     // conditions.
     bool needTestComposite = mIsTesting && root &&
                              (mCurrentCompositeTask ||
-                             (gfxPrefs::VsyncAlignedCompositor() &&
+                             (mCompositorVsyncObserver &&
                               mCompositorVsyncObserver->NeedsComposite()));
     if (needTestComposite) {
       AutoResolveRefLayers resolve(mCompositionManager);
@@ -1125,7 +1132,7 @@ CompositorParent::SetTestSampleTime(LayerTransactionParent* aLayerTree,
   mTestTime = aTime;
 
   bool testComposite = mCompositionManager && (mCurrentCompositeTask ||
-                                               (gfxPrefs::VsyncAlignedCompositor()
+                                               (mCompositorVsyncObserver
                                                && mCompositorVsyncObserver->NeedsComposite()));
 
   // Update but only if we were already scheduled to animate

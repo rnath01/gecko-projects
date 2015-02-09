@@ -49,7 +49,6 @@
 
 using namespace js;
 using namespace js::gc;
-using namespace js::types;
 using namespace js::frontend;
 
 using mozilla::ArrayLength;
@@ -585,7 +584,7 @@ js::XDRInterpretedFunction(XDRState<mode> *xdr, HandleObject enclosingScope, Han
             script = fun->nonLazyScript();
         }
 
-        if (fun->hasSingletonType())
+        if (fun->isSingleton())
             firstword |= HasSingletonType;
 
         atom = fun->displayAtom();
@@ -594,7 +593,7 @@ js::XDRInterpretedFunction(XDRState<mode> *xdr, HandleObject enclosingScope, Han
         // The environment of any function which is not reused will always be
         // null, it is later defined when a function is cloned or reused to
         // mirror the scope chain.
-        MOZ_ASSERT_IF(fun->hasSingletonType() &&
+        MOZ_ASSERT_IF(fun->isSingleton() &&
                       !((lazy && lazy->hasBeenCloned()) || (script && script->hasBeenCloned())),
                       fun->environment() == nullptr);
     }
@@ -873,19 +872,19 @@ CreateFunctionPrototype(JSContext *cx, JSProtoKey key)
         return nullptr;
 
     functionProto->initScript(script);
-    types::TypeObject* protoType = functionProto->getType(cx);
-    if (!protoType)
+    ObjectGroup* protoGroup = functionProto->getGroup(cx);
+    if (!protoGroup)
         return nullptr;
 
-    protoType->setInterpretedFunction(functionProto);
+    protoGroup->setInterpretedFunction(functionProto);
     script->setFunction(functionProto);
 
     /*
-     * The default 'new' type of Function.prototype is required by type
+     * The default 'new' group of Function.prototype is required by type
      * inference to have unknown properties, to simplify handling of e.g.
      * CloneFunctionObject.
      */
-    if (!JSObject::setNewTypeUnknown(cx, &JSFunction::class_, functionProto))
+    if (!JSObject::setNewGroupUnknown(cx, &JSFunction::class_, functionProto))
         return nullptr;
 
     // Construct the unique [[%ThrowTypeError%]] function object, used only for
@@ -1481,11 +1480,11 @@ JSFunction::createScriptForLazilyInterpretedFunction(JSContext *cx, HandleFuncti
             return true;
         }
 
-        MOZ_ASSERT(lazy->source()->hasSourceData());
+        MOZ_ASSERT(lazy->scriptSource()->hasSourceData());
 
         // Parse and compile the script from source.
         UncompressedSourceCache::AutoHoldEntry holder;
-        const char16_t *chars = lazy->source()->chars(cx, holder);
+        const char16_t *chars = lazy->scriptSource()->chars(cx, holder);
         if (!chars)
             return false;
 
@@ -1996,11 +1995,11 @@ js::NewFunctionWithProto(ExclusiveContext *cx, HandleObject funobjArg, Native na
     if (funobj) {
         MOZ_ASSERT(funobj->is<JSFunction>());
         MOZ_ASSERT(funobj->getParent() == parent);
-        MOZ_ASSERT_IF(native, funobj->hasSingletonType());
+        MOZ_ASSERT_IF(native, funobj->isSingleton());
     } else {
-        // Don't give asm.js module functions a singleton type since they
-        // are cloned (via CloneFunctionObjectIfNotSingleton) which assumes
-        // that hasSingletonType implies isInterpreted.
+        // Don't mark asm.js module functions as singleton since they are
+        // cloned (via CloneFunctionObjectIfNotSingleton) which assumes that
+        // isSingleton implies isInterpreted.
         if (native && !IsAsmJSModuleNative(native))
             newKind = SingletonObject;
         funobj = NewObjectWithClassProto(cx, &JSFunction::class_, proto,
@@ -2036,8 +2035,8 @@ bool
 js::CloneFunctionObjectUseSameScript(JSCompartment *compartment, HandleFunction fun)
 {
     return compartment == fun->compartment() &&
-           !fun->hasSingletonType() &&
-           !types::UseNewTypeForClone(fun);
+           !fun->isSingleton() &&
+           !ObjectGroup::useSingletonForClone(fun);
 }
 
 JSFunction *
@@ -2094,11 +2093,11 @@ js::CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent, 
 
     if (useSameScript) {
         /*
-         * Clone the function, reusing its script. We can use the same type as
+         * Clone the function, reusing its script. We can use the same group as
          * the original function provided that its prototype is correct.
          */
         if (fun->getProto() == clone->getProto())
-            clone->setType(fun->type());
+            clone->setGroup(fun->group());
         return clone;
     }
 

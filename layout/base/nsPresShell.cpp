@@ -1153,7 +1153,7 @@ PresShell::Destroy()
 
   mUpdateImageVisibilityEvent.Revoke();
 
-  ClearVisibleImagesList();
+  ClearVisibleImagesList(nsIImageLoadingContent::ON_NONVISIBLE_REQUEST_DISCARD);
 
   if (mCaret) {
     mCaret->Terminate();
@@ -5820,7 +5820,8 @@ PresShell::MarkImagesInListVisible(const nsDisplayList& aList)
 static PLDHashOperator
 DecrementVisibleCount(nsRefPtrHashKey<nsIImageLoadingContent>* aEntry, void*)
 {
-  aEntry->GetKey()->DecrementVisibleCount();
+  aEntry->GetKey()->DecrementVisibleCount(
+    nsIImageLoadingContent::ON_NONVISIBLE_NO_ACTION);
   return PL_DHASH_NEXT;
 }
 
@@ -5844,7 +5845,8 @@ PresShell::ClearImageVisibilityVisited(nsView* aView, bool aClear)
   if (aClear) {
     PresShell* presShell = static_cast<PresShell*>(vm->GetPresShell());
     if (!presShell->mImageVisibilityVisited) {
-      presShell->ClearVisibleImagesList();
+      presShell->ClearVisibleImagesList(
+        nsIImageLoadingContent::ON_NONVISIBLE_NO_ACTION);
     }
     presShell->mImageVisibilityVisited = false;
   }
@@ -5853,10 +5855,23 @@ PresShell::ClearImageVisibilityVisited(nsView* aView, bool aClear)
   }
 }
 
-void
-PresShell::ClearVisibleImagesList()
+static PLDHashOperator
+DecrementVisibleCountAndDiscard(nsRefPtrHashKey<nsIImageLoadingContent>* aEntry,
+                                void*)
 {
-  mVisibleImages.EnumerateEntries(DecrementVisibleCount, nullptr);
+  aEntry->GetKey()->DecrementVisibleCount(
+    nsIImageLoadingContent::ON_NONVISIBLE_REQUEST_DISCARD);
+  return PL_DHASH_NEXT;
+}
+
+void
+PresShell::ClearVisibleImagesList(uint32_t aNonvisibleAction)
+{
+  auto enumerator
+    = aNonvisibleAction == nsIImageLoadingContent::ON_NONVISIBLE_REQUEST_DISCARD
+    ? DecrementVisibleCountAndDiscard
+    : DecrementVisibleCount;
+  mVisibleImages.EnumerateEntries(enumerator, nullptr);
   mVisibleImages.Clear();
 }
 
@@ -5986,7 +6001,8 @@ PresShell::UpdateImageVisibility()
   // call update on that frame
   nsIFrame* rootFrame = GetRootFrame();
   if (!rootFrame) {
-    ClearVisibleImagesList();
+    ClearVisibleImagesList(
+      nsIImageLoadingContent::ON_NONVISIBLE_REQUEST_DISCARD);
     return;
   }
 
@@ -6145,7 +6161,8 @@ PresShell::RemoveImageFromVisibleList(nsIImageLoadingContent* aImage)
   mVisibleImages.RemoveEntry(aImage);
   if (mVisibleImages.Count() < count) {
     // aImage was in the hashtable, so we need to decrement its visible count
-    aImage->DecrementVisibleCount();
+    aImage->DecrementVisibleCount(
+      nsIImageLoadingContent::ON_NONVISIBLE_NO_ACTION);
   }
 }
 
@@ -6753,8 +6770,7 @@ PresShell::RecordMouseLocation(WidgetGUIEvent* aEvent)
     if (!rootFrame) {
       nsView* rootView = mViewManager->GetRootView();
       mMouseLocation = nsLayoutUtils::TranslateWidgetToView(mPresContext,
-        aEvent->widget, LayoutDeviceIntPoint::ToUntyped(aEvent->refPoint),
-        rootView);
+        aEvent->widget, aEvent->refPoint, rootView);
     } else {
       mMouseLocation =
         nsLayoutUtils::GetEventCoordinatesRelativeTo(aEvent, rootFrame);
@@ -7997,7 +8013,8 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent, nsEventStatus* aStatus)
         nsIDocument* doc = GetCurrentEventContent() ?
                            mCurrentEventContent->OwnerDoc() : nullptr;
         nsIDocument* fullscreenAncestor = nullptr;
-        if (aEvent->AsKeyboardEvent()->keyCode == NS_VK_ESCAPE) {
+        auto keyCode = aEvent->AsKeyboardEvent()->keyCode;
+        if (keyCode == NS_VK_ESCAPE) {
           if ((fullscreenAncestor = nsContentUtils::GetFullscreenAncestor(doc))) {
             // Prevent default action on ESC key press when exiting
             // DOM fullscreen mode. This prevents the browser ESC key
@@ -8033,8 +8050,15 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent, nsEventStatus* aStatus)
             }
           }
         }
-        // Else not full-screen mode or key code is unrestricted, fall
-        // through to normal handling.
+        if (keyCode != NS_VK_ESCAPE && keyCode != NS_VK_SHIFT &&
+            keyCode != NS_VK_CONTROL && keyCode != NS_VK_ALT &&
+            keyCode != NS_VK_WIN && keyCode != NS_VK_META) {
+          // Allow keys other than ESC and modifiers be marked as a
+          // valid user input for triggering popup, fullscreen, and
+          // pointer lock.
+          isHandlingUserInput = true;
+        }
+        break;
       }
       case NS_MOUSE_BUTTON_DOWN:
       case NS_MOUSE_BUTTON_UP:
@@ -8215,38 +8239,9 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent, nsEventStatus* aStatus)
           "Somebody changed aEvent to cause a DOM event!");
         nsPresShellEventCB eventCB(this);
         if (aEvent->mClass == eTouchEventClass) {
-          DispatchTouchEvent(aEvent, aStatus, &eventCB, touchIsNew);
+          DispatchTouchEventToDOM(aEvent, aStatus, &eventCB, touchIsNew);
         } else {
-          nsCOMPtr<nsINode> eventTarget = mCurrentEventContent.get();
-          nsPresShellEventCB* eventCBPtr = &eventCB;
-          if (!eventTarget) {
-            nsCOMPtr<nsIContent> targetContent;
-            if (mCurrentEventFrame) {
-              rv = mCurrentEventFrame->
-                     GetContentForEvent(aEvent, getter_AddRefs(targetContent));
-            }
-            if (NS_SUCCEEDED(rv) && targetContent) {
-              eventTarget = do_QueryInterface(targetContent);
-            } else if (mDocument) {
-              eventTarget = do_QueryInterface(mDocument);
-              // If we don't have any content, the callback wouldn't probably
-              // do nothing.
-              eventCBPtr = nullptr;
-            }
-          }
-          if (eventTarget) {
-            if (aEvent->mClass == eCompositionEventClass) {
-              IMEStateManager::DispatchCompositionEvent(eventTarget,
-                mPresContext, aEvent->AsCompositionEvent(), aStatus,
-                eventCBPtr);
-            } else if (aEvent->mClass == eKeyboardEventClass) {
-              HandleKeyboardEvent(eventTarget, *(aEvent->AsKeyboardEvent()),
-                                  false, aStatus, eventCBPtr);
-            } else {
-              EventDispatcher::Dispatch(eventTarget, mPresContext,
-                                        aEvent, nullptr, aStatus, eventCBPtr);
-            }
-          }
+          DispatchEventToDOM(aEvent, aStatus, &eventCB);
         }
       }
 
@@ -8319,11 +8314,50 @@ nsIPresShell::DispatchGotOrLostPointerCaptureEvent(bool aIsGotCapture,
   }
 }
 
-void
-PresShell::DispatchTouchEvent(WidgetEvent* aEvent,
+nsresult
+PresShell::DispatchEventToDOM(WidgetEvent* aEvent,
                               nsEventStatus* aStatus,
-                              nsPresShellEventCB* aEventCB,
-                              bool aTouchIsNew)
+                              nsPresShellEventCB* aEventCB)
+{
+  nsresult rv = NS_OK;
+  nsCOMPtr<nsINode> eventTarget = mCurrentEventContent.get();
+  nsPresShellEventCB* eventCBPtr = aEventCB;
+  if (!eventTarget) {
+    nsCOMPtr<nsIContent> targetContent;
+    if (mCurrentEventFrame) {
+      rv = mCurrentEventFrame->
+             GetContentForEvent(aEvent, getter_AddRefs(targetContent));
+    }
+    if (NS_SUCCEEDED(rv) && targetContent) {
+      eventTarget = do_QueryInterface(targetContent);
+    } else if (mDocument) {
+      eventTarget = do_QueryInterface(mDocument);
+      // If we don't have any content, the callback wouldn't probably
+      // do nothing.
+      eventCBPtr = nullptr;
+    }
+  }
+  if (eventTarget) {
+    if (aEvent->mClass == eCompositionEventClass) {
+      IMEStateManager::DispatchCompositionEvent(eventTarget,
+        mPresContext, aEvent->AsCompositionEvent(), aStatus,
+        eventCBPtr);
+    } else if (aEvent->mClass == eKeyboardEventClass) {
+      HandleKeyboardEvent(eventTarget, *(aEvent->AsKeyboardEvent()),
+                          false, aStatus, eventCBPtr);
+    } else {
+      EventDispatcher::Dispatch(eventTarget, mPresContext,
+                                aEvent, nullptr, aStatus, eventCBPtr);
+    }
+  }
+  return rv;
+}
+
+void
+PresShell::DispatchTouchEventToDOM(WidgetEvent* aEvent,
+                                   nsEventStatus* aStatus,
+                                   nsPresShellEventCB* aEventCB,
+                                   bool aTouchIsNew)
 {
   // calling preventDefault on touchstart or the first touchmove for a
   // point prevents mouse events. calling it on the touchend should
@@ -8475,9 +8509,9 @@ PresShell::AdjustContextMenuKeyEvent(WidgetMouseEvent* aEvent)
 
       nsCOMPtr<nsIWidget> widget = popupFrame->GetNearestWidget();
       aEvent->widget = widget;
-      nsIntPoint widgetPoint = widget->WidgetToScreenOffset();
+      LayoutDeviceIntPoint widgetPoint = widget->WidgetToScreenOffset();
       aEvent->refPoint = LayoutDeviceIntPoint::FromUntyped(
-        itemFrame->GetScreenRect().BottomLeft() - widgetPoint);
+        itemFrame->GetScreenRect().BottomLeft()) - widgetPoint;
 
       mCurrentEventContent = itemFrame->GetContent();
       mCurrentEventFrame = itemFrame;
@@ -8518,12 +8552,12 @@ PresShell::AdjustContextMenuKeyEvent(WidgetMouseEvent* aEvent)
   }
 
   // see if we should use the caret position for the popup
-  nsIntPoint caretPoint;
+  LayoutDeviceIntPoint caretPoint;
   // Beware! This may flush notifications via synchronous
   // ScrollSelectionIntoView.
   if (PrepareToUseCaretPosition(aEvent->widget, caretPoint)) {
     // caret position is good
-    aEvent->refPoint = LayoutDeviceIntPoint::FromUntyped(caretPoint);
+    aEvent->refPoint = caretPoint;
     return true;
   }
 
@@ -8564,7 +8598,8 @@ PresShell::AdjustContextMenuKeyEvent(WidgetMouseEvent* aEvent)
 //    relative to.  The returned point is in device pixels realtive to the
 //    widget passed in.
 bool
-PresShell::PrepareToUseCaretPosition(nsIWidget* aEventWidget, nsIntPoint& aTargetPt)
+PresShell::PrepareToUseCaretPosition(nsIWidget* aEventWidget,
+                                     LayoutDeviceIntPoint& aTargetPt)
 {
   nsresult rv;
 

@@ -214,6 +214,7 @@ let gInitialPages = [
 #include browser-ctrlTab.js
 #include browser-customization.js
 #include browser-devedition.js
+#include browser-eme.js
 #include browser-feeds.js
 #include browser-fullScreen.js
 #include browser-fullZoom.js
@@ -270,6 +271,12 @@ XPCOMUtils.defineLazyGetter(this, "PageMenuParent", function() {
   Cu.import("resource://gre/modules/PageMenu.jsm", tmp);
   return new tmp.PageMenuParent();
 });
+
+function* browserWindows() {
+  let windows = Services.wm.getEnumerator("navigator:browser");
+  while (windows.hasMoreElements())
+    yield windows.getNext();
+}
 
 /**
 * We can avoid adding multiple load event listeners and save some time by adding
@@ -817,10 +824,12 @@ function _loadURIWithFlags(browser, uri, flags, referrer, charset, postdata) {
     browser.userTypedClear++;
   }
 
-  let shouldBeRemote = gMultiProcessBrowser &&
-                       E10SUtils.shouldBrowserBeRemote(uri);
+  let process = browser.isRemoteBrowser ? Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT
+                                        : Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
+  let mustChangeProcess = gMultiProcessBrowser &&
+                          !E10SUtils.canLoadURIInProcess(uri, process);
   try {
-    if (browser.isRemoteBrowser == shouldBeRemote) {
+    if (!mustChangeProcess) {
       browser.webNavigation.loadURI(uri, flags, referrer, postdata, null);
     } else {
       LoadInOtherProcess(browser, {
@@ -834,7 +843,7 @@ function _loadURIWithFlags(browser, uri, flags, referrer, charset, postdata) {
     // We might lose history that way but at least the browser loaded a page.
     // This might be necessary if SessionStore wasn't initialized yet i.e.
     // when the homepage is a non-remote page.
-    gBrowser.updateBrowserRemoteness(browser, shouldBeRemote);
+    gBrowser.updateBrowserRemotenessByURL(browser, uri);
     browser.webNavigation.loadURI(uri, flags, referrer, postdata, null);
   } finally {
     if (browser.userTypedClear) {
@@ -1116,7 +1125,7 @@ var gBrowserInit = {
 #endif
     }, false, true);
 
-    gBrowser.addEventListener("AboutTabCrashedTryAgain", function(event) {
+    gBrowser.addEventListener("AboutTabCrashedMessage", function(event) {
       let ownerDoc = event.originalTarget;
 
       if (!ownerDoc.documentURI.startsWith("about:tabcrashed")) {
@@ -1134,8 +1143,23 @@ var gBrowserInit = {
         TabCrashReporter.submitCrashReport(browser);
       }
 #endif
+
       let tab = gBrowser.getTabForBrowser(browser);
-      SessionStore.reviveCrashedTab(tab);
+      switch (event.detail.message) {
+      case "closeTab":
+        gBrowser.removeTab(tab, { animate: true });
+        break;
+      case "restoreTab":
+        SessionStore.reviveCrashedTab(tab);
+        break;
+      case "restoreAll":
+        for (let browserWin of browserWindows()) {
+          for (let tab of window.gBrowser.tabs) {
+            SessionStore.reviveCrashedTab(tab);
+          }
+        }
+        break;
+      }
     }, false, true);
 
     let uriToLoad = this._getUriToLoad();
@@ -6471,11 +6495,9 @@ function warnAboutClosingWindow() {
     return gBrowser.warnAboutClosingTabs(gBrowser.closingTabsEnum.ALL);
 
   // Figure out if there's at least one other browser window around.
-  let e = Services.wm.getEnumerator("navigator:browser");
   let otherPBWindowExists = false;
   let nonPopupPresent = false;
-  while (e.hasMoreElements()) {
-    let win = e.getNext();
+  for (let win of browserWindows()) {
     if (!win.closed && win != window) {
       if (isPBWindow && PrivateBrowsingUtils.isWindowPrivate(win))
         otherPBWindowExists = true;
@@ -7574,9 +7596,7 @@ function switchToTabHavingURI(aURI, aOpenNew, aOpenParams={}) {
   if (isBrowserWindow && switchIfURIInWindow(window))
     return true;
 
-  let winEnum = Services.wm.getEnumerator("navigator:browser");
-  while (winEnum.hasMoreElements()) {
-    let browserWin = winEnum.getNext();
+  for (let browserWin of browserWindows()) {
     // Skip closed (but not yet destroyed) windows,
     // and the current window (which was checked earlier).
     if (browserWin.closed || browserWin == window)

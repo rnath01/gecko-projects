@@ -11,16 +11,16 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
 
 // We need to cache this before test runs...
 let cachedLeftPaneFolderIdGetter;
-let (getter = PlacesUIUtils.__lookupGetter__("leftPaneFolderId")) {
-  if (!cachedLeftPaneFolderIdGetter && typeof(getter) == "function")
-    cachedLeftPaneFolderIdGetter = getter;
+let getter = PlacesUIUtils.__lookupGetter__("leftPaneFolderId");
+if (!cachedLeftPaneFolderIdGetter && typeof(getter) == "function") {
+  cachedLeftPaneFolderIdGetter = getter;
 }
+
 // ...And restore it when test ends.
 registerCleanupFunction(function(){
-  let (getter = PlacesUIUtils.__lookupGetter__("leftPaneFolderId")) {
-    if (cachedLeftPaneFolderIdGetter && typeof(getter) != "function")
-      PlacesUIUtils.__defineGetter__("leftPaneFolderId",
-                                     cachedLeftPaneFolderIdGetter);
+  let getter = PlacesUIUtils.__lookupGetter__("leftPaneFolderId");
+  if (cachedLeftPaneFolderIdGetter && typeof(getter) != "function") {
+    PlacesUIUtils.__defineGetter__("leftPaneFolderId", cachedLeftPaneFolderIdGetter);
   }
 });
 
@@ -272,42 +272,6 @@ function promiseIsURIVisited(aURI) {
   return deferred.promise;
 }
 
-/**
- * Waits for all pending async statements on the default connection.
- *
- * @return {Promise}
- * @resolves When all pending async statements finished.
- * @rejects Never.
- *
- * @note The result is achieved by asynchronously executing a query requiring
- *       a write lock.  Since all statements on the same connection are
- *       serialized, the end of this write operation means that all writes are
- *       complete.  Note that WAL makes so that writers don't block readers, but
- *       this is a problem only across different connections.
- */
-function promiseAsyncUpdates()
-{
-  let deferred = Promise.defer();
-
-  let db = DBConn();
-  let begin = db.createAsyncStatement("BEGIN EXCLUSIVE");
-  begin.executeAsync();
-  begin.finalize();
-
-  let commit = db.createAsyncStatement("COMMIT");
-  commit.executeAsync({
-    handleResult: function () {},
-    handleError: function () {},
-    handleCompletion: function(aReason)
-    {
-      deferred.resolve();
-    }
-  });
-  commit.finalize();
-
-  return deferred.promise;
-}
-
 function promiseBookmarksNotification(notification, conditionFn) {
   info(`Waiting for ${notification}`);
   return new Promise((resolve, reject) => {
@@ -392,8 +356,9 @@ function promiseSetToolbarVisibility(aToolbar, aVisible, aCallback) {
     let transitionProperties =
       window.getComputedStyle(aToolbar).transitionProperty.split(", ");
     if (isToolbarVisible(aToolbar) != aVisible &&
-        (transitionProperties.includes("max-height") ||
-         transitionProperties.includes("all"))) {
+        transitionProperties.some(
+          prop => prop == "max-height" || prop == "all"
+        )) {
       // Just because max-height is a transitionable property doesn't mean
       // a transition will be triggered, but it's more likely.
       aToolbar.addEventListener("transitionend", listener);

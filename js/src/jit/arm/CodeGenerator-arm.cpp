@@ -1654,13 +1654,13 @@ CodeGeneratorARM::visitGuardShape(LGuardShape *guard)
 }
 
 void
-CodeGeneratorARM::visitGuardObjectType(LGuardObjectType *guard)
+CodeGeneratorARM::visitGuardObjectGroup(LGuardObjectGroup *guard)
 {
     Register obj = ToRegister(guard->input());
     Register tmp = ToRegister(guard->tempInt());
 
-    masm.ma_ldr(DTRAddr(obj, DtrOffImm(JSObject::offsetOfType())), tmp);
-    masm.ma_cmp(tmp, ImmGCPtr(guard->mir()->typeObject()));
+    masm.ma_ldr(DTRAddr(obj, DtrOffImm(JSObject::offsetOfGroup())), tmp);
+    masm.ma_cmp(tmp, ImmGCPtr(guard->mir()->group()));
 
     Assembler::Condition cond =
         guard->mir()->bailOnEquality() ? Assembler::Equal : Assembler::NotEqual;
@@ -1772,7 +1772,7 @@ CodeGeneratorARM::visitAsmJSLoadHeap(LAsmJSLoadHeap *ins)
     bool isSigned;
     int size;
     bool isFloat = false;
-    switch (mir->viewType()) {
+    switch (mir->accessType()) {
       case Scalar::Int8:    isSigned = true;  size =  8; break;
       case Scalar::Uint8:   isSigned = false; size =  8; break;
       case Scalar::Int16:   isSigned = true;  size = 16; break;
@@ -1852,7 +1852,7 @@ CodeGeneratorARM::visitAsmJSStoreHeap(LAsmJSStoreHeap *ins)
     bool isSigned;
     int size;
     bool isFloat = false;
-    switch (mir->viewType()) {
+    switch (mir->accessType()) {
       case Scalar::Int8:
       case Scalar::Uint8:   isSigned = false; size = 8; break;
       case Scalar::Int16:
@@ -1920,7 +1920,7 @@ void
 CodeGeneratorARM::visitAsmJSCompareExchangeHeap(LAsmJSCompareExchangeHeap *ins)
 {
     MAsmJSCompareExchangeHeap *mir = ins->mir();
-    Scalar::Type vt = mir->viewType();
+    Scalar::Type vt = mir->accessType();
     const LAllocation *ptr = ins->ptr();
     Register ptrReg = ToRegister(ptr);
     BaseIndex srcAddr(HeapReg, ptrReg, TimesOne);
@@ -1954,7 +1954,7 @@ void
 CodeGeneratorARM::visitAsmJSAtomicBinopHeap(LAsmJSAtomicBinopHeap *ins)
 {
     MAsmJSAtomicBinopHeap *mir = ins->mir();
-    Scalar::Type vt = mir->viewType();
+    Scalar::Type vt = mir->accessType();
     const LAllocation *ptr = ins->ptr();
     Register ptrReg = ToRegister(ptr);
     Register temp = ins->temp()->isBogusTemp() ? InvalidReg : ToRegister(ins->temp());

@@ -15,6 +15,7 @@
 #include "nsProxyRelease.h"
 #include "nsServiceManagerUtils.h"
 #include "nsComponentManagerUtils.h"
+#include "mozilla/Telemetry.h"
 
 using mozilla::gfx::IntSize;
 using mozilla::gfx::SurfaceFormat;
@@ -28,7 +29,7 @@ Decoder::Decoder(RasterImage* aImage)
   , mImageData(nullptr)
   , mColormap(nullptr)
   , mChunkCount(0)
-  , mDecodeFlags(0)
+  , mFlags(0)
   , mBytesDecoded(0)
   , mSendPartialInvalidations(false)
   , mDataDone(false)
@@ -266,6 +267,10 @@ Decoder::CompleteDecode()
     if (!HasDecoderError() && GetCompleteFrameCount() > 0) {
       // We're usable, so do exactly what we should have when the decoder
       // completed.
+
+      // Not writing to the entire frame may have left us transparent.
+      PostHasTransparency();
+
       if (mInFrame) {
         PostFrameStop();
       }
@@ -353,7 +358,7 @@ Decoder::AllocateFrame(const nsIntSize& aTargetSize /* = nsIntSize() */)
   mCurrentFrame = EnsureFrame(mNewFrameData.mFrameNum,
                               targetSize,
                               mNewFrameData.mFrameRect,
-                              mDecodeFlags,
+                              GetDecodeFlags(),
                               mNewFrameData.mFormat,
                               mNewFrameData.mPaletteDepth,
                               mCurrentFrame.get());
@@ -695,6 +700,13 @@ Decoder::NeedNewFrame(uint32_t framenum, uint32_t x_offset, uint32_t y_offset,
                                nsIntRect(x_offset, y_offset, width, height),
                                format, palette_depth);
   mNeedsNewFrame = true;
+}
+
+Telemetry::ID
+Decoder::SpeedHistogram()
+{
+  // Use HistogramCount as an invalid Histogram ID.
+  return Telemetry::HistogramCount;
 }
 
 } // namespace image

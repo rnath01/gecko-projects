@@ -55,7 +55,6 @@
 
 using namespace js;
 using namespace js::gc;
-using namespace js::types;
 
 using mozilla::DebugOnly;
 using mozilla::NumberEqualsInt32;
@@ -380,7 +379,7 @@ RunState::maybeCreateThisForConstructor(JSContext *cx)
         InvokeState &invoke = *asInvoke();
         if (invoke.constructing() && invoke.args().thisv().isPrimitive()) {
             RootedObject callee(cx, &invoke.args().callee());
-            NewObjectKind newKind = invoke.useNewType() ? SingletonObject : GenericObject;
+            NewObjectKind newKind = invoke.createSingleton() ? SingletonObject : GenericObject;
             JSObject *obj = CreateThisForFunction(cx, callee, newKind);
             if (!obj)
                 return false;
@@ -410,11 +409,6 @@ bool
 js::RunScript(JSContext *cx, RunState &state)
 {
     JS_CHECK_RECURSION(cx, return false);
-
-#ifdef NIGHTLY_BUILD
-    if (AssertOnScriptEntryHook hook = cx->runtime()->assertOnScriptEntryHook_)
-        (*hook)(cx, state.script());
-#endif
 
     SPSEntryMarker marker(cx->runtime(), state.script());
 
@@ -503,14 +497,14 @@ js::Invoke(JSContext *cx, CallArgs args, MaybeConstruct construct)
     /* Run function until JSOP_RETRVAL, JSOP_RETURN or error. */
     InvokeState state(cx, args, initial);
 
-    // Check to see if useNewType flag should be set for this frame.
+    // Check to see if createSingleton flag should be set for this frame.
     if (construct) {
         FrameIter iter(cx);
         if (!iter.done() && iter.hasScript()) {
             JSScript *script = iter.script();
             jsbytecode *pc = iter.pc();
-            if (UseNewType(cx, script, pc))
-                state.setUseNewType();
+            if (ObjectGroup::useSingletonForNewObject(cx, script, pc))
+                state.setCreateSingleton();
         }
     }
 
@@ -1327,7 +1321,7 @@ static MOZ_ALWAYS_INLINE bool
 SetObjectElementOperation(JSContext *cx, Handle<JSObject*> obj, HandleId id, const Value &value,
                           bool strict, JSScript *script = nullptr, jsbytecode *pc = nullptr)
 {
-    types::TypeScript::MonitorAssign(cx, obj, id);
+    TypeScript::MonitorAssign(cx, obj, id);
 
     if (obj->isNative() && JSID_IS_INT(id)) {
         uint32_t length = obj->as<NativeObject>().getDenseInitializedLength();
@@ -1495,7 +1489,6 @@ Interpret(JSContext *cx, RunState &state)
     RootedObject rootObject0(cx), rootObject1(cx), rootObject2(cx);
     RootedNativeObject rootNativeObject0(cx);
     RootedFunction rootFunction0(cx);
-    RootedTypeObject rootType0(cx);
     RootedPropertyName rootName0(cx);
     RootedId rootId0(cx);
     RootedShape rootShape0(cx);
@@ -2565,16 +2558,16 @@ CASE(JSOP_FUNCALL)
     }
 
     InitialFrameFlags initial = construct ? INITIAL_CONSTRUCT : INITIAL_NONE;
-    bool newType = UseNewType(cx, script, REGS.pc);
+    bool createSingleton = ObjectGroup::useSingletonForNewObject(cx, script, REGS.pc);
 
     TypeMonitorCall(cx, args, construct);
 
     {
         InvokeState state(cx, args, initial);
-        if (newType)
-            state.setUseNewType();
+        if (createSingleton)
+            state.setCreateSingleton();
 
-        if (!newType && jit::IsIonEnabled(cx)) {
+        if (!createSingleton && jit::IsIonEnabled(cx)) {
             jit::MethodStatus status = jit::CanEnter(cx, state);
             if (status == jit::Method_Error)
                 goto error;
@@ -2605,8 +2598,8 @@ CASE(JSOP_FUNCALL)
     if (!activation.pushInlineFrame(args, funScript, initial))
         goto error;
 
-    if (newType)
-        REGS.fp()->setUseNewType();
+    if (createSingleton)
+        REGS.fp()->setCreateSingleton();
 
     SET_SCRIPT(REGS.fp()->script());
 
@@ -3087,17 +3080,22 @@ CASE(JSOP_NEWINIT)
     MOZ_ASSERT(i == JSProto_Array || i == JSProto_Object);
 
     RootedObject &obj = rootObject0;
-    NewObjectKind newKind;
+    NewObjectKind newKind = GenericObject;
     if (i == JSProto_Array) {
-        newKind = UseNewTypeForInitializer(script, REGS.pc, &ArrayObject::class_);
+        if (ObjectGroup::useSingletonForAllocationSite(script, REGS.pc, &ArrayObject::class_))
+            newKind = SingletonObject;
         obj = NewDenseEmptyArray(cx, nullptr, newKind);
     } else {
         gc::AllocKind allocKind = GuessObjectGCKind(0);
-        newKind = UseNewTypeForInitializer(script, REGS.pc, &PlainObject::class_);
+        if (ObjectGroup::useSingletonForAllocationSite(script, REGS.pc, &PlainObject::class_))
+            newKind = SingletonObject;
         obj = NewBuiltinClassInstance<PlainObject>(cx, allocKind, newKind);
     }
-    if (!obj || !SetInitializerObjectType(cx, script, REGS.pc, obj, newKind))
+    if (!obj || !ObjectGroup::setAllocationSiteObjectGroup(cx, script, REGS.pc, obj,
+                                                           newKind == SingletonObject))
+    {
         goto error;
+    }
 
     PUSH_OBJECT(*obj);
 }
@@ -3107,10 +3105,15 @@ CASE(JSOP_NEWARRAY)
 {
     unsigned count = GET_UINT24(REGS.pc);
     RootedObject &obj = rootObject0;
-    NewObjectKind newKind = UseNewTypeForInitializer(script, REGS.pc, &ArrayObject::class_);
+    NewObjectKind newKind = GenericObject;
+    if (ObjectGroup::useSingletonForAllocationSite(script, REGS.pc, &ArrayObject::class_))
+        newKind = SingletonObject;
     obj = NewDenseFullyAllocatedArray(cx, count, nullptr, newKind);
-    if (!obj || !SetInitializerObjectType(cx, script, REGS.pc, obj, newKind))
+    if (!obj || !ObjectGroup::setAllocationSiteObjectGroup(cx, script, REGS.pc, obj,
+                                                           newKind == SingletonObject))
+    {
         goto error;
+    }
 
     PUSH_OBJECT(*obj);
 }
@@ -3119,7 +3122,7 @@ END_CASE(JSOP_NEWARRAY)
 CASE(JSOP_NEWARRAY_COPYONWRITE)
 {
     RootedObject &baseobj = rootObject0;
-    baseobj = types::GetOrFixupCopyOnWriteObject(cx, script, REGS.pc);
+    baseobj = ObjectGroup::getOrFixupCopyOnWriteObject(cx, script, REGS.pc);
     if (!baseobj)
         goto error;
 
@@ -3138,10 +3141,15 @@ CASE(JSOP_NEWOBJECT)
     baseobj = script->getObject(REGS.pc);
 
     RootedObject &obj = rootObject1;
-    NewObjectKind newKind = UseNewTypeForInitializer(script, REGS.pc, baseobj->getClass());
+    NewObjectKind newKind = GenericObject;
+    if (ObjectGroup::useSingletonForAllocationSite(script, REGS.pc, baseobj->getClass()))
+        newKind = SingletonObject;
     obj = CopyInitializerObject(cx, baseobj.as<PlainObject>(), newKind);
-    if (!obj || !SetInitializerObjectType(cx, script, REGS.pc, obj, newKind))
+    if (!obj || !ObjectGroup::setAllocationSiteObjectGroup(cx, script, REGS.pc, obj,
+                                                           newKind == SingletonObject))
+    {
         goto error;
+    }
 
     PUSH_OBJECT(*obj);
 }
@@ -3779,17 +3787,6 @@ js::GetAndClearException(JSContext *cx, MutableHandleValue res)
 
 template <bool strict>
 bool
-js::SetProperty(JSContext *cx, HandleObject obj, HandleId id, const Value &value)
-{
-    RootedValue v(cx, value);
-    return SetProperty(cx, obj, obj, id, &v, strict);
-}
-
-template bool js::SetProperty<true> (JSContext *cx, HandleObject obj, HandleId id, const Value &value);
-template bool js::SetProperty<false>(JSContext *cx, HandleObject obj, HandleId id, const Value &value);
-
-template <bool strict>
-bool
 js::DeleteProperty(JSContext *cx, HandleValue v, HandlePropertyName name, bool *bp)
 {
     RootedObject obj(cx, ToObjectFromStack(cx, v));
@@ -3960,13 +3957,12 @@ js::RunOnceScriptPrologue(JSContext *cx, HandleScript script)
         return true;
     }
 
-    // Force instantiation of the script's function's type to ensure the flag
+    // Force instantiation of the script's function's group to ensure the flag
     // is preserved in type information.
-    if (!script->functionNonDelazifying()->getType(cx))
+    if (!script->functionNonDelazifying()->getGroup(cx))
         return false;
 
-    types::MarkTypeObjectFlags(cx, script->functionNonDelazifying(),
-                               types::OBJECT_FLAG_RUNONCE_INVALIDATED);
+    MarkObjectGroupFlags(cx, script->functionNonDelazifying(), OBJECT_FLAG_RUNONCE_INVALIDATED);
     return true;
 }
 

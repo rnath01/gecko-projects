@@ -131,7 +131,7 @@ NetworkService.prototype = {
       return;
     }
 
-    NetUtil.asyncFetch(file, function(inputStream, status) {
+    NetUtil.asyncFetch2(file, function(inputStream, status) {
       let rxBytes = 0,
           txBytes = 0,
           now = Date.now();
@@ -154,7 +154,12 @@ NetworkService.prototype = {
 
       // netd always return success even interface doesn't exist.
       callback.networkStatsAvailable(true, rxBytes, txBytes, now);
-    });
+    },
+    null,      // aLoadingNode
+    Services.scriptSecurityManager.getSystemPrincipal(),
+    null,      // aTriggeringPrincipal
+    Ci.nsILoadInfo.SEC_NORMAL,
+    Ci.nsIContentPolicy.TYPE_OTHER);
   },
 
   setNetworkInterfaceAlarm: function(networkName, threshold, callback) {
@@ -373,17 +378,13 @@ NetworkService.prototype = {
     try {
       if (!network.httpProxyHost || network.httpProxyHost === "") {
         // Sets direct connection to internet.
-        Services.prefs.clearUserPref("network.proxy.type");
-        Services.prefs.clearUserPref("network.proxy.share_proxy_settings");
-        Services.prefs.clearUserPref("network.proxy.http");
-        Services.prefs.clearUserPref("network.proxy.http_port");
-        Services.prefs.clearUserPref("network.proxy.ssl");
-        Services.prefs.clearUserPref("network.proxy.ssl_port");
-        if(DEBUG) debug("No proxy support for " + network.name + " network interface.");
+        this.clearNetworkProxy();
+
+        if (DEBUG) debug("No proxy support for " + network.name + " network interface.");
         return;
       }
 
-      if(DEBUG) debug("Going to set proxy settings for " + network.name + " network interface.");
+      if (DEBUG) debug("Going to set proxy settings for " + network.name + " network interface.");
       // Sets manual proxy configuration.
       Services.prefs.setIntPref("network.proxy.type", MANUAL_PROXY_CONFIGURATION);
       // Do not use this proxy server for all protocols.
@@ -394,9 +395,20 @@ NetworkService.prototype = {
       Services.prefs.setIntPref("network.proxy.http_port", port);
       Services.prefs.setIntPref("network.proxy.ssl_port", port);
     } catch(ex) {
-        if(DEBUG) debug("Exception " + ex + ". Unable to set proxy setting for " +
+        if (DEBUG) debug("Exception " + ex + ". Unable to set proxy setting for " +
                          network.name + " network interface.");
     }
+  },
+
+  clearNetworkProxy: function() {
+    if (DEBUG) debug("Going to clear all network proxy.");
+
+    Services.prefs.clearUserPref("network.proxy.type");
+    Services.prefs.clearUserPref("network.proxy.share_proxy_settings");
+    Services.prefs.clearUserPref("network.proxy.http");
+    Services.prefs.clearUserPref("network.proxy.http_port");
+    Services.prefs.clearUserPref("network.proxy.ssl");
+    Services.prefs.clearUserPref("network.proxy.ssl_port");
   },
 
   // Enable/Disable DHCP server.

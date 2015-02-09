@@ -628,6 +628,10 @@ var shell = {
       content.removeEventListener('load', shell_homeLoaded);
       shell.isHomeLoaded = true;
 
+      if (Services.prefs.getBoolPref('b2g.orientation.animate')) {
+        Cu.import('resource://gre/modules/OrientationChangeHandler.jsm');
+      }
+
 #ifdef MOZ_WIDGET_GONK
       libcutils.property_set('sys.boot_completed', '1');
 #endif
@@ -1167,20 +1171,3 @@ Services.obs.addObserver(function resetProfile(subject, topic, data) {
                      .getService(Ci.nsIAppStartup);
   appStartup.quit(Ci.nsIAppStartup.eForceQuit);
 }, 'b2g-reset-profile', false);
-
-/**
-  * CID of our implementation of nsITransfer.
-  */
-const kTransferCid = Components.ID("{1b4c85df-cbdd-4bb6-b04e-613caece083c}");
-
-/**
-  * Contract ID of the service implementing nsITransfer.
-  */
-const kTransferContractId = "@mozilla.org/transfer;1";
-
-// Override Toolkit's nsITransfer implementation with the one from the
-// JavaScript API for downloads.  This will eventually be removed when
-// nsIDownloadManager will not be available anymore (bug 851471).
-Components.manager.QueryInterface(Ci.nsIComponentRegistrar)
-                  .registerFactory(kTransferCid, "",
-                                   kTransferContractId, null);

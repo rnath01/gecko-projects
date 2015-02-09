@@ -201,7 +201,7 @@ void
 LIRGenerator::visitNewCallObject(MNewCallObject *ins)
 {
     LInstruction *lir;
-    if (ins->templateObject()->hasSingletonType()) {
+    if (ins->templateObject()->isSingleton()) {
         LNewSingletonCallObject *singletonLir = new(alloc()) LNewSingletonCallObject(temp());
         define(singletonLir, ins);
         lir = singletonLir;
@@ -384,12 +384,24 @@ void
 LIRGenerator::lowerCallArguments(MCall *call)
 {
     uint32_t argc = call->numStackArgs();
-    if (argc > maxargslots_)
-        maxargslots_ = argc;
+
+    // Align the arguments of a call such that the callee would keep the same
+    // alignment as the caller.
+    uint32_t baseSlot = 0;
+    static const uint32_t alignment = JitStackAlignment / sizeof(Value);
+    if (alignment > 1)
+        baseSlot = AlignBytes(argc, alignment);
+    else
+        baseSlot = argc;
+
+    // Save the maximum number of argument, such that we can have one unique
+    // frame size.
+    if (baseSlot > maxargslots_)
+        maxargslots_ = baseSlot;
 
     for (size_t i = 0; i < argc; i++) {
         MDefinition *arg = call->getArg(i);
-        uint32_t argslot = argc - i;
+        uint32_t argslot = baseSlot - i;
 
         // Values take a slow path.
         if (arg->type() == MIRType_Value) {
@@ -844,9 +856,9 @@ LIRGenerator::visitFunctionDispatch(MFunctionDispatch *ins)
 }
 
 void
-LIRGenerator::visitTypeObjectDispatch(MTypeObjectDispatch *ins)
+LIRGenerator::visitObjectGroupDispatch(MObjectGroupDispatch *ins)
 {
-    LTypeObjectDispatch *lir = new(alloc()) LTypeObjectDispatch(useRegister(ins->input()), temp());
+    LObjectGroupDispatch *lir = new(alloc()) LObjectGroupDispatch(useRegister(ins->input()), temp());
     add(lir, ins);
 }
 
@@ -1391,7 +1403,7 @@ static void
 MaybeSetRecoversInput(S *mir, T *lir)
 {
     MOZ_ASSERT(lir->mirRaw() == mir);
-    if (!mir->fallible())
+    if (!mir->fallible() || !lir->snapshot())
         return;
 
     if (lir->output()->policy() != LDefinition::MUST_REUSE_INPUT)
@@ -1635,7 +1647,7 @@ LIRGenerator::visitStart(MStart *start)
     LStart *lir = new(alloc()) LStart;
     assignSnapshot(lir, Bailout_InitialState);
 
-    if (start->startType() == MStart::StartType_Default)
+    if (start->startType() == MStart::StartType_Default && lir->snapshot())
         lirGraph_.setEntrySnapshot(lir->snapshot());
     add(lir);
 }
@@ -2124,11 +2136,11 @@ LIRGenerator::visitStringReplace(MStringReplace *ins)
 void
 LIRGenerator::visitLambda(MLambda *ins)
 {
-    if (ins->info().singletonType || ins->info().useNewTypeForClone) {
+    if (ins->info().singletonType || ins->info().useSingletonForClone) {
         // If the function has a singleton type, this instruction will only be
         // executed once so we don't bother inlining it.
         //
-        // If UseNewTypeForClone is true, we will assign a singleton type to
+        // If UseSingletonForClone is true, we will assign a singleton type to
         // the clone and we have to clone the script, we can't do that inline.
         LLambdaForSingleton *lir = new(alloc()) LLambdaForSingleton(useRegisterAtStart(ins->scopeChain()));
         defineReturn(lir, ins);
@@ -2283,7 +2295,7 @@ LIRGenerator::visitTypeBarrier(MTypeBarrier *ins)
     // Requesting a non-GC pointer is safe here since we never re-enter C++
     // from inside a type barrier test.
 
-    const types::TemporaryTypeSet *types = ins->resultTypeSet();
+    const TemporaryTypeSet *types = ins->resultTypeSet();
     bool needTemp = !types->unknownObject() && types->getObjectCount() > 0;
 
     MIRType inputType = ins->getOperand(0)->type();
@@ -2312,8 +2324,8 @@ LIRGenerator::visitTypeBarrier(MTypeBarrier *ins)
         return;
     }
 
-    // Handle typebarrier with specific TypeObject/SingleObjects.
-    if (inputType == MIRType_Object && !types->hasType(types::Type::AnyObjectType()) &&
+    // Handle typebarrier with specific ObjectGroup/SingleObjects.
+    if (inputType == MIRType_Object && !types->hasType(TypeSet::AnyObjectType()) &&
         ins->barrierKind() != BarrierKind::TypeTagOnly)
     {
         LDefinition tmp = needTemp ? temp() : LDefinition::BogusTemp();
@@ -2334,7 +2346,7 @@ LIRGenerator::visitMonitorTypes(MMonitorTypes *ins)
     // Requesting a non-GC pointer is safe here since we never re-enter C++
     // from inside a type check.
 
-    const types::TemporaryTypeSet *types = ins->typeSet();
+    const TemporaryTypeSet *types = ins->typeSet();
     bool needTemp = !types->unknownObject() && types->getObjectCount() > 0;
     LDefinition tmp = needTemp ? temp() : tempToUnbox();
 
@@ -2619,12 +2631,12 @@ LIRGenerator::visitLoadUnboxedObjectOrNull(MLoadUnboxedObjectOrNull *ins)
     if (ins->type() == MIRType_Object) {
         LLoadUnboxedPointerT *lir = new(alloc()) LLoadUnboxedPointerT(useRegister(ins->elements()),
                                                                       useRegisterOrConstant(ins->index()));
-        if (ins->bailOnNull())
+        if (ins->nullBehavior() == MLoadUnboxedObjectOrNull::BailOnNull)
             assignSnapshot(lir, Bailout_TypeBarrierO);
         define(lir, ins);
     } else {
         MOZ_ASSERT(ins->type() == MIRType_Value);
-        MOZ_ASSERT(!ins->bailOnNull());
+        MOZ_ASSERT(ins->nullBehavior() != MLoadUnboxedObjectOrNull::BailOnNull);
 
         LLoadUnboxedPointerV *lir = new(alloc()) LLoadUnboxedPointerV(useRegister(ins->elements()),
                                                                       useRegisterOrConstant(ins->index()));
@@ -2848,7 +2860,7 @@ LIRGenerator::visitLoadTypedArrayElement(MLoadTypedArrayElement *ins)
     const LUse elements = useRegister(ins->elements());
     const LAllocation index = useRegisterOrConstant(ins->index());
 
-    MOZ_ASSERT(IsNumberType(ins->type()));
+    MOZ_ASSERT(IsNumberType(ins->type()) || ins->type() == MIRType_Boolean);
 
     // We need a temp register for Uint32Array with known double result.
     LDefinition tempDef = LDefinition::BogusTemp();
@@ -2884,7 +2896,9 @@ LIRGenerator::visitClampToUint8(MClampToUint8 *ins)
         break;
 
       case MIRType_Double:
-        define(new(alloc()) LClampDToUint8(useRegisterAtStart(in)), ins);
+        // LClampDToUint8 clobbers its input register. Making it available as
+        // a temp copy describes this behavior to the register allocator.
+        define(new(alloc()) LClampDToUint8(useRegisterAtStart(in), tempCopy(in, 0)), ins);
         break;
 
       case MIRType_Value:
@@ -4001,6 +4015,12 @@ LIRGenerator::visitDebugger(MDebugger *ins)
     LDebugger *lir = new(alloc()) LDebugger(tempFixed(CallTempReg0), tempFixed(CallTempReg1));
     assignSnapshot(lir, Bailout_Debugger);
     add(lir, ins);
+}
+
+void
+LIRGenerator::visitNurseryObject(MNurseryObject *ins)
+{
+    define(new(alloc()) LNurseryObject(), ins);
 }
 
 static void

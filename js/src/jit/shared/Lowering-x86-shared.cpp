@@ -44,12 +44,12 @@ LIRGeneratorX86Shared::visitGuardShape(MGuardShape *ins)
 }
 
 void
-LIRGeneratorX86Shared::visitGuardObjectType(MGuardObjectType *ins)
+LIRGeneratorX86Shared::visitGuardObjectGroup(MGuardObjectGroup *ins)
 {
     MOZ_ASSERT(ins->obj()->type() == MIRType_Object);
 
-    LGuardObjectType *guard = new(alloc()) LGuardObjectType(useRegisterAtStart(ins->obj()));
-    assignSnapshot(guard, Bailout_ObjectIdentityOrTypeGuard);
+    LGuardObjectGroup *guard = new(alloc()) LGuardObjectGroup(useRegisterAtStart(ins->obj()));
+    assignSnapshot(guard, ins->bailoutKind());
     add(guard, ins);
     redefine(ins, ins->obj());
 }
@@ -510,7 +510,7 @@ LIRGeneratorX86Shared::visitAsmJSCompareExchangeHeap(MAsmJSCompareExchangeHeap *
     MOZ_ASSERT(ptr->type() == MIRType_Int32);
 
     bool byteArray = false;
-    switch (ins->viewType()) {
+    switch (ins->accessType()) {
       case Scalar::Int8:
       case Scalar::Uint8:
         byteArray = true;
@@ -555,7 +555,7 @@ LIRGeneratorX86Shared::visitAsmJSAtomicBinopHeap(MAsmJSAtomicBinopHeap *ins)
     MOZ_ASSERT(ptr->type() == MIRType_Int32);
 
     bool byteArray = false;
-    switch (ins->viewType()) {
+    switch (ins->accessType()) {
       case Scalar::Int8:
       case Scalar::Uint8:
         byteArray = true;

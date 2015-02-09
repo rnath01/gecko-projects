@@ -332,6 +332,7 @@ public:
 
     virtual bool RecvLastPrivateDocShellDestroyed() MOZ_OVERRIDE;
 
+    virtual bool RecvVolumes(InfallibleTArray<VolumeInfo>&& aVolumes) MOZ_OVERRIDE;
     virtual bool RecvFilePathUpdate(const nsString& aStorageType,
                                     const nsString& aStorageName,
                                     const nsString& aPath,
@@ -440,7 +441,7 @@ public:
 private:
     virtual void ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE;
 
-    virtual void ProcessingError(Result what) MOZ_OVERRIDE;
+    virtual void ProcessingError(Result aCode, const char* aReason) MOZ_OVERRIDE;
 
     /**
      * Exit *now*.  Do not shut down XPCOM, do not pass Go, do not run

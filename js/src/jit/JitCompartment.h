@@ -186,7 +186,7 @@ class JitRuntime
     JitCode *stringPreBarrier_;
     JitCode *objectPreBarrier_;
     JitCode *shapePreBarrier_;
-    JitCode *typeObjectPreBarrier_;
+    JitCode *objectGroupPreBarrier_;
 
     // Thunk to call malloc/free.
     JitCode *mallocStub_;
@@ -234,6 +234,8 @@ class JitRuntime
 
     // Global table of jitcode native address => bytecode address mappings.
     JitcodeGlobalTable *jitcodeGlobalTable_;
+
+    bool hasIonNurseryObjects_;
 
   private:
     JitCode *generateLazyLinkStub(JSContext *cx);
@@ -359,7 +361,7 @@ class JitRuntime
           case MIRType_String: return stringPreBarrier_;
           case MIRType_Object: return objectPreBarrier_;
           case MIRType_Shape: return shapePreBarrier_;
-          case MIRType_TypeObject: return typeObjectPreBarrier_;
+          case MIRType_ObjectGroup: return objectGroupPreBarrier_;
           default: MOZ_CRASH();
         }
     }
@@ -388,6 +390,13 @@ class JitRuntime
         MOZ_ASSERT(!hasIonReturnOverride());
         MOZ_ASSERT(!v.isMagic());
         ionReturnOverride_ = v;
+    }
+
+    bool hasIonNurseryObjects() const {
+        return hasIonNurseryObjects_;
+    }
+    void setHasIonNurseryObjects(bool b)  {
+        hasIonNurseryObjects_ = b;
     }
 
     bool hasJitcodeGlobalTable() const {

@@ -364,7 +364,7 @@ class NativeObject : public JSObject
 
         static_assert(offsetof(NativeObject, shape_) == offsetof(shadow::Object, shape),
                       "shadow shape must match actual shape");
-        static_assert(offsetof(NativeObject, type_) == offsetof(shadow::Object, type),
+        static_assert(offsetof(NativeObject, group_) == offsetof(shadow::Object, group),
                       "shadow type must match actual type");
         static_assert(offsetof(NativeObject, slots_) == offsetof(shadow::Object, slots),
                       "shadow slots must match actual slots");
@@ -416,6 +416,12 @@ class NativeObject : public JSObject
     // object to a non-native one. This leaves the object with a type and shape
     // that are (temporarily) inconsistent.
     void setLastPropertyMakeNonNative(Shape *shape);
+
+    // As for setLastProperty(), but changes the class associated with the
+    // object to a native one. The object's type has already been changed, and
+    // this brings the shape into sync with it.
+    static void setLastPropertyMakeNative(ExclusiveContext *cx, HandleNativeObject obj,
+                                          HandleShape shape);
 
   protected:
 #ifdef DEBUG
@@ -808,8 +814,6 @@ class NativeObject : public JSObject
     static bool rollbackProperties(ExclusiveContext *cx, HandleNativeObject obj,
                                    uint32_t slotSpan);
 
-    inline bool setSlotIfHasType(Shape *shape, const Value &value,
-                                 bool overwriting = true);
     inline void setSlotWithType(ExclusiveContext *cx, Shape *shape,
                                 const Value &value, bool overwriting = true);
 
@@ -1383,8 +1387,7 @@ inline bool
 js::GetProperty(JSContext *cx, HandleObject obj, HandleObject receiver, HandleId id,
                 MutableHandleValue vp)
 {
-    MOZ_ASSERT(!!obj->getOps()->getGeneric == !!obj->getOps()->getProperty);
-    if (GenericIdOp op = obj->getOps()->getGeneric)
+    if (GetPropertyOp op = obj->getOps()->getProperty)
         return op(cx, obj, receiver, id, vp);
     return NativeGetProperty(cx, obj.as<NativeObject>(), receiver, id, vp);
 }
@@ -1392,7 +1395,7 @@ js::GetProperty(JSContext *cx, HandleObject obj, HandleObject receiver, HandleId
 inline bool
 js::GetPropertyNoGC(JSContext *cx, JSObject *obj, JSObject *receiver, jsid id, Value *vp)
 {
-    if (obj->getOps()->getGeneric)
+    if (obj->getOps()->getProperty)
         return false;
     return NativeGetPropertyNoGC(cx, &obj->as<NativeObject>(), receiver, id, vp);
 }
@@ -1401,7 +1404,7 @@ inline bool
 js::SetProperty(JSContext *cx, HandleObject obj, HandleObject receiver,
                 HandleId id, MutableHandleValue vp, bool strict)
 {
-    if (obj->getOps()->setGeneric)
+    if (obj->getOps()->setProperty)
         return JSObject::nonNativeSetProperty(cx, obj, receiver, id, vp, strict);
     return NativeSetProperty(cx, obj.as<NativeObject>(), receiver, id, Qualified, vp, strict);
 }
@@ -1410,7 +1413,7 @@ inline bool
 js::SetElement(JSContext *cx, HandleObject obj, HandleObject receiver, uint32_t index,
                MutableHandleValue vp, bool strict)
 {
-    if (obj->getOps()->setElement)
+    if (obj->getOps()->setProperty)
         return JSObject::nonNativeSetElement(cx, obj, receiver, index, vp, strict);
     return NativeSetElement(cx, obj.as<NativeObject>(), receiver, index, vp, strict);
 }

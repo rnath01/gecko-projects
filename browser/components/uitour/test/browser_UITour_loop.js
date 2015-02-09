@@ -16,8 +16,95 @@ function test() {
   UITourTest();
 }
 
+function runOffline(fun) {
+  return (done) => {
+    Services.io.offline = true;
+    fun(function onComplete() {
+      Services.io.offline = false;
+      done();
+    });
+  }
+}
+
 let tests = [
+  taskify(function* test_gettingStartedClicked_linkOpenedWithExpectedParams() {
+    Services.prefs.setBoolPref("loop.gettingStarted.seen", false);
+    Services.prefs.setCharPref("loop.gettingStarted.url", "http://example.com");
+    ise(loopButton.open, false, "Menu should initially be closed");
+    loopButton.click();
+
+    yield waitForConditionPromise(() => {
+      return loopButton.open;
+    }, "Menu should be visible after showMenu()");
+
+    gContentAPI.registerPageID("hello-tour_OpenPanel_testPage");
+    yield new Promise(resolve => {
+      gContentAPI.ping(() => resolve());
+    });
+
+    let loopDoc = document.getElementById("loop-notification-panel").children[0].contentDocument;
+    let gettingStartedButton = loopDoc.getElementById("fte-button");
+    ok(gettingStartedButton, "Getting Started button should be found");
+
+    let newTabPromise = waitForConditionPromise(() => {
+      return gBrowser.currentURI.path.contains("utm_source=firefox-browser");
+    }, "New tab with utm_content=testPageNewID should have opened");
+
+    gettingStartedButton.click();
+    yield newTabPromise;
+    ok(gBrowser.currentURI.path.contains("utm_content=hello-tour_OpenPanel_testPage"),
+        "Expected URL opened (" + gBrowser.currentURI.path + ")");
+    yield gBrowser.removeCurrentTab();
+
+    checkLoopPanelIsHidden();
+  }),
+  taskify(function* test_gettingStartedClicked_linkOpenedWithExpectedParams2() {
+    Services.prefs.setBoolPref("loop.gettingStarted.seen", false);
+    // Force a refresh of the loop panel since going from seen -> unseen doesn't trigger
+    // automatic re-rendering.
+    let loopWin = document.getElementById("loop-notification-panel").children[0].contentWindow;
+    var event = new loopWin.CustomEvent("GettingStartedSeen");
+    loopWin.dispatchEvent(event);
+
+    UITour.pageIDsForSession.clear();
+    Services.prefs.setCharPref("loop.gettingStarted.url", "http://example.com");
+    ise(loopButton.open, false, "Menu should initially be closed");
+    loopButton.click();
+
+    yield waitForConditionPromise(() => {
+      return loopButton.open;
+    }, "Menu should be visible after showMenu()");
+
+
+    gContentAPI.registerPageID("hello-tour_OpenPanel_testPageOldId");
+    yield new Promise(resolve => {
+      gContentAPI.ping(() => resolve());
+    });
+    // Set the time of the page ID to 10 hours earlier, so that it is considered "expired".
+    UITour.pageIDsForSession.set("hello-tour_OpenPanel_testPageOldId",
+                                   {lastSeen: Date.now() - (10 * 60 * 60 * 1000)});
+
+    let loopDoc = loopWin.document;
+    let gettingStartedButton = loopDoc.getElementById("fte-button");
+    ok(gettingStartedButton, "Getting Started button should be found");
+
+    let newTabPromise = waitForConditionPromise(() => {
+      Services.console.logStringMessage(gBrowser.currentURI.path);
+      return gBrowser.currentURI.path.contains("utm_source=firefox-browser");
+    }, "New tab with utm_content=testPageNewID should have opened");
+
+    gettingStartedButton.click();
+    yield newTabPromise;
+    ok(!gBrowser.currentURI.path.contains("utm_content=hello-tour_OpenPanel_testPageOldId"),
+       "Expected URL opened without the utm_content parameter (" +
+        gBrowser.currentURI.path + ")");
+    yield gBrowser.removeCurrentTab();
+
+    checkLoopPanelIsHidden();
+  }),
   taskify(function* test_menu_show_hide() {
+    // The targets to highlight only appear after getting started is launched.
+    Services.prefs.setBoolPref("loop.gettingStarted.seen", true);
     ise(loopButton.open, false, "Menu should initially be closed");
     gContentAPI.showMenu("loop");
 
@@ -94,7 +181,7 @@ let tests = [
       });
     });
   },
-  function test_notifyLoopChatWindowOpenedClosed(done) {
+  runOffline(function test_notifyLoopChatWindowOpenedClosed(done) {
     gContentAPI.observe((event, params) => {
       is(event, "Loop:ChatWindowOpened", "Check Loop:ChatWindowOpened notification");
       gContentAPI.observe((event, params) => {
@@ -110,8 +197,8 @@ let tests = [
       document.querySelector("#pinnedchats > chatbox").close();
     });
     LoopRooms.open("fakeTourRoom");
-  },
-  function test_notifyLoopRoomURLCopied(done) {
+  }),
+  runOffline(function test_notifyLoopRoomURLCopied(done) {
     gContentAPI.observe((event, params) => {
       is(event, "Loop:ChatWindowOpened", "Loop chat window should've opened");
       gContentAPI.observe((event, params) => {
@@ -131,8 +218,8 @@ let tests = [
     });
     setupFakeRoom();
     LoopRooms.open("fakeTourRoom");
-  },
-  function test_notifyLoopRoomURLEmailed(done) {
+  }),
+  runOffline(function test_notifyLoopRoomURLEmailed(done) {
     gContentAPI.observe((event, params) => {
       is(event, "Loop:ChatWindowOpened", "Loop chat window should've opened");
       gContentAPI.observe((event, params) => {
@@ -162,7 +249,7 @@ let tests = [
       });
     });
     LoopRooms.open("fakeTourRoom");
-  },
+  }),
   taskify(function* test_arrow_panel_position() {
     ise(loopButton.open, false, "Menu should initially be closed");
     let popup = document.getElementById("UITourTooltip");
@@ -267,13 +354,12 @@ function setupFakeRoom() {
 
 if (Services.prefs.getBoolPref("loop.enabled")) {
   loopButton = window.LoopUI.toolbarButton.node;
-  // The targets to highlight only appear after getting started is launched.
-  Services.prefs.setBoolPref("loop.gettingStarted.seen", true);
 
   registerCleanupFunction(() => {
     Services.prefs.clearUserPref("loop.gettingStarted.resumeOnFirstJoin");
     Services.prefs.clearUserPref("loop.gettingStarted.seen");
     Services.prefs.clearUserPref("loop.gettingStarted.url");
+    Services.io.offline = false;
 
     // Copied from browser/components/loop/test/mochitest/head.js
     // Remove the iframe after each test. This also avoids mochitest complaining

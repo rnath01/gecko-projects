@@ -30,6 +30,22 @@ const PREFS_WHITELIST = [
   "accessibility.",
   "browser.cache.",
   "browser.display.",
+  "browser.download.folderList",
+  "browser.download.hide_plugins_without_extensions",
+  "browser.download.importedFromSqlite",
+  "browser.download.lastDir.savePerSite",
+  "browser.download.manager.addToRecentDocs",
+  "browser.download.manager.alertOnEXEOpen",
+  "browser.download.manager.closeWhenDone",
+  "browser.download.manager.displayedHistoryDays",
+  "browser.download.manager.quitBehavior",
+  "browser.download.manager.resumeOnWakeDelay",
+  "browser.download.manager.retention",
+  "browser.download.manager.scanWhenDone",
+  "browser.download.manager.showAlertOnComplete",
+  "browser.download.manager.showWhenStarting",
+  "browser.download.preferred.",
+  "browser.download.useDownloadDir",
   "browser.fixup.",
   "browser.history_expire_",
   "browser.link.open_newwindow",
@@ -131,10 +147,16 @@ let dataProviders = {
     let data = {
       name: Services.appinfo.name,
       version: Services.appinfo.version,
+      buildID: Services.appinfo.appBuildID,
       userAgent: Cc["@mozilla.org/network/protocol;1?name=http"].
                  getService(Ci.nsIHttpProtocolHandler).
                  userAgent,
     };
+
+#ifdef MOZ_UPDATER
+    data.updateChannel = Cu.import("resource://gre/modules/UpdateChannel.jsm", {}).UpdateChannel.get();
+#endif
+
     try {
       data.vendor = Services.prefs.getCharPref("app.support.vendor");
     }

@@ -94,13 +94,14 @@ struct RunnableMethodTraits<mozilla::plugins::PluginModuleParent>
 bool
 mozilla::plugins::SetupBridge(uint32_t aPluginId,
                               dom::ContentParent* aContentParent,
-                              bool aForceBridgeNow)
+                              bool aForceBridgeNow,
+                              nsresult* rv)
 {
     nsRefPtr<nsPluginHost> host = nsPluginHost::GetInst();
     nsRefPtr<nsNPAPIPlugin> plugin;
-    nsresult rv = host->GetPluginForContentProcess(aPluginId, getter_AddRefs(plugin));
-    if (NS_FAILED(rv)) {
-        return false;
+    *rv = host->GetPluginForContentProcess(aPluginId, getter_AddRefs(plugin));
+    if (NS_FAILED(*rv)) {
+        return true;
     }
     PluginModuleChromeParent* chromeParent = static_cast<PluginModuleChromeParent*>(plugin->GetLibrary());
     chromeParent->SetContentParent(aContentParent);
@@ -293,7 +294,9 @@ PluginModuleContentParent::LoadModule(uint32_t aPluginId)
      * its module mapping. We fetch it from there after LoadPlugin finishes.
      */
     dom::ContentChild* cp = dom::ContentChild::GetSingleton();
-    if (!cp->SendLoadPlugin(aPluginId)) {
+    nsresult rv;
+    if (!cp->SendLoadPlugin(aPluginId, &rv) ||
+        NS_FAILED(rv)) {
         return nullptr;
     }
 
@@ -391,12 +394,12 @@ PluginModuleChromeParent::LoadModule(const char* aFilePath, uint32_t aPluginId,
 {
     PLUGIN_LOG_DEBUG_FUNCTION;
 
-    bool enableSandbox = false;
+    int32_t sandboxLevel = 0;
 #if defined(XP_WIN) && defined(MOZ_SANDBOX)
-    nsAutoCString sandboxPref("dom.ipc.plugins.sandbox.");
+    nsAutoCString sandboxPref("dom.ipc.plugins.sandbox-level.");
     sandboxPref.Append(aPluginTag->GetNiceFileName());
-    if (NS_FAILED(Preferences::GetBool(sandboxPref.get(), &enableSandbox))) {
-      enableSandbox = Preferences::GetBool("dom.ipc.plugins.sandbox.default");
+    if (NS_FAILED(Preferences::GetInt(sandboxPref.get(), &sandboxLevel))) {
+      sandboxLevel = Preferences::GetInt("dom.ipc.plugins.sandbox-level.default");
     }
 #endif
 
@@ -405,7 +408,7 @@ PluginModuleChromeParent::LoadModule(const char* aFilePath, uint32_t aPluginId,
     parent->mSubprocess->SetCallRunnableImmediately(!parent->mIsStartingAsync);
     TimeStamp launchStart = TimeStamp::Now();
     bool launched = parent->mSubprocess->Launch(Move(onLaunchedRunnable),
-                                                enableSandbox);
+                                                sandboxLevel);
     if (!launched) {
         // We never reached open
         parent->mShutdown = true;

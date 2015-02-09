@@ -1624,7 +1624,7 @@ Parser<ParseHandler>::functionArguments(FunctionSyntaxKind kind, FunctionType ty
         bool hasDefaults = false;
         Node duplicatedArg = null();
         Node list = null();
-        bool disallowDuplicateArgs = false;
+        bool disallowDuplicateArgs = kind == Arrow || kind == Method;
 
         if (type == Getter) {
             report(ParseError, false, null(), JSMSG_ACCESSOR_WRONG_ARGS, "getter", "no", "s");
@@ -2253,11 +2253,7 @@ Parser<FullParseHandler>::finishFunctionDefinition(ParseNode *pn, FunctionBox *f
         if (!item)
             return false;
 
-        item->pn_next = body->pn_head;
-        body->pn_head = item;
-        if (body->pn_tail == &body->pn_head)
-            body->pn_tail = &item->pn_next;
-        ++body->pn_count;
+        body->prepend(item);
         body->pn_xflags |= PNX_DESTRUCT;
     }
 

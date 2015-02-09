@@ -56,7 +56,7 @@ public:
   void Ended();
   bool IsExpectingMoreData() MOZ_OVERRIDE;
 
-  void SetDecodedDuration(int64_t aDuration);
+  void SetInitialDuration(int64_t aDuration);
   void SetMediaSourceDuration(double aDuration, MSRangeRemovalAction aAction);
   double GetMediaSourceDuration();
   void DurationChanged(double aOldDuration, double aNewDuration);
@@ -78,6 +78,10 @@ public:
   // Returns true if aReader is a currently active audio or video
   // reader in this decoders MediaSourceReader.
   bool IsActiveReader(MediaDecoderReader* aReader);
+
+  // Returns a string describing the state of the MediaSource internal
+  // buffered data. Used for debugging purposes.
+  void GetMozDebugReaderData(nsAString& aString);
 
 private:
   void DoSetMediaSourceDuration(double aDuration);

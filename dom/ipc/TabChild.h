@@ -196,10 +196,6 @@ public:
                                          const bool& aIsRoot,
                                          const mozilla::layers::ZoomConstraints& aConstraints) = 0;
 
-    nsEventStatus DispatchSynthesizedMouseEvent(uint32_t aMsg, uint64_t aTime,
-                                                const LayoutDevicePoint& aRefPoint,
-                                                nsIWidget* aWidget);
-
 protected:
     virtual ~TabChildBase();
     CSSSize GetPageSize(nsCOMPtr<nsIDocument> aDocument, const CSSSize& aViewport);
@@ -220,8 +216,6 @@ protected:
     // so we don't need things like this.
     void DispatchMessageManagerMessage(const nsAString& aMessageName,
                                        const nsAString& aJSONData);
-
-    nsEventStatus DispatchWidgetEvent(WidgetGUIEvent& event);
 
     void InitializeRootMetrics();
 
@@ -260,7 +254,11 @@ class TabChild MOZ_FINAL : public TabChildBase,
     typedef mozilla::layers::ActiveElementManager ActiveElementManager;
 
 public:
-    static std::map<TabId, nsRefPtr<TabChild>>& NestedTabChildMap();
+    /**
+     * Find TabChild of aTabId in the same content process of the
+     * caller.
+     */
+    static already_AddRefed<TabChild> FindTabChild(const TabId& aTabId);
 
 public:
     /** 
@@ -323,7 +321,8 @@ public:
                           const ScrollingBehavior& aScrolling,
                           const TextureFactoryIdentifier& aTextureFactoryIdentifier,
                           const uint64_t& aLayersId,
-                          PRenderFrameChild* aRenderFrame) MOZ_OVERRIDE;
+                          PRenderFrameChild* aRenderFrame,
+                          const bool& aParentIsActive) MOZ_OVERRIDE;
     virtual bool RecvUpdateDimensions(const nsIntRect& rect,
                                       const nsIntSize& size,
                                       const ScreenOrientation& orientation,
@@ -496,11 +495,16 @@ public:
      */
     PPluginWidgetChild* AllocPPluginWidgetChild() MOZ_OVERRIDE;
     bool DeallocPPluginWidgetChild(PPluginWidgetChild* aActor) MOZ_OVERRIDE;
-    already_AddRefed<nsIWidget> CreatePluginWidget(nsIWidget* aParent);
+    nsresult CreatePluginWidget(nsIWidget* aParent, nsIWidget** aOut);
 
     nsIntPoint GetChromeDisplacement() { return mChromeDisp; };
 
     bool IPCOpen() { return mIPCOpen; }
+
+    bool ParentIsActive()
+    {
+      return mParentIsActive;
+    }
 
 protected:
     virtual ~TabChild();
@@ -598,7 +602,7 @@ private:
     bool PrepareForSetTargetAPZCNotification(const ScrollableLayerGuid& aGuid,
                                              const uint64_t& aInputBlockId,
                                              nsIFrame* aRootFrame,
-                                             const nsIntPoint& aRefPoint,
+                                             const LayoutDeviceIntPoint& aRefPoint,
                                              nsTArray<ScrollableLayerGuid>* aTargets);
 
     // Sends a SetTarget notification for APZC, given one or more previous
@@ -615,13 +619,7 @@ private:
     // Get the pres shell resolution of the document in this tab.
     float GetPresShellResolution() const;
 
-    void SetTabId(const TabId& aTabId)
-    {
-      MOZ_ASSERT(mUniqueId == 0);
-
-      mUniqueId = aTabId;
-      NestedTabChildMap()[mUniqueId] = this;
-    }
+    void SetTabId(const TabId& aTabId);
 
     class CachedFileDescriptorInfo;
     class CachedFileDescriptorCallbackRunnable;
@@ -659,7 +657,6 @@ private:
     bool mPendingTouchPreventedResponse;
     ScrollableLayerGuid mPendingTouchPreventedGuid;
     uint64_t mPendingTouchPreventedBlockId;
-    void FireSingleTapEvent(LayoutDevicePoint aPoint);
 
     bool mTouchEndCancelled;
     bool mEndTouchIsClick;
@@ -674,6 +671,7 @@ private:
     float mDPI;
     double mDefaultScale;
     bool mIPCOpen;
+    bool mParentIsActive;
 
     DISALLOW_EVIL_CONSTRUCTORS(TabChild);
 };

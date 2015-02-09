@@ -797,6 +797,8 @@ class MochitestUtilsMixin(object):
       # Register chrome directory.
       chrometestDir = self.getChromeTestDir(options)
       manifestFile.write("content mochitests %s contentaccessible=yes\n" % chrometestDir)
+      manifestFile.write("content mochitests-any %s contentaccessible=yes remoteenabled=yes\n" % chrometestDir)
+      manifestFile.write("content mochitests-content %s contentaccessible=yes remoterequired=yes\n" % chrometestDir)
 
       if options.testingModulesDir is not None:
         manifestFile.write("resource testing-common file:///%s\n" %
@@ -1934,7 +1936,7 @@ class Mochitest(MochitestUtilsMixin):
     processLeakLog(self.leak_report_file, options)
 
     if self.nsprLogs:
-      with zipfile.ZipFile("%s/nsprlog.zip" % browserEnv["MOZ_UPLOAD_DIR"], "w", zipfile.ZIP_DEFLATED) as logzip:
+      with zipfile.ZipFile("%s/nsprlog.zip" % self.browserEnv["MOZ_UPLOAD_DIR"], "w", zipfile.ZIP_DEFLATED) as logzip:
         for logfile in glob.glob("%s/nspr*.log*" % tempfile.gettempdir()):
           logzip.write(logfile)
           os.remove(logfile)

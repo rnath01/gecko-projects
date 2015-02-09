@@ -145,6 +145,7 @@ protected:
   static bool sGonkDecoderEnabled;
   static bool sAndroidMCDecoderPreferred;
   static bool sAndroidMCDecoderEnabled;
+  static bool sGMPDecoderEnabled;
 };
 
 // A callback used by MediaDataDecoder to return output/errors to the
@@ -245,6 +246,7 @@ public:
   virtual void AllocateMediaResources() {}
   virtual void ReleaseMediaResources() {}
   virtual void ReleaseDecoder() {}
+  virtual bool IsHardwareAccelerated() const { return false; }
 };
 
 } // namespace mozilla

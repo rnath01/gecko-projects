@@ -144,6 +144,12 @@ pref("dom.enable_performance", true);
 // Whether resource timing will be gathered and returned by performance.GetEntries*
 pref("dom.enable_resource_timing", true);
 
+// Enable high-resolution timing markers for users
+pref("dom.enable_user_timing", true);
+
+// Enable printing performance marks/measures to log
+pref("dom.performance.enable_user_timing_logging", false);
+
 // Whether the Gamepad API is enabled
 pref("dom.gamepad.enabled", true);
 #ifdef RELEASE_BUILD
@@ -153,11 +159,7 @@ pref("dom.gamepad.non_standard_events.enabled", true);
 #endif
 
 // Whether the KeyboardEvent.code is enabled
-#ifdef RELEASE_BUILD
-pref("dom.keyboardevent.code.enabled", false);
-#else
 pref("dom.keyboardevent.code.enabled", true);
-#endif
 
 // Whether the WebCrypto API is enabled
 pref("dom.webcrypto.enabled", true);
@@ -277,6 +279,7 @@ pref("media.directshow.enabled", true);
 #ifdef MOZ_FMP4
 pref("media.fragmented-mp4.enabled", true);
 pref("media.fragmented-mp4.ffmpeg.enabled", false);
+pref("media.fragmented-mp4.gmp.enabled", false);
 #if defined(XP_WIN) && defined(MOZ_WMF) || defined(XP_MACOSX) || defined(MOZ_WIDGET_GONK)
 // Denotes that the fragmented MP4 parser can be created by <video> elements.
 pref("media.fragmented-mp4.exposed", true);
@@ -416,10 +419,10 @@ pref("media.getusermedia.screensharing.enabled", true);
 #endif
 
 #ifdef RELEASE_BUILD
-pref("media.getusermedia.screensharing.allowed_domains", "webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,example.com");
+pref("media.getusermedia.screensharing.allowed_domains", "webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,example.com");
 #else
  // temporary value, not intended for release - bug 1049087
-pref("media.getusermedia.screensharing.allowed_domains", "mozilla.github.io,webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,example.com");
+pref("media.getusermedia.screensharing.allowed_domains", "mozilla.github.io,webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,example.com");
 #endif
 // OS/X 10.6 and XP have screen/window sharing off by default due to various issues - Caveat emptor
 pref("media.getusermedia.screensharing.allow_on_old_platforms", false);
@@ -549,15 +552,12 @@ pref("apz.y_stationary_size_multiplier", "3.5");
 pref("apz.zoom_animation_duration_ms", 250);
 
 #ifdef XP_MACOSX
-// Layerize scrollable subframes to allow async panning
-pref("apz.subframe.enabled", true);
 pref("apz.fling_repaint_interval", 16);
 pref("apz.smooth_scroll_repaint_interval", 16);
 pref("apz.pan_repaint_interval", 16);
 pref("apz.x_skate_size_multiplier", "2.5");
 pref("apz.y_skate_size_multiplier", "3.5");
 #else
-pref("apz.subframe.enabled", false);
 pref("apz.fling_repaint_interval", 75);
 pref("apz.smooth_scroll_repaint_interval", 75);
 pref("apz.pan_repaint_interval", 250);
@@ -1064,6 +1064,7 @@ pref("javascript.options.mem.max", -1);
 pref("javascript.options.mem.gc_per_compartment", true);
 pref("javascript.options.mem.gc_incremental", true);
 pref("javascript.options.mem.gc_incremental_slice_ms", 10);
+pref("javascript.options.mem.gc_compacting", true);
 pref("javascript.options.mem.log", false);
 pref("javascript.options.mem.notify", false);
 pref("javascript.options.gc_on_memory_pressure", true);
@@ -3866,6 +3867,7 @@ pref("webgl.max-warnings-per-context", 32);
 pref("webgl.enable-draft-extensions", false);
 pref("webgl.enable-privileged-extensions", false);
 pref("webgl.bypass-shader-validation", false);
+pref("webgl.enable-prototype-webgl2", false);
 #ifdef XP_WIN
 pref("webgl.angle.try-d3d11", true);
 pref("webgl.angle.force-d3d11", false);
@@ -3921,6 +3923,9 @@ pref("layers.dump", false);
 #ifdef MOZ_DUMP_PAINTING
 // If we're dumping layers, also dump the texture data
 pref("layers.dump-texture", false);
+pref("layers.dump-decision", false);
+pref("layers.dump-client-layers", false);
+pref("layers.dump-host-layers", false);
 #endif
 pref("layers.draw-borders", false);
 pref("layers.draw-tile-borders", false);

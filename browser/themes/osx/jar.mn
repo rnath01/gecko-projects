@@ -30,6 +30,7 @@ browser.jar:
   skin/classic/browser/content-contextmenu.svg
   skin/classic/browser/dots.png                             (../shared/dots.png)
   skin/classic/browser/dots@2x.png                          (../shared/dots@2x.png)
+  skin/classic/browser/drm-icon.svg                         (../shared/drm-icon.svg)
 * skin/classic/browser/engineManager.css                    (engineManager.css)
   skin/classic/browser/fullscreen-darknoise.png
   skin/classic/browser/Geolocation-16.png
@@ -301,6 +302,7 @@ browser.jar:
   skin/classic/browser/tabbrowser/alltabs-box-bkgnd-icon.png             (tabbrowser/alltabs-box-bkgnd-icon.png)
   skin/classic/browser/tabbrowser/alltabs-box-bkgnd-icon-inverted.png    (tabbrowser/alltabs-box-bkgnd-icon-inverted.png)
   skin/classic/browser/tabbrowser/alltabs-box-bkgnd-icon-inverted@2x.png (tabbrowser/alltabs-box-bkgnd-icon-inverted@2x.png)
+  skin/classic/browser/tabbrowser/crashed.svg                            (../shared/tabbrowser/crashed.svg)
   skin/classic/browser/tabbrowser/newtab.png                             (tabbrowser/newtab.png)
   skin/classic/browser/tabbrowser/newtab@2x.png                          (tabbrowser/newtab@2x.png)
   skin/classic/browser/tabbrowser/newtab-inverted.png                    (tabbrowser/newtab-inverted.png)

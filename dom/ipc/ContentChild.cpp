@@ -1805,28 +1805,36 @@ ContentChild::ActorDestroy(ActorDestroyReason why)
 }
 
 void
-ContentChild::ProcessingError(Result what)
+ContentChild::ProcessingError(Result aCode, const char* aReason)
 {
-    switch (what) {
-    case MsgDropped:
-        NS_WARNING("MsgDropped in ContentChild");
-        return;
-    case MsgNotKnown:
-        NS_RUNTIMEABORT("aborting because of MsgNotKnown");
-    case MsgNotAllowed:
-        NS_RUNTIMEABORT("aborting because of MsgNotAllowed");
-    case MsgPayloadError:
-        NS_RUNTIMEABORT("aborting because of MsgPayloadError");
-    case MsgProcessingError:
-        NS_RUNTIMEABORT("aborting because of MsgProcessingError");
-    case MsgRouteError:
-        NS_RUNTIMEABORT("aborting because of MsgRouteError");
-    case MsgValueError:
-        NS_RUNTIMEABORT("aborting because of MsgValueError");
+    switch (aCode) {
+        case MsgDropped:
+            NS_WARNING("MsgDropped in ContentChild");
+            return;
 
-    default:
-        NS_RUNTIMEABORT("not reached");
+        case MsgNotKnown:
+        case MsgNotAllowed:
+        case MsgPayloadError:
+        case MsgProcessingError:
+        case MsgRouteError:
+        case MsgValueError:
+            break;
+
+        default:
+            NS_RUNTIMEABORT("not reached");
     }
+
+#if defined(MOZ_CRASHREPORTER) && !defined(MOZ_B2G)
+    if (ManagedPCrashReporterChild().Length() > 0) {
+        CrashReporterChild* crashReporter =
+            static_cast<CrashReporterChild*>(ManagedPCrashReporterChild()[0]);
+            nsDependentCString reason(aReason);
+            crashReporter->SendAnnotateCrashReport(
+                NS_LITERAL_CSTRING("ipc_channel_error"),
+                reason);
+    }
+#endif
+    NS_RUNTIMEABORT("Content child abort due to IPC error");
 }
 
 void
@@ -2133,6 +2141,18 @@ ContentChild::RecvLastPrivateDocShellDestroyed()
 {
     nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
     obs->NotifyObservers(nullptr, "last-pb-context-exited", nullptr);
+    return true;
+}
+
+bool
+ContentChild::RecvVolumes(nsTArray<VolumeInfo>&& aVolumes)
+{
+#ifdef MOZ_WIDGET_GONK
+    nsRefPtr<nsVolumeService> vs = nsVolumeService::GetSingleton();
+    if (vs) {
+        vs->RecvVolumesFromParent(aVolumes);
+    }
+#endif
     return true;
 }
 
@@ -2484,7 +2504,10 @@ ContentChild::RecvGetProfile(nsCString* aProfile)
 bool
 ContentChild::RecvLoadPluginResult(const uint32_t& aPluginId, const bool& aResult)
 {
-    bool finalResult = aResult && SendConnectPluginBridge(aPluginId);
+    nsresult rv;
+    bool finalResult = aResult &&
+                       SendConnectPluginBridge(aPluginId, &rv) &&
+                       NS_SUCCEEDED(rv);
     plugins::PluginModuleContentParent::OnLoadPluginResult(aPluginId,
                                                            finalResult);
     return true;

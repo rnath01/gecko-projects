@@ -332,6 +332,7 @@ NativeObject::setLastProperty(ExclusiveContext *cx, HandleNativeObject obj, Hand
     MOZ_ASSERT(!shape->inDictionary());
     MOZ_ASSERT(shape->compartment() == obj->compartment());
     MOZ_ASSERT(shape->numFixedSlots() == obj->numFixedSlots());
+    MOZ_ASSERT(shape->getObjectClass() == obj->getClass());
 
     size_t oldSpan = obj->lastProperty()->slotSpan();
     size_t newSpan = shape->slotSpan();
@@ -355,6 +356,7 @@ NativeObject::setLastPropertyShrinkFixedSlots(Shape *shape)
     MOZ_ASSERT(!shape->inDictionary());
     MOZ_ASSERT(shape->compartment() == compartment());
     MOZ_ASSERT(lastProperty()->slotSpan() == shape->slotSpan());
+    MOZ_ASSERT(shape->getObjectClass() == getClass());
 
     DebugOnly<size_t> oldFixed = numFixedSlots();
     DebugOnly<size_t> newFixed = shape->numFixedSlots();
@@ -379,6 +381,30 @@ NativeObject::setLastPropertyMakeNonNative(Shape *shape)
     MOZ_ASSERT(!hasDynamicSlots());
 
     shape_ = shape;
+}
+
+/* static */ void
+NativeObject::setLastPropertyMakeNative(ExclusiveContext *cx, HandleNativeObject obj,
+                                        HandleShape shape)
+{
+    MOZ_ASSERT(obj->getClass()->isNative());
+    MOZ_ASSERT(!obj->lastProperty()->isNative());
+    MOZ_ASSERT(shape->isNative());
+    MOZ_ASSERT(!obj->inDictionaryMode());
+    MOZ_ASSERT(!shape->inDictionary());
+    MOZ_ASSERT(shape->compartment() == obj->compartment());
+
+    obj->shape_ = shape;
+    obj->slots_ = nullptr;
+    obj->elements_ = emptyObjectElements;
+
+    size_t oldSpan = shape->numFixedSlots();
+    size_t newSpan = shape->slotSpan();
+
+    // A failures at this point will leave the object as a mutant, and we
+    // can't recover.
+    if (oldSpan != newSpan && !updateSlotsForSpan(cx, obj, oldSpan, newSpan))
+        CrashAtUnhandlableOOM("NativeObject::setLastPropertyMakeNative");
 }
 
 /* static */ bool
@@ -1091,16 +1117,16 @@ UpdateShapeTypeAndValue(ExclusiveContext *cx, NativeObject *obj, Shape *shape, c
 
         // Per the acquired properties analysis, when the shape of a partially
         // initialized object is changed to its fully initialized shape, its
-        // type can be updated as well.
-        if (types::TypeNewScript *newScript = obj->typeRaw()->newScript()) {
+        // group can be updated as well.
+        if (TypeNewScript *newScript = obj->groupRaw()->newScript()) {
             if (newScript->initializedShape() == shape)
-                obj->setType(newScript->initializedType());
+                obj->setGroup(newScript->initializedGroup());
         }
     }
     if (!shape->hasSlot() || !shape->hasDefaultGetter() || !shape->hasDefaultSetter())
-        types::MarkTypePropertyNonData(cx, obj, id);
+        MarkTypePropertyNonData(cx, obj, id);
     if (!shape->writable())
-        types::MarkTypePropertyNonWritable(cx, obj, id);
+        MarkTypePropertyNonWritable(cx, obj, id);
     return true;
 }
 
@@ -1567,10 +1593,10 @@ GetExistingProperty(JSContext *cx,
     if (shape->hasSlot()) {
         vp.set(obj->getSlot(shape->slot()));
         MOZ_ASSERT_IF(!vp.isMagic(JS_UNINITIALIZED_LEXICAL) &&
-                      !obj->hasSingletonType() &&
+                      !obj->isSingleton() &&
                       !obj->template is<ScopeObject>() &&
                       shape->hasDefaultGetter(),
-                      js::types::TypeHasProperty(cx, obj->type(), shape->propid(), vp));
+                      ObjectGroupHasProperty(cx, obj->group(), shape->propid(), vp));
     } else {
         vp.setUndefined();
     }
@@ -2193,6 +2219,53 @@ js::NativeSetElement(JSContext *cx, HandleNativeObject obj, HandleObject receive
     return NativeSetProperty(cx, obj, receiver, id, Qualified, vp, strict);
 }
 
+/*** [[Delete]] **********************************************************************************/
+
+// ES6 draft rev31 9.1.10 [[Delete]]
+bool
+js::NativeDeleteProperty(JSContext *cx, HandleNativeObject obj, HandleId id, bool *succeeded)
+{
+    // Steps 2-3.
+    RootedShape shape(cx);
+    if (!NativeLookupOwnProperty<CanGC>(cx, obj, id, &shape))
+        return false;
+
+    // Step 4.
+    if (!shape) {
+        // If no property call the class's delProperty hook, passing succeeded
+        // as the result parameter. This always succeeds when there is no hook.
+        return CallJSDeletePropertyOp(cx, obj->getClass()->delProperty, obj, id, succeeded);
+    }
+
+    cx->runtime()->gc.poke();
+
+    // Step 6. Non-configurable property.
+    if (GetShapeAttributes(obj, shape) & JSPROP_PERMANENT) {
+        *succeeded = false;
+        return true;
+    }
+
+    if (!CallJSDeletePropertyOp(cx, obj->getClass()->delProperty, obj, id, succeeded))
+        return false;
+    if (!*succeeded)
+        return true;
+
+    // Step 5.
+    if (IsImplicitDenseOrTypedArrayElement(shape)) {
+        // Typed array elements are non-configurable.
+        MOZ_ASSERT(!IsAnyTypedArray(obj));
+
+        if (!obj->maybeCopyElementsForWrite(cx))
+            return false;
+
+        obj->setDenseElementHole(cx, JSID_TO_INT(id));
+    } else {
+        if (!obj->removeProperty(cx, id))
+            return false;
+    }
+
+    return SuppressDeletedProperty(cx, obj, id);
+}
 
 /* * */
 
@@ -2221,60 +2294,9 @@ js::NativeSetPropertyAttributes(JSContext *cx, HandleNativeObject obj, HandleId 
         if (!NativeObject::changePropertyAttributes(cx, nobj.as<NativeObject>(), shape, *attrsp))
             return false;
         if (*attrsp & JSPROP_READONLY)
-            types::MarkTypePropertyNonWritable(cx, nobj, id);
+            MarkTypePropertyNonWritable(cx, nobj, id);
         return true;
     } else {
         return SetPropertyAttributes(cx, nobj, id, attrsp);
     }
-}
-
-bool
-js::NativeDeleteProperty(JSContext *cx, HandleNativeObject obj, HandleId id, bool *succeeded)
-{
-    RootedObject proto(cx);
-    RootedShape shape(cx);
-    if (!NativeLookupProperty<CanGC>(cx, obj, id, &proto, &shape))
-        return false;
-    if (!shape || proto != obj) {
-        /*
-         * If no property, or the property comes from a prototype, call the
-         * class's delProperty hook, passing succeeded as the result parameter.
-         */
-        return CallJSDeletePropertyOp(cx, obj->getClass()->delProperty, obj, id, succeeded);
-    }
-
-    cx->runtime()->gc.poke();
-
-    if (IsImplicitDenseOrTypedArrayElement(shape)) {
-        if (IsAnyTypedArray(obj)) {
-            // Don't delete elements from typed arrays.
-            *succeeded = false;
-            return true;
-        }
-
-        if (!CallJSDeletePropertyOp(cx, obj->getClass()->delProperty, obj, id, succeeded))
-            return false;
-        if (!*succeeded)
-            return true;
-
-        NativeObject *nobj = &obj->as<NativeObject>();
-        if (!nobj->maybeCopyElementsForWrite(cx))
-            return false;
-
-        nobj->setDenseElementHole(cx, JSID_TO_INT(id));
-        return SuppressDeletedProperty(cx, obj, id);
-    }
-
-    if (!shape->configurable()) {
-        *succeeded = false;
-        return true;
-    }
-
-    RootedId propid(cx, shape->propid());
-    if (!CallJSDeletePropertyOp(cx, obj->getClass()->delProperty, obj, propid, succeeded))
-        return false;
-    if (!*succeeded)
-        return true;
-
-    return obj->removeProperty(cx, id) && SuppressDeletedProperty(cx, obj, id);
 }

@@ -9,6 +9,7 @@ describe("loop.store.ActiveRoomStore", function () {
   var REST_ERRNOS = loop.shared.utils.REST_ERRNOS;
   var ROOM_STATES = loop.store.ROOM_STATES;
   var FAILURE_DETAILS = loop.shared.utils.FAILURE_DETAILS;
+  var SCREEN_SHARE_STATES = loop.shared.utils.SCREEN_SHARE_STATES;
   var sandbox, dispatcher, store, fakeMozLoop, fakeSdkDriver;
   var fakeMultiplexGum;
 
@@ -279,6 +280,31 @@ describe("loop.store.ActiveRoomStore", function () {
       store.feedbackComplete(new sharedActions.FeedbackComplete());
 
       expect(store.getStoreState()).eql(initialState);
+    });
+  });
+
+  describe("#videoDimensionsChanged", function() {
+    it("should not contain any video dimensions at the very start", function() {
+      expect(store.getStoreState()).eql(store.getInitialStoreState());
+    });
+
+    it("should update the store with new video dimensions", function() {
+      var actionData = {
+        isLocal: true,
+        videoType: "camera",
+        dimensions: { width: 640, height: 480 }
+      };
+
+      store.videoDimensionsChanged(new sharedActions.VideoDimensionsChanged(actionData));
+
+      expect(store.getStoreState().localVideoDimensions)
+        .to.have.property(actionData.videoType, actionData.dimensions);
+
+      actionData.isLocal = false;
+      store.videoDimensionsChanged(new sharedActions.VideoDimensionsChanged(actionData));
+
+      expect(store.getStoreState().remoteVideoDimensions)
+        .to.have.property(actionData.videoType, actionData.dimensions);
     });
   });
 
@@ -618,6 +644,26 @@ describe("loop.store.ActiveRoomStore", function () {
       }));
 
       expect(store.getStoreState().videoMuted).eql(true);
+    });
+  });
+
+  describe("#screenSharingState", function() {
+    it("should save the state", function() {
+      store.screenSharingState(new sharedActions.ScreenSharingState({
+        state: SCREEN_SHARE_STATES.ACTIVE
+      }));
+
+      expect(store.getStoreState().screenSharingState).eql(SCREEN_SHARE_STATES.ACTIVE);
+    });
+  });
+
+  describe("#receivingScreenShare", function() {
+    it("should save the state", function() {
+      store.receivingScreenShare(new sharedActions.ReceivingScreenShare({
+        receiving: true
+      }));
+
+      expect(store.getStoreState().receivingScreenShare).eql(true);
     });
   });
 

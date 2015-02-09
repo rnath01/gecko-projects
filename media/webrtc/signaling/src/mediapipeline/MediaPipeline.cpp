@@ -5,7 +5,6 @@
 
 // Original author: ekr@rtfm.com
 
-#include "logging.h"
 #include "MediaPipeline.h"
 
 #ifndef USE_FAKE_MEDIA_STREAMS
@@ -45,8 +44,7 @@
 #include "mozilla/gfx/Point.h"
 #include "mozilla/gfx/Types.h"
 
-#include "webrtc/modules/interface/module_common_types.h"
-#include "webrtc/modules/rtp_rtcp/interface/rtp_header_parser.h"
+#include "logging.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -1011,7 +1009,6 @@ void MediaPipelineTransmit::PipelineListener::ProcessVideoChunk(
 
     // Send a black image.
     nsAutoArrayPtr<uint8_t> pixelData;
-    static const fallible_t fallible = fallible_t();
     pixelData = new (fallible) uint8_t[length];
     if (pixelData) {
       // YCrCb black = 0x10 0x80 0x80
