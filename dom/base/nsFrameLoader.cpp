@@ -53,7 +53,8 @@
 #include "nsISHistory.h"
 #include "nsNullPrincipal.h"
 #include "nsIScriptError.h"
-
+#include "nsGlobalWindow.h"
+#include "nsPIWindowRoot.h"
 #include "nsLayoutUtils.h"
 #include "nsView.h"
 
@@ -898,7 +899,17 @@ nsFrameLoader::ShowRemoteFrame(const nsIntSize& size,
       return false;
     }
 
-    mRemoteBrowser->Show(size);
+    nsPIDOMWindow* win = mOwnerContent->OwnerDoc()->GetWindow();
+    bool parentIsActive = false;
+    if (win) {
+      nsCOMPtr<nsPIWindowRoot> windowRoot =
+        static_cast<nsGlobalWindow*>(win)->GetTopWindowRoot();
+      if (windowRoot) {
+        nsPIDOMWindow* topWin = windowRoot->GetWindow();
+        parentIsActive = topWin && topWin->IsActive();
+      }
+    }
+    mRemoteBrowser->Show(size, parentIsActive);
     mRemoteBrowserShown = true;
 
     EnsureMessageManager();
@@ -2098,7 +2109,7 @@ nsFrameLoader::TryRemoteBrowser()
     return false;
   }
 
-  TabParent* openingTab = static_cast<TabParent*>(parentDocShell->GetOpener());
+  TabParent* openingTab = TabParent::GetFrom(parentDocShell->GetOpener());
   ContentParent* openerContentParent = nullptr;
 
   if (openingTab &&
@@ -2304,7 +2315,7 @@ nsFrameLoader::CreateStaticClone(nsIFrameLoader* aDest)
 bool
 nsFrameLoader::DoLoadFrameScript(const nsAString& aURL, bool aRunInGlobalScope)
 {
-  auto* tabParent = static_cast<TabParent*>(GetRemoteBrowser());
+  auto* tabParent = TabParent::GetFrom(GetRemoteBrowser());
   if (tabParent) {
     return tabParent->SendLoadRemoteScript(nsString(aURL), aRunInGlobalScope);
   }
@@ -2500,7 +2511,7 @@ nsFrameLoader::SetRemoteBrowser(nsITabParent* aTabParent)
   MOZ_ASSERT(!mRemoteBrowser);
   MOZ_ASSERT(!mCurrentRemoteFrame);
   mRemoteFrame = true;
-  mRemoteBrowser = static_cast<TabParent*>(aTabParent);
+  mRemoteBrowser = TabParent::GetFrom(aTabParent);
   mChildID = mRemoteBrowser ? mRemoteBrowser->Manager()->ChildID() : 0;
   ShowRemoteFrame(nsIntSize(0, 0));
 }

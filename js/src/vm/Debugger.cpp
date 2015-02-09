@@ -1910,7 +1910,7 @@ UpdateExecutionObservabilityOfScriptsInZone(JSContext *cx, Zone *zone,
     // Iterate through observable scripts, invalidating their Ion scripts and
     // appending them to a vector for discarding their baseline scripts later.
     {
-        types::AutoEnterAnalysis enter(fop, zone);
+        AutoEnterAnalysis enter(fop, zone);
         if (JSScript *script = obs.singleScriptForZoneInvalidation()) {
             if (obs.shouldRecompileOrInvalidate(script)) {
                 if (!AppendAndInvalidateScript(cx, zone, script, scripts))
@@ -6016,8 +6016,8 @@ DebuggerGenericEval(JSContext *cx, const char *fullMethodName, const Value &code
                              fullMethodName, "string", InformalValueTypeName(code));
         return false;
     }
-    Rooted<JSFlatString *> flat(cx, code.toString()->ensureFlat(cx));
-    if (!flat)
+    RootedLinearString linear(cx, code.toString()->ensureLinear(cx));
+    if (!linear)
         return false;
 
     /*
@@ -6128,7 +6128,7 @@ DebuggerGenericEval(JSContext *cx, const char *fullMethodName, const Value &code
     AbstractFramePtr frame = iter ? iter->abstractFramePtr() : NullFramePtr();
     jsbytecode *pc = iter ? iter->pc() : nullptr;
     AutoStableStringChars stableChars(cx);
-    if (!stableChars.initTwoByte(cx, flat))
+    if (!stableChars.initTwoByte(cx, linear))
         return false;
 
     mozilla::Range<const char16_t> chars = stableChars.twoByteRange();

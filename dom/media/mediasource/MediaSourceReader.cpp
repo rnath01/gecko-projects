@@ -123,7 +123,7 @@ MediaSourceReader::RequestAudioData()
     mAudioPromise.Reject(CANCELED, __func__);
     return p;
   }
-  MOZ_RELEASE_ASSERT(!mAudioSeekRequest.Exists());
+  MOZ_DIAGNOSTIC_ASSERT(!mAudioSeekRequest.Exists());
 
   SwitchReaderResult ret = SwitchAudioReader(mLastAudioTime);
   switch (ret) {
@@ -157,7 +157,7 @@ void MediaSourceReader::DoAudioRequest()
 void
 MediaSourceReader::OnAudioDecoded(AudioData* aSample)
 {
-  MOZ_RELEASE_ASSERT(!IsSeeking());
+  MOZ_DIAGNOSTIC_ASSERT(!IsSeeking());
   mAudioRequest.Complete();
 
   MSE_DEBUGV("MediaSourceReader(%p)::OnAudioDecoded [mTime=%lld mDuration=%lld mDiscontinuity=%d]",
@@ -209,7 +209,7 @@ AdjustEndTime(int64_t* aEndTime, MediaDecoderReader* aReader)
 void
 MediaSourceReader::OnAudioNotDecoded(NotDecodedReason aReason)
 {
-  MOZ_RELEASE_ASSERT(!IsSeeking());
+  MOZ_DIAGNOSTIC_ASSERT(!IsSeeking());
   mAudioRequest.Complete();
 
   MSE_DEBUG("MediaSourceReader(%p)::OnAudioNotDecoded aReason=%u IsEnded: %d", this, aReason, IsEnded());
@@ -259,7 +259,7 @@ MediaSourceReader::RequestVideoData(bool aSkipToNextKeyframe, int64_t aTimeThres
     mVideoPromise.Reject(CANCELED, __func__);
     return p;
   }
-  MOZ_RELEASE_ASSERT(!mVideoSeekRequest.Exists());
+  MOZ_DIAGNOSTIC_ASSERT(!mVideoSeekRequest.Exists());
 
   SwitchReaderResult ret = SwitchVideoReader(mLastVideoTime);
   switch (ret) {
@@ -295,7 +295,7 @@ MediaSourceReader::DoVideoRequest()
 void
 MediaSourceReader::OnVideoDecoded(VideoData* aSample)
 {
-  MOZ_RELEASE_ASSERT(!IsSeeking());
+  MOZ_DIAGNOSTIC_ASSERT(!IsSeeking());
   mVideoRequest.Complete();
 
   MSE_DEBUGV("MediaSourceReader(%p)::OnVideoDecoded [mTime=%lld mDuration=%lld mDiscontinuity=%d]",
@@ -319,7 +319,7 @@ MediaSourceReader::OnVideoDecoded(VideoData* aSample)
 void
 MediaSourceReader::OnVideoNotDecoded(NotDecodedReason aReason)
 {
-  MOZ_RELEASE_ASSERT(!IsSeeking());
+  MOZ_DIAGNOSTIC_ASSERT(!IsSeeking());
   mVideoRequest.Complete();
 
   MSE_DEBUG("MediaSourceReader(%p)::OnVideoNotDecoded aReason=%u IsEnded: %d", this, aReason, IsEnded());
@@ -688,6 +688,10 @@ MediaSourceReader::Seek(int64_t aTime, int64_t aIgnored /* Used only for ogg whi
   mAudioPromise.RejectIfExists(CANCELED, __func__);
   mVideoPromise.RejectIfExists(CANCELED, __func__);
 
+  // Do the same for any data wait promises.
+  mAudioWaitPromise.RejectIfExists(WaitForDataRejectValue(MediaData::AUDIO_DATA, WaitForDataRejectValue::CANCELED), __func__);
+  mVideoWaitPromise.RejectIfExists(WaitForDataRejectValue(MediaData::VIDEO_DATA, WaitForDataRejectValue::CANCELED), __func__);
+
   // Finally, if we were midway seeking a new reader to find a sample, abandon
   // that too.
   mAudioSeekRequest.DisconnectIfExists();
@@ -897,8 +901,6 @@ MediaSourceReader::ReadMetadata(MediaInfo* aInfo, MetadataTags** aTags)
     return NS_ERROR_FAILURE;
   }
 
-  int64_t maxDuration = -1;
-
   if (mAudioTrack) {
     MOZ_ASSERT(mAudioTrack->IsReady());
     mAudioReader = mAudioTrack->Decoders()[0]->GetReader();
@@ -907,9 +909,9 @@ MediaSourceReader::ReadMetadata(MediaInfo* aInfo, MetadataTags** aTags)
     MOZ_ASSERT(info.HasAudio());
     mInfo.mAudio = info.mAudio;
     mInfo.mIsEncrypted = mInfo.mIsEncrypted || info.mIsEncrypted;
-    maxDuration = std::max(maxDuration, mAudioReader->GetDecoder()->GetMediaDuration());
-    MSE_DEBUG("MediaSourceReader(%p)::ReadMetadata audio reader=%p maxDuration=%lld",
-              this, mAudioReader.get(), maxDuration);
+    MSE_DEBUG("MediaSourceReader(%p)::ReadMetadata audio reader=%p duration=%lld",
+              this, mAudioReader.get(),
+              mAudioReader->GetDecoder()->GetMediaDuration());
   }
 
   if (mVideoTrack) {
@@ -920,16 +922,10 @@ MediaSourceReader::ReadMetadata(MediaInfo* aInfo, MetadataTags** aTags)
     MOZ_ASSERT(info.HasVideo());
     mInfo.mVideo = info.mVideo;
     mInfo.mIsEncrypted = mInfo.mIsEncrypted || info.mIsEncrypted;
-    maxDuration = std::max(maxDuration, mVideoReader->GetDecoder()->GetMediaDuration());
-    MSE_DEBUG("MediaSourceReader(%p)::ReadMetadata video reader=%p maxDuration=%lld",
-              this, mVideoReader.get(), maxDuration);
+    MSE_DEBUG("MediaSourceReader(%p)::ReadMetadata video reader=%p duration=%lld",
+              this, mVideoReader.get(),
+              mVideoReader->GetDecoder()->GetMediaDuration());
   }
-
-  if (!maxDuration) {
-    // Treat a duration of 0 as infinity
-    maxDuration = -1;
-  }
-  static_cast<MediaSourceDecoder*>(mDecoder)->SetDecodedDuration(maxDuration);
 
   *aInfo = mInfo;
   *aTags = nullptr; // TODO: Handle metadata.

@@ -26,219 +26,18 @@
 
 namespace js {
 
-class TypeDescr;
-class UnboxedLayout;
-
-class TaggedProto
-{
-  public:
-    static JSObject * const LazyProto;
-
-    TaggedProto() : proto(nullptr) {}
-    explicit TaggedProto(JSObject *proto) : proto(proto) {}
-
-    uintptr_t toWord() const { return uintptr_t(proto); }
-
-    bool isLazy() const {
-        return proto == LazyProto;
-    }
-    bool isObject() const {
-        /* Skip nullptr and LazyProto. */
-        return uintptr_t(proto) > uintptr_t(TaggedProto::LazyProto);
-    }
-    JSObject *toObject() const {
-        MOZ_ASSERT(isObject());
-        return proto;
-    }
-    JSObject *toObjectOrNull() const {
-        MOZ_ASSERT(!proto || isObject());
-        return proto;
-    }
-    JSObject *raw() const { return proto; }
-
-    bool operator ==(const TaggedProto &other) { return proto == other.proto; }
-    bool operator !=(const TaggedProto &other) { return proto != other.proto; }
-
-  private:
-    JSObject *proto;
-};
-
-template <>
-struct RootKind<TaggedProto>
-{
-    static ThingRootKind rootKind() { return THING_ROOT_OBJECT; }
-};
-
-template <> struct GCMethods<const TaggedProto>
-{
-    static TaggedProto initial() { return TaggedProto(); }
-    static bool poisoned(const TaggedProto &v) { return IsPoisonedPtr(v.raw()); }
-};
-
-template <> struct GCMethods<TaggedProto>
-{
-    static TaggedProto initial() { return TaggedProto(); }
-    static bool poisoned(const TaggedProto &v) { return IsPoisonedPtr(v.raw()); }
-};
-
-template<class Outer>
-class TaggedProtoOperations
-{
-    const TaggedProto *value() const {
-        return static_cast<const Outer*>(this)->extract();
-    }
-
-  public:
-    uintptr_t toWord() const { return value()->toWord(); }
-    inline bool isLazy() const { return value()->isLazy(); }
-    inline bool isObject() const { return value()->isObject(); }
-    inline JSObject *toObject() const { return value()->toObject(); }
-    inline JSObject *toObjectOrNull() const { return value()->toObjectOrNull(); }
-    JSObject *raw() const { return value()->raw(); }
-};
-
-template <>
-class HandleBase<TaggedProto> : public TaggedProtoOperations<Handle<TaggedProto> >
-{
-    friend class TaggedProtoOperations<Handle<TaggedProto> >;
-    const TaggedProto * extract() const {
-        return static_cast<const Handle<TaggedProto>*>(this)->address();
-    }
-};
-
-template <>
-class RootedBase<TaggedProto> : public TaggedProtoOperations<Rooted<TaggedProto> >
-{
-    friend class TaggedProtoOperations<Rooted<TaggedProto> >;
-    const TaggedProto *extract() const {
-        return static_cast<const Rooted<TaggedProto> *>(this)->address();
-    }
-};
-
-class CallObject;
-
 namespace jit {
     struct IonScript;
     class JitAllocPolicy;
     class TempAllocator;
 }
 
-namespace types {
-
+class TaggedProto;
 struct TypeZone;
-class TypeSet;
-struct TypeSetObjectKey;
-
-/*
- * Information about a single concrete type. We pack this into a single word,
- * where small values are particular primitive or other singleton types, and
- * larger values are either specific JS objects or object groups.
- */
-class Type
-{
-    uintptr_t data;
-    explicit Type(uintptr_t data) : data(data) {}
-
-  public:
-
-    uintptr_t raw() const { return data; }
-
-    bool isPrimitive() const {
-        return data < JSVAL_TYPE_OBJECT;
-    }
-
-    bool isPrimitive(JSValueType type) const {
-        MOZ_ASSERT(type < JSVAL_TYPE_OBJECT);
-        return (uintptr_t) type == data;
-    }
-
-    JSValueType primitive() const {
-        MOZ_ASSERT(isPrimitive());
-        return (JSValueType) data;
-    }
-
-    bool isMagicArguments() const {
-        return primitive() == JSVAL_TYPE_MAGIC;
-    }
-
-    bool isSomeObject() const {
-        return data == JSVAL_TYPE_OBJECT || data > JSVAL_TYPE_UNKNOWN;
-    }
-
-    bool isAnyObject() const {
-        return data == JSVAL_TYPE_OBJECT;
-    }
-
-    bool isUnknown() const {
-        return data == JSVAL_TYPE_UNKNOWN;
-    }
-
-    /* Accessors for types that are either JSObject or ObjectGroup. */
-
-    bool isObject() const {
-        MOZ_ASSERT(!isAnyObject() && !isUnknown());
-        return data > JSVAL_TYPE_UNKNOWN;
-    }
-
-    bool isObjectUnchecked() const {
-        return data > JSVAL_TYPE_UNKNOWN;
-    }
-
-    inline TypeSetObjectKey *objectKey() const;
-
-    /* Accessors for JSObject types */
-
-    bool isSingleton() const {
-        return isObject() && !!(data & 1);
-    }
-
-    inline JSObject *singleton() const;
-    inline JSObject *singletonNoBarrier() const;
-
-    /* Accessors for ObjectGroup types */
-
-    bool isGroup() const {
-        return isObject() && !(data & 1);
-    }
-
-    inline ObjectGroup *group() const;
-    inline ObjectGroup *groupNoBarrier() const;
-
-    bool operator == (Type o) const { return data == o.data; }
-    bool operator != (Type o) const { return data != o.data; }
-
-    static inline Type UndefinedType() { return Type(JSVAL_TYPE_UNDEFINED); }
-    static inline Type NullType()      { return Type(JSVAL_TYPE_NULL); }
-    static inline Type BooleanType()   { return Type(JSVAL_TYPE_BOOLEAN); }
-    static inline Type Int32Type()     { return Type(JSVAL_TYPE_INT32); }
-    static inline Type DoubleType()    { return Type(JSVAL_TYPE_DOUBLE); }
-    static inline Type StringType()    { return Type(JSVAL_TYPE_STRING); }
-    static inline Type SymbolType()    { return Type(JSVAL_TYPE_SYMBOL); }
-    static inline Type MagicArgType()  { return Type(JSVAL_TYPE_MAGIC); }
-    static inline Type AnyObjectType() { return Type(JSVAL_TYPE_OBJECT); }
-    static inline Type UnknownType()   { return Type(JSVAL_TYPE_UNKNOWN); }
-
-    static inline Type PrimitiveType(JSValueType type) {
-        MOZ_ASSERT(type < JSVAL_TYPE_UNKNOWN);
-        return Type(type);
-    }
-
-    static inline Type ObjectType(JSObject *obj);
-    static inline Type ObjectType(ObjectGroup *group);
-    static inline Type ObjectType(TypeSetObjectKey *key);
-
-    static js::ThingRootKind rootKind() { return js::THING_ROOT_TYPE; }
-};
-
-/* Get the type of a jsval, or zero for an unknown special value. */
-inline Type GetValueType(const Value &val);
-
-/*
- * Get the type of a possibly optimized out or uninitialized let value. This
- * generally only happens on unconditional type monitors on bailing out of
- * Ion, such as for argument and local types.
- */
-inline Type GetMaybeUntrackedValueType(const Value &val);
+class TypeConstraint;
+class TypeNewScript;
+class CompilerConstraintList;
+class HeapTypeSetKey;
 
 /*
  * Type inference memory management overview.
@@ -251,46 +50,6 @@ inline Type GetMaybeUntrackedValueType(const Value &val);
  * and on GC all data referring to live things is copied into a new allocator.
  * Thus, type set and constraints only hold weak references.
  */
-
-/*
- * A constraint which listens to additions to a type set and propagates those
- * changes to other type sets.
- */
-class TypeConstraint
-{
-public:
-    /* Next constraint listening to the same type set. */
-    TypeConstraint *next;
-
-    TypeConstraint()
-        : next(nullptr)
-    {}
-
-    /* Debugging name for this kind of constraint. */
-    virtual const char *kind() = 0;
-
-    /* Register a new type for the set this constraint is listening to. */
-    virtual void newType(JSContext *cx, TypeSet *source, Type type) = 0;
-
-    /*
-     * For constraints attached to an object property's type set, mark the
-     * property as having changed somehow.
-     */
-    virtual void newPropertyState(JSContext *cx, TypeSet *source) {}
-
-    /*
-     * For constraints attached to the JSID_EMPTY type set on an object,
-     * indicate a change in one of the object's dynamic property flags or other
-     * state.
-     */
-    virtual void newObjectState(JSContext *cx, ObjectGroup *group) {}
-
-    /*
-     * If the data this constraint refers to is still live, copy it into the
-     * zone's new allocator. Type constraints only hold weak references.
-     */
-    virtual bool sweep(TypeZone &zone, TypeConstraint **res) = 0;
-};
 
 /* Flags and other state stored in TypeSet::flags */
 enum : uint32_t {
@@ -351,16 +110,12 @@ enum : uint32_t {
 };
 typedef uint32_t TypeFlags;
 
-/* Flags and other state stored in ObjectGroup::flags */
+/* Flags and other state stored in ObjectGroup::Flags */
 enum : uint32_t {
     /* Whether this group is associated with some allocation site. */
     OBJECT_FLAG_FROM_ALLOCATION_SITE  = 0x1,
 
-    /*
-     * If set, the object's prototype might be in the nursery and can't be
-     * used during Ion compilation (which may be occurring off thread).
-     */
-    OBJECT_FLAG_NURSERY_PROTO         = 0x2,
+    /* (0x2 and 0x4 are unused) */
 
     /* Mask/shift for the number of properties in propertySet */
     OBJECT_FLAG_PROPERTY_COUNT_MASK   = 0xfff8,
@@ -440,11 +195,12 @@ class TemporaryTypeSet;
  *
  * - StackTypeSet are associated with TypeScripts, for arguments and values
  *   observed at property reads. These are implicitly frozen on compilation
- *   and do not have constraints attached to them.
+ *   and only have constraints added to them which can trigger invalidation of
+ *   TypeNewScript information.
  *
  * - HeapTypeSet are associated with the properties of ObjectGroups. These
- *   may have constraints added to them to trigger invalidation of compiled
- *   code.
+ *   may have constraints added to them to trigger invalidation of either
+ *   compiled code or TypeNewScript information.
  *
  * - TemporaryTypeSet are created during compilation and do not outlive
  *   that compilation.
@@ -458,12 +214,162 @@ class TemporaryTypeSet;
  */
 class TypeSet
 {
+  public:
+    // Type set entry for either a JSObject with singleton type or a
+    // non-singleton ObjectGroup.
+    class ObjectKey {
+      public:
+        static intptr_t keyBits(ObjectKey *obj) { return (intptr_t) obj; }
+        static ObjectKey *getKey(ObjectKey *obj) { return obj; }
+
+        static inline ObjectKey *get(JSObject *obj);
+        static inline ObjectKey *get(ObjectGroup *group);
+
+        bool isGroup() {
+            return (uintptr_t(this) & 1) == 0;
+        }
+        bool isSingleton() {
+            return (uintptr_t(this) & 1) != 0;
+        }
+
+        inline ObjectGroup *group();
+        inline JSObject *singleton();
+
+        inline ObjectGroup *groupNoBarrier();
+        inline JSObject *singletonNoBarrier();
+
+        const Class *clasp();
+        TaggedProto proto();
+        TypeNewScript *newScript();
+
+        bool unknownProperties();
+        bool hasFlags(CompilerConstraintList *constraints, ObjectGroupFlags flags);
+        bool hasStableClassAndProto(CompilerConstraintList *constraints);
+        void watchStateChangeForInlinedCall(CompilerConstraintList *constraints);
+        void watchStateChangeForTypedArrayData(CompilerConstraintList *constraints);
+        HeapTypeSetKey property(jsid id);
+        void ensureTrackedProperty(JSContext *cx, jsid id);
+
+        ObjectGroup *maybeGroup();
+    };
+
+    // Information about a single concrete type. We pack this into one word,
+    // where small values are particular primitive or other singleton types and
+    // larger values are either specific JS objects or object groups.
+    class Type
+    {
+        friend class TypeSet;
+
+        uintptr_t data;
+        explicit Type(uintptr_t data) : data(data) {}
+
+      public:
+
+        uintptr_t raw() const { return data; }
+
+        bool isPrimitive() const {
+            return data < JSVAL_TYPE_OBJECT;
+        }
+
+        bool isPrimitive(JSValueType type) const {
+            MOZ_ASSERT(type < JSVAL_TYPE_OBJECT);
+            return (uintptr_t) type == data;
+        }
+
+        JSValueType primitive() const {
+            MOZ_ASSERT(isPrimitive());
+            return (JSValueType) data;
+        }
+
+        bool isMagicArguments() const {
+            return primitive() == JSVAL_TYPE_MAGIC;
+        }
+
+        bool isSomeObject() const {
+            return data == JSVAL_TYPE_OBJECT || data > JSVAL_TYPE_UNKNOWN;
+        }
+
+        bool isAnyObject() const {
+            return data == JSVAL_TYPE_OBJECT;
+        }
+
+        bool isUnknown() const {
+            return data == JSVAL_TYPE_UNKNOWN;
+        }
+
+        /* Accessors for types that are either JSObject or ObjectGroup. */
+
+        bool isObject() const {
+            MOZ_ASSERT(!isAnyObject() && !isUnknown());
+            return data > JSVAL_TYPE_UNKNOWN;
+        }
+
+        bool isObjectUnchecked() const {
+            return data > JSVAL_TYPE_UNKNOWN;
+        }
+
+        inline ObjectKey *objectKey() const;
+
+        /* Accessors for JSObject types */
+
+        bool isSingleton() const {
+            return isObject() && !!(data & 1);
+        }
+
+        inline JSObject *singleton() const;
+        inline JSObject *singletonNoBarrier() const;
+
+        /* Accessors for ObjectGroup types */
+
+        bool isGroup() const {
+            return isObject() && !(data & 1);
+        }
+
+        inline ObjectGroup *group() const;
+        inline ObjectGroup *groupNoBarrier() const;
+
+        bool operator == (Type o) const { return data == o.data; }
+        bool operator != (Type o) const { return data != o.data; }
+
+        static ThingRootKind rootKind() { return THING_ROOT_TYPE; }
+    };
+
+    static inline Type UndefinedType() { return Type(JSVAL_TYPE_UNDEFINED); }
+    static inline Type NullType()      { return Type(JSVAL_TYPE_NULL); }
+    static inline Type BooleanType()   { return Type(JSVAL_TYPE_BOOLEAN); }
+    static inline Type Int32Type()     { return Type(JSVAL_TYPE_INT32); }
+    static inline Type DoubleType()    { return Type(JSVAL_TYPE_DOUBLE); }
+    static inline Type StringType()    { return Type(JSVAL_TYPE_STRING); }
+    static inline Type SymbolType()    { return Type(JSVAL_TYPE_SYMBOL); }
+    static inline Type MagicArgType()  { return Type(JSVAL_TYPE_MAGIC); }
+    static inline Type AnyObjectType() { return Type(JSVAL_TYPE_OBJECT); }
+    static inline Type UnknownType()   { return Type(JSVAL_TYPE_UNKNOWN); }
+
+    static inline Type PrimitiveType(JSValueType type) {
+        MOZ_ASSERT(type < JSVAL_TYPE_UNKNOWN);
+        return Type(type);
+    }
+
+    static inline Type ObjectType(JSObject *obj);
+    static inline Type ObjectType(ObjectGroup *group);
+    static inline Type ObjectType(ObjectKey *key);
+
+    static const char *NonObjectTypeString(Type type);
+
+#ifdef DEBUG
+    static const char *TypeString(Type type);
+    static const char *ObjectGroupString(ObjectGroup *group);
+#else
+    static const char *TypeString(Type type) { return nullptr; }
+    static const char *ObjectGroupString(ObjectGroup *group) { return nullptr; }
+#endif
+
   protected:
     /* Flags for this type set. */
     TypeFlags flags;
 
     /* Possible objects this type set can represent. */
-    TypeSetObjectKey **objectSet;
+    ObjectKey **objectSet;
 
   public:
 
@@ -519,7 +425,7 @@ class TypeSet
      * may return nullptr.
      */
     inline unsigned getObjectCount() const;
-    inline TypeSetObjectKey *getObject(unsigned i) const;
+    inline ObjectKey *getObject(unsigned i) const;
     inline JSObject *getSingleton(unsigned i) const;
     inline ObjectGroup *getGroup(unsigned i) const;
     inline JSObject *getSingletonNoBarrier(unsigned i) const;
@@ -581,6 +487,58 @@ class TypeSet
     inline void setBaseObjectCount(uint32_t count);
 
     void clearObjects();
+
+  public:
+    static inline Type GetValueType(const Value &val);
+
+    static inline bool IsUntrackedValue(const Value &val);
+
+    // Get the type of a possibly optimized out or uninitialized let value.
+    // This generally only happens on unconditional type monitors on bailing
+    // out of Ion, such as for argument and local types.
+    static inline Type GetMaybeUntrackedValueType(const Value &val);
+
+    static void MarkTypeRoot(JSTracer *trc, Type *v, const char *name);
+};
+
+/*
+ * A constraint which listens to additions to a type set and propagates those
+ * changes to other type sets.
+ */
+class TypeConstraint
+{
+public:
+    /* Next constraint listening to the same type set. */
+    TypeConstraint *next;
+
+    TypeConstraint()
+        : next(nullptr)
+    {}
+
+    /* Debugging name for this kind of constraint. */
+    virtual const char *kind() = 0;
+
+    /* Register a new type for the set this constraint is listening to. */
+    virtual void newType(JSContext *cx, TypeSet *source, TypeSet::Type type) = 0;
+
+    /*
+     * For constraints attached to an object property's type set, mark the
+     * property as having changed somehow.
+     */
+    virtual void newPropertyState(JSContext *cx, TypeSet *source) {}
+
+    /*
+     * For constraints attached to the JSID_EMPTY type set on an object,
+     * indicate a change in one of the object's dynamic property flags or other
+     * state.
+     */
+    virtual void newObjectState(JSContext *cx, ObjectGroup *group) {}
+
+    /*
+     * If the data this constraint refers to is still live, copy it into the
+     * zone's new allocator. Type constraints only hold weak references.
+     */
+    virtual bool sweep(TypeZone &zone, TypeConstraint **res) = 0;
 };
 
 // If there is an OOM while sweeping types, the type information is deoptimized
@@ -647,8 +605,6 @@ class HeapTypeSet : public ConstraintTypeSet
     inline void setNonConstantProperty(ExclusiveContext *cx);
 };
 
-class CompilerConstraintList;
-
 CompilerConstraintList *
 NewCompilerConstraintList(jit::TempAllocator &alloc);
 
@@ -658,7 +614,7 @@ class TemporaryTypeSet : public TypeSet
     TemporaryTypeSet() {}
     TemporaryTypeSet(LifoAlloc *alloc, Type type);
 
-    TemporaryTypeSet(uint32_t flags, TypeSetObjectKey **objectSet) {
+    TemporaryTypeSet(uint32_t flags, ObjectKey **objectSet) {
         this->flags = flags;
         this->objectSet = objectSet;
     }
@@ -772,30 +728,6 @@ AddClearDefiniteGetterSetterForPrototypeChain(JSContext *cx, ObjectGroup *group,
 bool
 AddClearDefiniteFunctionUsesInScript(JSContext *cx, ObjectGroup *group,
                                      JSScript *script, JSScript *calleeScript);
-
-/* Is this a reasonable PC to be doing inlining on? */
-inline bool isInlinableCall(jsbytecode *pc);
-
-/* Type information about a property. */
-struct Property
-{
-    /* Identifier for this property, JSID_VOID for the aggregate integer index property. */
-    HeapId id;
-
-    /* Possible types for this property, including types inherited from prototypes. */
-    HeapTypeSet types;
-
-    explicit Property(jsid id)
-      : id(id)
-    {}
-
-    Property(const Property &o)
-      : id(o.id.get()), types(o.types)
-    {}
-
-    static uint32_t keyBits(jsid id) { return uint32_t(JSID_BITS(id)); }
-    static jsid getKey(Property *p) { return p->id; }
-};
 
 // For types where only a small number of objects have been allocated, this
 // structure keeps track of all objects with the type in existence. Once
@@ -964,420 +896,8 @@ class TypeNewScript
     size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 };
 
-/*
- * Lazy object groups overview.
- *
- * Object groups which represent at most one JS object are constructed lazily.
- * These include groups for native functions, standard classes, scripted
- * functions defined at the top level of global/eval scripts, and in some
- * other cases. Typical web workloads often create many windows (and many
- * copies of standard natives) and many scripts, with comparatively few
- * non-singleton groups.
- *
- * We can recover the type information for the object from examining it,
- * so don't normally track the possible types of its properties as it is
- * updated. Property type sets for the object are only constructed when an
- * analyzed script attaches constraints to it: the script is querying that
- * property off the object or another which delegates to it, and the analysis
- * information is sensitive to changes in the property's type. Future changes
- * to the property (whether those uncovered by analysis or those occurring
- * in the VM) will treat these properties like those of any other object group.
- */
-
-/* Type information about an object accessed by a script. */
-struct ObjectGroup : public gc::TenuredCell
-{
-  private:
-    /* Class shared by objects in this group. */
-    const Class *clasp_;
-
-    /* Prototype shared by objects in this group. */
-    HeapPtrObject proto_;
-
-    /*
-     * Whether there is a singleton JS object with this group. That JS object
-     * must appear in type sets instead of this; we include the back reference
-     * here to allow reverting the JS object to a lazy group.
-     */
-    HeapPtrObject singleton_;
-
-  public:
-
-    const Class *clasp() const {
-        return clasp_;
-    }
-
-    void setClasp(const Class *clasp) {
-        clasp_ = clasp;
-    }
-
-    TaggedProto proto() const {
-        return TaggedProto(proto_);
-    }
-
-    JSObject *singleton() const {
-        return singleton_;
-    }
-
-    // For use during marking, don't call otherwise.
-    HeapPtrObject &protoRaw() { return proto_; }
-    HeapPtrObject &singletonRaw() { return singleton_; }
-
-    void setProto(JSContext *cx, TaggedProto proto);
-    void setProtoUnchecked(TaggedProto proto) {
-        proto_ = proto.raw();
-    }
-
-    void initSingleton(JSObject *singleton) {
-        singleton_ = singleton;
-    }
-
-    /*
-     * Value held by singleton if this is a standin group for a singleton JS
-     * object whose group has not been constructed yet.
-     */
-    static const size_t LAZY_SINGLETON = 1;
-    bool lazy() const { return singleton() == (JSObject *) LAZY_SINGLETON; }
-
-  private:
-    /* Flags for this group. */
-    ObjectGroupFlags flags_;
-
-    // Kinds of addendums which can be attached to ObjectGroups.
-    enum AddendumKind {
-        Addendum_None,
-
-        // When used by interpreted function, the addendum stores the
-        // canonical JSFunction object.
-        Addendum_InterpretedFunction,
-
-        // When used by the 'new' group when constructing an interpreted
-        // function, the addendum stores a TypeNewScript.
-        Addendum_NewScript,
-
-        // When objects in this group have an unboxed representation, the
-        // addendum stores an UnboxedLayout (which might have a TypeNewScript
-        // as well, if the group is also constructed using 'new').
-        Addendum_UnboxedLayout,
-
-        // When used by typed objects, the addendum stores a TypeDescr.
-        Addendum_TypeDescr
-    };
-
-    // If non-null, holds additional information about this object, whose
-    // format is indicated by the object's addendum kind.
-    void *addendum_;
-
-    void setAddendum(AddendumKind kind, void *addendum, bool writeBarrier = true);
-
-    AddendumKind addendumKind() const {
-        return (AddendumKind)
-            ((flags_ & OBJECT_FLAG_ADDENDUM_MASK) >> OBJECT_FLAG_ADDENDUM_SHIFT);
-    }
-
-    TypeNewScript *newScriptDontCheckGeneration() const {
-        if (addendumKind() == Addendum_NewScript)
-            return reinterpret_cast<TypeNewScript *>(addendum_);
-        return nullptr;
-    }
-
-    UnboxedLayout *maybeUnboxedLayoutDontCheckGeneration() const {
-        if (addendumKind() == Addendum_UnboxedLayout)
-            return reinterpret_cast<UnboxedLayout *>(addendum_);
-        return nullptr;
-    }
-
-    TypeNewScript *anyNewScript();
-    void detachNewScript(bool writeBarrier);
-
-  public:
-
-    ObjectGroupFlags flags() {
-        maybeSweep(nullptr);
-        return flags_;
-    }
-
-    void addFlags(ObjectGroupFlags flags) {
-        maybeSweep(nullptr);
-        flags_ |= flags;
-    }
-
-    void clearFlags(ObjectGroupFlags flags) {
-        maybeSweep(nullptr);
-        flags_ &= ~flags;
-    }
-
-    TypeNewScript *newScript() {
-        maybeSweep(nullptr);
-        return newScriptDontCheckGeneration();
-    }
-
-    void setNewScript(TypeNewScript *newScript) {
-        setAddendum(Addendum_NewScript, newScript);
-    }
-
-    UnboxedLayout *maybeUnboxedLayout() {
-        maybeSweep(nullptr);
-        return maybeUnboxedLayoutDontCheckGeneration();
-    }
-
-    UnboxedLayout &unboxedLayout() {
-        MOZ_ASSERT(addendumKind() == Addendum_UnboxedLayout);
-        return *maybeUnboxedLayout();
-    }
-
-    void setUnboxedLayout(UnboxedLayout *layout) {
-        setAddendum(Addendum_UnboxedLayout, layout);
-    }
-
-    TypeDescr *maybeTypeDescr() {
-        // Note: there is no need to sweep when accessing the type descriptor
-        // of an object, as it is strongly held and immutable.
-        if (addendumKind() == Addendum_TypeDescr)
-            return reinterpret_cast<TypeDescr *>(addendum_);
-        return nullptr;
-    }
-
-    TypeDescr &typeDescr() {
-        MOZ_ASSERT(addendumKind() == Addendum_TypeDescr);
-        return *maybeTypeDescr();
-    }
-
-    void setTypeDescr(TypeDescr *descr) {
-        setAddendum(Addendum_TypeDescr, descr);
-    }
-
-    JSFunction *maybeInterpretedFunction() {
-        // Note: as with type descriptors, there is no need to sweep when
-        // accessing the interpreted function associated with an object.
-        if (addendumKind() == Addendum_InterpretedFunction)
-            return reinterpret_cast<JSFunction *>(addendum_);
-        return nullptr;
-    }
-
-    void setInterpretedFunction(JSFunction *fun) {
-        setAddendum(Addendum_InterpretedFunction, fun);
-    }
-
-  private:
-    /*
-     * Properties of this object. This may contain JSID_VOID, representing the
-     * types of all integer indexes of the object, and/or JSID_EMPTY, holding
-     * constraints listening to changes to the object's state.
-     *
-     * The type sets in the properties of a group describe the possible values
-     * that can be read out of that property in actual JS objects. In native
-     * objects, property types account for plain data properties (those with a
-     * slot and no getter or setter hook) and dense elements. In typed objects
-     * and unboxed objects, property types account for object and value
-     * properties and elements in the object.
-     *
-     * For accesses on these properties, the correspondence is as follows:
-     *
-     * 1. If the group has unknownProperties(), the possible properties and
-     *    value types for associated JSObjects are unknown.
-     *
-     * 2. Otherwise, for any |obj| in |group|, and any |id| which is a property
-     *    in |obj|, before obj->getProperty(id) the property in |group| for
-     *    |id| must reflect the result of the getProperty.
-     *
-     * There are several exceptions to this:
-     *
-     * 1. For properties of global JS objects which are undefined at the point
-     *    where the property was (lazily) generated, the property type set will
-     *    remain empty, and the 'undefined' type will only be added after a
-     *    subsequent assignment or deletion. After these properties have been
-     *    assigned a defined value, the only way they can become undefined
-     *    again is after such an assign or deletion.
-     *
-     * 2. Array lengths are special cased by the compiler and VM and are not
-     *    reflected in property types.
-     *
-     * 3. In typed objects (but not unboxed objects), the initial values of
-     *    properties (null pointers and undefined values) are not reflected in
-     *    the property types. These values are always possible when reading the
-     *    property.
-     *
-     * We establish these by using write barriers on calls to setProperty and
-     * defineProperty which are on native properties, and on any jitcode which
-     * might update the property with a new type.
-     */
-    Property **propertySet;
-  public:
-
-    inline ObjectGroup(const Class *clasp, TaggedProto proto, ObjectGroupFlags initialFlags);
-
-    bool hasAnyFlags(ObjectGroupFlags flags) {
-        MOZ_ASSERT((flags & OBJECT_FLAG_DYNAMIC_MASK) == flags);
-        return !!(this->flags() & flags);
-    }
-    bool hasAllFlags(ObjectGroupFlags flags) {
-        MOZ_ASSERT((flags & OBJECT_FLAG_DYNAMIC_MASK) == flags);
-        return (this->flags() & flags) == flags;
-    }
-
-    bool unknownProperties() {
-        MOZ_ASSERT_IF(flags() & OBJECT_FLAG_UNKNOWN_PROPERTIES,
-                      hasAllFlags(OBJECT_FLAG_DYNAMIC_MASK));
-        return !!(flags() & OBJECT_FLAG_UNKNOWN_PROPERTIES);
-    }
-
-    bool shouldPreTenure() {
-        return hasAnyFlags(OBJECT_FLAG_PRE_TENURE) && !unknownProperties();
-    }
-
-    bool hasTenuredProto() {
-        return !(flags() & OBJECT_FLAG_NURSERY_PROTO);
-    }
-
-    gc::InitialHeap initialHeap(CompilerConstraintList *constraints);
-
-    bool canPreTenure() {
-        return !unknownProperties();
-    }
-
-    bool fromAllocationSite() {
-        return flags() & OBJECT_FLAG_FROM_ALLOCATION_SITE;
-    }
-
-    void setShouldPreTenure(ExclusiveContext *cx) {
-        MOZ_ASSERT(canPreTenure());
-        setFlags(cx, OBJECT_FLAG_PRE_TENURE);
-    }
-
-    /*
-     * Get or create a property of this object. Only call this for properties which
-     * a script accesses explicitly.
-     */
-    inline HeapTypeSet *getProperty(ExclusiveContext *cx, jsid id);
-
-    /* Get a property only if it already exists. */
-    inline HeapTypeSet *maybeGetProperty(jsid id);
-
-    inline unsigned getPropertyCount();
-    inline Property *getProperty(unsigned i);
-
-    /* Helpers */
-
-    void updateNewPropertyTypes(ExclusiveContext *cx, jsid id, HeapTypeSet *types);
-    bool addDefiniteProperties(ExclusiveContext *cx, Shape *shape);
-    bool matchDefiniteProperties(HandleObject obj);
-    void markPropertyNonData(ExclusiveContext *cx, jsid id);
-    void markPropertyNonWritable(ExclusiveContext *cx, jsid id);
-    void markStateChange(ExclusiveContext *cx);
-    void setFlags(ExclusiveContext *cx, ObjectGroupFlags flags);
-    void markUnknown(ExclusiveContext *cx);
-    void maybeClearNewScriptOnOOM();
-    void clearNewScript(ExclusiveContext *cx);
-    bool isPropertyNonData(jsid id);
-    bool isPropertyNonWritable(jsid id);
-
-    void print();
-
-    inline void clearProperties();
-    void maybeSweep(AutoClearTypeInferenceStateOnOOM *oom);
-
-  private:
-#ifdef DEBUG
-    bool needsSweep();
-#endif
-
-    uint32_t generation() {
-        return (flags_ & OBJECT_FLAG_GENERATION_MASK) >> OBJECT_FLAG_GENERATION_SHIFT;
-    }
-
-  public:
-    void setGeneration(uint32_t generation) {
-        MOZ_ASSERT(generation <= (OBJECT_FLAG_GENERATION_MASK >> OBJECT_FLAG_GENERATION_SHIFT));
-        flags_ &= ~OBJECT_FLAG_GENERATION_MASK;
-        flags_ |= generation << OBJECT_FLAG_GENERATION_SHIFT;
-    }
-
-    size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
-
-    inline void finalize(FreeOp *fop);
-    void fixupAfterMovingGC() {}
-
-    static inline ThingRootKind rootKind() { return THING_ROOT_OBJECT_GROUP; }
-
-    static inline uint32_t offsetOfClasp() {
-        return offsetof(ObjectGroup, clasp_);
-    }
-
-    static inline uint32_t offsetOfProto() {
-        return offsetof(ObjectGroup, proto_);
-    }
-
-    static inline uint32_t offsetOfAddendum() {
-        return offsetof(ObjectGroup, addendum_);
-    }
-
-    static inline uint32_t offsetOfFlags() {
-        return offsetof(ObjectGroup, flags_);
-    }
-
-  private:
-    inline uint32_t basePropertyCount();
-    inline void setBasePropertyCount(uint32_t count);
-
-    static void staticAsserts() {
-        JS_STATIC_ASSERT(offsetof(ObjectGroup, proto_) == offsetof(js::shadow::ObjectGroup, proto));
-    }
-};
-
-/*
- * Entries for the per-compartment set of groups which are the default
- * types to use for some prototype. An optional associated object is used which
- * allows multiple groups to be created with the same prototype. The
- * associated object may be a function (for types constructed with 'new') or a
- * type descriptor (for typed objects). These entries are also used for the set
- * of lazy groups in the compartment, which use a null associated object
- * (though there are only a few of these per compartment).
- */
-struct NewObjectGroupEntry
-{
-    ReadBarrieredObjectGroup group;
-
-    // Note: This pointer is only used for equality and does not need a read barrier.
-    JSObject *associated;
-
-    NewObjectGroupEntry(ObjectGroup *group, JSObject *associated)
-      : group(group), associated(associated)
-    {}
-
-    struct Lookup {
-        const Class *clasp;
-        TaggedProto hashProto;
-        TaggedProto matchProto;
-        JSObject *associated;
-
-        Lookup(const Class *clasp, TaggedProto proto, JSObject *associated)
-          : clasp(clasp), hashProto(proto), matchProto(proto), associated(associated)
-        {}
-
-        /*
-         * For use by generational post barriers only.  Look up an entry whose
-         * proto has been moved, but was hashed with the original value.
-         */
-        Lookup(const Class *clasp, TaggedProto hashProto, TaggedProto matchProto, JSObject *associated)
-            : clasp(clasp), hashProto(hashProto), matchProto(matchProto), associated(associated)
-        {}
-
-    };
-
-    static inline HashNumber hash(const Lookup &lookup);
-    static inline bool match(const NewObjectGroupEntry &key, const Lookup &lookup);
-    static void rekey(NewObjectGroupEntry &k, const NewObjectGroupEntry& newKey) { k = newKey; }
-};
-typedef HashSet<NewObjectGroupEntry, NewObjectGroupEntry, SystemAllocPolicy> NewObjectGroupTable;
-
-// Whether to make a singleton when calling 'new' at script/pc.
-bool
-UseSingletonForNewObject(JSContext *cx, JSScript *script, jsbytecode *pc);
-
-// Whether to make a deep cloned singleton when cloning fun.
-bool
-UseSingletonForClone(JSFunction *fun);
+/* Is this a reasonable PC to be doing inlining on? */
+inline bool isInlinableCall(jsbytecode *pc);
 
 /*
  * Whether Array.prototype, or an object on its proto chain, has an
@@ -1426,10 +946,6 @@ class TypeScript
     static inline TYPESET *BytecodeTypes(JSScript *script, jsbytecode *pc, uint32_t *bytecodeMap,
                                          uint32_t *hint, TYPESET *typeArray);
 
-    /* Get a group for an allocation site in this script. */
-    static inline ObjectGroup *InitGroup(JSContext *cx, JSScript *script, jsbytecode *pc,
-                                         JSProtoKey kind);
-
     /*
      * Monitor a bytecode pushing any value. This must be called for any opcode
      * which is JOF_TYPESET, and where either the script has not been analyzed
@@ -1445,9 +961,10 @@ class TypeScript
     static inline void MonitorAssign(JSContext *cx, HandleObject obj, jsid id);
 
     /* Add a type for a variable in a script. */
-    static inline void SetThis(JSContext *cx, JSScript *script, Type type);
+    static inline void SetThis(JSContext *cx, JSScript *script, TypeSet::Type type);
     static inline void SetThis(JSContext *cx, JSScript *script, const js::Value &value);
-    static inline void SetArgument(JSContext *cx, JSScript *script, unsigned arg, Type type);
+    static inline void SetArgument(JSContext *cx, JSScript *script, unsigned arg,
+                                   TypeSet::Type type);
     static inline void SetArgument(JSContext *cx, JSScript *script, unsigned arg,
                                    const js::Value &value);
 
@@ -1477,12 +994,6 @@ class TypeScript
 void
 FillBytecodeTypeMap(JSScript *script, uint32_t *bytecodeMap);
 
-ArrayObject *
-GetOrFixupCopyOnWriteObject(JSContext *cx, HandleScript script, jsbytecode *pc);
-
-ArrayObject *
-GetCopyOnWriteObject(JSScript *script, jsbytecode *pc);
-
 class RecompileInfo;
 
 // Allocate a CompilerOutput for a finished compilation and generate the type
@@ -1497,63 +1008,6 @@ FinishCompilation(JSContext *cx, HandleScript script, CompilerConstraintList *co
 void
 FinishDefinitePropertiesAnalysis(JSContext *cx, CompilerConstraintList *constraints);
 
-struct ArrayTableKey;
-typedef HashMap<ArrayTableKey,
-                ReadBarrieredObjectGroup,
-                ArrayTableKey,
-                SystemAllocPolicy> ArrayTypeTable;
-
-struct ObjectTableKey;
-struct ObjectTableEntry;
-typedef HashMap<ObjectTableKey,ObjectTableEntry,ObjectTableKey,SystemAllocPolicy> ObjectTypeTable;
-
-struct AllocationSiteKey;
-typedef HashMap<AllocationSiteKey,
-                ReadBarrieredObjectGroup,
-                AllocationSiteKey,
-                SystemAllocPolicy> AllocationSiteTable;
-
-class HeapTypeSetKey;
-
-// Type set entry for either a JSObject with singleton type or a non-singleton ObjectGroup.
-struct TypeSetObjectKey
-{
-    static intptr_t keyBits(TypeSetObjectKey *obj) { return (intptr_t) obj; }
-    static TypeSetObjectKey *getKey(TypeSetObjectKey *obj) { return obj; }
-
-    static inline TypeSetObjectKey *get(JSObject *obj);
-    static inline TypeSetObjectKey *get(ObjectGroup *group);
-
-    bool isGroup() {
-        return (uintptr_t(this) & 1) == 0;
-    }
-    bool isSingleton() {
-        return (uintptr_t(this) & 1) != 0;
-    }
-
-    inline ObjectGroup *group();
-    inline JSObject *singleton();
-
-    inline ObjectGroup *groupNoBarrier();
-    inline JSObject *singletonNoBarrier();
-
-    const Class *clasp();
-    TaggedProto proto();
-    TaggedProto protoMaybeInNursery();
-    bool hasTenuredProto();
-    TypeNewScript *newScript();
-
-    bool unknownProperties();
-    bool hasFlags(CompilerConstraintList *constraints, ObjectGroupFlags flags);
-    bool hasStableClassAndProto(CompilerConstraintList *constraints);
-    void watchStateChangeForInlinedCall(CompilerConstraintList *constraints);
-    void watchStateChangeForTypedArrayData(CompilerConstraintList *constraints);
-    HeapTypeSetKey property(jsid id);
-    void ensureTrackedProperty(JSContext *cx, jsid id);
-
-    ObjectGroup *maybeGroup();
-};
-
 // Representation of a heap type property which may or may not be instantiated.
 // Heap properties for singleton types are instantiated lazily as they are used
 // by the compiler, but this is only done on the main thread. If we are
@@ -1564,10 +1018,10 @@ struct TypeSetObjectKey
 // during generation of baseline caches.
 class HeapTypeSetKey
 {
-    friend struct TypeSetObjectKey;
+    friend class TypeSet::ObjectKey;
 
     // Object and property being accessed.
-    TypeSetObjectKey *object_;
+    TypeSet::ObjectKey *object_;
     jsid id_;
 
     // If instantiated, the underlying heap type set.
@@ -1578,7 +1032,7 @@ class HeapTypeSetKey
       : object_(nullptr), id_(JSID_EMPTY), maybeTypes_(nullptr)
     {}
 
-    TypeSetObjectKey *object() const { return object_; }
+    TypeSet::ObjectKey *object() const { return object_; }
     jsid id() const { return id_; }
     HeapTypeSet *maybeTypes() const { return maybeTypes_; }
 
@@ -1683,55 +1137,6 @@ class RecompileInfo
 
 typedef Vector<RecompileInfo, 0, SystemAllocPolicy> RecompileInfoVector;
 
-/* Type information for a compartment. */
-struct TypeCompartment
-{
-    /* Number of scripts in this compartment. */
-    unsigned scriptCount;
-
-    /* Table for referencing types of objects keyed to an allocation site. */
-    AllocationSiteTable *allocationSiteTable;
-
-    /* Tables for determining types of singleton/JSON objects. */
-    ArrayTypeTable *arrayTypeTable;
-    ObjectTypeTable *objectTypeTable;
-
-  private:
-    void setTypeToHomogenousArray(ExclusiveContext *cx, JSObject *obj, Type type);
-
-  public:
-    void fixArrayGroup(ExclusiveContext *cx, ArrayObject *obj);
-    void fixObjectGroup(ExclusiveContext *cx, PlainObject *obj);
-    void fixRestArgumentsType(ExclusiveContext *cx, ArrayObject *obj);
-
-    JSObject *newTypedObject(JSContext *cx, IdValuePair *properties, size_t nproperties);
-
-    TypeCompartment();
-    ~TypeCompartment();
-
-    inline JSCompartment *compartment();
-
-    // Prints results of this compartment if spew is enabled or force is set.
-    void print(JSContext *cx, bool force);
-
-    ObjectGroup *newObjectGroup(ExclusiveContext *cx, const Class *clasp, Handle<TaggedProto> proto,
-                                ObjectGroupFlags initialFlags = 0);
-
-    // Get or make a group for an allocation site, and add to the allocation site table.
-    ObjectGroup *addAllocationSiteObjectGroup(JSContext *cx, AllocationSiteKey key);
-
-    void clearTables();
-    void sweep(FreeOp *fop);
-    void finalizeObjects();
-
-    void addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf,
-                                size_t *allocationSiteTables,
-                                size_t *arrayTypeTables,
-                                size_t *objectTypeTables);
-};
-
-void FixRestArgumentsType(ExclusiveContext *cxArg, ArrayObject *obj);
-
 struct AutoEnterAnalysis;
 
 struct TypeZone
@@ -1797,11 +1202,9 @@ const char * InferSpewColor(TypeConstraint *constraint);
 const char * InferSpewColor(TypeSet *types);
 
 void InferSpew(SpewChannel which, const char *fmt, ...);
-const char * TypeString(Type type);
-const char * ObjectGroupString(ObjectGroup *group);
 
 /* Check that the type property for id in group contains value. */
-bool TypeHasProperty(JSContext *cx, ObjectGroup *group, jsid id, const Value &value);
+bool ObjectGroupHasProperty(JSContext *cx, ObjectGroup *group, jsid id, const Value &value);
 
 #else
 
@@ -1809,22 +1212,23 @@ inline const char * InferSpewColorReset() { return nullptr; }
 inline const char * InferSpewColor(TypeConstraint *constraint) { return nullptr; }
 inline const char * InferSpewColor(TypeSet *types) { return nullptr; }
 inline void InferSpew(SpewChannel which, const char *fmt, ...) {}
-inline const char * TypeString(Type type) { return nullptr; }
-inline const char * ObjectGroupString(ObjectGroup *group) { return nullptr; }
 
 #endif
 
 /* Print a warning, dump state and abort the program. */
 MOZ_NORETURN MOZ_COLD void TypeFailure(JSContext *cx, const char *fmt, ...);
 
-} /* namespace types */
+// Prints type information for a context if spew is enabled or force is set.
+void
+PrintTypes(JSContext *cx, JSCompartment *comp, bool force);
+
 } /* namespace js */
 
 // JS::ubi::Nodes can point to object groups; they're js::gc::Cell instances
 // with no associated compartment.
 namespace JS {
 namespace ubi {
-template<> struct Concrete<js::types::ObjectGroup> : TracerConcrete<js::types::ObjectGroup> { };
+template<> struct Concrete<js::ObjectGroup> : TracerConcrete<js::ObjectGroup> { };
 }
 }
 
