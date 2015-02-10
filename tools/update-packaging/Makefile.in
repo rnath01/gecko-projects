@@ -87,7 +87,7 @@ automation-partial-patch: complete-patch
 	    (cd previous; \
 	      MAR=$(MAR_BIN) perl $(topsrcdir)/tools/update-packaging/unwrap_full_update.pl '$(STAGE_DIR)/previous.mar') && \
 	    (cd current; \
-	      MAR=$(MAR_BIN) perl $(topsrcdir)/tools/update-packaging/unwrap_full_update.pl '../$(DIST)/$(COMPLETE_MAR)') && \
+	      MAR=$(MAR_BIN) perl $(topsrcdir)/tools/update-packaging/unwrap_full_update.pl '$(abspath $(DIST)/$(COMPLETE_MAR))') && \
 	    find current -name \*.pgc -print -delete && \
 	    find previous -name \*.pgc -print -delete && \
 	    rm -f $(STAGE_DIR)/*.partial.*.mar && \
