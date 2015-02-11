@@ -8,9 +8,6 @@ const Ci = Components.interfaces;
 
 Cu.import("resource:///modules/devtools/gDevTools.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "ZipUtils", "resource://gre/modules/ZipUtils.jsm");
 
 const {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 const {require} = devtools;
@@ -27,8 +24,6 @@ const utils = require("devtools/webide/utils");
 const Telemetry = require("devtools/shared/telemetry");
 const {RuntimeScanners, WiFiScanner} = require("devtools/webide/runtimes");
 const {showDoorhanger} = require("devtools/shared/doorhanger");
-const {FileUtils} = Cu.import("resource://gre/modules/FileUtils.jsm");
-const Git = require("devtools/webide/git");
 
 const Strings = Services.strings.createBundle("chrome://browser/locale/devtools/webide.properties");
 
@@ -937,7 +932,7 @@ let UI = {
   createToolbox: function() {
     this.toolboxPromise = AppManager.getTarget().then((target) => {
       return this.showToolbox(target);
-    }, console.error.bind(console));
+    }, console.error);
     return this.busyUntil(this.toolboxPromise, "opening toolbox");
   },
 
@@ -991,43 +986,6 @@ let UI = {
     splitter.setAttribute("hidden", "true");
     document.querySelector("#action-button-debug").removeAttribute("active");
     this.updateToolboxFullscreenState();
-  },
-
-  fetchProject: function() {
-    let project = AppManager.selectedProject;
-
-    if (!project || project.type !== "runtimeApp") {
-      return promise.resolve();
-    }
-    if (project.app.kind === "packaged") {
-      return UI.busyUntil(Task.spawn(function* () {
-        let packagePath = yield AppManager.fetchPackagedApp(project);
-        let directory = utils.getPackagedDirectory(window);
-
-        if (!directory) {
-          // User cancelled directory selection
-          return;
-        }
-
-        // Extract package into the selected directory
-        let target = FileUtils.File(packagePath);
-        ZipUtils.extractFiles(target, directory);
-
-        yield UI.importAndSelectApp(directory);
-      }), "importing packaged app");
-    } else {
-      return Cmds.importHostedApp(project.app.manifestURL);
-    }
-  },
-
-  cloneProject: function() {
-    let project = AppManager.selectedProject;
-    return UI.busyUntil(Task.spawn(function* () {
-      let directory = utils.getPackagedDirectory(window);
-      let metadata = AppManager.getProjectInstallMetaData(project);
-      yield Git.clone(directory, metadata.url, metadata.revision);
-      yield UI.importAndSelectApp(directory);
-    }));
   },
 };
 
