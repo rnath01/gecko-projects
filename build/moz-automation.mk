@@ -62,6 +62,7 @@ MOZ_AUTOMATION_TIERS := $(foreach sym,$(moz_automation_symbols),$(if $(filter 1,
 automation/uploadsymbols: automation/buildsymbols
 
 automation/update-packaging: automation/package
+automation/update-packaging: automation/installer
 automation/pretty-update-packaging: automation/pretty-package
 automation/pretty-update-packaging: automation/pretty-installer
 
