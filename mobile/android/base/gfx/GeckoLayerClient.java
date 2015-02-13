@@ -680,12 +680,14 @@ class GeckoLayerClient implements LayerView.Listener, PanZoomTarget
         mCurrentViewTransform.offsetX = offset.x;
         mCurrentViewTransform.offsetY = offset.y;
 
-        mRootLayer.setPositionAndResolution(
-            Math.round(x + mCurrentViewTransform.offsetX),
-            Math.round(y + mCurrentViewTransform.offsetY),
-            Math.round(x + width + mCurrentViewTransform.offsetX),
-            Math.round(y + height + mCurrentViewTransform.offsetY),
-            resolution);
+        if (mRootLayer) {
+            mRootLayer.setPositionAndResolution(
+                Math.round(x + mCurrentViewTransform.offsetX),
+                Math.round(y + mCurrentViewTransform.offsetY),
+                Math.round(x + width + mCurrentViewTransform.offsetX),
+                Math.round(y + height + mCurrentViewTransform.offsetY),
+                resolution);
+        }
 
         if (layersUpdated && mRecordDrawTimes) {
             // If we got a layers update, that means a draw finished. Check to see if the area drawn matches
