@@ -55,6 +55,12 @@ const IS_TOOLKIT_GONK = true;
 const IS_TOOLKIT_GONK = false;
 #endif
 
+#ifdef DISABLE_UPDATER_AUTHENTICODE_CHECK
+const UPDATER_AUTHENTICODE_CHECK_DISABLED = true;
+#else
+const UPDATER_AUTHENTICODE_CHECK_DISABLED = false;
+#endif
+
 #ifdef XP_MACOSX
 const DIR_MACOS = "Contents/MacOS/";
 const DIR_RESOURCES = "Contents/Resources/";
