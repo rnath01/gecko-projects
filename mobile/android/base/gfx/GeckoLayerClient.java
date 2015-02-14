@@ -680,7 +680,7 @@ class GeckoLayerClient implements LayerView.Listener, PanZoomTarget
         mCurrentViewTransform.offsetX = offset.x;
         mCurrentViewTransform.offsetY = offset.y;
 
-        if (mRootLayer) {
+        if (mRootLayer != null) {
             mRootLayer.setPositionAndResolution(
                 Math.round(x + mCurrentViewTransform.offsetX),
                 Math.round(y + mCurrentViewTransform.offsetY),
