@@ -1881,6 +1881,14 @@ public:
   }
   
   /*
+   * Returns true if user timing API should print to console.
+   */
+  static bool IsUserTimingLoggingEnabled()
+  {
+    return sIsUserTimingLoggingEnabled;
+  }
+
+  /*
    * Returns true if the performance timing APIs are enabled.
    */
   static bool IsResourceTimingEnabled()
@@ -2169,6 +2177,14 @@ public:
                                         int32_t& aOutEndOffset);
 
   /**
+   * Takes a selection, and return selection's bounding rect which is relative
+   * to root frame.
+   *
+   * @param aSel      Selection to check
+   */
+  static nsRect GetSelectionBoundingRect(mozilla::dom::Selection* aSel);
+
+  /**
    * Takes a frame for anonymous content within a text control (<input> or
    * <textarea>), and returns an offset in the text content, adjusted for a
    * trailing <br> frame.
@@ -2360,6 +2376,7 @@ private:
   static uint32_t sHandlingInputTimeout;
   static bool sIsPerformanceTimingEnabled;
   static bool sIsResourceTimingEnabled;
+  static bool sIsUserTimingLoggingEnabled;
   static bool sIsExperimentalAutocompleteEnabled;
   static bool sEncodeDecodeURLHash;
 

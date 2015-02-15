@@ -257,6 +257,7 @@ class Assembler : public AssemblerX86Shared
     using AssemblerX86Shared::jmp;
     using AssemblerX86Shared::push;
     using AssemblerX86Shared::pop;
+    using AssemblerX86Shared::vmovq;
 
     static uint8_t *PatchableJumpAddress(JitCode *code, size_t index);
     static void PatchJumpEntry(uint8_t *entry, uint8_t *target);

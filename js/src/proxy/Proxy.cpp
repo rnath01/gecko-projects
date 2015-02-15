@@ -4,13 +4,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "js/Proxy.h"
+
 #include <string.h>
 
 #include "jsapi.h"
 #include "jscntxt.h"
 #include "jsfun.h"
 #include "jsgc.h"
-#include "jsproxy.h"
 #include "jswrapper.h"
 
 #include "gc/Marking.h"
@@ -20,7 +21,6 @@
 #include "vm/WrapperObject.h"
 
 #include "jsatominlines.h"
-#include "jsinferinlines.h"
 #include "jsobjinlines.h"
 
 #include "vm/NativeObject-inl.h"
@@ -111,18 +111,7 @@ Proxy::getPropertyDescriptor(JSContext *cx, HandleObject proxy, HandleId id,
         return false;
     if (desc.object())
         return true;
-    INVOKE_ON_PROTOTYPE(cx, handler, proxy, JS_GetPropertyDescriptorById(cx, proto, id, desc));
-}
-
-bool
-Proxy::getPropertyDescriptor(JSContext *cx, HandleObject proxy, HandleId id, MutableHandleValue vp)
-{
-    JS_CHECK_RECURSION(cx, return false);
-
-    Rooted<PropertyDescriptor> desc(cx);
-    if (!Proxy::getPropertyDescriptor(cx, proxy, id, &desc))
-        return false;
-    return NewPropertyDescriptorObject(cx, desc, vp);
+    INVOKE_ON_PROTOTYPE(cx, handler, proxy, GetPropertyDescriptor(cx, proto, id, desc));
 }
 
 bool
@@ -137,18 +126,6 @@ Proxy::getOwnPropertyDescriptor(JSContext *cx, HandleObject proxy, HandleId id,
     if (!policy.allowed())
         return policy.returnValue();
     return handler->getOwnPropertyDescriptor(cx, proxy, id, desc);
-}
-
-bool
-Proxy::getOwnPropertyDescriptor(JSContext *cx, HandleObject proxy, HandleId id,
-                                MutableHandleValue vp)
-{
-    JS_CHECK_RECURSION(cx, return false);
-
-    Rooted<PropertyDescriptor> desc(cx);
-    if (!Proxy::getOwnPropertyDescriptor(cx, proxy, id, &desc))
-        return false;
-    return NewPropertyDescriptorObject(cx, desc, vp);
 }
 
 bool
@@ -603,17 +580,6 @@ js::proxy_GetOwnPropertyDescriptor(JSContext *cx, HandleObject obj, HandleId id,
 }
 
 bool
-js::proxy_SetPropertyAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp)
-{
-    /* Lookup the current property descriptor so we have setter/getter/value. */
-    Rooted<PropertyDescriptor> desc(cx);
-    if (!Proxy::getOwnPropertyDescriptor(cx, obj, id, &desc))
-        return false;
-    desc.setAttributes(*attrsp);
-    return Proxy::defineProperty(cx, obj, id, &desc);
-}
-
-bool
 js::proxy_DeleteProperty(JSContext *cx, HandleObject obj, HandleId id, bool *succeeded)
 {
     bool deleted;
@@ -754,6 +720,11 @@ JS_FRIEND_API(JSObject *)
 js::NewProxyObject(JSContext *cx, const BaseProxyHandler *handler, HandleValue priv, JSObject *proto_,
                    JSObject *parent_, const ProxyOptions &options)
 {
+    if (options.lazyProto()) {
+        MOZ_ASSERT(!proto_);
+        proto_ = TaggedProto::LazyProto;
+    }
+
     return ProxyObject::New(cx, handler, priv, TaggedProto(proto_), parent_,
                             options);
 }

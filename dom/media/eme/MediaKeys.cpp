@@ -58,6 +58,7 @@ RejectPromises(const uint32_t& aKey,
                void* aClosure)
 {
   aPromise->MaybeReject(NS_ERROR_DOM_INVALID_STATE_ERR);
+  ((MediaKeys*)aClosure)->Release();
   return PL_DHASH_NEXT;
 }
 
@@ -111,7 +112,9 @@ MediaKeys::Shutdown()
     mProxy = nullptr;
   }
 
-  mPromises.Enumerate(&RejectPromises, nullptr);
+  nsRefPtr<MediaKeys> kungFuDeathGrip = this;
+
+  mPromises.Enumerate(&RejectPromises, this);
   mPromises.Clear();
 }
 
@@ -169,6 +172,11 @@ MediaKeys::StorePromise(Promise* aPromise)
   static uint32_t sEMEPromiseCount = 1;
   MOZ_ASSERT(aPromise);
   uint32_t id = sEMEPromiseCount++;
+
+  // Keep MediaKeys alive for the lifetime of its promises. Any still-pending
+  // promises are rejected in Shutdown().
+  AddRef();
+
   mPromises.Put(id, aPromise);
   return id;
 }
@@ -179,6 +187,7 @@ MediaKeys::RetrievePromise(PromiseId aId)
   MOZ_ASSERT(mPromises.Contains(aId));
   nsRefPtr<Promise> promise;
   mPromises.Remove(aId, getter_AddRefs(promise));
+  Release();
   return promise.forget();
 }
 

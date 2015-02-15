@@ -16,6 +16,7 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/layers/APZCTreeManager.h"
+#include "mozilla/layers/APZThreadUtils.h"
 #include "mozilla/layers/CompositorParent.h"
 #include "mozilla/layers/LayerTransactionParent.h"
 #include "nsContentUtils.h"
@@ -418,18 +419,6 @@ RenderFrameParent::OwnerContentChanged(nsIContent* aContent)
   }
 }
 
-nsEventStatus
-RenderFrameParent::NotifyInputEvent(WidgetInputEvent& aEvent,
-                                    ScrollableLayerGuid* aOutTargetGuid,
-                                    uint64_t* aOutInputBlockId)
-{
-  if (GetApzcTreeManager()) {
-    return GetApzcTreeManager()->ReceiveInputEvent(
-        aEvent, aOutTargetGuid, aOutInputBlockId);
-  }
-  return nsEventStatus_eIgnore;
-}
-
 void
 RenderFrameParent::ActorDestroy(ActorDestroyReason why)
 {
@@ -543,7 +532,9 @@ RenderFrameParent::ContentReceivedInputBlock(const ScrollableLayerGuid& aGuid,
     return;
   }
   if (GetApzcTreeManager()) {
-    GetApzcTreeManager()->ContentReceivedInputBlock(aInputBlockId, aPreventDefault);
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
+        GetApzcTreeManager(), &APZCTreeManager::ContentReceivedInputBlock,
+        aInputBlockId, aPreventDefault));
   }
 }
 
@@ -559,7 +550,12 @@ RenderFrameParent::SetTargetAPZC(uint64_t aInputBlockId,
     }
   }
   if (GetApzcTreeManager()) {
-    GetApzcTreeManager()->SetTargetAPZC(aInputBlockId, aTargets);
+    // need a local var to disambiguate between the SetTargetAPZC overloads.
+    void (APZCTreeManager::*setTargetApzcFunc)(uint64_t, const nsTArray<ScrollableLayerGuid>&)
+        = &APZCTreeManager::SetTargetAPZC;
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
+        GetApzcTreeManager(), setTargetApzcFunc,
+        aInputBlockId, aTargets));
   }
 }
 
@@ -619,6 +615,17 @@ RenderFrameParent::TakeFocusForClick()
 }  // namespace layout
 }  // namespace mozilla
 
+nsDisplayRemote::nsDisplayRemote(nsDisplayListBuilder* aBuilder,
+                                 nsIFrame* aFrame,
+                                 RenderFrameParent* aRemoteFrame)
+  : nsDisplayItem(aBuilder, aFrame)
+  , mRemoteFrame(aRemoteFrame)
+{
+  mForceDispatchToContentRegion =
+    aBuilder->IsBuildingLayerEventRegions() &&
+    nsLayoutUtils::HasDocumentLevelListenersForApzAwareEvents(aFrame->PresContext()->PresShell());
+}
+
 already_AddRefed<Layer>
 nsDisplayRemote::BuildLayer(nsDisplayListBuilder* aBuilder,
                             LayerManager* aManager,
@@ -628,6 +635,9 @@ nsDisplayRemote::BuildLayer(nsDisplayListBuilder* aBuilder,
   nsIntRect visibleRect = GetVisibleRect().ToNearestPixels(appUnitsPerDevPixel);
   visibleRect += aContainerParameters.mOffset;
   nsRefPtr<Layer> layer = mRemoteFrame->BuildLayer(aBuilder, mFrame, aManager, visibleRect, this, aContainerParameters);
+  if (layer && layer->AsContainerLayer()) {
+    layer->AsContainerLayer()->SetForceDispatchToContentRegion(mForceDispatchToContentRegion);
+  }
   return layer.forget();
 }
 

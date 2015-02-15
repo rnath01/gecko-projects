@@ -489,7 +489,7 @@ CreatePrototypeObjectForComplexTypeInstance(JSContext *cx, HandleObject ctorProt
 
     return NewObjectWithProto<TypedProto>(cx,
                                           &*ctorPrototypePrototype,
-                                          nullptr,
+                                          NullPtr(),
                                           TenuredObject);
 }
 
@@ -586,7 +586,7 @@ ArrayMetaTypeDescr::create(JSContext *cx,
                            int32_t length)
 {
     Rooted<ArrayTypeDescr*> obj(cx);
-    obj = NewObjectWithProto<ArrayTypeDescr>(cx, arrayTypePrototype, nullptr, SingletonObject);
+    obj = NewObjectWithProto<ArrayTypeDescr>(cx, arrayTypePrototype, NullPtr(), SingletonObject);
     if (!obj)
         return nullptr;
 
@@ -778,11 +778,11 @@ StructMetaTypeDescr::create(JSContext *cx,
     int32_t alignment = 1;             // Alignment of struct.
     bool opaque = false;               // Opacity of struct.
 
-    userFieldOffsets = NewObjectWithProto<PlainObject>(cx, nullptr, nullptr, TenuredObject);
+    userFieldOffsets = NewObjectWithProto<PlainObject>(cx, nullptr, NullPtr(), TenuredObject);
     if (!userFieldOffsets)
         return nullptr;
 
-    userFieldTypes = NewObjectWithProto<PlainObject>(cx, nullptr, nullptr, TenuredObject);
+    userFieldTypes = NewObjectWithProto<PlainObject>(cx, nullptr, NullPtr(), TenuredObject);
     if (!userFieldTypes)
         return nullptr;
 
@@ -912,7 +912,7 @@ StructMetaTypeDescr::create(JSContext *cx,
         return nullptr;
 
     Rooted<StructTypeDescr*> descr(cx);
-    descr = NewObjectWithProto<StructTypeDescr>(cx, structTypePrototype, nullptr,
+    descr = NewObjectWithProto<StructTypeDescr>(cx, structTypePrototype, NullPtr(),
                                                 SingletonObject);
     if (!descr)
         return nullptr;
@@ -1154,7 +1154,7 @@ DefineSimpleTypeDescr(JSContext *cx,
         return false;
 
     Rooted<T*> descr(cx);
-    descr = NewObjectWithProto<T>(cx, funcProto, global, SingletonObject);
+    descr = NewObjectWithProto<T>(cx, funcProto, GlobalObject::upcast(global), SingletonObject);
     if (!descr)
         return false;
 
@@ -1174,7 +1174,7 @@ DefineSimpleTypeDescr(JSContext *cx,
     // Create the typed prototype for the scalar type. This winds up
     // not being user accessible, but we still create one for consistency.
     Rooted<TypedProto*> proto(cx);
-    proto = NewObjectWithProto<TypedProto>(cx, objProto, nullptr, TenuredObject);
+    proto = NewObjectWithProto<TypedProto>(cx, objProto, NullPtr(), TenuredObject);
     if (!proto)
         return false;
     descr->initReservedSlot(JS_DESCR_SLOT_TYPROTO, ObjectValue(*proto));
@@ -1209,7 +1209,8 @@ DefineMetaTypeDescr(JSContext *cx,
 
     // Create ctor.prototype, which inherits from Function.__proto__
 
-    RootedObject proto(cx, NewObjectWithProto<PlainObject>(cx, funcProto, global,
+    RootedObject proto(cx, NewObjectWithProto<PlainObject>(cx, funcProto,
+                                                           GlobalObject::upcast(global),
                                                            SingletonObject));
     if (!proto)
         return nullptr;
@@ -1221,7 +1222,7 @@ DefineMetaTypeDescr(JSContext *cx,
         return nullptr;
     RootedObject protoProto(cx);
     protoProto = NewObjectWithProto<PlainObject>(cx, objProto,
-                                                 global, SingletonObject);
+                                                 GlobalObject::upcast(global), SingletonObject);
     if (!protoProto)
         return nullptr;
 
@@ -1268,7 +1269,8 @@ GlobalObject::initTypedObjectModule(JSContext *cx, Handle<GlobalObject*> global)
         return false;
 
     Rooted<TypedObjectModuleObject*> module(cx);
-    module = NewObjectWithProto<TypedObjectModuleObject>(cx, objProto, global);
+    module = NewObjectWithProto<TypedObjectModuleObject>(cx, objProto,
+                                                         GlobalObject::upcast(global));
     if (!module)
         return false;
 
@@ -1495,7 +1497,9 @@ OutlineTypedObject::createUnattachedWithClass(JSContext *cx,
     MOZ_ASSERT(clasp == &OutlineTransparentTypedObject::class_ ||
                clasp == &OutlineOpaqueTypedObject::class_);
 
-    RootedObjectGroup group(cx, cx->getNewGroup(clasp, TaggedProto(&descr->typedProto()), descr));
+    RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, clasp,
+                                                             TaggedProto(&descr->typedProto()),
+                                                             descr));
     if (!group)
         return nullptr;
 
@@ -2039,22 +2043,6 @@ IsOwnId(JSContext *cx, HandleObject obj, HandleId id)
 }
 
 bool
-TypedObject::obj_setPropertyAttributes(JSContext *cx, HandleObject obj, HandleId id,
-                                       unsigned *attrsp)
-{
-    if (IsOwnId(cx, obj, id))
-        return ReportPropertyError(cx, JSMSG_CANT_REDEFINE_PROP, id);
-
-    RootedObject proto(cx, obj->getProto());
-    if (!proto) {
-        *attrsp = 0;
-        return true;
-    }
-
-    return SetPropertyAttributes(cx, proto, id, attrsp);
-}
-
-bool
 TypedObject::obj_deleteProperty(JSContext *cx, HandleObject obj, HandleId id, bool *succeeded)
 {
     if (IsOwnId(cx, obj, id))
@@ -2090,7 +2078,7 @@ TypedObject::obj_enumerate(JSContext *cx, HandleObject obj, AutoIdVector &proper
             return false;
 
         for (int32_t index = 0; index < typedObj->length(); index++) {
-            id.set(INT_TO_JSID(index));
+            id = INT_TO_JSID(index);
             properties.infallibleAppend(id);
         }
         break;
@@ -2102,7 +2090,7 @@ TypedObject::obj_enumerate(JSContext *cx, HandleObject obj, AutoIdVector &proper
             return false;
 
         for (size_t index = 0; index < fieldCount; index++) {
-            id.set(AtomToId(&descr->as<StructTypeDescr>().fieldName(index)));
+            id = AtomToId(&descr->as<StructTypeDescr>().fieldName(index));
             properties.infallibleAppend(id);
         }
         break;
@@ -2131,7 +2119,9 @@ InlineTypedObject::create(JSContext *cx, HandleTypeDescr descr, gc::InitialHeap 
                          ? &InlineOpaqueTypedObject::class_
                          : &InlineTransparentTypedObject::class_;
 
-    RootedObjectGroup group(cx, cx->getNewGroup(clasp, TaggedProto(&descr->typedProto()), descr));
+    RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, clasp,
+                                                             TaggedProto(&descr->typedProto()),
+                                                             descr));
     if (!group)
         return nullptr;
 
@@ -2327,7 +2317,6 @@ LazyArrayBufferTable::sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf)
             TypedObject::obj_getProperty,                \
             TypedObject::obj_setProperty,                \
             TypedObject::obj_getOwnPropertyDescriptor,   \
-            TypedObject::obj_setPropertyAttributes,      \
             TypedObject::obj_deleteProperty,             \
             nullptr, nullptr, /* watch/unwatch */        \
             nullptr,   /* getElements */                 \
@@ -2725,7 +2714,7 @@ js::StoreReference##T::Func(JSContext *cx, unsigned argc, Value *vp)    \
     int32_t offset = args[1].toInt32();                                         \
                                                                                 \
     jsid id = args[2].isString()                                                \
-              ? types::IdToTypeId(AtomToId(&args[2].toString()->asAtom()))      \
+              ? IdToTypeId(AtomToId(&args[2].toString()->asAtom()))             \
               : JSID_VOID;                                                      \
                                                                                 \
     /* Should be guaranteed by the typed objects API: */                        \
@@ -2791,8 +2780,8 @@ StoreReferenceHeapValue::store(JSContext *cx, HeapValue *heap, const Value &v,
     // considered to contain undefined.
     if (!v.isUndefined()) {
         if (cx->isJSContext())
-            types::AddTypePropertyId(cx->asJSContext(), obj, id, v);
-        else if (!types::HasTypePropertyId(obj, id, v))
+            AddTypePropertyId(cx->asJSContext(), obj, id, v);
+        else if (!HasTypePropertyId(obj, id, v))
             return false;
     }
 
@@ -2811,8 +2800,8 @@ StoreReferenceHeapPtrObject::store(JSContext *cx, HeapPtrObject *heap, const Val
     // considered to contain null.
     if (v.isObject()) {
         if (cx->isJSContext())
-            types::AddTypePropertyId(cx->asJSContext(), obj, id, v);
-        else if (!types::HasTypePropertyId(obj, id, v))
+            AddTypePropertyId(cx->asJSContext(), obj, id, v);
+        else if (!HasTypePropertyId(obj, id, v))
             return false;
     }
 

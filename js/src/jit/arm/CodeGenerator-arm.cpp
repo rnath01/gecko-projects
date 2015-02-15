@@ -52,6 +52,9 @@ CodeGeneratorARM::generatePrologue()
     if (isProfilerInstrumentationEnabled())
         masm.profilerEnterFrame(StackPointer, CallTempReg0);
 
+    // Ensure that the Ion frames is properly aligned.
+    masm.assertStackAlignment(JitStackAlignment, 0);
+
     // Note that this automatically sets MacroAssembler::framePushed().
     masm.reserveStack(frameSize());
     masm.checkStackAlignment();
@@ -1772,7 +1775,7 @@ CodeGeneratorARM::visitAsmJSLoadHeap(LAsmJSLoadHeap *ins)
     bool isSigned;
     int size;
     bool isFloat = false;
-    switch (mir->viewType()) {
+    switch (mir->accessType()) {
       case Scalar::Int8:    isSigned = true;  size =  8; break;
       case Scalar::Uint8:   isSigned = false; size =  8; break;
       case Scalar::Int16:   isSigned = true;  size = 16; break;
@@ -1852,7 +1855,7 @@ CodeGeneratorARM::visitAsmJSStoreHeap(LAsmJSStoreHeap *ins)
     bool isSigned;
     int size;
     bool isFloat = false;
-    switch (mir->viewType()) {
+    switch (mir->accessType()) {
       case Scalar::Int8:
       case Scalar::Uint8:   isSigned = false; size = 8; break;
       case Scalar::Int16:
@@ -1920,7 +1923,7 @@ void
 CodeGeneratorARM::visitAsmJSCompareExchangeHeap(LAsmJSCompareExchangeHeap *ins)
 {
     MAsmJSCompareExchangeHeap *mir = ins->mir();
-    Scalar::Type vt = mir->viewType();
+    Scalar::Type vt = mir->accessType();
     const LAllocation *ptr = ins->ptr();
     Register ptrReg = ToRegister(ptr);
     BaseIndex srcAddr(HeapReg, ptrReg, TimesOne);
@@ -1954,7 +1957,7 @@ void
 CodeGeneratorARM::visitAsmJSAtomicBinopHeap(LAsmJSAtomicBinopHeap *ins)
 {
     MAsmJSAtomicBinopHeap *mir = ins->mir();
-    Scalar::Type vt = mir->viewType();
+    Scalar::Type vt = mir->accessType();
     const LAllocation *ptr = ins->ptr();
     Register ptrReg = ToRegister(ptr);
     Register temp = ins->temp()->isBogusTemp() ? InvalidReg : ToRegister(ins->temp());

@@ -19,6 +19,7 @@
 #include "InputData.h"
 #include "nsBaseWidget.h"
 #include "nsRegion.h"
+#include "nsWeakReference.h"
 #include "nsIIdleServiceInternal.h"
 #include "Units.h"
 
@@ -44,11 +45,13 @@ struct InputContext;
 struct InputContextAction;
 }
 
-class nsWindow : public nsBaseWidget
+class nsWindow : public nsBaseWidget, public nsSupportsWeakReference
 {
 public:
     nsWindow();
     virtual ~nsWindow();
+
+    NS_DECL_ISUPPORTS_INHERITED
 
     static void DoDraw(void);
     static nsEventStatus DispatchInputEvent(mozilla::WidgetGUIEvent& aEvent);
@@ -57,7 +60,6 @@ public:
     NS_IMETHOD Create(nsIWidget *aParent,
                       void *aNativeParent,
                       const nsIntRect &aRect,
-                      nsDeviceContext *aContext,
                       nsWidgetInitData *aInitData);
     NS_IMETHOD Destroy(void);
 
@@ -88,6 +90,9 @@ public:
     }
     virtual mozilla::LayoutDeviceIntPoint WidgetToScreenOffset();
     void DispatchTouchInputViaAPZ(mozilla::MultiTouchInput& aInput);
+    void DispatchTouchEventForAPZ(const mozilla::MultiTouchInput& aInput,
+                                  const ScrollableLayerGuid& aGuid,
+                                  const uint64_t aInputBlockId);
     NS_IMETHOD DispatchEvent(mozilla::WidgetGUIEvent* aEvent,
                              nsEventStatus& aStatus);
     virtual nsresult SynthesizeNativeTouchPoint(uint32_t aPointerId,

@@ -742,7 +742,7 @@ ThreadActor.prototype = {
       }
       packet.why = aReason;
 
-      let loc = getFrameLocation(aFrame);
+      let loc = this.sources.getFrameLocation(aFrame);
       this.sources.getOriginalLocation(loc).then(aOrigPosition => {
         if (!aOrigPosition.sourceActor) {
           // The only time the source actor will be null is if there
@@ -805,7 +805,7 @@ ThreadActor.prototype = {
 
   _makeOnEnterFrame: function ({ pauseAndRespond }) {
     return aFrame => {
-      const generatedLocation = getFrameLocation(aFrame);
+      const generatedLocation = this.sources.getFrameLocation(aFrame);
       let { sourceActor } = this.synchronize(this.sources.getOriginalLocation(
         generatedLocation));
       let url = sourceActor.url;
@@ -820,7 +820,7 @@ ThreadActor.prototype = {
     return function (aCompletion) {
       // onPop is called with 'this' set to the current frame.
 
-      const generatedLocation = getFrameLocation(this);
+      const generatedLocation = thread.sources.getFrameLocation(this);
       const { sourceActor } = thread.synchronize(thread.sources.getOriginalLocation(
         generatedLocation));
       const url = sourceActor.url;
@@ -862,7 +862,7 @@ ThreadActor.prototype = {
     return function () {
       // onStep is called with 'this' set to the current frame.
 
-      const generatedLocation = getFrameLocation(this);
+      const generatedLocation = thread.sources.getFrameLocation(this);
       const newLocation = thread.synchronize(thread.sources.getOriginalLocation(
         generatedLocation));
 
@@ -942,7 +942,7 @@ ThreadActor.prototype = {
                       message: "Unknown resumeLimit type" });
     }
 
-    const generatedLocation = getFrameLocation(this.youngestFrame);
+    const generatedLocation = this.sources.getFrameLocation(this.youngestFrame);
     return this.sources.getOriginalLocation(generatedLocation)
       .then(originalLocation => {
         const { onEnterFrame, onPop, onStep } = this._makeSteppingHooks(originalLocation,
@@ -1289,7 +1289,7 @@ ThreadActor.prototype = {
       frames.push(form);
 
       let promise = this.sources.getOriginalLocation({
-        source: frame.script.source,
+        sourceActor: this.sources.createNonSourceMappedActor(frame.script.source),
         line: form.where.line,
         column: form.where.column
       }).then((aOrigLocation) => {
@@ -1902,7 +1902,7 @@ ThreadActor.prototype = {
   onDebuggerStatement: function (aFrame) {
     // Don't pause if we are currently stepping (in or over) or the frame is
     // black-boxed.
-    const generatedLocation = getFrameLocation(aFrame);
+    const generatedLocation = this.sources.getFrameLocation(aFrame);
     const { sourceActor } = this.synchronize(this.sources.getOriginalLocation(
       generatedLocation));
     const url = sourceActor ? sourceActor.url : null;
@@ -1934,7 +1934,7 @@ ThreadActor.prototype = {
       return undefined;
     }
 
-    const generatedLocation = getFrameLocation(aFrame);
+    const generatedLocation = this.sources.getFrameLocation(aFrame);
     const { sourceActor } = this.synchronize(this.sources.getOriginalLocation(
       generatedLocation));
     const url = sourceActor ? sourceActor.url : null;
@@ -2039,8 +2039,8 @@ ThreadActor.prototype = {
     let source = this.sources.createNonSourceMappedActor(aScript.source);
     for (let bpActor of this.breakpointActorMap.findActors({ sourceActor: source })) {
       // Limit the search to the line numbers contained in the new script.
-      if (bpActor.location.line >= aScript.startLine
-          && bpActor.location.line <= endLine) {
+      if (bpActor.generatedLocation.line >= aScript.startLine
+          && bpActor.generatedLocation.line <= endLine) {
         source.setBreakpointForActor(bpActor);
       }
     }
@@ -2708,52 +2708,8 @@ SourceActor.prototype = {
                message: "Breakpoints can only be set while the debuggee is paused."};
     }
 
-    let loc = {
-      url: this.url,
-      line: aRequest.location.line,
-      column: aRequest.location.column,
-    };
-    let originalLoc = loc;
-
-    return this.threadActor.sources.getGeneratedLocation({
-      sourceActor: this,
-      line: loc.line,
-      column: loc.column
-    }).then(genLoc => {
-      return this._createBreakpoint(genLoc, originalLoc, aRequest.condition);
-    });
-  },
-
-  _createBreakpoint: function(loc, originalLoc, condition) {
-    return this.setBreakpoint(originalLoc.line, originalLoc.column, condition)
-               .then(response =>
-    {
-      return Promise.resolve().then(() => {
-        var actual = response.actualLocation ? response.actualLocation : loc;
-        if (actual.sourceActor.source) {
-          return this.threadActor.sources.getOriginalLocation({
-            source: actual.sourceActor.source,
-            line: actual.line,
-            column: actual.column
-          });
-        } else {
-          return actual;
-        }
-      }).then((location) => {
-        if (location.sourceActor.url !== originalLoc.url ||
-            location.line !== originalLoc.line)
-        {
-          response.actualLocation = {
-            source: location.sourceActor.form(),
-            line: location.line,
-            column: location.column
-          };
-        }
-        return response;
-      });
-    }).then(null, error => {
-      DevToolsUtils.reportException("onSetBreakpoint", error);
-    });
+    return this.setBreakpoint(aRequest.location.line, aRequest.location.column,
+                              aRequest.condition);
   },
 
   /** Get or create the BreakpointActor for the breakpoint at the given location.
@@ -2761,17 +2717,21 @@ SourceActor.prototype = {
    * NB: This will override a pre-existing BreakpointActor's condition with
    * the given the location's condition.
    *
-   * @param Object location
-   *        The breakpoint location. See BreakpointStore.prototype.setActor
-   *        for more information.
+   * @param Object originalLocation
+   *        The original location of the breakpoint.
+   * @param Object generatedLocation
+   *        The generated location of the breakpoint.
    * @returns BreakpointActor
    */
-  _getOrCreateBreakpointActor: function (location, condition) {
-    let actor = this.breakpointActorMap.getActor(location);
+  _getOrCreateBreakpointActor: function (originalLocation, generatedLocation,
+                                         condition)
+  {
+    let actor = this.breakpointActorMap.getActor(generatedLocation);
     if (!actor) {
-      actor = new BreakpointActor(this.threadActor, location, condition);
+      actor = new BreakpointActor(this.threadActor, originalLocation,
+                                  generatedLocation, condition);
       this.threadActor.threadLifetimePool.addActor(actor);
-      this.breakpointActorMap.setActor(location, actor);
+      this.breakpointActorMap.setActor(generatedLocation, actor);
       return actor;
     }
 
@@ -2872,13 +2832,17 @@ SourceActor.prototype = {
    *        A condition for the breakpoint.
    */
   setBreakpoint: function (originalLine, originalColumn, condition) {
-    return this.threadActor.sources.getGeneratedLocation({
+    let originalLocation = {
       sourceActor: this,
       line: originalLine,
       column: originalColumn
-    }).then(generatedLocation => {
-      let actor = this._getOrCreateBreakpointActor(generatedLocation, condition);
+    };
 
+    return this.threadActor.sources.getGeneratedLocation(originalLocation)
+                                   .then(generatedLocation => {
+      let actor = this._getOrCreateBreakpointActor(originalLocation,
+                                                   generatedLocation,
+                                                   condition);
       return generatedLocation.sourceActor.setBreakpointForActor(actor);
     });
   },
@@ -2892,10 +2856,11 @@ SourceActor.prototype = {
    *        The BreakpointActor to set as breakpoint handler.
    */
   setBreakpointForActor: function (actor) {
+    let originalLocation = actor.originalLocation;
     let generatedLocation = {
       sourceActor: this,
-      line: actor.location.line,
-      column: actor.location.column
+      line: actor.generatedLocation.line,
+      column: actor.generatedLocation.column
     };
 
     let { line: generatedLine, column: generatedColumn } = generatedLocation;
@@ -2915,79 +2880,102 @@ SourceActor.prototype = {
       // store and the breakpoint will be set at that time. This is similar to
       // GDB's "pending" breakpoints for shared libraries that aren't loaded
       // yet.
-      return {
+      return Promise.resolve({
         actor: actor.actorID
-      };
+      });
     }
 
     // Ignore scripts for which the BreakpointActor is already a breakpoint
     // handler.
     scripts = scripts.filter((script) => !actor.hasScript(script));
 
+    let actualLocation;
+
+    // If generatedColumn is something other than 0, assume this is a column
+    // breakpoint and do not perform breakpoint sliding.
     if (generatedColumn) {
-      return this._setBreakpointAtColumn(scripts, generatedLocation, actor);
-    }
-
-    let result;
-    if (actor.scripts.size === 0) {
-      // If the BreakpointActor is not a breakpoint handler for any script, its
-      // location is not yet fixed. Use breakpoint sliding to select the first
-      // line greater than or equal to the requested line that has one or more
-      // offsets.
-      result = this._findNextLineWithOffsets(scripts, generatedLine);
+      this._setBreakpointAtColumn(scripts, generatedLocation, actor);
+      actualLocation = generatedLocation;
     } else {
-      // If the BreakpointActor is a breakpoint handler for at least one script,
-      // breakpoint sliding has already been carried out, so select the
-      // requested line, even if it does not have any offsets.
-      let entryPoints = findEntryPointsForLine(scripts, generatedLine)
-      if (entryPoints) {
-        result = {
-          line: generatedLine,
-          entryPoints: entryPoints
-        };
-      }
-    }
-
-    if (!result) {
-      return {
-        error: "noCodeAtLineColumn",
-        actor: actor.actorID
-      };
-    }
-
-    const { line: actualLine, entryPoints } = result;
-
-    const actualLocation = actualLine !== generatedLine
-                         ? { sourceActor: this, line: actualLine }
-      : undefined;
-
-    if (actualLocation) {
-      // Check whether we already have a breakpoint actor for the actual
-      // location. If we do have an existing actor, then the actor we created
-      // above is redundant and must be destroyed. If we do not have an existing
-      // actor, we need to update the breakpoint store with the new location.
-
-      let existingActor = this.breakpointActorMap.getActor(actualLocation);
-      if (existingActor) {
-        actor.onDelete();
-        this.breakpointActorMap.deleteActor(generatedLocation);
-        return {
-          actor: existingActor.actorID,
-          actualLocation
-        };
+      let result;
+      if (actor.scripts.size === 0) {
+        // If the BreakpointActor is not a breakpoint handler for any script, its
+        // location is not yet fixed. Use breakpoint sliding to select the first
+        // line greater than or equal to the requested line that has one or more
+        // offsets.
+        result = this._findNextLineWithOffsets(scripts, generatedLine);
       } else {
-        actor.location = actualLocation;
-        this.breakpointActorMap.deleteActor(generatedLocation);
-        this.breakpointActorMap.setActor(actualLocation, actor);
+        // If the BreakpointActor is a breakpoint handler for at least one script,
+        // breakpoint sliding has already been carried out, so select the
+        // requested line, even if it does not have any offsets.
+        let entryPoints = findEntryPointsForLine(scripts, generatedLine)
+        if (entryPoints) {
+          result = {
+            line: generatedLine,
+            entryPoints: entryPoints
+          };
+        }
+      }
+
+      if (!result) {
+        return Promise.resolve({
+          error: "noCodeAtLineColumn",
+          actor: actor.actorID
+        });
+      }
+
+      if (result.line !== generatedLine) {
+        actualLocation = {
+          sourceActor: generatedLocation.sourceActor,
+          line: result.line,
+          column: generatedLocation.column
+        };
+
+        // Check whether we already have a breakpoint actor for the actual
+        // location. If we do have an existing actor, then the actor we created
+        // above is redundant and must be destroyed. If we do not have an existing
+        // actor, we need to update the breakpoint store with the new location.
+
+        let existingActor = this.breakpointActorMap.getActor(actualLocation);
+        if (existingActor) {
+          actor.onDelete();
+          this.breakpointActorMap.deleteActor(generatedLocation);
+          actor = existingActor;
+        } else {
+          actor.generatedLocation = actualLocation;
+          this.breakpointActorMap.deleteActor(generatedLocation);
+          this.breakpointActorMap.setActor(actualLocation, actor);
+          setBreakpointOnEntryPoints(this.threadActor, actor, result.entryPoints);
+        }
+      } else {
+        setBreakpointOnEntryPoints(this.threadActor, actor, result.entryPoints);
+        actualLocation = generatedLocation;
       }
     }
 
-    setBreakpointOnEntryPoints(this.threadActor, actor, entryPoints);
-
-    return {
-      actor: actor.actorID,
-      actualLocation
-    };
+    return Promise.resolve().then(() => {
+      if (actualLocation.sourceActor.source) {
+        return this.threadActor.sources.getOriginalLocation({
+          sourceActor: actualLocation.sourceActor,
+          line: actualLocation.line,
+          column: actualLocation.column
+        });
+      } else {
+        return actualLocation;
+      }
+    }).then((actualLocation) => {
+      let response = { actor: actor.actorID };
+      if (actualLocation.sourceActor.url !== originalLocation.sourceActor.url ||
+          actualLocation.line !== originalLocation.line)
+      {
+        response.actualLocation = {
+          source: actualLocation.sourceActor.form(),
+          line: actualLocation.line,
+          column: actualLocation.column
+        };
+      }
+      return response;
+    });
   },
 
   /**
@@ -3342,7 +3330,7 @@ ObjectActor.prototype = {
     }
 
     const generatedLocation = {
-      source: this.obj.script.source,
+      sourceActor: this.threadActor.sources.createNonSourceMappedActor(this.obj.script.source),
       line: this.obj.script.startLine,
       // TODO bug 901138: use Debugger.Script.prototype.startColumn.
       column: 0
@@ -4585,7 +4573,12 @@ FrameActor.prototype = {
     form.this = threadActor.createValueGrip(this.frame.this);
     form.arguments = this._args();
     if (this.frame.script) {
-      form.where = getFrameLocation(this.frame);
+      var loc = this.threadActor.sources.getFrameLocation(this.frame);
+      form.where = {
+        source: loc.sourceActor.form(),
+        line: loc.line,
+        column: loc.column
+      };
     }
 
     if (!this.frame.older) {
@@ -4640,8 +4633,13 @@ FrameActor.prototype.requestTypes = {
  *
  * @param ThreadActor aThreadActor
  *        The parent thread actor that contains this breakpoint.
- * @param object aLocation
- *        Optional. An object with the following properties:
+ * @param object aOriginalLocation
+ *        An object with the following properties:
+ *        - sourceActor: A SourceActor that represents the source
+ *        - line: the specified line
+ *        - column: the specified column
+ * @param object aGeneratedLocation
+ *        An object with the following properties:
  *        - sourceActor: A SourceActor that represents the source
  *        - line: the specified line
  *        - column: the specified column
@@ -4649,14 +4647,15 @@ FrameActor.prototype.requestTypes = {
  *        Optional. A condition which, when false, will cause the breakpoint to
  *        be skipped.
  */
-function BreakpointActor(aThreadActor, aLocation, aCondition)
+function BreakpointActor(aThreadActor, aOriginalLocation, aGeneratedLocation, aCondition)
 {
   // The set of Debugger.Script instances that this breakpoint has been set
   // upon.
   this.scripts = new Set();
 
   this.threadActor = aThreadActor;
-  this.location = aLocation;
+  this.originalLocation = aOriginalLocation;
+  this.generatedLocation = aGeneratedLocation;
   this.condition = aCondition;
 }
 
@@ -4715,7 +4714,7 @@ BreakpointActor.prototype = {
   hit: function (aFrame) {
     // Don't pause if we are currently stepping (in or over) or the frame is
     // black-boxed.
-    let loc = getFrameLocation(aFrame);
+    let loc = this.threadActor.sources.getFrameLocation(aFrame);
     let { sourceActor } = this.threadActor.synchronize(
       this.threadActor.sources.getOriginalLocation(loc));
     let url = sourceActor.url;
@@ -4745,10 +4744,8 @@ BreakpointActor.prototype = {
    */
   onDelete: function (aRequest) {
     // Remove from the breakpoint store.
-    if (this.location) {
-      this.threadActor.breakpointActorMap.deleteActor(
-        update({}, this.location, { source: this.location.sourceActor.form() })
-      );
+    if (this.generatedLocation) {
+      this.threadActor.breakpointActorMap.deleteActor(this.generatedLocation);
     }
     this.threadActor.threadLifetimePool.removeActor(this);
     // Remove the actual breakpoint from the associated scripts.
@@ -5545,13 +5542,36 @@ ThreadSources.prototype = {
   },
 
   /**
+   * Return the non-source-mapped location of the given Debugger.Frame. If the
+   * frame does not have a script, the location's properties are all null.
+   *
+   * @param Debugger.Frame aFrame
+   *        The frame whose location we are getting.
+   * @returns Object
+   *          Returns an object of the form { source, line, column }
+   */
+  getFrameLocation: function (aFrame) {
+    if (!aFrame || !aFrame.script) {
+      return { sourceActor: null, line: null, column: null };
+    }
+    return {
+      sourceActor: this.createNonSourceMappedActor(aFrame.script.source),
+      line: aFrame.script.getOffsetLine(aFrame.offset),
+      column: getOffsetColumn(aFrame.offset, aFrame.script)
+    }
+  },
+
+  /**
    * Returns a promise of the location in the original source if the source is
    * source mapped, otherwise a promise of the same location. This can
    * be called with a source from *any* Debugger instance and we make
    * sure to that it works properly, reusing source maps if already
    * fetched. Use this from any actor that needs sourcemapping.
    */
-  getOriginalLocation: function ({ source, line, column }) {
+  getOriginalLocation: function ({ sourceActor, line, column }) {
+    let source = sourceActor.source;
+    let url = source ? source.url : sourceActor._originalUrl;
+
     // In certain scenarios the source map may have not been fetched
     // yet (or at least tied to this Debugger.Source instance), so use
     // `fetchSourceMap` instead of `getSourceMap`. This allows this
@@ -5590,8 +5610,8 @@ ThreadSources.prototype = {
 
       // No source map
       return resolve({
-        sourceActor: this.createNonSourceMappedActor(source),
-        url: source.url,
+        sourceActor: sourceActor,
+        url: url,
         line: line,
         column: column
       });
@@ -5743,26 +5763,6 @@ exports.ThreadSources = ThreadSources;
 function isHiddenSource(aSource) {
   // Ignore the internal Function.prototype script
   return aSource.text === '() {\n}';
-}
-
-/**
- * Return the non-source-mapped location of the given Debugger.Frame. If the
- * frame does not have a script, the location's properties are all null.
- *
- * @param Debugger.Frame aFrame
- *        The frame whose location we are getting.
- * @returns Object
- *          Returns an object of the form { source, line, column }
- */
-function getFrameLocation(aFrame) {
-  if (!aFrame || !aFrame.script) {
-    return { source: null, line: null, column: null };
-  }
-  return {
-    source: aFrame.script.source,
-    line: aFrame.script.getOffsetLine(aFrame.offset),
-    column: getOffsetColumn(aFrame.offset, aFrame.script)
-  }
 }
 
 /**

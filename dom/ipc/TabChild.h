@@ -45,7 +45,8 @@ class RenderFrameChild;
 }
 
 namespace layers {
-class ActiveElementManager;
+class APZEventState;
+struct SetTargetAPZCCallback;
 }
 
 namespace widget {
@@ -251,7 +252,8 @@ class TabChild MOZ_FINAL : public TabChildBase,
     typedef mozilla::dom::ClonedMessageData ClonedMessageData;
     typedef mozilla::layout::RenderFrameChild RenderFrameChild;
     typedef mozilla::layout::ScrollingBehavior ScrollingBehavior;
-    typedef mozilla::layers::ActiveElementManager ActiveElementManager;
+    typedef mozilla::layers::APZEventState APZEventState;
+    typedef mozilla::layers::SetTargetAPZCCallback SetTargetAPZCCallback;
 
 public:
     /**
@@ -312,7 +314,8 @@ public:
                                          const ViewID& aViewId,
                                          const bool& aIsRoot,
                                          const ZoomConstraints& aConstraints) MOZ_OVERRIDE;
-    virtual bool RecvLoadURL(const nsCString& uri) MOZ_OVERRIDE;
+    virtual bool RecvLoadURL(const nsCString& aURI,
+                             const BrowserConfiguration& aConfiguration) MOZ_OVERRIDE;
     virtual bool RecvCacheFileDescriptor(const nsString& aPath,
                                          const FileDescriptor& aFileDescriptor)
                                          MOZ_OVERRIDE;
@@ -321,7 +324,8 @@ public:
                           const ScrollingBehavior& aScrolling,
                           const TextureFactoryIdentifier& aTextureFactoryIdentifier,
                           const uint64_t& aLayersId,
-                          PRenderFrameChild* aRenderFrame) MOZ_OVERRIDE;
+                          PRenderFrameChild* aRenderFrame,
+                          const bool& aParentIsActive) MOZ_OVERRIDE;
     virtual bool RecvUpdateDimensions(const nsIntRect& rect,
                                       const nsIntSize& size,
                                       const ScreenOrientation& orientation,
@@ -433,17 +437,6 @@ public:
     void RequestNativeKeyBindings(mozilla::widget::AutoCacheNativeKeyCommands* aAutoCache,
                                   WidgetKeyboardEvent* aEvent);
 
-    /** Return a boolean indicating if the page has called preventDefault on
-     *  the event.
-     */
-    bool DispatchMouseEvent(const nsString&       aType,
-                            const CSSPoint&       aPoint,
-                            const int32_t&        aButton,
-                            const int32_t&        aClickCount,
-                            const int32_t&        aModifiers,
-                            const bool&           aIgnoreRootScrollFrame,
-                            const unsigned short& aInputSourceArg);
-
     /**
      * Signal to this TabChild that it should be made visible:
      * activated widget, retained layer tree, etc.  (Respectively,
@@ -494,11 +487,16 @@ public:
      */
     PPluginWidgetChild* AllocPPluginWidgetChild() MOZ_OVERRIDE;
     bool DeallocPPluginWidgetChild(PPluginWidgetChild* aActor) MOZ_OVERRIDE;
-    already_AddRefed<nsIWidget> CreatePluginWidget(nsIWidget* aParent);
+    nsresult CreatePluginWidget(nsIWidget* aParent, nsIWidget** aOut);
 
     nsIntPoint GetChromeDisplacement() { return mChromeDisp; };
 
     bool IPCOpen() { return mIPCOpen; }
+
+    bool ParentIsActive()
+    {
+      return mParentIsActive;
+    }
 
 protected:
     virtual ~TabChild();
@@ -533,7 +531,6 @@ private:
 
     nsresult Init();
 
-    class DelayedFireSingleTapEvent;
     class DelayedFireContextMenuEvent;
 
     // Notify others that our TabContext has been updated.  (At the moment, this
@@ -587,29 +584,6 @@ private:
 
     bool HasValidInnerSize();
 
-    void SendPendingTouchPreventedResponse(bool aPreventDefault,
-                                           const ScrollableLayerGuid& aGuid);
-
-    // Adds the scrollable layer target to the target list, and returns whether
-    // or not the caller should wait for a refresh to send a target
-    // notification.
-    bool PrepareForSetTargetAPZCNotification(const ScrollableLayerGuid& aGuid,
-                                             const uint64_t& aInputBlockId,
-                                             nsIFrame* aRootFrame,
-                                             const LayoutDeviceIntPoint& aRefPoint,
-                                             nsTArray<ScrollableLayerGuid>* aTargets);
-
-    // Sends a SetTarget notification for APZC, given one or more previous
-    // calls to PrepareForAPZCSetTargetNotification().
-    void SendSetTargetAPZCNotification(nsIPresShell* aShell,
-                                       const uint64_t& aInputBlockId,
-                                       const nsTArray<ScrollableLayerGuid>& aTargets,
-                                       bool aWaitForRefresh);
-
-    void SendSetTargetAPZCNotification(const WidgetTouchEvent& aEvent,
-                                       const mozilla::layers::ScrollableLayerGuid& aGuid,
-                                       const uint64_t& aInputBlockId);
-
     // Get the pres shell resolution of the document in this tab.
     float GetPresShellResolution() const;
 
@@ -648,15 +622,10 @@ private:
     bool mTriedBrowserInit;
     ScreenOrientation mOrientation;
     bool mUpdateHitRegion;
-    bool mPendingTouchPreventedResponse;
-    ScrollableLayerGuid mPendingTouchPreventedGuid;
-    uint64_t mPendingTouchPreventedBlockId;
-
-    bool mTouchEndCancelled;
-    bool mEndTouchIsClick;
 
     bool mIgnoreKeyPressEvent;
-    nsRefPtr<ActiveElementManager> mActiveElementManager;
+    nsRefPtr<APZEventState> mAPZEventState;
+    nsRefPtr<SetTargetAPZCCallback> mSetTargetAPZCCallback;
     bool mHasValidInnerSize;
     bool mDestroyed;
     // Position of tab, relative to parent widget (typically the window)
@@ -665,6 +634,7 @@ private:
     float mDPI;
     double mDefaultScale;
     bool mIPCOpen;
+    bool mParentIsActive;
 
     DISALLOW_EVIL_CONSTRUCTORS(TabChild);
 };

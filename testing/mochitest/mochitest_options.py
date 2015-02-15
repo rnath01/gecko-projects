@@ -163,7 +163,7 @@ class MochitestOptions(optparse.OptionParser):
         { "action": "store",
           "dest": "subsuite",
           "help": "subsuite of tests to run",
-          "default": "",
+          "default": None,
         }],
         [["--jetpack-package"],
         { "action": "store_true",
@@ -655,7 +655,7 @@ class MochitestOptions(optparse.OptionParser):
 
         options.leakThresholds = {
             "default": options.defaultLeakThreshold,
-            "tab": 20000, # See dependencies of bug 1051230.
+            "tab": 25000, # See dependencies of bug 1051230.
             "geckomediaplugin": 20000, # GMP rarely gets a log, but when it does, it leaks a little.
         }
 

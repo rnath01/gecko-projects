@@ -324,16 +324,6 @@ class JSFunction : public js::NativeObject
         return u.i.s.script_;
     }
 
-    // Returns non-callsited-clone version of this.  Use when return
-    // value can flow to arbitrary JS (see Bug 944975).
-    JSFunction* originalFunction() {
-        if (this->hasScript() && this->nonLazyScript()->isCallsiteClone()) {
-            return this->nonLazyScript()->donorFunction();
-        } else {
-            return this;
-        }
-    }
-
     js::HeapPtrScript &mutableScript() {
         MOZ_ASSERT(isInterpreted());
         return *(js::HeapPtrScript *)&u.i.s.script_;
@@ -442,16 +432,10 @@ class JSFunction : public js::NativeObject
 
     /* Bound function accessors. */
 
-    inline bool initBoundFunction(JSContext *cx, js::HandleValue thisArg,
+    inline bool initBoundFunction(JSContext *cx, js::HandleObject target, js::HandleValue thisArg,
                                   const js::Value *args, unsigned argslen);
 
-    JSObject *getBoundFunctionTarget() const {
-        MOZ_ASSERT(isBoundFunction());
-
-        /* Bound functions abuse |parent| to store their target function. */
-        return getParent();
-    }
-
+    JSObject *getBoundFunctionTarget() const;
     const js::Value &getBoundFunctionThis() const;
     const js::Value &getBoundFunctionArgument(unsigned which) const;
     size_t getBoundFunctionArgumentCount() const;

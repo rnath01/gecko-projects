@@ -177,7 +177,7 @@ MediaDecoderReader::ComputeStartTime(const VideoData* aVideo, const AudioData* a
   }
   DECODER_LOG("ComputeStartTime first video frame start %lld", aVideo ? aVideo->mTime : -1);
   DECODER_LOG("ComputeStartTime first audio frame start %lld", aAudio ? aAudio->mTime : -1);
-  MOZ_ASSERT(startTime >= 0);
+  NS_ASSERTION(startTime >= 0, "Start time is negative");
   return startTime;
 }
 
@@ -314,8 +314,7 @@ MediaDecoderReader::Shutdown()
   } else {
     // If we don't own our task queue, we resolve immediately (though
     // asynchronously).
-    p = new ShutdownPromise(__func__);
-    p->Resolve(true, __func__);
+    p = ShutdownPromise::CreateAndResolve(true, __func__);
   }
 
   return p;

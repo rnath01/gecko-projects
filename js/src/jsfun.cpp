@@ -21,7 +21,6 @@
 #include "jsatom.h"
 #include "jscntxt.h"
 #include "jsobj.h"
-#include "jsproxy.h"
 #include "jsscript.h"
 #include "jsstr.h"
 #include "jstypes.h"
@@ -35,6 +34,7 @@
 #include "jit/Ion.h"
 #include "jit/JitFrameIterator.h"
 #include "js/CallNonGenericMethod.h"
+#include "js/Proxy.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
 #include "vm/Shape.h"
@@ -49,7 +49,6 @@
 
 using namespace js;
 using namespace js::gc;
-using namespace js::types;
 using namespace js::frontend;
 
 using mozilla::ArrayLength;
@@ -263,16 +262,7 @@ CallerGetterImpl(JSContext *cx, CallArgs args)
         return true;
     }
 
-    // It might seem we need to replace call site clones with the original
-    // functions here.  But we're iterating over *non-builtin* frames, and the
-    // only call site-clonable scripts are for builtin, self-hosted functions
-    // (see assertions in js::CloneFunctionAtCallsite).  So the callee can't be
-    // a call site clone.
-    JSFunction *maybeClone = iter.callee(cx);
-    MOZ_ASSERT(!maybeClone->nonLazyScript()->isCallsiteClone(),
-               "non-builtin functions aren't call site-clonable");
-
-    RootedObject caller(cx, maybeClone);
+    RootedObject caller(cx, iter.callee(cx));
     if (!cx->compartment()->wrap(cx, &caller))
         return false;
 
@@ -336,16 +326,7 @@ CallerSetterImpl(JSContext *cx, CallArgs args)
     if (iter.done() || !iter.isFunctionFrame())
         return true;
 
-    // It might seem we need to replace call site clones with the original
-    // functions here.  But we're iterating over *non-builtin* frames, and the
-    // only call site-clonable scripts are for builtin, self-hosted functions
-    // (see assertions in js::CloneFunctionAtCallsite).  So the callee can't be
-    // a call site clone.
-    JSFunction *maybeClone = iter.callee(cx);
-    MOZ_ASSERT(!maybeClone->nonLazyScript()->isCallsiteClone(),
-               "non-builtin functions aren't call site-clonable");
-
-    RootedObject caller(cx, maybeClone);
+    RootedObject caller(cx, iter.callee(cx));
     if (!cx->compartment()->wrap(cx, &caller)) {
         cx->clearPendingException();
         return true;
@@ -412,7 +393,7 @@ ResolveInterpretedFunctionPrototype(JSContext *cx, HandleObject obj)
         return nullptr;
 
     RootedPlainObject proto(cx, NewObjectWithGivenProto<PlainObject>(cx, objProto,
-                                                                     nullptr, SingletonObject));
+                                                                     NullPtr(), SingletonObject));
     if (!proto)
         return nullptr;
 
@@ -873,7 +854,7 @@ CreateFunctionPrototype(JSContext *cx, JSProtoKey key)
         return nullptr;
 
     functionProto->initScript(script);
-    types::ObjectGroup* protoGroup = functionProto->getGroup(cx);
+    ObjectGroup* protoGroup = functionProto->getGroup(cx);
     if (!protoGroup)
         return nullptr;
 
@@ -1346,13 +1327,14 @@ js_fun_apply(JSContext *cx, unsigned argc, Value *vp)
     return true;
 }
 
-static const uint32_t JSSLOT_BOUND_FUNCTION_THIS       = 0;
-static const uint32_t JSSLOT_BOUND_FUNCTION_ARGS_COUNT = 1;
+static const uint32_t JSSLOT_BOUND_FUNCTION_TARGET     = 0;
+static const uint32_t JSSLOT_BOUND_FUNCTION_THIS       = 1;
+static const uint32_t JSSLOT_BOUND_FUNCTION_ARGS_COUNT = 2;
 
-static const uint32_t BOUND_FUNCTION_RESERVED_SLOTS = 2;
+static const uint32_t BOUND_FUNCTION_RESERVED_SLOTS = 3;
 
 inline bool
-JSFunction::initBoundFunction(JSContext *cx, HandleValue thisArg,
+JSFunction::initBoundFunction(JSContext *cx, HandleObject target, HandleValue thisArg,
                               const Value *args, unsigned argslen)
 {
     RootedFunction self(cx, this);
@@ -1371,12 +1353,21 @@ JSFunction::initBoundFunction(JSContext *cx, HandleValue thisArg,
     if (!NativeObject::setSlotSpan(cx, self, BOUND_FUNCTION_RESERVED_SLOTS + argslen))
         return false;
 
+    self->setSlot(JSSLOT_BOUND_FUNCTION_TARGET, ObjectValue(*target));
     self->setSlot(JSSLOT_BOUND_FUNCTION_THIS, thisArg);
     self->setSlot(JSSLOT_BOUND_FUNCTION_ARGS_COUNT, PrivateUint32Value(argslen));
 
     self->initSlotRange(BOUND_FUNCTION_RESERVED_SLOTS, args, argslen);
 
     return true;
+}
+
+JSObject*
+JSFunction::getBoundFunctionTarget() const
+{
+    MOZ_ASSERT(isBoundFunction());
+
+    return &getSlot(JSSLOT_BOUND_FUNCTION_TARGET).toObject();
 }
 
 const js::Value &
@@ -1679,21 +1670,17 @@ js_fun_bind(JSContext *cx, HandleObject target, HandleValue thisArg,
 
     JSFunction::Flags flags = target->isConstructor() ? JSFunction::NATIVE_CTOR
                                                       : JSFunction::NATIVE_FUN;
-    RootedObject funobj(cx, NewFunction(cx, js::NullPtr(), CallOrConstructBoundFunction, length,
-                                        flags, target, name));
-    if (!funobj)
+    RootedFunction fun(cx, NewFunction(cx, js::NullPtr(), CallOrConstructBoundFunction, length,
+                                       flags, cx->global(), name));
+    if (!fun)
         return nullptr;
 
-    /* NB: Bound functions abuse |parent| to store their target. */
-    if (!JSObject::setParent(cx, funobj, target))
-        return nullptr;
-
-    if (!funobj->as<JSFunction>().initBoundFunction(cx, thisArg, boundArgs, argslen))
+    if (!fun->initBoundFunction(cx, target, thisArg, boundArgs, argslen))
         return nullptr;
 
     /* Steps 17, 19-21 are handled by fun_resolve. */
     /* Step 18 is the default for new functions. */
-    return funobj;
+    return fun;
 }
 
 /*
@@ -1839,7 +1826,7 @@ FunctionConstructor(JSContext *cx, unsigned argc, Value *vp, GeneratorKind gener
          * here (duplicate argument names, etc.) will be detected when we
          * compile the function body.
          */
-        TokenStream ts(cx, options, collected_args.get(), args_length,
+        TokenStream ts(cx, options, collected_args.start().get(), args_length,
                        /* strictModeGetter = */ nullptr);
         bool yieldIsValidName = ts.versionNumber() < JSVERSION_1_7 && !isStarGenerator;
 
@@ -2003,8 +1990,9 @@ js::NewFunctionWithProto(ExclusiveContext *cx, HandleObject funobjArg, Native na
         // isSingleton implies isInterpreted.
         if (native && !IsAsmJSModuleNative(native))
             newKind = SingletonObject;
-        funobj = NewObjectWithClassProto(cx, &JSFunction::class_, proto,
-                                         SkipScopeParent(parent), allocKind, newKind);
+        RootedObject realParent(cx, SkipScopeParent(parent));
+        funobj = NewObjectWithClassProto(cx, &JSFunction::class_, proto, realParent, allocKind,
+                                         newKind);
         if (!funobj)
             return nullptr;
     }
@@ -2037,12 +2025,12 @@ js::CloneFunctionObjectUseSameScript(JSCompartment *compartment, HandleFunction 
 {
     return compartment == fun->compartment() &&
            !fun->isSingleton() &&
-           !types::UseSingletonForClone(fun);
+           !ObjectGroup::useSingletonForClone(fun);
 }
 
 JSFunction *
-js::CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent, gc::AllocKind allocKind,
-                        NewObjectKind newKindArg /* = GenericObject */)
+js::CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent,
+                        gc::AllocKind allocKind, NewObjectKind newKindArg /* = GenericObject */)
 {
     MOZ_ASSERT(parent);
     MOZ_ASSERT(!fun->isBoundFunction());
@@ -2059,8 +2047,9 @@ js::CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent, 
         if (!cloneProto)
             return nullptr;
     }
-    JSObject *cloneobj = NewObjectWithClassProto(cx, &JSFunction::class_, cloneProto,
-                                                 SkipScopeParent(parent), allocKind, newKind);
+    RootedObject realParent(cx, SkipScopeParent(parent));
+    JSObject *cloneobj = NewObjectWithClassProto(cx, &JSFunction::class_, cloneProto, realParent,
+                                                 allocKind, newKind);
     if (!cloneobj)
         return nullptr;
     RootedFunction clone(cx, &cloneobj->as<JSFunction>());

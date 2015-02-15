@@ -302,7 +302,6 @@ namespace js {
             js::proxy_GetProperty,                                                      \
             js::proxy_SetProperty,                                                      \
             js::proxy_GetOwnPropertyDescriptor,                                         \
-            js::proxy_SetPropertyAttributes,                                            \
             js::proxy_DeleteProperty,                                                   \
             js::proxy_Watch, js::proxy_Unwatch,                                         \
             js::proxy_GetElements,                                                      \
@@ -341,9 +340,6 @@ proxy_SetProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
 extern JS_FRIEND_API(bool)
 proxy_GetOwnPropertyDescriptor(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
                                JS::MutableHandle<JSPropertyDescriptor> desc);
-extern JS_FRIEND_API(bool)
-proxy_SetPropertyAttributes(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
-                            unsigned *attrsp);
 extern JS_FRIEND_API(bool)
 proxy_DeleteProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id, bool *succeeded);
 
@@ -408,13 +404,6 @@ SetSourceHook(JSRuntime *rt, mozilla::UniquePtr<SourceHook> hook);
 /* Remove |rt|'s source hook, and return it. The caller now owns the hook. */
 extern JS_FRIEND_API(mozilla::UniquePtr<SourceHook>)
 ForgetSourceHook(JSRuntime *rt);
-
-#ifdef NIGHTLY_BUILD
-typedef void (*AssertOnScriptEntryHook)(JSContext *cx, JS::HandleScript script);
-
-extern JS_FRIEND_API(void)
-SetAssertOnScriptEntryHook(JSRuntime *rt, AssertOnScriptEntryHook hook);
-#endif
 
 extern JS_FRIEND_API(JS::Zone *)
 GetCompartmentZone(JSCompartment *comp);
@@ -1443,6 +1432,49 @@ byteSize(Type atype)
       default:
         MOZ_CRASH("invalid scalar type");
     }
+}
+
+static inline bool
+isSimdType(Type atype) {
+    switch (atype) {
+      case Int8:
+      case Uint8:
+      case Uint8Clamped:
+      case Int16:
+      case Uint16:
+      case Int32:
+      case Uint32:
+      case Float32:
+      case Float64:
+        return false;
+      case Int32x4:
+      case Float32x4:
+        return true;
+      case MaxTypedArrayViewType:
+        break;
+    }
+    MOZ_CRASH("invalid scalar type");
+}
+
+static inline size_t
+scalarByteSize(Type atype) {
+    switch (atype) {
+      case Int32x4:
+      case Float32x4:
+        return 4;
+      case Int8:
+      case Uint8:
+      case Uint8Clamped:
+      case Int16:
+      case Uint16:
+      case Int32:
+      case Uint32:
+      case Float32:
+      case Float64:
+      case MaxTypedArrayViewType:
+        break;
+    }
+    MOZ_CRASH("invalid simd type");
 }
 
 } /* namespace Scalar */
@@ -2509,24 +2541,6 @@ GetElementsWithAdder(JSContext *cx, JS::HandleObject obj, JS::HandleObject recei
 
 JS_FRIEND_API(bool)
 ForwardToNative(JSContext *cx, JSNative native, const JS::CallArgs &args);
-
-/*
- * Helper function. To approximate a call to the [[DefineOwnProperty]] internal
- * method described in ES5, first call this, then call JS_DefinePropertyById.
- *
- * JS_DefinePropertyById by itself does not enforce the invariants on
- * non-configurable properties when obj->isNative(). This function performs the
- * relevant checks (specified in ES5 8.12.9 [[DefineOwnProperty]] steps 1-11),
- * but only if obj is native.
- *
- * The reason for the messiness here is that ES5 uses [[DefineOwnProperty]] as
- * a sort of extension point, but there is no hook in js::Class,
- * js::ProxyHandler, or the JSAPI with precisely the right semantics for it.
- */
-extern JS_FRIEND_API(bool)
-CheckDefineProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::HandleValue value,
-                    unsigned attrs,
-                    JSPropertyOp getter = nullptr, JSStrictPropertyOp setter = nullptr);
 
 /*
  * Helper function for HTMLDocument and HTMLFormElement.

@@ -71,6 +71,8 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/MouseEvents.h"
 
+#include "nsPIWindowRoot.h"
+
 #ifdef XP_MACOSX
 #include "nsINativeMenuService.h"
 #define USE_NATIVE_MENUS
@@ -172,7 +174,6 @@ nsresult nsWebShellWindow::Initialize(nsIXULWindow* aParent,
   mWindow->Create((nsIWidget *)parentWidget,          // Parent nsIWidget
                   nullptr,                            // Native parent widget
                   r,                                  // Widget dimensions
-                  nullptr,                            // Device context
                   &widgetInitData);                   // Widget initialization data
   mWindow->GetClientBounds(r);
   // Match the default background color of content. Important on windows
@@ -256,6 +257,15 @@ nsWebShellWindow::WindowMoved(nsIWidget* aWidget, int32_t x, int32_t y)
     nsCOMPtr<nsPIDOMWindow> window =
       mDocShell ? mDocShell->GetWindow() : nullptr;
     pm->AdjustPopupsOnWindowChange(window);
+  }
+
+  // Notify all tabs that the widget moved.
+  if (mDocShell && mDocShell->GetWindow()) {
+    nsCOMPtr<EventTarget> eventTarget = mDocShell->GetWindow()->GetTopWindowRoot();
+    nsContentUtils::DispatchChromeEvent(mDocShell->GetDocument(),
+                                        eventTarget,
+                                        NS_LITERAL_STRING("MozUpdateWindowPos"),
+                                        false, false, nullptr);
   }
 
   // Persist position, but not immediately, in case this OS is firing

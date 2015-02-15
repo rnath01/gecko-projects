@@ -715,9 +715,9 @@ Declaration::GetValue(nsCSSProperty aProperty, nsAString& aValue,
       const nsCSSValue *decorationStyle =
         data->ValueFor(eCSSProperty_text_decoration_style);
 
-      MOZ_ASSERT(decorationStyle->GetUnit() == eCSSUnit_Enumerated,
-                 nsPrintfCString("bad text-decoration-style unit %d",
-                                 decorationStyle->GetUnit()).get());
+      NS_ABORT_IF_FALSE(decorationStyle->GetUnit() == eCSSUnit_Enumerated,
+                        nsPrintfCString("bad text-decoration-style unit %d",
+                                        decorationStyle->GetUnit()).get());
 
       AppendValueToString(eCSSProperty_text_decoration_line, aValue,
                           aSerialization);
@@ -745,18 +745,18 @@ Declaration::GetValue(nsCSSProperty aProperty, nsAString& aValue,
       const nsCSSValue *transDelay =
         data->ValueFor(eCSSProperty_transition_delay);
 
-      MOZ_ASSERT(transDuration->GetUnit() == eCSSUnit_List ||
-                 transDuration->GetUnit() == eCSSUnit_ListDep,
-                 nsPrintfCString("bad t-duration unit %d",
-                                 transDuration->GetUnit()).get());
-      MOZ_ASSERT(transTiming->GetUnit() == eCSSUnit_List ||
-                 transTiming->GetUnit() == eCSSUnit_ListDep,
-                 nsPrintfCString("bad t-timing unit %d",
-                                 transTiming->GetUnit()).get());
-      MOZ_ASSERT(transDelay->GetUnit() == eCSSUnit_List ||
-                 transDelay->GetUnit() == eCSSUnit_ListDep,
-                 nsPrintfCString("bad t-delay unit %d",
-                                 transDelay->GetUnit()).get());
+      NS_ABORT_IF_FALSE(transDuration->GetUnit() == eCSSUnit_List ||
+                        transDuration->GetUnit() == eCSSUnit_ListDep,
+                        nsPrintfCString("bad t-duration unit %d",
+                                        transDuration->GetUnit()).get());
+      NS_ABORT_IF_FALSE(transTiming->GetUnit() == eCSSUnit_List ||
+                        transTiming->GetUnit() == eCSSUnit_ListDep,
+                        nsPrintfCString("bad t-timing unit %d",
+                                        transTiming->GetUnit()).get());
+      NS_ABORT_IF_FALSE(transDelay->GetUnit() == eCSSUnit_List ||
+                        transDelay->GetUnit() == eCSSUnit_ListDep,
+                        nsPrintfCString("bad t-delay unit %d",
+                                        transDelay->GetUnit()).get());
 
       const nsCSSValueList* dur = transDuration->GetListValue();
       const nsCSSValueList* tim = transTiming->GetListValue();
@@ -783,10 +783,10 @@ Declaration::GetValue(nsCSSProperty aProperty, nsAString& aValue,
           aValue.Truncate();
         }
       } else {
-        MOZ_ASSERT(transProp->GetUnit() == eCSSUnit_List ||
-                   transProp->GetUnit() == eCSSUnit_ListDep,
-                   nsPrintfCString("bad t-prop unit %d",
-                                   transProp->GetUnit()).get());
+        NS_ABORT_IF_FALSE(transProp->GetUnit() == eCSSUnit_List ||
+                          transProp->GetUnit() == eCSSUnit_ListDep,
+                          nsPrintfCString("bad t-prop unit %d",
+                                          transProp->GetUnit()).get());
         const nsCSSValueList* pro = transProp->GetListValue();
         for (;;) {
           pro->mValue.AppendToString(eCSSProperty_transition_property,
@@ -827,10 +827,10 @@ Declaration::GetValue(nsCSSProperty aProperty, nsAString& aValue,
 
       for (uint32_t i = 0; i < numProps; ++i) {
         values[i] = data->ValueFor(subprops[i]);
-        MOZ_ASSERT(values[i]->GetUnit() == eCSSUnit_List ||
-                   values[i]->GetUnit() == eCSSUnit_ListDep,
-                   nsPrintfCString("bad a-duration unit %d",
-                                   values[i]->GetUnit()).get());
+        NS_ABORT_IF_FALSE(values[i]->GetUnit() == eCSSUnit_List ||
+                          values[i]->GetUnit() == eCSSUnit_ListDep,
+                          nsPrintfCString("bad a-duration unit %d",
+                                          values[i]->GetUnit()).get());
         lists[i] = values[i]->GetListValue();
       }
 

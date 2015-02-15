@@ -510,7 +510,7 @@ LIRGeneratorX86Shared::visitAsmJSCompareExchangeHeap(MAsmJSCompareExchangeHeap *
     MOZ_ASSERT(ptr->type() == MIRType_Int32);
 
     bool byteArray = false;
-    switch (ins->viewType()) {
+    switch (ins->accessType()) {
       case Scalar::Int8:
       case Scalar::Uint8:
         byteArray = true;
@@ -555,7 +555,7 @@ LIRGeneratorX86Shared::visitAsmJSAtomicBinopHeap(MAsmJSAtomicBinopHeap *ins)
     MOZ_ASSERT(ptr->type() == MIRType_Int32);
 
     bool byteArray = false;
-    switch (ins->viewType()) {
+    switch (ins->accessType()) {
       case Scalar::Int8:
       case Scalar::Uint8:
         byteArray = true;
@@ -639,7 +639,7 @@ LIRGeneratorX86Shared::visitSimdBinaryArith(MSimdBinaryArith *ins)
 
     if (ins->type() == MIRType_Int32x4) {
         LSimdBinaryArithIx4 *lir = new(alloc()) LSimdBinaryArithIx4();
-        bool needsTemp = ins->operation() == MSimdBinaryArith::Mul && !MacroAssembler::HasSSE41();
+        bool needsTemp = ins->operation() == MSimdBinaryArith::Op_mul && !MacroAssembler::HasSSE41();
         lir->setTemp(0, needsTemp ? temp(LDefinition::INT32X4) : LDefinition::BogusTemp());
         lowerForFPU(lir, ins, lhs, rhs);
         return;
@@ -649,9 +649,9 @@ LIRGeneratorX86Shared::visitSimdBinaryArith(MSimdBinaryArith *ins)
 
     LSimdBinaryArithFx4 *lir = new(alloc()) LSimdBinaryArithFx4();
 
-    bool needsTemp = ins->operation() == MSimdBinaryArith::Max ||
-                     ins->operation() == MSimdBinaryArith::MinNum ||
-                     ins->operation() == MSimdBinaryArith::MaxNum;
+    bool needsTemp = ins->operation() == MSimdBinaryArith::Op_max ||
+                     ins->operation() == MSimdBinaryArith::Op_minNum ||
+                     ins->operation() == MSimdBinaryArith::Op_maxNum;
     lir->setTemp(0, needsTemp ? temp(LDefinition::FLOAT32X4) : LDefinition::BogusTemp());
 
     lowerForFPU(lir, ins, lhs, rhs);

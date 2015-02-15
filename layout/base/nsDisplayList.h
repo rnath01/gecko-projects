@@ -345,15 +345,10 @@ public:
     return CurrentPresShellState()->mInsidePointerEventsNoneDoc;
   }
 
-  bool GetAncestorHasTouchEventHandler() { return mAncestorHasTouchEventHandler; }
-  void SetAncestorHasTouchEventHandler(bool aValue)
+  bool GetAncestorHasApzAwareEventHandler() { return mAncestorHasApzAwareEventHandler; }
+  void SetAncestorHasApzAwareEventHandler(bool aValue)
   {
-    mAncestorHasTouchEventHandler = aValue;
-  }
-  bool GetAncestorHasScrollEventHandler() { return mAncestorHasScrollEventHandler; }
-  void SetAncestorHasScrollEventHandler(bool aValue)
-  {
-    mAncestorHasScrollEventHandler = aValue;
+    mAncestorHasApzAwareEventHandler = aValue;
   }
 
   bool HaveScrollableDisplayPort() const { return mHaveScrollableDisplayPort; }
@@ -432,9 +427,13 @@ public:
 
   /**
    * Return true if we're currently building a display list for the root
-   * presshell which is the presshell of a chrome document.
+   * presshell which is the presshell of a chrome document, or if we're
+   * building the display list for a popup and have not entered a subdocument
+   * inside that popup.
    */
-  bool IsInRootChromeDocument() { return mIsInRootChromeDocument; }
+  bool IsInRootChromeDocumentOrPopup() {
+    return (mIsInChromePresContext || mIsBuildingForPopup) && !IsInSubdocument();
+  }
 
   /**
    * @return true if images have been set to decode synchronously.
@@ -574,8 +573,7 @@ public:
         mPrevOffset(aBuilder->mCurrentOffsetToReferenceFrame),
         mPrevDirtyRect(aBuilder->mDirtyRect),
         mPrevIsAtRootOfPseudoStackingContext(aBuilder->mIsAtRootOfPseudoStackingContext),
-        mPrevAncestorHasTouchEventHandler(aBuilder->mAncestorHasTouchEventHandler),
-        mPrevAncestorHasScrollEventHandler(aBuilder->mAncestorHasScrollEventHandler)
+        mPrevAncestorHasApzAwareEventHandler(aBuilder->mAncestorHasApzAwareEventHandler)
     {
       if (aForChild->IsTransformed()) {
         aBuilder->mCurrentOffsetToReferenceFrame = nsPoint();
@@ -620,8 +618,7 @@ public:
       mBuilder->mCurrentOffsetToReferenceFrame = mPrevOffset;
       mBuilder->mDirtyRect = mPrevDirtyRect;
       mBuilder->mIsAtRootOfPseudoStackingContext = mPrevIsAtRootOfPseudoStackingContext;
-      mBuilder->mAncestorHasTouchEventHandler = mPrevAncestorHasTouchEventHandler;
-      mBuilder->mAncestorHasScrollEventHandler = mPrevAncestorHasScrollEventHandler;
+      mBuilder->mAncestorHasApzAwareEventHandler = mPrevAncestorHasApzAwareEventHandler;
       mBuilder->mCurrentAnimatedGeometryRoot = mPrevAnimatedGeometryRoot;
     }
   private:
@@ -633,8 +630,7 @@ public:
     nsPoint               mPrevOffset;
     nsRect                mPrevDirtyRect;
     bool                  mPrevIsAtRootOfPseudoStackingContext;
-    bool                  mPrevAncestorHasTouchEventHandler;
-    bool                  mPrevAncestorHasScrollEventHandler;
+    bool                  mPrevAncestorHasApzAwareEventHandler;
   };
 
   /**
@@ -911,18 +907,18 @@ private:
   // True when we're building a display list that's directly or indirectly
   // under an nsDisplayTransform
   bool                           mInTransform;
-  bool                           mIsInRootChromeDocument;
+  bool                           mIsInChromePresContext;
   bool                           mSyncDecodeImages;
   bool                           mIsPaintingToWindow;
   bool                           mIsCompositingCheap;
   bool                           mContainsPluginItem;
-  bool                           mAncestorHasTouchEventHandler;
-  bool                           mAncestorHasScrollEventHandler;
+  bool                           mAncestorHasApzAwareEventHandler;
   // True when the first async-scrollable scroll frame for which we build a
   // display list has a display port. An async-scrollable scroll frame is one
   // which WantsAsyncScroll().
   bool                           mHaveScrollableDisplayPort;
   bool                           mWindowDraggingAllowed;
+  bool                           mIsBuildingForPopup;
 };
 
 class nsDisplayItem;
@@ -1160,16 +1156,6 @@ public:
       }
     }
   }
-
-  /**
-   * For display items types that just draw a background we use this function
-   * to do any invalidation that might be needed if we are asked to sync decode
-   * images.
-   */
-  void AddInvalidRegionForSyncDecodeBackgroundImages(
-    nsDisplayListBuilder* aBuilder,
-    const nsDisplayItemGeometry* aGeometry,
-    nsRegion* aInvalidRegion);
 
   /**
    * Called when the area rendered by this display item has changed (been
@@ -2642,6 +2628,11 @@ public:
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) MOZ_OVERRIDE
   {
     *aSnap = false;
+    return nsRect();
+  }
+  nsRect GetHitRegionBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
+  {
+    *aSnap = false;
     return mHitRegion.GetBounds().Union(mMaybeHitRegion.GetBounds());
   }
 
@@ -3050,6 +3041,7 @@ public:
 
 protected:
   ViewID mScrollParentId;
+  bool mForceDispatchToContentRegion;
 };
 
 /**

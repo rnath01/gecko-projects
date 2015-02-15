@@ -723,7 +723,7 @@ CodeGenerator::visitFunctionDispatch(LFunctionDispatch *lir)
     for (size_t i = 0; i < casesWithFallback - 1; i++) {
         MOZ_ASSERT(i < mir->numCases());
         LBlock *target = skipTrivialBlocks(mir->getCaseBlock(i))->lir();
-        if (types::ObjectGroup *funcGroup = mir->getCaseObjectGroup(i)) {
+        if (ObjectGroup *funcGroup = mir->getCaseObjectGroup(i)) {
             masm.branchPtr(Assembler::Equal, Address(input, JSObject::offsetOfGroup()),
                            ImmGCPtr(funcGroup), target->label());
         } else {
@@ -764,7 +764,7 @@ CodeGenerator::visitObjectGroupDispatch(LObjectGroupDispatch *lir)
             if (lastBranch.isInitialized())
                 lastBranch.emit(masm);
 
-            types::ObjectGroup *group = propTable->getObjectGroup(j);
+            ObjectGroup *group = propTable->getObjectGroup(j);
             lastBranch = MacroAssembler::BranchGCPtr(Assembler::Equal, temp, ImmGCPtr(group),
                                                      target->label());
             lastBlock = target;
@@ -2006,6 +2006,10 @@ CodeGenerator::visitOsrEntry(LOsrEntry *lir)
     // to 0, before reserving the stack.
     MOZ_ASSERT(masm.framePushed() == frameSize());
     masm.setFramePushed(0);
+
+    // Ensure that the Ion frames is properly aligned.
+    masm.assertStackAlignment(JitStackAlignment, 0);
+
     masm.reserveStack(frameSize());
 }
 
@@ -3075,43 +3079,100 @@ CodeGenerator::emitPushArguments(LApplyArgsGeneric *apply, Register extraStackSp
 {
     // Holds the function nargs. Initially undefined.
     Register argcreg = ToRegister(apply->getArgc());
-
     Register copyreg = ToRegister(apply->getTempObject());
-    size_t argvOffset = frameSize() + JitFrameLayout::offsetOfActualArgs();
-    Label end;
 
     // Initialize the loop counter AND Compute the stack usage (if == 0)
     masm.movePtr(argcreg, extraStackSpace);
+
+    // Align the JitFrameLayout on the JitStackAlignment.
+    const uint32_t alignment = JitStackAlignment / sizeof(Value);
+    if (alignment > 1) {
+        MOZ_ASSERT(frameSize() % JitStackAlignment == 0,
+            "Stack padding assumes that the frameSize is correct");
+        MOZ_ASSERT(alignment == 2);
+        Label noPaddingNeeded;
+        // if the number of arguments is odd, then we do not need any padding.
+        masm.branchTestPtr(Assembler::NonZero, argcreg, Imm32(1), &noPaddingNeeded);
+        masm.addPtr(Imm32(1), extraStackSpace);
+        masm.bind(&noPaddingNeeded);
+    }
+
+    // Reserve space for copying the arguments.
+    NativeObject::elementsSizeMustNotOverflow();
+    masm.lshiftPtr(Imm32(ValueShift), extraStackSpace);
+    masm.subPtr(extraStackSpace, StackPointer);
+
+#ifdef DEBUG
+    // Put a magic value in the space reserved for padding. Note, this code
+    // cannot be merged with the previous test, as not all architectures can
+    // write below their stack pointers.
+    if (alignment > 1) {
+        MOZ_ASSERT(alignment == 2);
+        Label noPaddingNeeded;
+        // if the number of arguments is odd, then we do not need any padding.
+        masm.branchTestPtr(Assembler::NonZero, argcreg, Imm32(1), &noPaddingNeeded);
+        BaseValueIndex dstPtr(StackPointer, argcreg);
+        masm.storeValue(MagicValue(JS_ARG_POISON), dstPtr);
+        masm.bind(&noPaddingNeeded);
+    }
+#endif
+
+    // Skip the copy of arguments.
+    Label end;
     masm.branchTestPtr(Assembler::Zero, argcreg, argcreg, &end);
+
+    // We are making a copy of the arguments which are above the JitFrameLayout
+    // of the current Ion frame.
+    //
+    // [arg1] [arg0] <- src [this] [JitFrameLayout] [.. frameSize ..] [pad] [arg1] [arg0] <- dst
+
+    // Compute the source and destination offsets into the stack.
+    size_t argvSrcOffset = frameSize() + JitFrameLayout::offsetOfActualArgs();
+    size_t argvDstOffset = 0;
+
+    // Save the extra stack space, and re-use the register as a base.
+    masm.push(extraStackSpace);
+    Register argvSrcBase = extraStackSpace;
+    argvSrcOffset += sizeof(void *);
+    argvDstOffset += sizeof(void *);
+
+    // Save the actual number of register, and re-use the register as an index register.
+    masm.push(argcreg);
+    Register argvIndex = argcreg;
+    argvSrcOffset += sizeof(void *);
+    argvDstOffset += sizeof(void *);
+
+    // srcPtr = (StackPointer + extraStackSpace) + argvSrcOffset
+    // dstPtr = (StackPointer                  ) + argvDstOffset
+    masm.addPtr(StackPointer, argvSrcBase);
 
     // Copy arguments.
     {
-        Register count = extraStackSpace; // <- argcreg
         Label loop;
         masm.bind(&loop);
 
-        // We remove sizeof(void*) from argvOffset because without it we target
-        // the address after the memory area that we want to copy.
-        BaseValueIndex disp(StackPointer, argcreg, argvOffset - sizeof(void*));
-
-        // Do not use Push here because other this account to 1 in the framePushed
-        // instead of 0.  These push are only counted by argcreg.
-        masm.loadPtr(disp, copyreg);
-        masm.push(copyreg);
+        // As argvIndex is off by 1, and we use the decBranchPtr instruction
+        // to loop back, we have to substract the size of the word which are
+        // copied.
+        BaseValueIndex srcPtr(argvSrcBase, argvIndex, argvSrcOffset - sizeof(void *));
+        BaseValueIndex dstPtr(StackPointer, argvIndex, argvDstOffset - sizeof(void *));
+        masm.loadPtr(srcPtr, copyreg);
+        masm.storePtr(copyreg, dstPtr);
 
         // Handle 32 bits architectures.
         if (sizeof(Value) == 2 * sizeof(void*)) {
-            masm.loadPtr(disp, copyreg);
-            masm.push(copyreg);
+            BaseValueIndex srcPtrLow(argvSrcBase, argvIndex, argvSrcOffset - 2 * sizeof(void *));
+            BaseValueIndex dstPtrLow(StackPointer, argvIndex, argvDstOffset - 2 * sizeof(void *));
+            masm.loadPtr(srcPtrLow, copyreg);
+            masm.storePtr(copyreg, dstPtrLow);
         }
 
-        masm.decBranchPtr(Assembler::NonZero, count, Imm32(1), &loop);
+        masm.decBranchPtr(Assembler::NonZero, argvIndex, Imm32(1), &loop);
     }
 
-    // Compute the stack usage.
-    masm.movePtr(argcreg, extraStackSpace);
-    NativeObject::elementsSizeMustNotOverflow();
-    masm.lshiftPtr(Imm32(ValueShift), extraStackSpace);
+    // Restore argcreg and the extra stack space counter.
+    masm.pop(argcreg);
+    masm.pop(extraStackSpace);
 
     // Join with all arguments copied and the extra stack usage computed.
     masm.bind(&end);
@@ -3136,7 +3197,7 @@ CodeGenerator::visitApplyArgsGeneric(LApplyArgsGeneric *apply)
 
     // Temporary register for modifying the function object.
     Register objreg = ToRegister(apply->getTempObject());
-    Register copyreg = ToRegister(apply->getTempCopy());
+    Register extraStackSpace = ToRegister(apply->getTempStackCounter());
 
     // Holds the function nargs. Initially undefined.
     Register argcreg = ToRegister(apply->getArgc());
@@ -3150,14 +3211,14 @@ CodeGenerator::visitApplyArgsGeneric(LApplyArgsGeneric *apply)
     }
 
     // Copy the arguments of the current function.
-    emitPushArguments(apply, copyreg);
+    emitPushArguments(apply, extraStackSpace);
 
     masm.checkStackAlignment();
 
     // If the function is native, only emit the call to InvokeFunction.
     if (apply->hasSingleTarget() && apply->getSingleTarget()->isNative()) {
-        emitCallInvokeFunction(apply, copyreg);
-        emitPopArguments(apply, copyreg);
+        emitCallInvokeFunction(apply, extraStackSpace);
+        emitPopArguments(apply, extraStackSpace);
         return;
     }
 
@@ -3176,19 +3237,21 @@ CodeGenerator::visitApplyArgsGeneric(LApplyArgsGeneric *apply)
     {
         // Create the frame descriptor.
         unsigned pushed = masm.framePushed();
-        masm.addPtr(Imm32(pushed), copyreg);
-        masm.makeFrameDescriptor(copyreg, JitFrame_IonJS);
+        Register stackSpace = extraStackSpace;
+        masm.addPtr(Imm32(pushed), stackSpace);
+        masm.makeFrameDescriptor(stackSpace, JitFrame_IonJS);
 
         masm.Push(argcreg);
         masm.Push(calleereg);
-        masm.Push(copyreg); // descriptor
+        masm.Push(stackSpace); // descriptor
 
         Label underflow, rejoin;
 
         // Check whether the provided arguments satisfy target argc.
         if (!apply->hasSingleTarget()) {
-            masm.load16ZeroExtend(Address(calleereg, JSFunction::offsetOfNargs()), copyreg);
-            masm.branch32(Assembler::Below, argcreg, copyreg, &underflow);
+            Register nformals = extraStackSpace;
+            masm.load16ZeroExtend(Address(calleereg, JSFunction::offsetOfNargs()), nformals);
+            masm.branch32(Assembler::Below, argcreg, nformals, &underflow);
         } else {
             masm.branch32(Assembler::Below, argcreg, Imm32(apply->getSingleTarget()->nargs()),
                           &underflow);
@@ -3218,9 +3281,9 @@ CodeGenerator::visitApplyArgsGeneric(LApplyArgsGeneric *apply)
         markSafepointAt(callOffset, apply);
 
         // Recover the number of arguments from the frame descriptor.
-        masm.loadPtr(Address(StackPointer, 0), copyreg);
-        masm.rshiftPtr(Imm32(FRAMESIZE_SHIFT), copyreg);
-        masm.subPtr(Imm32(pushed), copyreg);
+        masm.loadPtr(Address(StackPointer, 0), stackSpace);
+        masm.rshiftPtr(Imm32(FRAMESIZE_SHIFT), stackSpace);
+        masm.subPtr(Imm32(pushed), stackSpace);
 
         // Increment to remove IonFramePrefix; decrement to fill FrameSizeClass.
         // The return address has already been removed from the Ion frame.
@@ -3232,12 +3295,12 @@ CodeGenerator::visitApplyArgsGeneric(LApplyArgsGeneric *apply)
     // Handle uncompiled or native functions.
     {
         masm.bind(&invoke);
-        emitCallInvokeFunction(apply, copyreg);
+        emitCallInvokeFunction(apply, extraStackSpace);
     }
 
     // Pop arguments and continue.
     masm.bind(&end);
-    emitPopArguments(apply, copyreg);
+    emitPopArguments(apply, extraStackSpace);
 }
 
 typedef bool (*ArraySpliceDenseFn)(JSContext *, HandleObject, uint32_t, uint32_t);
@@ -3395,7 +3458,7 @@ CodeGenerator::generateArgumentsChecks(bool bailout)
     for (uint32_t i = info.startArgSlot(); i < info.endArgSlot(); i++) {
         // All initial parameters are guaranteed to be MParameters.
         MParameter *param = rp->getOperand(i)->toParameter();
-        const types::TypeSet *types = param->resultTypeSet();
+        const TypeSet *types = param->resultTypeSet();
         if (!types || types->unknown())
             continue;
 
@@ -3680,8 +3743,8 @@ CodeGenerator::emitObjectOrStringResultChecks(LInstruction *lir, MDefinition *mi
         // properties become unknown, so check for this case.
         masm.loadPtr(Address(output, JSObject::offsetOfGroup()), temp);
         masm.branchTestPtr(Assembler::NonZero,
-                           Address(temp, types::ObjectGroup::offsetOfFlags()),
-                           Imm32(types::OBJECT_FLAG_UNKNOWN_PROPERTIES), &ok);
+                           Address(temp, ObjectGroup::offsetOfFlags()),
+                           Imm32(OBJECT_FLAG_UNKNOWN_PROPERTIES), &ok);
 
         masm.assumeUnreachable("MIR instruction returned object with unexpected type");
 
@@ -3760,8 +3823,8 @@ CodeGenerator::emitValueResultChecks(LInstruction *lir, MDefinition *mir)
         Register payload = masm.extractObject(output, temp1);
         masm.loadPtr(Address(payload, JSObject::offsetOfGroup()), temp1);
         masm.branchTestPtr(Assembler::NonZero,
-                           Address(temp1, types::ObjectGroup::offsetOfFlags()),
-                           Imm32(types::OBJECT_FLAG_UNKNOWN_PROPERTIES), &ok);
+                           Address(temp1, ObjectGroup::offsetOfFlags()),
+                           Imm32(OBJECT_FLAG_UNKNOWN_PROPERTIES), &ok);
         masm.bind(&realMiss);
 
         masm.assumeUnreachable("MIR instruction returned value with unexpected type");
@@ -3947,7 +4010,7 @@ CodeGenerator::visitNewArrayCallVM(LNewArray *lir)
     saveLive(lir);
 
     JSObject *templateObject = lir->mir()->templateObject();
-    types::ObjectGroup *group =
+    ObjectGroup *group =
         templateObject->isSingleton() ? nullptr : templateObject->group();
 
     pushArg(Imm32(lir->mir()->allocatingBehaviour()));
@@ -4338,7 +4401,7 @@ CodeGenerator::visitSimdUnbox(LSimdUnbox *lir)
 
     // Guard that the object has the same representation as the one produced for
     // SIMD value-type.
-    Address clasp(temp, types::ObjectGroup::offsetOfClasp());
+    Address clasp(temp, ObjectGroup::offsetOfClasp());
     static_assert(!SimdTypeDescr::Opaque, "SIMD objects are transparent");
     masm.branchPtr(Assembler::NotEqual, clasp, ImmPtr(&InlineTransparentTypedObject::class_),
                    &bail);
@@ -4346,7 +4409,7 @@ CodeGenerator::visitSimdUnbox(LSimdUnbox *lir)
     // obj->type()->typeDescr()
     // The previous class pointer comparison implies that the addendumKind is
     // Addendum_TypeDescr.
-    masm.loadPtr(Address(temp, types::ObjectGroup::offsetOfAddendum()), temp);
+    masm.loadPtr(Address(temp, ObjectGroup::offsetOfAddendum()), temp);
 
     // Check for the /Kind/ reserved slot of the TypeDescr.  This is an Int32
     // Value which is equivalent to the object class check.
@@ -4810,7 +4873,7 @@ CodeGenerator::visitTypedObjectDescr(LTypedObjectDescr *lir)
     Register out = ToRegister(lir->output());
 
     masm.loadPtr(Address(obj, JSObject::offsetOfGroup()), out);
-    masm.loadPtr(Address(out, types::ObjectGroup::offsetOfAddendum()), out);
+    masm.loadPtr(Address(out, ObjectGroup::offsetOfAddendum()), out);
 }
 
 void
@@ -7215,11 +7278,11 @@ CodeGenerator::generate()
 struct AutoDiscardIonCode
 {
     JSContext *cx;
-    types::RecompileInfo *recompileInfo;
+    RecompileInfo *recompileInfo;
     IonScript *ionScript;
     bool keep;
 
-    AutoDiscardIonCode(JSContext *cx, types::RecompileInfo *recompileInfo)
+    AutoDiscardIonCode(JSContext *cx, RecompileInfo *recompileInfo)
       : cx(cx), recompileInfo(recompileInfo), ionScript(nullptr), keep(false) {}
 
     ~AutoDiscardIonCode() {
@@ -7240,7 +7303,7 @@ struct AutoDiscardIonCode
 };
 
 bool
-CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
+CodeGenerator::link(JSContext *cx, CompilerConstraintList *constraints)
 {
     RootedScript script(cx, gen->info().script());
     OptimizationLevel optimizationLevel = gen->optimizationInfo().level();
@@ -7261,8 +7324,8 @@ CodeGenerator::link(JSContext *cx, types::CompilerConstraintList *constraints)
     // Check to make sure we didn't have a mid-build invalidation. If so, we
     // will trickle to jit::Compile() and return Method_Skipped.
     uint32_t warmUpCount = script->getWarmUpCount();
-    types::RecompileInfo recompileInfo;
-    if (!types::FinishCompilation(cx, script, constraints, &recompileInfo))
+    RecompileInfo recompileInfo;
+    if (!FinishCompilation(cx, script, constraints, &recompileInfo))
         return true;
 
     // IonMonkey could have inferred better type information during
@@ -7650,37 +7713,6 @@ CodeGenerator::visitStoreFixedSlotT(LStoreFixedSlotT *ins)
         emitPreBarrier(address);
 
     masm.storeConstantOrRegister(nvalue, address);
-}
-
-void
-CodeGenerator::visitCallsiteCloneCache(LCallsiteCloneCache *ins)
-{
-    const MCallsiteCloneCache *mir = ins->mir();
-    Register callee = ToRegister(ins->callee());
-    Register output = ToRegister(ins->output());
-
-    CallsiteCloneIC cache(callee, mir->block()->info().script(), mir->callPc(), output);
-    cache.setProfilerLeavePC(mir->profilerLeavePc());
-    addCache(ins, allocateCache(cache));
-}
-
-typedef JSObject *(*CallsiteCloneICFn)(JSContext *, size_t, HandleObject);
-const VMFunction CallsiteCloneIC::UpdateInfo =
-    FunctionInfo<CallsiteCloneICFn>(CallsiteCloneIC::update);
-
-void
-CodeGenerator::visitCallsiteCloneIC(OutOfLineUpdateCache *ool, DataPtr<CallsiteCloneIC> &ic)
-{
-    LInstruction *lir = ool->lir();
-    saveLive(lir);
-
-    pushArg(ic->calleeReg());
-    pushArg(Imm32(ool->getCacheIndex()));
-    callVM(CallsiteCloneIC::UpdateInfo, lir);
-    StoreRegisterTo(ic->outputReg()).generate(this);
-    restoreLiveIgnore(lir, StoreRegisterTo(ic->outputReg()).clobbered());
-
-    masm.jump(ool->rejoin());
 }
 
 void

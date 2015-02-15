@@ -22,7 +22,8 @@
 #include "jsatominlines.h"
 #include "jscompartmentinlines.h"
 #include "jsgcinlines.h"
-#include "jsinferinlines.h"
+
+#include "vm/TypeInference-inl.h"
 
 inline void
 JSObject::finalize(js::FreeOp *fop)
@@ -75,8 +76,8 @@ JSObject::setSingleton(js::ExclusiveContext *cx, js::HandleObject obj)
 {
     MOZ_ASSERT_IF(cx->isJSContext(), !IsInsideNursery(obj));
 
-    js::types::ObjectGroup *group = cx->getLazySingletonGroup(obj->getClass(),
-                                                              obj->getTaggedProto());
+    js::ObjectGroup *group = js::ObjectGroup::lazySingletonGroup(cx, obj->getClass(),
+                                                                 obj->getTaggedProto());
     if (!group)
         return false;
 
@@ -84,7 +85,7 @@ JSObject::setSingleton(js::ExclusiveContext *cx, js::HandleObject obj)
     return true;
 }
 
-inline js::types::ObjectGroup*
+inline js::ObjectGroup*
 JSObject::getGroup(JSContext *cx)
 {
     MOZ_ASSERT(cx->compartment() == compartment());
@@ -98,7 +99,7 @@ JSObject::getGroup(JSContext *cx)
 }
 
 inline void
-JSObject::setGroup(js::types::ObjectGroup *group)
+JSObject::setGroup(js::ObjectGroup *group)
 {
     MOZ_ASSERT(group);
     MOZ_ASSERT(!isSingleton());
@@ -177,7 +178,7 @@ js::GetElementNoGC(JSContext *cx, JSObject *obj, JSObject *receiver, uint32_t in
 inline bool
 js::DeleteProperty(JSContext *cx, HandleObject obj, HandleId id, bool *succeeded)
 {
-    types::MarkTypePropertyNonData(cx, obj, id);
+    MarkTypePropertyNonData(cx, obj, id);
     if (DeletePropertyOp op = obj->getOps()->deleteProperty)
         return op(cx, obj, id, succeeded);
     return NativeDeleteProperty(cx, obj.as<NativeObject>(), id, succeeded);
@@ -194,16 +195,6 @@ js::DeleteElement(JSContext *cx, HandleObject obj, uint32_t index, bool *succeed
 
 
 /* * */
-
-inline bool
-js::SetPropertyAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp)
-{
-    types::MarkTypePropertyNonData(cx, obj, id);
-    SetAttributesOp op = obj->getOps()->setAttributes;
-    if (op)
-        return op(cx, obj, id, attrsp);
-    return NativeSetPropertyAttributes(cx, obj.as<NativeObject>(), id, attrsp);
-}
 
 inline bool
 JSObject::isQualifiedVarObj()
@@ -496,27 +487,27 @@ class AutoPropDescVector : public AutoVectorRooter<PropDesc>
  * default to the prototype's global if the prototype is non-null.
  */
 JSObject *
-NewObjectWithGivenProto(ExclusiveContext *cx, const js::Class *clasp, TaggedProto proto, JSObject *parent,
-                        gc::AllocKind allocKind, NewObjectKind newKind);
+NewObjectWithGivenProto(ExclusiveContext *cx, const Class *clasp, TaggedProto proto,
+                        HandleObject parent, gc::AllocKind allocKind, NewObjectKind newKind);
 
 inline JSObject *
-NewObjectWithGivenProto(ExclusiveContext *cx, const js::Class *clasp, TaggedProto proto, JSObject *parent,
-                        NewObjectKind newKind = GenericObject)
+NewObjectWithGivenProto(ExclusiveContext *cx, const Class *clasp, TaggedProto proto,
+                        HandleObject parent, NewObjectKind newKind = GenericObject)
 {
     gc::AllocKind allocKind = gc::GetGCObjectKind(clasp);
     return NewObjectWithGivenProto(cx, clasp, proto, parent, allocKind, newKind);
 }
 
 inline JSObject *
-NewObjectWithGivenProto(ExclusiveContext *cx, const js::Class *clasp, JSObject *proto, JSObject *parent,
-                        NewObjectKind newKind = GenericObject)
+NewObjectWithGivenProto(ExclusiveContext *cx, const Class *clasp, JSObject *proto,
+                        HandleObject parent, NewObjectKind newKind = GenericObject)
 {
     return NewObjectWithGivenProto(cx, clasp, TaggedProto(proto), parent, newKind);
 }
 
 template <typename T>
 inline T *
-NewObjectWithGivenProto(ExclusiveContext *cx, TaggedProto proto, JSObject *parent,
+NewObjectWithGivenProto(ExclusiveContext *cx, TaggedProto proto, HandleObject parent,
                         NewObjectKind newKind = GenericObject)
 {
     JSObject *obj = NewObjectWithGivenProto(cx, &T::class_, proto, parent, newKind);
@@ -525,7 +516,7 @@ NewObjectWithGivenProto(ExclusiveContext *cx, TaggedProto proto, JSObject *paren
 
 template <typename T>
 inline T *
-NewObjectWithGivenProto(ExclusiveContext *cx, JSObject *proto, JSObject *parent,
+NewObjectWithGivenProto(ExclusiveContext *cx, JSObject *proto, HandleObject parent,
                         NewObjectKind newKind = GenericObject)
 {
     return NewObjectWithGivenProto<T>(cx, TaggedProto(proto), parent, newKind);
@@ -533,7 +524,7 @@ NewObjectWithGivenProto(ExclusiveContext *cx, JSObject *proto, JSObject *parent,
 
 template <typename T>
 inline T *
-NewObjectWithGivenProto(ExclusiveContext *cx, JSObject *proto, JSObject *parent,
+NewObjectWithGivenProto(ExclusiveContext *cx, JSObject *proto, HandleObject parent,
                         gc::AllocKind allocKind, NewObjectKind newKind = GenericObject)
 {
     JSObject *obj = NewObjectWithGivenProto(cx, &T::class_, TaggedProto(proto), parent, allocKind,
@@ -559,19 +550,21 @@ NewObjectWithGivenProto(ExclusiveContext *cx, JSObject *proto, JSObject *parent,
  * parent will be that global.
  */
 JSObject *
-NewObjectWithClassProtoCommon(ExclusiveContext *cx, const js::Class *clasp, JSObject *proto, JSObject *parent,
-                              gc::AllocKind allocKind, NewObjectKind newKind);
+NewObjectWithClassProtoCommon(ExclusiveContext *cx, const Class *clasp, JSObject *proto,
+                              HandleObject parent, gc::AllocKind allocKind,
+                              NewObjectKind newKind);
 
 inline JSObject *
-NewObjectWithClassProto(ExclusiveContext *cx, const js::Class *clasp, JSObject *proto, JSObject *parent,
-                        gc::AllocKind allocKind, NewObjectKind newKind = GenericObject)
+NewObjectWithClassProto(ExclusiveContext *cx, const Class *clasp, JSObject *proto,
+                        HandleObject parent, gc::AllocKind allocKind,
+                        NewObjectKind newKind = GenericObject)
 {
     return NewObjectWithClassProtoCommon(cx, clasp, proto, parent, allocKind, newKind);
 }
 
 inline JSObject *
-NewObjectWithClassProto(ExclusiveContext *cx, const js::Class *clasp, JSObject *proto, JSObject *parent,
-                        NewObjectKind newKind = GenericObject)
+NewObjectWithClassProto(ExclusiveContext *cx, const Class *clasp, JSObject *proto,
+                        HandleObject parent, NewObjectKind newKind = GenericObject)
 {
     gc::AllocKind allocKind = gc::GetGCObjectKind(clasp);
     return NewObjectWithClassProto(cx, clasp, proto, parent, allocKind, newKind);
@@ -579,7 +572,7 @@ NewObjectWithClassProto(ExclusiveContext *cx, const js::Class *clasp, JSObject *
 
 template<typename T>
 inline T *
-NewObjectWithProto(ExclusiveContext *cx, JSObject *proto, JSObject *parent,
+NewObjectWithProto(ExclusiveContext *cx, JSObject *proto, HandleObject parent,
                    gc::AllocKind allocKind, NewObjectKind newKind = GenericObject)
 {
     JSObject *obj = NewObjectWithClassProto(cx, &T::class_, proto, parent, allocKind, newKind);
@@ -588,7 +581,7 @@ NewObjectWithProto(ExclusiveContext *cx, JSObject *proto, JSObject *parent,
 
 template<typename T>
 inline T *
-NewObjectWithProto(ExclusiveContext *cx, JSObject *proto, JSObject *parent,
+NewObjectWithProto(ExclusiveContext *cx, JSObject *proto, HandleObject parent,
                    NewObjectKind newKind = GenericObject)
 {
     JSObject *obj = NewObjectWithClassProto(cx, &T::class_, proto, parent, newKind);
@@ -603,7 +596,7 @@ inline JSObject *
 NewBuiltinClassInstance(ExclusiveContext *cx, const Class *clasp, gc::AllocKind allocKind,
                         NewObjectKind newKind = GenericObject)
 {
-    return NewObjectWithClassProto(cx, clasp, nullptr, nullptr, allocKind, newKind);
+    return NewObjectWithClassProto(cx, clasp, nullptr, NullPtr(), allocKind, newKind);
 }
 
 inline JSObject *
@@ -758,7 +751,7 @@ NewObjectMetadata(ExclusiveContext *cxArg, JSObject **pmetadata)
         {
             // Use AutoEnterAnalysis to prohibit both any GC activity under the
             // callback, and any reentering of JS via Invoke() etc.
-            types::AutoEnterAnalysis enter(cx);
+            AutoEnterAnalysis enter(cx);
 
             if (!cx->compartment()->callObjectMetadataCallback(cx, pmetadata))
                 return false;
@@ -804,7 +797,7 @@ ApplyAttributes(unsigned attrs, bool enumerable, bool writable, bool configurabl
 } /* namespace js */
 
 extern js::NativeObject *
-js_InitClass(JSContext *cx, js::HandleObject obj, JSObject *parent_proto,
+js_InitClass(JSContext *cx, js::HandleObject obj, js::HandleObject parent_proto,
              const js::Class *clasp, JSNative constructor, unsigned nargs,
              const JSPropertySpec *ps, const JSFunctionSpec *fs,
              const JSPropertySpec *static_ps, const JSFunctionSpec *static_fs,

@@ -1909,18 +1909,8 @@ CheckForApzAwareEventHandlers(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
     return;
   }
   EventListenerManager* elm = nsContentUtils::GetExistingListenerManagerForNode(content);
-  if (!elm) {
-    return;
-  }
-  if (elm->HasListenersFor(nsGkAtoms::ontouchstart) ||
-      elm->HasListenersFor(nsGkAtoms::ontouchmove)) {
-    aBuilder->SetAncestorHasTouchEventHandler(true);
-  }
-  if (elm->HasListenersFor(nsGkAtoms::onwheel) ||
-      elm->HasListenersFor(nsGkAtoms::onDOMMouseScroll) ||
-      elm->HasListenersFor(nsHtml5Atoms::onmousewheel))
-  {
-    aBuilder->SetAncestorHasScrollEventHandler(true);
+  if (nsLayoutUtils::HasApzAwareListeners(elm)) {
+    aBuilder->SetAncestorHasApzAwareEventHandler(true);
   }
 }
 
@@ -2736,7 +2726,7 @@ nsFrame::IsSelectable(bool* aSelectable, uint8_t* aSelectStyle) const
         }
         break;
     }
-    frame = frame->GetParent();
+    frame = nsLayoutUtils::GetParentOrPlaceholderFor(frame);
   }
 
   // convert internal values to standard values
@@ -5190,6 +5180,7 @@ nsIFrame::SchedulePaint(PaintType aType)
 Layer*
 nsIFrame::InvalidateLayer(uint32_t aDisplayItemKey,
                           const nsIntRect* aDamageRect,
+                          const nsRect* aFrameDamageRect,
                           uint32_t aFlags /* = 0 */)
 {
   NS_ASSERTION(aDisplayItemKey > 0, "Need a key");
@@ -5203,11 +5194,11 @@ nsIFrame::InvalidateLayer(uint32_t aDisplayItemKey,
     return layer;
   }
 
-  if (aDamageRect && aDamageRect->IsEmpty()) {
-    return layer;
-  }
-
   if (!layer) {
+    if (aFrameDamageRect && aFrameDamageRect->IsEmpty()) {
+      return nullptr;
+    }
+
     // Plugins can transition from not rendering anything to rendering,
     // and still only call this. So always invalidate, with specifying
     // the display item type just in case.
@@ -5216,13 +5207,23 @@ nsIFrame::InvalidateLayer(uint32_t aDisplayItemKey,
     // screen because sometimes we don't have any retainned data
     // for remote type displayitem and thus Repaint event is not
     // triggered. So, always invalidate here as well.
+    uint32_t displayItemKey = aDisplayItemKey;
     if (aDisplayItemKey == nsDisplayItem::TYPE_PLUGIN ||
         aDisplayItemKey == nsDisplayItem::TYPE_REMOTE) {
-      InvalidateFrame();
-    } else {
-      InvalidateFrame(aDisplayItemKey);
+      displayItemKey = 0;
     }
+
+    if (aFrameDamageRect) {
+      InvalidateFrameWithRect(*aFrameDamageRect, displayItemKey);
+    } else {
+      InvalidateFrame(displayItemKey);
+    }
+
     return nullptr;
+  }
+
+  if (aDamageRect && aDamageRect->IsEmpty()) {
+    return layer;
   }
 
   if (aDamageRect) {

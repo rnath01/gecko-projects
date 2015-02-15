@@ -15,7 +15,10 @@
 #include "Layers.h"
 #include "SharedThreadPool.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/dom/TimeRanges.h"
+#include "mp4_demuxer/AnnexB.h"
+#include "mp4_demuxer/H264.h"
 #include "SharedDecoderManager.h"
 
 #ifdef MOZ_EME
@@ -63,6 +66,28 @@ TrackTypeToStr(TrackType aTrack)
   }
 }
 #endif
+
+bool
+AccumulateSPSTelemetry(const ByteBuffer* aExtradata)
+{
+  SPSData spsdata;
+  if (H264::DecodeSPSFromExtraData(aExtradata, spsdata) &&
+      spsdata.profile_idc && spsdata.level_idc) {
+    // Collect profile_idc values up to 244, otherwise 0 for unknown.
+    Telemetry::Accumulate(Telemetry::VIDEO_DECODED_H264_SPS_PROFILE,
+                          spsdata.profile_idc <= 244 ? spsdata.profile_idc : 0);
+
+    // Make sure level_idc represents a value between levels 1 and 5.2,
+    // otherwise collect 0 for unknown level.
+    Telemetry::Accumulate(Telemetry::VIDEO_DECODED_H264_SPS_LEVEL,
+                          (spsdata.level_idc >= 10 && spsdata.level_idc <= 52) ?
+                          spsdata.level_idc : 0);
+
+    return true;
+  }
+
+  return false;
+}
 
 // MP4Demuxer wants to do various blocking reads, which cause deadlocks while
 // mDemuxerMonitor is held. This stuff should really be redesigned, but we don't
@@ -114,6 +139,7 @@ MP4Reader::MP4Reader(AbstractMediaDecoder* aDecoder)
   , mLastReportedNumDecodedFrames(0)
   , mLayersBackendType(layers::LayersBackend::LAYERS_NONE)
   , mDemuxerInitialized(false)
+  , mFoundSPSForTelemetry(false)
   , mIsEncrypted(false)
   , mIndexReady(false)
   , mDemuxerMonitor("MP4 Demuxer")
@@ -206,7 +232,6 @@ MP4Reader::Init(MediaDecoderReader* aCloneDonor)
   MOZ_ASSERT(NS_IsMainThread(), "Must be on main thread.");
   PlatformDecoderModule::Init();
   mStream = new MP4Stream(mDecoder->GetResource());
-  mTimestampOffset = GetDecoder()->GetTimestampOffset();
 
   InitLayersBackendType();
 
@@ -342,7 +367,7 @@ MP4Reader::PreReadMetadata()
 bool
 MP4Reader::InitDemuxer()
 {
-  mDemuxer = new MP4Demuxer(mStream, mTimestampOffset, &mDemuxerMonitor);
+  mDemuxer = new MP4Demuxer(mStream, &mDemuxerMonitor);
   return mDemuxer->Init();
 }
 
@@ -466,6 +491,11 @@ MP4Reader::ReadMetadata(MediaInfo* aInfo,
     nsresult rv = mVideo.mDecoder->Init();
     NS_ENSURE_SUCCESS(rv, rv);
     mInfo.mVideo.mIsHardwareAccelerated = mVideo.mDecoder->IsHardwareAccelerated();
+
+    // Collect telemetry from h264 AVCC SPS.
+    if (!mFoundSPSForTelemetry) {
+      mFoundSPSForTelemetry = AccumulateSPSTelemetry(video.extra_data);
+    }
   }
 
   // Get the duration, and report it to the decoder if we have it.
@@ -557,10 +587,7 @@ MP4Reader::RequestVideoData(bool aSkipToNextKeyframe,
 
   if (mShutdown) {
     NS_WARNING("RequestVideoData on shutdown MP4Reader!");
-    MonitorAutoLock lock(mVideo.mMonitor);
-    nsRefPtr<VideoDataPromise> p = mVideo.mPromise.Ensure(__func__);
-    p->Reject(CANCELED, __func__);
-    return p;
+    return VideoDataPromise::CreateAndReject(CANCELED, __func__);
   }
 
   MOZ_ASSERT(HasVideo() && mPlatform && mVideo.mDecoder);
@@ -591,14 +618,14 @@ MP4Reader::RequestAudioData()
 {
   MOZ_ASSERT(GetTaskQueue()->IsCurrentThreadIn());
   VLOG("RequestAudioData");
+  if (mShutdown) {
+    NS_WARNING("RequestAudioData on shutdown MP4Reader!");
+    return AudioDataPromise::CreateAndReject(CANCELED, __func__);
+  }
+
   MonitorAutoLock lock(mAudio.mMonitor);
   nsRefPtr<AudioDataPromise> p = mAudio.mPromise.Ensure(__func__);
-  if (!mShutdown) {
-    ScheduleUpdate(kAudio);
-  } else {
-    NS_WARNING("RequestAudioData on shutdown MP4Reader!");
-    p->Reject(CANCELED, __func__);
-  }
+  ScheduleUpdate(kAudio);
   return p;
 }
 
@@ -686,6 +713,13 @@ MP4Reader::Update(TrackType aTrack)
 
   if (needInput) {
     MP4Sample* sample = PopSample(aTrack);
+
+    // Collect telemetry from h264 Annex B SPS.
+    if (sample && !mFoundSPSForTelemetry && AnnexB::HasSPS(sample)) {
+      nsRefPtr<ByteBuffer> extradata = AnnexB::ExtractExtraData(sample);
+      mFoundSPSForTelemetry = AccumulateSPSTelemetry(extradata);
+    }
+
     if (sample) {
       decoder.mDecoder->Input(sample);
       if (aTrack == kVideo) {

@@ -408,9 +408,6 @@ pref("browser.search.showOneOffButtons", true);
 // comma seperated list of of engines to hide in the search panel.
 pref("browser.search.hiddenOneOffs", "");
 
-// How many times to show the new search highlight
-pref("browser.search.highlightCount", 5);
-
 pref("browser.sessionhistory.max_entries", 50);
 
 // handle links targeting new windows
@@ -1187,15 +1184,17 @@ pref("browser.tabs.remote.desktopbehavior", true);
 // This will require a restart.
 pref("security.sandbox.windows.log", false);
 
-// Controls whether the Windows NPAPI plugin process is sandboxed by default.
+// Controls whether and how the Windows NPAPI plugin process is sandboxed.
 // To get a different setting for a particular plugin replace "default", with
 // the plugin's nice file name, see: nsPluginTag::GetNiceFileName.
-pref("dom.ipc.plugins.sandbox.default", false);
-pref("dom.ipc.plugins.sandbox.flash", true);
-
-// This controls whether the Windows NPAPI process sandbox is using a more
-// strict sandboxing policy.  This will require a restart.
-pref("dom.ipc.plugins.moreStrictSandbox", false);
+// On windows these levels are:
+// 0 - no sandbox
+// 1 - sandbox with USER_NON_ADMIN access token level
+// 2 - a more strict sandbox, which might cause functionality issues
+// 3 - the strongest settings we seem to be able to use without breaking
+//     everything, but will definitely cause some functionality restrictions
+pref("dom.ipc.plugins.sandbox-level.default", 0);
+pref("dom.ipc.plugins.sandbox-level.flash", 1);
 
 #if defined(MOZ_CONTENT_SANDBOX)
 // This controls whether the Windows content process sandbox is using a more
@@ -1438,6 +1437,7 @@ pref("devtools.profiler.ui.show-idle-blocks", true);
 
 // The default Performance UI settings
 pref("devtools.performance.ui.invert-call-tree", true);
+pref("devtools.performance.ui.invert-flame-graph", false);
 pref("devtools.performance.ui.flatten-tree-recursion", true);
 pref("devtools.performance.ui.show-platform-data", false);
 pref("devtools.performance.ui.show-idle-blocks", true);
@@ -1650,9 +1650,15 @@ pref("pdfjs.firstRun", true);
 pref("pdfjs.previousHandler.preferredAction", 0);
 pref("pdfjs.previousHandler.alwaysAskBeforeHandling", false);
 
+// Shumway is only bundled in Nightly.
 #ifdef NIGHTLY_BUILD
-// Shumway component (SWF player) is disabled by default. Also see bug 904346.
+// By default, Shumway (SWF player) is only enabled for whitelisted SWFs on Windows + OS X.
+#ifdef UNIX_BUT_NOT_MAC
 pref("shumway.disabled", true);
+#else
+pref("shumway.disabled", false);
+pref("shumway.swf.whitelist", "http://g-ecx.images-amazon.com/*/AiryBasicRenderer*.swf");
+#endif
 #endif
 
 // The maximum amount of decoded image data we'll willingly keep around (we
@@ -1661,7 +1667,6 @@ pref("shumway.disabled", true);
 pref("image.mem.max_decoded_image_kb", 256000);
 
 pref("loop.enabled", true);
-pref("loop.screenshare.enabled", false);
 pref("loop.server", "https://loop.services.mozilla.com/v0");
 pref("loop.seenToS", "unseen");
 pref("loop.showPartnerLogo", true);
@@ -1778,8 +1783,10 @@ pref("ui.key.menuAccessKeyFocuses", true);
 // Encrypted media extensions.
 #ifdef RELEASE_BUILD
 pref("media.eme.enabled", false);
+pref("media.eme.apiVisible", false);
 #else
 pref("media.eme.enabled", true);
+pref("media.eme.apiVisible", true);
 #endif
 
 // Play with different values of the decay time and get telemetry,

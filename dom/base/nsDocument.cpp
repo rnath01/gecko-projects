@@ -458,7 +458,7 @@ CustomElementCallback::Call()
 
       // If ELEMENT is in a document and this document has a browsing context,
       // enqueue attached callback for ELEMENT.
-      nsIDocument* document = mThisObject->GetUncomposedDoc();
+      nsIDocument* document = mThisObject->GetComposedDoc();
       if (document && document->GetDocShell()) {
         document->EnqueueLifecycleCallback(nsIDocument::eAttached, mThisObject);
       }
@@ -1715,8 +1715,8 @@ nsDocument::~nsDocument()
   // Kill the subdocument map, doing this will release its strong
   // references, if any.
   if (mSubDocuments) {
-    PL_DHashTableFinish(mSubDocuments);
-    delete mSubDocuments;
+    PL_DHashTableDestroy(mSubDocuments);
+
     mSubDocuments = nullptr;
   }
 
@@ -2126,8 +2126,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDocument)
   }
 
   if (tmp->mSubDocuments) {
-    PL_DHashTableFinish(tmp->mSubDocuments);
-    delete tmp->mSubDocuments;
+    PL_DHashTableDestroy(tmp->mSubDocuments);
     tmp->mSubDocuments = nullptr;
   }
 
@@ -2332,8 +2331,8 @@ nsDocument::ResetToURI(nsIURI *aURI, nsILoadGroup *aLoadGroup,
   // Delete references to sub-documents and kill the subdocument map,
   // if any. It holds strong references
   if (mSubDocuments) {
-    PL_DHashTableFinish(mSubDocuments);
-    delete mSubDocuments;
+    PL_DHashTableDestroy(mSubDocuments);
+
     mSubDocuments = nullptr;
   }
 
@@ -3958,8 +3957,8 @@ SubDocClearEntry(PLDHashTable *table, PLDHashEntryHdr *entry)
   }
 }
 
-static bool
-SubDocInitEntry(PLDHashTable *table, PLDHashEntryHdr *entry, const void *key)
+static void
+SubDocInitEntry(PLDHashEntryHdr *entry, const void *key)
 {
   SubDocMapEntry *e =
     const_cast<SubDocMapEntry *>
@@ -3969,7 +3968,6 @@ SubDocInitEntry(PLDHashTable *table, PLDHashEntryHdr *entry, const void *key)
   NS_ADDREF(e->mKey);
 
   e->mSubDocument = nullptr;
-  return true;
 }
 
 nsresult
@@ -4002,8 +4000,10 @@ nsDocument::SetSubDocumentFor(Element* aElement, nsIDocument* aSubDoc)
         SubDocInitEntry
       };
 
-      mSubDocuments = new PLDHashTable();
-      PL_DHashTableInit(mSubDocuments, &hash_table_ops, sizeof(SubDocMapEntry));
+      mSubDocuments = PL_NewDHashTable(&hash_table_ops, sizeof(SubDocMapEntry));
+      if (!mSubDocuments) {
+        return NS_ERROR_OUT_OF_MEMORY;
+      }
     }
 
     // Add a mapping to the hash table

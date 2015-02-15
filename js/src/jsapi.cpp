@@ -35,7 +35,6 @@
 #include "jsobj.h"
 #include "json.h"
 #include "jsprf.h"
-#include "jsproxy.h"
 #include "jsscript.h"
 #include "jsstr.h"
 #include "jstypes.h"
@@ -62,6 +61,7 @@
 #include "jit/JitCommon.h"
 #include "js/CharacterEncoding.h"
 #include "js/Conversions.h"
+#include "js/Proxy.h"
 #include "js/SliceBudget.h"
 #include "js/StructuredClone.h"
 #if ENABLE_INTL_API
@@ -88,7 +88,6 @@
 
 #include "jsatominlines.h"
 #include "jsfuninlines.h"
-#include "jsinferinlines.h"
 #include "jsscriptinlines.h"
 
 #include "vm/Interpreter-inl.h"
@@ -97,7 +96,6 @@
 
 using namespace js;
 using namespace js::gc;
-using namespace js::types;
 
 using mozilla::Maybe;
 using mozilla::PodCopy;
@@ -170,12 +168,11 @@ JS_GetEmptyString(JSRuntime *rt)
 JS_PUBLIC_API(bool)
 JS_GetCompartmentStats(JSRuntime *rt, CompartmentStatsVector &stats)
 {
-    if (!stats.resizeUninitialized(rt->numCompartments))
-        return false;
-
-    size_t pos = 0;
     for (CompartmentsIter c(rt, WithAtoms); !c.done(); c.next()) {
-        CompartmentTimeStats *stat = &stats[pos];
+        if (!stats.growBy(1))
+            return false;
+
+        CompartmentTimeStats *stat = &stats.back();
         stat->time = c.get()->totalTime;
         stat->compartment = c.get();
         stat->addonId = c.get()->addonId;
@@ -186,7 +183,6 @@ JS_GetCompartmentStats(JSRuntime *rt, CompartmentStatsVector &stats)
         } else {
             strcpy(stat->compartmentName, "<unknown>");
         }
-        pos++;
     }
     return true;
 }
@@ -2303,7 +2299,7 @@ DefineProperty(JSContext *cx, HandleObject obj, const char *name, HandleValue va
 
     RootedId id(cx);
     if (attrs & JSPROP_INDEX) {
-        id.set(INT_TO_JSID(intptr_t(name)));
+        id = INT_TO_JSID(intptr_t(name));
         attrs &= ~JSPROP_INDEX;
     } else {
         JSAtom *atom = Atomize(cx, name, strlen(name));
@@ -2624,46 +2620,6 @@ JS::ParsePropertyDescriptorObject(JSContext *cx,
     return true;
 }
 
-static bool
-GetPropertyDescriptorById(JSContext *cx, HandleObject obj, HandleId id,
-                          MutableHandle<PropertyDescriptor> desc)
-{
-    RootedObject obj2(cx);
-    RootedShape shape(cx);
-
-    if (!LookupProperty(cx, obj, id, &obj2, &shape))
-        return false;
-
-    desc.clear();
-    if (!shape)
-        return true;
-
-    desc.object().set(obj2);
-    if (obj2->isNative()) {
-        if (IsImplicitDenseOrTypedArrayElement(shape)) {
-            desc.setEnumerable();
-            desc.value().set(obj2->as<NativeObject>().getDenseOrTypedArrayElement(JSID_TO_INT(id)));
-        } else {
-            desc.setAttributes(shape->attributes());
-            desc.setGetter(shape->getter());
-            desc.setSetter(shape->setter());
-            MOZ_ASSERT(desc.value().isUndefined());
-            if (shape->hasSlot())
-                desc.value().set(obj2->as<NativeObject>().getSlot(shape->slot()));
-        }
-
-        return true;
-    }
-
-    // When we hit a proxy during lookup, the property might be
-    // on the prototype of the proxy, thus use getPropertyDescriptor.
-    if (obj2->is<ProxyObject>())
-        return Proxy::getPropertyDescriptor(cx, obj2, id, desc);
-
-    // Assume other non-natives (i.e. TypedObjects) behave in a sane way.
-    return GetOwnPropertyDescriptor(cx, obj2, id, desc);
-}
-
 JS_PUBLIC_API(bool)
 JS_GetOwnPropertyDescriptorById(JSContext *cx, HandleObject obj, HandleId id,
                                 MutableHandle<JSPropertyDescriptor> desc)
@@ -2689,7 +2645,7 @@ JS_PUBLIC_API(bool)
 JS_GetPropertyDescriptorById(JSContext *cx, HandleObject obj, HandleId id,
                              MutableHandle<JSPropertyDescriptor> desc)
 {
-    return GetPropertyDescriptorById(cx, obj, id, desc);
+    return GetPropertyDescriptor(cx, obj, id, desc);
 }
 
 JS_PUBLIC_API(bool)

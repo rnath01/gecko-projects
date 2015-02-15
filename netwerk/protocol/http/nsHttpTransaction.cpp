@@ -126,6 +126,8 @@ nsHttpTransaction::nsHttpTransaction()
     , mDontRouteViaWildCard(false)
     , mForceRestart(false)
     , mReuseOnRestart(false)
+    , mContentDecoding(false)
+    , mContentDecodingCheck(false)
     , mReportedStart(false)
     , mReportedResponseHeader(false)
     , mForTakeResponseHead(nullptr)
@@ -136,6 +138,7 @@ nsHttpTransaction::nsHttpTransaction()
     , mCountRecv(0)
     , mCountSent(0)
     , mAppId(NECKO_NO_APP_ID)
+    , mIsInBrowser(false)
     , mClassOfService(0)
 {
     LOG(("Creating nsHttpTransaction @%p\n", this));
@@ -244,8 +247,7 @@ nsHttpTransaction::Init(uint32_t caps,
     mChannel = do_QueryInterface(eventsink);
     nsCOMPtr<nsIChannel> channel = do_QueryInterface(eventsink);
     if (channel) {
-        bool isInBrowser;
-        NS_GetAppInfo(channel, &mAppId, &isInBrowser);
+        NS_GetAppInfo(channel, &mAppId, &mIsInBrowser);
     }
 
 #ifdef MOZ_WIDGET_GONK
@@ -792,7 +794,7 @@ nsHttpTransaction::SaveNetworkStats(bool enforce)
     // Create the event to save the network statistics.
     // the event is then dispathed to the main thread.
     nsRefPtr<nsRunnable> event =
-        new SaveNetworkStatsEvent(mAppId, mActiveNetwork,
+        new SaveNetworkStatsEvent(mAppId, mIsInBrowser, mActiveNetwork,
                                   mCountRecv, mCountSent, false);
     NS_DispatchToMainThread(event);
 
@@ -909,11 +911,17 @@ nsHttpTransaction::Close(nsresult reason)
 
         NS_WARNING("Partial transfer, incomplete HTTP response received");
 
-        if ((mHttpVersion >= NS_HTTP_VERSION_1_1) &&
-            gHttpHandler->GetEnforceH1Framing()) {
-            reason = NS_ERROR_NET_PARTIAL_TRANSFER;
-            LOG(("Partial transfer, incomplete HTTP response received: %s",
-                 mChunkedDecoder ? "broken chunk" : "c-l underrun"));
+        if (mHttpVersion >= NS_HTTP_VERSION_1_1) {
+            FrameCheckLevel clevel = gHttpHandler->GetEnforceH1Framing();
+            if (clevel >= FRAMECHECK_BARELY) {
+                if ((clevel == FRAMECHECK_STRICT) ||
+                    (mChunkedDecoder && mChunkedDecoder->GetChunkRemaining()) ||
+                    (!mChunkedDecoder && !mContentDecoding && mContentDecodingCheck) ) {
+                    reason = NS_ERROR_NET_PARTIAL_TRANSFER;
+                    LOG(("Partial transfer, incomplete HTTP response received: %s",
+                         mChunkedDecoder ? "broken chunk" : "c-l underrun"));
+                }
+            }
         }
 
         if (mConnection) {
@@ -1482,7 +1490,7 @@ nsHttpTransaction::HandleContentStart()
             break;
         case 421:
             if (!mConnInfo->GetAuthenticationHost().IsEmpty()) {
-                LOG(("Not Authoritative.\n"));
+                LOG(("Misdirected Request.\n"));
                 gHttpHandler->ConnMgr()->
                     ClearHostMapping(mConnInfo->GetHost(), mConnInfo->Port());
             }
@@ -1735,6 +1743,12 @@ nsHttpTransaction::ProcessData(char *buf, uint32_t count, uint32_t *countRead)
         if (mResponseIsComplete && countRemaining) {
             MOZ_ASSERT(mConnection);
             mConnection->PushBack(buf + *countRead, countRemaining);
+        }
+
+        if (!mContentDecodingCheck && mResponseHead) {
+            mContentDecoding =
+                !!mResponseHead->PeekHeader(nsHttp::Content_Encoding);
+            mContentDecodingCheck = true;
         }
     }
 

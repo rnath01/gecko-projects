@@ -63,13 +63,11 @@ RequestMapMatchEntry(PLDHashTable *table, const PLDHashEntryHdr *hdr,
   return entry->r == key;
 }
 
-static bool
-RequestMapInitEntry(PLDHashTable *table, PLDHashEntryHdr *hdr,
-                     const void *key)
+static void
+RequestMapInitEntry(PLDHashEntryHdr *hdr, const void *key)
 {
   RequestHashEntry *entry = static_cast<RequestHashEntry*>(hdr);
   entry->r = (void*)key;
-  return true;
 }
 
 static const PLDHashTableOps gMapOps = {
@@ -1398,6 +1396,7 @@ nsSecureBrowserUIImpl::GetSSLStatus(nsISSLStatus** _result)
 
   switch (mNotifiedSecurityState)
   {
+    case lis_broken_security:
     case lis_mixed_security:
     case lis_high_security:
       break;
@@ -1405,7 +1404,6 @@ nsSecureBrowserUIImpl::GetSSLStatus(nsISSLStatus** _result)
     default:
       NS_NOTREACHED("if this is reached you must add more entries to the switch");
     case lis_no_security:
-    case lis_broken_security:
       *_result = nullptr;
       return NS_OK;
   }

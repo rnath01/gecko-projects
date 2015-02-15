@@ -46,6 +46,7 @@ from automationutils import (
 
 from datetime import datetime
 from manifestparser import TestManifest
+from manifestparser.filters import subsuite
 from mochitest_options import MochitestOptions
 from mozprofile import Profile, Preferences
 from mozprofile.permissions import ServerLocations
@@ -1202,12 +1203,25 @@ class Mochitest(MochitestUtilsMixin):
       apps = None
 
     # preferences
-    prefsPath = os.path.join(SCRIPT_DIR, 'profile_data', 'prefs_general.js')
-    prefs = dict(Preferences.read_prefs(prefsPath))
+    preferences = [ os.path.join(SCRIPT_DIR, 'profile_data', 'prefs_general.js') ]
+
+    # TODO: Let's include those prefs until bug 1072443 is fixed
+    if mozinfo.info.get('buildapp') == 'mulet':
+       preferences += [ os.path.join(SCRIPT_DIR, 'profile_data', 'prefs_b2g_unittest.js') ]
+
+    prefs = {}
+    for path in preferences:
+        prefs.update(Preferences.read_prefs(path))
+
     prefs.update(self.extraPrefs(options.extraPrefs))
 
     # interpolate preferences
     interpolation = {"server": "%s:%s" % (options.webServer, options.httpPort)}
+
+    # TODO: Remove OOP once bug 1072443 is fixed
+    if mozinfo.info.get('buildapp') == 'mulet':
+      interpolation["OOP"] = "false"
+
     prefs = json.loads(json.dumps(prefs) % interpolation)
     for pref in prefs:
       prefs[pref] = Preferences.cast(prefs[pref])
@@ -1648,15 +1662,17 @@ class Mochitest(MochitestUtilsMixin):
          testPath.endswith('.xul') or \
          testPath.endswith('.js'):
           # In the case where we have a single file, we don't want to filter based on options such as subsuite.
-          tests = manifest.active_tests(disabled=disabled, options=None, **info)
+          tests = manifest.active_tests(disabled=disabled, **info)
           for test in tests:
             if 'disabled' in test:
               del test['disabled']
 
       else:
-        tests = manifest.active_tests(disabled=disabled, options=options, **info)
+        filters = [subsuite(options.subsuite)]
+        tests = manifest.active_tests(
+            disabled=disabled, filters=filters, **info)
         if len(tests) == 0:
-          tests = manifest.active_tests(disabled=True, options=options, **info)
+          tests = manifest.active_tests(disabled=True, **info)
 
     paths = []
 
@@ -1754,7 +1770,7 @@ class Mochitest(MochitestUtilsMixin):
 
     self.setTestRoot(options)
 
-    # Until we have all green, this only runs on bc*/dt* jobs
+    # Until we have all green, this only runs on bc*/dt*/mochitest-chrome jobs, not webapprt*, jetpack*, or plain
     if options.browserChrome:
       options.runByDir = True
 

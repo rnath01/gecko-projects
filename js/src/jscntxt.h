@@ -29,55 +29,6 @@ class CompileCompartment;
 class DebugModeOSRVolatileJitFrameIterator;
 }
 
-struct CallsiteCloneKey {
-    /* The original function that we are cloning. */
-    JSFunction *original;
-
-    /* The script of the call. */
-    JSScript *script;
-
-    /* The offset of the call. */
-    uint32_t offset;
-
-    CallsiteCloneKey(JSFunction *f, JSScript *s, uint32_t o) : original(f), script(s), offset(o) {}
-
-    bool operator==(const CallsiteCloneKey& other) {
-        return original == other.original && script == other.script && offset == other.offset;
-    }
-
-    bool operator!=(const CallsiteCloneKey& other) {
-        return !(*this == other);
-    }
-
-    typedef CallsiteCloneKey Lookup;
-
-    static inline uint32_t hash(CallsiteCloneKey key) {
-        return uint32_t(size_t(key.script->offsetToPC(key.offset)) ^ size_t(key.original));
-    }
-
-    static inline bool match(const CallsiteCloneKey &a, const CallsiteCloneKey &b) {
-        return a.script == b.script && a.offset == b.offset && a.original == b.original;
-    }
-
-    static void rekey(CallsiteCloneKey &k, const CallsiteCloneKey &newKey) {
-        k.original = newKey.original;
-        k.script = newKey.script;
-        k.offset = newKey.offset;
-    }
-};
-
-typedef HashMap<CallsiteCloneKey,
-                ReadBarrieredFunction,
-                CallsiteCloneKey,
-                SystemAllocPolicy> CallsiteCloneTable;
-
-JSFunction *
-ExistingCloneFunctionAtCallsite(const CallsiteCloneTable &table, JSFunction *fun,
-                                JSScript *script, jsbytecode *pc);
-
-JSFunction *CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun,
-                                    HandleScript script, jsbytecode *pc);
-
 typedef HashSet<JSObject *> ObjectSet;
 typedef HashSet<Shape *> ShapeSet;
 
@@ -301,13 +252,6 @@ class ExclusiveContext : public ContextFriendFields,
     }
 
     // Zone local methods that can be used freely from an ExclusiveContext.
-    types::ObjectGroup *getNewGroup(const Class *clasp, TaggedProto proto,
-                                    JSObject *associated = nullptr);
-    types::ObjectGroup *getLazySingletonGroup(const Class *clasp, TaggedProto proto);
-
-    // Returns false if not found.
-    bool findAllocationSiteForType(types::Type ty, JSScript **script, uint32_t *offset) const;
-
     inline js::LifoAlloc &typeLifoAlloc();
 
     // Current global. This is only safe to use within the scope of the
@@ -472,10 +416,6 @@ struct JSContext : public js::ExclusiveContext,
 
     void minorGC(JS::gcreason::Reason reason) {
         runtime_->gc.minorGC(this, reason);
-    }
-
-    void gcIfNeeded() {
-        runtime_->gc.gcIfNeeded(this);
     }
 
   public:

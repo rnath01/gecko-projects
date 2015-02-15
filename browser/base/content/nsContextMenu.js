@@ -332,9 +332,9 @@ nsContextMenu.prototype = {
     }
 
     // BiDi UI
-    this.showItem("context-sep-bidi", top.gBidiUI);
+    this.showItem("context-sep-bidi", !this.onNumeric && top.gBidiUI);
     this.showItem("context-bidi-text-direction-toggle",
-                  this.onTextInput && top.gBidiUI);
+                  this.onTextInput && !this.onNumeric && top.gBidiUI);
     this.showItem("context-bidi-page-direction-toggle",
                   !this.onTextInput && top.gBidiUI);
 
@@ -563,6 +563,7 @@ nsContextMenu.prototype = {
     this.onVideo           = false;
     this.onAudio           = false;
     this.onTextInput       = false;
+    this.onNumeric         = false;
     this.onKeywordField    = false;
     this.mediaURL          = "";
     this.onLink            = false;
@@ -658,6 +659,7 @@ nsContextMenu.prototype = {
       }
       else if (editFlags & (SpellCheckHelper.INPUT | SpellCheckHelper.TEXTAREA)) {
         this.onTextInput = (editFlags & SpellCheckHelper.TEXTINPUT) !== 0;
+        this.onNumeric = (editFlags & SpellCheckHelper.NUMERIC) !== 0;
         this.onEditableArea = (editFlags & SpellCheckHelper.EDITABLE) !== 0;
         if (this.onEditableArea) {
           if (this.isRemote) {
@@ -854,9 +856,9 @@ nsContextMenu.prototype = {
   },
 
   _openLinkInParameters : function (doc, extra) {
-    let params = { charset: doc.characterSet };
-    if (!BrowserUtils.linkHasNoReferrer(this.link))
-      params.referrerURI = document.documentURIObject;
+    let params = { charset: doc.characterSet,
+                   referrerURI: doc.documentURIObject,
+                   noReferrer: BrowserUtils.linkHasNoReferrer(this.link) };
     for (let p in extra)
       params[p] = extra[p];
     return params;
@@ -1196,7 +1198,7 @@ nsContextMenu.prototype = {
         let channel = aRequest.QueryInterface(Ci.nsIChannel);
         this.extListener =
           extHelperAppSvc.doContent(channel.contentType, aRequest, 
-                                    doc.defaultView, true, window);
+                                    null, true, window);
         this.extListener.onStartRequest(aRequest, aContext);
       }, 
 
@@ -1205,7 +1207,8 @@ nsContextMenu.prototype = {
         if (aStatusCode == NS_ERROR_SAVE_LINK_AS_TIMEOUT) {
           // do it the old fashioned way, which will pick the best filename
           // it can without waiting.
-          saveURL(linkURL, linkText, dialogTitle, bypassCache, false, doc.documentURIObject, doc);
+          saveURL(linkURL, linkText, dialogTitle, bypassCache, false,
+                  BrowserUtils.makeURIFromCPOW(doc.documentURIObject), doc);
         }
         if (this.extListener)
           this.extListener.onStopRequest(aRequest, aContext, aStatusCode);
@@ -1249,9 +1252,14 @@ nsContextMenu.prototype = {
     // set up a channel to do the saving
     var ioService = Cc["@mozilla.org/network/io-service;1"].
                     getService(Ci.nsIIOService);
-    var channel = ioService.newChannelFromURI(makeURI(linkURL));
+    var channel = ioService.newChannelFromURI2(makeURI(linkURL),
+                                               null, // aLoadingNode
+                                               this.principal, // aLoadingPrincipal
+                                               null, // aTriggeringPrincipal
+                                               Ci.nsILoadInfo.SEC_NORMAL,
+                                               Ci.nsIContentPolicy.TYPE_OTHER);
     if (channel instanceof Ci.nsIPrivateBrowsingChannel) {
-      let docIsPrivate = PrivateBrowsingUtils.isWindowPrivate(doc.defaultView);
+      let docIsPrivate = PrivateBrowsingUtils.isBrowserPrivate(gBrowser.selectedBrowser);
       channel.setPrivate(docIsPrivate);
     }
     channel.notificationCallbacks = new callbacks();
@@ -1267,7 +1275,7 @@ nsContextMenu.prototype = {
     channel.loadFlags |= flags;
 
     if (channel instanceof Ci.nsIHttpChannel) {
-      channel.referrer = doc.documentURIObject;
+      channel.referrer = BrowserUtils.makeURIFromCPOW(doc.documentURIObject);
       if (channel instanceof Ci.nsIHttpChannelInternal)
         channel.forceAllowThirdPartyCookie = true;
     }
@@ -1309,12 +1317,12 @@ nsContextMenu.prototype = {
     if (this.onCanvas) {
       // Bypass cache, since it's a data: URL.
       saveImageURL(this.target.toDataURL(), "canvas.png", "SaveImageTitle",
-                   true, false, doc.documentURIObject, doc);
+                   true, false, BrowserUtils.makeURIFromCPOW(doc.documentURIObject), doc);
     }
     else if (this.onImage) {
       urlSecurityCheck(this.mediaURL, this.principal);
       saveImageURL(this.mediaURL, null, "SaveImageTitle", false,
-                   false, doc.documentURIObject, doc);
+                   false, BrowserUtils.makeURIFromCPOW(doc.documentURIObject), doc);
     }
     else if (this.onVideo || this.onAudio) {
       urlSecurityCheck(this.mediaURL, this.principal);

@@ -9,6 +9,7 @@
 #include "pkix/ScopedPtr.h"
 #include "pkix/pkixtypes.h"
 #include "nsNSSComponent.h"
+#include "mozilla/BinarySearch.h"
 #include "mozilla/Casting.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Telemetry.h"
@@ -51,6 +52,8 @@
 #include "keyhi.h"
 
 #include <algorithm>
+
+#include "IntolerantFallbackList.inc"
 
 using namespace mozilla;
 using namespace mozilla::psm;
@@ -864,8 +867,7 @@ bool
 nsSSLIOLayerHelpers::fallbackLimitReached(const nsACString& hostName,
                                           uint16_t intolerant)
 {
-  MutexAutoLock lock(mutex);
-  if (mInsecureFallbackSites.Contains(hostName)) {
+  if (isInsecureFallbackSite(hostName)) {
     return intolerant <= SSL_LIBRARY_VERSION_TLS_1_0;
   }
   return intolerant <= mVersionFallbackLimit;
@@ -1225,26 +1227,6 @@ retryDueToTLSIntolerance(PRErrorCode err, nsNSSSocketInfo* socketInfo)
     return false;
   }
 
-  // Allow PR_CONNECT_RESET_ERROR only for whitelisted sites.
-  if (err == PR_CONNECT_RESET_ERROR &&
-      !socketInfo->SharedState().IOLayerHelpers()
-        .isInsecureFallbackSite(socketInfo->GetHostName())) {
-    return false;
-  }
-
-  if ((err == SSL_ERROR_NO_CYPHER_OVERLAP || err == PR_END_OF_FILE_ERROR ||
-       err == PR_CONNECT_RESET_ERROR) &&
-      nsNSSComponent::AreAnyWeakCiphersEnabled()) {
-    if (socketInfo->SharedState().IOLayerHelpers()
-                  .rememberStrongCiphersFailed(socketInfo->GetHostName(),
-                                               socketInfo->GetPort(), err)) {
-      Telemetry::Accumulate(Telemetry::SSL_WEAK_CIPHERS_FALLBACK,
-                            tlsIntoleranceTelemetryBucket(err));
-      return true;
-    }
-    Telemetry::Accumulate(Telemetry::SSL_WEAK_CIPHERS_FALLBACK, 0);
-  }
-
   // When not using a proxy we'll see a connection reset error.
   // When using a proxy, we'll see an end of file error.
   // In addition check for some error codes where it is reasonable
@@ -1460,7 +1442,8 @@ nsSSLIOLayerHelpers::nsSSLIOLayerHelpers()
   : mTreatUnsafeNegotiationAsBroken(false)
   , mWarnLevelMissingRFC5746(1)
   , mTLSIntoleranceInfo()
-  , mFalseStartRequireNPN(true)
+  , mFalseStartRequireNPN(false)
+  , mUseStaticFallbackList(true)
   , mVersionFallbackLimit(SSL_LIBRARY_VERSION_TLS_1_0)
   , mutex("nsSSLIOLayerHelpers.mutex")
 {
@@ -1684,6 +1667,9 @@ PrefObserver::Observe(nsISupports* aSubject, const char* aTopic,
       nsCString insecureFallbackHosts;
       Preferences::GetCString("security.tls.insecure_fallback_hosts", &insecureFallbackHosts);
       mOwner->setInsecureFallbackSites(insecureFallbackHosts);
+    } else if (prefName.EqualsLiteral("security.tls.insecure_fallback_hosts.use_static_list")) {
+      mOwner->mUseStaticFallbackList =
+        Preferences::GetBool("security.tls.insecure_fallback_hosts.use_static_list", true);
     }
   }
   return NS_OK;
@@ -1785,6 +1771,8 @@ nsSSLIOLayerHelpers::Init()
   nsCString insecureFallbackHosts;
   Preferences::GetCString("security.tls.insecure_fallback_hosts", &insecureFallbackHosts);
   setInsecureFallbackSites(insecureFallbackHosts);
+  mUseStaticFallbackList =
+    Preferences::GetBool("security.tls.insecure_fallback_hosts.use_static_list", true);
 
   mPrefObserver = new PrefObserver(this);
   Preferences::AddStrongObserver(mPrefObserver,
@@ -1843,9 +1831,31 @@ nsSSLIOLayerHelpers::setInsecureFallbackSites(const nsCString& str)
   }
 }
 
+struct FallbackListComparator
+{
+  explicit FallbackListComparator(const char* aTarget)
+    : mTarget(aTarget)
+  {}
+
+  int operator()(const char* aVal) const {
+    return strcmp(mTarget, aVal);
+  }
+
+private:
+  const char* mTarget;
+};
+
 bool
 nsSSLIOLayerHelpers::isInsecureFallbackSite(const nsACString& hostname)
 {
+  size_t match;
+  if (mUseStaticFallbackList &&
+      BinarySearchIf(kIntolerantFallbackList, 0,
+        ArrayLength(kIntolerantFallbackList),
+        FallbackListComparator(PromiseFlatCString(hostname).get()),
+        &match)) {
+    return true;
+  }
   MutexAutoLock lock(mutex);
   return mInsecureFallbackSites.Contains(hostname);
 }
@@ -2605,18 +2615,20 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
   infoObject->SharedState().IOLayerHelpers()
     .adjustForTLSIntolerance(infoObject->GetHostName(), infoObject->GetPort(),
                              range, strongCiphersStatus);
+  bool useWeakCiphers = range.max <= SSL_LIBRARY_VERSION_TLS_1_0 &&
+                        nsNSSComponent::AreAnyWeakCiphersEnabled();
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG,
          ("[%p] nsSSLIOLayerSetOptions: using TLS version range (0x%04x,0x%04x)%s\n",
           fd, static_cast<unsigned int>(range.min),
               static_cast<unsigned int>(range.max),
-          strongCiphersStatus == StrongCiphersFailed ? " with weak ciphers" : ""));
+          useWeakCiphers ? " with weak ciphers" : ""));
 
   if (SSL_VersionRangeSet(fd, &range) != SECSuccess) {
     return NS_ERROR_FAILURE;
   }
   infoObject->SetTLSVersionRange(range);
 
-  if (strongCiphersStatus == StrongCiphersFailed) {
+  if (useWeakCiphers) {
     nsNSSComponent::UseWeakCiphersOnSocket(fd);
   }
 

@@ -1398,18 +1398,18 @@ nsStyleSet::RuleNodeWithReplacement(Element* aElement,
 {
   NS_ASSERTION(mBatching == 0, "rule processors out of date");
 
-  MOZ_ASSERT(!(aReplacements & ~(eRestyle_CSSTransitions |
-                                 eRestyle_CSSAnimations |
-                                 eRestyle_SVGAttrAnimations |
-                                 eRestyle_StyleAttribute |
-                                 eRestyle_ChangeAnimationPhase |
-                                 eRestyle_ChangeAnimationPhaseDescendants |
-                                 eRestyle_Force |
-                                 eRestyle_ForceDescendants)),
-             // FIXME: Once bug 979133 lands we'll have a better
-             // way to print these.
-             nsPrintfCString("unexpected replacement bits 0x%" PRIX32,
-                             uint32_t(aReplacements)).get());
+  NS_ABORT_IF_FALSE(!(aReplacements & ~(eRestyle_CSSTransitions |
+                                        eRestyle_CSSAnimations |
+                                        eRestyle_SVGAttrAnimations |
+                                        eRestyle_StyleAttribute |
+                                        eRestyle_ChangeAnimationPhase |
+                                        eRestyle_ChangeAnimationPhaseDescendants |
+                                        eRestyle_Force |
+                                        eRestyle_ForceDescendants)),
+                    // FIXME: Once bug 979133 lands we'll have a better
+                    // way to print these.
+                    nsPrintfCString("unexpected replacement bits 0x%" PRIX32,
+                                    uint32_t(aReplacements)).get());
 
   // If we're changing animation phase, we have to reconsider what rules
   // are in these four levels.

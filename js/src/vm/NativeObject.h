@@ -13,7 +13,6 @@
 #include <stdint.h>
 
 #include "jsfriendapi.h"
-#include "jsinfer.h"
 #include "jsobj.h"
 #include "NamespaceImports.h"
 
@@ -23,6 +22,7 @@
 #include "js/Value.h"
 #include "vm/Shape.h"
 #include "vm/String.h"
+#include "vm/TypeInference.h"
 
 namespace js {
 
@@ -1343,10 +1343,6 @@ NativeLookupElement(JSContext *cx, HandleNativeObject obj, uint32_t index,
 extern bool
 NativeGetExistingProperty(JSContext *cx, HandleObject receiver, HandleNativeObject obj,
                           HandleShape shape, MutableHandle<Value> vp);
-
-extern bool
-NativeSetPropertyAttributes(JSContext *cx, HandleNativeObject obj, HandleId id, unsigned *attrsp);
-
 
 /* * */
 

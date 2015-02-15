@@ -220,9 +220,6 @@ struct JSCompartment
     inline void initGlobal(js::GlobalObject &global);
 
   public:
-    /* Type information about the scripts and objects in this compartment. */
-    js::types::TypeCompartment   types;
-
     void                         *data;
 
   private:
@@ -276,26 +273,14 @@ struct JSCompartment
     js::InitialShapeSet          initialShapes;
     void sweepInitialShapeTable();
 
-    /* Set of default 'new' or lazy groups in the compartment. */
-    js::types::NewObjectGroupTable newObjectGroups;
-    js::types::NewObjectGroupTable lazyObjectGroups;
-    void sweepNewObjectGroupTable(js::types::NewObjectGroupTable &table);
+    // Object group tables and other state in the compartment.
+    js::ObjectGroupCompartment   objectGroups;
 
 #ifdef JSGC_HASH_TABLE_CHECKS
-    void checkObjectGroupTablesAfterMovingGC();
-    void checkObjectGroupTableAfterMovingGC(js::types::NewObjectGroupTable &table);
     void checkInitialShapesTableAfterMovingGC();
     void checkWrapperMapAfterMovingGC();
     void checkBaseShapeTableAfterMovingGC();
 #endif
-
-    /*
-     * Hash table of all manually call site-cloned functions from within
-     * self-hosted code. Cloning according to call site provides extra
-     * sensitivity for type specialization and inlining.
-     */
-    js::CallsiteCloneTable callsiteClones;
-    void sweepCallsiteClones();
 
     /*
      * Lazily initialized script source object to use for scripts cloned
@@ -308,6 +293,9 @@ struct JSCompartment
 
     // Map from typed objects to array buffers lazily created for them.
     js::LazyArrayBufferTable *lazyArrayBuffers;
+
+    // All unboxed layouts in the compartment.
+    mozilla::LinkedList<js::UnboxedLayout> unboxedLayouts;
 
     /* During GC, stores the index of this compartment in rt->compartments. */
     unsigned                     gcIndex;
@@ -386,7 +374,6 @@ struct JSCompartment
 
     void sweepInnerViews();
     void sweepCrossCompartmentWrappers();
-    void sweepObjectGroupTables();
     void sweepSavedStacks();
     void sweepGlobalObject(js::FreeOp *fop);
     void sweepSelfHostingScriptSource();
@@ -400,7 +387,6 @@ struct JSCompartment
     void clearTables();
 
     void fixupInitialShapeTable();
-    void fixupNewObjectGroupTable(js::types::NewObjectGroupTable &table);
     void fixupAfterMovingGC();
     void fixupGlobal();
     void fixupBaseShapeTable();
@@ -532,6 +518,28 @@ struct JSCompartment
     bool ensureJitCompartmentExists(JSContext *cx);
     js::jit::JitCompartment *jitCompartment() {
         return jitCompartment_;
+    }
+
+    enum DeprecatedLanguageExtension {
+        DeprecatedForEach = 0,              // JS 1.6+
+        DeprecatedDestructuringForIn = 1,   // JS 1.7 only
+        DeprecatedLegacyGenerator = 2,      // JS 1.7+
+        DeprecatedExpressionClosure = 3,    // Added in JS 1.8
+        DeprecatedLetBlock = 4,             // Added in JS 1.7
+        DeprecatedLetExpression = 5,        // Added in JS 1.7
+        DeprecatedNoSuchMethod = 6,         // JS 1.7+
+        DeprecatedLanguageExtensionCount
+    };
+
+  private:
+    // Used for collecting telemetry on SpiderMonkey's deprecated language extensions.
+    bool sawDeprecatedLanguageExtension[DeprecatedLanguageExtensionCount];
+
+    void reportTelemetry();
+
+  public:
+    void addTelemetry(DeprecatedLanguageExtension e) {
+        sawDeprecatedLanguageExtension[e] = true;
     }
 };
 

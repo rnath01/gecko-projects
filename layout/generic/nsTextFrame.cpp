@@ -1149,17 +1149,9 @@ CanTextCrossFrameBoundary(nsIFrame* aFrame, nsIAtom* aType)
       result.mScanSiblings = true;
       result.mTextRunCanCrossFrameBoundary = true;
       result.mLineBreakerCanCrossFrameBoundary = true;
-    } else if (aFrame->GetType() == nsGkAtoms::rubyTextFrame ||
-               aFrame->GetType() == nsGkAtoms::rubyTextContainerFrame) {
-      result.mFrameToScan = aFrame->GetFirstPrincipalChild();
-      result.mOverflowFrameToScan =
-        aFrame->GetFirstChild(nsIFrame::kOverflowList);
-      NS_WARN_IF_FALSE(!result.mOverflowFrameToScan,
-                       "Scanning overflow inline frames is something we should avoid");
-      result.mScanSiblings = true;
-      result.mTextRunCanCrossFrameBoundary = false;
-      result.mLineBreakerCanCrossFrameBoundary = false;
     } else {
+      MOZ_ASSERT(aType != nsGkAtoms::rubyTextContainerFrame,
+                 "Shouldn't call this method for ruby text container");
       result.mFrameToScan = nullptr;
       result.mOverflowFrameToScan = nullptr;
       result.mTextRunCanCrossFrameBoundary = false;
@@ -1173,6 +1165,12 @@ BuildTextRunsScanner::FindBoundaryResult
 BuildTextRunsScanner::FindBoundaries(nsIFrame* aFrame, FindBoundaryState* aState)
 {
   nsIAtom* frameType = aFrame->GetType();
+  if (frameType == nsGkAtoms::rubyTextContainerFrame) {
+    // Don't stop a text run for ruby text container. We want ruby text
+    // containers to be skipped, but continue the text run across them.
+    return FB_CONTINUE;
+  }
+
   nsTextFrame* textFrame = frameType == nsGkAtoms::textFrame
     ? static_cast<nsTextFrame*>(aFrame) : nullptr;
   if (textFrame) {
@@ -1663,12 +1661,18 @@ BuildTextRunsScanner::ContinueTextRunAcrossFrames(nsTextFrame* aFrame1, nsTextFr
 
 void BuildTextRunsScanner::ScanFrame(nsIFrame* aFrame)
 {
+  nsIAtom* frameType = aFrame->GetType();
+  if (frameType == nsGkAtoms::rubyTextContainerFrame) {
+    // Don't include any ruby text container into the text run.
+    return;
+  }
+
   // First check if we can extend the current mapped frame block. This is common.
   if (mMappedFlows.Length() > 0) {
     MappedFlow* mappedFlow = &mMappedFlows[mMappedFlows.Length() - 1];
     if (mappedFlow->mEndFrame == aFrame &&
         (aFrame->GetStateBits() & NS_FRAME_IS_FLUID_CONTINUATION)) {
-      NS_ASSERTION(aFrame->GetType() == nsGkAtoms::textFrame,
+      NS_ASSERTION(frameType == nsGkAtoms::textFrame,
                    "Flow-sibling of a text frame is not a text frame?");
 
       // Don't do this optimization if mLastFrame has a terminal newline...
@@ -1682,7 +1686,6 @@ void BuildTextRunsScanner::ScanFrame(nsIFrame* aFrame)
     }
   }
 
-  nsIAtom* frameType = aFrame->GetType();
   // Now see if we can add a new set of frames to the current textrun
   if (frameType == nsGkAtoms::textFrame) {
     nsTextFrame* frame = static_cast<nsTextFrame*>(aFrame);
@@ -2125,21 +2128,26 @@ BuildTextRunsScanner::BuildTextRunForFrames(void* aTextBuffer)
       new MathMLTextRunFactory(transformingFactory.forget(), mathFlags,
                                sstyScriptLevel, fontInflation);
   }
-  nsTArray<nsStyleContext*> styles;
+  nsTArray<nsRefPtr<nsTransformedCharStyle>> styles;
   if (transformingFactory) {
     iter.SetOriginalOffset(0);
     for (uint32_t i = 0; i < mMappedFlows.Length(); ++i) {
       MappedFlow* mappedFlow = &mMappedFlows[i];
       nsTextFrame* f;
+      nsStyleContext* sc = nullptr;
+      nsRefPtr<nsTransformedCharStyle> charStyle;
       for (f = mappedFlow->mStartFrame; f != mappedFlow->mEndFrame;
            f = static_cast<nsTextFrame*>(f->GetNextContinuation())) {
         uint32_t offset = iter.GetSkippedOffset();
         iter.AdvanceOriginal(f->GetContentLength());
         uint32_t end = iter.GetSkippedOffset();
-        nsStyleContext* sc = f->StyleContext();
+        if (sc != f->StyleContext()) {
+          sc = f->StyleContext();
+          charStyle = new nsTransformedCharStyle(sc);
+        }
         uint32_t j;
         for (j = offset; j < end; ++j) {
-          styles.AppendElement(sc);
+          styles.AppendElement(charStyle);
         }
       }
     }
@@ -2160,7 +2168,7 @@ BuildTextRunsScanner::BuildTextRunForFrames(void* aTextBuffer)
     if (transformingFactory) {
       textRun = transformingFactory->MakeTextRun(text, transformedLength,
                                                  &params, fontGroup, textFlags,
-                                                 styles.Elements(), true);
+                                                 Move(styles), true);
       if (textRun) {
         // ownership of the factory has passed to the textrun
         transformingFactory.forget();
@@ -2175,7 +2183,7 @@ BuildTextRunsScanner::BuildTextRunForFrames(void* aTextBuffer)
     if (transformingFactory) {
       textRun = transformingFactory->MakeTextRun(text, transformedLength,
                                                  &params, fontGroup, textFlags,
-                                                 styles.Elements(), true);
+                                                 Move(styles), true);
       if (textRun) {
         // ownership of the factory has passed to the textrun
         transformingFactory.forget();
@@ -6120,9 +6128,15 @@ nsTextFrame::PaintText(nsRenderingContext* aRenderingContext, nsPoint aPt,
   gfxPoint framePt(aPt.x, aPt.y);
   gfxPoint textBaselinePt;
   if (verticalRun) {
-    textBaselinePt = // XXX sideways-left will need different handling here
-      gfxPoint(aPt.x + (wm.IsVerticalLR() ? mAscent : frameWidth - mAscent),
-               rtl ? aPt.y + GetSize().height : aPt.y);
+    if (wm.IsVerticalLR()) {
+      textBaselinePt.x =
+        nsLayoutUtils::GetSnappedBaselineX(this, ctx, aPt.x, mAscent);
+    } else {
+      textBaselinePt.x =
+        nsLayoutUtils::GetSnappedBaselineX(this, ctx, aPt.x + frameWidth,
+                                           -mAscent);
+    }
+    textBaselinePt.y = rtl ? aPt.y + GetSize().height : aPt.y;
   } else {
     textBaselinePt = gfxPoint(rtl ? gfxFloat(aPt.x + frameWidth) : framePt.x,
              nsLayoutUtils::GetSnappedBaselineY(this, ctx, aPt.y, mAscent));

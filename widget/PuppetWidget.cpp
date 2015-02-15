@@ -96,12 +96,11 @@ NS_IMETHODIMP
 PuppetWidget::Create(nsIWidget        *aParent,
                      nsNativeWidget   aNativeParent,
                      const nsIntRect  &aRect,
-                     nsDeviceContext *aContext,
                      nsWidgetInitData *aInitData)
 {
   MOZ_ASSERT(!aNativeParent, "got a non-Puppet native parent");
 
-  BaseCreate(nullptr, aRect, aContext, aInitData);
+  BaseCreate(nullptr, aRect, aInitData);
 
   mBounds = aRect;
   mEnabled = true;
@@ -139,7 +138,6 @@ PuppetWidget::InitIMEState()
 
 already_AddRefed<nsIWidget>
 PuppetWidget::CreateChild(const nsIntRect  &aRect,
-                          nsDeviceContext *aContext,
                           nsWidgetInitData *aInitData,
                           bool             aForceUseIWidgetParent)
 {
@@ -147,7 +145,7 @@ PuppetWidget::CreateChild(const nsIntRect  &aRect,
   nsCOMPtr<nsIWidget> widget = nsIWidget::CreatePuppetWidget(mTabChild);
   return ((widget &&
            NS_SUCCEEDED(widget->Create(isPopup ? nullptr: this, nullptr, aRect,
-                                       aContext, aInitData))) ?
+                                       aInitData))) ?
           widget.forget() : nullptr);
 }
 
@@ -960,6 +958,13 @@ PuppetWidget::GetWindowPosition()
   int32_t winX, winY, winW, winH;
   NS_ENSURE_SUCCESS(GetOwningTabChild()->GetDimensions(0, &winX, &winY, &winW, &winH), nsIntPoint());
   return nsIntPoint(winX, winY);
+}
+
+NS_METHOD
+PuppetWidget::GetScreenBounds(nsIntRect &aRect) {
+  aRect.MoveTo(LayoutDeviceIntPoint::ToUntyped(WidgetToScreenOffset()));
+  aRect.SizeTo(mBounds.Size());
+  return NS_OK;
 }
 
 PuppetScreen::PuppetScreen(void *nativeScreen)

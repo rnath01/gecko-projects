@@ -63,6 +63,7 @@ struct nsStyleImageOrientation;
 struct nsOverflowAreas;
 
 namespace mozilla {
+class EventListenerManager;
 class SVGImageContext;
 struct IntrinsicSize;
 struct ContainerLayerParameters;
@@ -1476,6 +1477,10 @@ public:
   // Get a baseline y position in app units that is snapped to device pixels.
   static gfxFloat GetSnappedBaselineY(nsIFrame* aFrame, gfxContext* aContext,
                                       nscoord aY, nscoord aAscent);
+  // Ditto for an x position (for vertical text). Note that for vertical-rl
+  // writing mode, the ascent value should be negated by the caller.
+  static gfxFloat GetSnappedBaselineX(nsIFrame* aFrame, gfxContext* aContext,
+                                      nscoord aX, nscoord aAscent);
 
   static nscoord AppUnitWidthOfString(char16_t aC,
                                       nsFontMetrics& aFontMetrics,
@@ -2550,6 +2555,9 @@ public:
                                       const mozilla::LogicalMargin& aFramePadding,
                                       mozilla::WritingMode aLineWM,
                                       mozilla::WritingMode aFrameWM);
+
+  static bool HasApzAwareListeners(mozilla::EventListenerManager* aElm);
+  static bool HasDocumentLevelListenersForApzAwareEvents(nsIPresShell* aShell);
 
 private:
   static uint32_t sFontSizeInflationEmPerLine;

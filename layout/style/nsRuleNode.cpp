@@ -1420,8 +1420,7 @@ nsRuleNode::DestroyInternal(nsRuleNode ***aDestroyQueueTail)
     PL_DHashTableEnumerate(children, EnqueueRuleNodeChildren,
                            &destroyQueueTail);
     *destroyQueueTail = nullptr; // ensure null-termination
-    PL_DHashTableFinish(children);
-    delete children;
+    PL_DHashTableDestroy(children);
   } else if (HaveChildren()) {
     *destroyQueueTail = ChildrenList();
     do {
@@ -1604,9 +1603,11 @@ nsRuleNode::ConvertChildrenToHash(int32_t aNumKids)
 {
   NS_ASSERTION(!ChildrenAreHashed() && HaveChildren(),
                "must have a non-empty list of children");
-  PLDHashTable *hash = new PLDHashTable();
-  PL_DHashTableInit(hash, &ChildrenHashOps, sizeof(ChildrenHashEntry),
-                    aNumKids);
+  PLDHashTable *hash = PL_NewDHashTable(&ChildrenHashOps,
+                                        sizeof(ChildrenHashEntry),
+                                        aNumKids);
+  if (!hash)
+    return;
   for (nsRuleNode* curr = ChildrenList(); curr; curr = curr->mNextSibling) {
     // This will never fail because of the initial size we gave the table.
     ChildrenHashEntry *entry = static_cast<ChildrenHashEntry*>(
@@ -4531,9 +4532,10 @@ nsRuleNode::ComputeUserInterfaceData(void* aStartStruct,
     else {
       // The parser will never create a list that is *all* URL values --
       // that's invalid.
-      MOZ_ASSERT(cursorUnit == eCSSUnit_List || cursorUnit == eCSSUnit_ListDep,
-                 nsPrintfCString("unrecognized cursor unit %d",
-                                 cursorUnit).get());
+      NS_ABORT_IF_FALSE(cursorUnit == eCSSUnit_List ||
+                        cursorUnit == eCSSUnit_ListDep,
+                        nsPrintfCString("unrecognized cursor unit %d",
+                                        cursorUnit).get());
       const nsCSSValueList* list = cursorValue->GetListValue();
       const nsCSSValueList* list2 = list;
       nsIDocument* doc = aContext->PresContext()->Document();
@@ -4949,9 +4951,9 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
           transition->SetProperty(prop);
         }
       } else {
-        MOZ_ASSERT(val.GetUnit() == eCSSUnit_All,
-                   nsPrintfCString("Invalid transition property unit %d",
-                                   val.GetUnit()).get());
+        NS_ABORT_IF_FALSE(val.GetUnit() == eCSSUnit_All,
+                          nsPrintfCString("Invalid transition property unit %d",
+                                          val.GetUnit()).get());
         transition->SetProperty(eCSSPropertyExtra_all_properties);
       }
     }
@@ -5102,9 +5104,9 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
           break;
         }
         default:
-          MOZ_ASSERT(false,
-                     nsPrintfCString("Invalid animation-name unit %d",
-                                     animName.list->mValue.GetUnit()).get());
+          NS_ABORT_IF_FALSE(false,
+                            nsPrintfCString("Invalid animation-name unit %d",
+                                            animName.list->mValue.GetUnit()).get());
       }
     }
 
@@ -5139,9 +5141,10 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
                animDirection.unit == eCSSUnit_Unset) {
       animation->SetDirection(NS_STYLE_ANIMATION_DIRECTION_NORMAL);
     } else if (animDirection.list) {
-      MOZ_ASSERT(animDirection.list->mValue.GetUnit() == eCSSUnit_Enumerated,
-                 nsPrintfCString("Invalid animation-direction unit %d",
-                                 animDirection.list->mValue.GetUnit()).get());
+      NS_ABORT_IF_FALSE(animDirection.list->mValue.GetUnit() ==
+                          eCSSUnit_Enumerated,
+                        nsPrintfCString("Invalid animation-direction unit %d",
+                                        animDirection.list->mValue.GetUnit()).get());
 
       animation->SetDirection(animDirection.list->mValue.GetIntValue());
     }
@@ -5158,9 +5161,10 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
                animFillMode.unit == eCSSUnit_Unset) {
       animation->SetFillMode(NS_STYLE_ANIMATION_FILL_MODE_NONE);
     } else if (animFillMode.list) {
-      MOZ_ASSERT(animFillMode.list->mValue.GetUnit() == eCSSUnit_Enumerated,
-                 nsPrintfCString("Invalid animation-fill-mode unit %d",
-                                 animFillMode.list->mValue.GetUnit()).get());
+      NS_ABORT_IF_FALSE(animFillMode.list->mValue.GetUnit() ==
+                          eCSSUnit_Enumerated,
+                        nsPrintfCString("Invalid animation-fill-mode unit %d",
+                                        animFillMode.list->mValue.GetUnit()).get());
 
       animation->SetFillMode(animFillMode.list->mValue.GetIntValue());
     }
@@ -5177,9 +5181,10 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
                animPlayState.unit == eCSSUnit_Unset) {
       animation->SetPlayState(NS_STYLE_ANIMATION_PLAY_STATE_RUNNING);
     } else if (animPlayState.list) {
-      MOZ_ASSERT(animPlayState.list->mValue.GetUnit() == eCSSUnit_Enumerated,
-                 nsPrintfCString("Invalid animation-play-state unit %d",
-                                 animPlayState.list->mValue.GetUnit()).get());
+      NS_ABORT_IF_FALSE(animPlayState.list->mValue.GetUnit() ==
+                          eCSSUnit_Enumerated,
+                        nsPrintfCString("Invalid animation-play-state unit %d",
+                                        animPlayState.list->mValue.GetUnit()).get());
 
       animation->SetPlayState(animPlayState.list->mValue.GetIntValue());
     }
@@ -6205,8 +6210,9 @@ SetBackgroundList(nsStyleContext* aStyleContext,
   }
 
   default:
-    MOZ_ASSERT(false,
-               nsPrintfCString("unexpected unit %d", aValue.GetUnit()).get());
+    NS_ABORT_IF_FALSE(false,
+                      nsPrintfCString("unexpected unit %d",
+                                      aValue.GetUnit()).get());
   }
 
   if (aItemCount > aMaxItemCount)
@@ -6275,8 +6281,9 @@ SetBackgroundPairList(nsStyleContext* aStyleContext,
   }
 
   default:
-    MOZ_ASSERT(false,
-               nsPrintfCString("unexpected unit %d", aValue.GetUnit()).get());
+    NS_ABORT_IF_FALSE(false,
+                      nsPrintfCString("unexpected unit %d",
+                                      aValue.GetUnit()).get());
   }
 
   if (aItemCount > aMaxItemCount)
@@ -6571,9 +6578,9 @@ nsRuleNode::ComputeBorderData(void* aStartStruct,
     break;
 
   default:
-    MOZ_ASSERT(false,
-               nsPrintfCString("unrecognized shadow unit %d",
-                               boxShadowValue->GetUnit()).get());
+    NS_ABORT_IF_FALSE(false,
+                      nsPrintfCString("unrecognized shadow unit %d",
+                                      boxShadowValue->GetUnit()).get());
   }
 
   // border-width, border-*-width: length, enum, inherit
@@ -7913,9 +7920,9 @@ nsRuleNode::ComputeContentData(void* aStartStruct,
   }
 
   default:
-    MOZ_ASSERT(false,
-               nsPrintfCString("unrecognized content unit %d",
-                               contentValue->GetUnit()).get());
+    NS_ABORT_IF_FALSE(false,
+                      nsPrintfCString("unrecognized content unit %d",
+                                      contentValue->GetUnit()).get());
   }
 
   // counter-increment: [string [int]]+, none, inherit
@@ -9225,8 +9232,7 @@ nsRuleNode::SweepChildren(nsTArray<nsRuleNode*>& aSweepQueue)
     PL_DHashTableEnumerate(children, SweepHashEntry, &survivorsWithChildren);
     childrenDestroyed = oldChildCount - children->EntryCount();
     if (childrenDestroyed == oldChildCount) {
-      PL_DHashTableFinish(children);
-      delete children;
+      PL_DHashTableDestroy(children);
       mChildren.asVoid = nullptr;
     }
   } else {

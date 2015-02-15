@@ -8,7 +8,10 @@
  */
 let JsCallTreeView = Heritage.extend(DetailsSubview, {
 
-  rerenderPrefs: ["invert-call-tree", "show-platform-data"],
+  rerenderPrefs: [
+    "invert-call-tree",
+    "show-platform-data"
+  ],
 
   rangeChangeDebounceTime: 50, // ms
 
@@ -92,6 +95,9 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
     // Bind events.
     root.on("link", this._onLink);
 
+    // Pipe "focus" events to the view, mostly for tests
+    root.on("focus", () => this.emit("focus"));
+
     // Clear out other call trees.
     let container = $("#js-calltree-view > .call-tree-cells-container");
     container.innerHTML = "";
@@ -105,6 +111,8 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
     let contentOnly = !PerformanceController.getPref("show-platform-data");
     root.toggleCategories(!contentOnly);
   },
+
+  toString: () => "[object JsCallTreeView]"
 });
 
 /**

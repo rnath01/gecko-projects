@@ -61,7 +61,7 @@ public:
   double Buffered(dom::TimeRanges* aRanges);
 
   // Mark the current decoder's resource as ended, clear mCurrentDecoder and
-  // reset mLast{Start,End}Timestamp.
+  // reset mLast{Start,End}Timestamp.  Main thread only.
   void DiscardCurrentDecoder();
   // Mark the current decoder's resource as ended.
   void EndCurrentDecoder();
@@ -114,6 +114,7 @@ public:
 
 private:
   friend class DecodersToInitialize;
+  friend class ReleaseDecoderTask;
   ~TrackBuffer();
 
   // Create a new decoder, set mCurrentDecoder to the new decoder and
@@ -181,6 +182,7 @@ private:
   nsTArray<nsRefPtr<SourceBufferDecoder>> mWaitingDecoders;
 
   // The decoder that the owning SourceBuffer is currently appending data to.
+  // Modified on the main thread only.
   nsRefPtr<SourceBufferDecoder> mCurrentDecoder;
 
   nsRefPtr<MediaSourceDecoder> mParentDecoder;
@@ -190,9 +192,11 @@ private:
   // AppendData.  Accessed on the main thread only.
   int64_t mLastStartTimestamp;
   Maybe<int64_t> mLastEndTimestamp;
+  void AdjustDecodersTimestampOffset(int32_t aOffset);
 
   // The timestamp offset used by our current decoder, in microseconds.
   int64_t mLastTimestampOffset;
+  int64_t mAdjustedTimestamp;
 
   // Set when the first decoder used by this TrackBuffer is initialized.
   // Protected by mParentDecoder's monitor.

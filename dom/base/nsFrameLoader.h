@@ -227,6 +227,9 @@ public:
   void ActivateUpdateHitRegion();
   void DeactivateUpdateHitRegion();
 
+  // Properly retrieves documentSize of any subdocument type.
+  nsresult GetWindowDimensions(nsIntRect& aRect);
+
 private:
 
   void SetOwnerContent(mozilla::dom::Element* aContent);
@@ -282,9 +285,6 @@ private:
   nsresult MaybeCreateDocShell();
   nsresult EnsureMessageManager();
 
-  // Properly retrieves documentSize of any subdocument type.
-  nsresult GetWindowDimensions(nsIntRect& aRect);
-
   // Updates the subdocument position and size. This gets called only
   // when we have our own in-process DocShell.
   void UpdateBaseWindowPositionAndSize(nsSubDocumentFrame *aIFrame);
@@ -311,6 +311,8 @@ private:
   // Update the permission manager's app-id refcount based on mOwnerContent's
   // own-or-containing-app.
   void ResetPermissionManagerStatus();
+
+  void InitializeBrowserAPI();
 
   nsCOMPtr<nsIDocShell> mDocShell;
   nsCOMPtr<nsIURI> mURIToLoad;
@@ -351,7 +353,6 @@ private:
   bool mRemoteFrame : 1;
   bool mClipSubdocument : 1;
   bool mClampScrollPosition : 1;
-  bool mRemoteBrowserInitialized : 1;
   bool mObservingOwnerContent : 1;
 
   // Backs nsIFrameLoader::{Get,Set}Visible.  Visibility state here relates to
@@ -369,9 +370,6 @@ private:
   // See nsIFrameLoader.idl. EVENT_MODE_NORMAL_DISPATCH automatically
   // forwards some input events to out-of-process content.
   uint32_t mEventMode;
-
-  // Indicate if we have sent 'remote-browser-pending'.
-  bool mPendingFrameSent;
 };
 
 #endif

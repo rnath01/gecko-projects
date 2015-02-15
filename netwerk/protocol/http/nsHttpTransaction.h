@@ -282,6 +282,8 @@ private:
     bool                            mDontRouteViaWildCard;
     bool                            mForceRestart;
     bool                            mReuseOnRestart;
+    bool                            mContentDecoding;
+    bool                            mContentDecodingCheck;
 
     // mClosed           := transaction has been explicitly closed
     // mTransactionDone  := transaction ran to completion or was interrupted
@@ -391,6 +393,7 @@ private:
     uint64_t                           mCountRecv;
     uint64_t                           mCountSent;
     uint32_t                           mAppId;
+    bool                               mIsInBrowser;
 #ifdef MOZ_WIDGET_GONK
     nsMainThreadPtrHandle<nsINetworkInterface> mActiveNetwork;
 #endif

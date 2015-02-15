@@ -75,14 +75,14 @@ nsPresArena::Allocate(uint32_t aCode, size_t aSize)
       char* limit = p + list->mEntrySize;
       for (; p < limit; p += sizeof(uintptr_t)) {
         uintptr_t val = *reinterpret_cast<uintptr_t*>(p);
-        MOZ_ASSERT(val == mozPoisonValue(),
-                   nsPrintfCString("PresArena: poison overwritten; "
-                                   "wanted %.16" PRIx64 " "
-                                   "found %.16" PRIx64 " "
-                                   "errors in bits %.16" PRIx64 " ",
-                                   uint64_t(mozPoisonValue()),
-                                   uint64_t(val),
-                                   uint64_t(mozPoisonValue() ^ val)).get());
+        NS_ABORT_IF_FALSE(val == mozPoisonValue(),
+                          nsPrintfCString("PresArena: poison overwritten; "
+                                          "wanted %.16" PRIx64 " "
+                                          "found %.16" PRIx64 " "
+                                          "errors in bits %.16" PRIx64 " ",
+                                          uint64_t(mozPoisonValue()),
+                                          uint64_t(val),
+                                          uint64_t(mozPoisonValue() ^ val)).get());
       }
     }
 #endif
