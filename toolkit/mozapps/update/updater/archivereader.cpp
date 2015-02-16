@@ -92,8 +92,8 @@ ArchiveReader::VerifySignature()
   if (rv != OK) {
     rv = VerifyLoadedCert(mArchive, secondaryCertData);
   }
-  return rv;
 #endif
+  return rv;
 #endif
 }
 
