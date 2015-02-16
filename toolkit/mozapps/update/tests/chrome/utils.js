@@ -996,7 +996,9 @@ function resetFiles() {
   } else {
     updaterBin = baseAppDir.clone();
     updaterBin.appendRelativePath("updater" + BIN_SUFFIX + ".bak");
-    updaterBin.moveTo(baseAppDir, "updater" + BIN_SUFFIX);
+    if (updaterBin.exists()) {
+      updaterBin.moveTo(baseAppDir, "updater" + BIN_SUFFIX);
+    }
   }
 }
 
