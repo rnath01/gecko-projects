@@ -195,6 +195,9 @@ var gDisableNoUpdateAddon = false;
 // onload function.
 var DEBUG_AUS_TEST = true;
 
+const isWindows = ("@mozilla.org/windows-registry-key;1" in Components.classes);
+const BIN_SUFFIX = (isWindows ? ".exe" : "");
+
 #include ../shared.js
 
 /**
@@ -864,6 +867,32 @@ function setupFiles() {
   updateSettingsIni = baseAppDir.clone();
   updateSettingsIni.append(FILE_UPDATE_SETTINGS_INI);
   writeFile(updateSettingsIni, UPDATE_SETTINGS_CONTENTS);
+
+  // Move away the real updater binary
+  let updaterBin = baseAppDir.clone();
+  updaterBin.appendRelativePath("updater.app");
+  if (updaterBin.exists()) {
+    updaterBin.moveTo(baseAppDir, "updater.app.bak");
+  } else {
+    let updaterBin = baseAppDir.clone();
+    updaterBin.appendRelativePath("updater" + BIN_SUFFIX);
+    updaterBin.moveTo(baseAppDir, "updater" + BIN_SUFFIX + ".bak");
+  }
+
+  // Move in the test only updater binary
+  let testUpdaterBinDir = AUS_Cc["@mozilla.org/file/directory_service;1"].
+    getService(AUS_Ci.nsIProperties).
+    get("CurWorkD", AUS_Ci.nsILocalFile);
+  testUpdaterBinDir.appendRelativePath(REL_PATH_DATA);
+  let testUpdaterBin = testUpdaterBinDir.clone();
+  testUpdaterBin.appendRelativePath("updater.app");
+  if (testUpdaterBin.exists()) {
+      testUpdaterBin.copyToFollowingLinks(baseAppDir, "updater.app");
+  } else {
+      let testUpdaterBin = testUpdaterBinDir.clone();
+      testUpdaterBin.appendRelativePath("updater" + BIN_SUFFIX);
+      testUpdaterBin.copyToFollowingLinks(baseAppDir, "updater" + BIN_SUFFIX);
+  }
 }
 
 /**
@@ -946,6 +975,28 @@ function resetFiles() {
            "path: " + updatedDir.path + "\n" +
            "Exception: " + e + "\n");
     }
+  }
+
+  // Remove the temp updater.app
+  let updaterBin = baseAppDir.clone();
+  updaterBin.appendRelativePath("updater.app");
+  if (updaterBin.exists()) {
+    updaterBin.remove(true);
+  } else {
+    let updaterBin = baseAppDir.clone();
+    updaterBin.appendRelativePath("updater" + BIN_SUFFIX);
+    updaterBin.remove(true);
+  }
+
+  // Move away updater.app
+  updaterBin = baseAppDir.clone();
+  updaterBin.appendRelativePath("updater.app.bak");
+  if (updaterBin.exists()) {
+    updaterBin.moveTo(baseAppDir, "updater.app");
+  } else {
+    updaterBin = baseAppDir.clone();
+    updaterBin.appendRelativePath("updater" + BIN_SUFFIX + ".bak");
+    updaterBin.moveTo(baseAppDir, "updater" + BIN_SUFFIX);
   }
 }
 
