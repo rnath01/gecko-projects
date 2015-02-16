@@ -20,8 +20,8 @@ function run_test() {
   updaterBin.append(FILE_UPDATER_BIN);
 
   logTestInfo("Launching maintenance service bin: " +
-              maintenanceServiceBin.path + " for updater: " +
-              updaterBin.path + " to check signature...");
+              maintenanceServiceBin.path + " to check updater: " +
+              updaterBin.path + " signature.");
 
   // Bypass the manifest and run as invoker
   let env = AUS_Cc["@mozilla.org/process/environment;1"].

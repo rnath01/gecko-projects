@@ -82,7 +82,9 @@ ArchiveReader::VerifySignature()
     return ARCHIVE_NOT_OPEN;
   }
 
-#ifdef MOZ_VERIFY_MAR_SIGNATURE
+#ifndef MOZ_VERIFY_MAR_SIGNATURE
+  return OK;
+#else
 #ifdef UPDATER_XPCSHELL_CERT
   int rv = VerifyLoadedCert(mArchive, xpcshellCertData);
 #else
@@ -90,10 +92,9 @@ ArchiveReader::VerifySignature()
   if (rv != OK) {
     rv = VerifyLoadedCert(mArchive, secondaryCertData);
   }
-#endif
-#endif
-
   return rv;
+#endif
+#endif
 }
 
 /**

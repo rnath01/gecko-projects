@@ -1251,12 +1251,15 @@ function getTestDirPath() {
  *          The relative path to the file or directory to get from the root of
  *          the test's data directory. If not specified the test's data
  *          directory will be returned.
+ * @param   aAllowNonExists (optional)
+ *          Whether or not to throw an error if the path exists.
+ *          If not specified, the false is used.
  * @return  The nsIFile for the file in the test data directory.
  * @throws  If the file or directory does not exist.
  */
-function getTestDirFile(aRelPath, allowNonExists) {
+function getTestDirFile(aRelPath, aAllowNonExists) {
   let relpath = getTestDirPath() + (aRelPath ? aRelPath : "");
-  return do_get_file(relpath, !!allowNonExists);
+  return do_get_file(relpath, !!aAllowNonExists);
 }
 
 #ifdef XP_WIN
@@ -1783,7 +1786,7 @@ function setupAppFiles() {
     // We use the updater binary after this loop from the data dir instead
     // because it has the xpcshell certs.
     if (aAppFile.relPath !== FILE_UPDATER_BIN) {
-        copyFileToTestAppDir(aAppFile.relPath, aAppFile.inGreDir);
+      copyFileToTestAppDir(aAppFile.relPath, aAppFile.inGreDir);
     }
   });
 
@@ -1795,8 +1798,8 @@ function setupAppFiles() {
       do_throw("Unable to find updater binary!");
     }
   }
-  let outputBinDir = getGREBinDir()
-  updater.copyToFollowingLinks(outputBinDir, updater.leafName);
+  let testBinDir = getGREBinDir()
+  updater.copyToFollowingLinks(testBinDir, updater.leafName);
 
   logTestInfo("finish - copying or creating symlinks to application files " +
               "for the test");
@@ -2122,8 +2125,8 @@ function runUpdateUsingService(aInitialStatus, aExpectedStatus, aCheckSvcLog) {
   if (!updater.exists()) {
     do_throw("Unable to find updater binary!");
   }
-  let outputBinDir = getGREBinDir()
-  updater.copyToFollowingLinks(outputBinDir, updater.leafName);
+  let testBinDir = getGREBinDir()
+  updater.copyToFollowingLinks(testBinDir, updater.leafName);
   updater.copyToFollowingLinks(updatesDir, updater.leafName);
 
   // The service will execute maintenanceservice_installer.exe and

@@ -6,9 +6,7 @@
 
 Program('updater')
 
-# The define is for includes from updater.rc in particular
 updater_rel_path = ''
 include('updater-common.build')
-
 DIRS += ['updater-xpcshell']
 FAIL_ON_WARNINGS = True

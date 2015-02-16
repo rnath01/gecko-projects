@@ -3,12 +3,14 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+# For changes here, also consider ../updater/Makefile.in
+
 XPCSHELLTESTROOT = $(abspath $(DEPTH))/_tests/xpcshell/toolkit/mozapps/update/tests
 MOCHITESTROOT = $(abspath $(DEPTH))/_tests/testing/mochitest/chrome/toolkit/mozapps/update/tests
 
 ifndef MOZ_PROFILE_GENERATE
 ifdef COMPILE_ENVIRONMENT
-INSTALL_TARGETS              += xpcshell-updater
+INSTALL_TARGETS += xpcshell-updater
 xpcshell-updater_TARGET  := libs
 xpcshell-updater_DEST    := $(XPCSHELLTESTROOT)/data
 xpcshell-updater_FILES   := $(DIST)/bin/updater-xpcshell$(BIN_SUFFIX)

@@ -6,7 +6,6 @@
 
 Program('updater-xpcshell')
 
-# The define is for includes from updater.rc in particular
 updater_rel_path = '../'
 DEFINES['UPDATER_XPCSHELL_CERT'] = True
 include('../updater-common.build')
