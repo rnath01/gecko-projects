@@ -21,7 +21,11 @@ class MediaResource;
 class MediaDecoderStateMachine;
 class SourceBufferDecoder;
 class TrackBuffer;
-enum MSRangeRemovalAction : uint8_t;
+
+enum MSRangeRemovalAction: uint8_t {
+  RUN = 0,
+  SKIP = 1
+};
 
 namespace dom {
 
@@ -78,6 +82,10 @@ public:
   // Returns true if aReader is a currently active audio or video
   // reader in this decoders MediaSourceReader.
   bool IsActiveReader(MediaDecoderReader* aReader);
+
+  // Returns a string describing the state of the MediaSource internal
+  // buffered data. Used for debugging purposes.
+  void GetMozDebugReaderData(nsAString& aString);
 
 private:
   void DoSetMediaSourceDuration(double aDuration);

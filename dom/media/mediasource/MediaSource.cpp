@@ -341,16 +341,11 @@ MediaSource::Enabled(JSContext* cx, JSObject* aGlobal)
   }
 
   // We want to restrict to YouTube only.
-  // We define that as the origin being https://*.youtube.com.
-  // We also support https://*.youtube-nocookie.com.
+  // We define that as the origin being *.youtube.com.
+  // We also support *.youtube-nocookie.com
   nsIPrincipal* principal = nsContentUtils::ObjectPrincipal(global);
   nsCOMPtr<nsIURI> uri;
   if (NS_FAILED(principal->GetURI(getter_AddRefs(uri))) || !uri) {
-    return false;
-  }
-
-  bool isHttps = false;
-  if (NS_FAILED(uri->SchemeIs("https", &isHttps)) || !isHttps) {
     return false;
   }
 
@@ -486,7 +481,8 @@ MediaSource::DurationChange(double aOldDuration, double aNewDuration)
   MSE_DEBUG("MediaSource(%p)::DurationChange(aOldDuration=%f, aNewDuration=%f)", this, aOldDuration, aNewDuration);
 
   if (aNewDuration < aOldDuration) {
-    mSourceBuffers->RangeRemoval(aNewDuration, aOldDuration);
+    // Remove all buffered data from aNewDuration.
+    mSourceBuffers->RangeRemoval(aNewDuration, PositiveInfinity<double>());
   }
   // TODO: If partial audio frames/text cues exist, clamp duration based on mSourceBuffers.
 }
@@ -538,6 +534,12 @@ MediaSource::Dump(const char* aPath)
   }
 }
 #endif
+
+void
+MediaSource::GetMozDebugReaderData(nsAString& aString)
+{
+  mDecoder->GetMozDebugReaderData(aString);
+}
 
 nsPIDOMWindow*
 MediaSource::GetParentObject() const

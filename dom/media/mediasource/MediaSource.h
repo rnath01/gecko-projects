@@ -29,11 +29,6 @@ namespace mozilla {
 class ErrorResult;
 template <typename T> class AsyncEventRunner;
 
-enum MSRangeRemovalAction: uint8_t {
-  RUN = 0,
-  SKIP = 1
-};
-
 namespace dom {
 
 class GlobalObject;
@@ -113,6 +108,10 @@ public:
   // aPath must exist.  Debug only, invoke from your favourite debugger.
   void Dump(const char* aPath);
 #endif
+
+  // Returns a string describing the state of the MediaSource internal
+  // buffered data. Used for debugging purposes.
+  void GetMozDebugReaderData(nsAString& aString);
 
 private:
   // MediaSourceDecoder uses DurationChange to set the duration

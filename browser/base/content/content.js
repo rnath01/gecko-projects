@@ -540,35 +540,6 @@ let ClickEventHandler = {
     } else if (ownerDoc.documentURI.startsWith("about:neterror")) {
       this.onAboutNetError(originalTarget, ownerDoc);
     }
-
-    let [href, node] = this._hrefAndLinkNodeForClickEvent(event);
-
-    let json = { button: event.button, shiftKey: event.shiftKey,
-                 ctrlKey: event.ctrlKey, metaKey: event.metaKey,
-                 altKey: event.altKey, href: null, title: null,
-                 bookmark: false };
-
-    if (href) {
-      json.href = href;
-      if (node) {
-        json.title = node.getAttribute("title");
-        if (event.button == 0 && !event.ctrlKey && !event.shiftKey &&
-            !event.altKey && !event.metaKey) {
-          json.bookmark = node.getAttribute("rel") == "sidebar";
-          if (json.bookmark) {
-            event.preventDefault(); // Need to prevent the pageload.
-          }
-        }
-      }
-
-      sendAsyncMessage("Content:Click", json);
-      return;
-    }
-
-    // This might be middle mouse navigation.
-    if (event.button == 1) {
-      sendAsyncMessage("Content:Click", json);
-    }
   },
 
   onAboutCertError: function (targetElement, ownerDoc) {
@@ -944,4 +915,29 @@ addMessageListener("ContextMenu:SaveVideoFrameAsImage", (message) => {
   sendAsyncMessage("ContextMenu:SaveVideoFrameAsImage:Result", {
     dataURL: canvas.toDataURL("image/jpeg", ""),
   });
+});
+
+addMessageListener("AboutMedia:CollectData", (mesage) => {
+  let text = "";
+  let media = content.document.getElementsByTagName('video');
+  if (media.length > 0) {
+    text += content.document.documentURI + "\n";
+  }
+  for (let mediaEl of media) {
+    text += "\t" + mediaEl.currentSrc + "\n";
+    text += "\t" + "currentTime: " + mediaEl.currentTime + "\n";
+    let ms = mediaEl.mozMediaSourceObject;
+    if (ms) {
+      for (let k = 0; k < ms.sourceBuffers.length; ++k) {
+        let sb = ms.sourceBuffers[k];
+        text += "\t\tSourceBuffer " + k + "\n";
+        for (let l = 0; l < sb.buffered.length; ++l) {
+          text += "\t\t\tstart=" + sb.buffered.start(l) + " end=" + sb.buffered.end(l) + "\n";
+        }
+      }
+      text += "\tInternal Data:\n";
+      text += ms.mozDebugReaderData.split("\n").map(line => { return "\t" + line + "\n"; }).join("");
+     }
+  }
+  sendAsyncMessage("AboutMedia:DataCollected", { text: text });
 });

@@ -21,6 +21,7 @@ namespace mozilla {
 
 class ContainerParser;
 class MediaSourceDecoder;
+class LargeDataBuffer;
 
 namespace dom {
 
@@ -39,7 +40,7 @@ public:
   // Append data to the current decoder.  Also responsible for calling
   // NotifyDataArrived on the decoder to keep buffered range computation up
   // to date.  Returns false if the append failed.
-  bool AppendData(const uint8_t* aData, uint32_t aLength, int64_t aTimestampOffset /* microseconds */);
+  bool AppendData(LargeDataBuffer* aData, int64_t aTimestampOffset /* microseconds */);
 
   // Evicts data held in the current decoders SourceBufferResource from the
   // start of the buffer through to aPlaybackTime. aThreshold is used to
@@ -75,7 +76,7 @@ public:
 
   // Returns true if any of the decoders managed by this track buffer
   // contain aTime in their buffered ranges.
-  bool ContainsTime(int64_t aTime);
+  bool ContainsTime(int64_t aTime, int64_t aTolerance);
 
   void BreakCycles();
 
@@ -91,6 +92,13 @@ public:
   // to select decoders.
   // TODO: Refactor to a cleaner interface between TrackBuffer and MediaSourceReader.
   const nsTArray<nsRefPtr<SourceBufferDecoder>>& Decoders();
+
+  // Runs MSE range removal algorithm.
+  // http://w3c.github.io/media-source/#sourcebuffer-coded-frame-removal
+  // Implementation is only partial, we can only trim a buffer.
+  // Returns true if data was evicted.
+  // Times are in microseconds.
+  bool RangeRemoval(int64_t aStart, int64_t aEnd);
 
 #ifdef MOZ_EME
   nsresult SetCDMProxy(CDMProxy* aProxy);
@@ -113,7 +121,8 @@ private:
 
   // Helper for AppendData, ensures NotifyDataArrived is called whenever
   // data is appended to the current decoder's SourceBufferResource.
-  bool AppendDataToCurrentResource(const uint8_t* aData, uint32_t aLength);
+  bool AppendDataToCurrentResource(LargeDataBuffer* aData,
+                                   uint32_t aDuration /* microseconds */);
 
   // Queue execution of InitializeDecoder on mTaskQueue.
   bool QueueInitializeDecoder(SourceBufferDecoder* aDecoder);

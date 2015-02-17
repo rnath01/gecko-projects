@@ -240,6 +240,9 @@ MediaSourceDecoder::DoSetMediaSourceDuration(double aDuration)
     mDecoderStateMachine->SetDuration(INT64_MAX);
     mMediaSourceDuration = PositiveInfinity<double>();
   }
+  if (mReader) {
+    mReader->SetMediaSourceDuration(mMediaSourceDuration);
+  }
 }
 
 void
@@ -285,6 +288,12 @@ MediaSourceDecoder::PrepareReaderInitialization()
 {
   MOZ_ASSERT(mReader);
   mReader->PrepareInitialization();
+}
+
+void
+MediaSourceDecoder::GetMozDebugReaderData(nsAString& aString)
+{
+  mReader->GetMozDebugReaderData(aString);
 }
 
 #ifdef MOZ_EME
