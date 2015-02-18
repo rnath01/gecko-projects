@@ -729,9 +729,6 @@ class GeckoLayerClient implements LayerView.Listener, PanZoomTarget
     public LayerRenderer.Frame createFrame() {
         // Create the shaders and textures if necessary.
         if (!mLayerRendererInitialized) {
-            if (mLayerRenderer == null) {
-                return null;
-            }
             mLayerRenderer.checkMonitoringEnabled();
             mLayerRenderer.createDefaultProgram();
             mLayerRendererInitialized = true;
