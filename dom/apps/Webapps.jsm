@@ -707,7 +707,7 @@ this.DOMApplicationRegistry = {
           // Fields that we must not update. Confere bug 993011 comment 10.
           let fieldsBlacklist = ["basePath", "id", "installerAppId",
             "installerIsBrowser", "localId", "receipts", "storeId",
-            "storeVersion"];
+            "storeVersion", "metaData"];
           // we fall into this case if the app is present in /system/b2g/webapps/webapps.json
           // and in /data/local/webapps/webapps.json: this happens when updating gaia apps
           // Confere bug 989876
@@ -2540,6 +2540,13 @@ this.DOMApplicationRegistry = {
     // Hosted apps can't be trusted or certified, so just check that the
     // manifest doesn't ask for those.
     function checkAppStatus(aManifest) {
+      try {
+        // Everything is authorized in developer mode.
+        if (Services.prefs.getBoolPref("developer.mode")) {
+          return true;
+        }
+      } catch(e) {}
+
       let manifestStatus = aManifest.type || "web";
       return manifestStatus === "web" ||
              manifestStatus === "trusted";
@@ -3828,6 +3835,13 @@ this.DOMApplicationRegistry = {
     let maxStatus = aIsSigned || aIsLocalFileInstall
                     ? Ci.nsIPrincipal.APP_STATUS_PRIVILEGED
                     : Ci.nsIPrincipal.APP_STATUS_INSTALLED;
+
+    try {
+      // Anything is possible in developer mode.
+      if (Services.prefs.getBoolPref("developer.mode")) {
+        maxStatus = Ci.nsIPrincipal.APP_STATUS_CERTIFIED;
+      }
+    } catch(e) {};
 
     let status = AppsUtils.getAppManifestStatus(newManifest);
     if (status > maxStatus) {

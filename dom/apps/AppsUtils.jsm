@@ -113,6 +113,7 @@ function _setAppProperties(aObj, aApp) {
   aObj.kind = aApp.kind;
   aObj.enabled = aApp.enabled !== undefined ? aApp.enabled : true;
   aObj.sideloaded = aApp.sideloaded;
+  aObj.installMetaData = aApp.installMetaData;
 }
 
 this.AppsUtils = {
@@ -494,6 +495,13 @@ this.AppsUtils = {
    * @param aStatus : the APP_STATUS_* for this app.
    */
   checkAppRole: function(aRole, aStatus) {
+    try {
+      // Anything is possible in developer mode.
+      if (Services.prefs.getBoolPref("developer.mode")) {
+        return true;
+      }
+    } catch(e) {}
+
     if (aRole == "theme" && aStatus !== Ci.nsIPrincipal.APP_STATUS_CERTIFIED) {
       return false;
     }

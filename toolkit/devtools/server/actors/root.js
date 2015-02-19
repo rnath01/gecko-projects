@@ -160,7 +160,10 @@ RootActor.prototype = {
     getUsedFontFaces: true,
     // Trait added in Gecko 38, indicating that all features necessary for
     // grabbing allocations from the MemoryActor are available for the performance tool
-    memoryActorAllocations: true
+    memoryActorAllocations: true,
+    // Whether the webapps actor implements `fetch` request
+    // that allows retrieving app sources locally
+    fetchPackagedApp: true,
   },
 
   /**

@@ -7,6 +7,7 @@
 dictionary InstallParameters {
   sequence<DOMString> receipts = [];
   sequence<DOMString> categories = [];
+  any installMetaData;
 };
 
 dictionary LanguageDesc {
@@ -59,6 +60,9 @@ interface DOMApplication : EventTarget {
 
   [Cached, Pure]
   readonly attribute sequence<DOMString> receipts;
+
+  [Cached, Pure]
+  readonly attribute any installMetaData;
 
   readonly attribute double progress;
 
