@@ -12,7 +12,7 @@ dictionary InstallParameters {
 
 dictionary LanguageDesc {
   DOMString target;
-  DOMString version;
+  long revision;
   DOMString name;
 };
 
