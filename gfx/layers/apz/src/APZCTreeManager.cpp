@@ -972,12 +972,19 @@ APZCTreeManager::SetTargetAPZC(uint64_t aInputBlockId, const ScrollableLayerGuid
   mInputQueue->SetConfirmedTargetApzc(aInputBlockId, apzc);
 }
 
+static bool
+GuidComparatorIgnoringPresShell(const ScrollableLayerGuid& aOne, const ScrollableLayerGuid& aTwo)
+{
+  return aOne.mLayersId == aTwo.mLayersId
+      && aOne.mScrollId == aTwo.mScrollId;
+}
+
 void
 APZCTreeManager::UpdateZoomConstraints(const ScrollableLayerGuid& aGuid,
                                        const ZoomConstraints& aConstraints)
 {
   MonitorAutoLock lock(mTreeLock);
-  nsRefPtr<HitTestingTreeNode> node = GetTargetNode(aGuid, nullptr);
+  nsRefPtr<HitTestingTreeNode> node = GetTargetNode(aGuid, &GuidComparatorIgnoringPresShell);
   MOZ_ASSERT(!node || node->GetApzc()); // any node returned must have an APZC
 
   // For a given layers id, non-root APZCs inherit the zoom constraints
@@ -1219,13 +1226,6 @@ APZCTreeManager::GetTargetAPZC(const ScreenPoint& aPoint, HitTestResult* aOutHit
     *aOutHitResult = hitResult;
   }
   return target.forget();
-}
-
-static bool
-GuidComparatorIgnoringPresShell(const ScrollableLayerGuid& aOne, const ScrollableLayerGuid& aTwo)
-{
-  return aOne.mLayersId == aTwo.mLayersId
-      && aOne.mScrollId == aTwo.mScrollId;
 }
 
 nsRefPtr<const OverscrollHandoffChain>
