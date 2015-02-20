@@ -24,15 +24,19 @@
 #include "js/TypeDecls.h"
 
 class nsFrameLoader;
+class nsIFrameLoader;
 class nsIContent;
 class nsIPrincipal;
 class nsIURI;
 class nsIWidget;
 class nsILoadContext;
-class CpowHolder;
 class nsIDocShell;
 
 namespace mozilla {
+
+namespace jsipc {
+class CpowHolder;
+}
 
 namespace layers {
 struct FrameMetrics;
@@ -144,7 +148,8 @@ public:
                                   const nsString& aFeatures,
                                   const nsString& aBaseURI,
                                   bool* aWindowIsNew,
-                                  InfallibleTArray<FrameScriptInfo>* aFrameScripts) MOZ_OVERRIDE;
+                                  InfallibleTArray<FrameScriptInfo>* aFrameScripts,
+                                  nsCString* aURLToLoad) MOZ_OVERRIDE;
     virtual bool RecvSyncMessage(const nsString& aMessage,
                                  const ClonedMessageData& aData,
                                  InfallibleTArray<CpowEntry>&& aCpows,
@@ -168,9 +173,9 @@ public:
                                          const bool& aCausedByComposition) MOZ_OVERRIDE;
     virtual bool RecvNotifyIMESelectedCompositionRect(
                    const uint32_t& aOffset,
-                   InfallibleTArray<nsIntRect>&& aRects,
+                   InfallibleTArray<LayoutDeviceIntRect>&& aRects,
                    const uint32_t& aCaretOffset,
-                   const nsIntRect& aCaretRect) MOZ_OVERRIDE;
+                   const LayoutDeviceIntRect& aCaretRect) MOZ_OVERRIDE;
     virtual bool RecvNotifyIMESelection(const uint32_t& aSeqno,
                                         const uint32_t& aAnchor,
                                         const uint32_t& aFocus,
@@ -179,12 +184,13 @@ public:
     virtual bool RecvNotifyIMETextHint(const nsString& aText) MOZ_OVERRIDE;
     virtual bool RecvNotifyIMEMouseButtonEvent(const widget::IMENotification& aEventMessage,
                                                bool* aConsumedByIME) MOZ_OVERRIDE;
-    virtual bool RecvNotifyIMEEditorRect(const nsIntRect& aRect) MOZ_OVERRIDE;
+    virtual bool RecvNotifyIMEEditorRect(const LayoutDeviceIntRect& aRect) MOZ_OVERRIDE;
     virtual bool RecvNotifyIMEPositionChange(
-                   const nsIntRect& aEditoRect,
-                   InfallibleTArray<nsIntRect>&& aCompositionRects,
-                   const nsIntRect& aCaretRect) MOZ_OVERRIDE;
+                   const LayoutDeviceIntRect& aEditorRect,
+                   InfallibleTArray<LayoutDeviceIntRect>&& aCompositionRects,
+                   const LayoutDeviceIntRect& aCaretRect) MOZ_OVERRIDE;
     virtual bool RecvEndIMEComposition(const bool& aCancel,
+                                       bool* aNoCompositionEvent,
                                        nsString* aComposition) MOZ_OVERRIDE;
     virtual bool RecvGetInputContext(int32_t* aIMEEnabled,
                                      int32_t* aIMEOpen,
@@ -230,7 +236,7 @@ public:
     // XXX/cjones: it's not clear what we gain by hiding these
     // message-sending functions under a layer of indirection and
     // eating the return values
-    void Show(const nsIntSize& size);
+    void Show(const nsIntSize& size, bool aParentIsActive);
     void UpdateDimensions(const nsIntRect& rect, const nsIntSize& size,
                           const nsIntPoint& chromeDisp);
     void UpdateFrame(const layers::FrameMetrics& aFrameMetrics);
@@ -258,6 +264,7 @@ public:
     bool MapEventCoordinatesForChildProcess(mozilla::WidgetEvent* aEvent);
     void MapEventCoordinatesForChildProcess(const LayoutDeviceIntPoint& aOffset,
                                             mozilla::WidgetEvent* aEvent);
+    LayoutDeviceToCSSScale GetLayoutDeviceToCSSScale();
 
     virtual bool RecvRequestNativeKeyBindings(const mozilla::WidgetKeyboardEvent& aEvent,
                                               MaybeNativeKeyBinding* aBindings) MOZ_OVERRIDE;
@@ -324,6 +331,9 @@ public:
     bool SendSelectionEvent(mozilla::WidgetSelectionEvent& event);
 
     static TabParent* GetFrom(nsFrameLoader* aFrameLoader);
+    static TabParent* GetFrom(nsIFrameLoader* aFrameLoader);
+    static TabParent* GetFrom(nsITabParent* aTabParent);
+    static TabParent* GetFrom(PBrowserParent* aTabParent);
     static TabParent* GetFrom(nsIContent* aContent);
     static TabId GetTabIdFrom(nsIDocShell* docshell);
 
@@ -342,7 +352,7 @@ public:
       return mTabId;
     }
 
-    nsIntPoint GetChildProcessOffset();
+    LayoutDeviceIntPoint GetChildProcessOffset();
 
     /**
      * Native widget remoting protocol for use with windowed plugins with e10s.
@@ -362,7 +372,7 @@ protected:
     bool ReceiveMessage(const nsString& aMessage,
                         bool aSync,
                         const StructuredCloneData* aCloneData,
-                        CpowHolder* aCpows,
+                        mozilla::jsipc::CpowHolder* aCpows,
                         nsIPrincipal* aPrincipal,
                         InfallibleTArray<nsString>* aJSONRetVal = nullptr);
 
@@ -395,6 +405,9 @@ protected:
 
     bool SendCompositionChangeEvent(mozilla::WidgetCompositionEvent& event);
 
+    bool InitBrowserConfiguration(nsIURI* aURI,
+                                  BrowserConfiguration& aConfiguration);
+
     // IME
     static TabParent *mIMETabParent;
     nsString mIMECacheText;
@@ -403,6 +416,7 @@ protected:
     mozilla::WritingMode mWritingMode;
     bool mIMEComposing;
     bool mIMECompositionEnding;
+    uint32_t mIMEEventCountAfterEnding;
     // Buffer to store composition text during ResetInputState
     // Compositions in almost all cases are small enough for nsAutoString
     nsAutoString mIMECompositionText;
@@ -410,10 +424,10 @@ protected:
     uint32_t mIMESeqno;
 
     uint32_t mIMECompositionRectOffset;
-    InfallibleTArray<nsIntRect> mIMECompositionRects;
+    InfallibleTArray<LayoutDeviceIntRect> mIMECompositionRects;
     uint32_t mIMECaretOffset;
-    nsIntRect mIMECaretRect;
-    nsIntRect mIMEEditorRect;
+    LayoutDeviceIntRect mIMECaretRect;
+    LayoutDeviceIntRect mIMEEditorRect;
 
     // The number of event series we're currently capturing.
     int32_t mEventCaptureDepth;
@@ -437,19 +451,15 @@ private:
     // When true, we create a pan/zoom controller for our frame and
     // notify it of input events targeting us.
     bool UseAsyncPanZoom();
-    // If we have a render frame currently, notify it that we're about
-    // to dispatch |aEvent| to our child.  If there's a relevant
-    // transform in place, |aEvent| will be transformed in-place so that
-    // it is ready to be dispatched to content.
+    // Update state prior to routing an APZ-aware event to the child process.
     // |aOutTargetGuid| will contain the identifier
     // of the APZC instance that handled the event. aOutTargetGuid may be
     // null.
     // |aOutInputBlockId| will contain the identifier of the input block
     // that this event was added to, if there was one. aOutInputBlockId may
     // be null.
-    nsEventStatus MaybeForwardEventToRenderFrame(WidgetInputEvent& aEvent,
-                                                 ScrollableLayerGuid* aOutTargetGuid,
-                                                 uint64_t* aOutInputBlockId);
+    void ApzAwareEventRoutingToChild(ScrollableLayerGuid* aOutTargetGuid,
+                                     uint64_t* aOutInputBlockId);
     // The offset for the child process which is sampled at touch start. This
     // means that the touch events are relative to where the frame was at the
     // start of the touch. We need to look for a better solution to this
@@ -489,14 +499,23 @@ private:
     static TabParent* sNextTabParent;
 
     // When loading a new tab or window via window.open, the child is
-    // responsible for loading the URL it wants into the new
-    // TabChild. Simultaneously, though, the parent sends a LoadURL message to
-    // every new PBrowser (usually for about:blank). This message usually
-    // arrives after the child has started to load the URL it wants, and
-    // overrides it. To prevent this, we set mSkipLoad to true when creating the
-    // new tab. This flag prevents the unwanted LoadURL message from being sent
-    // by the parent.
-    bool mSkipLoad;
+    // responsible for loading the URL it wants into the new TabChild. When the
+    // parent receives the CreateWindow message, though, it sends a LoadURL
+    // message, usually for about:blank. It's important for the about:blank load
+    // to get processed because the Firefox frontend expects every new window to
+    // immediately start loading something (see bug 1123090). However, we want
+    // the child to process the LoadURL message before it returns from
+    // ProvideWindow so that the URL sent from the parent doesn't override the
+    // child's URL. This is not possible using our IPC mechanisms. To solve the
+    // problem, we skip sending the LoadURL message in the parent and instead
+    // return the URL as a result from CreateWindow. The child simulates
+    // receiving a LoadURL message before returning from ProvideWindow.
+    //
+    // The mCreatingWindow flag is set while dispatching CreateWindow. During
+    // that time, any LoadURL calls are skipped and the URL is stored in
+    // mSkippedURL.
+    bool mCreatingWindow;
+    nsCString mDelayedURL;
 
     // When loading a new tab or window via window.open, we want to ensure that
     // frame scripts for that tab are loaded before any scripts start to run in

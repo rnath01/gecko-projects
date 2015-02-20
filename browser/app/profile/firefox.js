@@ -241,6 +241,8 @@ pref("lightweightThemes.update.enabled", true);
 pref("lightweightThemes.getMoreURL", "https://addons.mozilla.org/%LOCALE%/firefox/themes");
 pref("lightweightThemes.recommendedThemes", "[{\"id\":\"recommended-1\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/a-web-browser-renaissance/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.header.jpg\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.footer.jpg\",\"textcolor\":\"#000000\",\"accentcolor\":\"#f2d9b1\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.icon.jpg\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/1.preview.jpg\",\"author\":\"Sean.Martell\",\"version\":\"0\"},{\"id\":\"recommended-2\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/space-fantasy/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.header.jpg\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.footer.jpg\",\"textcolor\":\"#ffffff\",\"accentcolor\":\"#d9d9d9\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.icon.jpg\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/2.preview.jpg\",\"author\":\"fx5800p\",\"version\":\"1.0\"},{\"id\":\"recommended-3\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/linen-light/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.header.png\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.footer.png\",\"textcolor\":\"#None\",\"accentcolor\":\"#ada8a8\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.icon.png\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/3.preview.png\",\"author\":\"DVemer\",\"version\":\"1.0\"},{\"id\":\"recommended-4\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/pastel-gradient/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.header.png\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.footer.png\",\"textcolor\":\"#000000\",\"accentcolor\":\"#000000\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.icon.png\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/4.preview.png\",\"author\":\"darrinhenein\",\"version\":\"1.0\"},{\"id\":\"recommended-5\",\"homepageURL\":\"https://addons.mozilla.org/firefox/addon/carbon-light/\",\"headerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.header.png\",\"footerURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.footer.png\",\"textcolor\":\"#3b3b3b\",\"accentcolor\":\"#2e2e2e\",\"iconURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.icon.jpg\",\"previewURL\":\"resource:///chrome/browser/content/browser/defaultthemes/5.preview.jpg\",\"author\":\"Jaxivo\",\"version\":\"1.0\"}]");
 
+pref("browser.eme.ui.enabled", false);
+
 // UI tour experience.
 pref("browser.uitour.enabled", true);
 pref("browser.uitour.loglevel", "Error");
@@ -403,10 +405,13 @@ pref("browser.search.context.loadInBackground", false);
 
 pref("browser.search.showOneOffButtons", true);
 
-// How many times to show the new search highlight
-pref("browser.search.highlightCount", 5);
+// comma seperated list of of engines to hide in the search panel.
+pref("browser.search.hiddenOneOffs", "");
 
 pref("browser.sessionhistory.max_entries", 50);
+
+// Built-in default permissions.
+pref("permissions.manager.defaultsUrl", "resource://app/defaults/permissions");
 
 // handle links targeting new windows
 // 1=current window/tab, 2=new window, 3=new tab in most recent window
@@ -848,17 +853,17 @@ pref("browser.preferences.animateFadeIn", true);
 pref("browser.preferences.animateFadeIn", false);
 #endif
 
-// Toggles between the two Preferences implementations, pop-up window and in-content
-#ifdef EARLY_BETA_OR_EARLIER
-pref("browser.preferences.inContent", true);
-pref("browser.preferences.instantApply", true);
-#else
-pref("browser.preferences.inContent", false);
 #ifdef XP_WIN
 pref("browser.preferences.instantApply", false);
 #else
 pref("browser.preferences.instantApply", true);
 #endif
+
+// Toggles between the two Preferences implementations, pop-up window and in-content
+#ifdef EARLY_BETA_OR_EARLIER
+pref("browser.preferences.inContent", true);
+#else
+pref("browser.preferences.inContent", false);
 #endif
 
 pref("browser.download.show_plugins_in_list", true);
@@ -1182,6 +1187,18 @@ pref("browser.tabs.remote.desktopbehavior", true);
 // This will require a restart.
 pref("security.sandbox.windows.log", false);
 
+// Controls whether and how the Windows NPAPI plugin process is sandboxed.
+// To get a different setting for a particular plugin replace "default", with
+// the plugin's nice file name, see: nsPluginTag::GetNiceFileName.
+// On windows these levels are:
+// 0 - no sandbox
+// 1 - sandbox with USER_NON_ADMIN access token level
+// 2 - a more strict sandbox, which might cause functionality issues
+// 3 - the strongest settings we seem to be able to use without breaking
+//     everything, but will definitely cause some functionality restrictions
+pref("dom.ipc.plugins.sandbox-level.default", 0);
+pref("dom.ipc.plugins.sandbox-level.flash", 1);
+
 #if defined(MOZ_CONTENT_SANDBOX)
 // This controls whether the Windows content process sandbox is using a more
 // strict sandboxing policy.  This will require a restart.
@@ -1414,15 +1431,21 @@ pref("devtools.timeline.hiddenMarkers", "[]");
   pref("devtools.performance_dev.enabled", false);
 #endif
 
-pref("devtools.performance.ui.show-timeline-memory", false);
-
 // The default Profiler UI settings
+// TODO remove `devtools.profiler.ui.` branches when performance
+// tool lands (bug 1075567)
 pref("devtools.profiler.ui.flatten-tree-recursion", true);
 pref("devtools.profiler.ui.show-platform-data", false);
 pref("devtools.profiler.ui.show-idle-blocks", true);
 
 // The default Performance UI settings
 pref("devtools.performance.ui.invert-call-tree", true);
+pref("devtools.performance.ui.invert-flame-graph", false);
+pref("devtools.performance.ui.flatten-tree-recursion", true);
+pref("devtools.performance.ui.show-platform-data", false);
+pref("devtools.performance.ui.show-idle-blocks", true);
+pref("devtools.performance.ui.enable-memory", false);
+pref("devtools.performance.ui.enable-framerate", true);
 
 // The default cache UI setting
 pref("devtools.cache.disabled", false);
@@ -1630,9 +1653,15 @@ pref("pdfjs.firstRun", true);
 pref("pdfjs.previousHandler.preferredAction", 0);
 pref("pdfjs.previousHandler.alwaysAskBeforeHandling", false);
 
+// Shumway is only bundled in Nightly.
 #ifdef NIGHTLY_BUILD
-// Shumway component (SWF player) is disabled by default. Also see bug 904346.
+// By default, Shumway (SWF player) is only enabled for whitelisted SWFs on Windows + OS X.
+#ifdef UNIX_BUT_NOT_MAC
 pref("shumway.disabled", true);
+#else
+pref("shumway.disabled", false);
+pref("shumway.swf.whitelist", "http://g-ecx.images-amazon.com/*/AiryBasicRenderer*.swf");
+#endif
 #endif
 
 // The maximum amount of decoded image data we'll willingly keep around (we
@@ -1705,6 +1734,11 @@ pref("dom.debug.propagate_gesture_events_through_content", false);
 // The request URL of the GeoLocation backend.
 pref("geo.wifi.uri", "https://location.services.mozilla.com/v1/geolocate?key=%MOZILLA_API_KEY%");
 
+// On Mac, the default geo provider is corelocation.
+#ifdef XP_MACOSX
+pref("geo.provider.use_corelocation", true);
+#endif
+
 // Necko IPC security checks only needed for app isolation for cookies/cache/etc:
 // currently irrelevant for desktop e10s
 pref("network.disable.ipc.security", true);
@@ -1730,6 +1764,12 @@ pref("identity.fxaccounts.remote.signin.uri", "https://accounts.firefox.com/sign
 // "identity.fxaccounts.remote.signup.uri" pref.
 pref("identity.fxaccounts.settings.uri", "https://accounts.firefox.com/settings");
 
+// The remote URL of the FxA Profile Server
+pref("identity.fxaccounts.remote.profile.uri", "https://profile.accounts.firefox.com/v1");
+
+// The remote URL of the FxA OAuth Server
+pref("identity.fxaccounts.remote.oauth.uri", "https://oauth.accounts.firefox.com/v1");
+
 // Migrate any existing Firefox Account data from the default profile to the
 // Developer Edition profile.
 #ifdef MOZ_DEV_EDITION
@@ -1746,8 +1786,10 @@ pref("ui.key.menuAccessKeyFocuses", true);
 // Encrypted media extensions.
 #ifdef RELEASE_BUILD
 pref("media.eme.enabled", false);
+pref("media.eme.apiVisible", false);
 #else
 pref("media.eme.enabled", true);
+pref("media.eme.apiVisible", true);
 #endif
 
 // Play with different values of the decay time and get telemetry,
@@ -1767,8 +1809,8 @@ pref("experiments.manifest.uri", "https://telemetry-experiment.cdn.mozilla.net/m
 // Whether experiments are supported by the current application profile.
 pref("experiments.supported", true);
 
-// Enable the OpenH264 plugin support in the addon manager.
-pref("media.gmp-gmpopenh264.provider.enabled", true);
+// Enable GMP support in the addon manager.
+pref("media.gmp-provider.enabled", true);
 
 pref("browser.apps.URL", "https://marketplace.firefox.com/discovery/");
 
@@ -1803,7 +1845,14 @@ pref("dom.ipc.cpow.timeout", 500);
 // Enable e10s hang monitoring (slow script checking and plugin hang
 // detection).
 pref("dom.ipc.processHangMonitor", true);
+
+#ifdef DEBUG
+// Don't report hangs in DEBUG builds. They're too slow and often a
+// debugger is attached.
+pref("dom.ipc.reportProcessHangs", false);
+#else
 pref("dom.ipc.reportProcessHangs", true);
+#endif
 
 // Disable reader mode by default.
 pref("reader.parse-on-load.enabled", false);

@@ -8,6 +8,7 @@ let {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource:///modules/ContentWebRTC.jsm");
+Cu.import("resource:///modules/ContentObservers.jsm");
 Cu.import("resource://gre/modules/InlineSpellChecker.jsm");
 Cu.import("resource://gre/modules/InlineSpellCheckerContent.jsm");
 
@@ -162,7 +163,10 @@ let handleContentContextMenu = function (event) {
     }
 
     let customMenuItems = PageMenuChild.build(event.target);
-    sendSyncMessage("contextmenu", { editFlags, spellInfo, customMenuItems, addonInfo }, { event, popupNode: event.target });
+    let principal = event.target.ownerDocument.nodePrincipal;
+    sendSyncMessage("contextmenu",
+                    { editFlags, spellInfo, customMenuItems, addonInfo, principal },
+                    { event, popupNode: event.target });
   }
   else {
     // Break out to the parent window and pass the add-on info along
@@ -508,12 +512,15 @@ let AboutReaderListener = {
         }
 
         ReaderMode.parseDocument(content.document).then(article => {
+          // Do nothing if there is no article, or if the content window has been destroyed.
+          if (article === null || content === null) {
+            return;
+          }
+
           // The loaded page may have changed while we were parsing the document.
           // Make sure we've got the current one.
           let currentURL = Services.io.newURI(content.document.documentURI, null, null).specIgnoringRef;
-
-          // Do nothing if there's no article or the page in this tab has changed.
-          if (article == null || (article.url != currentURL)) {
+          if (article.url !== currentURL) {
             return;
           }
 

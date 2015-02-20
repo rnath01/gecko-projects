@@ -130,21 +130,17 @@ function isValidSerializerVersion (version) {
 function convertLegacyData (legacyData) {
   let { profilerData, ticksData, recordingDuration } = legacyData;
 
-  // The `profilerData` stays, and the previously unrecorded fields
-  // just are empty arrays.
+  // The `profilerData` and `ticksData` stay, but the previously unrecorded
+  // fields just are empty arrays or objects.
   let data = {
+    label: profilerData.profilerLabel,
+    duration: recordingDuration,
     markers: [],
     frames: [],
     memory: [],
     ticks: ticksData,
-    profilerData: profilerData,
-    // Data from the original profiler won't contain `interval` fields,
-    // but a recording duration, as well as the current time, which can be used
-    // to infer the interval startTime and endTime.
-    interval: {
-      startTime: profilerData.currentTime - recordingDuration,
-      endTime: profilerData.currentTime
-    }
+    allocations: { sites: [], timestamps: [], frames: [], counts: [] },
+    profile: profilerData.profile
   };
 
   return data;

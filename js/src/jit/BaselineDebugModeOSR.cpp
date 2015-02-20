@@ -99,6 +99,8 @@ struct DebugModeOSREntry
 
     bool needsRecompileInfo() const {
         return frameKind == ICEntry::Kind_CallVM ||
+               frameKind == ICEntry::Kind_StackCheck ||
+               frameKind == ICEntry::Kind_EarlyStackCheck ||
                frameKind == ICEntry::Kind_DebugTrap ||
                frameKind == ICEntry::Kind_DebugPrologue ||
                frameKind == ICEntry::Kind_DebugEpilogue;
@@ -205,7 +207,7 @@ CollectJitStackScripts(JSContext *cx, const Debugger::ExecutionObservableSet &ob
                 // See cases F and G in PatchBaselineFramesForDebugMode.
                 if (!entries.append(DebugModeOSREntry(script, info)))
                     return false;
-            } else if (frame->isDebuggerHandlingException()) {
+            } else if (frame->isHandlingException()) {
                 // We are in the middle of handling an exception and the frame
                 // must have an override pc.
                 uint32_t offset = script->pcToOffset(frame->overridePc());
@@ -293,6 +295,10 @@ ICEntryKindToString(ICEntry::Kind kind)
         return "non-op IC";
       case ICEntry::Kind_CallVM:
         return "callVM";
+      case ICEntry::Kind_StackCheck:
+        return "stack check";
+      case ICEntry::Kind_EarlyStackCheck:
+        return "early stack check";
       case ICEntry::Kind_DebugTrap:
         return "debug trap";
       case ICEntry::Kind_DebugPrologue:
@@ -329,7 +335,7 @@ SpewPatchStubFrame(ICStub *oldStub, ICStub *newStub)
 {
     JitSpew(JitSpew_BaselineDebugModeOSR,
             "Patch   stub %p -> %p on BaselineStub frame (%s)",
-            oldStub, newStub, ICStub::KindString(newStub->kind()));
+            oldStub, newStub, newStub ? ICStub::KindString(newStub->kind()) : "exception handler");
 }
 
 static void
@@ -348,6 +354,7 @@ PatchBaselineFramesForDebugMode(JSContext *cx, const Debugger::ExecutionObservab
     //  A. From a "can call" stub.
     //  B. From a VM call.
     //  H. From inside HandleExceptionBaseline.
+    //  I. From inside the interrupt handler via the prologue stack check.
     //
     // On to Off:
     //  - All the ways above.
@@ -356,10 +363,10 @@ PatchBaselineFramesForDebugMode(JSContext *cx, const Debugger::ExecutionObservab
     //  E. From the debug epilogue.
     //
     // Off to On to Off:
-    //  F. Undo case B above on previously patched yet unpopped frames.
+    //  F. Undo case B or I above on previously patched yet unpopped frames.
     //
     // On to Off to On:
-    //  G. Undo cases B, C, D, or E above on previously patched yet unpopped
+    //  G. Undo cases B, C, D, E, or I above on previously patched yet unpopped
     //     frames.
     //
     // In general, we patch the return address from the VM call to return to a
@@ -424,7 +431,7 @@ PatchBaselineFramesForDebugMode(JSContext *cx, const Debugger::ExecutionObservab
                 //
                 // Patch the resume address to nullptr, to ensure the old
                 // address is not used anywhere.
-                MOZ_ASSERT(iter.baselineFrame()->isDebuggerHandlingException());
+                MOZ_ASSERT(iter.baselineFrame()->isHandlingException());
                 MOZ_ASSERT(iter.baselineFrame()->overridePc() == pc);
                 uint8_t *retAddr = nullptr;
                 SpewPatchBaselineFrameFromExceptionHandler(prev->returnAddress(), retAddr,
@@ -438,23 +445,27 @@ PatchBaselineFramesForDebugMode(JSContext *cx, const Debugger::ExecutionObservab
 
             // Cases F and G above.
             //
-            // We undo a previous recompile by handling cases B, C, D, and E
-            // like normal, except that we retrieved the pc information via
+            // We undo a previous recompile by handling cases B, C, D, E, or I
+            // like normal, except that we retrieve the pc information via
             // the previous OSR debug info stashed on the frame.
             BaselineDebugModeOSRInfo *info = iter.baselineFrame()->getDebugModeOSRInfo();
             if (info) {
                 MOZ_ASSERT(info->pc == pc);
                 MOZ_ASSERT(info->frameKind == kind);
 
-                // Case G, might need to undo B, C, D, or E.
+                // Case G, might need to undo B, C, D, E, or I.
                 MOZ_ASSERT_IF(script->baselineScript()->hasDebugInstrumentation(),
                               kind == ICEntry::Kind_CallVM ||
+                              kind == ICEntry::Kind_StackCheck ||
+                              kind == ICEntry::Kind_EarlyStackCheck ||
                               kind == ICEntry::Kind_DebugTrap ||
                               kind == ICEntry::Kind_DebugPrologue ||
                               kind == ICEntry::Kind_DebugEpilogue);
-                // Case F, should only need to undo case B.
+                // Case F, should only need to undo case B or I.
                 MOZ_ASSERT_IF(!script->baselineScript()->hasDebugInstrumentation(),
-                              kind == ICEntry::Kind_CallVM);
+                              kind == ICEntry::Kind_CallVM ||
+                              kind == ICEntry::Kind_StackCheck ||
+                              kind == ICEntry::Kind_EarlyStackCheck);
 
                 // We will have allocated a new recompile info, so delete the
                 // existing one.
@@ -479,6 +490,20 @@ PatchBaselineFramesForDebugMode(JSContext *cx, const Debugger::ExecutionObservab
                 // baseline JIT code.
                 ICEntry &callVMEntry = bl->callVMEntryFromPCOffset(pcOffset);
                 recompInfo->resumeAddr = bl->returnAddressForIC(callVMEntry);
+                popFrameReg = false;
+                break;
+              }
+
+              case ICEntry::Kind_StackCheck:
+              case ICEntry::Kind_EarlyStackCheck: {
+                // Case I above.
+                //
+                // Patching mechanism is identical to a CallVM. This is
+                // handled especially only because the stack check VM call is
+                // part of the prologue, and not tied an opcode.
+                bool earlyCheck = kind == ICEntry::Kind_EarlyStackCheck;
+                ICEntry &stackCheckEntry = bl->stackCheckICEntry(earlyCheck);
+                recompInfo->resumeAddr = bl->returnAddressForIC(stackCheckEntry);
                 popFrameReg = false;
                 break;
               }
@@ -567,7 +592,7 @@ PatchBaselineFramesForDebugMode(JSContext *cx, const Debugger::ExecutionObservab
             // (i.e. fallback calls), we need to check for recompilation using
             // DebugModeOSRVolatileStub.
             if (layout->maybeStubPtr()) {
-                MOZ_ASSERT(entry.newStub);
+                MOZ_ASSERT(entry.newStub || prevFrame->isHandlingException());
                 SpewPatchStubFrame(entry.oldStub, entry.newStub);
                 layout->setStubPtr(entry.newStub);
             }
@@ -684,6 +709,16 @@ CloneOldBaselineStub(JSContext *cx, DebugModeOSREntryVector &entries, size_t ent
     ICStub *oldStub = entry.oldStub;
     MOZ_ASSERT(ICStub::CanMakeCalls(oldStub->kind()));
 
+    if (entry.frameKind == ICEntry::Kind_Invalid) {
+        // The exception handler can modify the frame's override pc while
+        // unwinding scopes. This is fine, but if we have a stub frame, the code
+        // code below will get confused: the entry's pcOffset doesn't match the
+        // stub that's still on the stack. To prevent that, we just set the new
+        // stub to nullptr as we will never return to this stub frame anyway.
+        entry.newStub = nullptr;
+        return true;
+    }
+
     // Get the new fallback stub from the recompiled baseline script.
     ICFallbackStub *fallbackStub = entry.fallbackStub();
 
@@ -696,9 +731,11 @@ CloneOldBaselineStub(JSContext *cx, DebugModeOSREntryVector &entries, size_t ent
         return true;
     }
 
-    // Check if we have already cloned the stub on a younger frame.
+    // Check if we have already cloned the stub on a younger frame. Ignore
+    // frames that entered the exception handler (entries[i].newStub is nullptr
+    // in that case, see above).
     for (size_t i = 0; i < entryIndex; i++) {
-        if (oldStub == entries[i].oldStub) {
+        if (oldStub == entries[i].oldStub && entries[i].frameKind != ICEntry::Kind_Invalid) {
             MOZ_ASSERT(entries[i].newStub);
             entry.newStub = entries[i].newStub;
             return true;
@@ -723,7 +760,7 @@ CloneOldBaselineStub(JSContext *cx, DebugModeOSREntryVector &entries, size_t ent
     switch (oldStub->kind()) {
 #define CASE_KIND(kindName)                                                  \
       case ICStub::kindName:                                                 \
-        entry.newStub = IC##kindName::Clone(cx, stubSpace, firstMonitorStub, \
+        entry.newStub = IC##kindName::Clone(stubSpace, firstMonitorStub,     \
                                             *oldStub->to##kindName());       \
         break;
         PATCHABLE_ICSTUB_KIND_LIST(CASE_KIND)
@@ -746,7 +783,7 @@ CloneOldBaselineStub(JSContext *cx, DebugModeOSREntryVector &entries, size_t ent
 static bool
 InvalidateScriptsInZone(JSContext *cx, Zone *zone, const Vector<DebugModeOSREntry> &entries)
 {
-    types::RecompileInfoVector invalid;
+    RecompileInfoVector invalid;
     for (UniqueScriptOSREntryIter iter(entries); !iter.done(); ++iter) {
         JSScript *script = iter.entry().script;
         if (script->compartment()->zone() != zone)
@@ -906,6 +943,35 @@ HasForcedReturn(BaselineDebugModeOSRInfo *info, bool rv)
     return false;
 }
 
+static inline bool
+IsReturningFromCallVM(BaselineDebugModeOSRInfo *info)
+{
+    // Keep this in sync with EmitBranchIsReturningFromCallVM.
+    //
+    // The stack check entries are returns from a callVM, but have a special
+    // kind because they do not exist in a 1-1 relationship with a pc offset.
+    return info->frameKind == ICEntry::Kind_CallVM ||
+           info->frameKind == ICEntry::Kind_StackCheck ||
+           info->frameKind == ICEntry::Kind_EarlyStackCheck;
+}
+
+static void
+EmitBranchICEntryKind(MacroAssembler &masm, Register entry, ICEntry::Kind kind, Label *label)
+{
+    masm.branch32(MacroAssembler::Equal,
+                  Address(entry, offsetof(BaselineDebugModeOSRInfo, frameKind)),
+                  Imm32(kind), label);
+}
+
+static void
+EmitBranchIsReturningFromCallVM(MacroAssembler &masm, Register entry, Label *label)
+{
+    // Keep this in sync with IsReturningFromCallVM.
+    EmitBranchICEntryKind(masm, entry, ICEntry::Kind_CallVM, label);
+    EmitBranchICEntryKind(masm, entry, ICEntry::Kind_StackCheck, label);
+    EmitBranchICEntryKind(masm, entry, ICEntry::Kind_EarlyStackCheck, label);
+}
+
 static void
 SyncBaselineDebugModeOSRInfo(BaselineFrame *frame, Value *vp, bool rv)
 {
@@ -927,7 +993,7 @@ SyncBaselineDebugModeOSRInfo(BaselineFrame *frame, Value *vp, bool rv)
     //
     // In the case of returning from a callVM, we don't need to restore R0 and
     // R1 ourself since we'll return into code that does it if needed.
-    if (info->frameKind != ICEntry::Kind_CallVM) {
+    if (!IsReturningFromCallVM(info)) {
         unsigned numUnsynced = info->slotInfo.numUnsynced();
         MOZ_ASSERT(numUnsynced <= 2);
         if (numUnsynced > 0)
@@ -1072,10 +1138,7 @@ JitRuntime::generateBaselineDebugModeOSRHandler(JSContext *cx, uint32_t *noFrame
     // Emit two tails for the case of returning from a callVM and all other
     // cases, as the state we need to restore differs depending on the case.
     Label returnFromCallVM, end;
-    masm.branch32(MacroAssembler::Equal,
-                  Address(temp, offsetof(BaselineDebugModeOSRInfo, frameKind)),
-                  Imm32(ICEntry::Kind_CallVM),
-                  &returnFromCallVM);
+    EmitBranchIsReturningFromCallVM(masm, temp, &returnFromCallVM);
 
     EmitBaselineDebugModeOSRHandlerTail(masm, temp, /* returnFromCallVM = */ false);
     masm.jump(&end);

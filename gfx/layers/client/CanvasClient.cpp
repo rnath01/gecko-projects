@@ -333,6 +333,9 @@ static TemporaryRef<gl::ShSurfHandle>
 CloneSurface(gl::SharedSurface* src, gl::SurfaceFactory* factory)
 {
     RefPtr<gl::ShSurfHandle> dest = factory->NewShSurfHandle(src->mSize);
+    if (!dest) {
+        return nullptr;
+    }
     SharedSurface::ProdCopy(src, dest->Surf(), factory);
     return dest.forget();
 }
@@ -401,6 +404,15 @@ CanvasClientSharedSurface::Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer)
 
   forwarder->UpdatedTexture(this, mFrontTex, nullptr);
   forwarder->UseTexture(this, mFrontTex);
+}
+
+void
+CanvasClientSharedSurface::ClearSurfaces()
+{
+  mFrontTex = nullptr;
+  // It is important to destroy the SharedSurface *after* the TextureClient.
+  mFront = nullptr;
+  mPrevFront = nullptr;
 }
 
 }

@@ -138,7 +138,12 @@ nsresult
 MediaEngineGonkVideoSource::Deallocate()
 {
   LOG((__FUNCTION__));
-  if (mSources.IsEmpty()) {
+  bool empty;
+  {
+    MonitorAutoLock lock(mMonitor);
+    empty = mSources.IsEmpty();
+  }
+  if (empty) {
 
     ReentrantMonitorAutoEnter sync(mCallbackMonitor);
 
@@ -171,10 +176,12 @@ MediaEngineGonkVideoSource::Start(SourceMediaStream* aStream, TrackID aID)
     return NS_ERROR_FAILURE;
   }
 
-  mSources.AppendElement(aStream);
+  {
+    MonitorAutoLock lock(mMonitor);
+    mSources.AppendElement(aStream);
+  }
 
   aStream->AddTrack(aID, 0, new VideoSegment());
-  aStream->AdvanceKnownTracksTime(STREAM_TIME_MAX);
 
   ReentrantMonitorAutoEnter sync(mCallbackMonitor);
 
@@ -190,6 +197,16 @@ MediaEngineGonkVideoSource::Start(SourceMediaStream* aStream, TrackID aID)
   mCallbackMonitor.Wait();
   if (mState != kStarted) {
     return NS_ERROR_FAILURE;
+  }
+
+  nsTArray<nsString> focusModes;
+  mCameraControl->Get(CAMERA_PARAM_SUPPORTED_FOCUSMODES, focusModes);
+  for (nsTArray<nsString>::index_type i = 0; i < focusModes.Length(); ++i) {
+    if (focusModes[i].EqualsASCII("continuous-video")) {
+      mCameraControl->Set(CAMERA_PARAM_FOCUSMODE, focusModes[i]);
+      mCameraControl->ResumeContinuousFocus();
+      break;
+    }
   }
 
   if (NS_FAILED(InitDirectMediaBuffer())) {
@@ -239,12 +256,16 @@ nsresult
 MediaEngineGonkVideoSource::Stop(SourceMediaStream* aSource, TrackID aID)
 {
   LOG((__FUNCTION__));
-  if (!mSources.RemoveElement(aSource)) {
-    // Already stopped - this is allowed
-    return NS_OK;
-  }
-  if (!mSources.IsEmpty()) {
-    return NS_OK;
+  {
+    MonitorAutoLock lock(mMonitor);
+
+    if (!mSources.RemoveElement(aSource)) {
+      // Already stopped - this is allowed
+      return NS_OK;
+    }
+    if (!mSources.IsEmpty()) {
+      return NS_OK;
+    }
   }
 
   ReentrantMonitorAutoEnter sync(mCallbackMonitor);
@@ -295,8 +316,19 @@ MediaEngineGonkVideoSource::Shutdown()
   ReentrantMonitorAutoEnter sync(mCallbackMonitor);
 
   if (mState == kStarted) {
-    while (!mSources.IsEmpty()) {
-      Stop(mSources[0], kVideoTrack); // XXX change to support multiple tracks
+    SourceMediaStream *source;
+    bool empty;
+
+    while (1) {
+      {
+        MonitorAutoLock lock(mMonitor);
+        empty = mSources.IsEmpty();
+        if (empty) {
+          break;
+        }
+        source = mSources[0];
+      }
+      Stop(source, kVideoTrack); // XXX change to support multiple tracks
     }
     MOZ_ASSERT(mState == kStopped);
   }
@@ -400,15 +432,6 @@ MediaEngineGonkVideoSource::StartImpl(webrtc::CaptureCapability aCapability) {
   config.mPreviewSize.height = aCapability.height;
   mCameraControl->Start(&config);
   mCameraControl->Set(CAMERA_PARAM_PICTURE_SIZE, config.mPreviewSize);
-
-  nsTArray<nsString> focusModes;
-  mCameraControl->Get(CAMERA_PARAM_SUPPORTED_FOCUSMODES, focusModes);
-  for (nsTArray<nsString>::index_type i = 0; i < focusModes.Length(); ++i) {
-    if (focusModes[i].EqualsASCII("continuous-video")) {
-      mCameraControl->Set(CAMERA_PARAM_FOCUSMODE, focusModes[i]);
-      break;
-    }
-  }
 
   hal::RegisterScreenConfigurationObserver(this);
 }

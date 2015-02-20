@@ -891,8 +891,7 @@
 .theme-light .scrollbutton-up > .toolbarbutton-icon,
 .theme-light .scrollbutton-down > .toolbarbutton-icon,
 .theme-light #black-boxed-message-button .button-icon,
-.theme-light #profiling-notice-button .button-icon,
-.theme-light #canvas-debugging-empty-notice-button .button-icon,
+.theme-light .notice-container button .button-icon,
 .theme-light #requests-menu-perf-notice-button .button-icon,
 .theme-light #requests-menu-network-summary-button .button-icon,
 .theme-light .event-tooltip-debugger-icon,
@@ -906,7 +905,8 @@
 .theme-light .devtools-tab[icon-invertable][selected] > image,
 .theme-light .devtools-tab[icon-invertable][highlighted] > image,
 .theme-light #record-snapshot[checked] > image,
-.theme-light #profiler-start[checked] > image {
+.theme-light #profiler-start[checked] > image,
+.theme-light .notice-container button[checked] .button-icon {
   filter: none !important;
 }
 
@@ -937,3 +937,25 @@
   border-color: var(--theme-splitter-color); /* Needed for responsive container at low width. */
 }
 
+/* Throbbers */
+.devtools-throbber::before {
+  content: "";
+  display: inline-block;
+  vertical-align: bottom;
+  -moz-margin-end: 0.5em;
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: 1.1s linear throbber-spin infinite;
+}
+
+@keyframes throbber-spin {
+  from {
+    transform: none;
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

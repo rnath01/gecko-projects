@@ -348,9 +348,7 @@ loop.conversationViews = (function(mozL10n) {
                          .isRequired,
       sdk: React.PropTypes.object.isRequired,
       conversationAppStore: React.PropTypes.instanceOf(
-        loop.store.ConversationAppStore).isRequired,
-      feedbackStore:
-        React.PropTypes.instanceOf(loop.store.FeedbackStore).isRequired
+        loop.store.ConversationAppStore).isRequired
     },
 
     getInitialState: function() {
@@ -426,7 +424,6 @@ loop.conversationViews = (function(mozL10n) {
 
           return (
             <sharedViews.FeedbackView
-              feedbackStore={this.props.feedbackStore}
               onAfterFeedbackReceived={this.closeWindow.bind(this)}
             />
           );
@@ -901,7 +898,7 @@ loop.conversationViews = (function(mozL10n) {
           <div className="conversation">
             <div className="media nested">
               <div className="video_wrapper remote_wrapper">
-                <div className="video_inner remote"></div>
+                <div className="video_inner remote focus-stream"></div>
               </div>
               <div className={localStreamClasses}></div>
             </div>
@@ -929,8 +926,7 @@ loop.conversationViews = (function(mozL10n) {
     propTypes: {
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
       store: React.PropTypes.instanceOf(
-        loop.store.ConversationStore).isRequired,
-      feedbackStore: React.PropTypes.instanceOf(loop.store.FeedbackStore)
+        loop.store.ConversationStore).isRequired
     },
 
     getInitialState: function() {
@@ -969,7 +965,6 @@ loop.conversationViews = (function(mozL10n) {
 
       return (
         <sharedViews.FeedbackView
-          feedbackStore={this.props.feedbackStore}
           onAfterFeedbackReceived={this._closeWindow.bind(this)}
         />
       );

@@ -10,6 +10,7 @@
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/dom/Headers.h"
 #include "mozilla/dom/RequestBinding.h"
+#include "nsWeakReference.h"
 
 namespace mozilla {
 namespace dom {
@@ -37,7 +38,8 @@ class WorkerNavigator;
 class Performance;
 
 class WorkerGlobalScope : public DOMEventTargetHelper,
-                          public nsIGlobalObject
+                          public nsIGlobalObject,
+                          public nsSupportsWeakReference
 {
   typedef mozilla::dom::indexedDB::IDBFactory IDBFactory;
 
@@ -201,9 +203,9 @@ public:
                    JS::MutableHandle<JSObject*> aReflector) MOZ_OVERRIDE;
 
   void
-  GetScope(DOMString& aScope) const
+  GetScope(nsString& aScope) const
   {
-    aScope.AsAString() = mScope;
+    aScope = mScope;
   }
 
   void

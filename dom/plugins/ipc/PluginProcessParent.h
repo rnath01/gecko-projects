@@ -50,8 +50,11 @@ public:
      *
      * @param aLaunchCompleteTask Task that is executed on the main
      * thread once the asynchonous launch has completed.
+     * @param aSandboxLevel Determines the strength of the sandbox.
+     * <= 0 means no sandbox.
      */
-    bool Launch(UniquePtr<LaunchCompleteTask> aLaunchCompleteTask = UniquePtr<LaunchCompleteTask>());
+    bool Launch(UniquePtr<LaunchCompleteTask> aLaunchCompleteTask = UniquePtr<LaunchCompleteTask>(),
+                int32_t aSandboxLevel = 0);
 
     void Delete();
 

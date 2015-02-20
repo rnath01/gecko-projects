@@ -24,9 +24,8 @@
 
 #include <functional>
 #include <vector>
-#include <gtest/gtest.h>
+#include "pkixgtest.h"
 
-#include "pkix/bind.h"
 #include "pkixder.h"
 
 using namespace mozilla::pkix;
@@ -468,7 +467,7 @@ TEST_F(pkixder_input_tests, MarkAndGetInput)
 }
 
 // Cannot run this test on debug builds because of the NotReached
-#ifndef DEBUG
+#ifdef NDEBUG
 TEST_F(pkixder_input_tests, MarkAndGetInputDifferentInput)
 {
   const uint8_t der[] = { 0x11, 0x22, 0x33, 0x44 };
@@ -844,10 +843,11 @@ TEST_F(pkixder_input_tests, NestedOf)
 
   std::vector<uint8_t> readValues;
   ASSERT_EQ(Success,
-    NestedOf(input, SEQUENCE, INTEGER, EmptyAllowed::No,
-             mozilla::pkix::bind(NestedOfHelper, mozilla::pkix::_1,
-                                 mozilla::pkix::ref(readValues))));
-  ASSERT_EQ((size_t) 3, readValues.size());
+            NestedOf(input, SEQUENCE, INTEGER, EmptyAllowed::No,
+                     [&readValues](Reader& r) {
+                       return NestedOfHelper(r, readValues);
+                     }));
+  ASSERT_EQ(3u, readValues.size());
   ASSERT_EQ(0x01, readValues[0]);
   ASSERT_EQ(0x02, readValues[1]);
   ASSERT_EQ(0x03, readValues[2]);
@@ -862,9 +862,10 @@ TEST_F(pkixder_input_tests, NestedOfWithTruncatedData)
   std::vector<uint8_t> readValues;
   ASSERT_EQ(Result::ERROR_BAD_DER,
             NestedOf(input, SEQUENCE, INTEGER, EmptyAllowed::No,
-                     mozilla::pkix::bind(NestedOfHelper, mozilla::pkix::_1,
-                                         mozilla::pkix::ref(readValues))));
-  ASSERT_EQ((size_t) 0, readValues.size());
+                     [&readValues](Reader& r) {
+                       return NestedOfHelper(r, readValues);
+                     }));
+  ASSERT_EQ(0u, readValues.size());
 }
 
 TEST_F(pkixder_input_tests, MatchRestAtEnd)

@@ -146,7 +146,7 @@ let lazilyLoadedObserverScripts = [
   ["Feedback", ["Feedback:Show"], "chrome://browser/content/Feedback.js"],
   ["SelectionHandler", ["TextSelection:Get"], "chrome://browser/content/SelectionHandler.js"],
   ["EmbedRT", ["GeckoView:ImportScript"], "chrome://browser/content/EmbedRT.js"],
-  ["Reader", ["Reader:Added", "Reader:Removed", "Gesture:DoubleTap"], "chrome://browser/content/Reader.js"],
+  ["Reader", ["Reader:FetchContent", "Reader:Removed", "Gesture:DoubleTap"], "chrome://browser/content/Reader.js"],
 ];
 if (AppConstants.MOZ_WEBRTC) {
   lazilyLoadedObserverScripts.push(
@@ -179,8 +179,7 @@ lazilyLoadedObserverScripts.forEach(function (aScript) {
     "Reader:ListStatusRequest",
     "Reader:RemoveFromList",
     "Reader:Share",
-    "Reader:ShowToast",
-    "Reader:ToolbarVisibility",
+    "Reader:ToolbarHidden",
     "Reader:SystemUIVisibility",
     "Reader:UpdateReaderButton",
   ], "chrome://browser/content/Reader.js"],
@@ -298,8 +297,8 @@ XPCOMUtils.defineLazyGetter(this, "ContentAreaUtils", function() {
   return ContentAreaUtils;
 });
 
-XPCOMUtils.defineLazyModuleGetter(this, "Rect",
-                                  "resource://gre/modules/Geometry.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Rect", "resource://gre/modules/Geometry.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Point", "resource://gre/modules/Geometry.jsm");
 
 function resolveGeckoURI(aURI) {
   if (!aURI)
@@ -369,10 +368,18 @@ var BrowserApp = {
 
         // Queue up some other performance-impacting initializations
         Services.tm.mainThread.dispatch(function() {
+          // Spin up some services which impact performance.
           Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager);
+          Services.search.init();
 
+          // Spin up some features which impact performance.
           CastingApps.init();
           DownloadNotifications.init();
+
+          if (AppConstants.MOZ_SAFE_BROWSING) {
+            // Bug 778855 - Perf regression if we do this here. To be addressed in bug 779008.
+            SafeBrowsing.init();
+          };
 
           // Delay this a minute because there's no rush
           setTimeout(() => {
@@ -380,13 +387,6 @@ var BrowserApp = {
             BrowserApp.gmpInstallManager.simpleCheckAndInstall().then(null, () => {});
           }, 1000 * 60);
         }, Ci.nsIThread.DISPATCH_NORMAL);
-
-        if (AppConstants.MOZ_SAFE_BROWSING) {
-          Services.tm.mainThread.dispatch(function() {
-            // Bug 778855 - Perf regression if we do this here. To be addressed in bug 779008.
-            SafeBrowsing.init();
-          }, Ci.nsIThread.DISPATCH_NORMAL);
-        }
 
         if (AppConstants.NIGHTLY_BUILD) {
           WebcompatReporter.init();
@@ -4451,8 +4451,7 @@ Tab.prototype = {
       ExternalApps.updatePageActionUri(fixedURI);
     }
 
-    let webNav = BrowserApp.selectedTab.window
-        .QueryInterface(Ci.nsIInterfaceRequestor)
+    let webNav = contentWin.QueryInterface(Ci.nsIInterfaceRequestor)
         .getInterface(Ci.nsIWebNavigation);
 
     let message = {
@@ -4982,6 +4981,11 @@ var BrowserEventHandler = {
       return;
     }
 
+    this._inCluster = aEvent.hitCluster;
+    if (this._inCluster) {
+      return;  // No highlight for a cluster of links
+    }
+
     let uri = this._getLinkURI(target);
     if (uri) {
       try {
@@ -5096,16 +5100,19 @@ var BrowserEventHandler = {
           Cu.reportError(e);
         }
 
-        // The _highlightElement was chosen after fluffing the touch events
-        // that led to this SingleTap, so by fluffing the mouse events, they
-        // should find the same target since we fluff them again below.
         let data = JSON.parse(aData);
         let {x, y} = data;
 
-        this._sendMouseEvent("mousemove", x, y);
-        this._sendMouseEvent("mousedown", x, y);
-        this._sendMouseEvent("mouseup",   x, y);
-
+        if (this._inCluster) {
+          this._clusterClicked(x, y);
+        } else {
+          // The _highlightElement was chosen after fluffing the touch events
+          // that led to this SingleTap, so by fluffing the mouse events, they
+          // should find the same target since we fluff them again below.
+          this._sendMouseEvent("mousemove", x, y);
+          this._sendMouseEvent("mousedown", x, y);
+          this._sendMouseEvent("mouseup",   x, y);
+        }
         // scrollToFocusedInput does its own checks to find out if an element should be zoomed into
         BrowserApp.scrollToFocusedInput(BrowserApp.selectedBrowser);
 
@@ -5126,6 +5133,16 @@ var BrowserEventHandler = {
         dump('BrowserEventHandler.handleUserEvent: unexpected topic "' + aTopic + '"');
         break;
     }
+  },
+
+  _clusterClicked: function(aX, aY) {
+    Messaging.sendRequest({
+      type: "Gesture:clusteredLinksClicked",
+      clickPosition: {
+        x: aX,
+        y: aY
+      }
+    });
   },
 
   onDoubleTap: function(aData) {
@@ -7302,7 +7319,8 @@ var RemoteDebugger = {
    * Prompt the user to accept or decline the incoming connection.
    * This is passed to DebuggerService.init as a callback.
    *
-   * @return true if the connection should be permitted, false otherwise
+   * @return An AuthenticationResult value.
+   *         A promise that will be resolved to the above is also allowed.
    */
   _showConnectionPrompt: function rd_showConnectionPrompt() {
     let title = Strings.browser.GetStringFromName("remoteIncomingPromptTitle");
@@ -7334,12 +7352,11 @@ var RemoteDebugger = {
       thread.processNextEvent(true);
 
     if (result === 0)
-      return true;
+      return DebuggerServer.AuthenticationResult.ALLOW;
     if (result === 2) {
-      Services.prefs.setBoolPref("devtools.debugger.remote-enabled", false);
-      this._stop();
+      return DebuggerServer.AuthenticationResult.DISABLE_ALL;
     }
-    return false;
+    return DebuggerServer.AuthenticationResult.DENY;
   },
 
   _restart: function rd_restart() {
@@ -7358,9 +7375,12 @@ var RemoteDebugger = {
       let pathOrPort = this._getPath();
       if (!pathOrPort)
         pathOrPort = this._getPort();
+      let AuthenticatorType = DebuggerServer.Authenticators.get("PROMPT");
+      let authenticator = new AuthenticatorType.Server();
+      authenticator.allowConnection = this._showConnectionPrompt.bind(this);
       let listener = DebuggerServer.createListener();
       listener.portOrPath = pathOrPort;
-      listener.allowConnection = this._showConnectionPrompt.bind(this);
+      listener.authenticator = authenticator;
       listener.open();
       dump("Remote debugger listening at path " + pathOrPort);
     } catch(e) {
@@ -7531,6 +7551,7 @@ var Distribution = {
   _file: null,
 
   init: function dc_init() {
+    Services.obs.addObserver(this, "Distribution:Changed", false);
     Services.obs.addObserver(this, "Distribution:Set", false);
     Services.obs.addObserver(this, "prefservice:after-app-defaults", false);
     Services.obs.addObserver(this, "Campaign:Set", false);
@@ -7544,6 +7565,15 @@ var Distribution = {
 
   observe: function dc_observe(aSubject, aTopic, aData) {
     switch (aTopic) {
+      case "Distribution:Changed":
+        // Re-init the search service.
+        try {
+          Services.search._asyncReInit();
+        } catch (e) {
+          console.log("Unable to reinit search service.");
+        }
+        // Fall through.
+
       case "Distribution:Set":
         // Reload the default prefs so we can observe "prefservice:after-app-defaults"
         Services.prefs.QueryInterface(Ci.nsIObserver).observe(null, "reload-default-prefs", null);
@@ -7600,7 +7630,7 @@ var Distribution = {
     defaults.setCharPref("distribution.id", global["id"]);
     defaults.setCharPref("distribution.version", global["version"]);
 
-    let locale = Services.prefs.getCharPref("general.useragent.locale");
+    let locale = BrowserApp.getUALocalePref();
     let aboutString = Cc["@mozilla.org/supports-string;1"].createInstance(Ci.nsISupportsString);
     aboutString.data = global["about." + locale] || global["about"];
     defaults.setComplexValue("distribution.about", Ci.nsISupportsString, aboutString);
@@ -7625,8 +7655,9 @@ var Distribution = {
     }
 
     // Apply a lightweight theme if necessary
-    if (prefs["lightweightThemes.isThemeSelected"])
+    if (prefs && prefs["lightweightThemes.isThemeSelected"]) {
       Services.obs.notifyObservers(null, "lightweight-theme-apply", "");
+    }
 
     let localizedString = Cc["@mozilla.org/pref-localizedstring;1"].createInstance(Ci.nsIPrefLocalizedString);
     let localizeablePrefs = aData["LocalizablePreferences"];

@@ -636,14 +636,15 @@ public:
 
     gfxFont *GetFont() const { return mFont; }
 
-    // returns true if features exist in output, false otherwise
-    static bool
+    static void
     MergeFontFeatures(const gfxFontStyle *aStyle,
                       const nsTArray<gfxFontFeature>& aFontFeatures,
                       bool aDisableLigatures,
                       const nsAString& aFamilyName,
                       bool aAddSmallCaps,
-                      nsDataHashtable<nsUint32HashKey,uint32_t>& aMergedFeatures);
+                      PLDHashOperator (*aHandleFeature)(const uint32_t&,
+                                                        uint32_t&, void*),
+                      void* aHandleFeatureData);
 
 protected:
     // the font this shaper is working with
@@ -1403,6 +1404,16 @@ public:
     // check whether this is an sfnt we can potentially use with Graphite
     bool FontCanSupportGraphite() {
         return mFontEntry->HasGraphiteTables();
+    }
+
+    // Whether this is a font that may be doing full-color rendering,
+    // and therefore needs us to use a mask for text-shadow even when
+    // we're not actually blurring.
+    bool AlwaysNeedsMaskForShadow() {
+        return mFontEntry->TryGetColorGlyphs() ||
+               mFontEntry->TryGetSVGData(this) ||
+               mFontEntry->HasFontTable(TRUETYPE_TAG('C','B','D','T')) ||
+               mFontEntry->HasFontTable(TRUETYPE_TAG('s','b','i','x'));
     }
 
     // whether a feature is supported by the font (limited to a small set

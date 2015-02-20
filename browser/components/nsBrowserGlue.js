@@ -119,6 +119,13 @@ XPCOMUtils.defineLazyModuleGetter(this, "UpdateChannel",
                                   "resource://gre/modules/UpdateChannel.jsm");
 #endif
 
+
+#if defined(MOZ_UPDATE_CHANNEL) && MOZ_UPDATE_CHANNEL != release
+#define MOZ_DEBUG_UA // Shorthand define for subsequent conditional sections.
+XPCOMUtils.defineLazyModuleGetter(this, "UserAgentOverrides",
+                                  "resource://gre/modules/UserAgentOverrides.jsm");
+#endif
+
 XPCOMUtils.defineLazyGetter(this, "ShellService", function() {
   try {
     return Cc["@mozilla.org/browser/shell-service;1"].
@@ -276,6 +283,9 @@ BrowserGlue.prototype = {
         Services.console.logStringMessage(null); // clear the console (in case it's open)
         Services.console.reset();
         break;
+      case "restart-in-safe-mode":
+        this._onSafeModeRestart();
+        break;
       case "quit-application-requested":
         this._onQuitRequest(subject, data);
         break;
@@ -413,6 +423,18 @@ BrowserGlue.prototype = {
 #endif
         break;
       case "browser-search-engine-modified":
+        // Ensure we cleanup the hiddenOneOffs pref when removing
+        // an engine, and that newly added engines are visible.
+        if (data == "engine-added" || data == "engine-removed") {
+          let engineName = subject.QueryInterface(Ci.nsISearchEngine).name;
+          let hiddenPref =
+            Services.prefs.getCharPref("browser.search.hiddenOneOffs");
+          let hiddenEngines = hiddenPref ? hiddenPref.split(",") : [];
+          hiddenEngines = hiddenEngines.filter(x => x !== engineName);
+          Services.prefs.setCharPref("browser.search.hiddenOneOffs",
+                                     hiddenEngines.join(","));
+        }
+
         if (data != "engine-default" && data != "engine-current") {
           break;
         }
@@ -501,6 +523,7 @@ BrowserGlue.prototype = {
 #endif
     os.addObserver(this, "browser-search-engine-modified", false);
     os.addObserver(this, "browser-search-service", false);
+    os.addObserver(this, "restart-in-safe-mode", false);
   },
 
   // cleanup (called on application shutdown)
@@ -512,6 +535,7 @@ BrowserGlue.prototype = {
     os.removeObserver(this, "browser:purge-session-history");
     os.removeObserver(this, "quit-application-requested");
     os.removeObserver(this, "quit-application-granted");
+    os.removeObserver(this, "restart-in-safe-mode");
 #ifdef OBSERVE_LASTWINDOW_CLOSE_TOPICS
     os.removeObserver(this, "browser-lastwindow-close-requested");
     os.removeObserver(this, "browser-lastwindow-close-granted");
@@ -581,9 +605,6 @@ BrowserGlue.prototype = {
       SignInToWebsiteUX.init();
     }
 #endif
-#ifdef NIGHTLY_BUILD
-    ShumwayUtils.init();
-#endif
     webrtcUI.init();
     AboutHome.init();
     SessionStore.init();
@@ -600,6 +621,11 @@ BrowserGlue.prototype = {
 
 #ifdef NIGHTLY_BUILD
     Services.prefs.addObserver(POLARIS_ENABLED, this, false);
+#endif
+
+#ifdef MOZ_DEBUG_UA
+    UserAgentOverrides.init();
+    DebugUserAgent.init();
 #endif
 
     Services.obs.notifyObservers(null, "browser-ui-startup-complete", "");
@@ -626,6 +652,33 @@ BrowserGlue.prototype = {
       if (buildDate + acceptableAge < today) {
         Cc["@mozilla.org/updates/update-service;1"].getService(Ci.nsIApplicationUpdateService).checkForBackgroundUpdates();
       }
+    }
+  },
+
+  _onSafeModeRestart: function BG_onSafeModeRestart() {
+    // prompt the user to confirm
+    let strings = Services.strings.createBundle("chrome://browser/locale/browser.properties");
+    let promptTitle = strings.GetStringFromName("safeModeRestartPromptTitle");
+    let promptMessage = strings.GetStringFromName("safeModeRestartPromptMessage");
+    let restartText = strings.GetStringFromName("safeModeRestartButton");
+    let buttonFlags = (Services.prompt.BUTTON_POS_0 *
+                       Services.prompt.BUTTON_TITLE_IS_STRING) +
+                      (Services.prompt.BUTTON_POS_1 *
+                       Services.prompt.BUTTON_TITLE_CANCEL) +
+                      Services.prompt.BUTTON_POS_0_DEFAULT;
+
+    let rv = Services.prompt.confirmEx(null, promptTitle, promptMessage,
+                                       buttonFlags, restartText, null, null,
+                                       null, {});
+    if (rv != 0)
+      return;
+
+    let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
+                       .createInstance(Ci.nsISupportsPRBool);
+    Services.obs.notifyObservers(cancelQuit, "quit-application-requested", "restart");
+
+    if (!cancelQuit.data) {
+      Services.startup.restartInSafeMode(Ci.nsIAppStartup.eAttemptQuit);
     }
   },
 
@@ -756,6 +809,12 @@ BrowserGlue.prototype = {
     // With older versions of the extension installed, this load will fail
     // passively.
     aWindow.messageManager.loadFrameScript("resource://pdf.js/pdfjschildbootstrap.js", true);
+#ifdef NIGHTLY_BUILD
+    // Registering Shumway bootstrap script the child processes.
+    aWindow.messageManager.loadFrameScript("chrome://shumway/content/bootstrap-content.js", true);
+    // Initializing Shumway (shall be run after child script registration).
+    ShumwayUtils.init();
+#endif
 #ifdef XP_WIN
     // For windows seven, initialize the jump list module.
     const WINTASKBAR_CONTRACTID = "@mozilla.org/windows-taskbar;1";
@@ -827,6 +886,9 @@ BrowserGlue.prototype = {
     if (Services.prefs.getBoolPref("dom.identity.enabled")) {
       SignInToWebsiteUX.uninit();
     }
+#endif
+#ifdef MOZ_DEBUG_UA
+    UserAgentOverrides.uninit();
 #endif
     webrtcUI.uninit();
     FormValidationHandler.uninit();
@@ -2540,7 +2602,8 @@ let E10SUINotification = {
       // e10s doesn't work with accessibility, so we prompt to disable
       // e10s if a11y is enabled, now or in the future.
       Services.obs.addObserver(this, "a11y-init-or-shutdown", true);
-      if (Services.appinfo.accessibilityEnabled) {
+      if (Services.appinfo.accessibilityEnabled &&
+          !Services.appinfo.accessibilityIsUIA) {
         this._showE10sAccessibilityWarning();
       }
     } else {
@@ -2744,3 +2807,36 @@ let globalMM = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessag
 globalMM.addMessageListener("UITour:onPageEvent", function(aMessage) {
   UITour.onPageEvent(aMessage, aMessage.data);
 });
+
+#ifdef MOZ_DEBUG_UA
+// Modify the user agent string for specific domains
+// to route debug information through their logging.
+var DebugUserAgent = {
+  DEBUG_UA: null,
+  DOMAINS: [
+    'youtube.com',
+    'www.youtube.com',
+    'youtube-nocookie.com',
+    'www.youtube-nocookie.com',
+  ],
+
+  init: function() {
+    // Only run if the MediaSource Extension API is available.
+    if (!Services.prefs.getBoolPref("media.mediasource.enabled")) {
+      return;
+    }
+    // Install our override filter.
+    UserAgentOverrides.addComplexOverride(this.onRequest.bind(this));
+    let ua = Cc["@mozilla.org/network/protocol;1?name=http"]
+                .getService(Ci.nsIHttpProtocolHandler).userAgent;
+    this.DEBUG_UA = ua + " Build/" + Services.appinfo.appBuildID;
+  },
+
+  onRequest: function(channel, defaultUA) {
+    if (this.DOMAINS.indexOf(channel.URI.host) != -1) {
+      return this.DEBUG_UA;
+    }
+    return null;
+  },
+};
+#endif // MOZ_DEBUG_UA

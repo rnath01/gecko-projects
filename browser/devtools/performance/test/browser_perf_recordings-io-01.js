@@ -7,7 +7,22 @@
 
 let test = Task.async(function*() {
   let { target, panel, toolbox } = yield initPerformance(SIMPLE_URL);
-  let { EVENTS, PerformanceController } = panel.panelWin;
+  let { EVENTS, PerformanceController, DetailsView, DetailsSubview } = panel.panelWin;
+
+  // Enable memory to test the memory-calltree and memory-flamegraph.
+  Services.prefs.setBoolPref(MEMORY_PREF, true);
+
+  // Cycle through all the views to initialize them, otherwise we can't use
+  // `waitForWidgetsRendered`. The waterfall is shown by default, but all the
+  // other views are created lazily, so won't emit any events.
+  yield DetailsView.selectView("js-calltree");
+  yield DetailsView.selectView("js-flamegraph");
+  yield DetailsView.selectView("memory-calltree");
+  yield DetailsView.selectView("memory-flamegraph");
+
+  // Need to allow widgets to be updated while hidden, otherwise we can't use
+  // `waitForWidgetsRendered`.
+  DetailsSubview.canUpdateWhileHidden = true;
 
   yield startRecording(panel);
   yield stopRecording(panel);
@@ -44,19 +59,20 @@ let test = Task.async(function*() {
 
   let importedData = PerformanceController.getCurrentRecording().getAllData();
 
-  is(importedData.startTime, originalData.startTime,
+  is(importedData.label, originalData.label,
     "The impored data is identical to the original data (1).");
-  is(importedData.endTime, originalData.endTime,
+  is(importedData.duration, originalData.duration,
     "The impored data is identical to the original data (2).");
-
   is(importedData.markers.toSource(), originalData.markers.toSource(),
     "The impored data is identical to the original data (3).");
   is(importedData.memory.toSource(), originalData.memory.toSource(),
     "The impored data is identical to the original data (4).");
   is(importedData.ticks.toSource(), originalData.ticks.toSource(),
     "The impored data is identical to the original data (5).");
-  is(importedData.profilerData.toSource(), originalData.profilerData.toSource(),
+  is(importedData.allocations.toSource(), originalData.allocations.toSource(),
     "The impored data is identical to the original data (6).");
+  is(importedData.profile.toSource(), originalData.profile.toSource(),
+    "The impored data is identical to the original data (7).");
 
   yield teardown(panel);
   finish();

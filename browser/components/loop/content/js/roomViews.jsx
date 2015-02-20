@@ -14,6 +14,7 @@ loop.roomViews = (function(mozL10n) {
   var sharedActions = loop.shared.actions;
   var sharedMixins = loop.shared.mixins;
   var ROOM_STATES = loop.store.ROOM_STATES;
+  var SCREEN_SHARE_STATES = loop.shared.utils.SCREEN_SHARE_STATES;
   var sharedViews = loop.shared.views;
 
   /**
@@ -169,9 +170,7 @@ loop.roomViews = (function(mozL10n) {
     ],
 
     propTypes: {
-      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
-      feedbackStore:
-        React.PropTypes.instanceOf(loop.store.FeedbackStore).isRequired,
+      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired
     },
 
     _renderInvitationOverlay: function() {
@@ -195,6 +194,7 @@ loop.roomViews = (function(mozL10n) {
             publishVideo: !this.state.videoMuted
           }),
           getLocalElementFunc: this._getElement.bind(this, ".local"),
+          getScreenShareElementFunc: this._getElement.bind(this, ".screen"),
           getRemoteElementFunc: this._getElement.bind(this, ".remote")
         }));
       }
@@ -240,6 +240,11 @@ loop.roomViews = (function(mozL10n) {
         "room-preview": this.state.roomState !== ROOM_STATES.HAS_PARTICIPANTS
       });
 
+      var screenShareData = {
+        state: this.state.screenSharingState,
+        visible: true
+      };
+
       switch(this.state.roomState) {
         case ROOM_STATES.FAILED:
         case ROOM_STATES.FULL: {
@@ -252,7 +257,6 @@ loop.roomViews = (function(mozL10n) {
         case ROOM_STATES.ENDED: {
           if (this.state.used)
             return <sharedViews.FeedbackView
-              feedbackStore={this.props.feedbackStore}
               onAfterFeedbackReceived={this.closeWindow}
             />;
 
@@ -269,15 +273,18 @@ loop.roomViews = (function(mozL10n) {
                 <div className="conversation room-conversation">
                   <div className="media nested">
                     <div className="video_wrapper remote_wrapper">
-                      <div className="video_inner remote"></div>
+                      <div className="video_inner remote focus-stream"></div>
                     </div>
                     <div className={localStreamClasses}></div>
+                    <div className="screen hide"></div>
                   </div>
                   <sharedViews.ConversationToolbar
+                    dispatcher={this.props.dispatcher}
                     video={{enabled: !this.state.videoMuted, visible: true}}
                     audio={{enabled: !this.state.audioMuted, visible: true}}
                     publishStream={this.publishStream}
-                    hangup={this.leaveRoom} />
+                    hangup={this.leaveRoom}
+                    screenShare={screenShareData} />
                 </div>
               </div>
             </div>

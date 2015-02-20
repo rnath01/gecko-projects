@@ -55,6 +55,9 @@ MOZ_PAY=1
 # Enable UI for healthreporter
 MOZ_SERVICES_HEALTHREPORT=1
 
+# Enable reading list service integration.
+#MOZ_ANDROID_READING_LIST_SERVICE=1
+
 # Enable runtime locale switching.
 MOZ_LOCALE_SWITCHER=1
 
@@ -72,9 +75,6 @@ MOZ_WEBGL_CONFORMANT=1
 
 # Enable the Search Activity.
 MOZ_ANDROID_SEARCH_ACTIVITY=1
-
-# Use the new tablet UI. This will go away in Bug 1106935.
-MOZ_ANDROID_NEW_TABLET_UI=1
 
 # Enable the share handler.
 MOZ_ANDROID_SHARE_OVERLAY=1

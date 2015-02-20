@@ -191,7 +191,7 @@ ParseEvalStringAsJSON(JSContext *cx, const mozilla::Range<const CharT> chars, Mu
 }
 
 static EvalJSONResult
-TryEvalJSON(JSContext *cx, JSFlatString *str, MutableHandleValue rval)
+TryEvalJSON(JSContext *cx, JSLinearString *str, MutableHandleValue rval)
 {
     if (str->hasLatin1Chars()) {
         AutoCheckCannotGC nogc;
@@ -203,13 +203,13 @@ TryEvalJSON(JSContext *cx, JSFlatString *str, MutableHandleValue rval)
             return EvalJSON_NotJSON;
     }
 
-    AutoStableStringChars flatChars(cx);
-    if (!flatChars.init(cx, str))
+    AutoStableStringChars linearChars(cx);
+    if (!linearChars.init(cx, str))
         return EvalJSON_Failure;
 
-    return flatChars.isLatin1()
-           ? ParseEvalStringAsJSON(cx, flatChars.latin1Range(), rval)
-           : ParseEvalStringAsJSON(cx, flatChars.twoByteRange(), rval);
+    return linearChars.isLatin1()
+           ? ParseEvalStringAsJSON(cx, linearChars.latin1Range(), rval)
+           : ParseEvalStringAsJSON(cx, linearChars.twoByteRange(), rval);
 }
 
 // Define subset of ExecuteType so that casting performs the injection.
@@ -277,19 +277,19 @@ EvalKernel(JSContext *cx, const CallArgs &args, EvalType evalType, AbstractFrame
         thisv = ObjectValue(*thisobj);
     }
 
-    Rooted<JSFlatString*> flatStr(cx, str->ensureFlat(cx));
-    if (!flatStr)
+    RootedLinearString linearStr(cx, str->ensureLinear(cx));
+    if (!linearStr)
         return false;
 
     RootedScript callerScript(cx, caller ? caller.script() : nullptr);
-    EvalJSONResult ejr = TryEvalJSON(cx, flatStr, args.rval());
+    EvalJSONResult ejr = TryEvalJSON(cx, linearStr, args.rval());
     if (ejr != EvalJSON_NotJSON)
         return ejr == EvalJSON_Success;
 
     EvalScriptGuard esg(cx);
 
     if (evalType == DIRECT_EVAL && caller.isNonEvalFunctionFrame())
-        esg.lookupInEvalCache(flatStr, callerScript, pc);
+        esg.lookupInEvalCache(linearStr, callerScript, pc);
 
     if (!esg.foundScript()) {
         RootedScript maybeScript(cx);
@@ -311,6 +311,8 @@ EvalKernel(JSContext *cx, const CallArgs &args, EvalType evalType, AbstractFrame
         if (evalType == DIRECT_EVAL)
             enclosing = callerScript->innermostStaticScope(pc);
         Rooted<StaticEvalObject *> staticScope(cx, StaticEvalObject::create(cx, enclosing));
+        if (!staticScope)
+            return false;
 
         CompileOptions options(cx);
         options.setFileAndLine(filename, 1)
@@ -321,18 +323,18 @@ EvalKernel(JSContext *cx, const CallArgs &args, EvalType evalType, AbstractFrame
                .setIntroductionInfo(introducerFilename, "eval", lineno, maybeScript, pcOffset)
                .maybeMakeStrictMode(evalType == DIRECT_EVAL && IsStrictEvalPC(pc));
 
-        AutoStableStringChars flatChars(cx);
-        if (!flatChars.initTwoByte(cx, flatStr))
+        AutoStableStringChars linearChars(cx);
+        if (!linearChars.initTwoByte(cx, linearStr))
             return false;
 
-        const char16_t *chars = flatChars.twoByteRange().start().get();
-        SourceBufferHolder::Ownership ownership = flatChars.maybeGiveOwnershipToCaller()
+        const char16_t *chars = linearChars.twoByteRange().start().get();
+        SourceBufferHolder::Ownership ownership = linearChars.maybeGiveOwnershipToCaller()
                                                   ? SourceBufferHolder::GiveOwnership
                                                   : SourceBufferHolder::NoOwnership;
-        SourceBufferHolder srcBuf(chars, flatStr->length(), ownership);
+        SourceBufferHolder srcBuf(chars, linearStr->length(), ownership);
         JSScript *compiled = frontend::CompileScript(cx, &cx->tempLifoAlloc(),
                                                      scopeobj, callerScript, staticScope,
-                                                     options, srcBuf, flatStr, staticLevel);
+                                                     options, srcBuf, linearStr, staticLevel);
         if (!compiled)
             return false;
 
@@ -364,17 +366,17 @@ js::DirectEvalStringFromIon(JSContext *cx,
 
     unsigned staticLevel = callerScript->staticLevel() + 1;
 
-    Rooted<JSFlatString*> flatStr(cx, str->ensureFlat(cx));
-    if (!flatStr)
+    RootedLinearString linearStr(cx, str->ensureLinear(cx));
+    if (!linearStr)
         return false;
 
-    EvalJSONResult ejr = TryEvalJSON(cx, flatStr, vp);
+    EvalJSONResult ejr = TryEvalJSON(cx, linearStr, vp);
     if (ejr != EvalJSON_NotJSON)
         return ejr == EvalJSON_Success;
 
     EvalScriptGuard esg(cx);
 
-    esg.lookupInEvalCache(flatStr, callerScript, pc);
+    esg.lookupInEvalCache(linearStr, callerScript, pc);
 
     if (!esg.foundScript()) {
         RootedScript maybeScript(cx);
@@ -403,18 +405,18 @@ js::DirectEvalStringFromIon(JSContext *cx,
                .setIntroductionInfo(introducerFilename, "eval", lineno, maybeScript, pcOffset)
                .maybeMakeStrictMode(IsStrictEvalPC(pc));
 
-        AutoStableStringChars flatChars(cx);
-        if (!flatChars.initTwoByte(cx, flatStr))
+        AutoStableStringChars linearChars(cx);
+        if (!linearChars.initTwoByte(cx, linearStr))
             return false;
 
-        const char16_t *chars = flatChars.twoByteRange().start().get();
-        SourceBufferHolder::Ownership ownership = flatChars.maybeGiveOwnershipToCaller()
+        const char16_t *chars = linearChars.twoByteRange().start().get();
+        SourceBufferHolder::Ownership ownership = linearChars.maybeGiveOwnershipToCaller()
                                                   ? SourceBufferHolder::GiveOwnership
                                                   : SourceBufferHolder::NoOwnership;
-        SourceBufferHolder srcBuf(chars, flatStr->length(), ownership);
+        SourceBufferHolder srcBuf(chars, linearStr->length(), ownership);
         JSScript *compiled = frontend::CompileScript(cx, &cx->tempLifoAlloc(),
                                                      scopeobj, callerScript, staticScope,
-                                                     options, srcBuf, flatStr, staticLevel);
+                                                     options, srcBuf, linearStr, staticLevel);
         if (!compiled)
             return false;
 
@@ -428,7 +430,19 @@ js::DirectEvalStringFromIon(JSContext *cx,
     // the calling frame cannot be updated to store the new object.
     MOZ_ASSERT(thisValue.isObject() || thisValue.isUndefined() || thisValue.isNull());
 
-    return ExecuteKernel(cx, esg.script(), *scopeobj, thisValue, ExecuteType(DIRECT_EVAL),
+    // When eval'ing strict code in a non-strict context, compute the 'this'
+    // value to use from what the caller passed in. This isn't necessary if
+    // the callee is not strict, as it will compute the non-strict 'this'
+    // value as necessary while it executes.
+    RootedValue nthisValue(cx, thisValue);
+    if (!callerScript->strict() && esg.script()->strict() && !thisValue.isObject()) {
+        JSObject *obj = BoxNonStrictThis(cx, thisValue);
+        if (!obj)
+            return false;
+        nthisValue = ObjectValue(*obj);
+    }
+
+    return ExecuteKernel(cx, esg.script(), *scopeobj, nthisValue, ExecuteType(DIRECT_EVAL),
                          NullFramePtr() /* evalInFrame */, vp.address());
 }
 
@@ -495,11 +509,10 @@ js::ExecuteInGlobalAndReturnScope(JSContext *cx, HandleObject global, HandleScri
         if (!script)
             return false;
 
-        Rooted<GlobalObject *> global(cx, script->compileAndGo() ? &script->global() : nullptr);
-        Debugger::onNewScript(cx, script, global);
+        Debugger::onNewScript(cx, script);
     }
 
-    RootedObject scope(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
+    RootedObject scope(cx, JS_NewPlainObject(cx));
     if (!scope)
         return false;
 

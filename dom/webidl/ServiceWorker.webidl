@@ -10,14 +10,18 @@
 
 // Still unclear what should be subclassed.
 // https://github.com/slightlyoff/ServiceWorker/issues/189
-[Pref="dom.serviceWorkers.enabled",
- // FIXME(nsm): Bug 1113522. Should also be exposed on Workers too.
- Exposed=Window]
+[Func="mozilla::dom::workers::ServiceWorkerVisible",
+ // FIXME(nsm): Bug 1113522. This is exposed to satisfy webidl constraints, but it won't actually work.
+ Exposed=(ServiceWorker,Window)]
 interface ServiceWorker : EventTarget {
   readonly attribute USVString scriptURL;
   readonly attribute ServiceWorkerState state;
 
   attribute EventHandler onstatechange;
+
+  // FIXME(catalinb): Should inherit this from Worker.
+  [Throws]
+  void postMessage(any message, optional sequence<Transferable> transferable);
 };
 
 ServiceWorker implements AbstractWorker;

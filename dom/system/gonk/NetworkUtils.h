@@ -291,7 +291,6 @@ private:
   CommandResult addHostRoute(NetworkParams& aOptions);
   CommandResult removeDefaultRoute(NetworkParams& aOptions);
   CommandResult removeHostRoute(NetworkParams& aOptions);
-  CommandResult removeHostRoutes(NetworkParams& aOptions);
   CommandResult removeNetworkRoute(NetworkParams& aOptions);
   CommandResult setDNS(NetworkParams& aOptions);
   CommandResult addSecondaryRoute(NetworkParams& aOptions);
@@ -310,7 +309,6 @@ private:
 
   CommandResult addHostRouteLegacy(NetworkParams& aOptions);
   CommandResult removeHostRouteLegacy(NetworkParams& aOptions);
-  CommandResult removeHostRoutesLegacy(NetworkParams& aOptions);
   CommandResult setDefaultRouteLegacy(NetworkParams& aOptions);
   CommandResult removeDefaultRouteLegacy(NetworkParams& aOptions);
   CommandResult removeNetworkRouteLegacy(NetworkParams& aOptions);
@@ -392,6 +390,8 @@ private:
   static void enableIpv6(PARAMS);
   static void disableIpv6(PARAMS);
   static void setIpv6Enabled(PARAMS, bool aEnabled);
+  static void addRouteToSecondaryTable(PARAMS);
+  static void removeRouteFromSecondaryTable(PARAMS);
   static void defaultAsyncSuccessHandler(PARAMS);
 
 #undef PARAMS

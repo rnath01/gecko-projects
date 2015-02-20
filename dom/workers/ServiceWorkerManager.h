@@ -8,24 +8,34 @@
 #include "nsIServiceWorkerManager.h"
 #include "nsCOMPtr.h"
 
+#include "ipc/IPCMessageUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/TypedEnum.h"
 #include "mozilla/TypedEnumBits.h"
 #include "mozilla/WeakPtr.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ServiceWorkerBinding.h" // For ServiceWorkerState
 #include "mozilla/dom/ServiceWorkerCommon.h"
+#include "mozilla/dom/ServiceWorkerRegistrar.h"
+#include "mozilla/dom/ServiceWorkerRegistrarTypes.h"
+#include "mozilla/ipc/BackgroundUtils.h"
+#include "nsIIPCBackgroundChildCreateCallback.h"
+#include "nsClassHashtable.h"
+#include "nsDataHashtable.h"
 #include "nsRefPtrHashtable.h"
 #include "nsTArrayForwardDeclare.h"
 #include "nsTObserverArray.h"
-#include "nsClassHashtable.h"
 
 class nsIScriptError;
 
 namespace mozilla {
+
+namespace ipc {
+class BackgroundChild;
+}
+
 namespace dom {
 
 class ServiceWorkerRegistration;
@@ -33,59 +43,13 @@ class ServiceWorkerRegistration;
 namespace workers {
 
 class ServiceWorker;
-
-/*
- * Wherever the spec treats a worker instance and a description of said worker
- * as the same thing; i.e. "Resolve foo with
- * _GetNewestWorker(serviceWorkerRegistration)", we represent the description
- * by this class and spawn a ServiceWorker in the right global when required.
- */
-class ServiceWorkerInfo MOZ_FINAL
-{
-  nsCString mScriptSpec;
-  ServiceWorkerState mState;
-
-  ~ServiceWorkerInfo()
-  { }
-
-public:
-  NS_INLINE_DECL_REFCOUNTING(ServiceWorkerInfo)
-
-  const nsCString&
-  GetScriptSpec() const
-  {
-    return mScriptSpec;
-  }
-
-  explicit ServiceWorkerInfo(const nsACString& aScriptSpec)
-    : mScriptSpec(aScriptSpec)
-    , mState(ServiceWorkerState::EndGuard_)
-  { }
-
-  void
-  UpdateState(ServiceWorkerState aState)
-  {
-#ifdef DEBUG
-    // Any state can directly transition to redundant, but everything else is
-    // ordered.
-    if (aState != ServiceWorkerState::Redundant) {
-      MOZ_ASSERT_IF(mState == ServiceWorkerState::EndGuard_, aState == ServiceWorkerState::Installing);
-      MOZ_ASSERT_IF(mState == ServiceWorkerState::Installing, aState == ServiceWorkerState::Installed);
-      MOZ_ASSERT_IF(mState == ServiceWorkerState::Installed, aState == ServiceWorkerState::Activating);
-      MOZ_ASSERT_IF(mState == ServiceWorkerState::Activating, aState == ServiceWorkerState::Activated);
-    }
-    // Activated can only go to redundant.
-    MOZ_ASSERT_IF(mState == ServiceWorkerState::Activated, aState == ServiceWorkerState::Redundant);
-#endif
-    mState = aState;
-    // FIXME(nsm): Inform all relevant ServiceWorker instances.
-  }
-};
+class ServiceWorkerInfo;
 
 class ServiceWorkerJobQueue;
 
 class ServiceWorkerJob : public nsISupports
 {
+protected:
   // The queue keeps the jobs alive, so they can hold a rawptr back to the
   // queue.
   ServiceWorkerJobQueue* mQueue;
@@ -117,8 +81,9 @@ class ServiceWorkerJobQueue MOZ_FINAL
 public:
   ~ServiceWorkerJobQueue()
   {
-    // FIXME(nsm): Clean up jobs.
-    MOZ_ASSERT(mJobs.IsEmpty());
+    if (!mJobs.IsEmpty()) {
+      NS_WARNING("Pending/running jobs still around on shutdown!");
+    }
   }
 
   void
@@ -131,6 +96,14 @@ public:
     if (wasEmpty) {
       aJob->Start();
     }
+  }
+
+  // Only used by HandleError, keep it that way!
+  ServiceWorkerJob*
+  Peek()
+  {
+    MOZ_ASSERT(!mJobs.IsEmpty());
+    return mJobs[0];
   }
 
 private:
@@ -169,6 +142,8 @@ public:
   // the URLs of the following three workers.
   nsCString mScriptSpec;
 
+  nsCOMPtr<nsIPrincipal> mPrincipal;
+
   nsRefPtr<ServiceWorkerInfo> mActiveWorker;
   nsRefPtr<ServiceWorkerInfo> mWaitingWorker;
   nsRefPtr<ServiceWorkerInfo> mInstallingWorker;
@@ -177,9 +152,9 @@ public:
   // removed since documents may be controlled. It is marked as
   // pendingUninstall and when all controlling documents go away, removed.
   bool mPendingUninstall;
-  bool mWaitingToActivate;
 
-  explicit ServiceWorkerRegistrationInfo(const nsACString& aScope);
+  explicit ServiceWorkerRegistrationInfo(const nsACString& aScope,
+                                         nsIPrincipal* aPrincipal);
 
   already_AddRefed<ServiceWorkerInfo>
   Newest()
@@ -225,6 +200,76 @@ public:
 
   void
   FinishActivate(bool aSuccess);
+
+  void
+  QueueStateChangeEvent(ServiceWorkerInfo* aInfo,
+                        ServiceWorkerState aState) const;
+};
+
+/*
+ * Wherever the spec treats a worker instance and a description of said worker
+ * as the same thing; i.e. "Resolve foo with
+ * _GetNewestWorker(serviceWorkerRegistration)", we represent the description
+ * by this class and spawn a ServiceWorker in the right global when required.
+ */
+class ServiceWorkerInfo MOZ_FINAL
+{
+private:
+  const ServiceWorkerRegistrationInfo* mRegistration;
+  nsCString mScriptSpec;
+  ServiceWorkerState mState;
+
+  ~ServiceWorkerInfo()
+  { }
+
+public:
+  NS_INLINE_DECL_REFCOUNTING(ServiceWorkerInfo)
+
+  const nsCString&
+  ScriptSpec() const
+  {
+    return mScriptSpec;
+  }
+
+  void SetScriptSpec(const nsCString& aSpec)
+  {
+    MOZ_ASSERT(!aSpec.IsEmpty());
+    mScriptSpec = aSpec;
+  }
+
+  explicit ServiceWorkerInfo(ServiceWorkerRegistrationInfo* aReg,
+                             const nsACString& aScriptSpec)
+    : mRegistration(aReg)
+    , mScriptSpec(aScriptSpec)
+    , mState(ServiceWorkerState::EndGuard_)
+  {
+    MOZ_ASSERT(mRegistration);
+  }
+
+  ServiceWorkerState
+  State() const
+  {
+    return mState;
+  }
+
+  void
+  UpdateState(ServiceWorkerState aState)
+  {
+#ifdef DEBUG
+    // Any state can directly transition to redundant, but everything else is
+    // ordered.
+    if (aState != ServiceWorkerState::Redundant) {
+      MOZ_ASSERT_IF(mState == ServiceWorkerState::EndGuard_, aState == ServiceWorkerState::Installing);
+      MOZ_ASSERT_IF(mState == ServiceWorkerState::Installing, aState == ServiceWorkerState::Installed);
+      MOZ_ASSERT_IF(mState == ServiceWorkerState::Installed, aState == ServiceWorkerState::Activating);
+      MOZ_ASSERT_IF(mState == ServiceWorkerState::Activating, aState == ServiceWorkerState::Activated);
+    }
+    // Activated can only go to redundant.
+    MOZ_ASSERT_IF(mState == ServiceWorkerState::Activated, aState == ServiceWorkerState::Redundant);
+#endif
+    mState = aState;
+    mRegistration->QueueStateChangeEvent(this, mState);
+  }
 };
 
 #define NS_SERVICEWORKERMANAGER_IMPL_IID                 \
@@ -240,113 +285,93 @@ public:
  * installation, querying and event dispatch of ServiceWorkers for all the
  * origins in the process.
  */
-class ServiceWorkerManager MOZ_FINAL : public nsIServiceWorkerManager
+class ServiceWorkerManager MOZ_FINAL
+  : public nsIServiceWorkerManager
+  , public nsIIPCBackgroundChildCreateCallback
 {
-  friend class ActivationRunnable;
-  friend class ServiceWorkerRegistrationInfo;
-  friend class ServiceWorkerRegisterJob;
   friend class GetReadyPromiseRunnable;
   friend class GetRegistrationsRunnable;
   friend class GetRegistrationRunnable;
-  friend class QueueFireUpdateFoundRunnable;
-  friend class UnregisterRunnable;
+  friend class ServiceWorkerRegisterJob;
+  friend class ServiceWorkerRegistrationInfo;
+  friend class ServiceWorkerUnregisterJob;
 
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSISERVICEWORKERMANAGER
+  NS_DECL_NSIIPCBACKGROUNDCHILDCREATECALLBACK
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_SERVICEWORKERMANAGER_IMPL_IID)
 
   static ServiceWorkerManager* FactoryCreate()
   {
     AssertIsOnMainThread();
-    if (!Preferences::GetBool("dom.serviceWorkers.enabled")) {
-      return nullptr;
-    }
 
     ServiceWorkerManager* res = new ServiceWorkerManager;
     NS_ADDREF(res);
     return res;
   }
 
-  /*
-   * This struct is used for passive ServiceWorker management.
-   * Actively running ServiceWorkers use the SharedWorker infrastructure in
-   * RuntimeService for execution and lifetime management.
-   */
-  struct ServiceWorkerDomainInfo
+  // Ordered list of scopes for glob matching.
+  // Each entry is an absolute URL representing the scope.
+  //
+  // An array is used for now since the number of controlled scopes per
+  // domain is expected to be relatively low. If that assumption was proved
+  // wrong this should be replaced with a better structure to avoid the
+  // memmoves associated with inserting stuff in the middle of the array.
+  nsTArray<nsCString> mOrderedScopes;
+
+  // Scope to registration. 
+  // The scope should be a fully qualified valid URL.
+  nsRefPtrHashtable<nsCStringHashKey, ServiceWorkerRegistrationInfo> mServiceWorkerRegistrationInfos;
+
+  nsTObserverArray<ServiceWorkerRegistration*> mServiceWorkerRegistrations;
+
+  nsRefPtrHashtable<nsISupportsHashKey, ServiceWorkerRegistrationInfo> mControlledDocuments;
+
+  // Maps scopes to job queues.
+  nsClassHashtable<nsCStringHashKey, ServiceWorkerJobQueue> mJobQueues;
+
+  nsDataHashtable<nsCStringHashKey, bool> mSetOfScopesBeingUpdated;
+
+  already_AddRefed<ServiceWorkerRegistrationInfo>
+  GetRegistration(const nsCString& aScope) const
   {
-    // Ordered list of scopes for glob matching.
-    // Each entry is an absolute URL representing the scope.
-    //
-    // An array is used for now since the number of controlled scopes per
-    // domain is expected to be relatively low. If that assumption was proved
-    // wrong this should be replaced with a better structure to avoid the
-    // memmoves associated with inserting stuff in the middle of the array.
-    nsTArray<nsCString> mOrderedScopes;
+    nsRefPtr<ServiceWorkerRegistrationInfo> reg;
+    mServiceWorkerRegistrationInfos.Get(aScope, getter_AddRefs(reg));
+    return reg.forget();
+  }
 
-    // Scope to registration.
-    nsRefPtrHashtable<nsCStringHashKey, ServiceWorkerRegistrationInfo> mServiceWorkerRegistrationInfos;
+  ServiceWorkerRegistrationInfo*
+  CreateNewRegistration(const nsCString& aScope, nsIPrincipal* aPrincipal);
 
-    nsTObserverArray<ServiceWorkerRegistration*> mServiceWorkerRegistrations;
+  void
+  RemoveRegistration(ServiceWorkerRegistrationInfo* aRegistration)
+  {
+    MOZ_ASSERT(aRegistration);
+    MOZ_ASSERT(!aRegistration->IsControllingDocuments());
+    MOZ_ASSERT(mServiceWorkerRegistrationInfos.Contains(aRegistration->mScope));
+    ServiceWorkerManager::RemoveScope(mOrderedScopes, aRegistration->mScope);
+    mServiceWorkerRegistrationInfos.Remove(aRegistration->mScope);
+  }
 
-    nsRefPtrHashtable<nsISupportsHashKey, ServiceWorkerRegistrationInfo> mControlledDocuments;
+  ServiceWorkerJobQueue*
+  GetOrCreateJobQueue(const nsCString& aScope)
+  {
+    return mJobQueues.LookupOrAdd(aScope);
+  }
 
-    nsClassHashtable<nsCStringHashKey, ServiceWorkerJobQueue> mJobQueues;
-
-    ServiceWorkerDomainInfo()
-    { }
-
-    already_AddRefed<ServiceWorkerRegistrationInfo>
-    GetRegistration(const nsCString& aScope) const
-    {
-      nsRefPtr<ServiceWorkerRegistrationInfo> reg;
-      mServiceWorkerRegistrationInfos.Get(aScope, getter_AddRefs(reg));
-      return reg.forget();
-    }
-
-    ServiceWorkerRegistrationInfo*
-    CreateNewRegistration(const nsCString& aScope)
-    {
-      ServiceWorkerRegistrationInfo* registration =
-        new ServiceWorkerRegistrationInfo(aScope);
-      // From now on ownership of registration is with
-      // mServiceWorkerRegistrationInfos.
-      mServiceWorkerRegistrationInfos.Put(aScope, registration);
-      ServiceWorkerManager::AddScope(mOrderedScopes, aScope);
-      return registration;
-    }
-
-    void
-    RemoveRegistration(ServiceWorkerRegistrationInfo* aRegistration)
-    {
-      MOZ_ASSERT(mServiceWorkerRegistrationInfos.Contains(aRegistration->mScope));
-      ServiceWorkerManager::RemoveScope(mOrderedScopes, aRegistration->mScope);
-      mServiceWorkerRegistrationInfos.Remove(aRegistration->mScope);
-    }
-
-    ServiceWorkerJobQueue*
-    GetOrCreateJobQueue(const nsCString& aScope)
-    {
-      return mJobQueues.LookupOrAdd(aScope);
-    }
-
-    NS_INLINE_DECL_REFCOUNTING(ServiceWorkerDomainInfo)
-
-  private:
-    ~ServiceWorkerDomainInfo()
-    { }
-  };
-
-  nsRefPtrHashtable<nsCStringHashKey, ServiceWorkerDomainInfo> mDomainMap;
+  void StoreRegistration(nsIPrincipal* aPrincipal,
+                         ServiceWorkerRegistrationInfo* aRegistration);
 
   void
   FinishFetch(ServiceWorkerRegistrationInfo* aRegistration);
 
-
-  void
+  // Returns true if the error was handled, false if normal worker error
+  // handling should continue.
+  bool
   HandleError(JSContext* aCx,
-              const nsACString& aScope,
-              const nsAString& aWorkerURL,
+              const nsCString& aScope,
+              const nsString& aWorkerURL,
               nsString aMessage,
               nsString aFilename,
               nsString aLine,
@@ -361,6 +386,9 @@ public:
   static already_AddRefed<ServiceWorkerManager>
   GetInstance();
 
+ void LoadRegistrations(
+                 const nsTArray<ServiceWorkerRegistrationData>& aRegistrations);
+
 private:
   ServiceWorkerManager();
   ~ServiceWorkerManager();
@@ -371,6 +399,9 @@ private:
   nsresult
   Update(ServiceWorkerRegistrationInfo* aRegistration);
 
+  nsresult
+  GetDocumentRegistration(nsIDocument* aDoc, ServiceWorkerRegistrationInfo** aRegistrationInfo);
+
   NS_IMETHOD
   CreateServiceWorkerForWindow(nsPIDOMWindow* aWindow,
                                const nsACString& aScriptSpec,
@@ -378,23 +409,10 @@ private:
                                ServiceWorker** aServiceWorker);
 
   NS_IMETHOD
-  CreateServiceWorker(const nsACString& aScriptSpec,
+  CreateServiceWorker(nsIPrincipal* aPrincipal,
+                      const nsACString& aScriptSpec,
                       const nsACString& aScope,
                       ServiceWorker** aServiceWorker);
-
-  static PLDHashOperator
-  CleanupServiceWorkerInformation(const nsACString& aDomain,
-                                  ServiceWorkerDomainInfo* aDomainInfo,
-                                  void *aUnused);
-
-  already_AddRefed<ServiceWorkerDomainInfo>
-  GetDomainInfo(nsIDocument* aDoc);
-
-  already_AddRefed<ServiceWorkerDomainInfo>
-  GetDomainInfo(nsIURI* aURI);
-
-  already_AddRefed<ServiceWorkerDomainInfo>
-  GetDomainInfo(const nsCString& aURL);
 
   NS_IMETHODIMP
   GetServiceWorkerForScope(nsIDOMWindow* aWindow,
@@ -433,6 +451,13 @@ private:
                                         const nsAString& aName);
 
   void
+  FireUpdateFound(ServiceWorkerRegistrationInfo* aRegistration)
+  {
+    FireEventOnServiceWorkerRegistrations(aRegistration,
+                                          NS_LITERAL_STRING("updatefound"));
+  }
+
+  void
   FireControllerChange(ServiceWorkerRegistrationInfo* aRegistration);
 
   void
@@ -454,12 +479,29 @@ private:
     nsRefPtr<Promise> mPromise;
   };
 
+  void AppendPendingOperation(nsIRunnable* aRunnable);
+  void AppendPendingOperation(ServiceWorkerJobQueue* aQueue,
+                              ServiceWorkerJob* aJob);
+
+  bool HasBackgroundActor() const
+  {
+    return !!mActor;
+  }
+
   static PLDHashOperator
   CheckPendingReadyPromisesEnumerator(nsISupports* aSupports,
                                       nsAutoPtr<PendingReadyPromise>& aData,
                                       void* aUnused);
 
   nsClassHashtable<nsISupportsHashKey, PendingReadyPromise> mPendingReadyPromises;
+ 
+  void
+  MaybeRemoveRegistration(ServiceWorkerRegistrationInfo* aRegistration);
+
+  mozilla::ipc::PBackgroundChild* mActor;
+
+  struct PendingOperation;
+  nsTArray<PendingOperation> mPendingOperations;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(ServiceWorkerManager,

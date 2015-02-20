@@ -25,6 +25,11 @@
 #include "base/task.h"
 #include "base/thread.h"
 
+#ifdef XP_WIN
+// For IsDebuggerPresent()
+#include <windows.h>
+#endif
+
 using namespace mozilla;
 using namespace mozilla::dom;
 
@@ -144,7 +149,7 @@ public:
   NS_IMETHOD TerminatePlugin() MOZ_OVERRIDE;
   NS_IMETHOD TerminateProcess() MOZ_OVERRIDE;
 
-  NS_IMETHOD IsReportForBrowser(nsIFrameLoader* aFrameLoader, bool* aResult);
+  NS_IMETHOD IsReportForBrowser(nsIFrameLoader* aFrameLoader, bool* aResult) MOZ_OVERRIDE;
 
   void Clear() { mContentParent = nullptr; mActor = nullptr; }
 
@@ -527,6 +532,14 @@ HangMonitorParent::RecvHangEvidence(const HangData& aHangData)
     return true;
   }
 
+#ifdef XP_WIN
+  // Don't report hangs if we're debugging the process. You can comment this
+  // line out for testing purposes.
+  if (IsDebuggerPresent()) {
+    return true;
+  }
+#endif
+
   mHangMonitor->InitiateCPOWTimeout();
 
   MonitorAutoLock lock(mMonitor);
@@ -606,7 +619,7 @@ HangMonitoredProcess::GetScriptBrowser(nsIDOMElement** aBrowser)
   nsTArray<PBrowserParent*> tabs;
   mContentParent->ManagedPBrowserParent(tabs);
   for (size_t i = 0; i < tabs.Length(); i++) {
-    TabParent* tp = static_cast<TabParent*>(tabs[i]);
+    TabParent* tp = TabParent::GetFrom(tabs[i]);
     if (tp->GetTabId() == tabId) {
       nsCOMPtr<nsIDOMElement> node = do_QueryInterface(tp->GetOwnerElement());
       node.forget(aBrowser);
@@ -738,7 +751,7 @@ HangMonitoredProcess::TerminateProcess()
     return NS_ERROR_UNEXPECTED;
   }
 
-  mContentParent->KillHard();
+  mContentParent->KillHard("HangMonitor");
   return NS_OK;
 }
 
@@ -752,14 +765,13 @@ HangMonitoredProcess::IsReportForBrowser(nsIFrameLoader* aFrameLoader, bool* aRe
     return NS_OK;
   }
 
-  nsCOMPtr<nsITabParent> itp;
-  aFrameLoader->GetTabParent(getter_AddRefs(itp));
-  if (!itp) {
+  TabParent* tp = TabParent::GetFrom(aFrameLoader);
+  if (!tp) {
     *aResult = false;
     return NS_OK;
   }
 
-  *aResult = mContentParent == static_cast<TabParent*>(itp.get())->Manager();
+  *aResult = mContentParent == tp->Manager();
   return NS_OK;
 }
 

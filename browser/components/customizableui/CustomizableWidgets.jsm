@@ -944,7 +944,7 @@ const CustomizableWidgets = [
       node.setAttribute("tooltiptext", CustomizableUI.getLocalizedProperty(this, "tooltiptext"));
       node.setAttribute("removable", "true");
       node.addEventListener("command", function(event) {
-        aDocument.defaultView.LoopUI.openCallPanel(event);
+        aDocument.defaultView.LoopUI.togglePanel(event);
       });
 
       return node;
@@ -1076,6 +1076,7 @@ CustomizableWidgets.push({
   id: "e10s-button",
   label: buttonLabel,
   tooltiptext: buttonLabel,
+  disabled: Services.appinfo.inSafeMode,
   defaultArea: CustomizableUI.AREA_PANEL,
   onCommand: getCommandFunction(openRemote),
 });

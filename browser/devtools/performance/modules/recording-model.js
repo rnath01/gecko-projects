@@ -3,33 +3,49 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const { PerformanceIO } = require("devtools/performance/io");
+const { Cc, Ci, Cu, Cr } = require("chrome");
 
-const RECORDING_IN_PROGRESS = exports.RECORDING_IN_PROGRESS = -1;
-const RECORDING_UNAVAILABLE = exports.RECORDING_UNAVAILABLE = null;
+loader.lazyRequireGetter(this, "PerformanceIO",
+  "devtools/performance/io", true);
+loader.lazyRequireGetter(this, "RecordingUtils",
+  "devtools/performance/recording-utils", true);
+
 /**
- * Model for a wholistic profile, containing start/stop times, profiling data, frames data,
- * timeline (marker, tick, memory) data, and methods to start/stop recording.
+ * Model for a wholistic profile, containing the duration, profiling data,
+ * frames data, timeline (marker, tick, memory) data, and methods to mark
+ * a recording as 'in progress' or 'finished'.
  */
 
 const RecordingModel = function (options={}) {
   this._front = options.front;
   this._performance = options.performance;
   this._label = options.label || "";
+
+  this._configuration = {
+    withTicks: options.withTicks || false,
+    withMemory: options.withMemory || false,
+    withAllocations: options.withAllocations || false
+  };
 };
 
 RecordingModel.prototype = {
-  _localStartTime: RECORDING_UNAVAILABLE,
-  _startTime: RECORDING_UNAVAILABLE,
-  _endTime: RECORDING_UNAVAILABLE,
-  _markers: [],
-  _frames: [],
-  _ticks: [],
-  _memory: [],
-  _profilerData: {},
-  _label: "",
+  // Private fields, only needed when a recording is started or stopped.
   _imported: false,
-  _isRecording: false,
+  _recording: false,
+  _profilerStartTime: 0,
+  _timelineStartTime: 0,
+  _memoryStartTime: 0,
+  _configuration: {},
+
+  // Serializable fields, necessary and sufficient for import and export.
+  _label: "",
+  _duration: 0,
+  _markers: null,
+  _frames: null,
+  _memory: null,
+  _ticks: null,
+  _allocations: null,
+  _profile: null,
 
   /**
    * Loads a recording from a file.
@@ -41,16 +57,14 @@ RecordingModel.prototype = {
     let recordingData = yield PerformanceIO.loadRecordingFromFile(file);
 
     this._imported = true;
-    this._label = recordingData.profilerData.profilerLabel || "";
-    this._startTime = recordingData.interval.startTime;
-    this._endTime = recordingData.interval.endTime;
+    this._label = recordingData.label || "";
+    this._duration = recordingData.duration;
     this._markers = recordingData.markers;
     this._frames = recordingData.frames;
     this._memory = recordingData.memory;
     this._ticks = recordingData.ticks;
-    this._profilerData = recordingData.profilerData;
-
-    return recordingData;
+    this._allocations = recordingData.allocations;
+    this._profile = recordingData.profile;
   }),
 
   /**
@@ -65,88 +79,81 @@ RecordingModel.prototype = {
   }),
 
   /**
-   * Starts recording with the PerformanceFront, storing the start times
-   * on the model.
+   * Starts recording with the PerformanceFront.
+   *
+   * @param object options
+   *        @see PerformanceFront.prototype.startRecording
    */
-  startRecording: Task.async(function *() {
+  startRecording: Task.async(function *(options = {}) {
     // Times must come from the actor in order to be self-consistent.
     // However, we also want to update the view with the elapsed time
     // even when the actor is not generating data. To do this we get
     // the local time and use it to compute a reasonable elapsed time.
     this._localStartTime = this._performance.now();
 
-    let { startTime } = yield this._front.startRecording({
-      withTicks: true,
-      withMemory: true
-    });
-    this._isRecording = true;
+    let info = yield this._front.startRecording(options);
+    this._profilerStartTime = info.profilerStartTime;
+    this._timelineStartTime = info.timelineStartTime;
+    this._memoryStartTime = info.memoryStartTime;
+    this._recording = true;
 
-    this._startTime = startTime;
-    this._endTime = RECORDING_IN_PROGRESS;
     this._markers = [];
     this._frames = [];
     this._memory = [];
     this._ticks = [];
+    this._allocations = { sites: [], timestamps: [], frames: [], counts: [] };
   }),
 
   /**
-   * Stops recording with the PerformanceFront, storing the end times
-   * on the model.
+   * Stops recording with the PerformanceFront.
    */
   stopRecording: Task.async(function *() {
-    let results = yield this._front.stopRecording();
-    this._isRecording = false;
+    let info = yield this._front.stopRecording(this.getConfiguration());
+    this._profile = info.profile;
+    this._duration = info.profilerEndTime - this._profilerStartTime;
+    this._recording = false;
 
-    // If `endTime` is not yielded from timeline actor (< Fx36), fake it.
-    if (!results.endTime) {
-      results.endTime = this._startTime + this.getLocalElapsedTime();
-    }
+    // We'll need to filter out all samples that fall out of current profile's
+    // range since the profiler is continuously running. Because of this, sample
+    // times are not guaranteed to have a zero epoch, so offset the timestamps.
+    RecordingUtils.filterSamples(this._profile, this._profilerStartTime);
+    RecordingUtils.offsetSampleTimes(this._profile, this._profilerStartTime);
 
-    this._endTime = results.endTime;
-    this._profilerData = results.profilerData;
-    this._markers = this._markers.sort((a,b) => (a.start > b.start));
-
-    return results;
+    // Markers need to be sorted ascending by time, to be properly displayed
+    // in a waterfall view.
+    this._markers = this._markers.sort((a, b) => (a.start > b.start));
   }),
 
   /**
-   * Returns the profile's label, from `console.profile(LABEL)`.
+   * Gets the profile's label, from `console.profile(LABEL)`.
+   * @return string
    */
   getLabel: function () {
     return this._label;
   },
 
   /**
-   * Gets the amount of time elapsed locally after starting a recording.
-   */
-  getLocalElapsedTime: function () {
-    return this._performance.now() - this._localStartTime;
-  },
-
-  /**
-   * Returns duration of this recording, in milliseconds.
+   * Gets duration of this recording, in milliseconds.
+   * @return number
    */
   getDuration: function () {
-    let { startTime, endTime } = this.getInterval();
-    return endTime - startTime;
+    // Compute an approximate ending time for the current recording if it is
+    // still in progress. This is needed to ensure that the view updates even
+    // when new data is not being generated.
+    if (this._recording) {
+      return this._performance.now() - this._localStartTime;
+    } else {
+      return this._duration;
+    }
   },
 
   /**
-   * Gets the time interval for the current recording.
+   * Returns configuration object of specifying whether the recording
+   * was started withTicks, withMemory and withAllocations.
    * @return object
    */
-  getInterval: function() {
-    let startTime = this._startTime;
-    let endTime = this._endTime;
-
-    // Compute an approximate ending time for the current recording. This is
-    // needed to ensure that the view updates even when new data is
-    // not being generated.
-    if (endTime == RECORDING_IN_PROGRESS) {
-      endTime = startTime + this.getLocalElapsedTime();
-    }
-
-    return { startTime, endTime };
+  getConfiguration: function () {
+    return this._configuration;
   },
 
   /**
@@ -182,24 +189,34 @@ RecordingModel.prototype = {
   },
 
   /**
+   * Gets the memory allocations data in this recording.
+   * @return array
+   */
+  getAllocations: function() {
+    return this._allocations;
+  },
+
+  /**
    * Gets the profiler data in this recording.
    * @return array
    */
-  getProfilerData: function() {
-    return this._profilerData;
+  getProfile: function() {
+    return this._profile;
   },
 
   /**
    * Gets all the data in this recording.
    */
   getAllData: function() {
-    let interval = this.getInterval();
+    let label = this.getLabel();
+    let duration = this.getDuration();
     let markers = this.getMarkers();
     let frames = this.getFrames();
     let memory = this.getMemory();
     let ticks = this.getTicks();
-    let profilerData = this.getProfilerData();
-    return { interval, markers, frames, memory, ticks, profilerData };
+    let allocations = this.getAllocations();
+    let profile = this.getProfile();
+    return { label, duration, markers, frames, memory, ticks, allocations, profile };
   },
 
   /**
@@ -207,7 +224,7 @@ RecordingModel.prototype = {
    * is recording.
    */
   isRecording: function () {
-    return this._isRecording;
+    return this._recording;
   },
 
   /**
@@ -216,31 +233,55 @@ RecordingModel.prototype = {
   addTimelineData: function (eventName, ...data) {
     // If this model isn't currently recording,
     // ignore the timeline data.
-    if (!this.isRecording()) {
+    if (!this._recording) {
       return;
     }
 
     switch (eventName) {
-      // Accumulate markers into an array.
-      case "markers":
+      // Accumulate timeline markers into an array. Furthermore, the timestamps
+      // do not have a zero epoch, so offset all of them by the start time.
+      case "markers": {
         let [markers] = data;
+        RecordingUtils.offsetMarkerTimes(markers, this._timelineStartTime);
         Array.prototype.push.apply(this._markers, markers);
         break;
+      }
       // Accumulate stack frames into an array.
-      case "frames":
+      case "frames": {
         let [, frames] = data;
         Array.prototype.push.apply(this._frames, frames);
         break;
-      // Accumulate memory measurements into an array.
-      case "memory":
-        let [delta, measurement] = data;
-        this._memory.push({ delta, value: measurement.total / 1024 / 1024 });
+      }
+      // Accumulate memory measurements into an array. Furthermore, the timestamp
+      // does not have a zero epoch, so offset it by the actor's start time.
+      case "memory": {
+        let [currentTime, measurement] = data;
+        this._memory.push({
+          delta: currentTime - this._timelineStartTime,
+          value: measurement.total / 1024 / 1024
+        });
         break;
+      }
       // Save the accumulated refresh driver ticks.
-      case "ticks":
+      case "ticks": {
         let [, timestamps] = data;
         this._ticks = timestamps;
         break;
+      }
+      // Accumulate allocation sites into an array. Furthermore, the timestamps
+      // do not have a zero epoch, and are microseconds instead of milliseconds,
+      // so offset all of them by the start time, also converting from µs to ms.
+      case "allocations": {
+        let [{ sites, timestamps, frames, counts }] = data;
+        let timeOffset = this._memoryStartTime * 1000;
+        let timeScale = 1000;
+        RecordingUtils.offsetAndScaleTimestamps(timestamps, timeOffset, timeScale);
+        Array.prototype.push.apply(this._allocations.sites, sites);
+        Array.prototype.push.apply(this._allocations.timestamps, timestamps);
+        Array.prototype.push.apply(this._allocations.frames, frames);
+        Array.prototype.push.apply(this._allocations.counts, counts);
+        break;
+      }
     }
   }
 };

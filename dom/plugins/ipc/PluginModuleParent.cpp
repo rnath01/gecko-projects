@@ -94,13 +94,14 @@ struct RunnableMethodTraits<mozilla::plugins::PluginModuleParent>
 bool
 mozilla::plugins::SetupBridge(uint32_t aPluginId,
                               dom::ContentParent* aContentParent,
-                              bool aForceBridgeNow)
+                              bool aForceBridgeNow,
+                              nsresult* rv)
 {
     nsRefPtr<nsPluginHost> host = nsPluginHost::GetInst();
     nsRefPtr<nsNPAPIPlugin> plugin;
-    nsresult rv = host->GetPluginForContentProcess(aPluginId, getter_AddRefs(plugin));
-    if (NS_FAILED(rv)) {
-        return false;
+    *rv = host->GetPluginForContentProcess(aPluginId, getter_AddRefs(plugin));
+    if (NS_FAILED(*rv)) {
+        return true;
     }
     PluginModuleChromeParent* chromeParent = static_cast<PluginModuleChromeParent*>(plugin->GetLibrary());
     chromeParent->SetContentParent(aContentParent);
@@ -293,7 +294,9 @@ PluginModuleContentParent::LoadModule(uint32_t aPluginId)
      * its module mapping. We fetch it from there after LoadPlugin finishes.
      */
     dom::ContentChild* cp = dom::ContentChild::GetSingleton();
-    if (!cp->SendLoadPlugin(aPluginId)) {
+    nsresult rv;
+    if (!cp->SendLoadPlugin(aPluginId, &rv) ||
+        NS_FAILED(rv)) {
         return nullptr;
     }
 
@@ -391,17 +394,28 @@ PluginModuleChromeParent::LoadModule(const char* aFilePath, uint32_t aPluginId,
 {
     PLUGIN_LOG_DEBUG_FUNCTION;
 
+    int32_t sandboxLevel = 0;
+#if defined(XP_WIN) && defined(MOZ_SANDBOX)
+    nsAutoCString sandboxPref("dom.ipc.plugins.sandbox-level.");
+    sandboxPref.Append(aPluginTag->GetNiceFileName());
+    if (NS_FAILED(Preferences::GetInt(sandboxPref.get(), &sandboxLevel))) {
+      sandboxLevel = Preferences::GetInt("dom.ipc.plugins.sandbox-level.default");
+    }
+#endif
+
     nsAutoPtr<PluginModuleChromeParent> parent(new PluginModuleChromeParent(aFilePath, aPluginId));
     UniquePtr<LaunchCompleteTask> onLaunchedRunnable(new LaunchedTask(parent));
     parent->mSubprocess->SetCallRunnableImmediately(!parent->mIsStartingAsync);
     TimeStamp launchStart = TimeStamp::Now();
-    bool launched = parent->mSubprocess->Launch(Move(onLaunchedRunnable));
+    bool launched = parent->mSubprocess->Launch(Move(onLaunchedRunnable),
+                                                sandboxLevel);
     if (!launched) {
         // We never reached open
         parent->mShutdown = true;
         return nullptr;
     }
     parent->mIsFlashPlugin = aPluginTag->mIsFlashPlugin;
+    parent->mIsBlocklisted = aPluginTag->GetBlocklistState() != 0;
     if (!parent->mIsStartingAsync) {
         int32_t launchTimeoutSecs = Preferences::GetInt(kLaunchTimeoutPref, 0);
         if (!parent->mSubprocess->WaitUntilConnected(launchTimeoutSecs * 1000)) {
@@ -460,7 +474,7 @@ PluginModuleChromeParent::OnProcessLaunched(const bool aSucceeded)
 #endif
 
 #ifdef XP_WIN
-    if (mIsFlashPlugin &&
+    if (!mIsBlocklisted && mIsFlashPlugin &&
         Preferences::GetBool("dom.ipc.plugins.flash.disable-protected-mode", false)) {
         SendDisableFlashProtectedMode();
     }
@@ -1498,8 +1512,8 @@ PluginModuleParent::RecvBackUpXResources(const FileDescriptor& aXSocketFd)
 #ifndef MOZ_X11
     NS_RUNTIMEABORT("This message only makes sense on X11 platforms");
 #else
-    NS_ABORT_IF_FALSE(0 > mPluginXSocketFdDup.get(),
-                      "Already backed up X resources??");
+    MOZ_ASSERT(0 > mPluginXSocketFdDup.get(),
+               "Already backed up X resources??");
     mPluginXSocketFdDup.forget();
     if (aXSocketFd.IsValid()) {
       mPluginXSocketFdDup.reset(aXSocketFd.PlatformHandle());
@@ -1914,9 +1928,7 @@ PluginModuleParent::RecvNP_InitializeResult(const NPError& aError)
     }
 
     if (mIsStartingAsync) {
-#if defined(XP_WIN)
         SetPluginFuncs(mNPPIface);
-#endif
         InitAsyncSurrogates();
     }
 

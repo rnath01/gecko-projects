@@ -6,70 +6,53 @@
 /**
  * Waterfall view containing the timeline markers, controlled by DetailsView.
  */
-let WaterfallView = {
+let WaterfallView = Heritage.extend(DetailsSubview, {
+
+  rangeChangeDebounceTime: 10, // ms
+
   /**
    * Sets up the view with event binding.
    */
-  initialize: Task.async(function *() {
-    this._onRecordingStarted = this._onRecordingStarted.bind(this);
-    this._onRecordingStoppedOrSelected = this._onRecordingStoppedOrSelected.bind(this);
+  initialize: function () {
+    DetailsSubview.initialize.call(this);
+
+    this.waterfall = new Waterfall($("#waterfall-breakdown"), $("#waterfall-view"), TIMELINE_BLUEPRINT);
+    this.details = new MarkerDetails($("#waterfall-details"), $("#waterfall-view > splitter"));
+
     this._onMarkerSelected = this._onMarkerSelected.bind(this);
     this._onResize = this._onResize.bind(this);
-
-    this.waterfall = new Waterfall($("#waterfall-breakdown"), $("#details-pane"), TIMELINE_BLUEPRINT);
-    this.details = new MarkerDetails($("#waterfall-details"), $("#waterfall-view > splitter"));
 
     this.waterfall.on("selected", this._onMarkerSelected);
     this.waterfall.on("unselected", this._onMarkerSelected);
     this.details.on("resize", this._onResize);
 
-    PerformanceController.on(EVENTS.RECORDING_STARTED, this._onRecordingStarted);
-    PerformanceController.on(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
-    PerformanceController.on(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
-
     this.waterfall.recalculateBounds();
-  }),
+  },
 
   /**
    * Unbinds events.
    */
   destroy: function () {
+    DetailsSubview.destroy.call(this);
+
     this.waterfall.off("selected", this._onMarkerSelected);
     this.waterfall.off("unselected", this._onMarkerSelected);
     this.details.off("resize", this._onResize);
-
-    PerformanceController.off(EVENTS.RECORDING_STARTED, this._onRecordingStarted);
-    PerformanceController.off(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
-    PerformanceController.off(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
   },
 
   /**
    * Method for handling all the set up for rendering a new waterfall.
+   *
+   * @param object interval [optional]
+   *        The { startTime, endTime }, in milliseconds.
    */
-  render: function() {
+  render: function(interval={}) {
     let recording = PerformanceController.getCurrentRecording();
-    let { startTime, endTime } = recording.getInterval();
+    let startTime = interval.startTime || 0;
+    let endTime = interval.endTime || recording.getDuration();
     let markers = recording.getMarkers();
-
-    this.waterfall.setData(markers, startTime, startTime, endTime);
-
+    this.waterfall.setData({ markers, interval: { startTime, endTime } });
     this.emit(EVENTS.WATERFALL_RENDERED);
-  },
-
-  /**
-   * Called when recording starts.
-   */
-  _onRecordingStarted: function () {
-    this.waterfall.clearView();
-  },
-
-  /**
-   * Called when recording stops or is selected.
-   */
-  _onRecordingStoppedOrSelected: function (_, recording) {
-    if (!recording.isRecording()) {
-      this.render();
-    }
   },
 
   /**
@@ -94,10 +77,7 @@ let WaterfallView = {
   _onResize: function () {
     this.waterfall.recalculateBounds();
     this.render();
-  }
-};
+  },
 
-/**
- * Convenient way of emitting events from the view.
- */
-EventEmitter.decorate(WaterfallView);
+  toString: () => "[object WaterfallView]"
+});

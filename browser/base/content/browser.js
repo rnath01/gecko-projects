@@ -214,6 +214,7 @@ let gInitialPages = [
 #include browser-ctrlTab.js
 #include browser-customization.js
 #include browser-devedition.js
+#include browser-eme.js
 #include browser-feeds.js
 #include browser-fullScreen.js
 #include browser-fullZoom.js
@@ -270,6 +271,12 @@ XPCOMUtils.defineLazyGetter(this, "PageMenuParent", function() {
   Cu.import("resource://gre/modules/PageMenu.jsm", tmp);
   return new tmp.PageMenuParent();
 });
+
+function* browserWindows() {
+  let windows = Services.wm.getEnumerator("navigator:browser");
+  while (windows.hasMoreElements())
+    yield windows.getNext();
+}
 
 /**
 * We can avoid adding multiple load event listeners and save some time by adding
@@ -817,10 +824,12 @@ function _loadURIWithFlags(browser, uri, flags, referrer, charset, postdata) {
     browser.userTypedClear++;
   }
 
-  let shouldBeRemote = gMultiProcessBrowser &&
-                       E10SUtils.shouldBrowserBeRemote(uri);
+  let process = browser.isRemoteBrowser ? Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT
+                                        : Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
+  let mustChangeProcess = gMultiProcessBrowser &&
+                          !E10SUtils.canLoadURIInProcess(uri, process);
   try {
-    if (browser.isRemoteBrowser == shouldBeRemote) {
+    if (!mustChangeProcess) {
       browser.webNavigation.loadURI(uri, flags, referrer, postdata, null);
     } else {
       LoadInOtherProcess(browser, {
@@ -834,7 +843,7 @@ function _loadURIWithFlags(browser, uri, flags, referrer, charset, postdata) {
     // We might lose history that way but at least the browser loaded a page.
     // This might be necessary if SessionStore wasn't initialized yet i.e.
     // when the homepage is a non-remote page.
-    gBrowser.updateBrowserRemoteness(browser, shouldBeRemote);
+    gBrowser.updateBrowserRemotenessByURL(browser, uri);
     browser.webNavigation.loadURI(uri, flags, referrer, postdata, null);
   } finally {
     if (browser.userTypedClear) {
@@ -868,7 +877,22 @@ function LoadInOtherProcess(browser, loadOptions, historyIndex = -1) {
 // Called when a docshell has attempted to load a page in an incorrect process.
 // This function is responsible for loading the page in the correct process.
 function RedirectLoad({ target: browser, data }) {
-  LoadInOtherProcess(browser, data.loadOptions, data.historyIndex);
+  // We should only start the redirection if the browser window has finished
+  // starting up. Otherwise, we should wait until the startup is done.
+  if (gBrowserInit.delayedStartupFinished) {
+    LoadInOtherProcess(browser, data.loadOptions, data.historyIndex);
+  } else {
+    let delayedStartupFinished = (subject, topic) => {
+      if (topic == "browser-delayed-startup-finished" &&
+          subject == window) {
+        Services.obs.removeObserver(delayedStartupFinished, topic);
+        LoadInOtherProcess(browser, data.loadOptions, data.historyIndex);
+      }
+    };
+    Services.obs.addObserver(delayedStartupFinished,
+                             "browser-delayed-startup-finished",
+                             false);
+  }
 }
 
 var gBrowserInit = {
@@ -897,6 +921,8 @@ var gBrowserInit = {
     mm.loadFrameScript("chrome://browser/content/content.js", true);
     mm.loadFrameScript("chrome://browser/content/content-UITour.js", true);
 
+    window.messageManager.addMessageListener("Browser:LoadURI", RedirectLoad);
+
     // initialize observers and listeners
     // and give C++ access to gBrowser
     XULBrowserWindow.init();
@@ -914,8 +940,6 @@ var gBrowserInit = {
       Cc["@mozilla.org/eventlistenerservice;1"]
         .getService(Ci.nsIEventListenerService)
         .addSystemEventListener(gBrowser, "click", contentAreaClick, true);
-    } else {
-      gBrowser.updateBrowserRemoteness(gBrowser.selectedBrowser, true);
     }
 
     // hook up UI through progress listener
@@ -1116,7 +1140,7 @@ var gBrowserInit = {
 #endif
     }, false, true);
 
-    gBrowser.addEventListener("AboutTabCrashedTryAgain", function(event) {
+    gBrowser.addEventListener("AboutTabCrashedMessage", function(event) {
       let ownerDoc = event.originalTarget;
 
       if (!ownerDoc.documentURI.startsWith("about:tabcrashed")) {
@@ -1134,8 +1158,23 @@ var gBrowserInit = {
         TabCrashReporter.submitCrashReport(browser);
       }
 #endif
+
       let tab = gBrowser.getTabForBrowser(browser);
-      SessionStore.reviveCrashedTab(tab);
+      switch (event.detail.message) {
+      case "closeTab":
+        gBrowser.removeTab(tab, { animate: true });
+        break;
+      case "restoreTab":
+        SessionStore.reviveCrashedTab(tab);
+        break;
+      case "restoreAll":
+        for (let browserWin of browserWindows()) {
+          for (let tab of window.gBrowser.tabs) {
+            SessionStore.reviveCrashedTab(tab);
+          }
+        }
+        break;
+      }
     }, false, true);
 
     let uriToLoad = this._getUriToLoad();
@@ -1157,13 +1196,29 @@ var gBrowserInit = {
       else if (uriToLoad instanceof XULElement) {
         // swap the given tab with the default about:blank tab and then close
         // the original tab in the other window.
+        let tabToOpen = uriToLoad;
 
         // Stop the about:blank load
         gBrowser.stop();
         // make sure it has a docshell
         gBrowser.docShell;
 
-        gBrowser.swapBrowsersAndCloseOther(gBrowser.selectedTab, uriToLoad);
+        // If the browser that we're swapping in was remote, then we'd better
+        // be able to support remote browsers, and then make our selectedTab
+        // remote.
+        try {
+          if (tabToOpen.linkedBrowser.isRemoteBrowser) {
+            if (!gMultiProcessBrowser) {
+              throw new Error("Cannot drag a remote browser into a window " +
+                              "without the remote tabs load context.");
+            }
+
+            gBrowser.updateBrowserRemoteness(gBrowser.selectedBrowser, true);
+          }
+          gBrowser.swapBrowsersAndCloseOther(gBrowser.selectedTab, tabToOpen);
+        } catch(e) {
+          Cu.reportError(e);
+        }
       }
       // window.arguments[2]: referrer (nsIURI)
       //                 [3]: postData (nsIInputStream)
@@ -1192,7 +1247,6 @@ var gBrowserInit = {
     Services.obs.addObserver(gXPInstallObserver, "addon-install-failed", false);
     Services.obs.addObserver(gXPInstallObserver, "addon-install-complete", false);
     window.messageManager.addMessageListener("Browser:URIFixup", gKeywordURIFixup);
-    window.messageManager.addMessageListener("Browser:LoadURI", RedirectLoad);
 
     BrowserOffline.init();
     OfflineApps.init();
@@ -1373,7 +1427,6 @@ var gBrowserInit = {
 
       SocialUI.init();
       TabView.init();
-      SearchHighlight.init();
 
       // Telemetry for master-password - we do this after 5 seconds as it
       // can cause IO if NSS/PSM has not already initialized.
@@ -2510,8 +2563,8 @@ let gMenuButtonUpdateBadge = {
         let badge = document.getAnonymousElementByAttribute(PanelUI.menuButton,
                                                             "class",
                                                             "toolbarbutton-badge");
-        badge.style.backgroundColor = 'green';
-        PanelUI.menuButton.setAttribute("badge", "\u2605");
+        badge.style.backgroundColor = '#74BF43';
+        PanelUI.menuButton.setAttribute("badge", "\u2B06");
 
         let brandBundle = document.getElementById("bundle_brand");
         let brandShortName = brandBundle.getString("brandShortName");
@@ -3582,138 +3635,6 @@ const BrowserSearch = {
   }
 };
 
-const SearchHighlight = {
-  eventsReady: false,
-  // The pref that controls how many times to show the highlight.
-  countPref: "browser.search.highlightCount",
-  // The current highlight to show.
-  currentPos: 0,
-  // Tracks if the popup closed very recently.
-  hideTimer: null,
-
-  // The list of highlights and the items in the panel to anchor them to.
-  highlights: [{
-    id: "SearchHighlight1",
-    anchor: "search-panel-one-offs"
-  }, {
-    id: "SearchHighlight2",
-    anchor: "searchbar-engine",
-  }],
-
-  init: function() {
-    this.panel = document.getElementById("PopupSearchAutoComplete");
-    this.panel.addEventListener("popupshowing", this.searchPanelShown.bind(this), false);
-  },
-
-  initEvents: function() {
-    if (this.eventsReady) {
-      return;
-    }
-
-    this.panel.addEventListener("popuphidden", this.searchPanelHidden.bind(this), false);
-
-    for (let highlight of this.highlights) {
-      highlight.panel = document.getElementById(highlight.id);
-      highlight.panel.addEventListener("popupshowing", this.disablePanelHiding.bind(this), false);
-      highlight.panel.addEventListener("popuphiding", this.enablePanelHiding.bind(this), false);
-
-      highlight.panel.querySelector("button").addEventListener("command", this.highlightButtonClicked.bind(this), false);
-    }
-
-    this.eventsReady = true;
-  },
-
-  get highlightPanel() {
-    return this.highlights[this.currentPos].panel;
-  },
-
-  showHighlight: function() {
-    // Check that all the events are setup.
-    this.initEvents();
-
-    // If a highlight is already showing then do nothing.
-    if (this.highlightPanel.state != "closed") {
-      return;
-    }
-
-    // Show the first highlight.
-    this.currentPos = 0;
-    this.showCurrentHighlight();
-  },
-
-  showCurrentHighlight: function() {
-    let highlight = this.highlights[this.currentPos];
-    let anchor = document.getAnonymousElementByAttribute(this.panel, "anonid", highlight.anchor);
-    highlight.panel.hidden = false;
-    highlight.panel.openPopup(anchor, "leftcenter topright");
-  },
-
-  searchPanelShown: function() {
-    let placement = CustomizableUI.getPlacementOfWidget("search-container");
-    if (placement.area == CustomizableUI.AREA_PANEL) {
-      // Opening a panel anchored to a panel anchored to a panel anchored to the
-      // window doesn't work very well
-      return;
-    }
-
-    if (!BrowserSearch.searchBar.value) {
-      // Don't show the panels when there is no text in the search box
-      return;
-    }
-
-    // If the panel was only very recently closed re-show the last highlight.
-    if (this.hideTimer) {
-      clearTimeout(this.hideTimer);
-      this.hideTimer = null;
-      this.showCurrentHighlight();
-      return;
-    }
-
-    // If the highlight has already been show the appropriate number of times
-    // do nothing.
-    let count = Services.prefs.getIntPref(this.countPref);
-    if (count <= 0)
-      return;
-
-    this.showHighlight();
-    Services.prefs.setIntPref(this.countPref, count - 1);
-  },
-
-  searchPanelHidden: function() {
-    if (this.highlightPanel.state == "closed") {
-      return;
-    }
-
-    this.highlightPanel.hidePopup();
-
-    // Set a flag when the panel was closed in the last short time.
-    this.hideTimer = setTimeout(() => {
-      this.hideTimer = null;
-    }, 500);
-  },
-
-  highlightButtonClicked: function() {
-    // When the button is clicked close the current highlight and open the next
-    // one.
-    this.highlightPanel.hidePopup();
-    this.currentPos++;
-    if (this.currentPos < this.highlights.length) {
-      this.showCurrentHighlight();
-    } else {
-      Services.prefs.setIntPref(this.countPref, 0);
-      this.currentPos = 0;
-    }
-  },
-
-  disablePanelHiding: function() {
-    this.panel.setAttribute("noautohide", "true");
-  },
-
-  enablePanelHiding: function() {
-    this.panel.setAttribute("noautohide", "false");
-  },
-};
-
 function FillHistoryMenu(aParent) {
   // Lazily add the hover listeners on first showing and never remove them
   if (!aParent.hasStatusListener) {
@@ -3760,13 +3681,14 @@ function FillHistoryMenu(aParent) {
     let item = document.createElement("menuitem");
     let entry = sessionHistory.getEntryAtIndex(j, false);
     let uri = entry.URI.spec;
+    let entryURI = BrowserUtils.makeURIFromCPOW(entry.URI);
 
     item.setAttribute("uri", uri);
     item.setAttribute("label", entry.title || uri);
     item.setAttribute("index", j);
 
     if (j != index) {
-      PlacesUtils.favicons.getFaviconURLForPage(entry.URI, function (aURI) {
+      PlacesUtils.favicons.getFaviconURLForPage(entryURI, function (aURI) {
         if (aURI) {
           let iconURL = PlacesUtils.favicons.getFaviconLinkForIcon(aURI).spec;
           iconURL = PlacesUtils.getImageURLForResolution(window, iconURL);
@@ -3872,7 +3794,10 @@ function OpenBrowserWindow(options)
   }
 
   if (options && options.remote) {
-    let omtcEnabled = gPrefService.getBoolPref("layers.offmainthreadcomposition.enabled");
+    // If we're using remote tabs by default, then OMTC will be force-enabled,
+    // despite the preference returning as false.
+    let omtcEnabled = gPrefService.getBoolPref("layers.offmainthreadcomposition.enabled")
+                      || Services.appinfo.browserTabsRemoteAutostart;
     if (!omtcEnabled) {
       alert("To use out-of-process tabs, you must set the layers.offmainthreadcomposition.enabled preference and restart. Opening a normal window instead.");
     } else {
@@ -4052,6 +3977,13 @@ var XULBrowserWindow = {
 
   setJSStatus: function () {
     // unsupported
+  },
+
+  forceInitialBrowserRemote: function() {
+    let initBrowser =
+      document.getAnonymousElementByAttribute(gBrowser, "anonid", "initialBrowser");
+    gBrowser.updateBrowserRemoteness(initBrowser, true);
+    return initBrowser.frameLoader.tabParent;
   },
 
   setDefaultStatus: function (status) {
@@ -4709,7 +4641,7 @@ function nsBrowserAccess() { }
 nsBrowserAccess.prototype = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIBrowserDOMWindow, Ci.nsISupports]),
 
-  _openURIInNewTab: function(aURI, aReferrer, aIsPrivate, aIsExternal) {
+  _openURIInNewTab: function(aURI, aReferrer, aIsPrivate, aIsExternal, aForceNotRemote=false) {
     let win, needToFocusWin;
 
     // try the current window.  if we're in a popup, fall back on the most recent browser window
@@ -4736,7 +4668,8 @@ nsBrowserAccess.prototype = {
     let tab = win.gBrowser.loadOneTab(aURI ? aURI.spec : "about:blank", {
                                       referrerURI: aReferrer,
                                       fromExternal: aIsExternal,
-                                      inBackground: loadInBackground});
+                                      inBackground: loadInBackground,
+                                      forceNotRemote: aForceNotRemote});
     let browser = win.gBrowser.getBrowserForTab(tab);
 
     if (needToFocusWin || (!loadInBackground && aIsExternal))
@@ -4746,8 +4679,22 @@ nsBrowserAccess.prototype = {
   },
 
   openURI: function (aURI, aOpener, aWhere, aContext) {
+    // This function should only ever be called if we're opening a URI
+    // from a non-remote browser window (via nsContentTreeOwner).
+    if (aOpener && Cu.isCrossProcessWrapper(aOpener)) {
+      Cu.reportError("nsBrowserAccess.openURI was passed a CPOW for aOpener. " +
+                     "openURI should only ever be called from non-remote browsers.");
+      throw Cr.NS_ERROR_FAILURE;
+    }
+
     var newWindow = null;
     var isExternal = (aContext == Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL);
+
+    if (aOpener && isExternal) {
+      Cu.reportError("nsBrowserAccess.openURI did not expect an opener to be " +
+                     "passed if the context is OPEN_EXTERNAL.");
+      throw Cr.NS_ERROR_FAILURE;
+    }
 
     if (isExternal && aURI && aURI.schemeIs("chrome")) {
       dump("use --chrome command-line option to load external chrome urls\n");
@@ -4761,19 +4708,30 @@ nsBrowserAccess.prototype = {
       else
         aWhere = gPrefService.getIntPref("browser.link.open_newwindow");
     }
+    let isPrivate = PrivateBrowsingUtils.isWindowPrivate(aOpener || window);
     switch (aWhere) {
       case Ci.nsIBrowserDOMWindow.OPEN_NEWWINDOW :
         // FIXME: Bug 408379. So how come this doesn't send the
         // referrer like the other loads do?
         var url = aURI ? aURI.spec : "about:blank";
+        let features = "all,dialog=no";
+        if (isPrivate) {
+          features += ",private";
+        }
         // Pass all params to openDialog to ensure that "url" isn't passed through
         // loadOneOrMoreURIs, which splits based on "|"
-        newWindow = openDialog(getBrowserURL(), "_blank", "all,dialog=no", url, null, null, null);
+        newWindow = openDialog(getBrowserURL(), "_blank", features, url, null, null, null);
         break;
       case Ci.nsIBrowserDOMWindow.OPEN_NEWTAB :
         let referrer = aOpener ? makeURI(aOpener.location.href) : null;
-        let isPrivate = PrivateBrowsingUtils.isWindowPrivate(aOpener || window);
-        let browser = this._openURIInNewTab(aURI, referrer, isPrivate, isExternal);
+        // If we have an opener, that means that the caller is expecting access
+        // to the nsIDOMWindow of the opened tab right away. For e10s windows,
+        // this means forcing the newly opened browser to be non-remote so that
+        // we can hand back the nsIDOMWindow. The XULBrowserWindow.shouldLoadURI
+        // will do the job of shuttling off the newly opened browser to run in
+        // the right process once it starts loading a URI.
+        let forceNotRemote = !!aOpener;
+        let browser = this._openURIInNewTab(aURI, referrer, isPrivate, isExternal, forceNotRemote);
         if (browser)
           newWindow = browser.contentWindow;
         break;
@@ -5727,9 +5685,9 @@ function handleLinkClick(event, href, linkNode) {
 
   urlSecurityCheck(href, doc.nodePrincipal);
   let params = { charset: doc.characterSet,
-                 allowMixedContent: persistAllowMixedContentInChildTab };
-  if (!BrowserUtils.linkHasNoReferrer(linkNode))
-    params.referrerURI = referrerURI;
+                 allowMixedContent: persistAllowMixedContentInChildTab,
+                 referrerURI: referrerURI,
+                 noReferrer: BrowserUtils.linkHasNoReferrer(linkNode) };
   openLinkIn(href, where, params);
   event.preventDefault();
   return true;
@@ -6463,11 +6421,9 @@ function warnAboutClosingWindow() {
     return gBrowser.warnAboutClosingTabs(gBrowser.closingTabsEnum.ALL);
 
   // Figure out if there's at least one other browser window around.
-  let e = Services.wm.getEnumerator("navigator:browser");
   let otherPBWindowExists = false;
   let nonPopupPresent = false;
-  while (e.hasMoreElements()) {
-    let win = e.getNext();
+  for (let win of browserWindows()) {
     if (!win.closed && win != window) {
       if (isPBWindow && PrivateBrowsingUtils.isWindowPrivate(win))
         otherPBWindowExists = true;
@@ -7172,7 +7128,7 @@ var gIdentityHandler = {
       break; }
     case this.IDENTITY_MODE_CHROMEUI:
       let brandBundle = document.getElementById("bundle_brand");
-      icon_label = brandBundle.getString("brandShortName");
+      icon_label = brandBundle.getString("brandShorterName");
       break;
     default:
       tooltip = gNavigatorBundle.getString("identity.unknown.tooltip");
@@ -7463,6 +7419,11 @@ let gRemoteTabsUI = {
       return;
     }
 
+    if (Services.appinfo.inSafeMode) {
+      // e10s isn't supported in safe mode, so don't show the menu items for it
+      return;
+    }
+
     let newRemoteWindow = document.getElementById("menu_newRemoteWindow");
     let newNonRemoteWindow = document.getElementById("menu_newNonRemoteWindow");
     let autostart = Services.appinfo.browserTabsRemoteAutostart;
@@ -7566,9 +7527,7 @@ function switchToTabHavingURI(aURI, aOpenNew, aOpenParams={}) {
   if (isBrowserWindow && switchIfURIInWindow(window))
     return true;
 
-  let winEnum = Services.wm.getEnumerator("navigator:browser");
-  while (winEnum.hasMoreElements()) {
-    let browserWin = winEnum.getNext();
+  for (let browserWin of browserWindows()) {
     // Skip closed (but not yet destroyed) windows,
     // and the current window (which was checked earlier).
     if (browserWin.closed || browserWin == window)
@@ -7683,32 +7642,8 @@ Object.defineProperty(this, "HUDService", {
 });
 
 // Prompt user to restart the browser in safe mode
-function safeModeRestart()
-{
-  // prompt the user to confirm
-  let promptTitle = gNavigatorBundle.getString("safeModeRestartPromptTitle");
-  let promptMessage =
-    gNavigatorBundle.getString("safeModeRestartPromptMessage");
-  let restartText = gNavigatorBundle.getString("safeModeRestartButton");
-  let buttonFlags = (Services.prompt.BUTTON_POS_0 *
-                     Services.prompt.BUTTON_TITLE_IS_STRING) +
-                    (Services.prompt.BUTTON_POS_1 *
-                     Services.prompt.BUTTON_TITLE_CANCEL) +
-                    Services.prompt.BUTTON_POS_0_DEFAULT;
-
-  let rv = Services.prompt.confirmEx(window, promptTitle, promptMessage,
-                                     buttonFlags, restartText, null, null,
-                                     null, {});
-  if (rv != 0)
-    return;
-
-  let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
-                     .createInstance(Ci.nsISupportsPRBool);
-  Services.obs.notifyObservers(cancelQuit, "quit-application-requested", "restart");
-
-  if (!cancelQuit.data) {
-    Services.startup.restartInSafeMode(Ci.nsIAppStartup.eAttemptQuit);
-  }
+function safeModeRestart() {
+  Services.obs.notifyObservers(null, "restart-in-safe-mode", "");
 }
 
 /* duplicateTabIn duplicates tab in a place specified by the parameter |where|.

@@ -33,6 +33,7 @@ Request::Request(nsIGlobalObject* aOwner, InternalRequest* aRequest)
   : FetchBody<Request>()
   , mOwner(aOwner)
   , mRequest(aRequest)
+  , mContext(RequestContext::Fetch)
 {
 }
 
@@ -62,7 +63,7 @@ Request::Constructor(const GlobalObject& aGlobal,
     inputReq->GetBody(getter_AddRefs(body));
     if (body) {
       if (inputReq->BodyUsed()) {
-        aRv.ThrowTypeError(MSG_REQUEST_BODY_CONSUMED_ERROR);
+        aRv.ThrowTypeError(MSG_FETCH_BODY_CONSUMED_ERROR);
         return nullptr;
       } else {
         inputReq->SetBodyUsed();
@@ -218,6 +219,15 @@ Request::Constructor(const GlobalObject& aGlobal,
   }
 
   if (aInit.mBody.WasPassed()) {
+    // HEAD and GET are not allowed to have a body.
+    nsAutoCString method;
+    request->GetMethod(method);
+    // method is guaranteed to be uppercase due to step 14.2 above.
+    if (method.EqualsLiteral("HEAD") || method.EqualsLiteral("GET")) {
+      aRv.ThrowTypeError(MSG_NO_BODY_ALLOWED_FOR_GET_AND_HEAD);
+      return nullptr;
+    }
+
     const OwningArrayBufferOrArrayBufferViewOrBlobOrUSVStringOrURLSearchParams& bodyInit = aInit.mBody.Value();
     nsCOMPtr<nsIInputStream> stream;
     nsCString contentType;
@@ -245,12 +255,20 @@ Request::Constructor(const GlobalObject& aGlobal,
 }
 
 already_AddRefed<Request>
-Request::Clone() const
+Request::Clone(ErrorResult& aRv) const
 {
-  // FIXME(nsm): Bug 1073231. This is incorrect, but the clone method isn't
-  // well defined yet.
-  nsRefPtr<Request> request = new Request(mOwner,
-                                          new InternalRequest(*mRequest));
+  if (BodyUsed()) {
+    aRv.ThrowTypeError(MSG_FETCH_BODY_CONSUMED_ERROR);
+    return nullptr;
+  }
+
+  nsRefPtr<InternalRequest> ir = mRequest->Clone();
+  if (!ir) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  nsRefPtr<Request> request = new Request(mOwner, ir);
   return request.forget();
 }
 

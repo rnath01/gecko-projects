@@ -979,7 +979,6 @@ nsTextEditorState::nsTextEditorState(nsITextControlElement* aOwningElement)
   : mTextCtrlElement(aOwningElement),
     mRestoringSelection(nullptr),
     mBoundFrame(nullptr),
-    mTextListener(nullptr),
     mEverInited(false),
     mEditorInitialized(false),
     mInitializing(false),
@@ -1012,7 +1011,7 @@ nsTextEditorState::Clear()
     // for us.
     DestroyEditor();
   }
-  NS_IF_RELEASE(mTextListener);
+  mTextListener = nullptr;
 }
 
 void nsTextEditorState::Unlink()
@@ -1125,8 +1124,8 @@ nsTextEditorState::BindToFrame(nsTextControlFrame* aFrame)
 
   // Create a SelectionController
   mSelCon = new nsTextInputSelectionImpl(frameSel, shell, rootNode);
+  MOZ_ASSERT(!mTextListener, "Should not overwrite the object");
   mTextListener = new nsTextInputListener(mTextCtrlElement);
-  NS_ADDREF(mTextListener);
 
   mTextListener->SetFrame(mBoundFrame);
   mSelCon->SetDisplaySelection(nsISelectionController::SELECTION_ON);
@@ -1647,7 +1646,6 @@ nsTextEditorState::UnbindFromFrame(nsTextControlFrame* aFrame)
         TrustedEventsAtSystemGroupBubble());
     }
 
-    NS_RELEASE(mTextListener);
     mTextListener = nullptr;
   }
 
@@ -1875,8 +1873,6 @@ bool
 nsTextEditorState::SetValue(const nsAString& aValue, bool aUserInput,
                             bool aSetValueChanged)
 {
-  mozilla::fallible_t fallible;
-
   if (mEditor && mBoundFrame) {
     // The InsertText call below might flush pending notifications, which
     // could lead into a scheduled PrepareEditor to be called.  That will
@@ -2111,7 +2107,7 @@ nsTextEditorState::UpdatePlaceholderVisibility(bool aNotify)
 void
 nsTextEditorState::HideSelectionIfBlurred()
 {
-  NS_ABORT_IF_FALSE(mSelCon, "Should have a selection controller if we have a frame!");
+  MOZ_ASSERT(mSelCon, "Should have a selection controller if we have a frame!");
   nsCOMPtr<nsIContent> content = do_QueryInterface(mTextCtrlElement);
   if (!nsContentUtils::IsFocusedContent(content)) {
     mSelCon->SetDisplaySelection(nsISelectionController::SELECTION_HIDDEN);

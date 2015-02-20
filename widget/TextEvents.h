@@ -12,6 +12,7 @@
 #include "mozilla/BasicEvents.h"
 #include "mozilla/EventForwards.h" // for KeyNameIndex, temporarily
 #include "mozilla/TextRange.h"
+#include "mozilla/FontRange.h"
 #include "nsCOMPtr.h"
 #include "nsIDOMKeyEvent.h"
 #include "nsITransferable.h"
@@ -19,6 +20,9 @@
 #include "nsStringGlue.h"
 #include "nsTArray.h"
 #include "WritingModes.h"
+
+class nsStringHashKey;
+template<class, class> class nsDataHashtable;
 
 /******************************************************************************
  * virtual keycode values
@@ -163,6 +167,10 @@ public:
   nsString mNativeCharactersIgnoringModifiers;
 #endif
 
+  // If the key should cause keypress events, this returns true.
+  // Otherwise, false.
+  bool ShouldCauseKeypressEvents() const;
+
   void GetDOMKeyName(nsAString& aKeyName)
   {
     if (mKeyNameIndex == KEY_NAME_INDEX_USE_STRING) {
@@ -180,10 +188,47 @@ public:
     GetDOMCodeName(mCodeNameIndex, aCodeName);
   }
 
+  bool IsModifierKeyEvent() const
+  {
+    return GetModifierForKeyName(mKeyNameIndex) != MODIFIER_NONE;
+  }
+
+  static void Shutdown();
+
+  /**
+   * ComputeLocationFromCodeValue() returns one of .location value
+   * (nsIDOMKeyEvent::DOM_KEY_LOCATION_*) which is the most preferred value
+   * for the specified specified code value.
+   */
+  static uint32_t ComputeLocationFromCodeValue(CodeNameIndex aCodeNameIndex);
+
+  /**
+   * ComputeKeyCodeFromKeyNameIndex() return a .keyCode value which can be
+   * mapped from the specified key value.  Note that this returns 0 if the
+   * key name index is KEY_NAME_INDEX_Unidentified or KEY_NAME_INDEX_USE_STRING.
+   * This means that this method is useful only for non-printable keys.
+   */
+  static uint32_t ComputeKeyCodeFromKeyNameIndex(KeyNameIndex aKeyNameIndex);
+
+  /**
+   * GetModifierForKeyName() returns a value of Modifier which is activated
+   * by the aKeyNameIndex.
+   */
+  static Modifier GetModifierForKeyName(KeyNameIndex aKeyNameIndex);
+
+  /**
+   * IsLockableModifier() returns true if aKeyNameIndex is a lockable modifier
+   * key such as CapsLock and NumLock.
+   */
+  static bool IsLockableModifier(KeyNameIndex aKeyNameIndex);
+
   static void GetDOMKeyName(KeyNameIndex aKeyNameIndex,
                             nsAString& aKeyName);
   static void GetDOMCodeName(CodeNameIndex aCodeNameIndex,
                              nsAString& aCodeName);
+
+  static KeyNameIndex GetKeyNameIndex(const nsAString& aKeyValue);
+  static CodeNameIndex GetCodeNameIndex(const nsAString& aCodeValue);
 
   static const char* GetCommandStr(Command aCommand);
 
@@ -207,6 +252,16 @@ public:
     mNativeKeyEvent = nullptr;
     mUniqueId = aEvent.mUniqueId;
   }
+
+private:
+  static const char16_t* kKeyNames[];
+  static const char16_t* kCodeNames[];
+  typedef nsDataHashtable<nsStringHashKey,
+                          KeyNameIndex> KeyNameIndexHashtable;
+  typedef nsDataHashtable<nsStringHashKey,
+                          CodeNameIndex> CodeNameIndexHashtable;
+  static KeyNameIndexHashtable* sKeyNameIndexHashtable;
+  static CodeNameIndexHashtable* sCodeNameIndexHashtable;
 };
 
 
@@ -397,6 +452,7 @@ public:
     , mSucceeded(false)
     , mWasAsync(false)
     , mUseNativeLineBreak(true)
+    , mWithFontRanges(false)
   {
   }
 
@@ -445,6 +501,13 @@ public:
     refPoint = aPoint;
   }
 
+  void RequestFontRanges()
+  {
+    NS_ASSERTION(message == NS_QUERY_TEXT_CONTENT,
+                 "not querying text content");
+    mWithFontRanges = true;
+  }
+
   uint32_t GetSelectionStart(void) const
   {
     NS_ASSERTION(message == NS_QUERY_SELECTED_TEXT,
@@ -461,14 +524,16 @@ public:
 
   mozilla::WritingMode GetWritingMode(void) const
   {
-    NS_ASSERTION(message == NS_QUERY_SELECTED_TEXT,
-                 "not querying selection");
+    NS_ASSERTION(message == NS_QUERY_SELECTED_TEXT ||
+                 message == NS_QUERY_TEXT_RECT,
+                 "not querying selection or text rect");
     return mReply.mWritingMode;
   }
 
   bool mSucceeded;
   bool mWasAsync;
   bool mUseNativeLineBreak;
+  bool mWithFontRanges;
   struct
   {
     uint32_t mOffset;
@@ -480,7 +545,7 @@ public:
     uint32_t mOffset;
     nsString mString;
     // Finally, the coordinates is system coordinates.
-    nsIntRect mRect;
+    mozilla::LayoutDeviceIntRect mRect;
     // The return widget has the caret. This is set at all query events.
     nsIWidget* mFocusedWidget;
     // true if selection is reversed (end < start)
@@ -493,6 +558,8 @@ public:
     mozilla::WritingMode mWritingMode;
     // used by NS_QUERY_SELECTION_AS_TRANSFERABLE
     nsCOMPtr<nsITransferable> mTransferable;
+    // used by NS_QUERY_TEXT_CONTENT with font ranges requested
+    nsAutoTArray<mozilla::FontRange, 1> mFontRanges;
   } mReply;
 
   enum

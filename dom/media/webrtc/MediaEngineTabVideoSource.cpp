@@ -174,7 +174,6 @@ MediaEngineTabVideoSource::Start(SourceMediaStream* aStream, TrackID aID)
     runnable = new StartRunnable(this);
   NS_DispatchToMainThread(runnable);
   aStream->AddTrack(aID, 0, new VideoSegment());
-  aStream->AdvanceKnownTracksTime(STREAM_TIME_MAX);
 
   return NS_OK;
 }
@@ -219,9 +218,13 @@ MediaEngineTabVideoSource::Draw() {
   IntSize size;
   // maintain source aspect ratio
   if (mBufWidthMax/innerWidth < mBufHeightMax/innerHeight) {
-    size = IntSize(mBufWidthMax, (mBufWidthMax * ((float) innerHeight/innerWidth)));
+    // adjust width to be divisible by 4 to work around bug 1125393
+    int32_t width = mBufWidthMax - (mBufWidthMax % 4);
+    size = IntSize(width, (width * ((float) innerHeight/innerWidth)));
   } else {
-    size = IntSize((mBufHeightMax * ((float) innerWidth/innerHeight)), mBufHeightMax);
+    int32_t tmpWidth = (mBufHeightMax * ((float) innerWidth/innerHeight));
+    int32_t width =  tmpWidth - (tmpWidth % 4);
+    size = IntSize(width, (width * ((float) innerHeight/innerWidth)));
   }
 
   gfxImageFormat format = gfxImageFormat::RGB24;

@@ -46,7 +46,6 @@ import org.mozilla.gecko.mozglue.GeckoLoader;
 import org.mozilla.gecko.preferences.ClearOnShutdownPref;
 import org.mozilla.gecko.preferences.GeckoPreferences;
 import org.mozilla.gecko.prompts.PromptService;
-import org.mozilla.gecko.updater.UpdateService;
 import org.mozilla.gecko.updater.UpdateServiceHelper;
 import org.mozilla.gecko.util.ActivityResultHandler;
 import org.mozilla.gecko.util.ActivityUtils;
@@ -127,16 +126,10 @@ public abstract class GeckoApp
     SensorEventListener,
     Tabs.OnTabsChangedListener {
 
-    protected GeckoApp() {
-        // We need to do this before any access to the profile; it controls
-        // which database class is used.
-        // We thus need to do this before our GeckoView is inflated, because
-        // GeckoView implicitly accesses the profile.
-        GeckoProfile.setBrowserDBFactory(getBrowserDBFactory());
-    }
-
     private static final String LOGTAG = "GeckoApp";
     private static final int ONE_DAY_MS = 1000*60*60*24;
+
+    private static final boolean ZOOMED_VIEW_ENABLED = AppConstants.NIGHTLY_BUILD;
 
     private static enum StartupAction {
         NORMAL,     /* normal application start */
@@ -167,8 +160,9 @@ public abstract class GeckoApp
     // after a version upgrade.
     private static final int CLEANUP_DEFERRAL_SECONDS = 15;
 
-    protected RelativeLayout mRootLayout;
+    protected OuterLayout mRootLayout;
     protected RelativeLayout mMainLayout;
+
     protected RelativeLayout mGeckoLayout;
     private View mCameraView;
     private OrientationEventListener mCameraOrientationEventListener;
@@ -181,6 +175,7 @@ public abstract class GeckoApp
     private ContactService mContactService;
     private PromptService mPromptService;
     private TextSelection mTextSelection;
+    private ZoomedView mZoomedView;
 
     protected DoorHangerPopup mDoorHangerPopup;
     protected FormAssistPopup mFormAssistPopup;
@@ -237,8 +232,6 @@ public abstract class GeckoApp
     public SharedPreferences getSharedPreferences() {
         return GeckoSharedPrefs.forApp(this);
     }
-
-    protected abstract BrowserDB.Factory getBrowserDBFactory();
 
     @Override
     public Activity getActivity() {
@@ -399,7 +392,7 @@ public abstract class GeckoApp
                 onPreparePanel(featureId, mMenuPanel, mMenu);
             }
 
-            return mMenuPanel; 
+            return mMenuPanel;
         }
 
         return super.onCreatePanelView(featureId);
@@ -512,7 +505,7 @@ public abstract class GeckoApp
             mMenuPanel.addView((GeckoMenu) mMenu);
         }
     }
- 
+
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         // Handle hardware menu key presses separately so that we can show a custom menu in some cases.
@@ -674,16 +667,11 @@ public abstract class GeckoApp
             toggleChrome(true);
 
         } else if ("Update:Check".equals(event)) {
-            startService(new Intent(
-                    UpdateServiceHelper.ACTION_CHECK_FOR_UPDATE, null, this, UpdateService.class));
-
+            UpdateServiceHelper.checkForUpdate(this);
         } else if ("Update:Download".equals(event)) {
-            startService(new Intent(
-                    UpdateServiceHelper.ACTION_DOWNLOAD_UPDATE, null, this, UpdateService.class));
-
+            UpdateServiceHelper.downloadUpdate(this);
         } else if ("Update:Install".equals(event)) {
-            startService(new Intent(
-                    UpdateServiceHelper.ACTION_APPLY_UPDATE, null, this, UpdateService.class));
+            UpdateServiceHelper.applyUpdate(this);
         }
     }
 
@@ -851,7 +839,9 @@ public abstract class GeckoApp
 
                     @Override
                     public void onToastHidden(ButtonToast.ReasonHidden reason) {
-                        if (reason == ButtonToast.ReasonHidden.TIMEOUT) {
+                        if (reason == ButtonToast.ReasonHidden.TIMEOUT ||
+                            reason == ButtonToast.ReasonHidden.TOUCH_OUTSIDE ||
+                            reason == ButtonToast.ReasonHidden.REPLACED) {
                             GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("Toast:Hidden", buttonId));
                         }
                     }
@@ -1073,7 +1063,7 @@ public abstract class GeckoApp
     public void requestRender() {
         mLayerView.requestRender();
     }
-    
+
     public void hidePlugins(Tab tab) {
         for (Layer layer : tab.getPluginLayers()) {
             if (layer instanceof PluginLayer) {
@@ -1274,7 +1264,7 @@ public abstract class GeckoApp
         setContentView(getLayout());
 
         // Set up Gecko layout.
-        mRootLayout = (RelativeLayout) findViewById(R.id.root_layout);
+        mRootLayout = (OuterLayout) findViewById(R.id.root_layout);
         mGeckoLayout = (RelativeLayout) findViewById(R.id.gecko_layout);
         mMainLayout = (RelativeLayout) findViewById(R.id.main_layout);
 
@@ -1588,11 +1578,10 @@ public abstract class GeckoApp
                                            (TextSelectionHandle) findViewById(R.id.caret_handle),
                                            (TextSelectionHandle) findViewById(R.id.focus_handle));
 
-        PrefsHelper.getPref("app.update.autodownload", new PrefsHelper.PrefHandlerBase() {
-            @Override public void prefValue(String pref, String value) {
-                UpdateServiceHelper.registerForUpdates(GeckoApp.this, value);
-            }
-        });
+        if (ZOOMED_VIEW_ENABLED) {
+            ViewStub stub = (ViewStub) findViewById(R.id.zoomed_view_stub);
+            mZoomedView = (ZoomedView) stub.inflate();
+        }
 
         // Trigger the completion of the telemetry timer that wraps activity startup,
         // then grab the duration to give to FHR.
@@ -1606,6 +1595,8 @@ public abstract class GeckoApp
                 if (rec != null) {
                     rec.recordJavaStartupTime(javaDuration);
                 }
+
+                UpdateServiceHelper.registerForUpdates(GeckoApp.this);
 
                 // Kick off our background services. We do this by invoking the broadcast
                 // receiver, which uses the system alarm infrastructure to perform tasks at
@@ -2058,6 +2049,9 @@ public abstract class GeckoApp
             mPromptService.destroy();
         if (mTextSelection != null)
             mTextSelection.destroy();
+        if (mZoomedView != null) {
+            mZoomedView.destroy();
+        }
         NotificationHelper.destroy();
         IntentHelper.destroy();
         GeckoNetworkManager.destroy();
@@ -2392,9 +2386,22 @@ public abstract class GeckoApp
     public static class MainLayout extends RelativeLayout {
         private TouchEventInterceptor mTouchEventInterceptor;
         private MotionEventInterceptor mMotionEventInterceptor;
+        private LayoutInterceptor mLayoutInterceptor;
 
         public MainLayout(Context context, AttributeSet attrs) {
             super(context, attrs);
+        }
+
+        @Override
+        protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+            super.onLayout(changed, left, top, right, bottom);
+            if (mLayoutInterceptor != null) {
+                mLayoutInterceptor.onLayout();
+            }
+        }
+
+        public void setLayoutInterceptor(LayoutInterceptor interceptor) {
+            mLayoutInterceptor = interceptor;
         }
 
         public void setTouchEventInterceptor(TouchEventInterceptor interceptor) {
