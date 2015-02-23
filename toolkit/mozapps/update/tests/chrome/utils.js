@@ -862,7 +862,7 @@ function verifyTestsRan() {
 function resetUpdaterBackup() {
   // Move back the original updater
   let baseAppDir = getAppBaseDir();
-  updater = baseAppDir.clone();
+  let updater = baseAppDir.clone();
   updater.appendRelativePath("updater.app.bak");
   if (updater.exists()) {
     updater.moveTo(baseAppDir, "updater.app");
@@ -900,7 +900,7 @@ function setupFiles() {
   if (updater.exists()) {
     updater.moveTo(baseAppDir, "updater.app.bak");
   } else {
-    let updater = baseAppDir.clone();
+    updater = baseAppDir.clone();
     updater.appendRelativePath("updater" + BIN_SUFFIX);
     updater.moveTo(baseAppDir, "updater" + BIN_SUFFIX + ".bak");
   }
