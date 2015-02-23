@@ -853,6 +853,29 @@ function verifyTestsRan() {
 }
 
 /**
+ * Restore the updater that was backed up.
+ * This is called both in setupFiles and resetFiles.
+ * It is called in setupFiles before the backup is done in case the previous
+ * test failed.
+ * It is called in resetFiles to put things back to its original state.
+ */
+function resetUpdaterBackup() {
+  // Move back the original updater
+  let baseAppDir = getAppBaseDir();
+  updater = baseAppDir.clone();
+  updater.appendRelativePath("updater.app.bak");
+  if (updater.exists()) {
+    updater.moveTo(baseAppDir, "updater.app");
+  } else {
+    updater = baseAppDir.clone();
+    updater.appendRelativePath("updater" + BIN_SUFFIX + ".bak");
+    if (updater.exists()) {
+      updater.moveTo(baseAppDir, "updater" + BIN_SUFFIX);
+    }
+  }
+}
+
+/**
  * Creates a backup of files the tests need to modify so they can be restored to
  * the original file when the test has finished and then modifies the files.
  */
@@ -868,30 +891,33 @@ function setupFiles() {
   updateSettingsIni.append(FILE_UPDATE_SETTINGS_INI);
   writeFile(updateSettingsIni, UPDATE_SETTINGS_CONTENTS);
 
-  // Move away the real updater binary
-  let updaterBin = baseAppDir.clone();
-  updaterBin.appendRelativePath("updater.app");
-  if (updaterBin.exists()) {
-    updaterBin.moveTo(baseAppDir, "updater.app.bak");
+  // Just in case the last test failed, try to reset.
+  resetUpdaterBackup();
+
+  // Move away the real updater
+  let updater = baseAppDir.clone();
+  updater.appendRelativePath("updater.app");
+  if (updater.exists()) {
+    updater.moveTo(baseAppDir, "updater.app.bak");
   } else {
-    let updaterBin = baseAppDir.clone();
-    updaterBin.appendRelativePath("updater" + BIN_SUFFIX);
-    updaterBin.moveTo(baseAppDir, "updater" + BIN_SUFFIX + ".bak");
+    let updater = baseAppDir.clone();
+    updater.appendRelativePath("updater" + BIN_SUFFIX);
+    updater.moveTo(baseAppDir, "updater" + BIN_SUFFIX + ".bak");
   }
 
-  // Move in the test only updater binary
-  let testUpdaterBinDir = AUS_Cc["@mozilla.org/file/directory_service;1"].
+  // Move in the test only updater
+  let testUpdaterDir = AUS_Cc["@mozilla.org/file/directory_service;1"].
     getService(AUS_Ci.nsIProperties).
     get("CurWorkD", AUS_Ci.nsILocalFile);
-  testUpdaterBinDir.appendRelativePath(REL_PATH_DATA);
-  let testUpdaterBin = testUpdaterBinDir.clone();
-  testUpdaterBin.appendRelativePath("updater.app");
-  if (testUpdaterBin.exists()) {
-      testUpdaterBin.copyToFollowingLinks(baseAppDir, "updater.app");
+  testUpdaterDir.appendRelativePath(REL_PATH_DATA);
+  let testUpdater = testUpdaterDir.clone();
+  testUpdater.appendRelativePath("updater.app");
+  if (testUpdater.exists()) {
+    testUpdater.copyToFollowingLinks(baseAppDir, "updater.app");
   } else {
-      let testUpdaterBin = testUpdaterBinDir.clone();
-      testUpdaterBin.appendRelativePath("updater" + BIN_SUFFIX);
-      testUpdaterBin.copyToFollowingLinks(baseAppDir, "updater" + BIN_SUFFIX);
+    testUpdater = testUpdaterDir.clone();
+    testUpdater.appendRelativePath("updater" + BIN_SUFFIX);
+    testUpdater.copyToFollowingLinks(baseAppDir, "updater" + BIN_SUFFIX);
   }
 }
 
@@ -977,29 +1003,18 @@ function resetFiles() {
     }
   }
 
-  // Remove the temp updater.app
-  let updaterBin = baseAppDir.clone();
-  updaterBin.appendRelativePath("updater.app");
-  if (updaterBin.exists()) {
-    updaterBin.remove(true);
-  } else {
-    let updaterBin = baseAppDir.clone();
-    updaterBin.appendRelativePath("updater" + BIN_SUFFIX);
-    updaterBin.remove(true);
+  // Remove the temp updater
+  let updater = baseAppDir.clone();
+  updater.appendRelativePath("updater.app");
+  if (!updater.exists()) {
+    updater = baseAppDir.clone();
+    updater.appendRelativePath("updater" + BIN_SUFFIX);
+  }
+  if (updater.exists()) {
+    updater.remove(true);
   }
 
-  // Move away updater.app
-  updaterBin = baseAppDir.clone();
-  updaterBin.appendRelativePath("updater.app.bak");
-  if (updaterBin.exists()) {
-    updaterBin.moveTo(baseAppDir, "updater.app");
-  } else {
-    updaterBin = baseAppDir.clone();
-    updaterBin.appendRelativePath("updater" + BIN_SUFFIX + ".bak");
-    if (updaterBin.exists()) {
-      updaterBin.moveTo(baseAppDir, "updater" + BIN_SUFFIX);
-    }
-  }
+  resetUpdaterBackup();
 }
 
 /**
