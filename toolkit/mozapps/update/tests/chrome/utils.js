@@ -909,7 +909,15 @@ function setupFiles() {
   let testUpdaterDir = AUS_Cc["@mozilla.org/file/directory_service;1"].
     getService(AUS_Ci.nsIProperties).
     get("CurWorkD", AUS_Ci.nsILocalFile);
-  testUpdaterDir.appendRelativePath(REL_PATH_DATA);
+
+  // Fixup the relPath for Windows, nsLocalFileWin's append code will fail with
+  // front slashes.
+  var relPath = REL_PATH_DATA;
+  if (isWindows) {
+    relPath = relPath.replace(/\//g,"\\");
+  }
+
+  testUpdaterDir.appendRelativePath(relPath);
   let testUpdater = testUpdaterDir.clone();
   testUpdater.appendRelativePath("updater.app");
   if (testUpdater.exists()) {
