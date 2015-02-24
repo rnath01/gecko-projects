@@ -113,13 +113,6 @@ APZCTreeManager::MakeAPZCInstance(uint64_t aLayersId,
     aController, AsyncPanZoomController::USE_GESTURE_DETECTOR);
 }
 
-static bool
-GuidComparatorIgnoringPresShell(const ScrollableLayerGuid& aOne, const ScrollableLayerGuid& aTwo)
-{
-  return aOne.mLayersId == aTwo.mLayersId
-      && aOne.mScrollId == aTwo.mScrollId;
-}
-
 void
 APZCTreeManager::GetAllowedTouchBehavior(WidgetInputEvent* aEvent,
                                          nsTArray<TouchBehaviorFlags>& aOutValues)
@@ -979,6 +972,13 @@ APZCTreeManager::SetTargetAPZC(uint64_t aInputBlockId, const ScrollableLayerGuid
   mInputQueue->SetConfirmedTargetApzc(aInputBlockId, apzc);
 }
 
+static bool
+GuidComparatorIgnoringPresShell(const ScrollableLayerGuid& aOne, const ScrollableLayerGuid& aTwo)
+{
+  return aOne.mLayersId == aTwo.mLayersId
+      && aOne.mScrollId == aTwo.mScrollId;
+}
+
 void
 APZCTreeManager::UpdateZoomConstraints(const ScrollableLayerGuid& aGuid,
                                        const ZoomConstraints& aConstraints)
@@ -1198,7 +1198,7 @@ already_AddRefed<AsyncPanZoomController>
 APZCTreeManager::GetTargetAPZC(const ScrollableLayerGuid& aGuid)
 {
   MonitorAutoLock lock(mTreeLock);
-  nsRefPtr<HitTestingTreeNode> node = GetTargetNode(aGuid, &GuidComparatorIgnoringPresShell);
+  nsRefPtr<HitTestingTreeNode> node = GetTargetNode(aGuid, nullptr);
   MOZ_ASSERT(!node || node->GetApzc()); // any node returned must have an APZC
   nsRefPtr<AsyncPanZoomController> apzc = node ? node->GetApzc() : nullptr;
   return apzc.forget();
