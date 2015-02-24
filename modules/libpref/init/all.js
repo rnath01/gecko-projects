@@ -607,6 +607,11 @@ pref("gfx.color_management.enablev4", false);
 
 pref("gfx.downloadable_fonts.enabled", true);
 pref("gfx.downloadable_fonts.fallback_delay", 3000);
+
+// disable downloadable font cache so that behavior is consistently
+// the uncached load behavior across pages (useful for testing reflow problems)
+pref("gfx.downloadable_fonts.disable_cache", false);
+
 #ifdef RELEASE_BUILD
 pref("gfx.downloadable_fonts.woff2.enabled", false);
 #else
@@ -4554,9 +4559,6 @@ pref("reader.color_scheme.values", "[\"light\",\"dark\",\"sepia\"]");
 
 // The font type in reader (sans-serif, serif)
 pref("reader.font_type", "sans-serif");
-
-// Font type values available in reader mode UI.
-pref("reader.font_type.values", "[\"serif\",\"sans-serif\"]");
 
 // Whether or not the user has interacted with the reader mode toolbar.
 // This is used to show a first-launch tip in reader mode.

@@ -6823,8 +6823,13 @@ ComputeGetPropResult(JSContext *cx, BaselineFrame *frame, JSOp op, HandlePropert
             return false;
 
         RootedId id(cx, NameToId(name));
-        if (!GetProperty(cx, obj, obj, id, res))
-            return false;
+        if (op == JSOP_GETXPROP) {
+            if (!GetPropertyForNameLookup(cx, obj, id, res))
+                return false;
+        } else {
+            if (!GetProperty(cx, obj, obj, id, res))
+                return false;
+        }
 
 #if JS_HAS_NO_SUCH_METHOD
         // Handle objects with __noSuchMethod__.
@@ -9162,6 +9167,16 @@ GetTemplateObjectForNative(JSContext *cx, HandleScript script, jsbytecode *pc,
             return !!res;
        }
 #undef ADD_INT32X4_SIMD_OP_NAME_
+#define ADD_FLOAT32X4_SIMD_OP_NAME_(OP) || native == js::simd_float32x4_##OP
+       if (false
+           ARITH_FLOAT32X4_SIMD_OP(ADD_FLOAT32X4_SIMD_OP_NAME_)
+           BITWISE_COMMONX4_SIMD_OP(ADD_FLOAT32X4_SIMD_OP_NAME_))
+       {
+            Rooted<SimdTypeDescr *> descr(cx, &cx->global()->float32x4TypeDescr().as<SimdTypeDescr>());
+            res.set(cx->compartment()->jitCompartment()->getSimdTemplateObjectFor(cx, descr));
+            return !!res;
+       }
+#undef ADD_FLOAT32X4_SIMD_OP_NAME_
     }
 
     return true;

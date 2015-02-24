@@ -154,6 +154,8 @@ public class BrowserApp extends GeckoApp
                                    LayoutInflater.Factory {
     private static final String LOGTAG = "GeckoBrowserApp";
 
+    private static final boolean ZOOMED_VIEW_ENABLED = AppConstants.NIGHTLY_BUILD;
+
     private static final int TABS_ANIMATION_DURATION = 450;
 
     private static final String ADD_SHORTCUT_TOAST = "add_shortcut_toast";
@@ -176,19 +178,22 @@ public class BrowserApp extends GeckoApp
     public ViewFlipper mActionBarFlipper;
     public ActionModeCompatView mActionBar;
     private BrowserToolbar mBrowserToolbar;
+    // We can't name the TabStrip class because it's not included on API 9.
+    private Refreshable mTabStrip;
     private ToolbarProgressView mProgressView;
     private FirstrunPane mFirstrunPane;
     private HomePager mHomePager;
     private TabsPanel mTabsPanel;
     private ViewGroup mHomePagerContainer;
-    protected Telemetry.Timer mAboutHomeStartupTimer;
     private ActionModeCompat mActionMode;
     private boolean mHideDynamicToolbarOnActionModeEnd;
     private TabHistoryController tabHistoryController;
+    private ZoomedView mZoomedView;
 
     private static final int GECKO_TOOLS_MENU = -1;
     private static final int ADDON_MENU_OFFSET = 1000;
     public static final String TAB_HISTORY_FRAGMENT_TAG = "tabHistoryFragment";
+
     private static class MenuItemInfo {
         public int id;
         public String label;
@@ -657,8 +662,6 @@ public class BrowserApp extends GeckoApp
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        mAboutHomeStartupTimer = new Telemetry.UptimeTimer("FENNEC_STARTUP_TIME_ABOUTHOME");
-
         final Intent intent = getIntent();
 
         // Note that we're calling GeckoProfile.get *before GeckoApp.onCreate*.
@@ -721,7 +724,7 @@ public class BrowserApp extends GeckoApp
         }
 
         if (HardwareUtils.isTablet()) {
-            findViewById(R.id.new_tablet_tab_strip).setVisibility(View.VISIBLE);
+            mTabStrip = (Refreshable) (((ViewStub) findViewById(R.id.new_tablet_tab_strip)).inflate());
         }
 
         ((GeckoApp.MainLayout) mMainLayout).setTouchEventInterceptor(new HideOnTouchListener());
@@ -827,6 +830,11 @@ public class BrowserApp extends GeckoApp
 
         // Set the maximum bits-per-pixel the favicon system cares about.
         IconDirectoryEntry.setMaxBPP(GeckoAppShell.getScreenDepth());
+
+        if (ZOOMED_VIEW_ENABLED) {
+            ViewStub stub = (ViewStub) findViewById(R.id.zoomed_view_stub);
+            mZoomedView = (ZoomedView) stub.inflate();
+        }
     }
 
     private void setupSystemUITinting() {
@@ -1301,6 +1309,9 @@ public class BrowserApp extends GeckoApp
             mReadingListHelper.uninit();
             mReadingListHelper = null;
         }
+        if (mZoomedView != null) {
+            mZoomedView.destroy();
+        }
 
         EventDispatcher.getInstance().unregisterGeckoThreadListener((GeckoEventListener)this,
             "Menu:Open",
@@ -1376,16 +1387,6 @@ public class BrowserApp extends GeckoApp
 
         // Context: Sharing via chrome list (no explicit session is active)
         Telemetry.sendUIEvent(TelemetryContract.Event.SHARE, TelemetryContract.Method.LIST);
-    }
-
-    @Override
-    protected void loadStartupTab(String url, int flags) {
-        // We aren't showing about:home, so cancel the telemetry timer
-        if (url != null || mShouldRestore) {
-            mAboutHomeStartupTimer.cancel();
-        }
-
-        super.loadStartupTab(url, flags);
     }
 
     private void setToolbarMargin(int margin) {
@@ -1528,6 +1529,10 @@ public class BrowserApp extends GeckoApp
             mRootLayout.reset();
             updateSideBarState();
             mTabsPanel.refresh();
+        }
+
+        if (mTabStrip != null) {
+            mTabStrip.refresh();
         }
 
         mBrowserToolbar.refresh();
@@ -3511,6 +3516,12 @@ public class BrowserApp extends GeckoApp
         return GeckoProfile.getDefaultProfileName(this);
     }
 
+    // For use from tests only.
+    @RobocopTarget
+    public ReadingListHelper getReadingListHelper() {
+        return mReadingListHelper;
+    }
+
     /**
      * Launch UI that lets the user update Firefox.
      *
@@ -3604,5 +3615,9 @@ public class BrowserApp extends GeckoApp
                                          osLocale,
                                          appLocale,
                                          previousSession);
+    }
+
+    public static interface Refreshable {
+        public void refresh();
     }
 }

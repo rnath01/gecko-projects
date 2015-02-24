@@ -92,7 +92,11 @@ JSObject *
 js::NonNullObject(JSContext *cx, const Value &v)
 {
     if (v.isPrimitive()) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_NOT_NONNULL_OBJECT);
+        RootedValue value(cx, v);
+        char *bytes = DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, value, NullPtr());
+        if (!bytes)
+            return nullptr;
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_NOT_NONNULL_OBJECT, bytes);
         return nullptr;
     }
     return &v.toObject();
@@ -280,7 +284,10 @@ PropDesc::initialize(JSContext *cx, const Value &origval, bool checkAccessors)
 
     /* 8.10.5 step 1 */
     if (v.isPrimitive()) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_NOT_NONNULL_OBJECT);
+        char *bytes = DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, v, NullPtr());
+        if (!bytes)
+            return false;
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_NOT_NONNULL_OBJECT, bytes);
         return false;
     }
     RootedObject desc(cx, &v.toObject());
@@ -411,7 +418,8 @@ js::Throw(JSContext *cx, jsid id, unsigned errorNumber)
 {
     MOZ_ASSERT(js_ErrorFormatString[errorNumber].argCount == 1);
 
-    JSString *idstr = IdToString(cx, id);
+    RootedValue idVal(cx, IdToValue(id));
+    JSString *idstr = ValueToSource(cx, idVal);
     if (!idstr)
        return false;
     JSAutoByteString bytes(cx, idstr);
@@ -899,7 +907,7 @@ js::StandardDefineProperty(JSContext *cx, HandleObject obj, HandleId id, const P
     if (IsAnyTypedArray(obj))
         return DefinePropertyOnTypedArray(cx, obj, id, desc, throwError, rval);
 
-    if (obj->is<UnboxedPlainObject>() && !obj->as<UnboxedPlainObject>().convertToNative(cx))
+    if (obj->is<UnboxedPlainObject>() && !UnboxedPlainObject::convertToNative(cx, obj))
         return false;
 
     if (obj->getOps()->lookupProperty) {

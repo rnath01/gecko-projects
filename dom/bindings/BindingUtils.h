@@ -28,6 +28,7 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/CycleCollectedJSRuntime.h"
 #include "nsCycleCollector.h"
+#include "nsIGlobalObject.h"
 #include "nsIXPConnect.h"
 #include "nsJSUtils.h"
 #include "nsISupportsImpl.h"
@@ -103,6 +104,13 @@ ThrowMethodFailedWithDetails(JSContext* cx, ErrorResult& rv,
                              const char* memberName,
                              bool reportJSContentExceptions = false)
 {
+  if (rv.IsUncatchableException()) {
+    // Nuke any existing exception on aCx, to make sure we're uncatchable.
+    JS_ClearPendingException(cx);
+    // Don't do any reporting.  Just return false, to create an
+    // uncatchable exception.
+    return false;
+  }
   if (rv.IsErrorWithMessage()) {
     rv.ReportErrorWithMessage(cx);
     return false;
@@ -1568,6 +1576,15 @@ static inline JSObject*
 WrapNativeParent(JSContext* cx, const T& p)
 {
   return WrapNativeParent(cx, GetParentPointer(p), GetWrapperCache(p), GetUseXBLScope(p));
+}
+
+// Specialization for the case of nsIGlobalObject, since in that case
+// we can just get the JSObject* directly.
+template<>
+inline JSObject*
+WrapNativeParent(JSContext* cx, nsIGlobalObject* const& p)
+{
+  return p ? p->GetGlobalJSObject() : JS::CurrentGlobalOrNull(cx);
 }
 
 template<typename T, bool WrapperCached=NativeHasMember<T>::GetParentObject>
