@@ -972,13 +972,6 @@ APZCTreeManager::SetTargetAPZC(uint64_t aInputBlockId, const ScrollableLayerGuid
   mInputQueue->SetConfirmedTargetApzc(aInputBlockId, apzc);
 }
 
-static bool
-GuidComparatorIgnoringPresShell(const ScrollableLayerGuid& aOne, const ScrollableLayerGuid& aTwo)
-{
-  return aOne.mLayersId == aTwo.mLayersId
-      && aOne.mScrollId == aTwo.mScrollId;
-}
-
 void
 APZCTreeManager::UpdateZoomConstraints(const ScrollableLayerGuid& aGuid,
                                        const ZoomConstraints& aConstraints)
