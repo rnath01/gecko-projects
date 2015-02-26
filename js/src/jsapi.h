@@ -598,59 +598,6 @@ class HandleValueArray
     }
 };
 
-// Container for futex methods, used to implement the Atomics primitives.
-//
-// Client code calls JS_SetContextFutexAPI to install an instance of a
-// subclass of PerRuntimeFutexAPI on the runtime.  Implementations
-// of the Atomics primitives will use that object, if it is present
-// (and fail, if not).
-//
-// The API may differ among clients; for example, the APIs installed by
-// a worker and by the main window event thread are possibly different.
-
-class PerRuntimeFutexAPI
-{
-  public:
-    virtual ~PerRuntimeFutexAPI() {}
-
-    // Acquire the GLOBAL lock for all futex resources in all domains.
-    virtual void lock() = 0;
-
-    // Release the GLOBAL lock.
-    virtual void unlock() = 0;
-
-    enum WakeResult {
-        Woken,                  // Woken by futexWait
-        Timedout,               // Woken by timeout
-        ErrorException,         // Propagate a pending exception
-        InterruptForTerminate,  // Woken by a request to terminate the worker, throw an uncatchable
-        WaitingNotAllowed,      // wait() was not allowed to block on this thread (permanently)
-        ErrorTooLong            // Implementation limit
-    };
-
-    // Block the thread.
-    //
-    // The lock must be held around this call, see lock() and unlock().
-    virtual WakeResult wait(double timeout_ns) = 0;
-
-    // Wake the thread represented by this PerRuntimeFutexAPI.
-    //
-    // The lock must be held around this call, see lock() and unlock().
-    // Since the sleeping thread also needs that lock to wake up, the
-    // thread will not actually wake up until the caller of wake()
-    // releases the lock.
-    virtual void wake() = 0;
-};
-
-JS_PUBLIC_API(JS::PerRuntimeFutexAPI *)
-GetRuntimeFutexAPI(JSRuntime *rt);
-
-// Transfers ownership of fx to rt; if rt's futexAPI field is not null when rt is
-// deleted then rt's destructor will delete that value.  If fx is null in this
-// call then ownership of a held nonnull value is transfered away from rt.
-JS_PUBLIC_API(void)
-SetRuntimeFutexAPI(JSRuntime *rt, JS::PerRuntimeFutexAPI *fx);
-
 }  /* namespace JS */
 
 /************************************************************************/
@@ -1038,50 +985,6 @@ typedef js::Vector<CompartmentTimeStats, 0, js::SystemAllocPolicy> CompartmentSt
 extern JS_PUBLIC_API(bool)
 JS_GetCompartmentStats(JSRuntime *rt, CompartmentStatsVector &stats);
 
-/*
- * Format is a string of the following characters (spaces are insignificant),
- * specifying the tabulated type conversions:
- *
- *   b      bool            Boolean
- *   c      char16_t        ECMA uint16_t, Unicode character
- *   i      int32_t         ECMA int32_t
- *   j      int32_t         ECMA int32_t (used to be different)
- *   u      uint32_t        ECMA uint32_t
- *   d      double          IEEE double
- *   I      double          Integral IEEE double
- *   S      JSString *      Unicode string, accessed by a JSString pointer
- *   W      char16_t *      Unicode character vector, 0-terminated (W for wide)
- *   o      JSObject *      Object reference
- *   f      JSFunction *    Function private
- *   v      jsval           Argument value (no conversion)
- *   *      N/A             Skip this argument (no vararg)
- *   /      N/A             End of required arguments
- *
- * The variable argument list after format must consist of &b, &c, &s, e.g.,
- * where those variables have the types given above.  For the pointer types
- * char *, JSString *, and JSObject *, the pointed-at memory returned belongs
- * to the JS runtime, not to the calling native code.  The runtime promises
- * to keep this memory valid so long as argv refers to allocated stack space
- * (so long as the native function is active).
- *
- * Fewer arguments than format specifies may be passed only if there is a /
- * in format after the last required argument specifier and argc is at least
- * the number of required arguments.  More arguments than format specifies
- * may be passed without error; it is up to the caller to deal with trailing
- * unconverted arguments.
- */
-extern JS_PUBLIC_API(bool)
-JS_ConvertArguments(JSContext *cx, const JS::CallArgs &args, const char *format, ...);
-
-#ifdef va_start
-extern JS_PUBLIC_API(bool)
-JS_ConvertArgumentsVA(JSContext *cx, const JS::CallArgs &args, const char *format,
-                      va_list ap);
-#endif
-
-extern JS_PUBLIC_API(bool)
-JS_ConvertValue(JSContext *cx, JS::HandleValue v, JSType type, JS::MutableHandleValue vp);
-
 extern JS_PUBLIC_API(bool)
 JS_ValueToObject(JSContext *cx, JS::HandleValue v, JS::MutableHandleObject objp);
 
@@ -1101,13 +1004,13 @@ extern JS_PUBLIC_API(JSType)
 JS_TypeOfValue(JSContext *cx, JS::Handle<JS::Value> v);
 
 extern JS_PUBLIC_API(bool)
-JS_StrictlyEqual(JSContext *cx, jsval v1, jsval v2, bool *equal);
+JS_StrictlyEqual(JSContext *cx, JS::Handle<JS::Value> v1, JS::Handle<JS::Value> v2, bool *equal);
 
 extern JS_PUBLIC_API(bool)
 JS_LooselyEqual(JSContext *cx, JS::Handle<JS::Value> v1, JS::Handle<JS::Value> v2, bool *equal);
 
 extern JS_PUBLIC_API(bool)
-JS_SameValue(JSContext *cx, jsval v1, jsval v2, bool *same);
+JS_SameValue(JSContext *cx, JS::Handle<JS::Value> v1, JS::Handle<JS::Value> v2, bool *same);
 
 /* True iff fun is the global eval function. */
 extern JS_PUBLIC_API(bool)
@@ -2242,7 +2145,7 @@ inline int CheckIsStrictPropertyOp(JSStrictPropertyOp op);
 #define JS_SELF_HOSTED_GET(name, getterName, flags) \
     {name, \
      uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | JSPROP_SHARED | JSPROP_GETTER), \
-     { nullptr, JS_CAST_STRING_TO(getterName, const JSJitInfo *) }, \
+     { { nullptr, JS_CAST_STRING_TO(getterName, const JSJitInfo *) } }, \
      JSNATIVE_WRAPPER(nullptr) }
 #define JS_SELF_HOSTED_GETSET(name, getterName, setterName, flags) \
     {name, \
@@ -4804,11 +4707,12 @@ JS_SetParallelParsingEnabled(JSRuntime *rt, bool enabled);
 extern JS_PUBLIC_API(void)
 JS_SetOffthreadIonCompilationEnabled(JSRuntime *rt, bool enabled);
 
-#define JIT_COMPILER_OPTIONS(Register)                                  \
-    Register(BASELINE_WARMUP_TRIGGER, "baseline.warmup.trigger")    \
-    Register(ION_WARMUP_TRIGGER, "ion.warmup.trigger")              \
-    Register(ION_ENABLE, "ion.enable")                                  \
-    Register(BASELINE_ENABLE, "baseline.enable")                        \
+#define JIT_COMPILER_OPTIONS(Register)                                     \
+    Register(BASELINE_WARMUP_TRIGGER, "baseline.warmup.trigger")           \
+    Register(ION_WARMUP_TRIGGER, "ion.warmup.trigger")                     \
+    Register(ION_GVN_ENABLE, "ion.gvn.enable")                             \
+    Register(ION_ENABLE, "ion.enable")                                     \
+    Register(BASELINE_ENABLE, "baseline.enable")                           \
     Register(OFFTHREAD_COMPILATION_ENABLE, "offthread-compilation.enable") \
     Register(SIGNALS_ENABLE, "signals.enable")
 
@@ -5141,12 +5045,86 @@ SetOutOfMemoryCallback(JSRuntime *rt, OutOfMemoryCallback cb, void *data);
 
 
 /*
- * Capture the current call stack as a chain of SavedFrame objects, and set
- * |stackp| to the SavedFrame for the newest stack frame. If |maxFrameCount| is
- * non-zero, capture at most the youngest |maxFrameCount| frames.
+ * Capture the current call stack as a chain of SavedFrame JSObjects, and set
+ * |stackp| to the SavedFrame for the youngest stack frame, or nullptr if there
+ * are no JS frames on the stack. If |maxFrameCount| is non-zero, capture at
+ * most the youngest |maxFrameCount| frames.
  */
 extern JS_PUBLIC_API(bool)
 CaptureCurrentStack(JSContext *cx, MutableHandleObject stackp, unsigned maxFrameCount = 0);
+
+/*
+ * Accessors for working with SavedFrame JSObjects
+ *
+ * Each of these functions assert that if their `HandleObject savedFrame`
+ * argument is non-null, its JSClass is the SavedFrame class (or it is a
+ * cross-compartment or Xray wrapper around an object with the SavedFrame class)
+ * and the object is not the SavedFrame.prototype object.
+ *
+ * Each of these functions will find the first SavedFrame object in the chain
+ * whose underlying stack frame principals are subsumed by the cx's current
+ * compartment's principals, and operate on that SavedFrame object. This
+ * prevents leaking information about privileged frames to un-privileged
+ * callers. As a result, the SavedFrame in parameters do _NOT_ need to be in the
+ * same compartment as the cx, and the various out parameters are _NOT_
+ * guaranteed to be in the same compartment as cx.
+ *
+ * Additionally, it may be the case that there is no such SavedFrame object
+ * whose captured frame's principals are subsumed by the caller's compartment's
+ * principals! If the `HandleObject savedFrame` argument is null, or the
+ * caller's principals do not subsume any of the chained SavedFrame object's
+ * principals, `SavedFrameResult::AccessDenied` is returned and a (hopefully)
+ * sane default value is chosen for the out param.
+ */
+
+enum class SavedFrameResult {
+    Ok,
+    AccessDenied
+};
+
+/*
+ * Given a SavedFrame JSObject, get its source property. Defaults to the empty
+ * string.
+ */
+extern JS_PUBLIC_API(SavedFrameResult)
+GetSavedFrameSource(JSContext *cx, HandleObject savedFrame, MutableHandleString sourcep);
+
+/*
+ * Given a SavedFrame JSObject, get its line property. Defaults to 0.
+ */
+extern JS_PUBLIC_API(SavedFrameResult)
+GetSavedFrameLine(JSContext *cx, HandleObject savedFrame, uint32_t *linep);
+
+/*
+ * Given a SavedFrame JSObject, get its column property. Defaults to 0.
+ */
+extern JS_PUBLIC_API(SavedFrameResult)
+GetSavedFrameColumn(JSContext *cx, HandleObject savedFrame, uint32_t *columnp);
+
+/*
+ * Given a SavedFrame JSObject, get its functionDisplayName string, or nullptr
+ * if SpiderMonkey was unable to infer a name for the captured frame's
+ * function. Defaults to nullptr.
+ */
+extern JS_PUBLIC_API(SavedFrameResult)
+GetSavedFrameFunctionDisplayName(JSContext *cx, HandleObject savedFrame, MutableHandleString namep);
+
+/*
+ * Given a SavedFrame JSObject, get its parent SavedFrame object or nullptr if
+ * it is the oldest frame in the stack. The `parentp` out parameter is _NOT_
+ * guaranteed to be in the cx's compartment. Defaults to nullptr.
+ */
+extern JS_PUBLIC_API(SavedFrameResult)
+GetSavedFrameParent(JSContext *cx, HandleObject savedFrame, MutableHandleObject parentp);
+
+/*
+ * Given a SavedFrame JSObject stack, stringify it in the same format as
+ * Error.prototype.stack. The stringified stack out parameter is placed in the
+ * cx's compartment. Defaults to the empty string.
+ */
+extern JS_PUBLIC_API(bool)
+StringifySavedFrameStack(JSContext *cx, HandleObject stack, MutableHandleString stringp);
+
 
 } /* namespace JS */
 

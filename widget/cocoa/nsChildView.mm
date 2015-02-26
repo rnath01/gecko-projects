@@ -44,6 +44,7 @@
 #include "nsMenuUtilsX.h"
 #include "nsMenuBarX.h"
 #include "NativeKeyBindings.h"
+#include "ComplexTextInputPanel.h"
 
 #include "gfxContext.h"
 #include "gfxQuartzSurface.h"
@@ -465,7 +466,6 @@ nsChildView::ReleaseTitlebarCGContext()
 nsresult nsChildView::Create(nsIWidget *aParent,
                              nsNativeWidget aNativeParent,
                              const nsIntRect &aRect,
-                             nsDeviceContext *aContext,
                              nsWidgetInitData *aInitData)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
@@ -496,7 +496,7 @@ nsresult nsChildView::Create(nsIWidget *aParent,
   // Ensure that the toolkit is created.
   nsToolkit::GetToolkit();
 
-  BaseCreate(aParent, aRect, aContext, aInitData);
+  BaseCreate(aParent, aRect, aInitData);
 
   // inherit things from the parent view and create our parallel
   // NSView in the Cocoa display system
@@ -543,6 +543,8 @@ nsresult nsChildView::Create(nsIWidget *aParent,
 
   NS_ASSERTION(!mTextInputHandler, "mTextInputHandler has already existed");
   mTextInputHandler = new TextInputHandler(this, mView);
+
+  mPluginFocused = false;
 
   return NS_OK;
 
@@ -1126,7 +1128,7 @@ nsresult nsChildView::SynthesizeNativeKeyEvent(int32_t aNativeKeyboardLayout,
                                                      aUnmodifiedCharacters);
 }
 
-nsresult nsChildView::SynthesizeNativeMouseEvent(nsIntPoint aPoint,
+nsresult nsChildView::SynthesizeNativeMouseEvent(LayoutDeviceIntPoint aPoint,
                                                  uint32_t aNativeMessage,
                                                  uint32_t aModifierFlags)
 {
@@ -1616,6 +1618,48 @@ nsChildView::NotifyIMEInternal(const IMENotification& aIMENotification)
     default:
       return NS_ERROR_NOT_IMPLEMENTED;
   }
+}
+
+NS_IMETHODIMP
+nsChildView::StartPluginIME(const mozilla::WidgetKeyboardEvent& aKeyboardEvent,
+                            int32_t aPanelX, int32_t aPanelY,
+                            nsString& aCommitted)
+{
+  NS_ENSURE_TRUE(mView, NS_ERROR_NOT_AVAILABLE);
+
+  ComplexTextInputPanel* ctiPanel =
+    ComplexTextInputPanel::GetSharedComplexTextInputPanel();
+
+  ctiPanel->PlacePanel(aPanelX, aPanelY);
+  // We deliberately don't use TextInputHandler::GetCurrentKeyEvent() to
+  // obtain the NSEvent* we pass to InterpretKeyEvent().  This works fine in
+  // non-e10s mode.  But in e10s mode TextInputHandler::HandleKeyDownEvent()
+  // has already returned, so the relevant KeyEventState* (and its NSEvent*)
+  // is already out of scope.  Furthermore we don't *need* to use it.
+  // StartPluginIME() is only ever called to start a new IME session when none
+  // currently exists.  So nested IME should never reach here, and so it should
+  // be fine to use the last key-down event received by -[ChildView keyDown:]
+  // (as we currently do).
+  ctiPanel->InterpretKeyEvent([mView lastKeyDownEvent], aCommitted);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsChildView::SetPluginFocused(bool& aFocused)
+{
+  if (aFocused == mPluginFocused) {
+    return NS_OK;
+  }
+  if (!aFocused) {
+    ComplexTextInputPanel* ctiPanel =
+      ComplexTextInputPanel::GetSharedComplexTextInputPanel();
+    if (ctiPanel) {
+      ctiPanel->CancelComposition();
+    }
+  }
+  mPluginFocused = aFocused;
+  return NS_OK;
 }
 
 NS_IMETHODIMP_(void)
@@ -2362,11 +2406,11 @@ GatherThemeGeometryRegion(const nsTArray<nsIWidget::ThemeGeometry>& aThemeGeomet
   return region;
 }
 
-template<typename T>
-static void MakeRegionsNonOverlappingImpl(T& aOutUnion) { }
+template<typename Region>
+static void MakeRegionsNonOverlappingImpl(Region& aOutUnion) { }
 
-template<typename T, typename ... TT>
-static void MakeRegionsNonOverlappingImpl(T& aOutUnion, T& aFirst, TT& ... aRest)
+template<typename Region, typename ... Regions>
+static void MakeRegionsNonOverlappingImpl(Region& aOutUnion, Region& aFirst, Regions& ... aRest)
 {
   MakeRegionsNonOverlappingImpl(aOutUnion, aRest...);
   aFirst.SubOut(aOutUnion);
@@ -2377,10 +2421,10 @@ static void MakeRegionsNonOverlappingImpl(T& aOutUnion, T& aFirst, TT& ... aRest
 // Each region in the argument list will have the union of all the regions
 // *following* it subtracted from itself. In other words, the arguments are
 // sorted low priority to high priority.
-template<typename T, typename ... TT>
-static void MakeRegionsNonOverlapping(T& aFirst, TT& ... aRest)
+template<typename Region, typename ... Regions>
+static void MakeRegionsNonOverlapping(Region& aFirst, Regions& ... aRest)
 {
-  T unionOfAll;
+  Region unionOfAll;
   MakeRegionsNonOverlappingImpl(unionOfAll, aFirst, aRest...);
 }
 
@@ -2902,6 +2946,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
     mExpectingWheelStop = NO;
 
     mLastMouseDownEvent = nil;
+    mLastKeyDownEvent = nil;
     mClickThroughMouseDownEvent = nil;
     mDragService = nullptr;
 
@@ -2954,6 +2999,26 @@ NSEvent* gLastDragMouseDownEvent = nil;
   return self;
 
   NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
+}
+
+// ComplexTextInputPanel's interpretKeyEvent hack won't work without this.
+// It makes calls to +[NSTextInputContext currentContext], deep in system
+// code, return the appropriate context.
+- (NSTextInputContext *)inputContext
+{
+  NSTextInputContext* pluginContext = NULL;
+  if (mGeckoChild && mGeckoChild->IsPluginFocused()) {
+    ComplexTextInputPanel* ctiPanel =
+      ComplexTextInputPanel::GetSharedComplexTextInputPanel();
+    if (ctiPanel) {
+      pluginContext = (NSTextInputContext*) ctiPanel->GetInputContext();
+    }
+  }
+  if (pluginContext) {
+    return pluginContext;
+  } else {
+    return [super inputContext];
+  }
 }
 
 - (void)installTextInputHandler:(TextInputHandler*)aHandler
@@ -3033,6 +3098,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   [mGLContext release];
   [mPendingDirtyRects release];
   [mLastMouseDownEvent release];
+  [mLastKeyDownEvent release];
   [mClickThroughMouseDownEvent release];
   CGImageRelease(mTopLeftCornerMask);
   ChildViewMouseTracker::OnDestroyView(self);
@@ -5170,6 +5236,15 @@ static int32_t RoundUp(double aDouble)
   NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(NSMakeRange(0, 0));
 }
 
+- (BOOL)drawsVerticallyForCharacterAtIndex:(NSUInteger)charIndex
+{
+  NS_ENSURE_TRUE(mTextInputHandler, NO);
+  if (charIndex == NSNotFound) {
+    return NO;
+  }
+  return mTextInputHandler->DrawsVerticallyForCharacterAtIndex(charIndex);
+}
+
 - (NSRect) firstRectForCharacterRange:(NSRange)theRange
 {
   NSRect rect;
@@ -5273,9 +5348,17 @@ static int32_t RoundUp(double aDouble)
   return YES;
 }
 
+- (NSEvent*)lastKeyDownEvent
+{
+  return mLastKeyDownEvent;
+}
+
 - (void)keyDown:(NSEvent*)theEvent
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+
+  [mLastKeyDownEvent release];
+  mLastKeyDownEvent = [theEvent retain];
 
   // Weird things can happen on keyboard input if the key window isn't in the
   // current space.  For example see bug 1056251.  To get around this, always

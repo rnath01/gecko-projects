@@ -2210,7 +2210,7 @@ RangeAnalysis::analyze()
                 if (iter->isAsmJSLoadHeap()) {
                     MAsmJSLoadHeap *ins = iter->toAsmJSLoadHeap();
                     Range *range = ins->ptr()->range();
-                    uint32_t elemSize = TypedArrayElemSize(ins->viewType());
+                    uint32_t elemSize = TypedArrayElemSize(ins->accessType());
                     if (range && range->hasInt32LowerBound() && range->lower() >= 0 &&
                         range->hasInt32UpperBound() && uint32_t(range->upper()) + elemSize <= minHeapLength) {
                         ins->removeBoundsCheck();
@@ -2218,7 +2218,7 @@ RangeAnalysis::analyze()
                 } else if (iter->isAsmJSStoreHeap()) {
                     MAsmJSStoreHeap *ins = iter->toAsmJSStoreHeap();
                     Range *range = ins->ptr()->range();
-                    uint32_t elemSize = TypedArrayElemSize(ins->viewType());
+                    uint32_t elemSize = TypedArrayElemSize(ins->accessType());
                     if (range && range->hasInt32LowerBound() && range->lower() >= 0 &&
                         range->hasInt32UpperBound() && uint32_t(range->upper()) + elemSize <= minHeapLength) {
                         ins->removeBoundsCheck();
@@ -2517,7 +2517,10 @@ MToDouble::truncate()
 bool
 MLoadTypedArrayElementStatic::needTruncation(TruncateKind kind)
 {
-    if (kind >= IndirectTruncate)
+    // IndirectTruncate not possible, since it returns 'undefined'
+    // upon out of bounds read. Doing arithmetic on 'undefined' gives wrong
+    // results. So only set infallible if explicitly truncated.
+    if (kind == Truncate)
         setInfallible();
 
     return false;
@@ -3162,6 +3165,26 @@ MToInt32::collectRangeInfoPreTrunc()
     Range inputRange(input());
     if (!inputRange.canBeNegativeZero())
         canBeNegativeZero_ = false;
+}
+
+void
+MBoundsCheck::collectRangeInfoPreTrunc()
+{
+    Range indexRange(index());
+    Range lengthRange(length());
+    if (!indexRange.hasInt32LowerBound() || !indexRange.hasInt32UpperBound())
+        return;
+    if (!lengthRange.hasInt32LowerBound() || lengthRange.canBeNaN())
+        return;
+
+    int64_t indexLower = indexRange.lower();
+    int64_t indexUpper = indexRange.upper();
+    int64_t lengthLower = lengthRange.lower();
+    int64_t min = minimum();
+    int64_t max = maximum();
+
+    if (indexLower + min >= 0 && indexUpper + max < lengthLower)
+        fallible_ = false;
 }
 
 void

@@ -7,6 +7,7 @@
 #ifndef jit_Disassembler_h
 #define jit_Disassembler_h
 
+#include "jit/MacroAssembler.h"
 #include "jit/Registers.h"
 
 namespace js {
@@ -77,6 +78,9 @@ class ComplexAddress {
             return;
           case Operand::MEM_SCALE:
             *this = ComplexAddress(op.disp(), op.base(), op.index(), op.scale());
+            return;
+          case Operand::MEM_ADDRESS32:
+            *this = ComplexAddress(op.address());
             return;
           default:
             break;
@@ -253,7 +257,6 @@ VerifyHeapAccess(uint8_t *begin, uint8_t *end, const HeapAccess &expected)
     MOZ_ASSERT(e == end);
     MOZ_ASSERT(disassembled == expected);
 }
-
 #endif
 
 } // namespace Disassembler

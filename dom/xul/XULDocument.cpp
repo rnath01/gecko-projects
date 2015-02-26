@@ -216,8 +216,7 @@ XULDocument::~XULDocument()
 
     // Destroy our broadcaster map.
     if (mBroadcasterMap) {
-        PL_DHashTableFinish(mBroadcasterMap);
-        delete mBroadcasterMap;
+        PL_DHashTableDestroy(mBroadcasterMap);
     }
 
     delete mTemplateBuilderTable;
@@ -769,8 +768,12 @@ XULDocument::AddBroadcastListenerFor(Element& aBroadcaster, Element& aListener,
     };
 
     if (! mBroadcasterMap) {
-        mBroadcasterMap = new PLDHashTable();
-        PL_DHashTableInit(mBroadcasterMap, &gOps, sizeof(BroadcasterMapEntry));
+        mBroadcasterMap = PL_NewDHashTable(&gOps, sizeof(BroadcasterMapEntry));
+
+        if (! mBroadcasterMap) {
+            aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
+            return;
+        }
     }
 
     BroadcasterMapEntry* entry =
@@ -927,7 +930,7 @@ XULDocument::AttributeWillChange(nsIDocument* aDocument,
                                  Element* aElement, int32_t aNameSpaceID,
                                  nsIAtom* aAttribute, int32_t aModType)
 {
-    NS_ABORT_IF_FALSE(aElement, "Null content!");
+    MOZ_ASSERT(aElement, "Null content!");
     NS_PRECONDITION(aAttribute, "Must have an attribute that's changing!");
 
     // XXXbz check aNameSpaceID, dammit!

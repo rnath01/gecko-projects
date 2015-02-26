@@ -168,16 +168,16 @@ typedef bool
 (* DefinePropertyOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::HandleValue value,
                      JSPropertyOp getter, JSStrictPropertyOp setter, unsigned attrs);
 typedef bool
+(* HasPropertyOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id, bool *foundp);
+typedef bool
 (* GetPropertyOp)(JSContext *cx, JS::HandleObject obj, JS::HandleObject receiver, JS::HandleId id,
                   JS::MutableHandleValue vp);
 typedef bool
-(* SetPropertyOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
+(* SetPropertyOp)(JSContext *cx, JS::HandleObject obj, JS::HandleObject receiver, JS::HandleId id,
                   JS::MutableHandleValue vp, bool strict);
 typedef bool
 (* GetOwnPropertyOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
                      JS::MutableHandle<JSPropertyDescriptor> desc);
-typedef bool
-(* SetAttributesOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id, unsigned *attrsp);
 typedef bool
 (* DeletePropertyOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id, bool *succeeded);
 
@@ -343,10 +343,10 @@ struct ObjectOps
 {
     LookupPropertyOp    lookupProperty;
     DefinePropertyOp    defineProperty;
+    HasPropertyOp       hasProperty;
     GetPropertyOp       getProperty;
     SetPropertyOp       setProperty;
     GetOwnPropertyOp    getOwnPropertyDescriptor;
-    SetAttributesOp     setAttributes;
     DeletePropertyOp    deleteProperty;
     WatchOp             watch;
     UnwatchOp           unwatch;

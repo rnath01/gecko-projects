@@ -20,9 +20,9 @@
 #include "js/Class.h"
 
 #if JS_STACK_GROWTH_DIRECTION > 0
-# define JS_CHECK_STACK_SIZE(limit, sp) ((uintptr_t)(sp) < (limit))
+# define JS_CHECK_STACK_SIZE(limit, sp) (MOZ_LIKELY(((uintptr_t)(sp) < (limit)))
 #else
-# define JS_CHECK_STACK_SIZE(limit, sp) ((uintptr_t)(sp) > (limit))
+# define JS_CHECK_STACK_SIZE(limit, sp) (MOZ_LIKELY((uintptr_t)(sp) > (limit)))
 #endif
 
 class JSAtom;
@@ -59,6 +59,13 @@ JS_SplicePrototype(JSContext *cx, JS::HandleObject obj, JS::HandleObject proto);
 extern JS_FRIEND_API(JSObject *)
 JS_NewObjectWithUniqueType(JSContext *cx, const JSClass *clasp, JS::HandleObject proto,
                            JS::HandleObject parent);
+
+// Allocate an object in exactly the same way as JS_NewObjectWithGivenProto, but
+// without invoking the metadata callback on it.  This allows creation of
+// internal bookkeeping objects that are guaranteed to not have metadata
+// attached to them.
+extern JS_FRIEND_API(JSObject *)
+JS_NewObjectWithoutMetadata(JSContext *cx, const JSClass *clasp, JS::Handle<JSObject*> proto);
 
 extern JS_FRIEND_API(uint32_t)
 JS_ObjectCountDynamicSlots(JS::HandleObject obj);
@@ -143,6 +150,24 @@ JS_ObjectToOuterObject(JSContext *cx, JS::HandleObject obj);
 extern JS_FRIEND_API(JSObject *)
 JS_CloneObject(JSContext *cx, JS::HandleObject obj, JS::HandleObject proto,
                JS::HandleObject parent);
+
+/*
+ * Copy the own properties of src to dst in a fast way.  src and dst must both
+ * be native and must be in the compartment of cx.  They must have the same
+ * class, the same parent, and the same prototype.  Class reserved slots will
+ * NOT be copied.
+ *
+ * dst must not have any properties on it before this function is called.
+ *
+ * src must have been allocated via JS_NewObjectWithoutMetadata so that we can
+ * be sure it has no metadata that needs copying to dst.  This also means that
+ * dst needs to have the compartment global as its parent.  This function will
+ * preserve the existing metadata on dst, if any.
+ */
+extern JS_FRIEND_API(bool)
+JS_InitializePropertiesFromCompatibleNativeObject(JSContext *cx,
+                                                  JS::HandleObject dst,
+                                                  JS::HandleObject src);
 
 extern JS_FRIEND_API(JSString *)
 JS_BasicObjectToString(JSContext *cx, JS::HandleObject obj);
@@ -299,10 +324,10 @@ namespace js {
         {                                                                               \
             js::proxy_LookupProperty,                                                   \
             js::proxy_DefineProperty,                                                   \
+            js::proxy_HasProperty,                                                      \
             js::proxy_GetProperty,                                                      \
             js::proxy_SetProperty,                                                      \
             js::proxy_GetOwnPropertyDescriptor,                                         \
-            js::proxy_SetPropertyAttributes,                                            \
             js::proxy_DeleteProperty,                                                   \
             js::proxy_Watch, js::proxy_Unwatch,                                         \
             js::proxy_GetElements,                                                      \
@@ -333,17 +358,16 @@ extern JS_FRIEND_API(bool)
 proxy_DefineProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::HandleValue value,
                      JSPropertyOp getter, JSStrictPropertyOp setter, unsigned attrs);
 extern JS_FRIEND_API(bool)
+proxy_HasProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id, bool *foundp);
+extern JS_FRIEND_API(bool)
 proxy_GetProperty(JSContext *cx, JS::HandleObject obj, JS::HandleObject receiver, JS::HandleId id,
                   JS::MutableHandleValue vp);
 extern JS_FRIEND_API(bool)
-proxy_SetProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
+proxy_SetProperty(JSContext *cx, JS::HandleObject obj, JS::HandleObject receiver, JS::HandleId id,
                   JS::MutableHandleValue bp, bool strict);
 extern JS_FRIEND_API(bool)
 proxy_GetOwnPropertyDescriptor(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
                                JS::MutableHandle<JSPropertyDescriptor> desc);
-extern JS_FRIEND_API(bool)
-proxy_SetPropertyAttributes(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
-                            unsigned *attrsp);
 extern JS_FRIEND_API(bool)
 proxy_DeleteProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id, bool *succeeded);
 
@@ -408,13 +432,6 @@ SetSourceHook(JSRuntime *rt, mozilla::UniquePtr<SourceHook> hook);
 /* Remove |rt|'s source hook, and return it. The caller now owns the hook. */
 extern JS_FRIEND_API(mozilla::UniquePtr<SourceHook>)
 ForgetSourceHook(JSRuntime *rt);
-
-#ifdef NIGHTLY_BUILD
-typedef void (*AssertOnScriptEntryHook)(JSContext *cx, JS::HandleScript script);
-
-extern JS_FRIEND_API(void)
-SetAssertOnScriptEntryHook(JSRuntime *rt, AssertOnScriptEntryHook hook);
-#endif
 
 extern JS_FRIEND_API(JS::Zone *)
 GetCompartmentZone(JSCompartment *comp);
@@ -1118,17 +1135,17 @@ struct CompartmentFilter {
 };
 
 struct AllCompartments : public CompartmentFilter {
-    virtual bool match(JSCompartment *c) const { return true; }
+    virtual bool match(JSCompartment *c) const MOZ_OVERRIDE { return true; }
 };
 
 struct ContentCompartmentsOnly : public CompartmentFilter {
-    virtual bool match(JSCompartment *c) const {
+    virtual bool match(JSCompartment *c) const MOZ_OVERRIDE {
         return !IsSystemCompartment(c);
     }
 };
 
 struct ChromeCompartmentsOnly : public CompartmentFilter {
-    virtual bool match(JSCompartment *c) const {
+    virtual bool match(JSCompartment *c) const MOZ_OVERRIDE {
         return IsSystemCompartment(c);
     }
 };
@@ -1136,13 +1153,13 @@ struct ChromeCompartmentsOnly : public CompartmentFilter {
 struct SingleCompartment : public CompartmentFilter {
     JSCompartment *ours;
     explicit SingleCompartment(JSCompartment *c) : ours(c) {}
-    virtual bool match(JSCompartment *c) const { return c == ours; }
+    virtual bool match(JSCompartment *c) const MOZ_OVERRIDE { return c == ours; }
 };
 
 struct CompartmentsWithPrincipals : public CompartmentFilter {
     JSPrincipals *principals;
     explicit CompartmentsWithPrincipals(JSPrincipals *p) : principals(p) {}
-    virtual bool match(JSCompartment *c) const {
+    virtual bool match(JSCompartment *c) const MOZ_OVERRIDE {
         return JS_GetCompartmentPrincipals(c) == principals;
     }
 };
@@ -1443,6 +1460,49 @@ byteSize(Type atype)
       default:
         MOZ_CRASH("invalid scalar type");
     }
+}
+
+static inline bool
+isSimdType(Type atype) {
+    switch (atype) {
+      case Int8:
+      case Uint8:
+      case Uint8Clamped:
+      case Int16:
+      case Uint16:
+      case Int32:
+      case Uint32:
+      case Float32:
+      case Float64:
+        return false;
+      case Int32x4:
+      case Float32x4:
+        return true;
+      case MaxTypedArrayViewType:
+        break;
+    }
+    MOZ_CRASH("invalid scalar type");
+}
+
+static inline size_t
+scalarByteSize(Type atype) {
+    switch (atype) {
+      case Int32x4:
+      case Float32x4:
+        return 4;
+      case Int8:
+      case Uint8:
+      case Uint8Clamped:
+      case Int16:
+      case Uint16:
+      case Int32:
+      case Uint32:
+      case Float32:
+      case Float64:
+      case MaxTypedArrayViewType:
+        break;
+    }
+    MOZ_CRASH("invalid simd type");
 }
 
 } /* namespace Scalar */
@@ -2511,24 +2571,6 @@ JS_FRIEND_API(bool)
 ForwardToNative(JSContext *cx, JSNative native, const JS::CallArgs &args);
 
 /*
- * Helper function. To approximate a call to the [[DefineOwnProperty]] internal
- * method described in ES5, first call this, then call JS_DefinePropertyById.
- *
- * JS_DefinePropertyById by itself does not enforce the invariants on
- * non-configurable properties when obj->isNative(). This function performs the
- * relevant checks (specified in ES5 8.12.9 [[DefineOwnProperty]] steps 1-11),
- * but only if obj is native.
- *
- * The reason for the messiness here is that ES5 uses [[DefineOwnProperty]] as
- * a sort of extension point, but there is no hook in js::Class,
- * js::ProxyHandler, or the JSAPI with precisely the right semantics for it.
- */
-extern JS_FRIEND_API(bool)
-CheckDefineProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::HandleValue value,
-                    unsigned attrs,
-                    JSPropertyOp getter = nullptr, JSStrictPropertyOp setter = nullptr);
-
-/*
  * Helper function for HTMLDocument and HTMLFormElement.
  *
  * These are the only two interfaces that have [OverrideBuiltins], a named
@@ -2607,6 +2649,17 @@ GetObjectEnvironmentObjectForFunction(JSFunction *fun);
  */
 extern JS_FRIEND_API(JSPrincipals *)
 GetSavedFramePrincipals(JS::HandleObject savedFrame);
+
+/*
+ * Get the first SavedFrame object in this SavedFrame stack whose principals are
+ * subsumed by the cx's principals. If there is no such frame, return nullptr.
+ *
+ * Do NOT pass a non-SavedFrame object here.
+ *
+ * The savedFrame and cx do not need to be in the same compartment.
+ */
+extern JS_FRIEND_API(JSObject *)
+GetFirstSubsumedSavedFrame(JSContext *cx, JS::HandleObject savedFrame);
 
 } /* namespace js */
 

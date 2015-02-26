@@ -93,7 +93,7 @@ var viewerPlayerglobalInfo = {
   catalog: SHUMWAY_ROOT + "playerglobal/playerglobal.json"
 };
 
-var builtinPath = SHUMWAY_ROOT + "avm2/generated/builtin/builtin.abc";
+var builtinPath = SHUMWAY_ROOT + "libs/builtin.abc";
 
 var playerWindow;
 var playerWindowLoaded = new Promise(function(resolve) {
@@ -161,6 +161,17 @@ function runViewer() {
   document.getElementById('inspectorMenu').addEventListener('click', showInInspector);
   document.getElementById('reportMenu').addEventListener('click', reportIssue);
   document.getElementById('aboutMenu').addEventListener('click', showAbout);
+
+  var version = Shumway.version || '';
+  document.getElementById('aboutMenu').label =
+    document.getElementById('aboutMenu').label.replace('%version%', version);
+
+  var debugMenuEnabled = FirefoxCom.requestSync('getBoolPref', {pref: 'shumway.debug.enabled', def: false});
+  if (debugMenuEnabled) {
+    document.getElementById('debugMenu').addEventListener('click', enableDebug);
+  } else {
+    document.getElementById('debugMenu').remove();
+  }
 }
 
 function showURL() {
@@ -199,6 +210,10 @@ function reportIssue() {
 
 function showAbout() {
   window.open('http://areweflashyet.com/');
+}
+
+function enableDebug() {
+  ShumwayCom.enableDebug();
 }
 
 var movieUrl, movieParams, objectParams;

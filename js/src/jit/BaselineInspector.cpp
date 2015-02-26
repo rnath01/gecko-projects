@@ -79,16 +79,31 @@ SetElemICInspector::sawTypedArrayWrite() const
     return false;
 }
 
+template <typename S, typename T>
+static bool
+VectorAppendNoDuplicate(S &list, T value)
+{
+    for (size_t i = 0; i < list.length(); i++) {
+        if (list[i] == value)
+            return true;
+    }
+    return list.append(value);
+}
+
 bool
 BaselineInspector::maybeInfoForPropertyOp(jsbytecode *pc,
                                           ShapeVector &nativeShapes,
-                                          ObjectGroupVector &unboxedGroups)
+                                          ObjectGroupVector &unboxedGroups,
+                                          ObjectGroupVector &convertUnboxedGroups)
 {
     // Return lists of native shapes and unboxed objects seen by the baseline
     // IC for the current op. Empty lists indicate no shapes/types are known,
-    // or there was an uncacheable access.
+    // or there was an uncacheable access. convertUnboxedGroups is used for
+    // unboxed object groups which have been seen, but have had instances
+    // converted to native objects and should be eagerly converted by Ion.
     MOZ_ASSERT(nativeShapes.empty());
     MOZ_ASSERT(unboxedGroups.empty());
+    MOZ_ASSERT(convertUnboxedGroups.empty());
 
     if (!hasBaselineScript())
         return true;
@@ -99,7 +114,7 @@ BaselineInspector::maybeInfoForPropertyOp(jsbytecode *pc,
     ICStub *stub = entry.firstStub();
     while (stub->next()) {
         Shape *shape = nullptr;
-        types::ObjectGroup *group = nullptr;
+        ObjectGroup *group = nullptr;
         if (stub->isGetProp_Native()) {
             shape = stub->toGetProp_Native()->shape();
         } else if (stub->isSetProp_Native()) {
@@ -114,27 +129,18 @@ BaselineInspector::maybeInfoForPropertyOp(jsbytecode *pc,
             return true;
         }
 
-        // Don't add the same shape/group twice (this can happen if there are
-        // multiple SetProp_Native stubs with different ObjectGroups).
+        if (group && group->unboxedLayout().nativeGroup()) {
+            if (!VectorAppendNoDuplicate(convertUnboxedGroups, group))
+                return false;
+            shape = group->unboxedLayout().nativeShape();
+            group = nullptr;
+        }
+
         if (shape) {
-            bool found = false;
-            for (size_t i = 0; i < nativeShapes.length(); i++) {
-                if (nativeShapes[i] == shape) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found && !nativeShapes.append(shape))
+            if (!VectorAppendNoDuplicate(nativeShapes, shape))
                 return false;
         } else {
-            bool found = false;
-            for (size_t i = 0; i < unboxedGroups.length(); i++) {
-                if (unboxedGroups[i] == group) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found && !unboxedGroups.append(group))
+            if (!VectorAppendNoDuplicate(unboxedGroups, group))
                 return false;
         }
 
@@ -466,6 +472,26 @@ BaselineInspector::getTemplateObject(jsbytecode *pc)
     return nullptr;
 }
 
+JSFunction *
+BaselineInspector::getSingleCallee(jsbytecode *pc)
+{
+    MOZ_ASSERT(*pc == JSOP_NEW);
+
+    if (!hasBaselineScript())
+        return nullptr;
+
+    const ICEntry &entry = icEntryFromPC(pc);
+    ICStub *stub = entry.firstStub();
+
+    if (entry.fallbackStub()->toCall_Fallback()->hadUnoptimizableCall())
+        return nullptr;
+
+    if (!stub->isCall_Scripted() || stub->next() != entry.fallbackStub())
+        return nullptr;
+
+    return stub->toCall_Scripted()->callee();
+}
+
 JSObject *
 BaselineInspector::getTemplateObjectForNative(jsbytecode *pc, Native native)
 {
@@ -476,11 +502,32 @@ BaselineInspector::getTemplateObjectForNative(jsbytecode *pc, Native native)
     for (ICStub *stub = entry.firstStub(); stub; stub = stub->next()) {
         if (stub->isCall_Native() && stub->toCall_Native()->callee()->native() == native)
             return stub->toCall_Native()->templateObject();
-        if (stub->isCall_StringSplit() && native == js::str_split)
-            return stub->toCall_StringSplit()->templateObject();
     }
 
     return nullptr;
+}
+
+bool
+BaselineInspector::isOptimizableCallStringSplit(jsbytecode *pc, JSString **stringOut, JSString **stringArg,
+                                                NativeObject **objOut)
+{
+    if (!hasBaselineScript())
+        return false;
+
+    const ICEntry &entry = icEntryFromPC(pc);
+
+    // If StringSplit stub is attached, must have only one stub attached.
+    if (entry.fallbackStub()->numOptimizedStubs() != 1)
+        return false;
+
+    ICStub *stub = entry.firstStub();
+    if (stub->kind() != ICStub::Call_StringSplit)
+        return false;
+
+    *stringOut = stub->toCall_StringSplit()->expectedThis();
+    *stringArg = stub->toCall_StringSplit()->expectedArg();
+    *objOut = stub->toCall_StringSplit()->templateObject();
+    return true;
 }
 
 JSObject *
@@ -598,10 +645,14 @@ BaselineInspector::commonGetPropFunction(jsbytecode *pc, JSObject **holder, Shap
             } else {
                 MOZ_ASSERT(*commonGetter == nstub->getter());
             }
-        } else if (!stub->isGetProp_Fallback() ||
-                   stub->toGetProp_Fallback()->hadUnoptimizableAccess())
-        {
-            // We have an unoptimizable access, so don't try to optimize.
+        } else if (stub->isGetProp_Fallback()) {
+            // If we have an unoptimizable access, don't try to optimize.
+            if (stub->toGetProp_Fallback()->hadUnoptimizableAccess())
+                return false;
+        } else if (stub->isGetName_Fallback()) {
+            if (stub->toGetName_Fallback()->hadUnoptimizableAccess())
+                return false;
+        } else {
             return false;
         }
     }

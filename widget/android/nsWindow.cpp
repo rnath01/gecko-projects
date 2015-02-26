@@ -211,7 +211,6 @@ NS_IMETHODIMP
 nsWindow::Create(nsIWidget *aParent,
                  nsNativeWidget aNativeParent,
                  const nsIntRect &aRect,
-                 nsDeviceContext *aContext,
                  nsWidgetInitData *aInitData)
 {
     ALOG("nsWindow[%p]::Create %p [%d %d %d %d]", (void*)this, (void*)aParent, aRect.x, aRect.y, aRect.width, aRect.height);
@@ -234,7 +233,7 @@ nsWindow::Create(nsIWidget *aParent,
         mBounds.height = gAndroidBounds.height;
     }
 
-    BaseCreate(nullptr, mBounds, aContext, aInitData);
+    BaseCreate(nullptr, mBounds, aInitData);
 
     NS_ASSERTION(IsTopLevel() || parent, "non top level windowdoesn't have a parent!");
 
@@ -1376,7 +1375,6 @@ ConvertAndroidKeyCodeToKeyNameIndex(AndroidGeckoEvent& aAndroidGeckoEvent)
         case AKEYCODE_ENDCALL:
         case AKEYCODE_NUM:                // XXX Not sure
         case AKEYCODE_HEADSETHOOK:
-        case AKEYCODE_FOCUS:
         case AKEYCODE_NOTIFICATION:       // XXX Not sure
         case AKEYCODE_PICTSYMBOLS:
 

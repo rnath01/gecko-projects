@@ -15,6 +15,11 @@ let Reader = {
   STATUS_FETCH_FAILED_UNSUPPORTED_FORMAT: 3,
   STATUS_FETCHED_ARTICLE: 4,
 
+  get _hasUsedToolbar() {
+    delete this._hasUsedToolbar;
+    return this._hasUsedToolbar = Services.prefs.getBoolPref("reader.has_used_toolbar");
+  },
+
   observe: function Reader_observe(aMessage, aTopic, aData) {
     switch (aTopic) {
       case "Reader:FetchContent": {
@@ -103,10 +108,6 @@ let Reader = {
         });
         break;
 
-      case "Reader:ShowToast":
-        NativeWindow.toast.show(message.data.toast, "short");
-        break;
-
       case "Reader:SystemUIVisibility":
         Messaging.sendRequest({
           type: "SystemUI:Visibility",
@@ -114,17 +115,30 @@ let Reader = {
         });
         break;
 
-      case "Reader:ToolbarVisibility":
-        Messaging.sendRequest({
-          type: "BrowserToolbar:Visibility",
-          visible: message.data.visible
-        });
+      case "Reader:ToolbarHidden":
+        if (!this._hasUsedToolbar) {
+          NativeWindow.toast.show(Strings.browser.GetStringFromName("readerMode.toolbarTip"), "short");
+          Services.prefs.setBoolPref("reader.has_used_toolbar", true);
+          this._hasUsedToolbar = true;
+        }
         break;
 
       case "Reader:UpdateReaderButton": {
         let tab = BrowserApp.getTabForBrowser(message.target);
         tab.browser.isArticle = message.data.isArticle;
         this.updatePageAction(tab);
+        break;
+      }
+      case "Reader:SetIntPref": {
+        if (message.data && message.data.name !== undefined) {
+          Services.prefs.setIntPref(message.data.name, message.data.value);
+        }
+        break;
+      }
+      case "Reader:SetCharPref": {
+        if (message.data && message.data.name !== undefined) {
+          Services.prefs.setCharPref(message.data.name, message.data.value);
+        }
         break;
       }
     }
@@ -157,7 +171,7 @@ let Reader = {
     let browser = tab.browser;
     if (browser.currentURI.spec.startsWith("about:reader")) {
       this.pageAction.id = PageActions.add({
-        title: Strings.browser.GetStringFromName("readerMode.exit"),
+        title: Strings.browser.GetStringFromName("readerView.exit"),
         icon: "drawable://reader_active",
         clickCallback: () => this.pageAction.readerModeCallback(tab.id),
         important: true
@@ -174,7 +188,7 @@ let Reader = {
 
     if (browser.isArticle) {
       this.pageAction.id = PageActions.add({
-        title: Strings.browser.GetStringFromName("readerMode.enter"),
+        title: Strings.browser.GetStringFromName("readerView.enter"),
         icon: "drawable://reader",
         clickCallback: () => this.pageAction.readerModeCallback(tab.id),
         longClickCallback: () => this.pageAction.readerModeActiveCallback(tab.id),

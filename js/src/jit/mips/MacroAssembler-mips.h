@@ -687,6 +687,7 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
     void branchTestObject(Condition cond, const ValueOperand &value, Label *label);
     void branchTestObject(Condition cond, Register tag, Label *label);
     void branchTestObject(Condition cond, const BaseIndex &src, Label *label);
+    void branchTestObject(Condition cond, const Address &src, Label *label);
     void testObjectSet(Condition cond, const ValueOperand &value, Register dest);
 
     void branchTestString(Condition cond, const ValueOperand &value, Label *label);
@@ -1162,7 +1163,7 @@ public:
     // Makes a call using the only two methods that it is sane for indep code
     // to make a call.
     void callJit(Register callee);
-    void callJitFromAsmJS(Register callee);
+    void callJitFromAsmJS(Register callee) { call(callee); }
 
     void reserveStack(uint32_t amount);
     void freeStack(uint32_t amount);

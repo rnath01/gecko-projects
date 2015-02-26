@@ -616,6 +616,10 @@ class NodeBuilder
 
     bool exportBatchSpecifier(TokenPos *pos, MutableHandleValue dst);
 
+    bool classStatement(HandleValue name, HandleValue heritage, HandleValue block, TokenPos *pos, MutableHandleValue dst);
+    bool classMethods(NodeVector &methods, MutableHandleValue dst);
+    bool classMethod(HandleValue name, HandleValue body, PropKind kind, bool isStatic, TokenPos *pos, MutableHandleValue dst);
+
     /*
      * expressions
      */
@@ -1714,6 +1718,53 @@ NodeBuilder::function(ASTType type, TokenPos *pos,
                    dst);
 }
 
+bool
+NodeBuilder::classMethod(HandleValue name, HandleValue body, PropKind kind, bool isStatic,
+                         TokenPos *pos, MutableHandleValue dst)
+{
+    RootedValue kindName(cx);
+    if (!atomValue(kind == PROP_INIT
+                   ? "method"
+                   : kind == PROP_GETTER
+                   ? "get"
+                   : "set", &kindName)) {
+        return false;
+    }
+
+    RootedValue isStaticVal(cx, BooleanValue(isStatic));
+    RootedValue cb(cx, callbacks[AST_CLASS_METHOD]);
+    if (!cb.isNull())
+        return callback(cb, kindName, name, body, isStaticVal, pos, dst);
+
+    return newNode(AST_CLASS_METHOD, pos,
+                   "name", name,
+                   "body", body,
+                   "kind", kindName,
+                   "static", isStaticVal,
+                   dst);
+}
+
+bool
+NodeBuilder::classMethods(NodeVector &methods, MutableHandleValue dst)
+{
+    return newArray(methods, dst);
+}
+
+bool
+NodeBuilder::classStatement(HandleValue name, HandleValue heritage, HandleValue block,
+                            TokenPos *pos, MutableHandleValue dst)
+{
+    RootedValue cb(cx, callbacks[AST_CLASS_STMT]);
+    if (!cb.isNull())
+        return callback(cb, name, heritage, block, pos, dst);
+
+    return newNode(AST_CLASS_STMT, pos,
+                   "name", name,
+                   "heritage", heritage,
+                   "body", block,
+                   dst);
+}
+
 namespace {
 
 /*
@@ -1786,6 +1837,8 @@ class ASTSerializer
     bool propertyName(ParseNode *pn, MutableHandleValue dst);
     bool property(ParseNode *pn, MutableHandleValue dst);
 
+    bool classMethod(ParseNode *pn, MutableHandleValue dst);
+
     bool optIdentifier(HandleAtom atom, TokenPos *pos, MutableHandleValue dst) {
         if (!atom) {
             dst.setMagic(JS_SERIALIZE_NO_NODE);
@@ -1796,6 +1849,7 @@ class ASTSerializer
 
     bool identifier(HandleAtom atom, TokenPos *pos, MutableHandleValue dst);
     bool identifier(ParseNode *pn, MutableHandleValue dst);
+    bool objectPropertyName(ParseNode *pn, MutableHandleValue dst);
     bool literal(ParseNode *pn, MutableHandleValue dst);
 
     bool pattern(ParseNode *pn, MutableHandleValue dst);
@@ -2302,11 +2356,11 @@ ASTSerializer::tryStatement(ParseNode *pn, MutableHandleValue dst)
     NodeVector guarded(cx);
     RootedValue unguarded(cx, NullValue());
 
-    if (pn->pn_kid2) {
-        if (!guarded.reserve(pn->pn_kid2->pn_count))
+    if (ParseNode *catchList = pn->pn_kid2) {
+        if (!guarded.reserve(catchList->pn_count))
             return false;
 
-        for (ParseNode *next = pn->pn_kid2->pn_head; next; next = next->pn_next) {
+        for (ParseNode *next = catchList->pn_head; next; next = next->pn_next) {
             RootedValue clause(cx);
             bool isGuarded;
             if (!catchClause(next->pn_expr, &isGuarded, &clause))
@@ -2367,11 +2421,12 @@ ASTSerializer::statement(ParseNode *pn, MutableHandleValue dst)
       case PNK_GLOBALCONST:
         return declaration(pn, dst);
 
+      case PNK_LETBLOCK:
+        return let(pn, false, dst);
+
       case PNK_LET:
       case PNK_CONST:
-        return pn->isArity(PN_BINARY)
-               ? let(pn, false, dst)
-               : declaration(pn, dst);
+        return declaration(pn, dst);
 
       case PNK_IMPORT:
         return importDeclaration(pn, dst);
@@ -2558,12 +2613,69 @@ ASTSerializer::statement(ParseNode *pn, MutableHandleValue dst)
       case PNK_DEBUGGER:
         return builder.debuggerStatement(&pn->pn_pos, dst);
 
+      case PNK_CLASS:
+      {
+         RootedValue className(cx);
+         RootedValue heritage(cx);
+         RootedValue classBody(cx);
+         return identifier(pn->pn_kid1->as<ClassNames>().innerBinding(), &className) &&
+                optExpression(pn->pn_kid2, &heritage) &&
+                statement(pn->pn_kid3, &classBody) &&
+                builder.classStatement(className, heritage, classBody, &pn->pn_pos, dst);
+      }
+
+      case PNK_CLASSMETHODLIST:
+      {
+        NodeVector methods(cx);
+        if (!methods.reserve(pn->pn_count))
+            return false;
+
+        for (ParseNode *next = pn->pn_head; next; next = next->pn_next) {
+            MOZ_ASSERT(pn->pn_pos.encloses(next->pn_pos));
+
+            RootedValue prop(cx);
+            if (!classMethod(next, &prop))
+                return false;
+            methods.infallibleAppend(prop);
+        }
+
+        return builder.classMethods(methods, dst);
+      }
+
       case PNK_NOP:
         return builder.emptyStatement(&pn->pn_pos, dst);
 
       default:
         LOCAL_NOT_REACHED("unexpected statement type");
     }
+}
+
+bool
+ASTSerializer::classMethod(ParseNode *pn, MutableHandleValue dst)
+{
+    PropKind kind;
+    switch (pn->getOp()) {
+      case JSOP_INITPROP:
+        kind = PROP_INIT;
+        break;
+
+      case JSOP_INITPROP_GETTER:
+        kind = PROP_GETTER;
+        break;
+
+      case JSOP_INITPROP_SETTER:
+        kind = PROP_SETTER;
+        break;
+
+      default:
+        LOCAL_NOT_REACHED("unexpected object-literal property");
+    }
+
+    RootedValue key(cx), val(cx);
+    bool isStatic = pn->as<ClassMethod>().isStatic();
+    return propertyName(pn->pn_left, &key) &&
+           expression(pn->pn_right, &val) &&
+           builder.classMethod(key, val, kind, isStatic, &pn->pn_pos, dst);
 }
 
 bool
@@ -2755,18 +2867,7 @@ ASTSerializer::expression(ParseNode *pn, MutableHandleValue dst)
 
       case PNK_OR:
       case PNK_AND:
-      {
-        if (pn->isArity(PN_BINARY)) {
-            MOZ_ASSERT(pn->pn_pos.encloses(pn->pn_left->pn_pos));
-            MOZ_ASSERT(pn->pn_pos.encloses(pn->pn_right->pn_pos));
-
-            RootedValue left(cx), right(cx);
-            return expression(pn->pn_left, &left) &&
-                   expression(pn->pn_right, &right) &&
-                   builder.logicalExpression(pn->isKind(PNK_OR), left, right, &pn->pn_pos, dst);
-        }
         return leftAssociate(pn, dst);
-      }
 
       case PNK_PREINCREMENT:
       case PNK_PREDECREMENT:
@@ -2836,18 +2937,6 @@ ASTSerializer::expression(ParseNode *pn, MutableHandleValue dst)
       case PNK_BITAND:
       case PNK_IN:
       case PNK_INSTANCEOF:
-        if (pn->isArity(PN_BINARY)) {
-            MOZ_ASSERT(pn->pn_pos.encloses(pn->pn_left->pn_pos));
-            MOZ_ASSERT(pn->pn_pos.encloses(pn->pn_right->pn_pos));
-
-            BinaryOperator op = binop(pn->getKind(), pn->getOp());
-            LOCAL_ASSERT(op > BINOP_ERR && op < BINOP_LIMIT);
-
-            RootedValue left(cx), right(cx);
-            return expression(pn->pn_left, &left) &&
-                   expression(pn->pn_right, &right) &&
-                   builder.binaryExpression(op, left, right, &pn->pn_pos, dst);
-        }
         return leftAssociate(pn, dst);
 
       case PNK_DELETE:
@@ -3067,7 +3156,7 @@ ASTSerializer::expression(ParseNode *pn, MutableHandleValue dst)
         LOCAL_ASSERT(pn->pn_count == 1);
         return comprehension(pn->pn_head, dst);
 
-      case PNK_LET:
+      case PNK_LETEXPR:
         return let(pn, true, dst);
 
       default:
@@ -3080,7 +3169,7 @@ ASTSerializer::propertyName(ParseNode *pn, MutableHandleValue dst)
 {
     if (pn->isKind(PNK_COMPUTED_NAME))
         return expression(pn, dst);
-    if (pn->isKind(PNK_NAME))
+    if (pn->isKind(PNK_OBJECT_PROPERTY_NAME))
         return identifier(pn, dst);
 
     LOCAL_ASSERT(pn->isKind(PNK_STRING) || pn->isKind(PNK_NUMBER));
@@ -3266,6 +3355,17 @@ bool
 ASTSerializer::identifier(ParseNode *pn, MutableHandleValue dst)
 {
     LOCAL_ASSERT(pn->isArity(PN_NAME) || pn->isArity(PN_NULLARY));
+    LOCAL_ASSERT(pn->pn_atom);
+
+    RootedAtom pnAtom(cx, pn->pn_atom);
+    return identifier(pnAtom, &pn->pn_pos, dst);
+}
+
+bool
+ASTSerializer::objectPropertyName(ParseNode *pn, MutableHandleValue dst)
+{
+    LOCAL_ASSERT(pn->isKind(PNK_OBJECT_PROPERTY_NAME));
+    LOCAL_ASSERT(pn->isArity(PN_NULLARY));
     LOCAL_ASSERT(pn->pn_atom);
 
     RootedAtom pnAtom(cx, pn->pn_atom);

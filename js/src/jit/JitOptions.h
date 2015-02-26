@@ -7,6 +7,8 @@
 #ifndef jit_JitOptions_h
 #define jit_JitOptions_h
 
+#include "mozilla/Maybe.h"
+
 #include "jit/IonTypes.h"
 #include "js/TypeDecls.h"
 
@@ -70,6 +72,7 @@ struct JitOptions
     void setEagerCompilation();
     void setCompilerWarmUpThreshold(uint32_t warmUpThreshold);
     void resetCompilerWarmUpThreshold();
+    void enableGvn(bool val);
 };
 
 extern JitOptions js_JitOptions;

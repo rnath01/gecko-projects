@@ -138,22 +138,18 @@ describe("loop.OTSdkDriver", function () {
       };
     });
 
-    it("should dispatch a `ScreenSharingState` action", function() {
-      driver.startScreenShare(new sharedActions.StartScreenShare());
-
-      sinon.assert.calledOnce(dispatcher.dispatch);
-      sinon.assert.calledWithExactly(dispatcher.dispatch,
-        new sharedActions.ScreenSharingState({
-          state: SCREEN_SHARE_STATES.PENDING
-        }));
-    });
-
     it("should initialize a publisher", function() {
-      driver.startScreenShare(new sharedActions.StartScreenShare());
+      // We're testing with `videoSource` set to 'browser', not 'window', as it
+      // has multiple options.
+      var options = {
+        videoSource: "browser",
+        browserWindow: 42,
+        scrollWithPage: true
+      };
+      driver.startScreenShare(options);
 
       sinon.assert.calledOnce(sdk.initPublisher);
-      sinon.assert.calledWithMatch(sdk.initPublisher,
-        fakeElement, {videoSource: "window"});
+      sinon.assert.calledWithMatch(sdk.initPublisher, fakeElement, options);
     });
   });
 
@@ -161,7 +157,9 @@ describe("loop.OTSdkDriver", function () {
     beforeEach(function() {
       driver.getScreenShareElementFunc = function() {};
 
-      driver.startScreenShare(new sharedActions.StartScreenShare());
+      driver.startScreenShare({
+        videoSource: "window"
+      });
 
       sandbox.stub(dispatcher, "dispatch");
 
@@ -175,19 +173,9 @@ describe("loop.OTSdkDriver", function () {
     });
 
     it("should destroy the share", function() {
-      driver.endScreenShare(new sharedActions.EndScreenShare());
+      expect(driver.endScreenShare()).to.equal(true);
 
       sinon.assert.calledOnce(publisher.destroy);
-    });
-
-    it("should dispatch a `ScreenSharingState` action", function() {
-      driver.endScreenShare(new sharedActions.EndScreenShare());
-
-      sinon.assert.calledOnce(dispatcher.dispatch);
-      sinon.assert.calledWithExactly(dispatcher.dispatch,
-        new sharedActions.ScreenSharingState({
-          state: SCREEN_SHARE_STATES.INACTIVE
-        }));
     });
   });
 
@@ -611,7 +599,9 @@ describe("loop.OTSdkDriver", function () {
 
       driver.getScreenShareElementFunc = function() {};
 
-      driver.startScreenShare(new sharedActions.StartScreenShare());
+      driver.startScreenShare({
+        videoSource: "window"
+      });
 
       sandbox.stub(dispatcher, "dispatch");
     });

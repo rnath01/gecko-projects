@@ -147,6 +147,9 @@ pref("dom.enable_resource_timing", true);
 // Enable high-resolution timing markers for users
 pref("dom.enable_user_timing", true);
 
+// Enable printing performance marks/measures to log
+pref("dom.performance.enable_user_timing_logging", false);
+
 // Whether the Gamepad API is enabled
 pref("dom.gamepad.enabled", true);
 #ifdef RELEASE_BUILD
@@ -157,6 +160,11 @@ pref("dom.gamepad.non_standard_events.enabled", true);
 
 // Whether the KeyboardEvent.code is enabled
 pref("dom.keyboardevent.code.enabled", true);
+
+// If this is true, TextEventDispatcher dispatches keydown and keyup events
+// even during composition (keypress events are never fired during composition
+// even if this is true).
+pref("dom.keyboardevent.dispatch_during_composition", false);
 
 // Whether the WebCrypto API is enabled
 pref("dom.webcrypto.enabled", true);
@@ -183,6 +191,8 @@ pref("browser.sessionhistory.max_total_viewers", -1);
 
 pref("ui.use_native_colors", true);
 pref("ui.click_hold_context_menus", false);
+// Duration of timeout of incremental search in menus (ms).  0 means infinite.
+pref("ui.menu.incremental_search.timeout", 1000);
 pref("browser.display.use_document_fonts",  1);  // 0 = never, 1 = quick, 2 = always
 // 0 = default: always, except in high contrast mode
 // 1 = always
@@ -304,6 +314,7 @@ pref("media.webm.intel_decoder.enabled", false);
 #endif
 #ifdef MOZ_GSTREAMER
 pref("media.gstreamer.enabled", true);
+pref("media.gstreamer.enable-blacklist", true);
 #endif
 #ifdef MOZ_APPLEMEDIA
 pref("media.apple.mp3.enabled", true);
@@ -416,10 +427,10 @@ pref("media.getusermedia.screensharing.enabled", true);
 #endif
 
 #ifdef RELEASE_BUILD
-pref("media.getusermedia.screensharing.allowed_domains", "webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,example.com");
+pref("media.getusermedia.screensharing.allowed_domains", "webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,example.com");
 #else
  // temporary value, not intended for release - bug 1049087
-pref("media.getusermedia.screensharing.allowed_domains", "mozilla.github.io,webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,example.com");
+pref("media.getusermedia.screensharing.allowed_domains", "mozilla.github.io,webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,example.com");
 #endif
 // OS/X 10.6 and XP have screen/window sharing off by default due to various issues - Caveat emptor
 pref("media.getusermedia.screensharing.allow_on_old_platforms", false);
@@ -431,11 +442,11 @@ pref("media.webvtt.regions.enabled", false);
 // AudioTrack and VideoTrack support
 pref("media.track.enabled", false);
 
-// Whether to enable MediaSource support.  We want to enable on non-release
-// builds and on release windows, but on release builds restrict to YouTube.  We
-// don't enable for YouTube on non-Windows for now because the MP4 code for
-// those platforms isn't ready yet.
-#if defined(XP_WIN) || !defined(RELEASE_BUILD)
+// Whether to enable MediaSource support.
+// We want to enable on non-release  builds and on release windows and mac
+// but on release builds restrict to YouTube. We don't enable for other
+// configurations because code for those platforms isn't ready yet.
+#if defined(XP_WIN) || defined(XP_MACOSX) || !defined(RELEASE_BUILD)
 pref("media.mediasource.enabled", true);
 #else
 pref("media.mediasource.enabled", false);
@@ -596,6 +607,11 @@ pref("gfx.color_management.enablev4", false);
 
 pref("gfx.downloadable_fonts.enabled", true);
 pref("gfx.downloadable_fonts.fallback_delay", 3000);
+
+// disable downloadable font cache so that behavior is consistently
+// the uncached load behavior across pages (useful for testing reflow problems)
+pref("gfx.downloadable_fonts.disable_cache", false);
+
 #ifdef RELEASE_BUILD
 pref("gfx.downloadable_fonts.woff2.enabled", false);
 #else
@@ -1346,7 +1362,8 @@ pref("network.http.tcp_keepalive.short_lived_idle_time", 10);
 pref("network.http.tcp_keepalive.long_lived_connections", true);
 pref("network.http.tcp_keepalive.long_lived_idle_time", 600);
 
-pref("network.http.enforce-framing.http1", false);
+pref("network.http.enforce-framing.http1", false); // should be named "strict"
+pref("network.http.enforce-framing.soft", true);
 
 // default values for FTP
 // in a DSCP environment this should be 40 (0x28, or AF11), per RFC-4594,
@@ -1571,6 +1588,9 @@ pref("network.dnsCacheExpirationGracePeriod", 60);
 
 // This preference can be used to turn off DNS prefetch.
 pref("network.dns.disablePrefetch", false);
+
+// Contols whether or not "localhost" should resolve when offline
+pref("network.dns.offline-localhost", true);
 
 // This preference controls whether or not URLs with UTF-8 characters are
 // escaped.  Set this preference to TRUE for strict RFC2396 conformance.
@@ -2174,7 +2194,7 @@ pref("layout.css.grid.enabled", false);
 // in nsLayoutStylesheetCache::EnsureGlobal and the invalidation of
 // mUASheet in nsLayoutStylesheetCache::DependentPrefChanged (if it's not
 // otherwise needed) are removed.
-pref("layout.css.ruby.enabled", false);
+pref("layout.css.ruby.enabled", true);
 
 // Is support for CSS display:contents enabled?
 pref("layout.css.display-contents.enabled", true);
@@ -2395,12 +2415,6 @@ pref("svg.paint-order.enabled", true);
 
 // Is support for the <marker orient="auto-start-reverse"> feature enabled?
 pref("svg.marker-improvements.enabled", true);
-
-#ifdef RELEASE_BUILD
-pref("svg.svg-iframe.enabled", false);
-#else
-pref("svg.svg-iframe.enabled", false);
-#endif
 
 // Is support for the new getBBox method from SVG 2 enabled?
 // See https://svgwg.org/svg2-draft/single-page.html#types-SVGBoundingBoxOptions
@@ -2734,10 +2748,11 @@ pref("font.name.monospace.x-western", "Courier New");
 pref("font.name.cursive.x-western", "Comic Sans MS");
 
 pref("font.name.serif.zh-CN", "SimSun");
-pref("font.name.sans-serif.zh-CN", "SimSun");
+pref("font.name.sans-serif.zh-CN", "Microsoft YaHei");
 pref("font.name.monospace.zh-CN", "SimSun");
+pref("font.name.cursive.zh-CN", "KaiTi");
 pref("font.name-list.serif.zh-CN", "MS Song, SimSun, SimSun-ExtB");
-pref("font.name-list.sans-serif.zh-CN", "MS Song, SimSun, SimSun-ExtB");
+pref("font.name-list.sans-serif.zh-CN", "Microsoft YaHei, SimHei, Arial Unicode MS");
 pref("font.name-list.monospace.zh-CN", "MS Song, SimSun, SimSun-ExtB");
 
 // Per Taiwanese users' demand. They don't want to use TC fonts for
@@ -3864,6 +3879,7 @@ pref("webgl.max-warnings-per-context", 32);
 pref("webgl.enable-draft-extensions", false);
 pref("webgl.enable-privileged-extensions", false);
 pref("webgl.bypass-shader-validation", false);
+pref("webgl.enable-prototype-webgl2", false);
 #ifdef XP_WIN
 pref("webgl.angle.try-d3d11", true);
 pref("webgl.angle.force-d3d11", false);
@@ -4089,10 +4105,10 @@ pref("dom.vibrator.max_vibrate_list_len", 128);
 pref("dom.battery.enabled", true);
 
 // Image srcset
-pref("dom.image.srcset.enabled", false);
+pref("dom.image.srcset.enabled", true);
 
 // <picture> element and sizes
-pref("dom.image.picture.enabled", false);
+pref("dom.image.picture.enabled", true);
 
 // WebSMS
 pref("dom.sms.enabled", false);
@@ -4465,6 +4481,16 @@ pref("dom.mozSettings.SettingsService.verbose.enabled", false);
 // readwrite.
 pref("dom.mozSettings.allowForceReadOnly", false);
 
+// The interval at which to check for slow running addons
+#ifdef NIGHTLY_BUILD
+pref("browser.addon-watch.interval", 15000);
+#else
+pref("browser.addon-watch.interval", -1);
+#endif
+pref("browser.addon-watch.ignore", "[\"mochikit@mozilla.org\",\"special-powers@mozilla.org\"]");
+// the percentage of time addons are allowed to use without being labeled slow
+pref("browser.addon-watch.percentage-limit", 5);
+
 // RequestSync API is disabled by default.
 pref("dom.requestSync.enabled", false);
 
@@ -4487,9 +4513,6 @@ pref("browser.search.official", true);
 
 #ifndef MOZ_WIDGET_GONK
 // GMPInstallManager prefs
-
-// Enables some extra logging (can reduce performance)
-pref("media.gmp-manager.log", false);
 
 // User-settable override to media.gmp-manager.url for testing purposes.
 //pref("media.gmp-manager.url.override", "");
@@ -4524,6 +4547,9 @@ pref("media.gmp-manager.certs.1.issuerName", "CN=DigiCert Secure Server CA,O=Dig
 pref("media.gmp-manager.certs.1.commonName", "aus4.mozilla.org");
 pref("media.gmp-manager.certs.2.issuerName", "CN=Thawte SSL CA,O=\"Thawte, Inc.\",C=US");
 pref("media.gmp-manager.certs.2.commonName", "aus4.mozilla.org");
+
+// Adobe EME is currently pref'd off by default and hidden in the addon manager.
+pref("media.gmp-eme-adobe.hidden", true);
 #endif
 
 // Whether or not to perform reader mode article parsing on page load.
@@ -4534,13 +4560,16 @@ pref("reader.parse-on-load.enabled", true);
 // is disabled by default.
 pref("reader.parse-on-load.force-enabled", false);
 
-// The default relative font size in reader mode (1-5)
-pref("reader.font_size", 3);
+// The default relative font size in reader mode (1-9)
+pref("reader.font_size", 5);
 
-// The default color scheme in reader mode (light, dark, print, auto)
+// The default color scheme in reader mode (light, dark, sepia, auto)
 // auto = color automatically adjusts according to ambient light level
 // (auto only works on platforms where the 'devicelight' event is enabled)
 pref("reader.color_scheme", "light");
+
+// Color scheme values available in reader mode UI.
+pref("reader.color_scheme.values", "[\"light\",\"dark\",\"sepia\"]");
 
 // The font type in reader (sans-serif, serif)
 pref("reader.font_type", "sans-serif");
@@ -4549,9 +4578,25 @@ pref("reader.font_type", "sans-serif");
 // This is used to show a first-launch tip in reader mode.
 pref("reader.has_used_toolbar", false);
 
+// Whether to use a vertical or horizontal toolbar.
+pref("reader.toolbar.vertical", true);
+
 #if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
 // Whether to allow, on a Linux system that doesn't support the necessary sandboxing
 // features, loading Gecko Media Plugins unsandboxed.  However, EME CDMs will not be
 // loaded without sandboxing even if this pref is changed.
 pref("media.gmp.insecure.allow", false);
+#endif
+
+// Use vsync aligned rendering. b2g prefs are in b2g.js
+// Only supported on windows, os x, and b2g
+#if defined(XP_WIN) || defined(XP_MACOSX)
+pref("gfx.vsync.hw-vsync.enabled", false);
+pref("gfx.vsync.compositor", false);
+pref("gfx.vsync.refreshdriver", false);
+#endif
+
+// Secure Element API
+#ifdef MOZ_SECUREELEMENT
+pref("dom.secureelement.enabled", false);
 #endif

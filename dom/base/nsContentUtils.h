@@ -157,7 +157,7 @@ struct EventNameMapping
 {
   // This holds pointers to nsGkAtoms members, and is therefore safe as a
   // non-owning reference.
-  nsIAtom* MOZ_OWNING_REF mAtom;
+  nsIAtom* MOZ_NON_OWNING_REF mAtom;
   uint32_t mId;
   int32_t  mType;
   mozilla::EventClassID mEventClassID;
@@ -614,6 +614,11 @@ public:
                            uint32_t aContentPolicyType = nsIContentPolicy::TYPE_IMAGE);
 
   /**
+   * Returns true if objects in aDocument shouldn't initiate image loads.
+   */
+  static bool DocumentInactiveForImageLoads(nsIDocument* aDocument);
+
+  /**
    * Method to start an image load.  This does not do any security checks.
    * This method will attempt to make aURI immutable; a caller that wants to
    * keep a mutable version around should pass in a clone.
@@ -646,7 +651,8 @@ public:
    * Null document/channel arguments return the public image loader.
    */
   static imgLoader* GetImgLoaderForDocument(nsIDocument* aDoc);
-  static imgLoader* GetImgLoaderForChannel(nsIChannel* aChannel);
+  static imgLoader* GetImgLoaderForChannel(nsIChannel* aChannel,
+                                           nsIDocument* aContext);
 
   /**
    * Returns whether the given URI is in the image cache.
@@ -832,28 +838,11 @@ public:
    * A helper function that parses a sandbox attribute (of an <iframe> or
    * a CSP directive) and converts it to the set of flags used internally.
    *
-   * @param aSandboxAttr  the sandbox attribute
-   * @return              the set of flags (SANDBOXED_NONE if aSandboxAttr is null)
+   * @param sandboxAttr   the sandbox attribute
+   * @return              the set of flags (0 if sandboxAttr is null)
    */
-  static uint32_t ParseSandboxAttributeToFlags(const nsAttrValue* aSandboxAttr);
+  static uint32_t ParseSandboxAttributeToFlags(const nsAttrValue* sandboxAttr);
 
-  /**
-   * A helper function that checks if a string matches a valid sandbox
-   * flag.
-   *
-   * @param aFlag  the potential sandbox flag
-   * @return       true if the flag is a sandbox flag
-   */
-  static bool IsValidSandboxFlag(const nsAString& aFlag);
-
-  /**
-   * A helper function that returns a string attribute corresponding to the
-   * sandbox flags.
-   *
-   * @param aFlags  the sandbox flags
-   * @param aString the attribute corresponding to the flags (null if flags is 0)
-   */
-  static void SandboxFlagsToString(uint32_t aFlags, nsAString& aString);
 
   /**
    * Fill (with the parameters given) the localized string named |aKey| in
@@ -1898,6 +1887,14 @@ public:
   }
   
   /*
+   * Returns true if user timing API should print to console.
+   */
+  static bool IsUserTimingLoggingEnabled()
+  {
+    return sIsUserTimingLoggingEnabled;
+  }
+
+  /*
    * Returns true if the performance timing APIs are enabled.
    */
   static bool IsResourceTimingEnabled()
@@ -2023,7 +2020,7 @@ public:
   };
 
   static already_AddRefed<nsIDocumentLoaderFactory>
-  FindInternalContentViewer(const char* aType,
+  FindInternalContentViewer(const nsACString& aType,
                             ContentViewerType* aLoaderType = nullptr);
 
   /**
@@ -2184,6 +2181,14 @@ public:
                                         Element* aRoot,
                                         int32_t& aOutStartOffset,
                                         int32_t& aOutEndOffset);
+
+  /**
+   * Takes a selection, and return selection's bounding rect which is relative
+   * to root frame.
+   *
+   * @param aSel      Selection to check
+   */
+  static nsRect GetSelectionBoundingRect(mozilla::dom::Selection* aSel);
 
   /**
    * Takes a frame for anonymous content within a text control (<input> or
@@ -2377,6 +2382,7 @@ private:
   static uint32_t sHandlingInputTimeout;
   static bool sIsPerformanceTimingEnabled;
   static bool sIsResourceTimingEnabled;
+  static bool sIsUserTimingLoggingEnabled;
   static bool sIsExperimentalAutocompleteEnabled;
   static bool sEncodeDecodeURLHash;
 

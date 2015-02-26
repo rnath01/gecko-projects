@@ -221,14 +221,14 @@ extern bool
 RunScript(JSContext *cx, RunState &state);
 
 extern bool
-StrictlyEqual(JSContext *cx, const Value &lval, const Value &rval, bool *equal);
+StrictlyEqual(JSContext *cx, HandleValue lval, HandleValue rval, bool *equal);
 
 extern bool
-LooselyEqual(JSContext *cx, const Value &lval, const Value &rval, bool *equal);
+LooselyEqual(JSContext *cx, HandleValue lval, HandleValue rval, bool *equal);
 
 /* === except that NaN is the same as NaN and -0 is not the same as +0. */
 extern bool
-SameValue(JSContext *cx, const Value &v1, const Value &v2, bool *same);
+SameValue(JSContext *cx, HandleValue v1, HandleValue v2, bool *same);
 
 extern JSType
 TypeOfObject(JSObject *obj);
@@ -343,10 +343,6 @@ UrshValues(JSContext *cx, MutableHandleValue lhs, MutableHandleValue rhs, Mutabl
 
 template <bool strict>
 bool
-SetProperty(JSContext *cx, HandleObject obj, HandleId id, const Value &value);
-
-template <bool strict>
-bool
 DeleteProperty(JSContext *ctx, HandleValue val, HandlePropertyName name, bool *bv);
 
 template <bool strict>
@@ -380,6 +376,9 @@ InitGetterSetterOperation(JSContext *cx, jsbytecode *pc, HandleObject obj, Handl
 bool
 InitGetterSetterOperation(JSContext *cx, jsbytecode *pc, HandleObject obj, HandlePropertyName name,
                           HandleObject val);
+
+unsigned
+GetInitDataPropAttrs(JSOp op);
 
 bool
 EnterWithOperation(JSContext *cx, AbstractFramePtr frame, HandleValue val, HandleObject staticWith);

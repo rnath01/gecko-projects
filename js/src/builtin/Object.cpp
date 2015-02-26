@@ -18,9 +18,9 @@
 #include "jsobjinlines.h"
 
 #include "vm/NativeObject-inl.h"
+#include "vm/Shape-inl.h"
 
 using namespace js;
-using namespace js::types;
 
 using js::frontend::IsIdentifier;
 using mozilla::ArrayLength;
@@ -637,7 +637,7 @@ js::ObjectCreateImpl(JSContext *cx, HandleObject proto, NewObjectKind newKind,
         // instead.
         RootedObjectGroup ngroup(cx, group);
         if (!ngroup) {
-            ngroup = GetCallerInitGroup(cx, JSProto_Null);
+            ngroup = ObjectGroup::callingAllocationSiteGroup(cx, JSProto_Null);
             if (!ngroup)
                 return nullptr;
         }
@@ -659,11 +659,13 @@ js::ObjectCreateWithTemplate(JSContext *cx, HandlePlainObject templateObj)
     return ObjectCreateImpl(cx, proto, GenericObject, group);
 }
 
-/* ES5 15.2.3.5: Object.create(O [, Properties]) */
+// ES6 draft rev34 (2015/02/20) 19.1.2.2 Object.create(O [, Properties])
 bool
 js::obj_create(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
+
+    // Step 1.
     if (args.length() == 0) {
         JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_MORE_ARGS_NEEDED,
                              "Object.create", "0", "s");
@@ -681,24 +683,21 @@ js::obj_create(JSContext *cx, unsigned argc, Value *vp)
         return false;
     }
 
+    // Step 2.
     RootedObject proto(cx, args[0].toObjectOrNull());
     RootedPlainObject obj(cx, ObjectCreateImpl(cx, proto));
     if (!obj)
         return false;
 
-    /* 15.2.3.5 step 4. */
+    // Step 3.
     if (args.hasDefined(1)) {
-        if (args[1].isPrimitive()) {
-            JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_NOT_NONNULL_OBJECT);
-            return false;
-        }
-
-        RootedObject props(cx, &args[1].toObject());
-        if (!DefineProperties(cx, obj, props))
+        RootedValue val(cx, args[1]);
+        RootedObject props(cx, ToObject(cx, val));
+        if (!props || !DefineProperties(cx, obj, props))
             return false;
     }
 
-    /* 5. Return obj. */
+    // Step 4.
     args.rval().setObject(*obj);
     return true;
 }
@@ -1140,7 +1139,7 @@ CreateObjectPrototype(JSContext *cx, JSProtoKey key)
      * Create |Object.prototype| first, mirroring CreateBlankProto but for the
      * prototype of the created object.
      */
-    RootedPlainObject objectProto(cx, NewObjectWithGivenProto<PlainObject>(cx, nullptr,
+    RootedPlainObject objectProto(cx, NewObjectWithGivenProto<PlainObject>(cx, NullPtr(),
                                                                            self, SingletonObject));
     if (!objectProto)
         return nullptr;

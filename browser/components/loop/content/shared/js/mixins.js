@@ -101,6 +101,31 @@ loop.shared.mixins = (function() {
     componentDidMount: function() {
       this.documentBody.addEventListener("click", this._onBodyClick);
       this.documentBody.addEventListener("blur", this.hideDropdownMenu);
+
+      var menu = this.refs.menu;
+      if (!menu) {
+        return;
+      }
+
+      // Correct the position of the menu if necessary.
+      var menuNode = menu.getDOMNode();
+      var menuNodeRect = menuNode.getBoundingClientRect();
+      var bodyRect = {
+        height: this.documentBody.offsetHeight,
+        width: this.documentBody.offsetWidth
+      };
+
+      // First we check the vertical overflow.
+      var y = menuNodeRect.top + menuNodeRect.height;
+      if (y >= bodyRect.height) {
+        menuNode.style.marginTop = bodyRect.height - y + "px";
+      }
+
+      // Then we check the horizontal overflow.
+      var x = menuNodeRect.left + menuNodeRect.width;
+      if (x >= bodyRect.width) {
+        menuNode.style.marginLeft = bodyRect.width - x + "px";
+      }
     },
 
     componentWillUnmount: function() {
@@ -275,14 +300,17 @@ loop.shared.mixins = (function() {
      *       same name as the possible video types (currently only "screen").
      * Note: Once we support multiple remote video streams, this function will
      *       need to be updated.
+     *
+     * @param {string} videoType The video type according to the sdk, e.g. "camera" or
+     *                           "screen".
      * @return {Object} contains the remote stream dimension properties of its
      *                  container node, the stream itself and offset of the stream
      *                  relative to its container node in pixels.
      */
-    getRemoteVideoDimensions: function() {
+    getRemoteVideoDimensions: function(videoType) {
       var remoteVideoDimensions;
 
-      Object.keys(this._videoDimensionsCache.remote).forEach(function(videoType) {
+      if (videoType in this._videoDimensionsCache.remote) {
         var node = this._getElement("." + (videoType === "camera" ? "remote" : videoType));
         var width = node.offsetWidth;
         // If the width > 0 then we record its real size by taking its aspect
@@ -295,17 +323,39 @@ loop.shared.mixins = (function() {
             width: width,
             height: node.offsetHeight
           };
+
           var ratio = this._videoDimensionsCache.remote[videoType].aspectRatio;
+          // Leading axis is the side that has the smallest ratio.
           var leadingAxis = Math.min(ratio.width, ratio.height) === ratio.width ?
             "width" : "height";
-          var slaveSize = remoteVideoDimensions[leadingAxis] +
-            (remoteVideoDimensions[leadingAxis] * (1 - ratio[leadingAxis]));
-          remoteVideoDimensions.streamWidth = leadingAxis === "width" ?
-            remoteVideoDimensions.width : slaveSize;
-          remoteVideoDimensions.streamHeight = leadingAxis === "height" ?
-            remoteVideoDimensions.height: slaveSize;
+          var slaveAxis = leadingAxis === "height" ? "width" : "height";
+
+          // We need to work out if the leading axis of the video is full, by
+          // calculating the expected length of the leading axis based on the
+          // length of the slave axis and aspect ratio.
+          var leadingAxisFull = remoteVideoDimensions[slaveAxis] * ratio[leadingAxis] >
+            remoteVideoDimensions[leadingAxis];
+
+          if (leadingAxisFull) {
+            // If the leading axis is "full" then we need to adjust the slave axis.
+            var slaveAxisSize = remoteVideoDimensions[leadingAxis] / ratio[leadingAxis];
+
+            remoteVideoDimensions.streamWidth = leadingAxis === "width" ?
+              remoteVideoDimensions.width : slaveAxisSize;
+            remoteVideoDimensions.streamHeight = leadingAxis === "height" ?
+              remoteVideoDimensions.height: slaveAxisSize;
+          } else {
+            // If the leading axis is not "full" then we need to adjust it, based
+            // on the length of the leading axis.
+            var leadingAxisSize = remoteVideoDimensions[slaveAxis] * ratio[leadingAxis];
+
+            remoteVideoDimensions.streamWidth = leadingAxis === "height" ?
+              remoteVideoDimensions.width : leadingAxisSize;
+            remoteVideoDimensions.streamHeight = leadingAxis === "width" ?
+              remoteVideoDimensions.height: leadingAxisSize;
+          }
         }
-      }, this);
+      }
 
       // Supply some sensible defaults for the remoteVideoDimensions if no remote
       // stream is connected (yet).
@@ -365,13 +415,19 @@ loop.shared.mixins = (function() {
           screenShareStreamParent.style.height = "100%";
         }
 
-        // Update the position and dimensions of the containers of local video
-        // streams, if necessary. The consumer of this mixin should implement the
-        // actual updating mechanism.
+        // Update the position and dimensions of the containers of local and remote
+        // video streams, if necessary. The consumer of this mixin should implement
+        // the actual updating mechanism.
         Object.keys(this._videoDimensionsCache.local).forEach(function(videoType) {
           var ratio = this._videoDimensionsCache.local[videoType].aspectRatio;
           if (videoType == "camera" && this.updateLocalCameraPosition) {
             this.updateLocalCameraPosition(ratio);
+          }
+        }, this);
+        Object.keys(this._videoDimensionsCache.remote).forEach(function(videoType) {
+          var ratio = this._videoDimensionsCache.remote[videoType].aspectRatio;
+          if (videoType == "camera" && this.updateRemoteCameraPosition) {
+            this.updateRemoteCameraPosition(ratio);
           }
         }, this);
       }.bind(this), 0);

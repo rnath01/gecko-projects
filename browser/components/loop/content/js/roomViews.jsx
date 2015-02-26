@@ -170,8 +170,7 @@ loop.roomViews = (function(mozL10n) {
     ],
 
     propTypes: {
-      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
-      mozLoop: React.PropTypes.object.isRequired,
+      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired
     },
 
     _renderInvitationOverlay: function() {
@@ -243,7 +242,7 @@ loop.roomViews = (function(mozL10n) {
 
       var screenShareData = {
         state: this.state.screenSharingState,
-        visible: this.props.mozLoop.getLoopPref("screenshare.enabled")
+        visible: true
       };
 
       switch(this.state.roomState) {
@@ -274,7 +273,7 @@ loop.roomViews = (function(mozL10n) {
                 <div className="conversation room-conversation">
                   <div className="media nested">
                     <div className="video_wrapper remote_wrapper">
-                      <div className="video_inner remote remote-stream"></div>
+                      <div className="video_inner remote focus-stream"></div>
                     </div>
                     <div className={localStreamClasses}></div>
                     <div className="screen hide"></div>

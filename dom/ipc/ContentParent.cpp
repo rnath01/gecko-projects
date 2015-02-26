@@ -119,6 +119,7 @@
 #include "nsISpellChecker.h"
 #include "nsIStyleSheet.h"
 #include "nsISupportsPrimitives.h"
+#include "nsISystemMessagesInternal.h"
 #include "nsITimer.h"
 #include "nsIURIFixup.h"
 #include "nsIWindowWatcher.h"
@@ -1324,11 +1325,21 @@ ContentParent::ForwardKnownInfo()
 #ifdef MOZ_WIDGET_GONK
     InfallibleTArray<VolumeInfo> volumeInfo;
     nsRefPtr<nsVolumeService> vs = nsVolumeService::GetSingleton();
-    if (vs) {
+    if (vs && !mIsForBrowser) {
         vs->GetVolumesForIPC(&volumeInfo);
         unused << SendVolumes(volumeInfo);
     }
 #endif /* MOZ_WIDGET_GONK */
+
+    nsCOMPtr<nsISystemMessagesInternal> systemMessenger =
+        do_GetService("@mozilla.org/system-message-internal;1");
+    if (systemMessenger && !mIsForBrowser) {
+        nsCOMPtr<nsIURI> manifestURI;
+        nsresult rv = NS_NewURI(getter_AddRefs(manifestURI), mAppManifestURL);
+        if (NS_SUCCEEDED(rv)) {
+            systemMessenger->RefreshCache(mMessageManager, manifestURI);
+        }
+    }
 }
 
 namespace {
@@ -2425,12 +2436,12 @@ ContentParent::RecvReadPermissions(InfallibleTArray<IPC::Permission>* aPermissio
         services::GetPermissionManager();
     nsPermissionManager* permissionManager =
         static_cast<nsPermissionManager*>(permissionManagerIface.get());
-    NS_ABORT_IF_FALSE(permissionManager,
-                 "We have no permissionManager in the Chrome process !");
+    MOZ_ASSERT(permissionManager,
+               "We have no permissionManager in the Chrome process !");
 
     nsCOMPtr<nsISimpleEnumerator> enumerator;
     DebugOnly<nsresult> rv = permissionManager->GetEnumerator(getter_AddRefs(enumerator));
-    NS_ABORT_IF_FALSE(NS_SUCCEEDED(rv), "Could not get enumerator!");
+    MOZ_ASSERT(NS_SUCCEEDED(rv), "Could not get enumerator!");
     while(1) {
         bool hasMore;
         enumerator->HasMoreElements(&hasMore);
@@ -4169,6 +4180,14 @@ ContentParent::RecvPrivateDocShellsExist(const bool& aExist)
 }
 
 bool
+ContentParent::DoLoadMessageManagerScript(const nsAString& aURL,
+                                          bool aRunInGlobalScope)
+{
+    MOZ_ASSERT(!aRunInGlobalScope);
+    return SendLoadProcessScript(nsString(aURL));
+}
+
+bool
 ContentParent::DoSendAsyncMessage(JSContext* aCx,
                                   const nsAString& aMessage,
                                   const mozilla::dom::StructuredCloneData& aData,
@@ -4425,8 +4444,8 @@ ContentParent::RecvBackUpXResources(const FileDescriptor& aXSocketFd)
 #ifndef MOZ_X11
     NS_RUNTIMEABORT("This message only makes sense on X11 platforms");
 #else
-    NS_ABORT_IF_FALSE(0 > mChildXSocketFdDup.get(),
-                      "Already backed up X resources??");
+    MOZ_ASSERT(0 > mChildXSocketFdDup.get(),
+               "Already backed up X resources??");
     mChildXSocketFdDup.forget();
     if (aXSocketFd.IsValid()) {
         mChildXSocketFdDup.reset(aXSocketFd.PlatformHandle());

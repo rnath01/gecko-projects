@@ -184,6 +184,7 @@ namespace jit {
     _(StoreElementHole)                                                     \
     _(StoreUnboxedObjectOrNull)                                             \
     _(StoreUnboxedString)                                                   \
+    _(ConvertUnboxedObjectToNative)                                         \
     _(ArrayPopShift)                                                        \
     _(ArrayPush)                                                            \
     _(ArrayConcat)                                                          \
@@ -203,7 +204,6 @@ namespace jit {
     _(CallGetProperty)                                                      \
     _(GetNameCache)                                                         \
     _(CallGetIntrinsicValue)                                                \
-    _(CallsiteCloneCache)                                                   \
     _(CallGetElement)                                                       \
     _(CallSetElement)                                                       \
     _(CallSetProperty)                                                      \

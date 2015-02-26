@@ -977,11 +977,6 @@ public:
     GetDefaultComputedStyle(mozilla::dom::Element& aElt,
                             const nsAString& aPseudoElt,
                             mozilla::ErrorResult& aError);
-  mozilla::dom::indexedDB::IDBFactory*
-    GetMozIndexedDB(mozilla::ErrorResult& aError)
-  {
-    return GetIndexedDB(aError);
-  }
   int32_t MozRequestAnimationFrame(nsIFrameRequestCallback* aRequestCallback,
                                    mozilla::ErrorResult& aError);
   void MozCancelAnimationFrame(int32_t aHandle, mozilla::ErrorResult& aError)
@@ -1718,8 +1713,8 @@ protected:
 
   ~nsGlobalChromeWindow()
   {
-    NS_ABORT_IF_FALSE(mCleanMessageManager,
-                      "chrome windows may always disconnect the msg manager");
+    MOZ_ASSERT(mCleanMessageManager,
+               "chrome windows may always disconnect the msg manager");
 
     mGroupMessageManagers.EnumerateRead(DisconnectGroupMessageManager, nullptr);
     mGroupMessageManagers.Clear();

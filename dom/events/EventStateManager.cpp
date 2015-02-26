@@ -265,7 +265,7 @@ EventStateManager* EventStateManager::sActiveESM = nullptr;
 nsIDocument* EventStateManager::sMouseOverDocument = nullptr;
 nsWeakFrame EventStateManager::sLastDragOverFrame = nullptr;
 LayoutDeviceIntPoint EventStateManager::sLastRefPoint = kInvalidRefPoint;
-nsIntPoint EventStateManager::sLastScreenPoint = nsIntPoint(0, 0);
+LayoutDeviceIntPoint EventStateManager::sLastScreenPoint = LayoutDeviceIntPoint(0, 0);
 LayoutDeviceIntPoint EventStateManager::sSynthCenteringPoint = kInvalidRefPoint;
 CSSIntPoint EventStateManager::sLastClientPoint = CSSIntPoint(0, 0);
 bool EventStateManager::sIsPointerLocked = false;
@@ -481,32 +481,9 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
   mCurrentTarget = aTargetFrame;
   mCurrentTargetContent = nullptr;
 
-  // Focus events don't necessarily need a frame.
-  if (NS_EVENT_NEEDS_FRAME(aEvent)) {
-    NS_ASSERTION(mCurrentTarget, "mCurrentTarget is null.  this should not happen.  see bug #13007");
-    if (!mCurrentTarget) return NS_ERROR_NULL_POINTER;
-  }
-#ifdef DEBUG
-  if (aEvent->HasDragEventMessage() && sIsPointerLocked) {
-    NS_ASSERTION(sIsPointerLocked,
-      "sIsPointerLocked is true. Drag events should be suppressed when the pointer is locked.");
-  }
-#endif
-  // Store last known screenPoint and clientPoint so pointer lock
-  // can use these values as constants.
-  WidgetMouseEvent* mouseEvent = aEvent->AsMouseEvent();
-  if (aEvent->mFlags.mIsTrusted &&
-      ((mouseEvent && mouseEvent->IsReal()) ||
-       aEvent->mClass == eWheelEventClass) &&
-      !sIsPointerLocked) {
-    sLastScreenPoint =
-      UIEvent::CalculateScreenPoint(aPresContext, aEvent);
-    sLastClientPoint =
-      UIEvent::CalculateClientPoint(aPresContext, aEvent, nullptr);
-  }
-
   // Do not take account NS_MOUSE_ENTER/EXIT so that loading a page
   // when user is not active doesn't change the state to active.
+  WidgetMouseEvent* mouseEvent = aEvent->AsMouseEvent();
   if (aEvent->mFlags.mIsTrusted &&
       ((mouseEvent && mouseEvent->IsReal() &&
         mouseEvent->message != NS_MOUSE_ENTER &&
@@ -524,9 +501,34 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
     ++gMouseOrKeyboardEventCounter;
   }
 
-  *aStatus = nsEventStatus_eIgnore;
-
   WheelTransaction::OnEvent(aEvent);
+
+  // Focus events don't necessarily need a frame.
+  if (NS_EVENT_NEEDS_FRAME(aEvent)) {
+    if (!mCurrentTarget) {
+      return NS_ERROR_NULL_POINTER;
+    }
+  }
+#ifdef DEBUG
+  if (aEvent->HasDragEventMessage() && sIsPointerLocked) {
+    NS_ASSERTION(sIsPointerLocked,
+      "sIsPointerLocked is true. Drag events should be suppressed when "
+      "the pointer is locked.");
+  }
+#endif
+  // Store last known screenPoint and clientPoint so pointer lock
+  // can use these values as constants.
+  if (aEvent->mFlags.mIsTrusted &&
+      ((mouseEvent && mouseEvent->IsReal()) ||
+       aEvent->mClass == eWheelEventClass) &&
+      !sIsPointerLocked) {
+    sLastScreenPoint =
+      UIEvent::CalculateScreenPoint(aPresContext, aEvent);
+    sLastClientPoint =
+      UIEvent::CalculateClientPoint(aPresContext, aEvent, nullptr);
+  }
+
+  *aStatus = nsEventStatus_eIgnore;
 
   switch (aEvent->message) {
   case NS_CONTEXTMENU:
@@ -1137,24 +1139,6 @@ EventStateManager::IsRemoteTarget(nsIContent* target) {
   }
 
   return false;
-}
-
-/*static*/ LayoutDeviceIntPoint
-EventStateManager::GetChildProcessOffset(nsFrameLoader* aFrameLoader,
-                                         const WidgetEvent& aEvent)
-{
-  // The "toplevel widget" in child processes is always at position
-  // 0,0.  Map the event coordinates to match that.
-  nsIFrame* targetFrame = aFrameLoader->GetPrimaryFrameOfOwningContent();
-  if (!targetFrame) {
-    return LayoutDeviceIntPoint();
-  }
-  nsPresContext* presContext = targetFrame->PresContext();
-
-  // Find out how far we're offset from the nearest widget.
-  nsPoint pt = nsLayoutUtils::GetEventCoordinatesRelativeTo(&aEvent,
-                                                            targetFrame);
-  return LayoutDeviceIntPoint::FromAppUnitsToNearest(pt, presContext->AppUnitsPerDevPixel());
 }
 
 bool
@@ -2576,6 +2560,16 @@ EventStateManager::DecideGestureEvent(WidgetGestureNotifyEvent* aEvent,
   bool displayPanFeedback = false;
   for (nsIFrame* current = targetFrame; current;
        current = nsLayoutUtils::GetCrossDocParentFrame(current)) {
+
+    // e10s - mark remote content as pannable. This is a work around since
+    // we don't have access to remote frame scroll info here. Apz data may
+    // assist is solving this.
+    if (current && IsRemoteTarget(current->GetContent())) {
+      panDirection = WidgetGestureNotifyEvent::ePanBoth;
+      // We don't know when we reach bounds, so just disable feedback for now.
+      displayPanFeedback = false;
+      break;
+    }
 
     nsIAtom* currentFrameType = current->GetType();
 
@@ -4019,8 +4013,7 @@ EventStateManager::GenerateMouseEnterExit(WidgetMouseEvent* aMouseEvent)
           // in the other branch here.
           sSynthCenteringPoint = center;
           aMouseEvent->widget->SynthesizeNativeMouseMove(
-            LayoutDeviceIntPoint::ToUntyped(center +
-              aMouseEvent->widget->WidgetToScreenOffset()));
+            center + aMouseEvent->widget->WidgetToScreenOffset());
         } else if (aMouseEvent->refPoint == sSynthCenteringPoint) {
           // This is the "synthetic native" event we dispatched to re-center the
           // pointer. Cancel it so we don't expose the centering move to content.
@@ -4155,8 +4148,7 @@ EventStateManager::SetPointerLock(nsIWidget* aWidget,
     sLastRefPoint = GetWindowInnerRectCenter(aElement->OwnerDoc()->GetWindow(),
                                              aWidget,
                                              mPresContext);
-    aWidget->SynthesizeNativeMouseMove(
-      LayoutDeviceIntPoint::ToUntyped(sLastRefPoint + aWidget->WidgetToScreenOffset()));
+    aWidget->SynthesizeNativeMouseMove(sLastRefPoint + aWidget->WidgetToScreenOffset());
 
     // Retarget all events to this element via capture.
     nsIPresShell::SetCapturingContent(aElement, CAPTURE_POINTERLOCK);
@@ -4171,8 +4163,7 @@ EventStateManager::SetPointerLock(nsIWidget* aWidget,
     // pre-pointerlock position, so that the synthetic mouse event reports
     // no movement.
     sLastRefPoint = mPreLockPoint;
-    aWidget->SynthesizeNativeMouseMove(
-      LayoutDeviceIntPoint::ToUntyped(mPreLockPoint + aWidget->WidgetToScreenOffset()));
+    aWidget->SynthesizeNativeMouseMove(mPreLockPoint + aWidget->WidgetToScreenOffset());
 
     // Don't retarget events to this element any more.
     nsIPresShell::SetCapturingContent(nullptr, CAPTURE_POINTERLOCK);

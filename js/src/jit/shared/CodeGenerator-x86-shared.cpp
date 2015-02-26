@@ -48,6 +48,9 @@ CodeGeneratorX86Shared::generatePrologue()
     if (isProfilerInstrumentationEnabled())
         masm.profilerEnterFrame(StackPointer, CallTempReg0);
 
+    // Ensure that the Ion frames is properly aligned.
+    masm.assertStackAlignment(JitStackAlignment, 0);
+
     // Note that this automatically sets MacroAssembler::framePushed().
     masm.reserveStack(frameSize());
 
@@ -336,6 +339,8 @@ void
 CodeGeneratorX86Shared::visitOutOfLineLoadTypedArrayOutOfBounds(OutOfLineLoadTypedArrayOutOfBounds *ool)
 {
     switch (ool->viewType()) {
+      case Scalar::Float32x4:
+      case Scalar::Int32x4:
       case Scalar::MaxTypedArrayViewType:
         MOZ_CRASH("unexpected array type");
       case Scalar::Float32:
@@ -343,12 +348,6 @@ CodeGeneratorX86Shared::visitOutOfLineLoadTypedArrayOutOfBounds(OutOfLineLoadTyp
         break;
       case Scalar::Float64:
         masm.loadConstantDouble(GenericNaN(), ool->dest().fpu());
-        break;
-      case Scalar::Float32x4:
-        masm.loadConstantFloat32x4(SimdConstant::SplatX4(float(GenericNaN())), ool->dest().fpu());
-        break;
-      case Scalar::Int32x4:
-        masm.loadConstantInt32x4(SimdConstant::SplatX4(0), ool->dest().fpu());
         break;
       case Scalar::Int8:
       case Scalar::Uint8:
@@ -362,6 +361,82 @@ CodeGeneratorX86Shared::visitOutOfLineLoadTypedArrayOutOfBounds(OutOfLineLoadTyp
         break;
     }
     masm.jmp(ool->rejoin());
+}
+
+void
+CodeGeneratorX86Shared::visitOffsetBoundsCheck(OffsetBoundsCheck *oolCheck)
+{
+    // The access is heap[ptr + offset]. The inline code checks that
+    // ptr < heap.length - offset. We get here when that fails. We need to check
+    // for the case where ptr + offset >= 0, in which case the access is still
+    // in bounds.
+    MOZ_ASSERT(oolCheck->offset() != 0,
+               "An access without a constant offset doesn't need a separate OffsetBoundsCheck");
+    masm.cmp32(oolCheck->ptrReg(), Imm32(-uint32_t(oolCheck->offset())));
+    masm.j(Assembler::Below, oolCheck->outOfBounds());
+
+#ifdef JS_CODEGEN_X64
+    // In order to get the offset to wrap properly, we must sign-extend the
+    // pointer to 32-bits. We'll zero out the sign extension immediately
+    // after the access to restore asm.js invariants.
+    masm.movslq(oolCheck->ptrReg(), oolCheck->ptrReg());
+#endif
+
+    masm.jmp(oolCheck->rejoin());
+}
+
+uint32_t
+CodeGeneratorX86Shared::emitAsmJSBoundsCheckBranch(const MAsmJSHeapAccess *access,
+                                                   const MInstruction *mir,
+                                                   Register ptr, Label *fail)
+{
+    // Emit a bounds-checking branch for |access|.
+
+    MOZ_ASSERT(gen->needsAsmJSBoundsCheckBranch(access));
+
+    Label *pass = nullptr;
+
+    // If we have a non-zero offset, it's possible that |ptr| itself is out of
+    // bounds, while adding the offset computes an in-bounds address. To catch
+    // this case, we need a second branch, which we emit out of line since it's
+    // unlikely to be needed in normal programs.
+    if (access->offset() != 0) {
+        OffsetBoundsCheck *oolCheck = new(alloc()) OffsetBoundsCheck(fail, ptr, access->offset());
+        fail = oolCheck->entry();
+        pass = oolCheck->rejoin();
+        addOutOfLineCode(oolCheck, mir);
+    }
+
+    // The bounds check is a comparison with an immediate value. The asm.js
+    // module linking process will add the length of the heap to the immediate
+    // field, so -access->endOffset() will turn into
+    // (heapLength - access->endOffset()), allowing us to test whether the end
+    // of the access is beyond the end of the heap.
+    uint32_t maybeCmpOffset = masm.cmp32WithPatch(ptr, Imm32(-access->endOffset())).offset();
+    masm.j(Assembler::Above, fail);
+
+    if (pass)
+        masm.bind(pass);
+
+    return maybeCmpOffset;
+}
+
+void
+CodeGeneratorX86Shared::cleanupAfterAsmJSBoundsCheckBranch(const MAsmJSHeapAccess *access,
+                                                           Register ptr)
+{
+    // Clean up after performing a heap access checked by a branch.
+
+    MOZ_ASSERT(gen->needsAsmJSBoundsCheckBranch(access));
+
+#ifdef JS_CODEGEN_X64
+    // If the offset is 0, we don't use an OffsetBoundsCheck.
+    if (access->offset() != 0) {
+        // Zero out the high 32 bits, in case the OffsetBoundsCheck code had to
+        // sign-extend (movslq) the pointer value to get wraparound to work.
+        masm.movl(ptr, ptr);
+    }
+#endif
 }
 
 bool
@@ -1816,6 +1891,7 @@ CodeGeneratorX86Shared::visitRound(LRound *lir)
 
     // Branch to a slow path for non-positive inputs. Doesn't catch NaN.
     masm.zeroDouble(scratch);
+    masm.loadConstantDouble(GetBiggestNumberLessThan(0.5), temp);
     masm.branchDouble(Assembler::DoubleLessThanOrEqual, input, scratch, &negativeOrZero);
 
     // Input is positive. Add the biggest double less than 0.5 and
@@ -1823,7 +1899,6 @@ CodeGeneratorX86Shared::visitRound(LRound *lir)
     // than 0.5, adding 0.5 would undesirably round up to 1). Note that we have
     // to add the input to the temp register because we're not allowed to
     // modify the input register.
-    masm.loadConstantDouble(GetBiggestNumberLessThan(0.5), temp);
     masm.addDouble(input, temp);
     bailoutCvttsd2si(temp, output, lir->snapshot());
 
@@ -1844,7 +1919,14 @@ CodeGeneratorX86Shared::visitRound(LRound *lir)
 
     // Input is negative.
     masm.bind(&negative);
+
+    // Inputs in ]-0.5; 0] need to be added 0.5, other negative inputs need to
+    // be added the biggest double less than 0.5.
+    Label loadJoin;
+    masm.loadConstantDouble(-0.5, scratch);
+    masm.branchDouble(Assembler::DoubleLessThan, input, scratch, &loadJoin);
     masm.loadConstantDouble(0.5, temp);
+    masm.bind(&loadJoin);
 
     if (AssemblerX86Shared::HasSSE41()) {
         // Add 0.5 and round toward -Infinity. The result is stored in the temp
@@ -1898,6 +1980,7 @@ CodeGeneratorX86Shared::visitRoundF(LRoundF *lir)
 
     // Branch to a slow path for non-positive inputs. Doesn't catch NaN.
     masm.zeroFloat32(scratch);
+    masm.loadConstantFloat32(GetBiggestNumberLessThan(0.5f), temp);
     masm.branchFloat(Assembler::DoubleLessThanOrEqual, input, scratch, &negativeOrZero);
 
     // Input is non-negative. Add the biggest float less than 0.5 and truncate,
@@ -1905,7 +1988,6 @@ CodeGeneratorX86Shared::visitRoundF(LRoundF *lir)
     // adding 0.5 would undesirably round up to 1). Note that we have to add
     // the input to the temp register because we're not allowed to modify the
     // input register.
-    masm.loadConstantFloat32(GetBiggestNumberLessThan(0.5f), temp);
     masm.addFloat32(input, temp);
 
     bailoutCvttss2si(temp, output, lir->snapshot());
@@ -1927,7 +2009,14 @@ CodeGeneratorX86Shared::visitRoundF(LRoundF *lir)
 
     // Input is negative.
     masm.bind(&negative);
+
+    // Inputs in ]-0.5; 0] need to be added 0.5, other negative inputs need to
+    // be added the biggest double less than 0.5.
+    Label loadJoin;
+    masm.loadConstantFloat32(-0.5f, scratch);
+    masm.branchFloat(Assembler::DoubleLessThan, input, scratch, &loadJoin);
     masm.loadConstantFloat32(0.5f, temp);
+    masm.bind(&loadJoin);
 
     if (AssemblerX86Shared::HasSSE41()) {
         // Add 0.5 and round toward -Infinity. The result is stored in the temp
@@ -1995,7 +2084,7 @@ CodeGeneratorX86Shared::visitGuardClass(LGuardClass *guard)
     Register tmp = ToRegister(guard->tempInt());
 
     masm.loadPtr(Address(obj, JSObject::offsetOfGroup()), tmp);
-    masm.cmpPtr(Operand(tmp, types::ObjectGroup::offsetOfClasp()), ImmPtr(guard->mir()->getClass()));
+    masm.cmpPtr(Operand(tmp, ObjectGroup::offsetOfClasp()), ImmPtr(guard->mir()->getClass()));
     bailoutIf(Assembler::NotEqual, guard->snapshot());
 }
 
@@ -2661,13 +2750,13 @@ CodeGeneratorX86Shared::visitSimdBinaryArithIx4(LSimdBinaryArithIx4 *ins)
 
     MSimdBinaryArith::Operation op = ins->operation();
     switch (op) {
-      case MSimdBinaryArith::Add:
+      case MSimdBinaryArith::Op_add:
         masm.vpaddd(rhs, lhs, output);
         return;
-      case MSimdBinaryArith::Sub:
+      case MSimdBinaryArith::Op_sub:
         masm.vpsubd(rhs, lhs, output);
         return;
-      case MSimdBinaryArith::Mul: {
+      case MSimdBinaryArith::Op_mul: {
         if (AssemblerX86Shared::HasSSE41()) {
             masm.vpmulld(rhs, lhs, output);
             return;
@@ -2688,19 +2777,19 @@ CodeGeneratorX86Shared::visitSimdBinaryArithIx4(LSimdBinaryArithIx4 *ins)
         masm.vshufps(MacroAssembler::ComputeShuffleMask(LaneZ, LaneX, LaneW, LaneY), lhs, lhs, lhs);
         return;
       }
-      case MSimdBinaryArith::Div:
+      case MSimdBinaryArith::Op_div:
         // x86 doesn't have SIMD i32 div.
         break;
-      case MSimdBinaryArith::Max:
+      case MSimdBinaryArith::Op_max:
         // we can do max with a single instruction only if we have SSE4.1
         // using the PMAXSD instruction.
         break;
-      case MSimdBinaryArith::Min:
+      case MSimdBinaryArith::Op_min:
         // we can do max with a single instruction only if we have SSE4.1
         // using the PMINSD instruction.
         break;
-      case MSimdBinaryArith::MinNum:
-      case MSimdBinaryArith::MaxNum:
+      case MSimdBinaryArith::Op_minNum:
+      case MSimdBinaryArith::Op_maxNum:
         break;
     }
     MOZ_CRASH("unexpected SIMD op");
@@ -2715,19 +2804,19 @@ CodeGeneratorX86Shared::visitSimdBinaryArithFx4(LSimdBinaryArithFx4 *ins)
 
     MSimdBinaryArith::Operation op = ins->operation();
     switch (op) {
-      case MSimdBinaryArith::Add:
+      case MSimdBinaryArith::Op_add:
         masm.vaddps(rhs, lhs, output);
         return;
-      case MSimdBinaryArith::Sub:
+      case MSimdBinaryArith::Op_sub:
         masm.vsubps(rhs, lhs, output);
         return;
-      case MSimdBinaryArith::Mul:
+      case MSimdBinaryArith::Op_mul:
         masm.vmulps(rhs, lhs, output);
         return;
-      case MSimdBinaryArith::Div:
+      case MSimdBinaryArith::Op_div:
         masm.vdivps(rhs, lhs, output);
         return;
-      case MSimdBinaryArith::Max: {
+      case MSimdBinaryArith::Op_max: {
         FloatRegister lhsCopy = masm.reusedInputFloat32x4(lhs, ScratchSimdReg);
         masm.vcmpunordps(rhs, lhsCopy, ScratchSimdReg);
 
@@ -2740,14 +2829,14 @@ CodeGeneratorX86Shared::visitSimdBinaryArithFx4(LSimdBinaryArithFx4 *ins)
         masm.vorps(ScratchSimdReg, output, output); // or in the all-ones NaNs
         return;
       }
-      case MSimdBinaryArith::Min: {
+      case MSimdBinaryArith::Op_min: {
         FloatRegister rhsCopy = masm.reusedInputAlignedFloat32x4(rhs, ScratchSimdReg);
         masm.vminps(Operand(lhs), rhsCopy, ScratchSimdReg);
         masm.vminps(rhs, lhs, output);
         masm.vorps(ScratchSimdReg, output, output); // NaN or'd with arbitrary bits is NaN
         return;
       }
-      case MSimdBinaryArith::MinNum: {
+      case MSimdBinaryArith::Op_minNum: {
         FloatRegister tmp = ToFloatRegister(ins->temp());
         masm.loadConstantInt32x4(SimdConstant::SplatX4(int32_t(0x80000000)), tmp);
 
@@ -2777,7 +2866,7 @@ CodeGeneratorX86Shared::visitSimdBinaryArithFx4(LSimdBinaryArithFx4 *ins)
         }
         return;
       }
-      case MSimdBinaryArith::MaxNum: {
+      case MSimdBinaryArith::Op_maxNum: {
         FloatRegister mask = ScratchSimdReg;
         masm.loadConstantInt32x4(SimdConstant::SplatX4(0), mask);
         masm.vpcmpeqd(Operand(lhs), mask, mask);

@@ -25,7 +25,6 @@
 
 using namespace js;
 using namespace js::gc;
-using namespace js::types;
 
 using mozilla::PodZero;
 
@@ -153,7 +152,7 @@ CallObject::createSingleton(JSContext *cx, HandleShape shape, uint32_t lexicalBe
     MOZ_ASSERT(CanBeFinalizedInBackground(kind, &CallObject::class_));
     kind = gc::GetBackgroundAllocKind(kind);
 
-    RootedObjectGroup group(cx, cx->getLazySingletonGroup(&class_, TaggedProto(nullptr)));
+    RootedObjectGroup group(cx, ObjectGroup::lazySingletonGroup(cx, &class_, TaggedProto(nullptr)));
     if (!group)
         return nullptr;
     RootedObject obj(cx, JSObject::create(cx, kind, gc::TenuredHeap, shape, group));
@@ -178,7 +177,7 @@ CallObject::createTemplateObject(JSContext *cx, HandleScript script, gc::Initial
     RootedShape shape(cx, script->bindings.callObjShape());
     MOZ_ASSERT(shape->getObjectClass() == &class_);
 
-    RootedObjectGroup group(cx, cx->getNewGroup(&class_, TaggedProto(nullptr)));
+    RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, &class_, TaggedProto(nullptr)));
     if (!group)
         return nullptr;
 
@@ -326,7 +325,7 @@ DeclEnvObject::createTemplateObject(JSContext *cx, HandleFunction fun, gc::Initi
 {
     MOZ_ASSERT(IsNurseryAllocable(FINALIZE_KIND));
 
-    RootedObjectGroup group(cx, cx->getNewGroup(&class_, TaggedProto(nullptr)));
+    RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, &class_, TaggedProto(nullptr)));
     if (!group)
         return nullptr;
 
@@ -400,7 +399,7 @@ js::XDRStaticWithObject(XDRState<XDR_DECODE> *, HandleObject, MutableHandle<Stat
 StaticWithObject *
 StaticWithObject::create(ExclusiveContext *cx)
 {
-    RootedObjectGroup group(cx, cx->getNewGroup(&class_, TaggedProto(nullptr)));
+    RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, &class_, TaggedProto(nullptr)));
     if (!group)
         return nullptr;
 
@@ -433,7 +432,8 @@ DynamicWithObject::create(JSContext *cx, HandleObject object, HandleObject enclo
                           HandleObject staticWith, WithKind kind)
 {
     MOZ_ASSERT(staticWith->is<StaticWithObject>());
-    RootedObjectGroup group(cx, cx->getNewGroup(&class_, TaggedProto(staticWith.get())));
+    RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, &class_,
+                                                             TaggedProto(staticWith.get())));
     if (!group)
         return nullptr;
 
@@ -477,6 +477,13 @@ with_DefineProperty(JSContext *cx, HandleObject obj, HandleId id, HandleValue va
 }
 
 static bool
+with_HasProperty(JSContext *cx, HandleObject obj, HandleId id, bool *foundp)
+{
+    RootedObject actual(cx, &obj->as<DynamicWithObject>().object());
+    return HasProperty(cx, actual, id, foundp);
+}
+
+static bool
 with_GetProperty(JSContext *cx, HandleObject obj, HandleObject receiver, HandleId id,
                  MutableHandleValue vp)
 {
@@ -485,11 +492,14 @@ with_GetProperty(JSContext *cx, HandleObject obj, HandleObject receiver, HandleI
 }
 
 static bool
-with_SetProperty(JSContext *cx, HandleObject obj, HandleId id,
+with_SetProperty(JSContext *cx, HandleObject obj, HandleObject receiver, HandleId id,
                  MutableHandleValue vp, bool strict)
 {
     RootedObject actual(cx, &obj->as<DynamicWithObject>().object());
-    return SetProperty(cx, actual, actual, id, vp, strict);
+    RootedObject actualReceiver(cx, receiver);
+    if (receiver == obj)
+        actualReceiver = actual;
+    return SetProperty(cx, actual, actualReceiver, id, vp, strict);
 }
 
 static bool
@@ -498,13 +508,6 @@ with_GetOwnPropertyDescriptor(JSContext *cx, HandleObject obj, HandleId id,
 {
     RootedObject actual(cx, &obj->as<DynamicWithObject>().object());
     return GetOwnPropertyDescriptor(cx, actual, id, desc);
-}
-
-static bool
-with_SetPropertyAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp)
-{
-    RootedObject actual(cx, &obj->as<DynamicWithObject>().object());
-    return SetPropertyAttributes(cx, actual, id, attrsp);
 }
 
 static bool
@@ -548,10 +551,10 @@ const Class DynamicWithObject::class_ = {
     {
         with_LookupProperty,
         with_DefineProperty,
+        with_HasProperty,
         with_GetProperty,
         with_SetProperty,
         with_GetOwnPropertyDescriptor,
-        with_SetPropertyAttributes,
         with_DeleteProperty,
         nullptr, nullptr,    /* watch/unwatch */
         nullptr,             /* getElements */
@@ -563,7 +566,7 @@ const Class DynamicWithObject::class_ = {
 /* static */ StaticEvalObject *
 StaticEvalObject::create(JSContext *cx, HandleObject enclosing)
 {
-    RootedObjectGroup group(cx, cx->getNewGroup(&class_, TaggedProto(nullptr)));
+    RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, &class_, TaggedProto(nullptr)));
     if (!group)
         return nullptr;
 
@@ -596,7 +599,8 @@ ClonedBlockObject::create(JSContext *cx, Handle<StaticBlockObject *> block, Hand
 {
     MOZ_ASSERT(block->getClass() == &BlockObject::class_);
 
-    RootedObjectGroup group(cx, cx->getNewGroup(&BlockObject::class_, TaggedProto(block.get())));
+    RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, &BlockObject::class_,
+                                                             TaggedProto(block.get())));
     if (!group)
         return nullptr;
 
@@ -668,7 +672,8 @@ ClonedBlockObject::copyUnaliasedValues(AbstractFramePtr frame)
 StaticBlockObject *
 StaticBlockObject::create(ExclusiveContext *cx)
 {
-    RootedObjectGroup group(cx, cx->getNewGroup(&BlockObject::class_, TaggedProto(nullptr)));
+    RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, &BlockObject::class_,
+                                                             TaggedProto(nullptr)));
     if (!group)
         return nullptr;
 
@@ -880,7 +885,7 @@ js::CloneNestedScopeObject(JSContext *cx, HandleObject enclosingScope, Handle<Ne
 /* static */ UninitializedLexicalObject *
 UninitializedLexicalObject::create(JSContext *cx, HandleObject enclosing)
 {
-    RootedObjectGroup group(cx, cx->getNewGroup(&class_, TaggedProto(nullptr)));
+    RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, &class_, TaggedProto(nullptr)));
     if (!group)
         return nullptr;
 
@@ -918,6 +923,13 @@ uninitialized_LookupProperty(JSContext *cx, HandleObject obj, HandleId id,
 }
 
 static bool
+uninitialized_HasProperty(JSContext *cx, HandleObject obj, HandleId id, bool *foundp)
+{
+    ReportUninitializedLexicalId(cx, id);
+    return false;
+}
+
+static bool
 uninitialized_GetProperty(JSContext *cx, HandleObject obj, HandleObject receiver, HandleId id,
                           MutableHandleValue vp)
 {
@@ -926,7 +938,7 @@ uninitialized_GetProperty(JSContext *cx, HandleObject obj, HandleObject receiver
 }
 
 static bool
-uninitialized_SetProperty(JSContext *cx, HandleObject obj, HandleId id,
+uninitialized_SetProperty(JSContext *cx, HandleObject obj, HandleObject receiver, HandleId id,
                           MutableHandleValue vp, bool strict)
 {
     ReportUninitializedLexicalId(cx, id);
@@ -936,13 +948,6 @@ uninitialized_SetProperty(JSContext *cx, HandleObject obj, HandleId id,
 static bool
 uninitialized_GetOwnPropertyDescriptor(JSContext *cx, HandleObject obj, HandleId id,
                                        MutableHandle<JSPropertyDescriptor> desc)
-{
-    ReportUninitializedLexicalId(cx, id);
-    return false;
-}
-
-static bool
-uninitialized_SetPropertyAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp)
 {
     ReportUninitializedLexicalId(cx, id);
     return false;
@@ -976,10 +981,10 @@ const Class UninitializedLexicalObject::class_ = {
     {
         uninitialized_LookupProperty,
         nullptr,             /* defineProperty */
+        uninitialized_HasProperty,
         uninitialized_GetProperty,
         uninitialized_SetProperty,
         uninitialized_GetOwnPropertyDescriptor,
-        uninitialized_SetPropertyAttributes,
         uninitialized_DeleteProperty,
         nullptr, nullptr,    /* watch/unwatch */
         nullptr,             /* getElements */

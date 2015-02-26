@@ -90,7 +90,7 @@ BaselineCompiler::compile()
         return Method_Error;
 
     // Pin analysis info during compilation.
-    types::AutoEnterAnalysis autoEnterAnalysis(cx);
+    AutoEnterAnalysis autoEnterAnalysis(cx);
 
     MOZ_ASSERT(!script->hasBaselineScript());
 
@@ -250,7 +250,7 @@ BaselineCompiler::compile()
 #endif
 
     uint32_t *bytecodeMap = baselineScript->bytecodeTypeMap();
-    types::FillBytecodeTypeMap(script, bytecodeMap);
+    FillBytecodeTypeMap(script, bytecodeMap);
 
     // The last entry in the last index found, and is used to avoid binary
     // searches for the sought entry when queries are in linear order.
@@ -277,7 +277,7 @@ BaselineCompiler::compile()
             return Method_Error;
 
         JitcodeGlobalEntry::BaselineEntry entry;
-        entry.init(code->raw(), code->rawEnd(), script, str);
+        entry.init(code, code->raw(), code->rawEnd(), script, str);
 
         JitcodeGlobalTable *globalTable = cx->runtime()->jitRuntime()->getJitcodeGlobalTable();
         if (!globalTable->addEntry(entry, cx->runtime())) {
@@ -412,6 +412,10 @@ BaselineCompiler::emitPrologue()
     // call into the VM and trigger a GC.
     if (!initScopeChain())
         return false;
+
+    // When compiling with Debugger instrumentation, set the debuggeeness of
+    // the frame before any operation that can call into the VM.
+    emitIsDebuggeeCheck();
 
     if (!emitStackCheck())
         return false;
@@ -565,6 +569,19 @@ BaselineCompiler::emitStackCheck(bool earlyCheck)
 
     masm.bind(&skipCall);
     return true;
+}
+
+void
+BaselineCompiler::emitIsDebuggeeCheck()
+{
+    if (compileDebugInstrumentation_) {
+        masm.Push(BaselineFrameReg);
+        masm.setupUnalignedABICall(1, R0.scratchReg());
+        masm.loadBaselineFramePtr(BaselineFrameReg, R0.scratchReg());
+        masm.passABIArg(R0.scratchReg());
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void *, jit::FrameIsDebuggeeCheck));
+        masm.Pop(BaselineFrameReg);
+    }
 }
 
 typedef bool (*DebugPrologueFn)(JSContext *, BaselineFrame *, jsbytecode *, bool *);
@@ -1722,8 +1739,8 @@ BaselineCompiler::emit_JSOP_NEWARRAY()
 
     uint32_t length = GET_UINT24(pc);
     RootedObjectGroup group(cx);
-    if (!types::UseSingletonForInitializer(script, pc, JSProto_Array)) {
-        group = types::TypeScript::InitGroup(cx, script, pc, JSProto_Array);
+    if (!ObjectGroup::useSingletonForAllocationSite(script, pc, JSProto_Array)) {
+        group = ObjectGroup::allocationSiteGroup(cx, script, pc, JSProto_Array);
         if (!group)
             return false;
     }
@@ -1732,7 +1749,7 @@ BaselineCompiler::emit_JSOP_NEWARRAY()
     masm.move32(Imm32(length), R0.scratchReg());
     masm.movePtr(ImmGCPtr(group), R1.scratchReg());
 
-    ArrayObject *templateObject = NewDenseUnallocatedArray(cx, length, nullptr, TenuredObject);
+    ArrayObject *templateObject = NewDenseUnallocatedArray(cx, length, NullPtr(), TenuredObject);
     if (!templateObject)
         return false;
     templateObject->setGroup(group);
@@ -1753,7 +1770,7 @@ bool
 BaselineCompiler::emit_JSOP_NEWARRAY_COPYONWRITE()
 {
     RootedScript scriptRoot(cx, script);
-    JSObject *obj = types::GetOrFixupCopyOnWriteObject(cx, scriptRoot, pc);
+    JSObject *obj = ObjectGroup::getOrFixupCopyOnWriteObject(cx, scriptRoot, pc);
     if (!obj)
         return false;
 
@@ -1797,8 +1814,8 @@ BaselineCompiler::emit_JSOP_NEWOBJECT()
     frame.syncStack(0);
 
     RootedObjectGroup group(cx);
-    if (!types::UseSingletonForInitializer(script, pc, JSProto_Object)) {
-        group = types::TypeScript::InitGroup(cx, script, pc, JSProto_Object);
+    if (!ObjectGroup::useSingletonForAllocationSite(script, pc, JSProto_Object)) {
+        group = ObjectGroup::allocationSiteGroup(cx, script, pc, JSProto_Object);
         if (!group)
             return false;
     }
@@ -1822,8 +1839,8 @@ BaselineCompiler::emit_JSOP_NEWOBJECT()
         Register objReg = R0.scratchReg();
         Register tempReg = R1.scratchReg();
         masm.movePtr(ImmGCPtr(group), tempReg);
-        masm.branchTest32(Assembler::NonZero, Address(tempReg, types::ObjectGroup::offsetOfFlags()),
-                          Imm32(types::OBJECT_FLAG_PRE_TENURE), &slowPath);
+        masm.branchTest32(Assembler::NonZero, Address(tempReg, ObjectGroup::offsetOfFlags()),
+                          Imm32(OBJECT_FLAG_PRE_TENURE), &slowPath);
         masm.branchPtr(Assembler::NotEqual, AbsoluteAddress(cx->compartment()->addressOfMetadataCallback()),
                       ImmWord(0), &slowPath);
         masm.createGCObject(objReg, tempReg, templateObject, gc::DefaultHeap, &slowPath);
@@ -1848,8 +1865,8 @@ BaselineCompiler::emit_JSOP_NEWINIT()
     JSProtoKey key = JSProtoKey(GET_UINT8(pc));
 
     RootedObjectGroup group(cx);
-    if (!types::UseSingletonForInitializer(script, pc, key)) {
-        group = types::TypeScript::InitGroup(cx, script, pc, key);
+    if (!ObjectGroup::useSingletonForAllocationSite(script, pc, key)) {
+        group = ObjectGroup::allocationSiteGroup(cx, script, pc, key);
         if (!group)
             return false;
     }
@@ -1859,7 +1876,7 @@ BaselineCompiler::emit_JSOP_NEWINIT()
         masm.move32(Imm32(0), R0.scratchReg());
         masm.movePtr(ImmGCPtr(group), R1.scratchReg());
 
-        ArrayObject *templateObject = NewDenseUnallocatedArray(cx, 0, nullptr, TenuredObject);
+        ArrayObject *templateObject = NewDenseUnallocatedArray(cx, 0, NullPtr(), TenuredObject);
         if (!templateObject)
             return false;
         templateObject->setGroup(group);
@@ -1955,6 +1972,18 @@ BaselineCompiler::emit_JSOP_INITPROP()
     // Call IC.
     ICSetProp_Fallback::Compiler compiler(cx);
     return emitOpIC(compiler.getStub(&stubSpace_));
+}
+
+bool
+BaselineCompiler::emit_JSOP_INITLOCKEDPROP()
+{
+    return emit_JSOP_INITPROP();
+}
+
+bool
+BaselineCompiler::emit_JSOP_INITHIDDENPROP()
+{
+    return emit_JSOP_INITPROP();
 }
 
 typedef bool (*NewbornArrayPushFn)(JSContext *, HandleObject, const Value &);
@@ -3361,10 +3390,10 @@ BaselineCompiler::emit_JSOP_REST()
 {
     frame.syncStack(0);
 
-    ArrayObject *templateObject = NewDenseUnallocatedArray(cx, 0, nullptr, TenuredObject);
+    ArrayObject *templateObject = NewDenseUnallocatedArray(cx, 0, NullPtr(), TenuredObject);
     if (!templateObject)
         return false;
-    types::FixRestArgumentsType(cx, templateObject);
+    ObjectGroup::fixRestArgumentsGroup(cx, templateObject);
 
     // Call IC.
     ICRest_Fallback::Compiler compiler(cx, templateObject);

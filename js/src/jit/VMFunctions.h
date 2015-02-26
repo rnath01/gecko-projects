@@ -345,7 +345,7 @@ template <> struct TypeToArgProperties<HandleShape> {
     static const uint32_t result = TypeToArgProperties<Shape *>::result | VMFunction::ByRef;
 };
 template <> struct TypeToArgProperties<HandleObjectGroup> {
-    static const uint32_t result = TypeToArgProperties<types::ObjectGroup *>::result | VMFunction::ByRef;
+    static const uint32_t result = TypeToArgProperties<ObjectGroup *>::result | VMFunction::ByRef;
 };
 
 // Convert argument type to whether or not it should be passed in a float
@@ -617,7 +617,13 @@ class AutoDetectInvalidation
     void setReturnOverride();
 
   public:
-    AutoDetectInvalidation(JSContext *cx, MutableHandleValue rval, IonScript *ionScript = nullptr);
+    AutoDetectInvalidation(JSContext *cx, MutableHandleValue rval, IonScript *ionScript)
+      : cx_(cx), ionScript_(ionScript), rval_(rval), disabled_(false)
+    {
+        MOZ_ASSERT(ionScript);
+    }
+
+    AutoDetectInvalidation(JSContext *cx, MutableHandleValue rval);
 
     void disable() {
         MOZ_ASSERT(!disabled_);
@@ -641,7 +647,9 @@ bool CheckOverRecursedWithExtra(JSContext *cx, BaselineFrame *frame,
 bool DefVarOrConst(JSContext *cx, HandlePropertyName dn, unsigned attrs, HandleObject scopeChain);
 bool SetConst(JSContext *cx, HandlePropertyName name, HandleObject scopeChain, HandleValue rval);
 bool MutatePrototype(JSContext *cx, HandlePlainObject obj, HandleValue value);
-bool InitProp(JSContext *cx, HandleNativeObject obj, HandlePropertyName name, HandleValue value);
+
+bool InitProp(JSContext *cx, HandleNativeObject obj, HandlePropertyName name, HandleValue value,
+              jsbytecode *pc);
 
 template<bool Equal>
 bool LooselyEqual(JSContext *cx, MutableHandleValue lhs, MutableHandleValue rhs, bool *res);
@@ -698,6 +706,7 @@ uint32_t GetIndexFromString(JSString *str);
 bool DebugPrologue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool *mustReturn);
 bool DebugEpilogue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool ok);
 bool DebugEpilogueOnBaselineReturn(JSContext *cx, BaselineFrame *frame, jsbytecode *pc);
+void FrameIsDebuggeeCheck(BaselineFrame *frame);
 
 JSObject *CreateGenerator(JSContext *cx, BaselineFrame *frame);
 bool NormalSuspend(JSContext *cx, HandleObject obj, BaselineFrame *frame, jsbytecode *pc,
@@ -759,7 +768,7 @@ void MarkValueFromIon(JSRuntime *rt, Value *vp);
 void MarkStringFromIon(JSRuntime *rt, JSString **stringp);
 void MarkObjectFromIon(JSRuntime *rt, JSObject **objp);
 void MarkShapeFromIon(JSRuntime *rt, Shape **shapep);
-void MarkObjectGroupFromIon(JSRuntime *rt, types::ObjectGroup **groupp);
+void MarkObjectGroupFromIon(JSRuntime *rt, ObjectGroup **groupp);
 
 // Helper for generatePreBarrier.
 inline void *

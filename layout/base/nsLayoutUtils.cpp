@@ -8,6 +8,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/BasicEvents.h"
+#include "mozilla/EventDispatcher.h"
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/Likely.h"
 #include "mozilla/Maybe.h"
@@ -20,6 +21,7 @@
 #include "nsIDOMHTMLElement.h"
 #include "nsFrameList.h"
 #include "nsGkAtoms.h"
+#include "nsHtml5Atoms.h"
 #include "nsIAtom.h"
 #include "nsCSSPseudoElements.h"
 #include "nsCSSAnonBoxes.h"
@@ -779,8 +781,8 @@ nsLayoutUtils::FindOrCreateIDFor(nsIContent* aContent)
 nsIContent*
 nsLayoutUtils::FindContentFor(ViewID aId)
 {
-  NS_ABORT_IF_FALSE(aId != FrameMetrics::NULL_SCROLL_ID,
-                    "Cannot find a content element in map for null IDs.");
+  MOZ_ASSERT(aId != FrameMetrics::NULL_SCROLL_ID,
+             "Cannot find a content element in map for null IDs.");
   nsIContent* content;
   bool exists = GetContentMap().Get(aId, &content);
 
@@ -866,6 +868,11 @@ GetDisplayPortFromMarginsData(nsIContent* aContent,
     // We want the scroll frame, the root scroll frame differs from all
     // others in that the primary frame is not the scroll frame.
     frame = frame->PresContext()->PresShell()->GetRootScrollFrame();
+    if (!frame) {
+      // If there is no root scrollframe, just exit.
+      return ApplyRectMultiplier(base, aMultiplier);
+    }
+
     isRoot = true;
   }
 
@@ -2189,10 +2196,10 @@ static bool
 CheckCorner(nscoord aXOffset, nscoord aYOffset,
             nscoord aXRadius, nscoord aYRadius)
 {
-  NS_ABORT_IF_FALSE(aXOffset > 0 && aYOffset > 0,
-                    "must not pass nonpositives to CheckCorner");
-  NS_ABORT_IF_FALSE(aXRadius >= 0 && aYRadius >= 0,
-                    "must not pass negatives to CheckCorner");
+  MOZ_ASSERT(aXOffset > 0 && aYOffset > 0,
+             "must not pass nonpositives to CheckCorner");
+  MOZ_ASSERT(aXRadius >= 0 && aYRadius >= 0,
+             "must not pass negatives to CheckCorner");
 
   // Avoid floating point math unless we're either (1) within the
   // quarter-ellipse area at the rounded corner or (2) outside the
@@ -4876,15 +4883,26 @@ nsLayoutUtils::ComputeSizeWithIntrinsicDimensions(WritingMode aWM,
         tentBSize = nsPresContext::CSSPixelsToAppUnits(150);
       }
 
-      nsSize autoSize =
-        ComputeAutoSizeWithIntrinsicDimensions(minISize, minBSize,
-                                               maxISize, maxBSize,
-                                               tentISize, tentBSize);
-      // The nsSize that ComputeAutoSizeWithIntrinsicDimensions returns will
-      // actually contain logical values if the parameters passed to it were
-      // logical coordinates, so we do NOT perform a physical-to-logical
-      // conversion here, but just assign the fields directly to our result.
-      return LogicalSize(aWM, autoSize.width, autoSize.height);
+      if (aIntrinsicRatio != nsSize(0, 0)) {
+        nsSize autoSize =
+          ComputeAutoSizeWithIntrinsicDimensions(minISize, minBSize,
+                                                 maxISize, maxBSize,
+                                                 tentISize, tentBSize);
+        // The nsSize that ComputeAutoSizeWithIntrinsicDimensions returns will
+        // actually contain logical values if the parameters passed to it were
+        // logical coordinates, so we do NOT perform a physical-to-logical
+        // conversion here, but just assign the fields directly to our result.
+        iSize = autoSize.width;
+        bSize = autoSize.height;
+      } else {
+        // No intrinsic ratio, so just clamp the dimensions
+        // independently without calling
+        // ComputeAutoSizeWithIntrinsicDimensions, which deals with
+        // propagating these changes to the other dimension (and would
+        // be incorrect when there is no intrinsic ratio).
+        iSize = NS_CSS_MINMAX(tentISize, minISize, maxISize);
+        bSize = NS_CSS_MINMAX(tentBSize, minBSize, maxBSize);
+      }
     } else {
 
       // 'auto' iSize, non-'auto' bSize
@@ -5097,6 +5115,19 @@ nsLayoutUtils::GetSnappedBaselineY(nsIFrame* aFrame, gfxContext* aContext,
   if (!aContext->UserToDevicePixelSnapped(putativeRect, true))
     return baseline;
   return aContext->DeviceToUser(putativeRect.TopLeft()).y * appUnitsPerDevUnit;
+}
+
+gfxFloat
+nsLayoutUtils::GetSnappedBaselineX(nsIFrame* aFrame, gfxContext* aContext,
+                                   nscoord aX, nscoord aAscent)
+{
+  gfxFloat appUnitsPerDevUnit = aFrame->PresContext()->AppUnitsPerDevPixel();
+  gfxFloat baseline = gfxFloat(aX) + aAscent;
+  gfxRect putativeRect(baseline / appUnitsPerDevUnit, 0, 1, 1);
+  if (!aContext->UserToDevicePixelSnapped(putativeRect, true)) {
+    return baseline;
+  }
+  return aContext->DeviceToUser(putativeRect.TopLeft()).x * appUnitsPerDevUnit;
 }
 
 // Hard limit substring lengths to 8000 characters ... this lets us statically
@@ -5834,6 +5865,20 @@ ComputeSnappedImageDrawingParameters(gfxContext*     aCtx,
 
     gfxRect anchoredDestRect(anchorPoint, scaledDest);
     gfxRect anchoredImageRect(imageSpaceAnchorPoint, imageSize);
+
+    // Calculate anchoredDestRect with snapped fill rect when the devPixelFill rect
+    // corresponds to just a single tile in that direction
+    if (fill.Width() != devPixelFill.Width() &&
+        devPixelDest.x == devPixelFill.x &&
+        devPixelDest.XMost() == devPixelFill.XMost()) {
+      anchoredDestRect.width = fill.width;
+    }
+    if (fill.Height() != devPixelFill.Height() &&
+        devPixelDest.y == devPixelFill.y &&
+        devPixelDest.YMost() == devPixelFill.YMost()) {
+      anchoredDestRect.height = fill.height;
+    }
+
     transform = TransformBetweenRects(anchoredImageRect, anchoredDestRect);
     invTransform = TransformBetweenRects(anchoredDestRect, anchoredImageRect);
   }
@@ -7291,7 +7336,7 @@ nsLayoutUtils::InflationMinFontSizeFor(const nsIFrame *aFrame)
     }
   }
 
-  NS_ABORT_IF_FALSE(false, "root should always be container");
+  MOZ_ASSERT(false, "root should always be container");
 
   return 0;
 }
@@ -7837,4 +7882,35 @@ nsLayoutUtils::SetBSizeFromFontMetrics(const nsIFrame* aFrame,
   aMetrics.SetBlockStartAscent(aMetrics.BlockStartAscent() +
                                aFramePadding.BStart(aFrameWM));
   aMetrics.BSize(aLineWM) += aFramePadding.BStartEnd(aFrameWM);
+}
+
+/* static */ bool
+nsLayoutUtils::HasApzAwareListeners(EventListenerManager* aElm)
+{
+  if (!aElm) {
+    return false;
+  }
+  return aElm->HasListenersFor(nsGkAtoms::ontouchstart) ||
+         aElm->HasListenersFor(nsGkAtoms::ontouchmove) ||
+         aElm->HasListenersFor(nsGkAtoms::onwheel) ||
+         aElm->HasListenersFor(nsGkAtoms::onDOMMouseScroll) ||
+         aElm->HasListenersFor(nsHtml5Atoms::onmousewheel);
+}
+
+/* static */ bool
+nsLayoutUtils::HasDocumentLevelListenersForApzAwareEvents(nsIPresShell* aShell)
+{
+  if (nsIDocument* doc = aShell->GetDocument()) {
+    WidgetEvent event(true, NS_EVENT_NULL);
+    nsTArray<EventTarget*> targets;
+    nsresult rv = EventDispatcher::Dispatch(doc, nullptr, &event, nullptr,
+        nullptr, nullptr, &targets);
+    NS_ENSURE_SUCCESS(rv, false);
+    for (size_t i = 0; i < targets.Length(); i++) {
+      if (HasApzAwareListeners(targets[i]->GetExistingListenerManager())) {
+        return true;
+      }
+    }
+  }
+  return false;
 }

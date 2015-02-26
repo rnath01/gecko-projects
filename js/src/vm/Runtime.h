@@ -20,20 +20,21 @@
 
 #include "jsatom.h"
 #include "jsclist.h"
-#ifdef DEBUG
-# include "jsproxy.h"
-#endif
 #include "jsscript.h"
 
 #ifdef XP_MACOSX
 # include "asmjs/AsmJSSignalHandlers.h"
 #endif
+#include "builtin/AtomicsObject.h"
 #include "ds/FixedSizeHash.h"
 #include "frontend/ParseMaps.h"
 #include "gc/GCRuntime.h"
 #include "gc/Tracer.h"
 #include "irregexp/RegExpStack.h"
 #include "js/HashTable.h"
+#ifdef DEBUG
+# include "js/Proxy.h" // For AutoEnterPolicy
+#endif
 #include "js/Vector.h"
 #include "vm/CommonPropertyNames.h"
 #include "vm/DateTime.h"
@@ -287,7 +288,7 @@ class NewObjectCache
     inline bool lookupGlobal(const Class *clasp, js::GlobalObject *global, gc::AllocKind kind,
                              EntryIndex *pentry);
 
-    bool lookupGroup(js::types::ObjectGroup *group, gc::AllocKind kind, EntryIndex *pentry) {
+    bool lookupGroup(js::ObjectGroup *group, gc::AllocKind kind, EntryIndex *pentry) {
         return lookup(group->clasp(), group, kind, pentry);
     }
 
@@ -296,7 +297,6 @@ class NewObjectCache
      * nullptr if returning the object could possibly trigger GC (does not
      * indicate failure).
      */
-    template <AllowGC allowGC>
     inline JSObject *newObjectFromHit(JSContext *cx, EntryIndex entry, js::gc::InitialHeap heap);
 
     /* Fill an entry after a cache miss. */
@@ -306,7 +306,7 @@ class NewObjectCache
     inline void fillGlobal(EntryIndex entry, const Class *clasp, js::GlobalObject *global,
                            gc::AllocKind kind, NativeObject *obj);
 
-    void fillGroup(EntryIndex entry, js::types::ObjectGroup *group, gc::AllocKind kind,
+    void fillGroup(EntryIndex entry, js::ObjectGroup *group, gc::AllocKind kind,
                    NativeObject *obj)
     {
         MOZ_ASSERT(obj->group() == group);
@@ -347,7 +347,7 @@ class NewObjectCache
     static void copyCachedToObject(JSObject *dst, JSObject *src, gc::AllocKind kind) {
         js_memcpy(dst, src, gc::Arena::thingSize(kind));
         Shape::writeBarrierPost(dst->shape_, &dst->shape_);
-        types::ObjectGroup::writeBarrierPost(dst->group_, &dst->group_);
+        ObjectGroup::writeBarrierPost(dst->group_, &dst->group_);
     }
 };
 
@@ -641,6 +641,21 @@ struct JSRuntime : public JS::shadow::Runtime,
      */
     js::Activation * volatile profilingActivation_;
 
+    /*
+     * The profiler sampler generation after the latest sample.
+     *
+     * The lapCount indicates the number of largest number of 'laps'
+     * (wrapping from high to low) that occurred when writing entries
+     * into the sample buffer.  All JitcodeGlobalMap entries referenced
+     * from a given sample are assigned the generation of the sample buffer
+     * at the START of the run.  If multiple laps occur, then some entries
+     * (towards the end) will be written out with the "wrong" generation.
+     * The lapCount indicates the required fudge factor to use to compare
+     * entry generations with the sample buffer generation.
+     */
+    mozilla::Atomic<uint32_t, mozilla::ReleaseAcquire> profilerSampleBufferGen_;
+    mozilla::Atomic<uint32_t, mozilla::ReleaseAcquire> profilerSampleBufferLapCount_;
+
     /* See AsmJSActivation comment. */
     js::AsmJSActivation * volatile asmJSActivationStack_;
 
@@ -660,6 +675,31 @@ struct JSRuntime : public JS::shadow::Runtime,
     }
     static unsigned offsetOfProfilingActivation() {
         return offsetof(JSRuntime, profilingActivation_);
+    }
+
+    uint32_t profilerSampleBufferGen() {
+        return profilerSampleBufferGen_;
+    }
+    void setProfilerSampleBufferGen(uint32_t gen) {
+        profilerSampleBufferGen_ = gen;
+    }
+
+    uint32_t profilerSampleBufferLapCount() {
+        MOZ_ASSERT(profilerSampleBufferLapCount_ > 0);
+        return profilerSampleBufferLapCount_;
+    }
+    void updateProfilerSampleBufferLapCount(uint32_t lapCount) {
+        MOZ_ASSERT(profilerSampleBufferLapCount_ > 0);
+
+        // Use compareExchange to make sure we have monotonic increase.
+        for (;;) {
+            uint32_t curLapCount = profilerSampleBufferLapCount_;
+            if (curLapCount >= lapCount)
+                break;
+
+            if (profilerSampleBufferLapCount_.compareExchange(curLapCount, lapCount))
+                break;
+        }
     }
 
     js::AsmJSActivation *asmJSActivationStack() const {
@@ -774,7 +814,9 @@ struct JSRuntime : public JS::shadow::Runtime,
         return numExclusiveThreads > 0;
     }
 
-    /* How many compartments there are across all zones. */
+    // How many compartments there are across all zones. This number includes
+    // ExclusiveContext compartments, so it isn't necessarily equal to the
+    // number of compartments visited by CompartmentsIter.
     size_t              numCompartments;
 
     /* Locale-specific callbacks for string conversion. */
@@ -786,8 +828,8 @@ struct JSRuntime : public JS::shadow::Runtime,
     /* Default JSVersion. */
     JSVersion defaultVersion_;
 
-    /* Futex API, if installed */
-    JS::PerRuntimeFutexAPI *futexAPI_;
+    /* Futex state, used by futexWait and futexWake on the Atomics object */
+    js::FutexRuntime fx;
 
   private:
     /* See comment for JS_AbortIfWrongThread in jsapi.h. */
@@ -805,11 +847,6 @@ struct JSRuntime : public JS::shadow::Runtime,
     js::LifoAlloc tempLifoAlloc;
 
   private:
-    /*
-     * Both of these allocators are used for regular expression code which is shared at the
-     * thread-data level.
-     */
-    js::jit::ExecutableAllocator *execAlloc_;
     js::jit::JitRuntime *jitRuntime_;
 
     /*
@@ -824,20 +861,9 @@ struct JSRuntime : public JS::shadow::Runtime,
     /* Space for interpreter frames. */
     js::InterpreterStack interpreterStack_;
 
-    js::jit::ExecutableAllocator *createExecutableAllocator(JSContext *cx);
     js::jit::JitRuntime *createJitRuntime(JSContext *cx);
 
   public:
-    js::jit::ExecutableAllocator *getExecAlloc(JSContext *cx) {
-        return execAlloc_ ? execAlloc_ : createExecutableAllocator(cx);
-    }
-    js::jit::ExecutableAllocator &execAlloc() {
-        MOZ_ASSERT(execAlloc_);
-        return *execAlloc_;
-    }
-    js::jit::ExecutableAllocator *maybeExecAlloc() {
-        return execAlloc_;
-    }
     js::jit::JitRuntime *getJitRuntime(JSContext *cx) {
         return jitRuntime_ ? jitRuntime_ : createJitRuntime(cx);
     }
@@ -986,10 +1012,6 @@ struct JSRuntime : public JS::shadow::Runtime,
     }
 
     mozilla::UniquePtr<js::SourceHook> sourceHook;
-
-#ifdef NIGHTLY_BUILD
-    js::AssertOnScriptEntryHook assertOnScriptEntryHook_;
-#endif
 
     /* SPS profiling metadata */
     js::SPSProfiler     spsProfiler;

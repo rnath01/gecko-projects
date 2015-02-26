@@ -4,9 +4,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsPIDOMWindow.h"
 #include "mozilla/dom/MediaKeyStatusMap.h"
+#include "nsPIDOMWindow.h"
 #include "mozilla/dom/UnionTypes.h"
+#include "mozilla/dom/ToJSValue.h"
 
 namespace mozilla {
 namespace dom {
@@ -47,10 +48,13 @@ MediaKeyStatusMap::MediaKeyStatusMap(JSContext* aCx,
   if (NS_WARN_IF(!mMap)) {
     aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
   }
+
+  mozilla::HoldJSObjects(this);
 }
 
 MediaKeyStatusMap::~MediaKeyStatusMap()
 {
+  mozilla::DropJSObjects(this);
 }
 
 JSObject*

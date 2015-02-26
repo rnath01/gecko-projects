@@ -132,10 +132,10 @@ InterpreterFrame::createRestParameter(JSContext *cx)
     unsigned nformal = fun()->nargs() - 1, nactual = numActualArgs();
     unsigned nrest = (nactual > nformal) ? nactual - nformal : 0;
     Value *restvp = argv() + nformal;
-    ArrayObject *obj = NewDenseCopiedArray(cx, nrest, restvp, nullptr);
+    ArrayObject *obj = NewDenseCopiedArray(cx, nrest, restvp, NullPtr());
     if (!obj)
         return nullptr;
-    types::FixRestArgumentsType(cx, obj);
+    ObjectGroup::fixRestArgumentsGroup(cx, obj);
     return obj;
 }
 
@@ -1714,8 +1714,10 @@ ActivationIterator::settle()
         activation_ = activation_->prev();
 }
 
-JS::ProfilingFrameIterator::ProfilingFrameIterator(JSRuntime *rt, const RegisterState &state)
+JS::ProfilingFrameIterator::ProfilingFrameIterator(JSRuntime *rt, const RegisterState &state,
+                                                   uint32_t sampleBufferGen)
   : rt_(rt),
+    sampleBufferGen_(sampleBufferGen),
     activation_(rt->profilingActivation()),
     savedPrevJitTop_(nullptr)
 {
@@ -1867,7 +1869,6 @@ JS::ProfilingFrameIterator::extractStack(Frame *frames, uint32_t offset, uint32_
         frames[offset].activation = activation_;
         frames[offset].label = asmJSIter().label();
         frames[offset].hasTrackedOptimizations = false;
-        frames[offset].trackedOptimizationIndex = 0;
         return 1;
     }
 
@@ -1878,6 +1879,10 @@ JS::ProfilingFrameIterator::extractStack(Frame *frames, uint32_t offset, uint32_
     jit::JitcodeGlobalTable *table = rt_->jitRuntime()->getJitcodeGlobalTable();
     jit::JitcodeGlobalEntry entry;
     table->lookupInfallible(returnAddr, &entry, rt_);
+    if (hasSampleBufferGen())
+        table->lookupForSampler(returnAddr, &entry, rt_, sampleBufferGen_);
+    else
+        table->lookup(returnAddr, &entry, rt_);
 
     MOZ_ASSERT(entry.isIon() || entry.isIonCache() || entry.isBaseline() || entry.isDummy());
 
@@ -1900,7 +1905,6 @@ JS::ProfilingFrameIterator::extractStack(Frame *frames, uint32_t offset, uint32_
         frames[offset + i].activation = activation_;
         frames[offset + i].label = labels[i];
         frames[offset + i].hasTrackedOptimizations = false;
-        frames[offset + i].trackedOptimizationIndex = 0;
     }
 
     // Extract the index into the side table of optimization information and
@@ -1912,10 +1916,7 @@ JS::ProfilingFrameIterator::extractStack(Frame *frames, uint32_t offset, uint32_
     // when we write out the JSON stream of the profile.
     if (false && entry.hasTrackedOptimizations()) {
         mozilla::Maybe<uint8_t> index = entry.trackedOptimizationIndexAtAddr(returnAddr);
-        if (index.isSome()) {
-            frames[offset].hasTrackedOptimizations = true;
-            frames[offset].trackedOptimizationIndex = index.value();
-        }
+        frames[offset].hasTrackedOptimizations = index.isSome();
     }
 
     return depth;

@@ -253,12 +253,17 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     };
     typedef mozilla::LinkedList<AllocationSite> AllocationSiteList;
 
+    bool allowUnobservedAsmJS;
+
     bool trackingAllocationSites;
     double allocationSamplingProbability;
     AllocationSiteList allocationsLog;
     size_t allocationsLogLength;
     size_t maxAllocationsLogLength;
+    bool allocationsLogOverflowed;
+
     static const size_t DEFAULT_MAX_ALLOCATIONS_LOG_LENGTH = 5000;
+
     bool appendAllocationSite(JSContext *cx, HandleSavedFrame frame, int64_t when);
     void emptyAllocationsLog();
 
@@ -400,6 +405,8 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     static bool setOnPromiseSettled(JSContext *cx, unsigned argc, Value *vp);
     static bool getUncaughtExceptionHook(JSContext *cx, unsigned argc, Value *vp);
     static bool setUncaughtExceptionHook(JSContext *cx, unsigned argc, Value *vp);
+    static bool getAllowUnobservedAsmJS(JSContext *cx, unsigned argc, Value *vp);
+    static bool setAllowUnobservedAsmJS(JSContext *cx, unsigned argc, Value *vp);
     static bool getMemory(JSContext *cx, unsigned argc, Value *vp);
     static bool addDebuggee(JSContext *cx, unsigned argc, Value *vp);
     static bool addAllGlobalsAsDebuggees(JSContext *cx, unsigned argc, Value *vp);
@@ -434,18 +441,27 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
                                              IsObserving observing);
 
   public:
+    static bool ensureExecutionObservabilityOfOsrFrame(JSContext *cx, InterpreterFrame *frame);
+
     // Public for DebuggerScript_setBreakpoint.
     static bool ensureExecutionObservabilityOfScript(JSContext *cx, JSScript *script);
+
+    // Whether the Debugger instance needs to observe all non-AOT JS
+    // execution of its debugees.
+    IsObserving observesAllExecution() const;
+
+    // Whether the Debugger instance needs to observe AOT-compiled asm.js
+    // execution of its debuggees.
+    IsObserving observesAsmJS() const;
 
   private:
     static bool ensureExecutionObservabilityOfFrame(JSContext *cx, AbstractFramePtr frame);
     static bool ensureExecutionObservabilityOfCompartment(JSContext *cx, JSCompartment *comp);
 
     static bool hookObservesAllExecution(Hook which);
-    bool anyOtherDebuggerObservingAllExecution(GlobalObject *global) const;
-    bool hasAnyLiveHooksThatObserveAllExecution() const;
-    bool hasAnyHooksThatObserveAllExecution() const;
-    bool setObservesAllExecution(JSContext *cx, IsObserving observing);
+
+    bool updateObservesAllExecutionOnDebuggees(JSContext *cx, IsObserving observing);
+    void updateObservesAsmJSOnDebuggees(IsObserving observing);
 
     JSObject *getHook(Hook hook) const;
     bool hasAnyLiveHooks() const;

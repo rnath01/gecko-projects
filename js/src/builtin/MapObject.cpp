@@ -823,7 +823,10 @@ HashableValue::operator==(const HashableValue &other) const
 
 #ifdef DEBUG
     bool same;
-    MOZ_ASSERT(SameValue(nullptr, value, other.value, &same));
+    PerThreadData *data = TlsPerThreadData.get();
+    RootedValue valueRoot(data, value);
+    RootedValue otherRoot(data, other.value);
+    MOZ_ASSERT(SameValue(nullptr, valueRoot, otherRoot, &same));
     MOZ_ASSERT(same == b);
 #endif
     return b;
@@ -901,7 +904,7 @@ MapIteratorObject::kind() const
 bool
 GlobalObject::initMapIteratorProto(JSContext *cx, Handle<GlobalObject *> global)
 {
-    JSObject *base = GlobalObject::getOrCreateIteratorPrototype(cx, global);
+    Rooted<JSObject*> base(cx, GlobalObject::getOrCreateIteratorPrototype(cx, global));
     if (!base)
         return false;
     Rooted<MapIteratorObject *> proto(cx,
@@ -1637,7 +1640,7 @@ SetIteratorObject::kind() const
 bool
 GlobalObject::initSetIteratorProto(JSContext *cx, Handle<GlobalObject*> global)
 {
-    JSObject *base = GlobalObject::getOrCreateIteratorPrototype(cx, global);
+    Rooted<JSObject*> base(cx, GlobalObject::getOrCreateIteratorPrototype(cx, global));
     if (!base)
         return false;
     Rooted<SetIteratorObject *> proto(cx,

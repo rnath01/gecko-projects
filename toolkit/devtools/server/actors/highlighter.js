@@ -600,6 +600,11 @@ CanvasFrameAnonymousContentHelper.prototype = {
  * - this.currentNode: the node to be shown
  * - this.currentQuads: all of the node's box model region quads
  * - this.win: the current window
+ *
+ * Emits the following events:
+ * - shown
+ * - hidden
+ * - updated
  */
 function AutoRefreshHighlighter(tabActor) {
   EventEmitter.decorate(this);
@@ -638,6 +643,8 @@ AutoRefreshHighlighter.prototype = {
     this._updateAdjustedQuads();
     this._startRefreshLoop();
     this._show();
+
+    this.emit("shown");
   },
 
   /**
@@ -653,6 +660,8 @@ AutoRefreshHighlighter.prototype = {
     this.currentNode = null;
     this.currentQuads = {};
     this.options = null;
+
+    this.emit("hidden");
   },
 
   /**
@@ -1310,7 +1319,7 @@ BoxModelHighlighter.prototype = Heritage.extend(AutoRefreshHighlighter.prototype
     }
 
     let rect = this.currentQuads.border.bounds;
-    let dim = Math.ceil(rect.width) + " \u00D7 " + Math.ceil(rect.height);
+    let dim = parseFloat(rect.width.toPrecision(6)) + " \u00D7 " + parseFloat(rect.height.toPrecision(6));
 
     let elementId = this.ID_CLASS_PREFIX + "nodeinfobar-";
     this.markup.setTextContentForElement(elementId + "tagname", tagName);

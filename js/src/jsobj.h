@@ -118,7 +118,7 @@ class JSObject : public js::gc::Cell
                                           bool *succeeded);
 
     // Make a new group to use for a singleton object.
-    static js::types::ObjectGroup *makeLazyGroup(JSContext *cx, js::HandleObject obj);
+    static js::ObjectGroup *makeLazyGroup(JSContext *cx, js::HandleObject obj);
 
   public:
     js::Shape * lastProperty() const {
@@ -143,12 +143,12 @@ class JSObject : public js::gc::Cell
         return &getClass()->ops;
     }
 
-    js::types::ObjectGroup *group() const {
+    js::ObjectGroup *group() const {
         MOZ_ASSERT(!hasLazyGroup());
         return groupRaw();
     }
 
-    js::types::ObjectGroup *groupRaw() const {
+    js::ObjectGroup *groupRaw() const {
         return group_;
     }
 
@@ -189,16 +189,14 @@ class JSObject : public js::gc::Cell
     inline void setInitialSlotsMaybeNonNative(js::HeapSlot *slots);
     inline void setInitialElementsMaybeNonNative(js::HeapSlot *elements);
 
-  protected:
     enum GenerateShape {
         GENERATE_NONE,
         GENERATE_SHAPE
     };
 
-    bool setFlag(js::ExclusiveContext *cx, /*BaseShape::Flag*/ uint32_t flag,
-                 GenerateShape generateShape = GENERATE_NONE);
+    bool setFlags(js::ExclusiveContext *cx, /*BaseShape::Flag*/ uint32_t flags,
+                  GenerateShape generateShape = GENERATE_NONE);
 
-  public:
     /*
      * An object is a delegate if it is on another object's prototype or scope
      * chain, and therefore the delegate might be asked implicitly to get or
@@ -213,7 +211,7 @@ class JSObject : public js::gc::Cell
     }
 
     bool setDelegate(js::ExclusiveContext *cx) {
-        return setFlag(cx, js::BaseShape::DELEGATE, GENERATE_SHAPE);
+        return setFlags(cx, js::BaseShape::DELEGATE, GENERATE_SHAPE);
     }
 
     bool isBoundFunction() const {
@@ -226,18 +224,18 @@ class JSObject : public js::gc::Cell
         return lastProperty()->hasObjectFlag(js::BaseShape::WATCHED);
     }
     bool setWatched(js::ExclusiveContext *cx) {
-        return setFlag(cx, js::BaseShape::WATCHED, GENERATE_SHAPE);
+        return setFlags(cx, js::BaseShape::WATCHED, GENERATE_SHAPE);
     }
 
     /* See InterpreterFrame::varObj. */
     inline bool isQualifiedVarObj();
     bool setQualifiedVarObj(js::ExclusiveContext *cx) {
-        return setFlag(cx, js::BaseShape::QUALIFIED_VAROBJ);
+        return setFlags(cx, js::BaseShape::QUALIFIED_VAROBJ);
     }
 
     inline bool isUnqualifiedVarObj();
     bool setUnqualifiedVarObj(js::ExclusiveContext *cx) {
-        return setFlag(cx, js::BaseShape::UNQUALIFIED_VAROBJ);
+        return setFlags(cx, js::BaseShape::UNQUALIFIED_VAROBJ);
     }
 
     /*
@@ -250,7 +248,7 @@ class JSObject : public js::gc::Cell
         return lastProperty()->hasObjectFlag(js::BaseShape::UNCACHEABLE_PROTO);
     }
     bool setUncacheableProto(js::ExclusiveContext *cx) {
-        return setFlag(cx, js::BaseShape::UNCACHEABLE_PROTO, GENERATE_SHAPE);
+        return setFlags(cx, js::BaseShape::UNCACHEABLE_PROTO, GENERATE_SHAPE);
     }
 
     /*
@@ -261,7 +259,7 @@ class JSObject : public js::gc::Cell
         return lastProperty()->hasObjectFlag(js::BaseShape::HAD_ELEMENTS_ACCESS);
     }
     bool setHadElementsAccess(js::ExclusiveContext *cx) {
-        return setFlag(cx, js::BaseShape::HAD_ELEMENTS_ACCESS);
+        return setFlags(cx, js::BaseShape::HAD_ELEMENTS_ACCESS);
     }
 
     /*
@@ -323,9 +321,7 @@ class JSObject : public js::gc::Cell
      */
     static inline bool setSingleton(js::ExclusiveContext *cx, js::HandleObject obj);
 
-    // uninlinedGetGroup() is the same as getGroup(), but not inlined.
-    inline js::types::ObjectGroup* getGroup(JSContext *cx);
-    js::types::ObjectGroup* uninlinedGetGroup(JSContext *cx);
+    inline js::ObjectGroup* getGroup(JSContext *cx);
 
     const js::HeapPtrObjectGroup &groupFromGC() const {
         /* Direct field access for use by GC. */
@@ -355,9 +351,7 @@ class JSObject : public js::gc::Cell
 
     JSObject *getProto() const {
         MOZ_ASSERT(!uninlinedIsProxy());
-        JSObject *proto = getTaggedProto().toObjectOrNull();
-        MOZ_ASSERT_IF(proto && proto->isNative(), proto->isDelegate());
-        return proto;
+        return getTaggedProto().toObjectOrNull();
     }
 
     // Normal objects and a subset of proxies have uninteresting [[Prototype]].
@@ -390,13 +384,7 @@ class JSObject : public js::gc::Cell
         return lastProperty()->hasObjectFlag(js::BaseShape::IMMUTABLE_PROTOTYPE);
     }
 
-    // uninlinedSetGroup() is the same as setGroup(), but not inlined.
-    inline void setGroup(js::types::ObjectGroup *group);
-    void uninlinedSetGroup(js::types::ObjectGroup *group);
-
-#ifdef DEBUG
-    bool hasNewGroup(const js::Class *clasp, js::types::ObjectGroup *group);
-#endif
+    inline void setGroup(js::ObjectGroup *group);
 
     /*
      * Mark an object that has been iterated over and is a singleton. We need
@@ -407,7 +395,7 @@ class JSObject : public js::gc::Cell
         return lastProperty()->hasObjectFlag(js::BaseShape::ITERATED_SINGLETON);
     }
     bool setIteratedSingleton(js::ExclusiveContext *cx) {
-        return setFlag(cx, js::BaseShape::ITERATED_SINGLETON);
+        return setFlags(cx, js::BaseShape::ITERATED_SINGLETON);
     }
 
     /*
@@ -424,7 +412,7 @@ class JSObject : public js::gc::Cell
         return lastProperty()->hasObjectFlag(js::BaseShape::NEW_SCRIPT_CLEARED);
     }
     bool setNewScriptCleared(js::ExclusiveContext *cx) {
-        return setFlag(cx, js::BaseShape::NEW_SCRIPT_CLEARED);
+        return setFlags(cx, js::BaseShape::NEW_SCRIPT_CLEARED);
     }
 
     /* Set a new prototype for an object with a singleton type. */
@@ -740,7 +728,7 @@ namespace js {
  * internal methods in vm/NativeObject.h.
  *
  * Proxies override the behavior of internal methods. So when 'obj' is a proxy,
- * any one of the functions below could do just about anything. See jsproxy.h.
+ * any one of the functions below could do just about anything. See js/Proxy.h.
  */
 
 /*
@@ -925,6 +913,10 @@ DeleteElement(JSContext *cx, js::HandleObject obj, uint32_t index, bool *succeed
 extern bool
 SetImmutablePrototype(js::ExclusiveContext *cx, JS::HandleObject obj, bool *succeeded);
 
+extern bool
+GetPropertyDescriptor(JSContext *cx, HandleObject obj, HandleId id,
+                      MutableHandle<PropertyDescriptor> desc);
+
 /*
  * Deprecated. A version of HasProperty that also returns the object on which
  * the property was found (but that information is unreliable for proxies), and
@@ -945,13 +937,6 @@ LookupProperty(JSContext *cx, HandleObject obj, PropertyName *name,
 /* Set *result to tell whether obj has an own property with the given id. */
 extern bool
 HasOwnProperty(JSContext *cx, HandleObject obj, HandleId id, bool *result);
-
-/*
- * Deprecated. Search the prototype chain for `obj[id]` and redefine it to have
- * the given property attributes.
- */
-inline bool
-SetPropertyAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp);
 
 /*
  * Set a watchpoint: a synchronous callback when the given property of the
@@ -1140,7 +1125,7 @@ GetInitialHeap(NewObjectKind newKind, const Class *clasp)
 // Specialized call for constructing |this| with a known function callee,
 // and a known prototype.
 extern JSObject *
-CreateThisForFunctionWithProto(JSContext *cx, js::HandleObject callee, JSObject *proto,
+CreateThisForFunctionWithProto(JSContext *cx, js::HandleObject callee, HandleObject proto,
                                NewObjectKind newKind = GenericObject);
 
 // Specialized call for constructing |this| with a known function callee.
@@ -1211,6 +1196,9 @@ namespace js {
 bool
 LookupPropertyPure(ExclusiveContext *cx, JSObject *obj, jsid id, JSObject **objp,
                    Shape **propp);
+
+bool
+GetPropertyPure(ExclusiveContext *cx, JSObject *obj, jsid id, Value *vp);
 
 bool
 GetOwnPropertyDescriptor(JSContext *cx, HandleObject obj, HandleId id,

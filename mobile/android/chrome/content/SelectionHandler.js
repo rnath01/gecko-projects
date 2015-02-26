@@ -38,8 +38,13 @@ var SelectionHandler = {
 
   // Keeps track of data about the dimensions of the selection. Coordinates
   // stored here are relative to the _contentWindow window.
-  _cache: null,
+  _cache: { anchorPt: {}, focusPt: {} },
+  _targetIsRTL: false,
+  _anchorIsRTL: false,
+  _focusIsRTL: false,
+
   _activeType: 0, // TYPE_NONE
+  _selectionID: 0, // Unique Selection ID
 
   _draggingHandles: false, // True while user drags text selection handles
   _dragStartAnchorOffset: null, // Editables need initial pos during HandleMove events
@@ -78,12 +83,9 @@ var SelectionHandler = {
                                                     getInterface(Ci.nsIDOMWindowUtils);
   },
 
-  _isRTL: false,
-
   _addObservers: function sh_addObservers() {
     Services.obs.addObserver(this, "Gesture:SingleTap", false);
     Services.obs.addObserver(this, "Tab:Selected", false);
-    Services.obs.addObserver(this, "after-viewport-change", false);
     Services.obs.addObserver(this, "TextSelection:Move", false);
     Services.obs.addObserver(this, "TextSelection:Position", false);
     Services.obs.addObserver(this, "TextSelection:End", false);
@@ -98,7 +100,6 @@ var SelectionHandler = {
   _removeObservers: function sh_removeObservers() {
     Services.obs.removeObserver(this, "Gesture:SingleTap");
     Services.obs.removeObserver(this, "Tab:Selected");
-    Services.obs.removeObserver(this, "after-viewport-change");
     Services.obs.removeObserver(this, "TextSelection:Move");
     Services.obs.removeObserver(this, "TextSelection:Position");
     Services.obs.removeObserver(this, "TextSelection:End");
@@ -120,9 +121,6 @@ var SelectionHandler = {
       // Update handle/caret position on page reflow (keyboard open/close,
       // dynamic DOM changes, orientation updates, etc).
       case "TextSelection:LayerReflow": {
-        if (this._activeType == this.TYPE_SELECTION) {
-          this._updateCacheForSelection();
-        }
         if (this._activeType != this.TYPE_NONE) {
           this._positionHandlesOnChange();
         }
@@ -137,10 +135,19 @@ var SelectionHandler = {
         }
         break;
       }
+
       case "Tab:Selected":
-      case "TextSelection:End":
         this._closeSelection();
         break;
+
+      case "TextSelection:End":
+        let data = JSON.parse(aData);
+        // End the requested selection only.
+        if (this._selectionID === data.selectionID) {
+          this._closeSelection();
+        }
+        break;
+
       case "TextSelection:Action":
         for (let type in this.actions) {
           if (this.actions[type].id == aData) {
@@ -149,13 +156,6 @@ var SelectionHandler = {
           }
         }
         break;
-      case "after-viewport-change": {
-        if (this._activeType == this.TYPE_SELECTION) {
-          // Update the cache after the viewport changes (e.g. panning, zooming).
-          this._updateCacheForSelection();
-        }
-        break;
-      }
 
       case "TextSelection:Move": {
         let data = JSON.parse(aData);
@@ -181,8 +181,6 @@ var SelectionHandler = {
           this._startDraggingHandles();
           this._ensureSelectionDirection();
           this._stopDraggingHandles();
-
-          this._updateCacheForSelection();
           this._positionHandles();
 
           // Changes to handle position can affect selection context and actionbar display
@@ -318,7 +316,6 @@ var SelectionHandler = {
     }
 
     // Update the selection handle positions.
-    this._updateCacheForSelection();
     this._positionHandles();
   },
 
@@ -365,12 +362,8 @@ var SelectionHandler = {
     selection.QueryInterface(Ci.nsISelectionPrivate).addSelectionListener(this);
     this._activeType = this.TYPE_SELECTION;
 
-    // Initialize the cache
-    this._cache = { anchorPt: {}, focusPt: {}};
-    this._updateCacheForSelection();
-
-    let scroll = this._getScrollPos();
     // Figure out the distance between the selection and the click
+    let scroll = this._getScrollPos();
     let positions = this._getHandlePositions(scroll);
 
     if (aOptions.mode == this.SELECT_AT_POINT &&
@@ -382,6 +375,7 @@ var SelectionHandler = {
     // Determine position and show handles, open actionbar
     this._positionHandles(positions);
     Messaging.sendRequest({
+      selectionID: this._selectionID,
       type: "TextSelection:ShowHandles",
       handles: [this.HANDLE_TYPE_ANCHOR, this.HANDLE_TYPE_FOCUS]
     });
@@ -773,6 +767,7 @@ var SelectionHandler = {
     // Determine position and show caret, open actionbar
     this._positionHandles();
     Messaging.sendRequest({
+      selectionID: this._selectionID,
       type: "TextSelection:ShowHandles",
       handles: [this.HANDLE_TYPE_CARET]
     });
@@ -794,9 +789,10 @@ var SelectionHandler = {
       aElement.focus();
     }
 
+    this._selectionID++;
     this._stopDraggingHandles();
     this._contentWindow = aElement.ownerDocument.defaultView;
-    this._isRTL = (this._contentWindow.getComputedStyle(aElement, "").direction == "rtl");
+    this._targetIsRTL = (this._contentWindow.getComputedStyle(aElement, "").direction == "rtl");
 
     this._addObservers();
   },
@@ -1043,7 +1039,6 @@ var SelectionHandler = {
       Messaging.sendRequest({
         type: "TextSelection:PositionHandles",
         positions: positions,
-        rtl: this._isRTL
       });
     }
   },
@@ -1109,8 +1104,7 @@ var SelectionHandler = {
 
     this._contentWindow = null;
     this._targetElement = null;
-    this._isRTL = false;
-    this._cache = null;
+    this._targetIsRTL = false;
     this._ignoreCompositionChanges = false;
     this._prevHandlePositions = [];
     this._prevTargetElementHasText = null;
@@ -1165,28 +1159,56 @@ var SelectionHandler = {
   /*
    * Updates the TYPE_SELECTION cache, with the handle anchor/focus point values
    * of the current selection. Passed to Java for UI positioning only.
+   *
+   * Note that the anchor handle and focus handle can reference text in nodes
+   * with mixed direction. (ie a.direction = "rtl" while f.direction = "ltr").
    */
   _updateCacheForSelection: function() {
-    let rects = this._getSelection().getRangeAt(0).getClientRects();
+    let selection = this._getSelection();
+    let rects = selection.getRangeAt(0).getClientRects();
     if (rects.length == 0) {
       // nsISelection object exists, but there's nothing actually selected
       throw "Failed to update cache for invalid selection";
     }
 
+    // Right-to-Left (ie: Hebrew) anchorPt is on right,
+    // Left-to-Right (ie: English) anchorPt is on left.
+    this._anchorIsRTL = this._isNodeRTL(selection.anchorNode);
     let anchorIdx = 0;
+    this._cache.anchorPt = (this._anchorIsRTL) ?
+      new Point(rects[anchorIdx].right, rects[anchorIdx].bottom) :
+      new Point(rects[anchorIdx].left, rects[anchorIdx].bottom);
+
+    // Right-to-Left (ie: Hebrew) focusPt is on left,
+    // Left-to-Right (ie: English) focusPt is on right.
+    this._focusIsRTL = this._isNodeRTL(selection.focusNode);
     let focusIdx = rects.length - 1;
-    if (this._isRTL) {
-      // Right-to-Left (ie: Hebrew) anchorPt is on right, focusPt is on left.
-      this._cache.anchorPt = new Point(rects[anchorIdx].right, rects[anchorIdx].bottom);
-      this._cache.focusPt = new Point(rects[focusIdx].left, rects[focusIdx].bottom);
-    } else {
-      // Left-to-Right (ie: English) anchorPt is on left, focusPt is on right.
-      this._cache.anchorPt = new Point(rects[anchorIdx].left, rects[anchorIdx].bottom);
-      this._cache.focusPt = new Point(rects[focusIdx].right, rects[focusIdx].bottom);
-    }
+    this._cache.focusPt = (this._focusIsRTL) ?
+      new Point(rects[focusIdx].left, rects[focusIdx].bottom) :
+      new Point(rects[focusIdx].right, rects[focusIdx].bottom);
   },
 
-  _getHandlePositions: function sh_getHandlePositions(scroll) {
+  /*
+   * Return true if text associated with a node is RTL.
+   */
+  _isNodeRTL: function(node) {
+    // Find containing node that supports .direction attribute (needed
+    // when target node is #text for example).
+    while (node && !(node instanceof Element)) {
+      node = node.parentNode;
+    }
+
+    // Worst case, use original direction from _targetElement.
+    if (!node) {
+      return this._targetIsRTL;
+    }
+
+    let nodeWin = node.ownerDocument.defaultView;
+    let nodeStyle = nodeWin.getComputedStyle(node, "");
+    return (nodeStyle.direction == "rtl");
+  },
+
+  _getHandlePositions: function(scroll = this._getScrollPos()) {
     // the checkHidden function tests to see if the given point is hidden inside an
     // iframe/subdocument. this is so that if we select some text inside an iframe and
     // scroll the iframe so the selection is out of view, we hide the handles rather
@@ -1201,7 +1223,6 @@ var SelectionHandler = {
       };
     }
 
-    let positions = null;
     if (this._activeType == this.TYPE_CURSOR) {
       // The left and top properties returned are relative to the client area
       // of the window, so we don't need to account for a sub-frame offset.
@@ -1214,26 +1235,23 @@ var SelectionHandler = {
       return [{ handle: this.HANDLE_TYPE_CARET,
                 left: x + scroll.X,
                 top: y + scroll.Y,
+                rtl: this._targetIsRTL,
                 hidden: checkHidden(x, y) }];
-    } else {
-      let anchorX = this._cache.anchorPt.x;
-      let anchorY = this._cache.anchorPt.y;
-      let focusX = this._cache.focusPt.x;
-      let focusY = this._cache.focusPt.y;
-
-      // Translate coordinates to account for selections in sub-frames. We can't cache
-      // this because the top-level page may have scrolled since selection started.
-      let offset = this._getViewOffset();
-
-      return  [{ handle: this.HANDLE_TYPE_ANCHOR,
-                 left: anchorX + offset.x + scroll.X,
-                 top: anchorY + offset.y + scroll.Y,
-                 hidden: checkHidden(anchorX, anchorY) },
-               { handle: this.HANDLE_TYPE_FOCUS,
-                 left: focusX + offset.x + scroll.X,
-                 top: focusY + offset.y + scroll.Y,
-                 hidden: checkHidden(focusX, focusY) }];
     }
+
+    // Determine the handle screen coords
+    this._updateCacheForSelection();
+    let offset = this._getViewOffset();
+    return  [{ handle: this.HANDLE_TYPE_ANCHOR,
+               left: this._cache.anchorPt.x + offset.x + scroll.X,
+               top: this._cache.anchorPt.y + offset.y + scroll.Y,
+               rtl: this._anchorIsRTL,
+               hidden: checkHidden(this._cache.anchorPt.x, this._cache.anchorPt.y) },
+             { handle: this.HANDLE_TYPE_FOCUS,
+               left: this._cache.focusPt.x + offset.x + scroll.X,
+               top: this._cache.focusPt.y + offset.y + scroll.Y,
+               rtl: this._focusIsRTL,
+               hidden: checkHidden(this._cache.focusPt.x, this._cache.focusPt.y) }];
   },
 
   // Position handles, but avoid superfluous re-positioning (helps during
@@ -1247,6 +1265,7 @@ var SelectionHandler = {
       for (let i = 0; i < aPrev.length; i++) {
         if (aPrev[i].left != aCurr[i].left ||
             aPrev[i].top != aCurr[i].top ||
+            aPrev[i].rtl != aCurr[i].rtl ||
             aPrev[i].hidden != aCurr[i].hidden) {
           return false;
         }
@@ -1254,7 +1273,7 @@ var SelectionHandler = {
       return true;
     }
 
-    let positions = this._getHandlePositions(this._getScrollPos());
+    let positions = this._getHandlePositions();
     if (!samePositions(this._prevHandlePositions, positions)) {
       this._positionHandles(positions);
     }
@@ -1264,14 +1283,10 @@ var SelectionHandler = {
   // to invalid position, then releases, we can put it back where it started
   // positions is an array of objects with data about handle positions,
   // which we get from _getHandlePositions.
-  _positionHandles: function sh_positionHandles(positions) {
-    if (!positions) {
-      positions = this._getHandlePositions(this._getScrollPos());
-    }
+  _positionHandles: function(positions = this._getHandlePositions()) {
     Messaging.sendRequest({
       type: "TextSelection:PositionHandles",
       positions: positions,
-      rtl: this._isRTL
     });
     this._prevHandlePositions = positions;
 
@@ -1298,9 +1313,6 @@ var SelectionHandler = {
       if (view == scrollView) {
         // The selection is in a view (or sub-view) of the view that scrolled.
         // So we need to reposition the handles.
-        if (this._activeType == this.TYPE_SELECTION) {
-          this._updateCacheForSelection();
-        }
         this._positionHandles();
         break;
       }

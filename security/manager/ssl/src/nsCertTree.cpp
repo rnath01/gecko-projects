@@ -71,17 +71,12 @@ CompareCacheMatchEntry(PLDHashTable *table, const PLDHashEntryHdr *hdr,
   return entryPtr->entry->key == key;
 }
 
-static bool
-CompareCacheInitEntry(PLDHashTable *table, PLDHashEntryHdr *hdr,
-                     const void *key)
+static void
+CompareCacheInitEntry(PLDHashEntryHdr *hdr, const void *key)
 {
   new (hdr) CompareCacheHashEntryPtr();
   CompareCacheHashEntryPtr *entryPtr = static_cast<CompareCacheHashEntryPtr*>(hdr);
-  if (!entryPtr->entry) {
-    return false;
-  }
   entryPtr->entry->key = (void*)key;
-  return true;
 }
 
 static void
@@ -178,11 +173,14 @@ void nsCertTree::ClearCompareHash()
   }
 }
 
-void nsCertTree::InitCompareHash()
+nsresult nsCertTree::InitCompareHash()
 {
   ClearCompareHash();
-  PL_DHashTableInit(&mCompareCache, &gMapOps,
-                    sizeof(CompareCacheHashEntryPtr), 64);
+  if (!PL_DHashTableInit(&mCompareCache, &gMapOps,
+                         sizeof(CompareCacheHashEntryPtr), fallible, 64)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+  return NS_OK;
 }
 
 nsCertTree::~nsCertTree()
@@ -659,11 +657,11 @@ nsCertTree::LoadCertsFromCache(nsINSSCertCache *aCache, uint32_t aType)
     mTreeArray = nullptr;
     mNumRows = 0;
   }
-  InitCompareHash();
+  nsresult rv = InitCompareHash();
+  if (NS_FAILED(rv)) return rv;
 
-  nsresult rv =
-    GetCertsByTypeFromCache(aCache, aType, GetCompareFuncFromCertType(aType),
-                            &mCompareCache);
+  rv = GetCertsByTypeFromCache(aCache, aType, 
+                               GetCompareFuncFromCertType(aType), &mCompareCache);
   if (NS_FAILED(rv)) return rv;
   return UpdateUIContents();
 }
@@ -677,10 +675,11 @@ nsCertTree::LoadCerts(uint32_t aType)
     mTreeArray = nullptr;
     mNumRows = 0;
   }
-  InitCompareHash();
+  nsresult rv = InitCompareHash();
+  if (NS_FAILED(rv)) return rv;
 
-  nsresult rv =
-    GetCertsByType(aType, GetCompareFuncFromCertType(aType), &mCompareCache);
+  rv = GetCertsByType(aType, 
+                      GetCompareFuncFromCertType(aType), &mCompareCache);
   if (NS_FAILED(rv)) return rv;
   return UpdateUIContents();
 }

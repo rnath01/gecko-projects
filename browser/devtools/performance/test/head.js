@@ -12,6 +12,7 @@ let { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 let { gDevTools } = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
 let { DevToolsUtils } = Cu.import("resource://gre/modules/devtools/DevToolsUtils.jsm", {});
 let { DebuggerServer } = Cu.import("resource://gre/modules/devtools/dbg-server.jsm", {});
+let { merge } = devtools.require("sdk/util/object");
 let { getPerformanceActorsConnection, PerformanceFront } = devtools.require("devtools/performance/front");
 
 let nsIProfilerModule = Cc["@mozilla.org/tools/profiler;1"].getService(Ci.nsIProfiler);
@@ -21,6 +22,14 @@ let mm = null;
 const FRAME_SCRIPT_UTILS_URL = "chrome://browser/content/devtools/frame-script-utils.js"
 const EXAMPLE_URL = "http://example.com/browser/browser/devtools/performance/test/";
 const SIMPLE_URL = EXAMPLE_URL + "doc_simple-test.html";
+
+const FRAMERATE_PREF = "devtools.performance.ui.enable-framerate";
+const MEMORY_PREF = "devtools.performance.ui.enable-memory";
+const PLATFORM_DATA_PREF = "devtools.performance.ui.show-platform-data";
+const IDLE_PREF = "devtools.performance.ui.show-idle-blocks";
+const INVERT_PREF = "devtools.performance.ui.invert-call-tree";
+const INVERT_FLAME_PREF = "devtools.performance.ui.invert-flame-graph";
+const FLATTEN_PREF = "devtools.performance.ui.flatten-tree-recursion";
 
 // All tests are asynchronous.
 waitForExplicitFinish();
@@ -153,7 +162,7 @@ function test () {
   Task.spawn(spawnTest).then(finish, handleError);
 }
 
-function initBackend(aUrl) {
+function initBackend(aUrl, targetOps={}) {
   info("Initializing a performance front.");
 
   if (!DebuggerServer.initialized) {
@@ -167,6 +176,13 @@ function initBackend(aUrl) {
 
     yield target.makeRemote();
 
+    // Attach addition options to `target`. This is used to force mock fronts
+    // to smokescreen test different servers where memory or timeline actors
+    // may not exist. Possible options that will actually work:
+    // TEST_MOCK_MEMORY_ACTOR = true
+    // TEST_MOCK_TIMELINE_ACTOR = true
+    merge(target, targetOps);
+
     yield gDevTools.showToolbox(target, "performance");
 
     let connection = getPerformanceActorsConnection(target);
@@ -177,7 +193,7 @@ function initBackend(aUrl) {
   });
 }
 
-function initPerformance(aUrl, selectedTool="performance") {
+function initPerformance(aUrl, selectedTool="performance", targetOps={}) {
   info("Initializing a performance pane.");
 
   return Task.spawn(function*() {
@@ -185,6 +201,13 @@ function initPerformance(aUrl, selectedTool="performance") {
     let target = TargetFactory.forTab(tab);
 
     yield target.makeRemote();
+
+    // Attach addition options to `target`. This is used to force mock fronts
+    // to smokescreen test different servers where memory or timeline actors
+    // may not exist. Possible options that will actually work:
+    // TEST_MOCK_MEMORY_ACTOR = true
+    // TEST_MOCK_TIMELINE_ACTOR = true
+    merge(target, targetOps);
 
     let toolbox = yield gDevTools.showToolbox(target, selectedTool);
     let panel = toolbox.getCurrentPanel();
@@ -239,21 +262,23 @@ function click (win, button) {
   EventUtils.sendMouseEvent({ type: "click" }, button, win);
 }
 
-function* startRecording(panel) {
+function mousedown (win, button) {
+  EventUtils.sendMouseEvent({ type: "mousedown" }, button, win);
+}
+
+function* startRecording(panel, options={}) {
   let win = panel.panelWin;
   let clicked = panel.panelWin.PerformanceView.once(win.EVENTS.UI_START_RECORDING);
   let willStart = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_WILL_START);
   let hasStarted = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_STARTED);
-  let button = win.$("#record-button");
+  let button = win.$("#main-record-button");
 
   ok(!button.hasAttribute("checked"),
     "The record button should not be checked yet.");
-
   ok(!button.hasAttribute("locked"),
     "The record button should not be locked yet.");
 
   click(win, button);
-
   yield clicked;
 
   ok(button.hasAttribute("checked"),
@@ -262,7 +287,16 @@ function* startRecording(panel) {
     "The record button should be locked.");
 
   yield willStart;
+  let stateChanged = once(win.PerformanceView, win.EVENTS.UI_STATE_CHANGED);
+
   yield hasStarted;
+  let overviewRendered = options.waitForOverview ? once(win.OverviewView, win.EVENTS.OVERVIEW_RENDERED) : Promise.resolve();
+
+  yield stateChanged;
+  yield overviewRendered;
+
+  is(win.PerformanceView.getState(), "recording",
+    "The current state is 'recording'.");
 
   ok(button.hasAttribute("checked"),
     "The record button should still be checked.");
@@ -270,12 +304,12 @@ function* startRecording(panel) {
     "The record button should not be locked.");
 }
 
-function* stopRecording(panel) {
+function* stopRecording(panel, options={}) {
   let win = panel.panelWin;
   let clicked = panel.panelWin.PerformanceView.once(win.EVENTS.UI_STOP_RECORDING);
   let willStop = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_WILL_STOP);
   let hasStopped = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_STOPPED);
-  let button = win.$("#record-button");
+  let button = win.$("#main-record-button");
 
   ok(button.hasAttribute("checked"),
     "The record button should already be checked.");
@@ -283,7 +317,6 @@ function* stopRecording(panel) {
     "The record button should not be locked yet.");
 
   click(win, button);
-
   yield clicked;
 
   ok(!button.hasAttribute("checked"),
@@ -292,7 +325,16 @@ function* stopRecording(panel) {
     "The record button should be locked.");
 
   yield willStop;
+  let stateChanged = once(win.PerformanceView, win.EVENTS.UI_STATE_CHANGED);
+
   yield hasStopped;
+  let overviewRendered = options.waitForOverview ? once(win.OverviewView, win.EVENTS.OVERVIEW_RENDERED) : Promise.resolve();
+
+  yield stateChanged;
+  yield overviewRendered;
+
+  is(win.PerformanceView.getState(), "recorded",
+    "The current state is 'recorded'.");
 
   ok(!button.hasAttribute("checked"),
     "The record button should not be checked.");
@@ -306,7 +348,9 @@ function waitForWidgetsRendered(panel) {
     OverviewView,
     WaterfallView,
     JsCallTreeView,
-    JsFlameGraphView
+    JsFlameGraphView,
+    MemoryCallTreeView,
+    MemoryFlameGraphView,
   } = panel.panelWin;
 
   return Promise.all([
@@ -316,7 +360,9 @@ function waitForWidgetsRendered(panel) {
     once(OverviewView, EVENTS.OVERVIEW_RENDERED),
     once(WaterfallView, EVENTS.WATERFALL_RENDERED),
     once(JsCallTreeView, EVENTS.JS_CALL_TREE_RENDERED),
-    once(JsFlameGraphView, EVENTS.JS_FLAMEGRAPH_RENDERED)
+    once(JsFlameGraphView, EVENTS.JS_FLAMEGRAPH_RENDERED),
+    once(MemoryCallTreeView, EVENTS.MEMORY_CALL_TREE_RENDERED),
+    once(MemoryFlameGraphView, EVENTS.MEMORY_FLAMEGRAPH_RENDERED),
   ]);
 }
 
@@ -363,4 +409,16 @@ function dropSelection(graph) {
 function getSourceActor(aSources, aURL) {
   let item = aSources.getItemForAttachment(a => a.source.url === aURL);
   return item && item.value;
+}
+
+/**
+ * Fires a key event, like "VK_UP", "VK_DOWN", etc.
+ */
+function fireKey (e) {
+  EventUtils.synthesizeKey(e, {});
+}
+
+function reload (aTarget, aEvent = "navigate") {
+  aTarget.activeTab.reload();
+  return once(aTarget, aEvent);
 }

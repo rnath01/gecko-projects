@@ -45,7 +45,7 @@
 #include "basic/X11BasicCompositor.h" // for X11BasicCompositor
 #endif
 #include "nsCOMPtr.h"                   // for already_AddRefed
-#include "nsDebug.h"                    // for NS_ABORT_IF_FALSE, etc
+#include "nsDebug.h"                    // for NS_ASSERTION, etc
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsIWidget.h"                  // for nsIWidget
 #include "nsRect.h"                     // for nsIntRect
@@ -74,10 +74,12 @@
 namespace mozilla {
 namespace layers {
 
-using namespace base;
 using namespace mozilla::ipc;
 using namespace mozilla::gfx;
 using namespace std;
+
+using base::ProcessHandle;
+using base::Thread;
 
 CompositorParent::LayerTreeState::LayerTreeState()
   : mParent(nullptr)
@@ -230,7 +232,7 @@ CompositorVsyncObserver::CompositorVsyncObserver(CompositorParent* aCompositorPa
   MOZ_ASSERT(aWidget != nullptr);
   mCompositorVsyncDispatcher = aWidget->GetCompositorVsyncDispatcher();
 #ifdef MOZ_WIDGET_GONK
-  GeckoTouchDispatcher::SetCompositorVsyncObserver(this);
+  GeckoTouchDispatcher::GetInstance()->SetCompositorVsyncObserver(this);
 #endif
 }
 
@@ -368,7 +370,7 @@ void
 CompositorVsyncObserver::DispatchTouchEvents(TimeStamp aVsyncTimestamp)
 {
 #ifdef MOZ_WIDGET_GONK
-  GeckoTouchDispatcher::NotifyVsync(aVsyncTimestamp);
+  GeckoTouchDispatcher::GetInstance()->NotifyVsync(aVsyncTimestamp);
 #endif
 }
 
@@ -443,7 +445,7 @@ CompositorParent::CompositorParent(nsIWidget* aWidget,
     mApzcTreeManager = new APZCTreeManager();
   }
 
-  if (gfxPrefs::VsyncAlignedCompositor()) {
+  if (gfxPrefs::VsyncAlignedCompositor() && gfxPrefs::HardwareVsyncEnabled()) {
     mCompositorVsyncObserver = new CompositorVsyncObserver(this, aWidget);
   }
 
@@ -471,8 +473,8 @@ CompositorParent::~CompositorParent()
 void
 CompositorParent::Destroy()
 {
-  NS_ABORT_IF_FALSE(ManagedPLayerTransactionParent().Length() == 0,
-                    "CompositorParent destroyed before managed PLayerTransactionParent");
+  MOZ_ASSERT(ManagedPLayerTransactionParent().Length() == 0,
+             "CompositorParent destroyed before managed PLayerTransactionParent");
 
   MOZ_ASSERT(mPaused); // Ensure RecvWillStop was called
   // Ensure that the layer manager is destructed on the compositor thread.

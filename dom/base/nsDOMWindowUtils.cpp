@@ -640,11 +640,17 @@ nsDOMWindowUtils::GetWidgetModifiers(int32_t aModifiers)
   if (aModifiers & nsIDOMWindowUtils::MODIFIER_FN) {
     result |= mozilla::MODIFIER_FN;
   }
+  if (aModifiers & nsIDOMWindowUtils::MODIFIER_FNLOCK) {
+    result |= mozilla::MODIFIER_FNLOCK;
+  }
   if (aModifiers & nsIDOMWindowUtils::MODIFIER_NUMLOCK) {
     result |= mozilla::MODIFIER_NUMLOCK;
   }
   if (aModifiers & nsIDOMWindowUtils::MODIFIER_SCROLLLOCK) {
     result |= mozilla::MODIFIER_SCROLLLOCK;
+  }
+  if (aModifiers & nsIDOMWindowUtils::MODIFIER_SYMBOL) {
+    result |= mozilla::MODIFIER_SYMBOL;
   }
   if (aModifiers & nsIDOMWindowUtils::MODIFIER_SYMBOLLOCK) {
     result |= mozilla::MODIFIER_SYMBOLLOCK;
@@ -1322,7 +1328,7 @@ nsDOMWindowUtils::SendNativeMouseEvent(int32_t aScreenX,
   if (!widget)
     return NS_ERROR_FAILURE;
 
-  return widget->SynthesizeNativeMouseEvent(nsIntPoint(aScreenX, aScreenY),
+  return widget->SynthesizeNativeMouseEvent(LayoutDeviceIntPoint(aScreenX, aScreenY),
                                             aNativeMessage, aModifierFlags);
 }
 
@@ -1345,8 +1351,8 @@ nsDOMWindowUtils::SendNativeMouseScrollEvent(int32_t aScreenX,
     return NS_ERROR_FAILURE;
   }
 
-  return widget->SynthesizeNativeMouseScrollEvent(nsIntPoint(aScreenX,
-                                                             aScreenY),
+  return widget->SynthesizeNativeMouseScrollEvent(LayoutDeviceIntPoint(aScreenX,
+                                                                       aScreenY),
                                                   aNativeMessage,
                                                   aDeltaX, aDeltaY, aDeltaZ,
                                                   aModifierFlags,
@@ -1716,9 +1722,9 @@ CanvasToDataSourceSurface(nsIDOMHTMLCanvasElement* aCanvas)
     return nullptr;
   }
 
-  NS_ABORT_IF_FALSE(node->IsElement(),
-                    "An nsINode that implements nsIDOMHTMLCanvasElement should "
-                    "be an element.");
+  MOZ_ASSERT(node->IsElement(),
+             "An nsINode that implements nsIDOMHTMLCanvasElement should "
+             "be an element.");
   nsLayoutUtils::SurfaceFromElementResult result =
     nsLayoutUtils::SurfaceFromElement(node->AsElement());
   return result.mSourceSurface->GetDataSurface();
@@ -2309,7 +2315,7 @@ nsDOMWindowUtils::GetClassName(JS::Handle<JS::Value> aObject, JSContext* aCx,
   }
 
   *aName = NS_strdup(JS_GetClass(aObject.toObjectOrNull())->name);
-  NS_ABORT_IF_FALSE(*aName, "NS_strdup should be infallible.");
+  MOZ_ASSERT(*aName, "NS_strdup should be infallible.");
   return NS_OK;
 }
 
@@ -2698,9 +2704,9 @@ nsDOMWindowUtils::ComputeAnimationDistance(nsIDOMElement* aElement,
     property = eCSSProperty_UNKNOWN;
   }
 
-  NS_ABORT_IF_FALSE(property == eCSSProperty_UNKNOWN ||
-                    !nsCSSProps::IsShorthand(property),
-                    "should not have shorthand");
+  MOZ_ASSERT(property == eCSSProperty_UNKNOWN ||
+             !nsCSSProps::IsShorthand(property),
+             "should not have shorthand");
 
   StyleAnimationValue v1, v2;
   if (property == eCSSProperty_UNKNOWN ||

@@ -47,7 +47,6 @@
 #include "vm/Xdr.h"
 
 #include "jsfuninlines.h"
-#include "jsinferinlines.h"
 #include "jsobjinlines.h"
 
 #include "vm/ScopeObject-inl.h"
@@ -60,8 +59,6 @@ using namespace js::frontend;
 using mozilla::PodCopy;
 using mozilla::PodZero;
 using mozilla::RotateLeft;
-
-typedef Rooted<GlobalObject *> RootedGlobalObject;
 
 /* static */ BindingIter
 Bindings::argumentsBinding(ExclusiveContext *cx, InternalBindingsHandle bindings)
@@ -1359,7 +1356,7 @@ const Class ScriptSourceObject::class_ = {
 ScriptSourceObject *
 ScriptSourceObject::create(ExclusiveContext *cx, ScriptSource *source)
 {
-    RootedObject object(cx, NewObjectWithGivenProto(cx, &class_, nullptr, cx->global()));
+    RootedObject object(cx, NewObjectWithGivenProto(cx, &class_, NullPtr(), cx->global()));
     if (!object)
         return nullptr;
     RootedScriptSource sourceObject(cx, &object->as<ScriptSourceObject>());
@@ -2390,7 +2387,7 @@ JSScript::Create(ExclusiveContext *cx, HandleObject enclosingScope, bool savedCa
     PodZero(script.get());
     new (&script->bindings) Bindings;
 
-    script->enclosingScopeOrOriginalFunction_ = enclosingScope;
+    script->enclosingStaticScope_ = enclosingScope;
     script->savedCallerFun_ = savedCallerFun;
     script->initCompartment(cx);
 
@@ -2606,7 +2603,7 @@ JSScript::fullyInitFromEmitter(ExclusiveContext *cx, HandleScript script, Byteco
         bce->tryNoteList.finish(script->trynotes());
     if (bce->blockScopeList.length() != 0)
         bce->blockScopeList.finish(script->blockScopes());
-    script->strict_ = bce->sc->strict;
+    script->strict_ = bce->sc->strict();
     script->explicitUseStrict_ = bce->sc->hasExplicitUseStrict();
     script->bindingsAccessedDynamically_ = bce->sc->bindingsAccessedDynamically();
     script->funHasExtensibleScope_ = funbox ? funbox->hasExtensibleScope() : false;
@@ -3126,11 +3123,6 @@ js::CloneScript(JSContext *cx, HandleObject enclosingScope, HandleFunction fun, 
     dst->isGeneratorExp_ = src->isGeneratorExp();
     dst->setGeneratorKind(src->generatorKind());
 
-    /* Copy over hints. */
-    dst->shouldInline_ = src->shouldInline();
-    dst->shouldCloneAtCallsite_ = src->shouldCloneAtCallsite();
-    dst->isCallsiteClone_ = src->isCallsiteClone();
-
     if (nconsts != 0) {
         HeapValue *vector = Rebase<HeapValue>(dst, src, src->consts()->vector);
         dst->consts()->vector = vector;
@@ -3422,8 +3414,8 @@ JSScript::markChildren(JSTracer *trc)
     if (functionNonDelazifying())
         MarkObject(trc, &function_, "function");
 
-    if (enclosingScopeOrOriginalFunction_)
-        MarkObject(trc, &enclosingScopeOrOriginalFunction_, "enclosing");
+    if (enclosingStaticScope_)
+        MarkObject(trc, &enclosingStaticScope_, "enclosingStaticScope");
 
     if (maybeLazyScript())
         MarkLazyScriptUnbarriered(trc, &lazyScript, "lazyScript");
@@ -3770,7 +3762,7 @@ LazyScript::CreateRaw(ExclusiveContext *cx, HandleFunction fun,
     if (!res)
         return nullptr;
 
-    cx->compartment()->scheduleDelazificationForDebugMode();
+    cx->compartment()->scheduleDelazificationForDebugger();
 
     return new (res) LazyScript(fun, table.forget(), packed, begin, end, lineno, column);
 }

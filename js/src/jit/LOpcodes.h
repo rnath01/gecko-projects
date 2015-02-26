@@ -118,10 +118,10 @@
     _(CompareVAndBranch)            \
     _(CompareVM)                    \
     _(BitAndAndBranch)              \
-    _(IsNullOrLikeUndefined)        \
-    _(IsNullOrLikeUndefinedAndBranch)\
-    _(EmulatesUndefined)            \
-    _(EmulatesUndefinedAndBranch)   \
+    _(IsNullOrLikeUndefinedV)       \
+    _(IsNullOrLikeUndefinedT)       \
+    _(IsNullOrLikeUndefinedAndBranchV)\
+    _(IsNullOrLikeUndefinedAndBranchT)\
     _(MinMaxI)                      \
     _(MinMaxD)                      \
     _(MinMaxF)                      \
@@ -219,9 +219,11 @@
     _(LoadElementHole)              \
     _(LoadUnboxedPointerV)          \
     _(LoadUnboxedPointerT)          \
+    _(UnboxObjectOrNull)            \
     _(StoreElementV)                \
     _(StoreElementT)                \
     _(StoreUnboxedPointer)          \
+    _(ConvertUnboxedObjectToNative) \
     _(ArrayPopShiftV)               \
     _(ArrayPopShiftT)               \
     _(ArrayPushV)                   \
@@ -257,7 +259,6 @@
     _(CallGetProperty)              \
     _(GetNameCache)                 \
     _(CallGetIntrinsicValue)        \
-    _(CallsiteCloneCache)           \
     _(CallGetElement)               \
     _(CallSetElement)               \
     _(CallInitElementArray)         \

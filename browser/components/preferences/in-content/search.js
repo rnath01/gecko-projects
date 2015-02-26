@@ -29,6 +29,7 @@ var gSearchPane = {
     window.addEventListener("dragstart", this, false);
     window.addEventListener("keypress", this, false);
     window.addEventListener("select", this, false);
+    window.addEventListener("blur", this, true);
 
     Services.obs.addObserver(this, "browser-search-engine-modified", false);
     window.addEventListener("unload", () => {
@@ -109,6 +110,12 @@ var gSearchPane = {
           gSearchPane.onTreeSelect();
         }
         break;
+      case "blur":
+        if (aEvent.target.id == "engineList" &&
+            aEvent.target.inputField == document.getBindingParent(aEvent.originalTarget)) {
+          gSearchPane.onInputBlur();
+        }
+        break;
     }
   },
 
@@ -132,6 +139,11 @@ var gSearchPane = {
         break;
       }
     }
+  },
+
+  onInputBlur: function() {
+    let tree = document.getElementById("engineList");
+    tree.stopEditing(false);
   },
 
   onTreeSelect: function() {
@@ -343,6 +355,11 @@ EngineStore.prototype = {
         this.moveEngine(this._getEngineByName(e.name), i);
       } else {
         // Otherwise, add it back to our internal store
+
+        // The search service removes the alias when an engine is hidden,
+        // so clear any alias we may have cached before unhiding the engine.
+        e.alias = "";
+
         this._engines.splice(i, 0, e);
         let engine = e.originalEngine;
         engine.hidden = false;

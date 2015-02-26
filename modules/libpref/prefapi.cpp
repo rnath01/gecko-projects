@@ -143,14 +143,19 @@ static nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, u
 
 #define PREF_HASHTABLE_INITIAL_LENGTH   1024
 
-void PREF_Init()
+nsresult PREF_Init()
 {
     if (!gHashTable.IsInitialized()) {
-        PL_DHashTableInit(&gHashTable, &pref_HashTableOps,
-                          sizeof(PrefHashEntry), PREF_HASHTABLE_INITIAL_LENGTH);
+        if (!PL_DHashTableInit(&gHashTable, &pref_HashTableOps,
+                               sizeof(PrefHashEntry), fallible,
+                               PREF_HASHTABLE_INITIAL_LENGTH)) {
+            return NS_ERROR_OUT_OF_MEMORY;
+        }
+
         PL_INIT_ARENA_POOL(&gPrefNameArena, "PrefNameArena",
                            PREFNAME_ARENA_SIZE);
     }
+    return NS_OK;
 }
 
 /* Frees the callback list. */

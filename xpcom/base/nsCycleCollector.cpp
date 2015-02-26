@@ -914,7 +914,7 @@ CCGraph::RemoveNodeFromMap(void* aPtr)
 static nsISupports*
 CanonicalizeXPCOMParticipant(nsISupports* aIn)
 {
-  nsISupports* out;
+  nsISupports* out = nullptr;
   aIn->QueryInterface(NS_GET_IID(nsCycleCollectionISupports),
                       reinterpret_cast<void**>(&out));
   return out;
@@ -1026,7 +1026,7 @@ public:
 
   void StartBlock(Block* aBlock)
   {
-    NS_ABORT_IF_FALSE(!mFreeList, "should not have free list");
+    MOZ_ASSERT(!mFreeList, "should not have free list");
 
     // Put all the entries in the block on the free list.
     nsPurpleBufferEntry* entries = aBlock->mEntries;
@@ -1409,6 +1409,7 @@ ToParticipant(nsISupports* aPtr, nsXPCOMCycleCollectionParticipant** aCp)
   // nsXPCOMCycleCollectionParticipant, which is a per-class singleton helper
   // object that implements traversal and unlinking logic for the nsISupports
   // in question.
+  *aCp = nullptr;
   CallQueryInterface(aPtr, aCp);
 }
 
@@ -3928,7 +3929,7 @@ HoldJSObjectsImpl(void* aHolder, nsScriptObjectTracer* aTracer)
 void
 HoldJSObjectsImpl(nsISupports* aHolder)
 {
-  nsXPCOMCycleCollectionParticipant* participant;
+  nsXPCOMCycleCollectionParticipant* participant = nullptr;
   CallQueryInterface(aHolder, &participant);
   MOZ_ASSERT(participant, "Failed to QI to nsXPCOMCycleCollectionParticipant!");
   MOZ_ASSERT(participant->CheckForRightISupports(aHolder),
@@ -3955,7 +3956,7 @@ void
 DropJSObjectsImpl(nsISupports* aHolder)
 {
 #ifdef DEBUG
-  nsXPCOMCycleCollectionParticipant* participant;
+  nsXPCOMCycleCollectionParticipant* participant = nullptr;
   CallQueryInterface(aHolder, &participant);
   MOZ_ASSERT(participant, "Failed to QI to nsXPCOMCycleCollectionParticipant!");
   MOZ_ASSERT(participant->CheckForRightISupports(aHolder),

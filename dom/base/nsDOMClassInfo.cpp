@@ -260,6 +260,9 @@ static nsDOMClassInfoData sClassInfoData[] = {
   NS_DEFINE_CHROME_ONLY_CLASSINFO_DATA(ContentFrameMessageManager, nsEventTargetSH,
                                        DOM_DEFAULT_SCRIPTABLE_FLAGS |
                                        nsIXPCScriptable::IS_GLOBAL_OBJECT)
+  NS_DEFINE_CHROME_ONLY_CLASSINFO_DATA(ContentProcessMessageManager, nsDOMGenericSH,
+                                       DOM_DEFAULT_SCRIPTABLE_FLAGS |
+                                       nsIXPCScriptable::IS_GLOBAL_OBJECT)
   NS_DEFINE_CHROME_ONLY_CLASSINFO_DATA(ChromeMessageBroadcaster, nsDOMGenericSH,
                                        DOM_DEFAULT_SCRIPTABLE_FLAGS)
   NS_DEFINE_CHROME_ONLY_CLASSINFO_DATA(ChromeMessageSender, nsDOMGenericSH,
@@ -674,8 +677,16 @@ nsDOMClassInfo::Init()
     DOM_CLASSINFO_MAP_ENTRY(nsIContentFrameMessageManager)
   DOM_CLASSINFO_MAP_END
 
+  DOM_CLASSINFO_MAP_BEGIN_NO_CLASS_IF(ContentProcessMessageManager, nsISupports)
+    DOM_CLASSINFO_MAP_ENTRY(nsIMessageListenerManager)
+    DOM_CLASSINFO_MAP_ENTRY(nsIMessageSender)
+    DOM_CLASSINFO_MAP_ENTRY(nsISyncMessageSender)
+    DOM_CLASSINFO_MAP_ENTRY(nsIContentProcessMessageManager)
+  DOM_CLASSINFO_MAP_END
+
   DOM_CLASSINFO_MAP_BEGIN_NO_CLASS_IF(ChromeMessageBroadcaster, nsISupports)
     DOM_CLASSINFO_MAP_ENTRY(nsIFrameScriptLoader)
+    DOM_CLASSINFO_MAP_ENTRY(nsIProcessScriptLoader)
     DOM_CLASSINFO_MAP_ENTRY(nsIMessageListenerManager)
     DOM_CLASSINFO_MAP_ENTRY(nsIMessageBroadcaster)
   DOM_CLASSINFO_MAP_END
@@ -683,6 +694,7 @@ nsDOMClassInfo::Init()
   DOM_CLASSINFO_MAP_BEGIN_NO_CLASS_IF(ChromeMessageSender, nsISupports)
     DOM_CLASSINFO_MAP_ENTRY(nsIProcessChecker)
     DOM_CLASSINFO_MAP_ENTRY(nsIFrameScriptLoader)
+    DOM_CLASSINFO_MAP_ENTRY(nsIProcessScriptLoader)
     DOM_CLASSINFO_MAP_ENTRY(nsIMessageListenerManager)
     DOM_CLASSINFO_MAP_ENTRY(nsIMessageSender)
   DOM_CLASSINFO_MAP_END
@@ -895,45 +907,11 @@ nsDOMClassInfo::PreCreate(nsISupports *nativeObj, JSContext *cx,
 }
 
 NS_IMETHODIMP
-nsDOMClassInfo::Create(nsIXPConnectWrappedNative *wrapper,
-                       JSContext *cx, JSObject *obj)
-{
-  NS_WARNING("nsDOMClassInfo::Create Don't call me!");
-
-  return NS_ERROR_UNEXPECTED;
-}
-
-NS_IMETHODIMP
-nsDOMClassInfo::PostCreate(nsIXPConnectWrappedNative *wrapper,
-                           JSContext *cx, JSObject *obj)
-{
-  NS_WARNING("nsDOMClassInfo::PostCreate Don't call me!");
-
-  return NS_ERROR_UNEXPECTED;
-}
-
-NS_IMETHODIMP
-nsDOMClassInfo::PostTransplant(nsIXPConnectWrappedNative *wrapper,
-                               JSContext *cx, JSObject *obj)
-{
-  MOZ_CRASH("nsDOMClassInfo::PostTransplant Don't call me!");
-}
-
-NS_IMETHODIMP
 nsDOMClassInfo::AddProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                             JSObject *obj, jsid id, jsval *vp,
                             bool *_retval)
 {
   NS_WARNING("nsDOMClassInfo::AddProperty Don't call me!");
-
-  return NS_ERROR_UNEXPECTED;
-}
-
-NS_IMETHODIMP
-nsDOMClassInfo::DelProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                            JSObject *obj, jsid id, bool *_retval)
-{
-  NS_WARNING("nsDOMClassInfo::DelProperty Don't call me!");
 
   return NS_ERROR_UNEXPECTED;
 }
@@ -1009,16 +987,6 @@ nsDOMClassInfo::Resolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
   }
 
   return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDOMClassInfo::Convert(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                        JSObject *obj, uint32_t type, jsval *vp,
-                        bool *_retval)
-{
-  NS_WARNING("nsDOMClassInfo::Convert Don't call me!");
-
-  return NS_ERROR_UNEXPECTED;
 }
 
 NS_IMETHODIMP
@@ -1765,7 +1733,7 @@ GetXPCProto(nsIXPConnect *aXPConnect, JSContext *cx, nsGlobalWindow *aWin,
   nsCOMPtr<nsIClassInfo> ci;
   if (aNameStruct->mType == nsGlobalNameStruct::eTypeClassConstructor) {
     int32_t id = aNameStruct->mDOMClassInfoID;
-    NS_ABORT_IF_FALSE(id >= 0, "Negative DOM classinfo?!?");
+    MOZ_ASSERT(id >= 0, "Negative DOM classinfo?!?");
 
     nsDOMClassInfoID ci_id = (nsDOMClassInfoID)id;
 
@@ -2035,7 +2003,8 @@ nsWindowSH::GlobalResolve(nsGlobalWindow *aWin, JSContext *cx,
     if (aWin->GetDoc()) {
       aWin->GetDoc()->WarnOnceAbout(nsIDocument::eWindow_Controllers);
     }
-    JS::Rooted<JSObject*> shim(cx, JS_NewObject(cx, &ControllersShimClass, obj));
+    MOZ_ASSERT(JS_IsGlobalObject(obj));
+    JS::Rooted<JSObject*> shim(cx, JS_NewObject(cx, &ControllersShimClass));
     if (NS_WARN_IF(!shim)) {
       return NS_ERROR_OUT_OF_MEMORY;
     }

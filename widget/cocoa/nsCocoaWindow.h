@@ -258,7 +258,6 @@ public:
     NS_IMETHOD              Create(nsIWidget* aParent,
                                    nsNativeWidget aNativeParent,
                                    const nsIntRect &aRect,
-                                   nsDeviceContext *aContext,
                                    nsWidgetInitData *aInitData = nullptr) MOZ_OVERRIDE;
 
     NS_IMETHOD              Destroy() MOZ_OVERRIDE;
@@ -325,7 +324,7 @@ public:
     NS_IMETHOD SetWindowTitlebarColor(nscolor aColor, bool aActive) MOZ_OVERRIDE;
     virtual void SetDrawsInTitlebar(bool aState) MOZ_OVERRIDE;
     virtual void UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries) MOZ_OVERRIDE;
-    virtual nsresult SynthesizeNativeMouseEvent(nsIntPoint aPoint,
+    virtual nsresult SynthesizeNativeMouseEvent(mozilla::LayoutDeviceIntPoint aPoint,
                                                 uint32_t aNativeMessage,
                                                 uint32_t aModifierFlags) MOZ_OVERRIDE;
 
@@ -372,8 +371,7 @@ protected:
   nsresult             CreateNativeWindow(const NSRect &aRect,
                                           nsBorderStyle aBorderStyle,
                                           bool aRectIsFrameRect);
-  nsresult             CreatePopupContentView(const nsIntRect &aRect,
-                                              nsDeviceContext *aContext);
+  nsresult             CreatePopupContentView(const nsIntRect &aRect);
   void                 DestroyNativeWindow();
   void                 AdjustWindowShadow();
   void                 SetWindowBackgroundBlur();

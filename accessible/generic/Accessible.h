@@ -579,6 +579,7 @@ public:
   bool IsDoc() const { return HasGenericType(eDocument); }
   DocAccessible* AsDoc();
 
+  bool IsGenericHyperText() const { return mType == eHyperTextType; }
   bool IsHyperText() const { return HasGenericType(eHyperText); }
   HyperTextAccessible* AsHyperText();
 
@@ -609,6 +610,11 @@ public:
   bool IsMenuPopup() const { return mType == eMenuPopupType; }
 
   bool IsProxy() const { return mType == eProxyType; }
+  ProxyAccessible* Proxy() const
+  {
+    MOZ_ASSERT(IsProxy());
+    return mBits.proxy;
+  }
 
   bool IsProgress() const { return mType == eProgressType; }
 

@@ -378,12 +378,14 @@ CodeGeneratorShared::encodeAllocation(LSnapshot *snapshot, MDefinition *mir,
       case MIRType_String:
       case MIRType_Symbol:
       case MIRType_Object:
+      case MIRType_ObjectOrNull:
       case MIRType_Boolean:
       case MIRType_Double:
       case MIRType_Float32:
       {
         LAllocation *payload = snapshot->payloadOfSlot(*allocIndex);
-        JSValueType valueType = ValueTypeFromMIRType(type);
+        JSValueType valueType =
+            (type == MIRType_ObjectOrNull) ? JSVAL_TYPE_OBJECT : ValueTypeFromMIRType(type);
         if (payload->isMemory()) {
             if (type == MIRType_Float32)
                 alloc = RValueAllocation::Float32(ToStackIndex(payload));
@@ -874,7 +876,7 @@ class ReadTempAttemptsVectorOp : public JS::ForEachTrackedOptimizationAttemptOp
 struct ReadTempTypeInfoVectorOp : public IonTrackedOptimizationsTypeInfo::ForEachOp
 {
     TempOptimizationTypeInfoVector *types_;
-    types::TypeSet::TypeList accTypes_;
+    TypeSet::TypeList accTypes_;
 
   public:
     explicit ReadTempTypeInfoVectorOp(TempOptimizationTypeInfoVector *types)
@@ -1164,6 +1166,10 @@ CodeGeneratorShared::verifyOsiPointRegs(LSafepoint *safepoint)
     // will potentially add a call at a random location, by patching the code
     // before the return address.
     masm.branch32(Assembler::NotEqual, checkRegs, Imm32(1), &failure);
+
+    // Set checkRegs to 0, so that we don't try to verify registers after we
+    // return from this script to the caller.
+    masm.store32(Imm32(0), checkRegs);
 
     // Ignore clobbered registers. Some instructions (like LValueToInt32) modify
     // temps after calling into the VM. This is fine because no other
