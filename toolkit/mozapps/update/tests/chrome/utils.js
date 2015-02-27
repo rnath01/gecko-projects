@@ -162,6 +162,9 @@ const TEST_ADDONS = [ "appdisabled_1", "appdisabled_2",
                       "updateversion_1", "updateversion_2",
                       "userdisabled_1", "userdisabled_2", "hotfix" ];
 
+const IS_WINDOWS = ("@mozilla.org/windows-registry-key;1" in Components.classes);
+const BIN_SUFFIX = (IS_WINDOWS ? ".exe" : "");
+
 var gURLData = URL_HOST + "/" + REL_PATH_DATA + "/";
 
 var gTestTimeout = 240000; // 4 minutes
@@ -194,9 +197,6 @@ var gDisableNoUpdateAddon = false;
 // information for an individual test set DEBUG_AUS_TEST to true in the test's
 // onload function.
 var DEBUG_AUS_TEST = true;
-
-const isWindows = ("@mozilla.org/windows-registry-key;1" in Components.classes);
-const BIN_SUFFIX = (isWindows ? ".exe" : "");
 
 #include ../shared.js
 
@@ -853,25 +853,34 @@ function verifyTestsRan() {
 }
 
 /**
- * Restore the updater that was backed up.
- * This is called both in setupFiles and resetFiles.
- * It is called in setupFiles before the backup is done in case the previous
- * test failed.
- * It is called in resetFiles to put things back to its original state.
+ * Restore the updater that was backed up.  This is called both in setupFiles
+ * and resetFiles.  It is called in setupFiles before the backup is done in
+ * case the previous test failed.  It is called in resetFiles to put things
+ * back to its original state.
  */
 function resetUpdaterBackup() {
   // Move back the original updater
   let baseAppDir = getAppBaseDir();
-  let updater = baseAppDir.clone();
-  updater.appendRelativePath("updater.app.bak");
-  if (updater.exists()) {
-    updater.moveTo(baseAppDir, "updater.app");
-  } else {
+  let updaterBackup = baseAppDir.clone();
+  let moveToRelPath = "updater.app";
+  updaterBackup.appendRelativePath("updater.app.bak");
+  if (!updaterBackup.exists()) {
     updater = baseAppDir.clone();
-    updater.appendRelativePath("updater" + BIN_SUFFIX + ".bak");
-    if (updater.exists()) {
-      updater.moveTo(baseAppDir, "updater" + BIN_SUFFIX);
+    updaterBackup.appendRelativePath("updater" + BIN_SUFFIX + ".bak");
+    moveToRelPath = "updater" + BIN_SUFFIX;
+  }
+  if (updaterBackup.exists()) {
+     // Remove the temp updater
+    let updater = baseAppDir.clone();
+    updater.appendRelativePath("updater.app");
+    if (!updater.exists()) {
+      updater = baseAppDir.clone();
+      updater.appendRelativePath("updater" + BIN_SUFFIX);
     }
+    if (updater.exists()) {
+      updater.remove(true);
+    }
+    updaterBackup.moveTo(baseAppDir, moveToRelPath);
   }
 }
 
@@ -910,14 +919,12 @@ function setupFiles() {
     getService(AUS_Ci.nsIProperties).
     get("CurWorkD", AUS_Ci.nsILocalFile);
 
-  // Fixup the relPath for Windows, nsLocalFileWin's append code will fail with
-  // front slashes.
-  var relPath = REL_PATH_DATA;
-  if (isWindows) {
-    relPath = relPath.replace(/\//g,"\\");
+  let relPath = REL_PATH_DATA;
+  let pathParts = relPath.split("/");
+  for (let i = 0; i < pathParts.length; ++i) {
+    testUpdaterDir.append(pathParts[i]);
   }
 
-  testUpdaterDir.appendRelativePath(relPath);
   let testUpdater = testUpdaterDir.clone();
   testUpdater.appendRelativePath("updater.app");
   if (testUpdater.exists()) {
@@ -1009,17 +1016,6 @@ function resetFiles() {
            "path: " + updatedDir.path + "\n" +
            "Exception: " + e + "\n");
     }
-  }
-
-  // Remove the temp updater
-  let updater = baseAppDir.clone();
-  updater.appendRelativePath("updater.app");
-  if (!updater.exists()) {
-    updater = baseAppDir.clone();
-    updater.appendRelativePath("updater" + BIN_SUFFIX);
-  }
-  if (updater.exists()) {
-    updater.remove(true);
   }
 
   resetUpdaterBackup();
