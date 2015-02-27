@@ -58,7 +58,8 @@ DoesBinaryMatchAllowedCertificates(LPCWSTR basePathForUpdate, LPCWSTR filePath,
       return FALSE;
     } else if (allowFallbackKeySkip) {
       LOG_WARN(("Fallback key present, skipping VerifyCertificateTrustForFile "
-                "check and the cert attribute registry matching check."));
+                "check and the certificate attribute registry matching "
+                "check."));
       return TRUE;
     }
   }

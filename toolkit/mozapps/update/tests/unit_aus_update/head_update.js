@@ -1253,7 +1253,7 @@ function getTestDirPath() {
  *          directory will be returned.
  * @param   aAllowNonExists (optional)
  *          Whether or not to throw an error if the path exists.
- *          If not specified, the false is used.
+ *          If not specified, then false is used.
  * @return  The nsIFile for the file in the test data directory.
  * @throws  If the file or directory does not exist.
  */
@@ -1750,8 +1750,6 @@ function setupAppFiles() {
   // dependentlibs.list file.
   let appFiles = [ { relPath  : FILE_APP_BIN,
                      inGreDir : false },
-                   { relPath  : FILE_UPDATER_BIN,
-                     inGreDir : false },
                    { relPath  : FILE_APPLICATION_INI,
                      inGreDir : true },
                    { relPath  : "dependentlibs.list",
@@ -1783,11 +1781,7 @@ function setupAppFiles() {
   istream.close();
 
   appFiles.forEach(function CMAF_FLN_FE(aAppFile) {
-    // We use the updater binary after this loop from the data dir instead
-    // because it has the xpcshell certs.
-    if (aAppFile.relPath !== FILE_UPDATER_BIN) {
-      copyFileToTestAppDir(aAppFile.relPath, aAppFile.inGreDir);
-    }
+    copyFileToTestAppDir(aAppFile.relPath, aAppFile.inGreDir);
   });
 
   // Copy the xpcshell updater binary
