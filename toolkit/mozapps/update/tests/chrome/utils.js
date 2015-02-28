@@ -162,8 +162,11 @@ const TEST_ADDONS = [ "appdisabled_1", "appdisabled_2",
                       "updateversion_1", "updateversion_2",
                       "userdisabled_1", "userdisabled_2", "hotfix" ];
 
-const IS_WINDOWS = ("@mozilla.org/windows-registry-key;1" in Components.classes);
-const BIN_SUFFIX = (IS_WINDOWS ? ".exe" : "");
+const IS_WIN = ("@mozilla.org/windows-registry-key;1" in Components.classes);
+const IS_MACOSX = ("nsILocalFileMac" in Components.interfaces);
+const BIN_SUFFIX = (IS_WIN ? ".exe" : "");
+const FILE_UPDATER_BIN = "updater" + IS_MACOSX ? ".app" : BIN_SUFFIX;
+const FILE_UPDATER_BIN_BAK = FILE_UPDATER_BIN + ".bak";
 
 var gURLData = URL_HOST + "/" + REL_PATH_DATA + "/";
 
@@ -859,28 +862,16 @@ function verifyTestsRan() {
  * back to its original state.
  */
 function resetUpdaterBackup() {
-  // Move back the original updater
   let baseAppDir = getAppBaseDir();
+  let updater = baseAppDir.clone();
   let updaterBackup = baseAppDir.clone();
-  let moveToRelPath = "updater.app";
-  updaterBackup.appendRelativePath("updater.app.bak");
-  if (!updaterBackup.exists()) {
-    updater = baseAppDir.clone();
-    updaterBackup.appendRelativePath("updater" + BIN_SUFFIX + ".bak");
-    moveToRelPath = "updater" + BIN_SUFFIX;
-  }
+  updater.append(FILE_UPDATER_BIN);
+  updaterBackup.append(FILE_UPDATER_BIN_BAK);
   if (updaterBackup.exists()) {
-     // Remove the temp updater
-    let updater = baseAppDir.clone();
-    updater.appendRelativePath("updater.app");
-    if (!updater.exists()) {
-      updater = baseAppDir.clone();
-      updater.appendRelativePath("updater" + BIN_SUFFIX);
-    }
     if (updater.exists()) {
       updater.remove(true);
     }
-    updaterBackup.moveTo(baseAppDir, moveToRelPath);
+    updaterBackup.moveTo(baseAppDir, FILE_UPDATER_BIN);
   }
 }
 
@@ -905,14 +896,8 @@ function setupFiles() {
 
   // Move away the real updater
   let updater = baseAppDir.clone();
-  updater.appendRelativePath("updater.app");
-  if (updater.exists()) {
-    updater.moveTo(baseAppDir, "updater.app.bak");
-  } else {
-    updater = baseAppDir.clone();
-    updater.appendRelativePath("updater" + BIN_SUFFIX);
-    updater.moveTo(baseAppDir, "updater" + BIN_SUFFIX + ".bak");
-  }
+  updater.append(FILE_UPDATER_BIN);
+  updater.moveTo(baseAppDir, FILE_UPDATER_BIN_BAK);
 
   // Move in the test only updater
   let testUpdaterDir = AUS_Cc["@mozilla.org/file/directory_service;1"].
@@ -926,13 +911,9 @@ function setupFiles() {
   }
 
   let testUpdater = testUpdaterDir.clone();
-  testUpdater.appendRelativePath("updater.app");
+  testUpdater.append(FILE_UPDATER_BIN);
   if (testUpdater.exists()) {
-    testUpdater.copyToFollowingLinks(baseAppDir, "updater.app");
-  } else {
-    testUpdater = testUpdaterDir.clone();
-    testUpdater.appendRelativePath("updater" + BIN_SUFFIX);
-    testUpdater.copyToFollowingLinks(baseAppDir, "updater" + BIN_SUFFIX);
+    testUpdater.copyToFollowingLinks(baseAppDir, FILE_UPDATER_BIN);
   }
 }
 
