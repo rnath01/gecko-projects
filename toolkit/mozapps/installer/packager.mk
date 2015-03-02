@@ -22,11 +22,17 @@ endif
 	@echo 'Staging installer files...'
 	@$(NSINSTALL) -D $(DEPTH)/installer-stage/core
 	@cp -av $(DIST)/$(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH)/. $(DEPTH)/installer-stage/core
+	# Make sure we have a precomplete file before signing the package,
+	# otherwise OSX doesn't like it.
+	@(cd $(DEPTH)/installer-stage/core && $(CREATE_PRECOMPLETE_CMD))
 ifdef MOZ_SIGN_PREPARED_PACKAGE_CMD
 # The && true is necessary to make sure Pymake spins a shell
 	$(MOZ_SIGN_PREPARED_PACKAGE_CMD) $(DEPTH)/installer-stage && true
 endif
 	$(call MAKE_SIGN_EME_VOUCHER,$(DEPTH)/installer-stage/core)
+	# Create a new precomplete file in case we created a voucher.bin,
+	# otherwise voucher.bin won't be removed during uninstall. However, we
+	# can't generate the voucher until we've signed the plugin-container.
 	@(cd $(DEPTH)/installer-stage/core && $(CREATE_PRECOMPLETE_CMD))
 
 # Override the value of OMNIJAR_NAME from config.status with the value
