@@ -2546,6 +2546,9 @@ LIRGenerator::visitNot(MNot *ins)
 void
 LIRGenerator::visitBoundsCheck(MBoundsCheck *ins)
 {
+     if (!ins->fallible())
+         return;
+
     LInstruction *check;
     if (ins->minimum() || ins->maximum()) {
         check = new(alloc()) LBoundsCheckRange(useRegisterOrConstant(ins->index()),
@@ -3659,8 +3662,10 @@ LIRGenerator::visitAsmJSReturn(MAsmJSReturn *ins)
         lir->setOperand(0, useFixed(rval, ReturnFloat32Reg));
     else if (rval->type() == MIRType_Double)
         lir->setOperand(0, useFixed(rval, ReturnDoubleReg));
-    else if (IsSimdType(rval->type()))
-        lir->setOperand(0, useFixed(rval, ReturnSimdReg));
+    else if (rval->type() == MIRType_Int32x4)
+        lir->setOperand(0, useFixed(rval, ReturnInt32x4Reg));
+    else if (rval->type() == MIRType_Float32x4)
+        lir->setOperand(0, useFixed(rval, ReturnFloat32x4Reg));
     else if (rval->type() == MIRType_Int32)
         lir->setOperand(0, useFixed(rval, ReturnReg));
     else
@@ -3798,9 +3803,8 @@ LIRGenerator::visitSimdBox(MSimdBox *ins)
     MOZ_ASSERT(IsSimdType(ins->input()->type()));
     LUse in = useRegister(ins->input());
     LSimdBox *lir = new(alloc()) LSimdBox(in, temp());
-    // :TODO: Cannot spill SIMD registers (Bug 1112164)
-    assignSnapshot(lir, Bailout_Inevitable);
     define(lir, ins);
+    assignSafepoint(lir, ins);
 }
 
 void
@@ -3862,7 +3866,12 @@ void
 LIRGenerator::visitSimdReinterpretCast(MSimdReinterpretCast *ins)
 {
     MOZ_ASSERT(IsSimdType(ins->type()) && IsSimdType(ins->input()->type()));
-    redefine(ins, ins->input());
+    MDefinition *input = ins->input();
+    LUse use = useRegisterAtStart(input);
+    // :TODO: (Bug 1132894) We have to allocate a different register as redefine
+    // and/or defineReuseInput are not yet capable of reusing the same register
+    // with a different register type.
+    define(new(alloc()) LSimdReinterpretCast(use), ins);
 }
 
 void
@@ -3960,6 +3969,7 @@ LIRGenerator::visitSimdShuffle(MSimdShuffle *ins)
 void
 LIRGenerator::visitSimdUnaryArith(MSimdUnaryArith *ins)
 {
+    MOZ_ASSERT(IsSimdType(ins->input()->type()));
     MOZ_ASSERT(IsSimdType(ins->type()));
 
     // Cannot be at start, as the ouput is used as a temporary to store values.
@@ -3979,15 +3989,17 @@ LIRGenerator::visitSimdUnaryArith(MSimdUnaryArith *ins)
 void
 LIRGenerator::visitSimdBinaryComp(MSimdBinaryComp *ins)
 {
+    MOZ_ASSERT(IsSimdType(ins->lhs()->type()));
+    MOZ_ASSERT(IsSimdType(ins->rhs()->type()));
     MOZ_ASSERT(ins->type() == MIRType_Int32x4);
 
     if (ShouldReorderCommutative(ins->lhs(), ins->rhs(), ins))
         ins->reverse();
 
-    if (ins->compareType() == MSimdBinaryComp::CompareInt32x4) {
+    if (ins->specialization() == MIRType_Int32x4) {
         LSimdBinaryCompIx4 *add = new(alloc()) LSimdBinaryCompIx4();
         lowerForCompIx4(add, ins, ins->lhs(), ins->rhs());
-    } else if (ins->compareType() == MSimdBinaryComp::CompareFloat32x4) {
+    } else if (ins->specialization() == MIRType_Float32x4) {
         LSimdBinaryCompFx4 *add = new(alloc()) LSimdBinaryCompFx4();
         lowerForCompFx4(add, ins, ins->lhs(), ins->rhs());
     } else {
@@ -3998,6 +4010,8 @@ LIRGenerator::visitSimdBinaryComp(MSimdBinaryComp *ins)
 void
 LIRGenerator::visitSimdBinaryBitwise(MSimdBinaryBitwise *ins)
 {
+    MOZ_ASSERT(IsSimdType(ins->lhs()->type()));
+    MOZ_ASSERT(IsSimdType(ins->rhs()->type()));
     MOZ_ASSERT(IsSimdType(ins->type()));
 
     MDefinition *lhs = ins->lhs();

@@ -22,6 +22,7 @@
 #include "Units.h"
 #include "WritingModes.h"
 #include "js/TypeDecls.h"
+#include "nsIDOMEventListener.h"
 
 class nsFrameLoader;
 class nsIFrameLoader;
@@ -58,7 +59,8 @@ class nsIContentParent;
 class Element;
 struct StructuredCloneData;
 
-class TabParent : public PBrowserParent 
+class TabParent : public PBrowserParent
+                , public nsIDOMEventListener
                 , public nsITabParent 
                 , public nsIAuthPromptProvider
                 , public nsISecureBrowserUI
@@ -66,7 +68,6 @@ class TabParent : public PBrowserParent
                 , public TabContext
 {
     typedef mozilla::dom::ClonedMessageData ClonedMessageData;
-    typedef mozilla::layout::ScrollingBehavior ScrollingBehavior;
 
     virtual ~TabParent();
 
@@ -98,6 +99,9 @@ public:
     void SetBrowserDOMWindow(nsIBrowserDOMWindow* aBrowserDOMWindow) {
         mBrowserDOMWindow = aBrowserDOMWindow;
     }
+
+    // nsIDOMEventListener interfaces 
+    NS_DECL_NSIDOMEVENTLISTENER
 
     already_AddRefed<nsILoadContext> GetLoadContext();
 
@@ -242,8 +246,7 @@ public:
     // message-sending functions under a layer of indirection and
     // eating the return values
     void Show(const nsIntSize& size, bool aParentIsActive);
-    void UpdateDimensions(const nsIntRect& rect, const nsIntSize& size,
-                          const nsIntPoint& chromeDisp);
+    void UpdateDimensions(const nsIntRect& rect, const nsIntSize& size);
     void UpdateFrame(const layers::FrameMetrics& aFrameMetrics);
     void UIResolutionChanged();
     void AcknowledgeScrollUpdate(const ViewID& aScrollId, const uint32_t& aScrollGeneration);
@@ -400,7 +403,6 @@ protected:
     virtual bool RecvRemotePaintIsReady() MOZ_OVERRIDE;
 
     virtual bool RecvGetRenderFrameInfo(PRenderFrameParent* aRenderFrame,
-                                        ScrollingBehavior* aScrolling,
                                         TextureFactoryIdentifier* aTextureFactoryIdentifier,
                                         uint64_t* aLayersId) MOZ_OVERRIDE;
 
@@ -453,9 +455,6 @@ private:
 
     CSSPoint AdjustTapToChildWidget(const CSSPoint& aPoint);
 
-    // When true, we create a pan/zoom controller for our frame and
-    // notify it of input events targeting us.
-    bool UseAsyncPanZoom();
     // Update state prior to routing an APZ-aware event to the child process.
     // |aOutTargetGuid| will contain the identifier
     // of the APZC instance that handled the event. aOutTargetGuid may be

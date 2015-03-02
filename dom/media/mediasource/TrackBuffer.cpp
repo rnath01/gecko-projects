@@ -427,9 +427,15 @@ TrackBuffer::EvictData(double aPlaybackTime,
 
   bool evicted = toEvict < (totalSize - aThreshold);
   if (evicted) {
-    nsRefPtr<dom::TimeRanges> ranges = new dom::TimeRanges();
-    mCurrentDecoder->GetBuffered(ranges);
-    *aBufferStartTime = std::max(0.0, ranges->GetStartTime());
+    if (playingDecoder) {
+      nsRefPtr<dom::TimeRanges> ranges = new dom::TimeRanges();
+      playingDecoder->GetBuffered(ranges);
+      *aBufferStartTime = std::max(0.0, ranges->GetStartTime());
+    } else {
+      // We do not currently have data to play yet.
+      // Avoid evicting anymore data to minimize rebuffering time.
+      *aBufferStartTime = 0.0;
+    }
   }
 
   return evicted;
@@ -1002,7 +1008,7 @@ TrackBuffer::RangeRemoval(int64_t aStart, int64_t aEnd)
     for (size_t i = 0; i < decoders.Length(); ++i) {
       nsRefPtr<dom::TimeRanges> buffered = new dom::TimeRanges();
       decoders[i]->GetBuffered(buffered);
-      if (buffered->GetEndTime() < aEnd) {
+      if (int64_t(buffered->GetEndTime() * USECS_PER_S) < aEnd) {
         // Can be fully removed.
         MSE_DEBUG("remove all bufferedEnd=%f time=%f, size=%lld",
                   buffered->GetEndTime(), time,
@@ -1021,7 +1027,7 @@ TrackBuffer::RangeRemoval(int64_t aStart, int64_t aEnd)
   } else {
     // Only trimming existing buffers.
     for (size_t i = 0; i < decoders.Length(); ++i) {
-      if (aStart <= buffered->GetStartTime()) {
+      if (aStart <= int64_t(buffered->GetStartTime() * USECS_PER_S)) {
         // It will be entirely emptied, can clear all data.
         decoders[i]->GetResource()->EvictAll();
       } else {

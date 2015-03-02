@@ -13,6 +13,7 @@
 #include "nsITimer.h"
 #include "nsIWeakReferenceUtils.h"
 #include "nsIWidget.h"
+#include "TouchManager.h"
 
 #define APZES_LOG(...)
 // #define APZES_LOG(...) printf_stderr("APZCCH: " __VA_ARGS__)
@@ -189,7 +190,7 @@ APZEventState::ProcessTouchEvent(const WidgetTouchEvent& aEvent,
     mActiveElementManager->SetTargetElement(aEvent.touches[0]->GetTarget());
   }
 
-  bool isTouchPrevented = nsIPresShell::gPreventMouseEvents ||
+  bool isTouchPrevented = TouchManager::gPreventMouseEvents ||
       aEvent.mFlags.mMultipleActionsPrevented;
   switch (aEvent.message) {
   case NS_TOUCH_START: {
@@ -249,6 +250,9 @@ APZEventState::ProcessAPZStateChange(const nsCOMPtr<nsIDocument>& aDocument,
   case APZStateChange::TransformBegin:
   {
     nsIScrollableFrame* sf = nsLayoutUtils::FindScrollableFrameFor(aViewId);
+    if (sf) {
+      sf->SetTransformingByAPZ(true);
+    }
     nsIScrollbarMediator* scrollbarMediator = do_QueryFrame(sf);
     if (scrollbarMediator) {
       scrollbarMediator->ScrollbarActivityStarted();
@@ -266,6 +270,9 @@ APZEventState::ProcessAPZStateChange(const nsCOMPtr<nsIDocument>& aDocument,
   case APZStateChange::TransformEnd:
   {
     nsIScrollableFrame* sf = nsLayoutUtils::FindScrollableFrameFor(aViewId);
+    if (sf) {
+      sf->SetTransformingByAPZ(false);
+    }
     nsIScrollbarMediator* scrollbarMediator = do_QueryFrame(sf);
     if (scrollbarMediator) {
       scrollbarMediator->ScrollbarActivityStopped();
