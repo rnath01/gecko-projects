@@ -6,10 +6,10 @@
 # Mock environments used:
 # - 64-bits:
 #   https://s3.amazonaws.com/mozilla-releng-mock-archive/67b65e51eb091fba7941a04d249343924a3ee653
-#   + libxml2-devel.x86_64 gettext.x86_64 libjpeg-devel.x86_64
+#   + libxml2-devel.x86_64 gettext.x86_64 libjpeg-devel.x86_64 intltool libXtst-devel.x86_64
 # - 32-bits:
 #   https://s3.amazonaws.com/mozilla-releng-mock-archive/58d76c6acca148a1aedcbec7fc1b8212e12807b4
-#   + libxml2-devel.i686 gettext.i686 libjpeg-devel.i686
+#   + libxml2-devel.i686 gettext.i686 libjpeg-devel.i686 intltool libXtst-devel.i686
 
 set -e
 
@@ -22,6 +22,8 @@ pixman_version=0.20.2
 cairo_version=1.10.2
 pango_version=1.30.1
 atk_version=2.2.0
+at_spi2_core_version=2.0.2
+at_spi2_atk_version=2.0.2
 gtk__version=3.4.4
 
 pkg_config_url=http://pkgconfig.freedesktop.org/releases/pkg-config-${pkg_config_version}.tar.gz
@@ -33,6 +35,8 @@ pixman_url=http://cairographics.org/releases/pixman-${pixman_version}.tar.gz
 cairo_url=http://cairographics.org/releases/cairo-${cairo_version}.tar.gz
 pango_url=http://ftp.gnome.org/pub/GNOME/sources/pango/${pango_version%.*}/pango-${pango_version}.tar.xz
 atk_url=http://ftp.gnome.org/pub/GNOME/sources/atk/${atk_version%.*}/atk-${atk_version}.tar.xz
+at_spi2_core_url=http://ftp.gnome.org/pub/gnome/sources/at-spi2-core/${at_spi2_core_version%.*}/at-spi2-core-${at_spi2_core_version}.tar.bz2
+at_spi2_atk_url=http://ftp.gnome.org/pub/gnome/sources/at-spi2-atk/${at_spi2_atk_version%.*}/at-spi2-atk-${at_spi2_atk_version}.tar.bz2
 gtk__url=http://ftp.gnome.org/pub/gnome/sources/gtk+/${gtk__version%.*}/gtk+-${gtk__version}.tar.xz
 
 cwd=$(pwd)
@@ -97,6 +101,8 @@ build pixman --disable-gtk
 build cairo --enable-tee
 build pango
 build atk
+build at-spi2-core
+build at-spi2-atk
 make_flags="$make_flags GLIB_COMPILE_SCHEMAS=glib-compile-schemas"
 build gtk+
 
