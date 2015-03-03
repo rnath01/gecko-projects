@@ -20,7 +20,7 @@
 #include <gtk/gtk.h>
 
 #if (MOZ_WIDGET_GTK == 3)
-extern "C" __attribute__((weak)) int atk_bridge_adaptor_init (int*, char **[]);
+extern "C" __attribute__((weak,visibility("default"))) int atk_bridge_adaptor_init (int*, char **[]);
 #endif
 
 using namespace mozilla;
