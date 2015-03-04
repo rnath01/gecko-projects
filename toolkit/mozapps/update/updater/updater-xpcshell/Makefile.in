@@ -7,15 +7,10 @@
 
 XPCSHELLTESTROOT = $(abspath $(DEPTH))/_tests/xpcshell/toolkit/mozapps/update/tests
 MOCHITESTROOT = $(abspath $(DEPTH))/_tests/testing/mochitest/chrome/toolkit/mozapps/update/tests
-
-ifndef MOZ_PROFILE_GENERATE
-ifdef COMPILE_ENVIRONMENT
 INSTALL_TARGETS += xpcshell-updater
 xpcshell-updater_TARGET  := libs
 xpcshell-updater_DEST    := $(XPCSHELLTESTROOT)/data
 xpcshell-updater_FILES   := $(DIST)/bin/updater-xpcshell$(BIN_SUFFIX)
-endif
-endif # Not MOZ_PROFILE_GENERATE
 
 include $(topsrcdir)/config/rules.mk
 
