@@ -720,9 +720,9 @@ $(info PARTIAL MAR is $(PARTIAL_MAR))
 $(info DIST is $(DIST))
 $(info FILE IS $(call QUOTED_WILDCARD,$(wildcard $(DIST)/$(PARTIAL_MAR))))
 $(info "find . -type f -name '*firefox*partial*.mar'")
-$(info $(shell find . -type f -name '*firefox*partial*.mar'))
-$(info "pwd: $(shell pwd)")
-$(info "ls pwd + ../../dist: $(shell ls ../../dist)" )
+$(info PWD IS )
+$(info $(shell pwd))
+$(info $(shell find /builds/slave/Linux-ash-l10n-1_10-0000000000/build/ash/obj-l10n/dist/ -type f -name '*firefox*partial*.mar'))
 
 UPLOAD_FILES= \
   $(call QUOTED_WILDCARD,$(DIST)/$(PACKAGE)) \
