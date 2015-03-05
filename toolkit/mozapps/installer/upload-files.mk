@@ -715,6 +715,11 @@ UPLOAD_EXTRA_FILES += host/bin/mar
 UPLOAD_EXTRA_FILES += host/bin/mbsdiff
 endif
 
+
+$(warning PARTIAL MAR is $(PARTIAL_MAR))
+$(warning DIST is $(DIST))
+$(warning FILE IS $(call QUOTED_WILDCARD,$(wildcard $(DIST)/$(PARTIAL_MAR))))
+
 UPLOAD_FILES= \
   $(call QUOTED_WILDCARD,$(DIST)/$(PACKAGE)) \
   $(call QUOTED_WILDCARD,$(INSTALLER_PACKAGE)) \
