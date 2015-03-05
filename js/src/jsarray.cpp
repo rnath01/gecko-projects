@@ -27,6 +27,7 @@
 
 #include "ds/Sort.h"
 #include "gc/Heap.h"
+#include "js/Class.h"
 #include "js/Conversions.h"
 #include "vm/ArgumentsObject.h"
 #include "vm/Interpreter.h"
@@ -1212,12 +1213,13 @@ js::array_join(JSContext *cx, unsigned argc, Value *vp)
 }
 
 static inline bool
-InitArrayTypes(JSContext *cx, ObjectGroup *group, const Value *vector, unsigned count)
+InitArrayTypes(JSContext *cx, ObjectGroup *group, JSObject *obj,
+               const Value *vector, unsigned count)
 {
     if (!group->unknownProperties()) {
         AutoEnterAnalysis enter(cx);
 
-        HeapTypeSet *types = group->getProperty(cx, JSID_VOID);
+        HeapTypeSet *types = group->getProperty(cx, obj, JSID_VOID);
         if (!types)
             return false;
 
@@ -1248,7 +1250,7 @@ InitArrayElements(JSContext *cx, HandleObject obj, uint32_t start, uint32_t coun
     ObjectGroup *group = obj->getGroup(cx);
     if (!group)
         return false;
-    if (updateTypes && !InitArrayTypes(cx, group, vector, count))
+    if (updateTypes && !InitArrayTypes(cx, group, obj, vector, count))
         return false;
 
     /*
@@ -2753,7 +2755,7 @@ GetIndexedPropertiesInRange(JSContext *cx, HandleObject obj, uint32_t begin, uin
 
         // Append sparse elements.
         if (pobj->isIndexed()) {
-            Shape::Range<NoGC> r(pobj->lastProperty());
+            Shape::Range<NoGC> r(pobj->as<NativeObject>().lastProperty());
             for (; !r.empty(); r.popFront()) {
                 Shape &shape = r.front();
                 jsid id = shape.propid();
@@ -3060,7 +3062,7 @@ IsArrayConstructor(const Value &v)
 static bool
 ArrayFromCallArgs(JSContext *cx, HandleObjectGroup group, CallArgs &args)
 {
-    if (!InitArrayTypes(cx, group, args.array(), args.length()))
+    if (!InitArrayTypes(cx, group, nullptr, args.array(), args.length()))
         return false;
     JSObject *obj = (args.length() == 0)
         ? NewDenseEmptyArray(cx)
@@ -3534,7 +3536,7 @@ js::NewDenseFullyAllocatedArrayWithTemplate(JSContext *cx, uint32_t length, JSOb
     allocKind = GetBackgroundAllocKind(allocKind);
 
     RootedObjectGroup group(cx, templateObject->group());
-    RootedShape shape(cx, templateObject->lastProperty());
+    RootedShape shape(cx, templateObject->as<ArrayObject>().lastProperty());
 
     gc::InitialHeap heap = GetInitialHeap(GenericObject, &ArrayObject::class_);
     Rooted<ArrayObject *> arr(cx, ArrayObject::createArray(cx, allocKind,

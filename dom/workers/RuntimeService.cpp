@@ -59,7 +59,6 @@
 #endif
 
 #include "Principal.h"
-#include "ServiceWorker.h"
 #include "SharedWorker.h"
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
@@ -156,6 +155,7 @@ static_assert(MAX_WORKERS_PER_DOMAIN >= 1,
 #endif
 
 #define PREF_DOM_FETCH_ENABLED         "dom.fetch.enabled"
+#define PREF_DOM_CACHES_ENABLED        "dom.caches.enabled"
 #define PREF_WORKERS_LATEST_JS_VERSION "dom.workers.latestJSVersion"
 #define PREF_INTL_ACCEPT_LANGUAGES     "intl.accept_languages"
 
@@ -839,6 +839,57 @@ PreserveWrapper(JSContext *cx, JSObject *obj)
     return mozilla::dom::TryPreserveWrapper(obj);
 }
 
+class DebuggeeGlobalSecurityWrapper : public js::CrossCompartmentSecurityWrapper {
+public:
+  DebuggeeGlobalSecurityWrapper()
+  : js::CrossCompartmentSecurityWrapper(CROSS_COMPARTMENT, false)
+  {
+  }
+
+  bool enter(JSContext* cx, JS::HandleObject wrapper, JS::HandleId id,
+             js::Wrapper::Action act, bool* bp) const
+  {
+    *bp = false;
+    return false;
+  }
+
+  static const DebuggeeGlobalSecurityWrapper singleton;
+};
+
+const DebuggeeGlobalSecurityWrapper DebuggeeGlobalSecurityWrapper::singleton;
+
+JSObject*
+Wrap(JSContext *cx, JS::HandleObject existing, JS::HandleObject obj)
+{
+  JSObject* targetGlobal = JS::CurrentGlobalOrNull(cx);
+  if (!IsDebuggerGlobal(targetGlobal)) {
+    MOZ_CRASH("There should be no edges from the debuggee to the debugger.");
+  }
+
+  JSObject* originGlobal = js::GetGlobalForObjectCrossCompartment(obj);
+
+  const js::Wrapper* wrapper = nullptr;
+  if (IsDebuggerGlobal(originGlobal)) {
+    wrapper = &js::CrossCompartmentWrapper::singleton;
+  } else {
+    if (obj != originGlobal) {
+      MOZ_CRASH("The should be only edges from the debugger to the debuggee global.");
+    }
+
+    wrapper = &DebuggeeGlobalSecurityWrapper::singleton;
+  }
+
+  if (existing) {
+    js::Wrapper::Renew(cx, existing, obj, wrapper);
+  }
+  return js::Wrapper::New(cx, obj, wrapper);
+}
+
+static const JSWrapObjectCallbacks WrapObjectCallbacks = {
+  Wrap,
+  nullptr,
+};
+
 class WorkerJSRuntime : public mozilla::CycleCollectedJSRuntime
 {
 public:
@@ -852,6 +903,7 @@ public:
   {
     js::SetPreserveWrapperCallback(Runtime(), PreserveWrapper);
     JS_InitDestroyPrincipalsCallback(Runtime(), DestroyWorkerPrincipals);
+    JS_SetWrapObjectCallbacks(Runtime(), &WrapObjectCallbacks);
   }
 
   ~WorkerJSRuntime()
@@ -1778,6 +1830,10 @@ RuntimeService::Init()
                                   WorkerPrefChanged,
                                   PREF_DOM_FETCH_ENABLED,
                                   reinterpret_cast<void *>(WORKERPREF_DOM_FETCH))) ||
+      NS_FAILED(Preferences::RegisterCallbackAndCall(
+                                  WorkerPrefChanged,
+                                  PREF_DOM_CACHES_ENABLED,
+                                  reinterpret_cast<void *>(WORKERPREF_DOM_CACHES))) ||
       NS_FAILED(Preferences::RegisterCallback(LoadRuntimeOptions,
                                               PREF_JS_OPTIONS_PREFIX,
                                               nullptr)) ||
@@ -1967,6 +2023,10 @@ RuntimeService::Cleanup()
         NS_FAILED(Preferences::UnregisterCallback(LoadRuntimeOptions,
                                                   PREF_WORKERS_OPTIONS_PREFIX,
                                                   nullptr)) ||
+        NS_FAILED(Preferences::UnregisterCallback(
+                                  WorkerPrefChanged,
+                                  PREF_DOM_CACHES_ENABLED,
+                                  reinterpret_cast<void *>(WORKERPREF_DOM_CACHES))) ||
         NS_FAILED(Preferences::UnregisterCallback(
                                   WorkerPrefChanged,
                                   PREF_DOM_FETCH_ENABLED,
@@ -2189,61 +2249,6 @@ RuntimeService::ResumeWorkersForWindow(nsPIDOMWindow* aWindow)
 }
 
 nsresult
-RuntimeService::CreateServiceWorker(const GlobalObject& aGlobal,
-                                    const nsAString& aScriptURL,
-                                    const nsACString& aScope,
-                                    ServiceWorker** aServiceWorker)
-{
-  nsresult rv;
-
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
-  MOZ_ASSERT(window);
-
-  nsRefPtr<SharedWorker> sharedWorker;
-  rv = CreateSharedWorkerInternal(aGlobal, aScriptURL, aScope,
-                                  WorkerTypeService,
-                                  getter_AddRefs(sharedWorker));
-
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  nsRefPtr<ServiceWorker> serviceWorker =
-    new ServiceWorker(window, sharedWorker);
-
-  serviceWorker->mURL = aScriptURL;
-
-  serviceWorker.forget(aServiceWorker);
-  return rv;
-}
-
-nsresult
-RuntimeService::CreateServiceWorkerFromLoadInfo(JSContext* aCx,
-                                               WorkerPrivate::LoadInfo* aLoadInfo,
-                                               const nsAString& aScriptURL,
-                                               const nsACString& aScope,
-                                               ServiceWorker** aServiceWorker)
-{
-
-  nsRefPtr<SharedWorker> sharedWorker;
-  nsresult rv = CreateSharedWorkerFromLoadInfo(aCx, aLoadInfo, aScriptURL, aScope,
-                                               WorkerTypeService,
-                                               getter_AddRefs(sharedWorker));
-
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  nsRefPtr<ServiceWorker> serviceWorker =
-    new ServiceWorker(nullptr, sharedWorker);
-
-  serviceWorker->mURL = aScriptURL;
-
-  serviceWorker.forget(aServiceWorker);
-  return rv;
-}
-
-nsresult
 RuntimeService::CreateSharedWorkerInternal(const GlobalObject& aGlobal,
                                            const nsAString& aScriptURL,
                                            const nsACString& aName,
@@ -2258,7 +2263,7 @@ RuntimeService::CreateSharedWorkerInternal(const GlobalObject& aGlobal,
 
   JSContext* cx = aGlobal.Context();
 
-  WorkerPrivate::LoadInfo loadInfo;
+  WorkerLoadInfo loadInfo;
   nsresult rv = WorkerPrivate::GetLoadInfo(cx, window, nullptr, aScriptURL,
                                            false,
                                            WorkerPrivate::OverrideLoadGroup,
@@ -2271,7 +2276,7 @@ RuntimeService::CreateSharedWorkerInternal(const GlobalObject& aGlobal,
 
 nsresult
 RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
-                                               WorkerPrivate::LoadInfo* aLoadInfo,
+                                               WorkerLoadInfo* aLoadInfo,
                                                const nsAString& aScriptURL,
                                                const nsACString& aName,
                                                WorkerType aType,
@@ -2559,6 +2564,12 @@ RuntimeService::WorkerPrefChanged(const char* aPrefName, void* aClosure)
     key = WORKERPREF_DOM_FETCH;
     sDefaultPreferences[WORKERPREF_DOM_FETCH] =
       Preferences::GetBool(PREF_DOM_FETCH_ENABLED, false);
+  }
+
+  if (key == WORKERPREF_DOM_CACHES) {
+    key = WORKERPREF_DOM_CACHES;
+    sDefaultPreferences[WORKERPREF_DOM_CACHES] =
+      Preferences::GetBool(PREF_DOM_CACHES_ENABLED, false);
   }
 
   // This function should never be registered as a callback for a preference it

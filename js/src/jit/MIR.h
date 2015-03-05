@@ -1814,6 +1814,12 @@ class MSimdSwizzle
         return new(alloc) MSimdSwizzle(obj, type, laneX, laneY, laneZ, laneW);
     }
 
+    static MSimdSwizzle *New(TempAllocator &alloc, MDefinition *obj, MIRType type,
+                             uint32_t laneX, uint32_t laneY, uint32_t laneZ, uint32_t laneW)
+    {
+        return new(alloc) MSimdSwizzle(obj, type, laneX, laneY, laneZ, laneW);
+    }
+
     bool congruentTo(const MDefinition *ins) const MOZ_OVERRIDE {
         if (!ins->isSimdSwizzle())
             return false;
@@ -1828,6 +1834,57 @@ class MSimdSwizzle
     MDefinition *foldsTo(TempAllocator &alloc) MOZ_OVERRIDE;
 
     ALLOW_CLONE(MSimdSwizzle)
+};
+
+// A "general swizzle" is a swizzle with non-constant lane indices.  This is the
+// one that Ion inlines and it can be folded into a MSimdSwizzle if lane indices
+// are constant. Performance of general swizzle does not really matter, as we
+// expect to always get constant indices.
+class MSimdGeneralSwizzle :
+    public MAryInstruction<5>,
+    public SimdSwizzlePolicy::Data
+{
+  protected:
+    MSimdGeneralSwizzle(MDefinition *vec, MDefinition *lanes[4], MIRType type)
+    {
+        MOZ_ASSERT(IsSimdType(type));
+        MOZ_ASSERT(SimdTypeToLength(type) == 4);
+
+        initOperand(0, vec);
+        for (unsigned i = 0; i < 4; i++)
+            initOperand(1 + i, lanes[i]);
+
+        setResultType(type);
+        specialization_ = type;
+        setMovable();
+    }
+
+  public:
+    INSTRUCTION_HEADER(SimdGeneralSwizzle);
+    ALLOW_CLONE(MSimdGeneralSwizzle);
+
+    static MSimdGeneralSwizzle *New(TempAllocator &alloc, MDefinition *vec, MDefinition *lanes[4],
+                                    MIRType type)
+    {
+        return new(alloc) MSimdGeneralSwizzle(vec, lanes, type);
+    }
+
+    MDefinition *input() const {
+        return getOperand(0);
+    }
+    MDefinition *lane(size_t i) const {
+        return getOperand(1 + i);
+    }
+
+    bool congruentTo(const MDefinition *ins) const MOZ_OVERRIDE {
+        return congruentIfOperandsEqual(ins);
+    }
+
+    MDefinition *foldsTo(TempAllocator &alloc) MOZ_OVERRIDE;
+
+    AliasSet getAliasSet() const MOZ_OVERRIDE {
+        return AliasSet::None();
+    }
 };
 
 // Applies a shuffle operation to the inputs, selecting the 2 first lanes of the
@@ -3096,7 +3153,8 @@ class MSimdBox
         MOZ_ASSERT(IsSimdType(op->type()));
         setMovable();
         setResultType(MIRType_Object);
-        setResultTypeSet(MakeSingletonTypeSet(constraints, templateObject));
+        if (constraints)
+            setResultTypeSet(MakeSingletonTypeSet(constraints, templateObject));
     }
 
   public:
@@ -8775,6 +8833,7 @@ class MLoadTypedArrayElement
     public SingleObjectPolicy::Data
 {
     Scalar::Type arrayType_;
+    Scalar::Type readType_;
     bool requiresBarrier_;
     int32_t offsetAdjustment_;
     bool canonicalizeDoubles_;
@@ -8784,6 +8843,7 @@ class MLoadTypedArrayElement
                            int32_t offsetAdjustment, bool canonicalizeDoubles)
       : MBinaryInstruction(elements, index),
         arrayType_(arrayType),
+        readType_(arrayType),
         requiresBarrier_(requiresBarrier == DoesRequireMemoryBarrier),
         offsetAdjustment_(offsetAdjustment),
         canonicalizeDoubles_(canonicalizeDoubles)
@@ -8810,6 +8870,13 @@ class MLoadTypedArrayElement
         return new(alloc) MLoadTypedArrayElement(elements, index, arrayType,
                                                  requiresBarrier, offsetAdjustment,
                                                  canonicalizeDoubles);
+    }
+
+    void setReadType(Scalar::Type type) {
+        readType_ = type;
+    }
+    Scalar::Type readType() const {
+        return readType_;
     }
 
     Scalar::Type arrayType() const {
@@ -8849,6 +8916,8 @@ class MLoadTypedArrayElement
             return false;
         const MLoadTypedArrayElement *other = ins->toLoadTypedArrayElement();
         if (arrayType_ != other->arrayType_)
+            return false;
+        if (readType_ != other->readType_)
             return false;
         if (offsetAdjustment() != other->offsetAdjustment())
             return false;
@@ -8994,8 +9063,49 @@ class MLoadTypedArrayElementStatic
     void collectRangeInfoPreTrunc() MOZ_OVERRIDE;
 };
 
+// Base class for MIR ops that write to typed arrays.
+class StoreTypedArrayBase
+{
+    Scalar::Type writeType_;
+
+  protected:
+    explicit StoreTypedArrayBase(Scalar::Type writeType)
+      : writeType_(writeType)
+    {
+        MOZ_ASSERT(isIntegerWrite() || isFloatWrite() || isSimdWrite());
+    }
+
+  public:
+    void setWriteType(Scalar::Type type) {
+        writeType_ = type;
+    }
+    Scalar::Type writeType() const {
+        return writeType_;
+    }
+    bool isByteWrite() const {
+        return writeType_ == Scalar::Int8 ||
+               writeType_ == Scalar::Uint8 ||
+               writeType_ == Scalar::Uint8Clamped;
+    }
+    bool isIntegerWrite() const {
+        return isByteWrite () ||
+               writeType_ == Scalar::Int16 ||
+               writeType_ == Scalar::Uint16 ||
+               writeType_ == Scalar::Int32 ||
+               writeType_ == Scalar::Uint32;
+    }
+    bool isFloatWrite() const {
+        return writeType_ == Scalar::Float32 ||
+               writeType_ == Scalar::Float64;
+    }
+    bool isSimdWrite() const {
+        return Scalar::isSimdType(writeType());
+    }
+};
+
 class MStoreTypedArrayElement
   : public MTernaryInstruction,
+    public StoreTypedArrayBase,
     public StoreTypedArrayPolicy::Data
 {
     Scalar::Type arrayType_;
@@ -9009,6 +9119,7 @@ class MStoreTypedArrayElement
                             Scalar::Type arrayType, MemoryBarrierRequirement requiresBarrier,
                             int32_t offsetAdjustment)
       : MTernaryInstruction(elements, index, value),
+        StoreTypedArrayBase(arrayType),
         arrayType_(arrayType),
         requiresBarrier_(requiresBarrier == DoesRequireMemoryBarrier),
         offsetAdjustment_(offsetAdjustment),
@@ -9037,15 +9148,6 @@ class MStoreTypedArrayElement
 
     Scalar::Type arrayType() const {
         return arrayType_;
-    }
-    bool isByteArray() const {
-        return arrayType_ == Scalar::Int8 ||
-               arrayType_ == Scalar::Uint8 ||
-               arrayType_ == Scalar::Uint8Clamped;
-    }
-    bool isFloatArray() const {
-        return arrayType_ == Scalar::Float32 ||
-               arrayType_ == Scalar::Float64;
     }
     MDefinition *elements() const {
         return getOperand(0);
@@ -9082,13 +9184,13 @@ class MStoreTypedArrayElement
 
 class MStoreTypedArrayElementHole
   : public MAryInstruction<4>,
+    public StoreTypedArrayBase,
     public StoreTypedArrayHolePolicy::Data
 {
-    Scalar::Type arrayType_;
-
     MStoreTypedArrayElementHole(MDefinition *elements, MDefinition *length, MDefinition *index,
                                 MDefinition *value, Scalar::Type arrayType)
-      : MAryInstruction<4>(), arrayType_(arrayType)
+      : MAryInstruction<4>(),
+        StoreTypedArrayBase(arrayType)
     {
         initOperand(0, elements);
         initOperand(1, length);
@@ -9112,16 +9214,9 @@ class MStoreTypedArrayElementHole
     }
 
     Scalar::Type arrayType() const {
-        return arrayType_;
-    }
-    bool isByteArray() const {
-        return arrayType_ == Scalar::Int8 ||
-               arrayType_ == Scalar::Uint8 ||
-               arrayType_ == Scalar::Uint8Clamped;
-    }
-    bool isFloatArray() const {
-        return arrayType_ == Scalar::Float32 ||
-               arrayType_ == Scalar::Float64;
+        MOZ_ASSERT(!Scalar::isSimdType(writeType()),
+                   "arrayType == writeType iff the write type isn't SIMD");
+        return writeType();
     }
     MDefinition *elements() const {
         return getOperand(0);
@@ -9141,7 +9236,7 @@ class MStoreTypedArrayElementHole
     TruncateKind operandTruncateKind(size_t index) const MOZ_OVERRIDE;
 
     bool canConsumeFloat32(MUse *use) const MOZ_OVERRIDE {
-        return use == getUseFor(3) && arrayType_ == Scalar::Float32;
+        return use == getUseFor(3) && arrayType() == Scalar::Float32;
     }
 
     ALLOW_CLONE(MStoreTypedArrayElementHole)
@@ -9149,16 +9244,20 @@ class MStoreTypedArrayElementHole
 
 // Store a value infallibly to a statically known typed array.
 class MStoreTypedArrayElementStatic :
-    public MBinaryInstruction
-  , public StoreTypedArrayElementStaticPolicy::Data
+    public MBinaryInstruction,
+    public StoreTypedArrayBase,
+    public StoreTypedArrayElementStaticPolicy::Data
 {
     MStoreTypedArrayElementStatic(JSObject *someTypedArray, MDefinition *ptr, MDefinition *v,
                                   int32_t offset, bool needsBoundsCheck)
-        : MBinaryInstruction(ptr, v), someTypedArray_(someTypedArray),
+        : MBinaryInstruction(ptr, v),
+          StoreTypedArrayBase(AnyTypedArrayType(someTypedArray)),
+          someTypedArray_(someTypedArray),
           offset_(offset), needsBoundsCheck_(needsBoundsCheck)
     {}
 
     AlwaysTenured<JSObject*> someTypedArray_;
+
     // An offset to be encoded in the store instruction - taking advantage of the
     // addressing modes. This is only non-zero when the access is proven to be
     // within bounds.
@@ -9178,11 +9277,7 @@ class MStoreTypedArrayElementStatic :
     }
 
     Scalar::Type accessType() const {
-        return AnyTypedArrayType(someTypedArray_);
-    }
-    bool isFloatArray() const {
-        return accessType() == Scalar::Float32 ||
-               accessType() == Scalar::Float64;
+        return writeType();
     }
 
     void *base() const;
@@ -9995,16 +10090,18 @@ class MGuardShape
     }
 };
 
-// Bail if the object's shape is not one of the shapes in shapes_.
-class MGuardShapePolymorphic
+// Bail if the object's shape or unboxed group is not in the input list.
+class MGuardReceiverPolymorphic
   : public MUnaryInstruction,
     public SingleObjectPolicy::Data
 {
     Vector<Shape *, 4, JitAllocPolicy> shapes_;
+    Vector<ObjectGroup *, 4, JitAllocPolicy> unboxedGroups_;
 
-    MGuardShapePolymorphic(TempAllocator &alloc, MDefinition *obj)
+    MGuardReceiverPolymorphic(TempAllocator &alloc, MDefinition *obj)
       : MUnaryInstruction(obj),
-        shapes_(alloc)
+        shapes_(alloc),
+        unboxedGroups_(alloc)
     {
         setGuard();
         setMovable();
@@ -10012,15 +10109,16 @@ class MGuardShapePolymorphic
     }
 
   public:
-    INSTRUCTION_HEADER(GuardShapePolymorphic)
+    INSTRUCTION_HEADER(GuardReceiverPolymorphic)
 
-    static MGuardShapePolymorphic *New(TempAllocator &alloc, MDefinition *obj) {
-        return new(alloc) MGuardShapePolymorphic(alloc, obj);
+    static MGuardReceiverPolymorphic *New(TempAllocator &alloc, MDefinition *obj) {
+        return new(alloc) MGuardReceiverPolymorphic(alloc, obj);
     }
 
     MDefinition *obj() const {
         return getOperand(0);
     }
+
     bool addShape(Shape *shape) {
         return shapes_.append(shape);
     }
@@ -10029,6 +10127,16 @@ class MGuardShapePolymorphic
     }
     Shape *getShape(size_t i) const {
         return shapes_[i];
+    }
+
+    bool addUnboxedGroup(ObjectGroup *group) {
+        return unboxedGroups_.append(group);
+    }
+    size_t numUnboxedGroups() const {
+        return unboxedGroups_.length();
+    }
+    ObjectGroup *getUnboxedGroup(size_t i) const {
+        return unboxedGroups_[i];
     }
 
     bool congruentTo(const MDefinition *ins) const MOZ_OVERRIDE;

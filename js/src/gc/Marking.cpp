@@ -542,6 +542,12 @@ Mark##base##RootRange(JSTracer *trc, size_t len, type **vec, const char *name)  
 }                                                                                                 \
                                                                                                   \
 bool                                                                                              \
+Is##base##MarkedFromAnyThread(type **thingp)                                                      \
+{                                                                                                 \
+    return IsMarkedFromAnyThread<type>(thingp);                                                   \
+}                                                                                                 \
+                                                                                                  \
+bool                                                                                              \
 Is##base##Marked(type **thingp)                                                                   \
 {                                                                                                 \
     return IsMarked<type>(thingp);                                                                \
@@ -803,22 +809,6 @@ gc::MarkValueRoot(JSTracer *trc, Value *v, const char *name)
 }
 
 void
-TypeSet::MarkTypeRoot(JSTracer *trc, TypeSet::Type *v, const char *name)
-{
-    JS_ROOT_MARKING_ASSERT(trc);
-    trc->setTracingName(name);
-    if (v->isSingletonUnchecked()) {
-        JSObject *obj = v->singleton();
-        MarkInternal(trc, &obj);
-        *v = TypeSet::ObjectType(obj);
-    } else if (v->isGroupUnchecked()) {
-        ObjectGroup *group = v->group();
-        MarkInternal(trc, &group);
-        *v = TypeSet::ObjectType(group);
-    }
-}
-
-void
 gc::MarkValueRange(JSTracer *trc, size_t len, BarrieredBase<Value> *vec, const char *name)
 {
     for (size_t i = 0; i < len; ++i) {
@@ -901,6 +891,30 @@ gc::IsValueAboutToBeFinalizedFromAnyThread(Value *v)
         v->setSymbol(sym);
     }
     return rv;
+}
+
+/*** Type Marking ***/
+
+void
+TypeSet::MarkTypeRoot(JSTracer *trc, TypeSet::Type *v, const char *name)
+{
+    JS_ROOT_MARKING_ASSERT(trc);
+    MarkTypeUnbarriered(trc, v, name);
+}
+
+void
+TypeSet::MarkTypeUnbarriered(JSTracer *trc, TypeSet::Type *v, const char *name)
+{
+    trc->setTracingName(name);
+    if (v->isSingletonUnchecked()) {
+        JSObject *obj = v->singleton();
+        MarkInternal(trc, &obj);
+        *v = TypeSet::ObjectType(obj);
+    } else if (v->isGroupUnchecked()) {
+        ObjectGroup *group = v->group();
+        MarkInternal(trc, &group);
+        *v = TypeSet::ObjectType(group);
+    }
 }
 
 /*** Slot Marking ***/
@@ -1304,8 +1318,10 @@ ScanObjectGroup(GCMarker *gcmarker, ObjectGroup *group)
     if (group->proto().isObject())
         gcmarker->traverse(group->proto().toObject());
 
-    if (group->singleton() && !group->lazy())
-        gcmarker->traverse(group->singleton());
+    group->compartment()->mark();
+
+    if (GlobalObject *global = group->compartment()->unsafeUnbarrieredMaybeGlobal())
+        PushMarkStack(gcmarker, global);
 
     if (group->newScript())
         group->newScript()->trace(gcmarker);
@@ -1337,9 +1353,6 @@ gc::MarkChildren(JSTracer *trc, ObjectGroup *group)
 
     if (group->proto().isObject())
         MarkObject(trc, &group->protoRaw(), "group_proto");
-
-    if (group->singleton() && !group->lazy())
-        MarkObject(trc, &group->singletonRaw(), "group_singleton");
 
     if (group->newScript())
         group->newScript()->trace(trc);
@@ -1679,9 +1692,6 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
         ObjectGroup *group = obj->groupFromGC();
         traverse(group);
 
-        Shape *shape = obj->lastProperty();
-        PushMarkStack(this, shape);
-
         /* Call the trace hook if necessary. */
         const Class *clasp = group->clasp();
         if (clasp->trace) {
@@ -1692,11 +1702,13 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
                             (!obj->compartment()->options().getTrace() || !obj->isOwnGlobal())),
                           clasp->flags & JSCLASS_IMPLEMENTS_BARRIERS);
             if (clasp->trace == InlineTypedObject::obj_trace) {
-                TypeDescr *descr = &obj->as<InlineOpaqueTypedObject>().typeDescr();
+                Shape *shape = obj->as<InlineTypedObject>().shapeFromGC();
+                PushMarkStack(this, shape);
+                TypeDescr *descr = &obj->as<InlineTypedObject>().typeDescr();
                 if (!descr->hasTraceList())
                     return;
                 unboxedTraceList = descr->traceList();
-                unboxedMemory = obj->as<InlineOpaqueTypedObject>().inlineTypedMem();
+                unboxedMemory = obj->as<InlineTypedObject>().inlineTypedMem();
                 goto scan_unboxed;
             }
             if (clasp == &UnboxedPlainObject::class_) {
@@ -1710,10 +1722,14 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
             clasp->trace(this, obj);
         }
 
-        if (!shape->isNative())
+        if (!clasp->isNative())
             return;
 
         NativeObject *nobj = &obj->as<NativeObject>();
+
+        Shape *shape = nobj->lastProperty();
+        PushMarkStack(this, shape);
+
         unsigned nslots = nobj->slotSpan();
 
         do {

@@ -80,6 +80,21 @@ BuildScrollContainerLayers()
   return !sContainerlessScrollingEnabled;
 }
 
+static uint32_t
+GetOverflowChange(const nsRect& aCurScrolledRect, const nsRect& aPrevScrolledRect)
+{
+  uint32_t result = 0;
+  if (aPrevScrolledRect.x != aCurScrolledRect.x ||
+      aPrevScrolledRect.width != aCurScrolledRect.width) {
+    result |= nsIScrollableFrame::HORIZONTAL;
+  }
+  if (aPrevScrolledRect.y != aCurScrolledRect.y ||
+      aPrevScrolledRect.height != aCurScrolledRect.height) {
+    result |= nsIScrollableFrame::VERTICAL;
+  }
+  return result;
+}
+
 //----------------------------------------------------------------------
 
 //----------nsHTMLScrollFrame-------------------------------------------
@@ -913,6 +928,8 @@ nsHTMLScrollFrame::Reflow(nsPresContext*           aPresContext,
   if (mHelper.mIsRoot && !oldScrolledAreaBounds.IsEqualEdges(newScrolledAreaBounds)) {
     mHelper.PostScrolledAreaEvent();
   }
+
+  mHelper.UpdatePrevScrolledRect();
 
   aStatus = NS_FRAME_COMPLETE;
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aDesiredSize);
@@ -3018,17 +3035,6 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
        (aBuilder->RootReferenceFrame()->PresContext() != mOuter->PresContext()));
   }
 
-  if (aBuilder->IsPaintingToWindow() &&
-      !mShouldBuildScrollableLayer &&
-      shouldBuildLayer)
-  {
-    if (nsDisplayLayerEventRegions *eventRegions = aBuilder->GetLayerEventRegions()) {
-      // Make sure that APZ will dispatch events back to content so we can
-      // create a displayport for this frame.
-      eventRegions->AddInactiveScrollPort(mScrollPort + aBuilder->ToReferenceFrame(mOuter));
-    }
-  }
-
   mScrollParentID = aBuilder->GetCurrentScrollParentId();
 
   nsDisplayListCollection scrolledContent;
@@ -3138,31 +3144,49 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       wrapper.WrapListsInPlace(aBuilder, mOuter, scrolledContent);
     }
 
+    // Make sure that APZ will dispatch events back to content so we can create
+    // a displayport for this frame. We'll add the item later on.
+    nsDisplayLayerEventRegions* inactiveRegionItem = nullptr;
+    if (aBuilder->IsPaintingToWindow() &&
+        !mShouldBuildScrollableLayer &&
+        shouldBuildLayer &&
+        gfxPrefs::LayoutEventRegionsEnabled())
+    {
+      inactiveRegionItem = new (aBuilder) nsDisplayLayerEventRegions(aBuilder, mScrolledFrame);
+      inactiveRegionItem->AddInactiveScrollPort(mScrollPort + aBuilder->ToReferenceFrame(mOuter));
+    }
+
     // In case we are not using displayport or the nsDisplayScrollLayers are
     // flattened during visibility computation, we still need to export the
     // metadata about this scroll box to the compositor process.
     nsDisplayScrollInfoLayer* layerItem = new (aBuilder) nsDisplayScrollInfoLayer(
       aBuilder, mScrolledFrame, mOuter);
+
     nsDisplayList* positionedDescendants = scrolledContent.PositionedDescendants();
+    nsDisplayList* destinationList = nullptr;
     if (BuildScrollContainerLayers()) {
       // We process display items from bottom to top, so if we need to flatten after
       // the scroll layer items have been processed we need to be on the top.
       if (!positionedDescendants->IsEmpty()) {
         layerItem->SetOverrideZIndex(MaxZIndexInList(positionedDescendants, aBuilder));
-        positionedDescendants->AppendNewToTop(layerItem);
+        destinationList = positionedDescendants;
       } else {
-        aLists.Outlines()->AppendNewToTop(layerItem);
+        destinationList = aLists.Outlines();
       }
     } else {
       int32_t zindex =
         MaxZIndexInListOfItemsContainedInFrame(positionedDescendants, mOuter);
       if (zindex >= 0) {
         layerItem->SetOverrideZIndex(zindex);
-        positionedDescendants->AppendNewToTop(layerItem);
+        destinationList = positionedDescendants;
       } else {
-        scrolledContent.Outlines()->AppendNewToTop(layerItem);
+        destinationList = scrolledContent.Outlines();
       }
     }
+    if (inactiveRegionItem) {
+      destinationList->AppendNewToTop(inactiveRegionItem);
+    }
+    destinationList->AppendNewToTop(layerItem);
   }
   // Now display overlay scrollbars and the resizer, if we have one.
   AppendScrollPartsTo(aBuilder, aDirtyRect, scrolledContent, usingDisplayport,
@@ -3699,10 +3723,10 @@ ScrollFrameHelper::ReloadChildFrames()
           NS_ASSERTION(!mVScrollbarBox, "Found multiple vertical scrollbars?");
           mVScrollbarBox = frame;
         }
-      } else if (content->Tag() == nsGkAtoms::resizer) {
+      } else if (content->IsXULElement(nsGkAtoms::resizer)) {
         NS_ASSERTION(!mResizerBox, "Found multiple resizers");
         mResizerBox = frame;
-      } else if (content->Tag() == nsGkAtoms::scrollcorner) {
+      } else if (content->IsXULElement(nsGkAtoms::scrollcorner)) {
         // probably a scrollcorner
         NS_ASSERTION(!mScrollCornerBox, "Found multiple scrollcorners");
         mScrollCornerBox = frame;
@@ -4518,6 +4542,8 @@ nsXULScrollFrame::Layout(nsBoxLayoutState& aState)
     f->SetRect(clippedRect);
   }
 
+  mHelper.UpdatePrevScrolledRect();
+
   mHelper.PostOverflowEvent();
   return NS_OK;
 }
@@ -4661,9 +4687,27 @@ ScrollFrameHelper::UpdateOverflow()
   nsIScrollableFrame* sf = do_QueryFrame(mOuter);
   ScrollbarStyles ss = sf->GetScrollbarStyles();
 
-  if (ss.mVertical != NS_STYLE_OVERFLOW_HIDDEN ||
-      ss.mHorizontal != NS_STYLE_OVERFLOW_HIDDEN ||
-      GetScrollPosition() != nsPoint()) {
+  // Reflow when the change in overflow leads to one of our scrollbars
+  // changing or might require repositioning the scrolled content due to
+  // reduced extents.
+  nsRect scrolledRect = GetScrolledRect();
+  uint32_t overflowChange = GetOverflowChange(scrolledRect, mPrevScrolledRect);
+  mPrevScrolledRect = scrolledRect;
+
+  bool needReflow = false;
+  nsPoint scrollPosition = GetScrollPosition();
+  if (overflowChange & nsIScrollableFrame::HORIZONTAL) {
+    if (ss.mHorizontal != NS_STYLE_OVERFLOW_HIDDEN || scrollPosition.x) {
+      needReflow = true;
+    }
+  }
+  if (overflowChange & nsIScrollableFrame::VERTICAL) {
+    if (ss.mVertical != NS_STYLE_OVERFLOW_HIDDEN || scrollPosition.y) {
+      needReflow = true;
+    }
+  }
+
+  if (needReflow) {
     // If there are scrollbars, or we're not at the beginning of the pane,
     // the scroll position may change. In this case, mark the frame as
     // needing reflow. Don't use NS_FRAME_IS_DIRTY as dirty as that means
@@ -4690,6 +4734,12 @@ ScrollFrameHelper::UpdateSticky()
     nsIScrollableFrame* scrollFrame = do_QueryFrame(mOuter);
     ssc->UpdatePositions(scrollFrame->GetScrollPosition(), mOuter);
   }
+}
+
+void
+ScrollFrameHelper::UpdatePrevScrolledRect()
+{
+  mPrevScrolledRect = GetScrolledRect();
 }
 
 void

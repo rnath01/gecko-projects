@@ -321,10 +321,10 @@ js::IsCallObject(JSObject *obj)
     return obj->is<CallObject>();
 }
 
-JS_FRIEND_API(JSObject *)
-js::GetObjectParentMaybeScope(JSObject *obj)
+JS_FRIEND_API(bool)
+js::CanAccessObjectShape(JSObject *obj)
 {
-    return obj->enclosingScope();
+    return obj->maybeShape() != nullptr;
 }
 
 JS_FRIEND_API(JSObject *)
@@ -630,19 +630,19 @@ JS_CloneObject(JSContext *cx, HandleObject obj, HandleObject protoArg)
 
 #ifdef DEBUG
 JS_FRIEND_API(void)
-js_DumpString(JSString *str)
+js::DumpString(JSString *str)
 {
     str->dump();
 }
 
 JS_FRIEND_API(void)
-js_DumpAtom(JSAtom *atom)
+js::DumpAtom(JSAtom *atom)
 {
     atom->dump();
 }
 
 JS_FRIEND_API(void)
-js_DumpChars(const char16_t *s, size_t n)
+js::DumpChars(const char16_t *s, size_t n)
 {
     fprintf(stderr, "char16_t * (%p) = ", (void *) s);
     JSString::dumpChars(s, n);
@@ -650,7 +650,7 @@ js_DumpChars(const char16_t *s, size_t n)
 }
 
 JS_FRIEND_API(void)
-js_DumpObject(JSObject *obj)
+js::DumpObject(JSObject *obj)
 {
     if (!obj) {
         fprintf(stderr, "NULL\n");

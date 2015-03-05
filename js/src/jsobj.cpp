@@ -2213,7 +2213,7 @@ js::CloneObjectLiteral(JSContext *cx, HandleObject parent, HandleObject srcObj)
         if (!res)
             return nullptr;
 
-        RootedShape newShape(cx, ReshapeForParentAndAllocKind(cx, srcObj->lastProperty(),
+        RootedShape newShape(cx, ReshapeForParentAndAllocKind(cx, srcObj->as<PlainObject>().lastProperty(),
                                                               TaggedProto(proto), parent, kind));
         if (!newShape || !res->setLastProperty(cx, newShape))
             return nullptr;
@@ -2294,7 +2294,7 @@ JSObject::fixDictionaryShapeAfterSwap()
     // Dictionary shapes can point back to their containing objects, so after
     // swapping the guts of those objects fix the pointers up.
     if (isNative() && as<NativeObject>().inDictionaryMode())
-        shape_->listp = &shape_;
+        as<NativeObject>().shape_->listp = &as<NativeObject>().shape_;
 }
 
 /* Use this method with extreme caution. It trades the guts of two objects. */
@@ -3045,7 +3045,7 @@ js::LookupPropertyPure(ExclusiveContext *cx, JSObject *obj, jsid id, JSObject **
             do {
                 const Class *clasp = obj->getClass();
                 if (!clasp->resolve)
-                break;
+                    break;
                 if (clasp->resolve == fun_resolve && !FunctionHasResolveHook(cx->names(), id))
                     break;
                 if (clasp->resolve == str_resolve && !JSID_IS_INT(id))
@@ -3660,7 +3660,7 @@ js::GetObjectSlotName(JSTracer *trc, char *buf, size_t bufsize)
 
     Shape *shape;
     if (obj->isNative()) {
-        shape = obj->lastProperty();
+        shape = obj->as<NativeObject>().lastProperty();
         while (shape && (!shape->hasSlot() || shape->slot() != slot))
             shape = shape->previous();
     } else {
@@ -3736,7 +3736,7 @@ js::ReportGetterOnlyAssignment(JSContext *cx, bool strict)
 
 /*
  * Routines to print out values during debugging.  These are FRIEND_API to help
- * the debugger find them and to support temporarily hacking js_Dump* calls
+ * the debugger find them and to support temporarily hacking js::Dump* calls
  * into other code.
  */
 
@@ -3799,14 +3799,14 @@ dumpValue(const Value &v)
 }
 
 JS_FRIEND_API(void)
-js_DumpValue(const Value &val)
+js::DumpValue(const Value &val)
 {
     dumpValue(val);
     fputc('\n', stderr);
 }
 
 JS_FRIEND_API(void)
-js_DumpId(jsid id)
+js::DumpId(jsid id)
 {
     fprintf(stderr, "jsid %p = ", (void *) JSID_BITS(id));
     dumpValue(IdToValue(id));
@@ -3937,7 +3937,7 @@ JSObject::dump()
     if (obj->isNative()) {
         fprintf(stderr, "properties:\n");
         Vector<Shape *, 8, SystemAllocPolicy> props;
-        for (Shape::Range<NoGC> r(obj->lastProperty()); !r.empty(); r.popFront())
+        for (Shape::Range<NoGC> r(obj->as<NativeObject>().lastProperty()); !r.empty(); r.popFront())
             props.append(&r.front());
         for (size_t i = props.length(); i-- != 0;)
             DumpProperty(&obj->as<NativeObject>(), *props[i]);
@@ -3966,7 +3966,7 @@ MaybeDumpValue(const char *name, const Value &v)
 }
 
 JS_FRIEND_API(void)
-js_DumpInterpreterFrame(JSContext *cx, InterpreterFrame *start)
+js::DumpInterpreterFrame(JSContext *cx, InterpreterFrame *start)
 {
     /* This should only called during live debugging. */
     ScriptFrameIter i(cx, ScriptFrameIter::GO_THROUGH_SAVED);
@@ -4036,7 +4036,7 @@ js_DumpInterpreterFrame(JSContext *cx, InterpreterFrame *start)
 #endif /* DEBUG */
 
 JS_FRIEND_API(void)
-js_DumpBacktrace(JSContext *cx)
+js::DumpBacktrace(JSContext *cx)
 {
     Sprinter sprinter(cx);
     sprinter.init();
@@ -4112,42 +4112,20 @@ JSObject::addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::ClassIn
     }
 }
 
-bool
-JSObject::hasIdempotentProtoChain() const
-{
-    // Return false if obj (or an object on its proto chain) is non-native or
-    // has a resolve or lookup hook.
-    JSObject *obj = const_cast<JSObject *>(this);
-    while (true) {
-        if (!obj->isNative())
-            return false;
-
-        JSResolveOp resolve = obj->getClass()->resolve;
-        if (resolve && resolve != js::fun_resolve && resolve != js::str_resolve)
-            return false;
-
-        if (obj->getOps()->lookupProperty)
-            return false;
-
-        obj = obj->getProto();
-        if (!obj)
-            return true;
-    }
-}
-
 void
 JSObject::markChildren(JSTracer *trc)
 {
     MarkObjectGroup(trc, &group_, "group");
 
-    MarkShape(trc, &shape_, "shape");
-
     const Class *clasp = group_->clasp();
     if (clasp->trace)
         clasp->trace(trc, this);
 
-    if (shape_->isNative()) {
+    if (clasp->isNative()) {
         NativeObject *nobj = &as<NativeObject>();
+
+        MarkShape(trc, &nobj->shape_, "shape");
+
         MarkObjectSlots(trc, nobj, 0, nobj->slotSpan());
 
         do {
@@ -4165,4 +4143,17 @@ JSObject::markChildren(JSTracer *trc)
                                "objectElements");
         } while (false);
     }
+}
+
+JSObject *
+JSObject::getParent() const
+{
+    if (Shape *shape = maybeShape())
+        return shape->getObjectParent();
+
+    // Avoid the parent-link checking in JSObject::global. Unboxed plain
+    // objects keep their compartment's global alive through their layout, and
+    // don't need a read barrier here.
+    MOZ_ASSERT(is<UnboxedPlainObject>());
+    return compartment()->unsafeUnbarrieredMaybeGlobal();
 }
