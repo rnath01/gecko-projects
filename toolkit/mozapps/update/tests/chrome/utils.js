@@ -165,7 +165,7 @@ const TEST_ADDONS = [ "appdisabled_1", "appdisabled_2",
 const IS_WIN = ("@mozilla.org/windows-registry-key;1" in Components.classes);
 const IS_MACOSX = ("nsILocalFileMac" in Components.interfaces);
 const BIN_SUFFIX = (IS_WIN ? ".exe" : "");
-const FILE_UPDATER_BIN = "updater" + IS_MACOSX ? ".app" : BIN_SUFFIX;
+const FILE_UPDATER_BIN = "updater" + (IS_MACOSX ? ".app" : BIN_SUFFIX);
 const FILE_UPDATER_BIN_BAK = FILE_UPDATER_BIN + ".bak";
 
 var gURLData = URL_HOST + "/" + REL_PATH_DATA + "/";
