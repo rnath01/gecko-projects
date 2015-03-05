@@ -721,6 +721,8 @@ $(info DIST is $(DIST))
 $(info FILE IS $(call QUOTED_WILDCARD,$(wildcard $(DIST)/$(PARTIAL_MAR))))
 $(info "find . -type f -name '*firefox*partial*.mar'")
 $(info $(shell find . -type f -name '*firefox*partial*.mar'))
+$(info "pwd: $(shell pwd)")
+$(info "ls pwd + ../../dist: $(shell ls ../../dist)" )
 
 UPLOAD_FILES= \
   $(call QUOTED_WILDCARD,$(DIST)/$(PACKAGE)) \
