@@ -6,6 +6,9 @@ ac_add_options --with-google-api-keyfile=/builds/gapi.data
 ac_add_options --with-google-oauth-api-keyfile=/builds/google-oauth-api.key
 ac_add_options --with-mozilla-api-keyfile=/builds/mozilla-desktop-geoloc-api.key
 
+MOZ_AUTOMATION_UPLOAD_SYMBOLS=1
+MOZ_AUTOMATION_UPDATE_PACKAGING=1
+
 . $topsrcdir/build/unix/mozconfig.linux
 
 # Needed to enable breakpad in application.ini
