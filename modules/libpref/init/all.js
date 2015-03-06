@@ -488,9 +488,6 @@ pref("media.audio_data.enabled", false);
 // Whether to use async panning and zooming
 pref("layers.async-pan-zoom.enabled", false);
 
-// Whether to enable containerless async scrolling
-pref("layout.async-containerless-scrolling.enabled", true);
-
 // Whether to enable event region building during painting
 pref("layout.event-regions.enabled", false);
 
@@ -1363,6 +1360,12 @@ pref("network.http.enforce-framing.soft", true);
 pref("network.ftp.data.qos", 0);
 pref("network.ftp.control.qos", 0);
 
+// If this pref is false only one xpcom event will be served per poll
+// iteration. This is the original behavior.
+// If it is true multiple events will be served.
+pref("network.sts.serve_multiple_events_per_poll_iteration", true);
+// The max time to spend on xpcom events between two polls in ms.
+pref("network.sts.max_time_for_events_between_two_polls", 100);
 // </http>
 
 // 2147483647 == PR_INT32_MAX == ~2 GB
@@ -2090,6 +2093,23 @@ pref("layout.css.isolation.enabled", true);
 
 // Is support for CSS Filters enabled?
 pref("layout.css.filters.enabled", true);
+
+// Is support for scroll-snap enabled?
+pref("layout.css.scroll-snap.enabled", false);
+
+// Set the threshold distance in CSS pixels below which scrolling will snap to
+// an edge, when scroll snapping is set to "proximity".
+pref("layout.css.scroll-snap.proximity-threshold", 200);
+
+// When selecting the snap point for CSS scroll snapping, the velocity of the
+// scroll frame is clamped to this speed, in CSS pixels / s.
+pref("layout.css.scroll-snap.prediction-max-velocity", 2000);
+
+// When selecting the snap point for CSS scroll snapping, the velocity of the
+// scroll frame is integrated over this duration, in seconds.  The snap point
+// best suited for this position is selected, enabling the user to perform fling
+// gestures.
+pref("layout.css.scroll-snap.prediction-sensitivity", "0.750");
 
 // Is support for basic shapes in clip-path enabled?
 pref("layout.css.clip-path-shapes.enabled", false);

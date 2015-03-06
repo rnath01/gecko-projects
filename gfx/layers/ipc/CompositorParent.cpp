@@ -1449,6 +1449,22 @@ CompositorParent::PostInsertVsyncProfilerMarker(TimeStamp aVsyncTimestamp)
   }
 }
 
+/* static */ void
+CompositorParent::RequestNotifyLayerTreeReady(uint64_t aLayersId, CompositorUpdateObserver* aObserver)
+{
+  EnsureLayerTreeMapReady();
+  MonitorAutoLock lock(*sIndirectLayerTreesLock);
+  sIndirectLayerTrees[aLayersId].mLayerTreeReadyObserver = aObserver;
+}
+
+/* static */ void
+CompositorParent::RequestNotifyLayerTreeCleared(uint64_t aLayersId, CompositorUpdateObserver* aObserver)
+{
+  EnsureLayerTreeMapReady();
+  MonitorAutoLock lock(*sIndirectLayerTreesLock);
+  sIndirectLayerTrees[aLayersId].mLayerTreeClearedObserver = aObserver;
+}
+
 /**
  * This class handles layer updates pushed directly from child
  * processes to the compositor thread.  It's associated with a
@@ -1527,6 +1543,7 @@ public:
                                    uint32_t aPaintSequenceNumber,
                                    bool aIsRepeatTransaction) MOZ_OVERRIDE;
   virtual void ForceComposite(LayerTransactionParent* aLayerTree) MOZ_OVERRIDE;
+  virtual void NotifyClearCachedResources(LayerTransactionParent* aLayerTree) MOZ_OVERRIDE;
   virtual bool SetTestSampleTime(LayerTransactionParent* aLayerTree,
                                  const TimeStamp& aTime) MOZ_OVERRIDE;
   virtual void LeaveTestMode(LayerTransactionParent* aLayerTree) MOZ_OVERRIDE;
@@ -1749,7 +1766,7 @@ CrossProcessCompositorParent::ShadowLayersUpdated(
 
   // Cache the plugin data for this remote layer tree
   state->mPluginData = aPlugins;
-  state->mUpdatedPluginDataAvailable = !!state->mPluginData.Length();
+  state->mUpdatedPluginDataAvailable = true;
 
   state->mParent->NotifyShadowTreeTransaction(id, aIsFirstPaint, aScheduleComposite,
       aPaintSequenceNumber, aIsRepeatTransaction);
@@ -1760,15 +1777,22 @@ CrossProcessCompositorParent::ShadowLayersUpdated(
     mNotifyAfterRemotePaint = false;
   }
 
+  if (state->mLayerTreeReadyObserver) {
+    nsRefPtr<CompositorUpdateObserver> observer = state->mLayerTreeReadyObserver;
+    state->mLayerTreeReadyObserver = nullptr;
+    observer->ObserveUpdate(id, true);
+  }
+
   aLayerTree->SetPendingTransactionId(aTransactionId);
 }
 
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
 // Sends plugin window state changes to the main thread
 static void
 UpdatePluginWindowState(uint64_t aId)
 {
   CompositorParent::LayerTreeState& lts = sIndirectLayerTrees[aId];
-  if (!lts.mPluginData.Length()) {
+  if (!lts.mPluginData.Length() && !lts.mUpdatedPluginDataAvailable) {
     return;
   }
 
@@ -1779,8 +1803,17 @@ UpdatePluginWindowState(uint64_t aId)
   bool shouldHidePlugin = (!lts.mRoot ||
                            !lts.mRoot->GetParent()) &&
                           !lts.mUpdatedPluginDataAvailable;
-
   if (shouldComposePlugin) {
+    if (!lts.mPluginData.Length()) {
+      // We will pass through here in cases where the previous shadow layer
+      // tree contained visible plugins and the new tree does not. All we need
+      // to do here is hide the plugins for the old tree, so don't waste time
+      // calculating clipping.
+      nsTArray<uintptr_t> aVisibleIdList;
+      unused << lts.mParent->SendUpdatePluginVisibility(aVisibleIdList);
+      return;
+    }
+
     // Retrieve the offset and visible region of the layer that hosts
     // the plugins, CompositorChild needs these in calculating proper
     // plugin clipping.
@@ -1818,6 +1851,7 @@ UpdatePluginWindowState(uint64_t aId)
     lts.mPluginData.Clear();
   }
 }
+#endif // #if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
 
 void
 CrossProcessCompositorParent::DidComposite(uint64_t aId)
@@ -1828,7 +1862,9 @@ CrossProcessCompositorParent::DidComposite(uint64_t aId)
     unused << SendDidComposite(aId, layerTree->GetPendingTransactionId());
     layerTree->SetPendingTransactionId(0);
   }
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
   UpdatePluginWindowState(aId);
+#endif
 }
 
 void
@@ -1843,6 +1879,23 @@ CrossProcessCompositorParent::ForceComposite(LayerTransactionParent* aLayerTree)
   }
   if (parent) {
     parent->ForceComposite(aLayerTree);
+  }
+}
+
+void
+CrossProcessCompositorParent::NotifyClearCachedResources(LayerTransactionParent* aLayerTree)
+{
+  uint64_t id = aLayerTree->GetId();
+  MOZ_ASSERT(id != 0);
+
+  nsRefPtr<CompositorUpdateObserver> observer;
+  { // scope lock
+    MonitorAutoLock lock(*sIndirectLayerTreesLock);
+    observer = sIndirectLayerTrees[id].mLayerTreeClearedObserver;
+    sIndirectLayerTrees[id].mLayerTreeClearedObserver = nullptr;
+  }
+  if (observer) {
+    observer->ObserveUpdate(id, false);
   }
 }
 
