@@ -716,14 +716,6 @@ UPLOAD_EXTRA_FILES += host/bin/mbsdiff
 endif
 
 
-$(info PARTIAL MAR is $(PARTIAL_MAR))
-$(info DIST is $(DIST))
-$(info FILE IS $(call QUOTED_WILDCARD,$(wildcard $(DIST)/$(PARTIAL_MAR))))
-$(info "find . -type f -name '*firefox*partial*.mar'")
-$(info PWD IS )
-$(info $(shell pwd))
-$(info $(shell find /builds/slave/Linux-ash-l10n-1_3-00000000000/build/ash/obj-l10n/dist/ -type f -name '*firefox*partial*.mar'))
-
 UPLOAD_FILES= \
   $(call QUOTED_WILDCARD,$(DIST)/$(PACKAGE)) \
   $(call QUOTED_WILDCARD,$(INSTALLER_PACKAGE)) \
