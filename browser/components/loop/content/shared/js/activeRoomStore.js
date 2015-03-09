@@ -55,6 +55,8 @@ loop.store.ActiveRoomStore = (function() {
         throw new Error("Missing option sdkDriver");
       }
       this._sdkDriver = options.sdkDriver;
+
+      this._isDesktop = options.isDesktop || false;
     },
 
     /**
@@ -356,6 +358,21 @@ loop.store.ActiveRoomStore = (function() {
      * @param {sharedActions.ConnectionFailure} actionData
      */
     connectionFailure: function(actionData) {
+      /**
+       * XXX This is a workaround for desktop machines that do not have a
+       * camera installed. As we don't yet have device enumeration, when
+       * we do, this can be removed (bug 1138851), and the sdk should handle it.
+       */
+      if (this._isDesktop &&
+          actionData.reason === FAILURE_DETAILS.UNABLE_TO_PUBLISH_MEDIA &&
+          this.getStoreState().videoMuted === false) {
+        // We failed to publish with media, so due to the bug, we try again without
+        // video.
+        this.setStoreState({videoMuted: true});
+        this._sdkDriver.retryPublishWithoutVideo();
+        return;
+      }
+
       // Treat all reasons as something failed. In theory, clientDisconnected
       // could be a success case, but there's no way we should be intentionally
       // sending that and still have the window open.
@@ -497,13 +514,6 @@ loop.store.ActiveRoomStore = (function() {
     windowUnload: function() {
       this._leaveRoom(ROOM_STATES.CLOSING);
 
-      // If we're closing the window, then ensure the screensharing state
-      // is cleared. We don't do this on leave room, as we might still be
-      // sharing.
-      this._mozLoop.setScreenShareState(
-        this.getStoreState().windowId,
-        false);
-
       if (!this._onUpdateListener) {
         return;
       }
@@ -520,7 +530,7 @@ loop.store.ActiveRoomStore = (function() {
      * Handles a room being left.
      */
     leaveRoom: function() {
-      this._leaveRoom();
+      this._leaveRoom(ROOM_STATES.ENDED);
     },
 
     /**
@@ -554,14 +564,24 @@ loop.store.ActiveRoomStore = (function() {
      * Handles leaving a room. Clears any membership timeouts, then
      * signals to the server the leave of the room.
      *
-     * @param {ROOM_STATES} nextState Optional; the next state to switch to.
-     *                                Switches to READY if undefined.
+     * @param {ROOM_STATES} nextState The next state to switch to.
      */
     _leaveRoom: function(nextState) {
       if (loop.standaloneMedia) {
         loop.standaloneMedia.multiplexGum.reset();
       }
 
+      this._mozLoop.setScreenShareState(
+        this.getStoreState().windowId,
+        false);
+
+      if (this._browserSharingListener) {
+        // Remove the browser sharing listener as we don't need it now.
+        this._mozLoop.removeBrowserSharingListener(this._browserSharingListener);
+        this._browserSharingListener = null;
+      }
+
+      // We probably don't need to end screen share separately, but lets be safe.
       this._sdkDriver.disconnectSession();
 
       if (this._timeout) {
@@ -577,7 +597,7 @@ loop.store.ActiveRoomStore = (function() {
           this._storeState.sessionToken);
       }
 
-      this.setStoreState({roomState: nextState || ROOM_STATES.ENDED});
+      this.setStoreState({roomState: nextState});
     },
 
     /**
