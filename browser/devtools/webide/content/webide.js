@@ -919,22 +919,7 @@ let UI = {
       let json = JSON.parse(event.data);
       switch (json.name) {
         case "toolbox-close":
-<<<<<<< local
           this.closeToolboxUI();
-=======
-          // There are many ways to close a toolbox:
-          // * Close button inside the toolbox
-          // * Toggle toolbox wrench in WebIDE
-          // * Disconnect the current runtime gracefully
-          // * Yank cord out of device
-          // We can't know for sure which one was used here, so reset the
-          // |toolboxPromise| since someone must be destroying it to reach here,
-          // and call our own close method.
-          if (this.toolboxIframe && this.toolboxIframe.uid == json.uid) {
-            this.toolboxPromise = null;
-            this._closeToolboxUI();
-          }
->>>>>>> other
           break;
       }
     } catch(e) { console.error(e); }
@@ -942,20 +927,10 @@ let UI = {
 
   destroyToolbox: function() {
     if (this.toolboxPromise) {
-<<<<<<< local
       return this.toolboxPromise.then(toolbox => {
         toolbox.destroy();
         this.toolboxPromise = null;
       }, console.error);
-=======
-      let toolboxPromise = this.toolboxPromise;
-      this.toolboxPromise = null;
-      return toolboxPromise.then(toolbox => {
-        return toolbox.destroy();
-      }).then(null, console.error)
-        .then(() => this._closeToolboxUI())
-        .then(null, console.error);
->>>>>>> other
     }
     return promise.resolve();
   },
