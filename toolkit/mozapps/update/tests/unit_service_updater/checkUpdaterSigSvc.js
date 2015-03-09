@@ -24,15 +24,15 @@ function run_test() {
               updaterBin.path + " signature.");
 
   // Bypass the manifest and run as invoker
-  let env = AUS_Cc["@mozilla.org/process/environment;1"].
-            getService(AUS_Ci.nsIEnvironment);
+  let env = Cc["@mozilla.org/process/environment;1"].
+            getService(Ci.nsIEnvironment);
   env.set("__COMPAT_LAYER", "RunAsInvoker");
 
   let dummyInstallPath = "---";
   let maintenanceServiceBinArgs = ["check-cert", dummyInstallPath,
                                    updaterBin.path];
-  let maintenanceServiceBinProcess = AUS_Cc["@mozilla.org/process/util;1"].
-                                     createInstance(AUS_Ci.nsIProcess);
+  let maintenanceServiceBinProcess = Cc["@mozilla.org/process/util;1"].
+                                     createInstance(Ci.nsIProcess);
   maintenanceServiceBinProcess.init(maintenanceServiceBin);
   maintenanceServiceBinProcess.run(true, maintenanceServiceBinArgs,
                                    maintenanceServiceBinArgs.length);
