@@ -8,7 +8,7 @@
  * This tests that code path.  */
 
 function run_test() {
-  if (UPDATER_AUTHENTICODE_CHECK_DISABLED) {
+  if (!IS_AUTHENTICODE_CHECK_ENABLED) {
     return;
   }
 
