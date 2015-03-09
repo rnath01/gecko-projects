@@ -13,7 +13,7 @@
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/UnionTypes.h"
 #include "mozilla/CDMProxy.h"
-#include "mozilla/EMELog.h"
+#include "mozilla/EMEUtils.h"
 #include "nsContentUtils.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "mozilla/Preferences.h"
@@ -27,6 +27,8 @@
 #include "nsContentCID.h"
 #include "nsServiceManagerUtils.h"
 #include "mozIGeckoMediaPluginService.h"
+#include "mozilla/dom/MediaKeySystemAccess.h"
+#include "nsPrintfCString.h"
 
 namespace mozilla {
 
@@ -173,6 +175,8 @@ MediaKeys::StorePromise(Promise* aPromise)
   MOZ_ASSERT(aPromise);
   uint32_t id = sEMEPromiseCount++;
 
+  EME_LOG("MediaKeys::StorePromise() id=%d", id);
+
   // Keep MediaKeys alive for the lifetime of its promises. Any still-pending
   // promises are rejected in Shutdown().
   AddRef();
@@ -184,7 +188,10 @@ MediaKeys::StorePromise(Promise* aPromise)
 already_AddRefed<Promise>
 MediaKeys::RetrievePromise(PromiseId aId)
 {
-  MOZ_ASSERT(mPromises.Contains(aId));
+  if (!mPromises.Contains(aId)) {
+    NS_WARNING(nsPrintfCString("Tried to retrieve a non-existent promise id=%d", aId).get());
+    return nullptr;
+  }
   nsRefPtr<Promise> promise;
   mPromises.Remove(aId, getter_AddRefs(promise));
   Release();
@@ -194,9 +201,10 @@ MediaKeys::RetrievePromise(PromiseId aId)
 void
 MediaKeys::RejectPromise(PromiseId aId, nsresult aExceptionCode)
 {
+  EME_LOG("MediaKeys::RejectPromise(%d, 0x%x)", aId, aExceptionCode);
+
   nsRefPtr<Promise> promise(RetrievePromise(aId));
   if (!promise) {
-    NS_WARNING("MediaKeys tried to reject a non-existent promise");
     return;
   }
   if (mPendingSessions.Contains(aId)) {
@@ -241,9 +249,10 @@ MediaKeys::OnSessionIdReady(MediaKeySession* aSession)
 void
 MediaKeys::ResolvePromise(PromiseId aId)
 {
+  EME_LOG("MediaKeys::ResolvePromise(%d)", aId);
+
   nsRefPtr<Promise> promise(RetrievePromise(aId));
   if (!promise) {
-    NS_WARNING("MediaKeys tried to resolve a non-existent promise");
     return;
   }
   if (mPendingSessions.Contains(aId)) {
@@ -356,15 +365,19 @@ MediaKeys::OnCDMCreated(PromiseId aId, const nsACString& aNodeId)
 {
   nsRefPtr<Promise> promise(RetrievePromise(aId));
   if (!promise) {
-    NS_WARNING("MediaKeys tried to resolve a non-existent promise");
     return;
   }
   mNodeId = aNodeId;
   nsRefPtr<MediaKeys> keys(this);
+  EME_LOG("MediaKeys::OnCDMCreated() resolve promise id=%d", aId);
   promise->MaybeResolve(keys);
   if (mCreatePromiseId == aId) {
     Release();
   }
+
+  MediaKeySystemAccess::NotifyObservers(mParent,
+                                        mKeySystem,
+                                        MediaKeySystemStatus::Cdm_created);
 }
 
 already_AddRefed<MediaKeySession>
@@ -394,9 +407,10 @@ MediaKeys::OnSessionLoaded(PromiseId aId, bool aSuccess)
 {
   nsRefPtr<Promise> promise(RetrievePromise(aId));
   if (!promise) {
-    NS_WARNING("MediaKeys tried to resolve a non-existent promise");
     return;
   }
+  EME_LOG("MediaKeys::OnSessionLoaded() resolve promise id=%d", aId);
+
   promise->MaybeResolve(aSuccess);
 }
 

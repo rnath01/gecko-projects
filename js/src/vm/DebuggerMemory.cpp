@@ -39,10 +39,9 @@ using mozilla::Nothing;
 /* static */ DebuggerMemory *
 DebuggerMemory::create(JSContext *cx, Debugger *dbg)
 {
-
-    Value memoryProto = dbg->object->getReservedSlot(Debugger::JSSLOT_DEBUG_MEMORY_PROTO);
-    RootedNativeObject memory(cx, NewNativeObjectWithGivenProto(cx, &class_,
-                                                                &memoryProto.toObject(),
+    Value memoryProtoValue = dbg->object->getReservedSlot(Debugger::JSSLOT_DEBUG_MEMORY_PROTO);
+    RootedObject memoryProto(cx, &memoryProtoValue.toObject());
+    RootedNativeObject memory(cx, NewNativeObjectWithGivenProto(cx, &class_, memoryProto,
                                                                 NullPtr()));
     if (!memory)
         return nullptr;
@@ -63,7 +62,7 @@ DebuggerMemory::getDebugger()
 /* static */ bool
 DebuggerMemory::construct(JSContext *cx, unsigned argc, Value *vp)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_NO_CONSTRUCTOR,
+    JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_NO_CONSTRUCTOR,
                          "Debugger.Memory");
     return false;
 }
@@ -80,13 +79,13 @@ DebuggerMemory::checkThis(JSContext *cx, CallArgs &args, const char *fnName)
     const Value &thisValue = args.thisv();
 
     if (!thisValue.isObject()) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_NOT_NONNULL_OBJECT);
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_NOT_NONNULL_OBJECT, InformalValueTypeName(thisValue));
         return nullptr;
     }
 
     JSObject &thisObject = thisValue.toObject();
     if (!thisObject.is<DebuggerMemory>()) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_INCOMPATIBLE_PROTO,
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_INCOMPATIBLE_PROTO,
                              class_.name, fnName, thisObject.getClass()->name);
         return nullptr;
     }
@@ -96,7 +95,7 @@ DebuggerMemory::checkThis(JSContext *cx, CallArgs &args, const char *fnName)
     // of Debugger.Memory. It is the only object that is<DebuggerMemory>() but
     // doesn't have a Debugger instance.
     if (thisObject.as<DebuggerMemory>().getReservedSlot(JSSLOT_DEBUGGER).isUndefined()) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_INCOMPATIBLE_PROTO,
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_INCOMPATIBLE_PROTO,
                              class_.name, fnName, "prototype object");
         return nullptr;
     }
@@ -140,17 +139,17 @@ DebuggerMemory::setTrackingAllocationSites(JSContext *cx, unsigned argc, Value *
     }
 
     if (enabling) {
-        for (GlobalObjectSet::Range r = dbg->debuggees.all(); !r.empty(); r.popFront()) {
+        for (WeakGlobalObjectSet::Range r = dbg->debuggees.all(); !r.empty(); r.popFront()) {
             JSCompartment *compartment = r.front()->compartment();
             if (compartment->hasObjectMetadataCallback()) {
-                JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr,
+                JS_ReportErrorNumber(cx, GetErrorMessage, nullptr,
                                      JSMSG_OBJECT_METADATA_CALLBACK_ALREADY_SET);
                 return false;
             }
         }
     }
 
-    for (GlobalObjectSet::Range r = dbg->debuggees.all(); !r.empty(); r.popFront()) {
+    for (WeakGlobalObjectSet::Range r = dbg->debuggees.all(); !r.empty(); r.popFront()) {
         if (enabling) {
             r.front()->compartment()->setObjectMetadataCallback(SavedStacksMetadataCallback);
         } else {
@@ -181,7 +180,7 @@ DebuggerMemory::drainAllocationsLog(JSContext *cx, unsigned argc, Value *vp)
     Debugger* dbg = memory->getDebugger();
 
     if (!dbg->trackingAllocationSites) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_NOT_TRACKING_ALLOCATIONS,
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_NOT_TRACKING_ALLOCATIONS,
                              "drainAllocationsLog");
         return false;
     }
@@ -246,7 +245,7 @@ DebuggerMemory::setMaxAllocationsLogLength(JSContext *cx, unsigned argc, Value *
         return false;
 
     if (max < 1) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_UNEXPECTED_TYPE,
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_UNEXPECTED_TYPE,
                              "(set maxAllocationsLogLength)'s parameter",
                              "not a positive integer");
         return false;
@@ -284,7 +283,7 @@ DebuggerMemory::setAllocationSamplingProbability(JSContext *cx, unsigned argc, V
         return false;
 
     if (probability < 0.0 || probability > 1.0) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_UNEXPECTED_TYPE,
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_UNEXPECTED_TYPE,
                              "(set allocationSamplingProbability)'s parameter",
                              "not a number between 0 and 1");
         return false;
@@ -779,7 +778,7 @@ DebuggerMemory::takeCensus(JSContext *cx, unsigned argc, Value *vp)
     RootedObject dbgObj(cx, dbg->object);
 
     // Populate our target set of debuggee zones.
-    for (GlobalObjectSet::Range r = dbg->allDebuggees(); !r.empty(); r.popFront()) {
+    for (WeakGlobalObjectSet::Range r = dbg->allDebuggees(); !r.empty(); r.popFront()) {
         if (!census.debuggeeZones.put(r.front()->zone()))
             return false;
     }

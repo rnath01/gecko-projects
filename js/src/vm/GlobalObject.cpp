@@ -47,15 +47,19 @@ struct ProtoTableEntry {
     ClassInitializerOp init;
 };
 
+namespace js {
+
 #define DECLARE_PROTOTYPE_CLASS_INIT(name,code,init,clasp) \
     extern JSObject *init(JSContext *cx, Handle<JSObject*> obj);
 JS_FOR_EACH_PROTOTYPE(DECLARE_PROTOTYPE_CLASS_INIT)
 #undef DECLARE_PROTOTYPE_CLASS_INIT
 
+} // namespace js
+
 JSObject *
-js_InitViaClassSpec(JSContext *cx, Handle<JSObject*> obj)
+js::InitViaClassSpec(JSContext *cx, Handle<JSObject*> obj)
 {
-    MOZ_CRASH("js_InitViaClassSpec() should not be called.");
+    MOZ_CRASH("InitViaClassSpec() should not be called.");
 }
 
 static const ProtoTableEntry protoTable[JSProto_LIMIT] = {
@@ -101,11 +105,11 @@ GlobalObject::resolveConstructor(JSContext *cx, Handle<GlobalObject*> global, JS
     MOZ_ASSERT(!global->isStandardClassResolved(key));
 
     // There are two different kinds of initialization hooks. One of them is
-    // the class js_InitFoo hook, defined in a JSProtoKey-keyed table at the
+    // the class js::InitFoo hook, defined in a JSProtoKey-keyed table at the
     // top of this file. The other lives in the ClassSpec for classes that
     // define it. Classes may use one or the other, but not both.
     ClassInitializerOp init = protoTable[key].init;
-    if (init == js_InitViaClassSpec)
+    if (init == InitViaClassSpec)
         init = nullptr;
 
     const Class *clasp = ProtoKeyToClass(key);
@@ -234,7 +238,7 @@ GlobalObject::createInternal(JSContext *cx, const Class *clasp)
     MOZ_ASSERT(clasp->flags & JSCLASS_IS_GLOBAL);
     MOZ_ASSERT(clasp->trace == JS_GlobalObjectTraceHook);
 
-    JSObject *obj = NewObjectWithGivenProto(cx, clasp, nullptr, NullPtr(), SingletonObject);
+    JSObject *obj = NewObjectWithGivenProto(cx, clasp, NullPtr(), NullPtr(), SingletonObject);
     if (!obj)
         return nullptr;
 
@@ -415,7 +419,7 @@ GlobalObject::warnOnceAbout(JSContext *cx, HandleObject obj, uint32_t slot, unsi
     Rooted<GlobalObject*> global(cx, &obj->global());
     HeapSlot &v = global->getSlotRef(slot);
     if (v.isUndefined()) {
-        if (!JS_ReportErrorFlagsAndNumber(cx, JSREPORT_WARNING, js_GetErrorMessage, nullptr,
+        if (!JS_ReportErrorFlagsAndNumber(cx, JSREPORT_WARNING, GetErrorMessage, nullptr,
                                           errorNumber))
         {
             return false;
@@ -435,11 +439,11 @@ GlobalObject::createConstructor(JSContext *cx, Native ctor, JSAtom *nameArg, uns
 }
 
 static NativeObject *
-CreateBlankProto(JSContext *cx, const Class *clasp, JSObject &proto, HandleObject global)
+CreateBlankProto(JSContext *cx, const Class *clasp, HandleObject proto, HandleObject global)
 {
     MOZ_ASSERT(clasp != &JSFunction::class_);
 
-    RootedNativeObject blankProto(cx, NewNativeObjectWithGivenProto(cx, clasp, &proto, global,
+    RootedNativeObject blankProto(cx, NewNativeObjectWithGivenProto(cx, clasp, proto, global,
                                                                     SingletonObject));
     if (!blankProto || !blankProto->setDelegate(cx))
         return nullptr;
@@ -451,15 +455,15 @@ NativeObject *
 GlobalObject::createBlankPrototype(JSContext *cx, const Class *clasp)
 {
     Rooted<GlobalObject*> self(cx, this);
-    JSObject *objectProto = getOrCreateObjectPrototype(cx);
+    RootedObject objectProto(cx, getOrCreateObjectPrototype(cx));
     if (!objectProto)
         return nullptr;
 
-    return CreateBlankProto(cx, clasp, *objectProto, self);
+    return CreateBlankProto(cx, clasp, objectProto, self);
 }
 
 NativeObject *
-GlobalObject::createBlankPrototypeInheriting(JSContext *cx, const Class *clasp, JSObject &proto)
+GlobalObject::createBlankPrototypeInheriting(JSContext *cx, const Class *clasp, HandleObject proto)
 {
     Rooted<GlobalObject*> self(cx, this);
     return CreateBlankProto(cx, clasp, proto, self);
@@ -521,7 +525,8 @@ GlobalObject::getOrCreateDebuggers(JSContext *cx, Handle<GlobalObject*> global)
     if (debuggers)
         return debuggers;
 
-    NativeObject *obj = NewNativeObjectWithGivenProto(cx, &GlobalDebuggees_class, nullptr, global);
+    NativeObject *obj = NewNativeObjectWithGivenProto(cx, &GlobalDebuggees_class, NullPtr(),
+                                                      global);
     if (!obj)
         return nullptr;
     debuggers = cx->new_<DebuggerVector>();
@@ -613,11 +618,11 @@ GlobalObject::addIntrinsicValue(JSContext *cx, HandleId id, HandleValue value)
     Rooted<UnownedBaseShape*> base(cx, last->base()->unowned());
 
     StackShape child(base, id, slot, 0, 0);
-    RootedShape shape(cx, cx->compartment()->propertyTree.getChild(cx, last, child));
+    Shape *shape = cx->compartment()->propertyTree.getChild(cx, last, child);
     if (!shape)
         return false;
 
-    if (!NativeObject::setLastProperty(cx, holder, shape))
+    if (!holder->setLastProperty(cx, shape))
         return false;
 
     holder->setSlot(shape->slot(), value);

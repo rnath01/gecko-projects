@@ -6,6 +6,7 @@
 #include "nsTextRunTransformations.h"
 
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/Move.h"
 
 #include "nsGkAtoms.h"
 #include "nsStyleConsts.h"
@@ -18,6 +19,8 @@
 #include "nsNetUtil.h"
 #include "GreekCasing.h"
 #include "IrishCasing.h"
+
+using namespace mozilla;
 
 // Unicode characters needing special casing treatment in tr/az languages
 #define LATIN_CAPITAL_LETTER_I_WITH_DOT_ABOVE  0x0130
@@ -568,8 +571,9 @@ nsCaseTransformTextRunFactory::TransformString(
       aCharsToMergeArray.AppendElement(false);
       if (aTextRun) {
         aStyleArray->AppendElement(charStyle);
-        aCanBreakBeforeArray->AppendElement(inhibitBreakBefore ? false :
-                                            aTextRun->CanBreakLineBefore(i));
+        aCanBreakBeforeArray->AppendElement(
+          inhibitBreakBefore ? gfxShapedText::CompressedGlyph::FLAG_BREAK_TYPE_NONE
+                             : aTextRun->CanBreakBefore(i));
       }
 
       if (IS_IN_BMP(ch)) {
@@ -588,7 +592,8 @@ nsCaseTransformTextRunFactory::TransformString(
         aCharsToMergeArray.AppendElement(true);
         if (aTextRun) {
           aStyleArray->AppendElement(charStyle);
-          aCanBreakBeforeArray->AppendElement(false);
+          aCanBreakBeforeArray->AppendElement(
+            gfxShapedText::CompressedGlyph::FLAG_BREAK_TYPE_NONE);
         }
       }
     }

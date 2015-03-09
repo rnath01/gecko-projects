@@ -27,13 +27,6 @@
 #include "SSLServerCertVerification.h"
 #include "nsNSSCertHelper.h"
 
-#ifndef MOZ_NO_EV_CERTS
-#include "nsIDocShell.h"
-#include "nsIDocShellTreeItem.h"
-#include "nsISecureBrowserUI.h"
-#include "nsIInterfaceRequestorUtils.h"
-#endif
-
 #include "nsCharSeparatedTokenizer.h"
 #include "nsIConsoleService.h"
 #include "PSMRunnable.h"
@@ -273,39 +266,6 @@ nsNSSSocketInfo::SetNotificationCallbacks(nsIInterfaceRequestor* aCallbacks)
 
   return NS_OK;
 }
-
-#ifndef MOZ_NO_EV_CERTS
-static void
-getSecureBrowserUI(nsIInterfaceRequestor* callbacks,
-                   nsISecureBrowserUI** result)
-{
-  NS_ASSERTION(result, "result parameter to getSecureBrowserUI is null");
-  *result = nullptr;
-
-  NS_ASSERTION(NS_IsMainThread(),
-               "getSecureBrowserUI called off the main thread");
-
-  if (!callbacks)
-    return;
-
-  nsCOMPtr<nsISecureBrowserUI> secureUI = do_GetInterface(callbacks);
-  if (secureUI) {
-    secureUI.forget(result);
-    return;
-  }
-
-  nsCOMPtr<nsIDocShellTreeItem> item = do_GetInterface(callbacks);
-  if (item) {
-    nsCOMPtr<nsIDocShellTreeItem> rootItem;
-    (void) item->GetSameTypeRootTreeItem(getter_AddRefs(rootItem));
-
-    nsCOMPtr<nsIDocShell> docShell = do_QueryInterface(rootItem);
-    if (docShell) {
-      (void) docShell->GetSecurityUI(result);
-    }
-  }
-}
-#endif
 
 void
 nsNSSSocketInfo::NoteTimeUntilReady()
@@ -578,49 +538,6 @@ nsNSSSocketInfo::SetFileDescPtr(PRFileDesc* aFilePtr)
 {
   mFd = aFilePtr;
   return NS_OK;
-}
-
-#ifndef MOZ_NO_EV_CERTS
-class PreviousCertRunnable : public SyncRunnableBase
-{
-public:
-  explicit PreviousCertRunnable(nsIInterfaceRequestor* callbacks)
-    : mCallbacks(callbacks)
-  {
-  }
-
-  virtual void RunOnTargetThread()
-  {
-    nsCOMPtr<nsISecureBrowserUI> secureUI;
-    getSecureBrowserUI(mCallbacks, getter_AddRefs(secureUI));
-    nsCOMPtr<nsISSLStatusProvider> statusProvider = do_QueryInterface(secureUI);
-    if (statusProvider) {
-      nsCOMPtr<nsISSLStatus> status;
-      (void) statusProvider->GetSSLStatus(getter_AddRefs(status));
-      if (status) {
-        (void) status->GetServerCert(getter_AddRefs(mPreviousCert));
-      }
-    }
-  }
-
-  nsCOMPtr<nsIX509Cert> mPreviousCert; // out
-private:
-  nsCOMPtr<nsIInterfaceRequestor> mCallbacks; // in
-};
-#endif
-
-void
-nsNSSSocketInfo::GetPreviousCert(nsIX509Cert** _result)
-{
-  NS_ASSERTION(_result, "_result parameter to GetPreviousCert is null");
-  *_result = nullptr;
-
-#ifndef MOZ_NO_EV_CERTS
-  RefPtr<PreviousCertRunnable> runnable(new PreviousCertRunnable(mCallbacks));
-  DebugOnly<nsresult> rv = runnable->DispatchToMainThreadAndWait();
-  NS_ASSERTION(NS_SUCCEEDED(rv), "runnable->DispatchToMainThreadAndWait() failed");
-  runnable->mPreviousCert.forget(_result);
-#endif
 }
 
 void
@@ -1207,6 +1124,13 @@ retryDueToTLSIntolerance(PRErrorCode err, nsNSSSocketInfo* socketInfo)
   // Note this only happens during the initial SSL handshake.
 
   SSLVersionRange range = socketInfo->GetTLSVersionRange();
+  nsSSLIOLayerHelpers& helpers = socketInfo->SharedState().IOLayerHelpers();
+
+  if (err == SSL_ERROR_UNSUPPORTED_VERSION &&
+      range.min == SSL_LIBRARY_VERSION_TLS_1_0) {
+    socketInfo->SetSecurityState(nsIWebProgressListener::STATE_IS_INSECURE |
+                                 nsIWebProgressListener::STATE_USES_SSL_3);
+  }
 
   if (err == SSL_ERROR_INAPPROPRIATE_FALLBACK_ALERT) {
     // This is a clear signal that we've fallen back too many versions.  Treat
@@ -1216,15 +1140,36 @@ retryDueToTLSIntolerance(PRErrorCode err, nsNSSSocketInfo* socketInfo)
     // First, track the original cause of the version fallback.  This uses the
     // same buckets as the telemetry below, except that bucket 0 will include
     // all cases where there wasn't an original reason.
-    PRErrorCode originalReason = socketInfo->SharedState().IOLayerHelpers()
-      .getIntoleranceReason(socketInfo->GetHostName(), socketInfo->GetPort());
+    PRErrorCode originalReason =
+      helpers.getIntoleranceReason(socketInfo->GetHostName(),
+                                   socketInfo->GetPort());
     Telemetry::Accumulate(Telemetry::SSL_VERSION_FALLBACK_INAPPROPRIATE,
                           tlsIntoleranceTelemetryBucket(originalReason));
 
-    socketInfo->SharedState().IOLayerHelpers()
-      .forgetIntolerance(socketInfo->GetHostName(), socketInfo->GetPort());
+    helpers.forgetIntolerance(socketInfo->GetHostName(),
+                              socketInfo->GetPort());
 
     return false;
+  }
+
+  // Disallow PR_CONNECT_RESET_ERROR if fallback limit reached.
+  bool fallbackLimitReached =
+    helpers.fallbackLimitReached(socketInfo->GetHostName(), range.max);
+  if (err == PR_CONNECT_RESET_ERROR && fallbackLimitReached) {
+    return false;
+  }
+
+  if ((err == SSL_ERROR_NO_CYPHER_OVERLAP || err == PR_END_OF_FILE_ERROR ||
+       err == PR_CONNECT_RESET_ERROR) &&
+      (!fallbackLimitReached || helpers.mUnrestrictedRC4Fallback) &&
+      nsNSSComponent::AreAnyWeakCiphersEnabled()) {
+    if (helpers.rememberStrongCiphersFailed(socketInfo->GetHostName(),
+                                            socketInfo->GetPort(), err)) {
+      Telemetry::Accumulate(Telemetry::SSL_WEAK_CIPHERS_FALLBACK,
+                            tlsIntoleranceTelemetryBucket(err));
+      return true;
+    }
+    Telemetry::Accumulate(Telemetry::SSL_WEAK_CIPHERS_FALLBACK, 0);
   }
 
   // When not using a proxy we'll see a connection reset error.
@@ -1281,10 +1226,9 @@ retryDueToTLSIntolerance(PRErrorCode err, nsNSSSocketInfo* socketInfo)
   // TLS intolerance fallback due to remembered tolerance.
   Telemetry::Accumulate(pre, reason);
 
-  if (!socketInfo->SharedState().IOLayerHelpers()
-                 .rememberIntolerantAtVersion(socketInfo->GetHostName(),
-                                              socketInfo->GetPort(),
-                                              range.min, range.max, err)) {
+  if (!helpers.rememberIntolerantAtVersion(socketInfo->GetHostName(),
+                                           socketInfo->GetPort(),
+                                           range.min, range.max, err)) {
     return false;
   }
 
@@ -1444,6 +1388,7 @@ nsSSLIOLayerHelpers::nsSSLIOLayerHelpers()
   , mTLSIntoleranceInfo()
   , mFalseStartRequireNPN(false)
   , mUseStaticFallbackList(true)
+  , mUnrestrictedRC4Fallback(false)
   , mVersionFallbackLimit(SSL_LIBRARY_VERSION_TLS_1_0)
   , mutex("nsSSLIOLayerHelpers.mutex")
 {
@@ -1670,6 +1615,9 @@ PrefObserver::Observe(nsISupports* aSubject, const char* aTopic,
     } else if (prefName.EqualsLiteral("security.tls.insecure_fallback_hosts.use_static_list")) {
       mOwner->mUseStaticFallbackList =
         Preferences::GetBool("security.tls.insecure_fallback_hosts.use_static_list", true);
+    } else if (prefName.EqualsLiteral("security.tls.unrestricted_rc4_fallback")) {
+      mOwner->mUnrestrictedRC4Fallback =
+        Preferences::GetBool("security.tls.unrestricted_rc4_fallback", false);
     }
   }
   return NS_OK;
@@ -1708,6 +1656,8 @@ nsSSLIOLayerHelpers::~nsSSLIOLayerHelpers()
         "security.tls.version.fallback-limit");
     Preferences::RemoveObserver(mPrefObserver,
         "security.tls.insecure_fallback_hosts");
+    Preferences::RemoveObserver(mPrefObserver,
+        "security.tls.unrestricted_rc4_fallback");
   }
 }
 
@@ -1773,6 +1723,8 @@ nsSSLIOLayerHelpers::Init()
   setInsecureFallbackSites(insecureFallbackHosts);
   mUseStaticFallbackList =
     Preferences::GetBool("security.tls.insecure_fallback_hosts.use_static_list", true);
+  mUnrestrictedRC4Fallback =
+    Preferences::GetBool("security.tls.unrestricted_rc4_fallback", false);
 
   mPrefObserver = new PrefObserver(this);
   Preferences::AddStrongObserver(mPrefObserver,
@@ -1785,6 +1737,8 @@ nsSSLIOLayerHelpers::Init()
                                  "security.tls.version.fallback-limit");
   Preferences::AddStrongObserver(mPrefObserver,
                                  "security.tls.insecure_fallback_hosts");
+  Preferences::AddStrongObserver(mPrefObserver,
+                                 "security.tls.unrestricted_rc4_fallback");
   return NS_OK;
 }
 
@@ -1845,16 +1799,34 @@ private:
   const char* mTarget;
 };
 
+static const char* const kFallbackWildcardList[] =
+{
+  ".kuronekoyamato.co.jp", // bug 1128366
+  ".userstorage.mega.co.nz", // bug 1133496
+  ".whatwg.org", // bug 1137079
+  ".wildcard.test",
+};
+
 bool
 nsSSLIOLayerHelpers::isInsecureFallbackSite(const nsACString& hostname)
 {
   size_t match;
-  if (mUseStaticFallbackList &&
-      BinarySearchIf(kIntolerantFallbackList, 0,
-        ArrayLength(kIntolerantFallbackList),
-        FallbackListComparator(PromiseFlatCString(hostname).get()),
-        &match)) {
-    return true;
+  if (mUseStaticFallbackList) {
+    const char* host = PromiseFlatCString(hostname).get();
+    if (BinarySearchIf(kIntolerantFallbackList, 0,
+          ArrayLength(kIntolerantFallbackList),
+          FallbackListComparator(host), &match)) {
+      return true;
+    }
+    for (size_t i = 0; i < ArrayLength(kFallbackWildcardList); ++i) {
+      size_t hostLen = hostname.Length();
+      const char* target = kFallbackWildcardList[i];
+      size_t targetLen = strlen(target);
+      if (hostLen > targetLen &&
+          !memcmp(host + hostLen - targetLen, target, targetLen)) {
+        return true;
+      }
+    }
   }
   MutexAutoLock lock(mutex);
   return mInsecureFallbackSites.Contains(hostname);
@@ -2615,20 +2587,18 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
   infoObject->SharedState().IOLayerHelpers()
     .adjustForTLSIntolerance(infoObject->GetHostName(), infoObject->GetPort(),
                              range, strongCiphersStatus);
-  bool useWeakCiphers = range.max <= SSL_LIBRARY_VERSION_TLS_1_0 &&
-                        nsNSSComponent::AreAnyWeakCiphersEnabled();
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG,
          ("[%p] nsSSLIOLayerSetOptions: using TLS version range (0x%04x,0x%04x)%s\n",
           fd, static_cast<unsigned int>(range.min),
               static_cast<unsigned int>(range.max),
-          useWeakCiphers ? " with weak ciphers" : ""));
+          strongCiphersStatus == StrongCiphersFailed ? " with weak ciphers" : ""));
 
   if (SSL_VersionRangeSet(fd, &range) != SECSuccess) {
     return NS_ERROR_FAILURE;
   }
   infoObject->SetTLSVersionRange(range);
 
-  if (useWeakCiphers) {
+  if (strongCiphersStatus == StrongCiphersFailed) {
     nsNSSComponent::UseWeakCiphersOnSocket(fd);
   }
 

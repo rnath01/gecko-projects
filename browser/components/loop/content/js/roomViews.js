@@ -166,7 +166,8 @@ loop.roomViews = (function(mozL10n) {
       ActiveRoomStoreMixin,
       sharedMixins.DocumentTitleMixin,
       sharedMixins.MediaSetupMixin,
-      sharedMixins.RoomsAudioMixin
+      sharedMixins.RoomsAudioMixin,
+      sharedMixins.WindowCloseMixin
     ],
 
     propTypes: {
@@ -204,14 +205,11 @@ loop.roomViews = (function(mozL10n) {
      * User clicked on the "Leave" button.
      */
     leaveRoom: function() {
-      this.props.dispatcher.dispatch(new sharedActions.LeaveRoom());
-    },
-
-    /**
-     * Closes the window if the cancel button is pressed in the generic failure view.
-     */
-    closeWindow: function() {
-      window.close();
+      if (this.state.used) {
+        this.props.dispatcher.dispatch(new sharedActions.LeaveRoom());
+      } else {
+        this.closeWindow();
+      }
     },
 
     /**
@@ -255,15 +253,9 @@ loop.roomViews = (function(mozL10n) {
           );
         }
         case ROOM_STATES.ENDED: {
-          if (this.state.used)
-            return React.createElement(sharedViews.FeedbackView, {
-              onAfterFeedbackReceived: this.closeWindow}
-            );
-
-          // In case the room was not used (no one was here), we
-          // bypass the feedback form.
-          this.closeWindow();
-          return null;
+          return React.createElement(sharedViews.FeedbackView, {
+            onAfterFeedbackReceived: this.closeWindow}
+          );
         }
         default: {
           return (
@@ -273,7 +265,7 @@ loop.roomViews = (function(mozL10n) {
                 React.createElement("div", {className: "conversation room-conversation"}, 
                   React.createElement("div", {className: "media nested"}, 
                     React.createElement("div", {className: "video_wrapper remote_wrapper"}, 
-                      React.createElement("div", {className: "video_inner remote remote-stream"})
+                      React.createElement("div", {className: "video_inner remote focus-stream"})
                     ), 
                     React.createElement("div", {className: localStreamClasses}), 
                     React.createElement("div", {className: "screen hide"})

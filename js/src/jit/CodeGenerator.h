@@ -122,7 +122,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitMaybeToDoubleElement(LMaybeToDoubleElement *lir);
     void visitMaybeCopyElementsForWrite(LMaybeCopyElementsForWrite *lir);
     void visitGuardObjectIdentity(LGuardObjectIdentity *guard);
-    void visitGuardShapePolymorphic(LGuardShapePolymorphic *lir);
+    void visitGuardReceiverPolymorphic(LGuardReceiverPolymorphic *lir);
     void visitTypeBarrierV(LTypeBarrierV *lir);
     void visitTypeBarrierO(LTypeBarrierO *lir);
     void visitMonitorTypes(LMonitorTypes *lir);
@@ -221,10 +221,10 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitCompareS(LCompareS *lir);
     void visitCompareStrictS(LCompareStrictS *lir);
     void visitCompareVM(LCompareVM *lir);
-    void visitIsNullOrLikeUndefined(LIsNullOrLikeUndefined *lir);
-    void visitIsNullOrLikeUndefinedAndBranch(LIsNullOrLikeUndefinedAndBranch *lir);
-    void visitEmulatesUndefined(LEmulatesUndefined *lir);
-    void visitEmulatesUndefinedAndBranch(LEmulatesUndefinedAndBranch *lir);
+    void visitIsNullOrLikeUndefinedV(LIsNullOrLikeUndefinedV *lir);
+    void visitIsNullOrLikeUndefinedT(LIsNullOrLikeUndefinedT *lir);
+    void visitIsNullOrLikeUndefinedAndBranchV(LIsNullOrLikeUndefinedAndBranchV *lir);
+    void visitIsNullOrLikeUndefinedAndBranchT(LIsNullOrLikeUndefinedAndBranchT *lir);
     void emitConcat(LInstruction *lir, Register lhs, Register rhs, Register output);
     void visitConcat(LConcat *lir);
     void visitCharCodeAt(LCharCodeAt *lir);
@@ -245,11 +245,13 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitLoadElementHole(LLoadElementHole *lir);
     void visitLoadUnboxedPointerV(LLoadUnboxedPointerV *lir);
     void visitLoadUnboxedPointerT(LLoadUnboxedPointerT *lir);
+    void visitUnboxObjectOrNull(LUnboxObjectOrNull *lir);
     void visitStoreElementT(LStoreElementT *lir);
     void visitStoreElementV(LStoreElementV *lir);
     void visitStoreElementHoleT(LStoreElementHoleT *lir);
     void visitStoreElementHoleV(LStoreElementHoleV *lir);
     void visitStoreUnboxedPointer(LStoreUnboxedPointer *lir);
+    void visitConvertUnboxedObjectToNative(LConvertUnboxedObjectToNative *lir);
     void emitArrayPopShift(LInstruction *lir, const MArrayPopShift *mir, Register obj,
                            Register elementsTemp, Register lengthTemp, TypedOrValueRegister out);
     void visitArrayPopShiftV(LArrayPopShiftV *lir);
@@ -470,6 +472,22 @@ class CodeGenerator : public CodeGeneratorSpecific
 #if defined(JS_ION_PERF)
     PerfSpewer perfSpewer_;
 #endif
+
+    // This integer is a bit mask of all SimdTypeDescr::Type indexes.  When a
+    // MSimdBox instruction is encoded, it might have either been created by
+    // IonBuilder, or by the Eager Simd Unbox phase.
+    //
+    // As the template objects are weak references, the JitCompartment is using
+    // Read Barriers, but such barrier cannot be used during the compilation. To
+    // work around this issue, the barriers are captured during
+    // CodeGenerator::link.
+    //
+    // Instead of saving the pointers, we just save the index of the Read
+    // Barriered objects in a bit mask.
+    uint32_t simdRefreshTemplatesDuringLink_;
+
+    void registerSimdTemplate(InlineTypedObject *templateObject);
+    void captureSimdTemplate(JSContext *cx);
 };
 
 } // namespace jit

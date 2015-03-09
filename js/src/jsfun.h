@@ -60,7 +60,7 @@ class JSFunction : public js::NativeObject
                                LAMBDA | SELF_HOSTED | SELF_HOSTED_CTOR | HAS_REST | ASMJS | ARROW
     };
 
-    static_assert(INTERPRETED == JS_FUNCTION_INTERPRETED_BIT,
+    static_assert((INTERPRETED | INTERPRETED_LAZY) == js::JS_FUNCTION_INTERPRETED_BITS,
                   "jsfriendapi.h's JSFunction::INTERPRETED-alike is wrong");
 
   private:
@@ -324,6 +324,16 @@ class JSFunction : public js::NativeObject
         return u.i.s.script_;
     }
 
+    bool getLength(JSContext *cx, uint16_t *length) {
+        JS::RootedFunction self(cx, this);
+        if (self->isInterpretedLazy() && !self->getOrCreateScript(cx))
+            return false;
+
+        *length = self->hasScript() ? self->nonLazyScript()->funLength()
+                                    : (self->nargs() - self->hasRest());
+        return true;
+    }
+
     js::HeapPtrScript &mutableScript() {
         MOZ_ASSERT(isInterpreted());
         return *(js::HeapPtrScript *)&u.i.s.script_;
@@ -510,7 +520,7 @@ NewFunction(ExclusiveContext *cx, HandleObject funobj, JSNative native, unsigned
 extern JSFunction *
 NewFunctionWithProto(ExclusiveContext *cx, HandleObject funobj, JSNative native, unsigned nargs,
                      JSFunction::Flags flags, HandleObject parent, HandleAtom atom,
-                     JSObject *proto, gc::AllocKind allocKind = JSFunction::FinalizeKind,
+                     HandleObject proto, gc::AllocKind allocKind = JSFunction::FinalizeKind,
                      NewObjectKind newKind = GenericObject);
 
 extern JSAtom *
@@ -653,17 +663,17 @@ CallOrConstructBoundFunction(JSContext *, unsigned, js::Value *);
 
 extern const JSFunctionSpec function_methods[];
 
-} /* namespace js */
+extern bool
+fun_apply(JSContext *cx, unsigned argc, Value *vp);
 
 extern bool
-js_fun_apply(JSContext *cx, unsigned argc, js::Value *vp);
-
-extern bool
-js_fun_call(JSContext *cx, unsigned argc, js::Value *vp);
+fun_call(JSContext *cx, unsigned argc, Value *vp);
 
 extern JSObject *
-js_fun_bind(JSContext *cx, js::HandleObject target, js::HandleValue thisArg,
-            js::Value *boundArgs, unsigned argslen);
+fun_bind(JSContext *cx, HandleObject target, HandleValue thisArg,
+         Value *boundArgs, unsigned argslen);
+
+} /* namespace js */
 
 #ifdef DEBUG
 namespace JS {

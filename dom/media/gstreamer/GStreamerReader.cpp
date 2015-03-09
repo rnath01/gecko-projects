@@ -116,26 +116,7 @@ GStreamerReader::GStreamerReader(AbstractMediaDecoder* aDecoder)
 GStreamerReader::~GStreamerReader()
 {
   MOZ_COUNT_DTOR(GStreamerReader);
-  ResetDecode();
-
-  if (mPlayBin) {
-    gst_app_src_end_of_stream(mSource);
-    if (mSource)
-      gst_object_unref(mSource);
-    gst_element_set_state(mPlayBin, GST_STATE_NULL);
-    gst_object_unref(mPlayBin);
-    mPlayBin = nullptr;
-    mVideoSink = nullptr;
-    mVideoAppSink = nullptr;
-    mAudioSink = nullptr;
-    mAudioAppSink = nullptr;
-    gst_object_unref(mBus);
-    mBus = nullptr;
-#if GST_VERSION_MAJOR >= 1
-    g_object_unref(mAllocator);
-    g_object_unref(mBufferPool);
-#endif
-  }
+  NS_ASSERTION(!mPlayBin, "No Shutdown() after Init()");
 }
 
 nsresult GStreamerReader::Init(MediaDecoderReader* aCloneDonor)
@@ -199,6 +180,33 @@ nsresult GStreamerReader::Init(MediaDecoderReader* aCloneDonor)
                    G_CALLBACK(GStreamerReader::ElementAddedCb), this);
 
   return NS_OK;
+}
+
+nsRefPtr<ShutdownPromise>
+GStreamerReader::Shutdown()
+{
+  ResetDecode();
+
+  if (mPlayBin) {
+    gst_app_src_end_of_stream(mSource);
+    if (mSource)
+      gst_object_unref(mSource);
+    gst_element_set_state(mPlayBin, GST_STATE_NULL);
+    gst_object_unref(mPlayBin);
+    mPlayBin = nullptr;
+    mVideoSink = nullptr;
+    mVideoAppSink = nullptr;
+    mAudioSink = nullptr;
+    mAudioAppSink = nullptr;
+    gst_object_unref(mBus);
+    mBus = nullptr;
+#if GST_VERSION_MAJOR >= 1
+    g_object_unref(mAllocator);
+    g_object_unref(mBufferPool);
+#endif
+  }
+
+  return MediaDecoderReader::Shutdown();
 }
 
 GstBusSyncReply
@@ -749,7 +757,7 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
       }
     }
 
-    mDecoder->NotifyDecodedFrames(0, 1);
+    mDecoder->NotifyDecodedFrames(0, 1, 0);
 
 #if GST_VERSION_MAJOR >= 1
     GstSample *sample = gst_app_sink_pull_sample(mVideoAppSink);
@@ -763,6 +771,7 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
 
   bool isKeyframe = !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT);
   if ((aKeyFrameSkip && !isKeyframe)) {
+    mDecoder->NotifyDecodedFrames(0, 0, 1);
     gst_buffer_unref(buffer);
     return true;
   }
@@ -1142,7 +1151,7 @@ void GStreamerReader::NewVideoBuffer()
    * and notify the decode thread potentially blocked in DecodeVideoFrame
    */
 
-  mDecoder->NotifyDecodedFrames(1, 0);
+  mDecoder->NotifyDecodedFrames(1, 0, 0);
   mVideoSinkBufferCount++;
   mon.NotifyAll();
 }

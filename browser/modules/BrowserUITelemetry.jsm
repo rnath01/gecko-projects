@@ -599,6 +599,10 @@ this.BrowserUITelemetry = {
     this._countEvent(["click-builtin-item", source, "search-settings"]);
   },
 
+  countPanicEvent: function(timeId) {
+    this._countEvent(["forget-button", timeId]);
+  },
+
   _logAwesomeBarSearchResult: function (url) {
     let spec = Services.search.parseSubmissionURL(url);
     if (spec.engine) {
@@ -669,6 +673,7 @@ this.BrowserUITelemetry = {
     "spell-add-dictionaries-main", "spell-dictionaries",
     "spell-dictionaries-menu", "spell-add-dictionaries",
     "bidi-text-direction-toggle", "bidi-page-direction-toggle", "inspect",
+    "media-eme-learn-more"
   ]),
 
   _contextMenuInteractions: {},

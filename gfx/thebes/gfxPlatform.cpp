@@ -451,6 +451,7 @@ void RecordingPrefChanged(const char *aPrefName, void *aClosure)
 void
 gfxPlatform::Init()
 {
+    MOZ_RELEASE_ASSERT(NS_IsMainThread());
     if (gEverInitialized) {
         NS_RUNTIMEABORT("Already started???");
     }
@@ -1060,6 +1061,7 @@ void
 gfxPlatform::InitializeSkiaCacheLimits()
 {
   if (UseAcceleratedSkiaCanvas()) {
+#ifdef USE_SKIA_GPU
     bool usingDynamicCache = gfxPrefs::CanvasSkiaGLDynamicCache();
     int cacheItemLimit = gfxPrefs::CanvasSkiaGLCacheItems();
     int cacheSizeLimit = gfxPrefs::CanvasSkiaGLCacheSize();
@@ -1081,7 +1083,6 @@ gfxPlatform::InitializeSkiaCacheLimits()
     printf_stderr("Determined SkiaGL cache limits: Size %i, Items: %i\n", cacheSizeLimit, cacheItemLimit);
   #endif
 
-#ifdef USE_SKIA_GPU
     mSkiaGlue->GetGrContext()->setResourceCacheLimits(cacheItemLimit, cacheSizeLimit);
 #endif
   }
@@ -1097,8 +1098,9 @@ gfxPlatform::GetSkiaGLGlue()
      * FIXME: This should be stored in TLS or something, since there needs to be one for each thread using it. As it
      * stands, this only works on the main thread.
      */
-    mozilla::gl::SurfaceCaps caps = mozilla::gl::SurfaceCaps::ForRGBA();
-    nsRefPtr<mozilla::gl::GLContext> glContext = mozilla::gl::GLContextProvider::CreateOffscreen(gfxIntSize(16, 16), caps);
+    bool requireCompatProfile = true;
+    nsRefPtr<mozilla::gl::GLContext> glContext;
+    glContext = mozilla::gl::GLContextProvider::CreateHeadless(requireCompatProfile);
     if (!glContext) {
       printf_stderr("Failed to create GLContext for SkiaGL!\n");
       return nullptr;
@@ -2302,3 +2304,15 @@ gfxPlatform::CreateHardwareVsyncSource()
   nsRefPtr<mozilla::gfx::VsyncSource> softwareVsync = new SoftwareVsyncSource();
   return softwareVsync.forget();
 }
+
+/* static */ bool
+gfxPlatform::IsInLayoutAsapMode()
+{
+  // There are 2 modes of ASAP mode.
+  // 1 is that the refresh driver and compositor are in lock step
+  // the second is that the compositor goes ASAP and the refresh driver
+  // goes at whatever the configurated rate is. This only checks the version
+  // talos uses, which is the refresh driver and compositor are in lockstep.
+  return Preferences::GetInt("layout.frame_rate", -1) == 0;
+}
+

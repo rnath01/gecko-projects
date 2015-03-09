@@ -592,7 +592,7 @@ nsXPCWrappedJSClass::GetRootJSObject(JSContext* cx, JSObject* aJSObjArg)
     JSObject* result = CallQueryInterfaceOnJSObject(cx, aJSObj,
                                                     NS_GET_IID(nsISupports));
     if (!result)
-        return aJSObj;
+        result = aJSObj;
     JSObject* inner = js::UncheckedUnwrap(result);
     if (inner)
         return inner;
@@ -1124,7 +1124,7 @@ nsXPCWrappedJSClass::CallMethod(nsXPCWrappedJS* wrapper, uint16_t methodIndex,
 
         if (param.IsOut() || param.IsDipper()) {
             // create an 'out' object
-            RootedObject out_obj(cx, NewOutObject(cx, obj));
+            RootedObject out_obj(cx, NewOutObject(cx));
             if (!out_obj) {
                 retval = NS_ERROR_OUT_OF_MEMORY;
                 goto pre_call_clean_up;
@@ -1469,10 +1469,9 @@ xpc::IsOutObject(JSContext* cx, JSObject* obj)
 }
 
 JSObject*
-xpc::NewOutObject(JSContext* cx, JSObject* scope)
+xpc::NewOutObject(JSContext* cx)
 {
-    RootedObject global(cx, JS_GetGlobalForObject(cx, scope));
-    return JS_NewObject(cx, nullptr, global);
+    return JS_NewObject(cx, &XPCOutParamClass);
 }
 
 

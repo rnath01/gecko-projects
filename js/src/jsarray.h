@@ -15,10 +15,9 @@
 namespace js {
 /* 2^32-2, inclusive */
 const uint32_t MAX_ARRAY_INDEX = 4294967294u;
-}
 
 inline bool
-js_IdIsIndex(jsid id, uint32_t *indexp)
+IdIsIndex(jsid id, uint32_t *indexp)
 {
     if (JSID_IS_INT(id)) {
         int32_t i = JSID_TO_INT(id);
@@ -34,18 +33,13 @@ js_IdIsIndex(jsid id, uint32_t *indexp)
 }
 
 extern JSObject *
-js_InitArrayClass(JSContext *cx, js::HandleObject obj);
-
-extern bool
-js_InitContextBusyArrayTable(JSContext *cx);
-
-namespace js {
+InitArrayClass(JSContext *cx, js::HandleObject obj);
 
 class ArrayObject;
 
 /* Create a dense array with no capacity allocated, length set to 0. */
 extern ArrayObject * JS_FASTCALL
-NewDenseEmptyArray(JSContext *cx, JSObject *proto = nullptr,
+NewDenseEmptyArray(JSContext *cx, HandleObject proto = NullPtr(),
                    NewObjectKind newKind = GenericObject);
 
 /*
@@ -53,7 +47,7 @@ NewDenseEmptyArray(JSContext *cx, JSObject *proto = nullptr,
  * contents. This is useful, e.g., when accepting length from the user.
  */
 extern ArrayObject * JS_FASTCALL
-NewDenseUnallocatedArray(ExclusiveContext *cx, uint32_t length, JSObject *proto = nullptr,
+NewDenseUnallocatedArray(ExclusiveContext *cx, uint32_t length, HandleObject proto = NullPtr(),
                          NewObjectKind newKind = GenericObject);
 
 /*
@@ -61,12 +55,12 @@ NewDenseUnallocatedArray(ExclusiveContext *cx, uint32_t length, JSObject *proto 
  * but with only |EagerAllocationMaxLength| elements allocated.
  */
 extern ArrayObject * JS_FASTCALL
-NewDensePartlyAllocatedArray(ExclusiveContext *cx, uint32_t length, JSObject *proto = nullptr,
+NewDensePartlyAllocatedArray(ExclusiveContext *cx, uint32_t length, HandleObject proto = NullPtr(),
                              NewObjectKind newKind = GenericObject);
 
 /* Create a dense array with length and capacity == 'length', initialized length set to 0. */
 extern ArrayObject * JS_FASTCALL
-NewDenseFullyAllocatedArray(ExclusiveContext *cx, uint32_t length, JSObject *proto = nullptr,
+NewDenseFullyAllocatedArray(ExclusiveContext *cx, uint32_t length, HandleObject proto = NullPtr(),
                             NewObjectKind newKind = GenericObject);
 
 enum AllocatingBehaviour {
@@ -86,12 +80,12 @@ NewDenseArray(ExclusiveContext *cx, uint32_t length, HandleObjectGroup group,
 /* Create a dense array with a copy of the dense array elements in src. */
 extern ArrayObject *
 NewDenseCopiedArray(JSContext *cx, uint32_t length, HandleArrayObject src,
-                    uint32_t elementOffset, JSObject *proto = nullptr);
+                    uint32_t elementOffset, HandleObject proto = NullPtr());
 
 /* Create a dense array from the given array values, which must be rooted */
 extern ArrayObject *
-NewDenseCopiedArray(JSContext *cx, uint32_t length, const Value *values, JSObject *proto = nullptr,
-                    NewObjectKind newKind = GenericObject);
+NewDenseCopiedArray(JSContext *cx, uint32_t length, const Value *values,
+                    HandleObject proto = NullPtr(), NewObjectKind newKind = GenericObject);
 
 /* Create a dense array based on templateObject with the given length. */
 extern ArrayObject *
@@ -107,9 +101,7 @@ NewDenseCopyOnWriteArray(JSContext *cx, HandleArrayObject templateObject, gc::In
  * increase the length of the array.
  */
 extern bool
-WouldDefinePastNonwritableLength(ExclusiveContext *cx,
-                                 HandleObject obj, uint32_t index, bool strict,
-                                 bool *definesPast);
+WouldDefinePastNonwritableLength(HandleNativeObject obj, uint32_t index);
 
 /*
  * Canonicalize |vp| to a uint32_t value potentially suitable for use as an
@@ -131,7 +123,7 @@ ObjectMayHaveExtraIndexedProperties(JSObject *obj);
  * Copy 'length' elements from aobj to vp.
  *
  * This function assumes 'length' is effectively the result of calling
- * js_GetLengthProperty on aobj. vp must point to rooted memory.
+ * GetLengthProperty on aobj. vp must point to rooted memory.
  */
 extern bool
 GetElements(JSContext *cx, HandleObject aobj, uint32_t length, js::Value *vp);
@@ -195,15 +187,15 @@ NewbornArrayPush(JSContext *cx, HandleObject obj, const Value &v);
 extern ArrayObject *
 ArrayConstructorOneArg(JSContext *cx, HandleObjectGroup group, int32_t lengthInt);
 
-} /* namespace js */
-
 #ifdef DEBUG
 extern bool
-js_ArrayInfo(JSContext *cx, unsigned argc, js::Value *vp);
+ArrayInfo(JSContext *cx, unsigned argc, Value *vp);
 #endif
 
 /* Array constructor native. Exposed only so the JIT can know its address. */
-bool
-js_Array(JSContext *cx, unsigned argc, js::Value *vp);
+extern bool
+ArrayConstructor(JSContext *cx, unsigned argc, Value *vp);
+
+} /* namespace js */
 
 #endif /* jsarray_h */

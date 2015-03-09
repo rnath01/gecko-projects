@@ -478,6 +478,8 @@ nsContextMenu.prototype = {
     var statsShowing = this.onVideo && this.target.mozMediaStatisticsShowing;
     this.showItem("context-video-showstats", this.onVideo && this.target.controls && !statsShowing);
     this.showItem("context-video-hidestats", this.onVideo && this.target.controls && statsShowing);
+    this.showItem("context-media-eme-learnmore", this.onDRMMedia);
+    this.showItem("context-media-eme-separator", this.onDRMMedia);
 
     // Disable them when there isn't a valid media source loaded.
     if (onMedia) {
@@ -499,7 +501,7 @@ nsContextMenu.prototype = {
       this.setItemAttr("context-media-showcontrols", "disabled", hasError);
       this.setItemAttr("context-media-hidecontrols", "disabled", hasError);
       if (this.onVideo) {
-        let canSaveSnapshot = this.target.readyState >= this.target.HAVE_CURRENT_DATA;
+        let canSaveSnapshot = !this.onDRMMedia && this.target.readyState >= this.target.HAVE_CURRENT_DATA;
         this.setItemAttr("context-video-saveimage",  "disabled", !canSaveSnapshot);
         this.setItemAttr("context-video-fullscreen", "disabled", hasError);
         this.setItemAttr("context-video-showstats", "disabled", hasError);
@@ -562,6 +564,7 @@ nsContextMenu.prototype = {
     this.onCanvas          = false;
     this.onVideo           = false;
     this.onAudio           = false;
+    this.onDRMMedia        = false;
     this.onTextInput       = false;
     this.onNumeric         = false;
     this.onKeywordField    = false;
@@ -573,6 +576,7 @@ nsContextMenu.prototype = {
     this.linkURL           = "";
     this.linkURI           = null;
     this.linkProtocol      = "";
+    this.linkHasNoReferrer = false;
     this.onMathML          = false;
     this.inFrame           = false;
     this.inSrcdocFrame     = false;
@@ -640,6 +644,9 @@ nsContextMenu.prototype = {
         if (this.isMediaURLReusable(mediaURL)) {
           this.mediaURL = mediaURL;
         }
+        if (this.target.isEncrypted) {
+          this.onDRMMedia = true;
+        }
         // Firefox always creates a HTMLVideoElement when loading an ogg file
         // directly. If the media is actually audio, be smarter and provide a
         // context menu with audio operations.
@@ -655,6 +662,9 @@ nsContextMenu.prototype = {
         let mediaURL = this.target.currentSrc || this.target.src;
         if (this.isMediaURLReusable(mediaURL)) {
           this.mediaURL = mediaURL;
+        }
+        if (this.target.isEncrypted) {
+          this.onDRMMedia = true;
         }
       }
       else if (editFlags & (SpellCheckHelper.INPUT | SpellCheckHelper.TEXTAREA)) {
@@ -729,6 +739,7 @@ nsContextMenu.prototype = {
           this.linkProtocol = this.getLinkProtocol();
           this.onMailtoLink = (this.linkProtocol == "mailto");
           this.onSaveableLink = this.isLinkSaveable( this.link );
+          this.linkHasNoReferrer = BrowserUtils.linkHasNoReferrer(elem);
         }
 
         // Background image?  Don't bother if we've already found a
@@ -855,10 +866,10 @@ nsContextMenu.prototype = {
     return aNode.spellcheck;
   },
 
-  _openLinkInParameters : function (doc, extra) {
-    let params = { charset: doc.characterSet,
-                   referrerURI: doc.documentURIObject,
-                   noReferrer: BrowserUtils.linkHasNoReferrer(this.link) };
+  _openLinkInParameters : function (extra) {
+    let params = { charset: gContextMenuContentData.charSet,
+                   referrerURI: gContextMenuContentData.documentURIObject,
+                   noReferrer: this.linkHasNoReferrer };
     for (let p in extra)
       params[p] = extra[p];
     return params;
@@ -866,41 +877,38 @@ nsContextMenu.prototype = {
 
   // Open linked-to URL in a new window.
   openLink : function () {
-    var doc = this.target.ownerDocument;
     urlSecurityCheck(this.linkURL, this.principal);
-    openLinkIn(this.linkURL, "window", this._openLinkInParameters(doc));
+    openLinkIn(this.linkURL, "window", this._openLinkInParameters());
   },
 
   // Open linked-to URL in a new private window.
   openLinkInPrivateWindow : function () {
-    var doc = this.target.ownerDocument;
     urlSecurityCheck(this.linkURL, this.principal);
     openLinkIn(this.linkURL, "window",
-               this._openLinkInParameters(doc, { private: true }));
+               this._openLinkInParameters({ private: true }));
   },
 
   // Open linked-to URL in a new tab.
   openLinkInTab: function() {
-    var doc = this.target.ownerDocument;
     urlSecurityCheck(this.linkURL, this.principal);
-    var referrerURI = doc.documentURIObject;
+    let referrerURI = gContextMenuContentData.documentURIObject;
 
     // if the mixedContentChannel is present and the referring URI passes
     // a same origin check with the target URI, we can preserve the users
     // decision of disabling MCB on a page for it's child tabs.
-    var persistAllowMixedContentInChildTab = false;
+    let persistAllowMixedContentInChildTab = false;
 
     if (this.browser.docShell && this.browser.docShell.mixedContentChannel) {
       const sm = Services.scriptSecurityManager;
       try {
-        var targetURI = this.linkURI;
+        let targetURI = this.linkURI;
         sm.checkSameOriginURI(referrerURI, targetURI, false);
         persistAllowMixedContentInChildTab = true;
       }
       catch (e) { }
     }
 
-    let params = this._openLinkInParameters(doc, {
+    let params = this._openLinkInParameters({
       allowMixedContent: persistAllowMixedContentInChildTab,
     });
     openLinkIn(this.linkURL, "tab", params);
@@ -908,18 +916,15 @@ nsContextMenu.prototype = {
 
   // open URL in current tab
   openLinkInCurrent: function() {
-    var doc = this.target.ownerDocument;
     urlSecurityCheck(this.linkURL, this.principal);
-    openLinkIn(this.linkURL, "current", this._openLinkInParameters(doc));
+    openLinkIn(this.linkURL, "current", this._openLinkInParameters());
   },
 
   // Open frame in a new tab.
   openFrameInTab: function() {
-    var doc = this.target.ownerDocument;
-    var frameURL = doc.location.href;
-    var referrer = doc.referrer;
-    openLinkIn(frameURL, "tab",
-               { charset: doc.characterSet,
+    let referrer = gContextMenuContentData.referrer;
+    openLinkIn(gContextMenuContentData.docLocation, "tab",
+               { charset: gContextMenuContentData.charSet,
                  referrerURI: referrer ? makeURI(referrer) : null });
   },
 
@@ -930,25 +935,21 @@ nsContextMenu.prototype = {
 
   // Open clicked-in frame in its own window.
   openFrame: function() {
-    var doc = this.target.ownerDocument;
-    var frameURL = doc.location.href;
-    var referrer = doc.referrer;
-    openLinkIn(frameURL, "window",
-               { charset: doc.characterSet,
+    let referrer = gContextMenuContentData.referrer;
+    openLinkIn(gContextMenuContentData.docLocation, "window",
+               { charset: gContextMenuContentData.charSet,
                  referrerURI: referrer ? makeURI(referrer) : null });
   },
 
   // Open clicked-in frame in the same window.
   showOnlyThisFrame: function() {
-    var doc = this.target.ownerDocument;
-    var frameURL = doc.location.href;
-
-    urlSecurityCheck(frameURL,
+    urlSecurityCheck(gContextMenuContentData.docLocation,
                      this.browser.contentPrincipal,
                      Ci.nsIScriptSecurityManager.DISALLOW_SCRIPT);
-    var referrer = doc.referrer;
-    openUILinkIn(frameURL, "current", { disallowInheritPrincipal: true,
-                                        referrerURI: referrer ? makeURI(referrer) : null });
+    let referrer = gContextMenuContentData.referrer;
+    openUILinkIn(gContextMenuContentData.docLocation, "current",
+                 { disallowInheritPrincipal: true,
+                   referrerURI: referrer ? makeURI(referrer) : null });
   },
 
   reload: function(event) {
@@ -1067,12 +1068,6 @@ nsContextMenu.prototype = {
                    document.documentURIObject, document);
     };
     mm.addMessageListener("ContextMenu:SaveVideoFrameAsImage:Result", onMessage);
-  },
-
-  fullScreenVideo: function () {
-    let video = this.target;
-    if (document.mozFullScreenEnabled)
-      video.mozRequestFullScreen();
   },
 
   leaveDOMFullScreen: function() {
@@ -1659,43 +1654,27 @@ nsContextMenu.prototype = {
   },
 
   mediaCommand : function CM_mediaCommand(command, data) {
-    var media = this.target;
-
-    switch (command) {
-      case "play":
-        media.play();
-        break;
-      case "pause":
-        media.pause();
-        break;
-      case "mute":
-        media.muted = true;
-        break;
-      case "unmute":
-        media.muted = false;
-        break;
-      case "playbackRate":
-        media.playbackRate = data;
-        break;
-      case "hidecontrols":
-        media.removeAttribute("controls");
-        break;
-      case "showcontrols":
-        media.setAttribute("controls", "true");
-        break;
-      case "hidestats":
-      case "showstats":
-        var event = media.ownerDocument.createEvent("CustomEvent");
-        event.initCustomEvent("media-showStatistics", false, true, command == "showstats");
-        media.dispatchEvent(event);
-        break;
-    }
+    let mm = this.browser.messageManager;
+    mm.sendAsyncMessage("ContextMenu:MediaCommand",
+                        {command: command, data: data},
+                        {element: this.target});
   },
 
   copyMediaLocation : function () {
     var clipboard = Cc["@mozilla.org/widget/clipboardhelper;1"].
                     getService(Ci.nsIClipboardHelper);
     clipboard.copyString(this.mediaURL, document);
+  },
+
+  drmLearnMore: function(aEvent) {
+    let drmInfoURL = Services.urlFormatter.formatURLPref("app.support.baseURL") + "drm-content";
+    let dest = whereToOpenLink(aEvent);
+    // Don't ever want this to open in the same tab as it'll unload the
+    // DRM'd video, which is going to be a bad idea in most cases.
+    if (dest == "current") {
+      dest = "tab";
+    }
+    openUILinkIn(drmInfoURL, dest);
   },
 
   get imageURL() {

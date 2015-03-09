@@ -398,15 +398,15 @@ IsNormalObjectField(ExclusiveContext *cx, ParseNode *pn)
 {
     return pn->isKind(PNK_COLON) &&
            pn->getOp() == JSOP_INITPROP &&
-           BinaryLeft(pn)->isKind(PNK_NAME) &&
-           BinaryLeft(pn)->name() != cx->names().proto;
+           BinaryLeft(pn)->isKind(PNK_OBJECT_PROPERTY_NAME);
 }
 
 static inline PropertyName *
 ObjectNormalFieldName(ExclusiveContext *cx, ParseNode *pn)
 {
     MOZ_ASSERT(IsNormalObjectField(cx, pn));
-    return BinaryLeft(pn)->name();
+    MOZ_ASSERT(BinaryLeft(pn)->isKind(PNK_OBJECT_PROPERTY_NAME));
+    return BinaryLeft(pn)->pn_atom->asPropertyName();
 }
 
 static inline ParseNode *
@@ -1481,7 +1481,7 @@ class MOZ_STACK_CLASS ModuleCompiler
                                            errorString_.get());
         }
         if (errorOverRecursed_)
-            js_ReportOverRecursed(cx_);
+            ReportOverRecursed(cx_);
     }
 
     bool init() {
@@ -1548,7 +1548,7 @@ class MOZ_STACK_CLASS ModuleCompiler
         // "use strict" should be added to the source if we are in an implicit
         // strict context, see also comment above addUseStrict in
         // js::FunctionToString.
-        bool strict = parser_.pc->sc->strict && !parser_.pc->sc->hasExplicitUseStrict();
+        bool strict = parser_.pc->sc->strict() && !parser_.pc->sc->hasExplicitUseStrict();
         module_ = cx_->new_<AsmJSModule>(parser_.ss, srcStart, srcBodyStart, strict,
                                          cx_->canUseSignalHandlers());
         if (!module_)
@@ -1961,7 +1961,7 @@ class MOZ_STACK_CLASS ModuleCompiler
         // Protection works at page granularity, so we need to ensure that no
         // stub code gets into the function code pages.
         MOZ_ASSERT(!finishedFunctionBodies_);
-        masm_.align(AsmJSPageSize);
+        masm_.haltingAlign(AsmJSPageSize);
         module_->finishFunctionBodies(masm_.currentOffset());
         finishedFunctionBodies_ = true;
     }
@@ -2137,8 +2137,8 @@ IsCoercionCall(ModuleCompiler &m, ParseNode *pn, AsmJSCoercion *coercion, ParseN
         return true;
     }
 
-    if (global->isSimdCtor()) {
-        switch (global->simdCtorType()) {
+    if (global->isSimdOperation() && global->simdOperation() == AsmJSSimdOperation_check) {
+        switch (global->simdOperationType()) {
           case AsmJSSimdType_int32x4:
             *coercion = AsmJS_ToInt32x4;
             return true;
@@ -2519,7 +2519,9 @@ class FunctionCompiler
         const JitCompileOptions options;
         mirGen_ = lifo_.new_<MIRGenerator>(CompileCompartment::get(cx()->compartment()),
                                            options, alloc_,
-                                           graph_, info_, optimizationInfo);
+                                           graph_, info_, optimizationInfo,
+                                           &m().onOutOfBoundsLabel(),
+                                           m().usesSignalHandlersForOOB());
 
         if (!newBlock(/* pred = */ nullptr, &curBlock_, fn_))
             return false;
@@ -2790,7 +2792,7 @@ class FunctionCompiler
             return nullptr;
 
         MOZ_ASSERT(IsSimdType(type));
-        MSimdSplatX4 *ins = MSimdSplatX4::New(alloc(), type, v);
+        MSimdSplatX4 *ins = MSimdSplatX4::NewAsmJS(alloc(), v, type);
         curBlock_->add(ins);
         return ins;
     }
@@ -2871,7 +2873,7 @@ class FunctionCompiler
         if (inDeadCode())
             return nullptr;
 
-        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK && !m().usesSignalHandlersForOOB();
+        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK;
         MOZ_ASSERT(!Scalar::isSimdType(accessType), "SIMD loads should use loadSimdHeap");
         MAsmJSLoadHeap *load = MAsmJSLoadHeap::New(alloc(), accessType, ptr, needsBoundsCheck);
         curBlock_->add(load);
@@ -2884,11 +2886,10 @@ class FunctionCompiler
         if (inDeadCode())
             return nullptr;
 
-        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK && !m().usesSignalHandlersForOOB();
+        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK;
         MOZ_ASSERT(Scalar::isSimdType(accessType), "loadSimdHeap can only load from a SIMD view");
-        Label *outOfBoundsLabel = &m().onOutOfBoundsLabel();
         MAsmJSLoadHeap *load = MAsmJSLoadHeap::New(alloc(), accessType, ptr, needsBoundsCheck,
-                                                   outOfBoundsLabel, numElems);
+                                                   numElems);
         curBlock_->add(load);
         return load;
     }
@@ -2898,7 +2899,7 @@ class FunctionCompiler
         if (inDeadCode())
             return;
 
-        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK && !m().usesSignalHandlersForOOB();
+        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK;
         MOZ_ASSERT(!Scalar::isSimdType(accessType), "SIMD stores should use loadSimdHeap");
         MAsmJSStoreHeap *store = MAsmJSStoreHeap::New(alloc(), accessType, ptr, v, needsBoundsCheck);
         curBlock_->add(store);
@@ -2910,11 +2911,10 @@ class FunctionCompiler
         if (inDeadCode())
             return;
 
-        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK && !m().usesSignalHandlersForOOB();
+        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK;
         MOZ_ASSERT(Scalar::isSimdType(accessType), "storeSimdHeap can only load from a SIMD view");
-        Label *outOfBoundsLabel = &m().onOutOfBoundsLabel();
         MAsmJSStoreHeap *store = MAsmJSStoreHeap::New(alloc(), accessType, ptr, v, needsBoundsCheck,
-                                                      outOfBoundsLabel, numElems);
+                                                      numElems);
         curBlock_->add(store);
     }
 
@@ -2931,9 +2931,8 @@ class FunctionCompiler
         if (inDeadCode())
             return nullptr;
 
-        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK && !m().usesSignalHandlersForOOB();
+        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK;
         MAsmJSLoadHeap *load = MAsmJSLoadHeap::New(alloc(), accessType, ptr, needsBoundsCheck,
-                                                   /* outOfBoundsLabel = */ nullptr,
                                                    /* numElems */ 0,
                                                    MembarBeforeLoad, MembarAfterLoad);
         curBlock_->add(load);
@@ -2945,9 +2944,8 @@ class FunctionCompiler
         if (inDeadCode())
             return;
 
-        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK && !m().usesSignalHandlersForOOB();
+        bool needsBoundsCheck = chk == NEEDS_BOUNDS_CHECK;
         MAsmJSStoreHeap *store = MAsmJSStoreHeap::New(alloc(), accessType, ptr, v, needsBoundsCheck,
-                                                      /* outOfBoundsLabel = */ nullptr,
                                                       /* numElems = */ 0,
                                                       MembarBeforeStore, MembarAfterStore);
         curBlock_->add(store);
@@ -5567,12 +5565,7 @@ class CheckSimdVectorScalarArgs
         }
 
         // Second argument is the scalar
-        Type coercedFormalType = SimdToCoercedScalarType(formalSimdType_);
-        if (!(actualType <= coercedFormalType)) {
-            return f.failf(arg, "%s is not a subtype of %s", actualType.toChars(),
-                           coercedFormalType.toChars());
-        }
-        return true;
+        return CheckSimdScalarArgs(formalSimdType_)(f, arg, argIndex, actualType, def);
     }
 };
 
@@ -5844,6 +5837,17 @@ CheckSimdSelect(FunctionCompiler &f, ParseNode *call, AsmJSSimdType opType, bool
 }
 
 static bool
+CheckSimdCheck(FunctionCompiler &f, ParseNode *call, AsmJSSimdType opType, MDefinition **def,
+               Type *type)
+{
+    AsmJSCoercion coercion;
+    ParseNode *argNode;
+    if (!IsCoercionCall(f.m(), call, &coercion, &argNode))
+        return f.failf(call, "expected 1 argument in call to check");
+    return CheckCoercionArg(f, argNode, coercion, def, type);
+}
+
+static bool
 CheckSimdOperationCall(FunctionCompiler &f, ParseNode *call, const ModuleCompiler::Global *global,
                        MDefinition **def, Type *type)
 {
@@ -5852,11 +5856,14 @@ CheckSimdOperationCall(FunctionCompiler &f, ParseNode *call, const ModuleCompile
     AsmJSSimdType opType = global->simdOperationType();
 
     switch (global->simdOperation()) {
+      case AsmJSSimdOperation_check:
+        return CheckSimdCheck(f, call, opType, def, type);
+
 #define OP_CHECK_CASE_LIST_(OP)                                                         \
       case AsmJSSimdOperation_##OP:                                                     \
         return CheckSimdBinary(f, call, opType, MSimdBinaryArith::Op_##OP, def, type);
       ARITH_COMMONX4_SIMD_OP(OP_CHECK_CASE_LIST_)
-      ARITH_FLOAT32X4_SIMD_OP(OP_CHECK_CASE_LIST_)
+      BINARY_ARITH_FLOAT32X4_SIMD_OP(OP_CHECK_CASE_LIST_)
 #undef OP_CHECK_CASE_LIST_
 
       case AsmJSSimdOperation_lessThan:
@@ -5961,11 +5968,6 @@ CheckSimdCtorCall(FunctionCompiler &f, ParseNode *call, const ModuleCompiler::Gl
                   MDefinition **def, Type *type)
 {
     MOZ_ASSERT(call->isKind(PNK_CALL));
-
-    AsmJSCoercion coercion;
-    ParseNode *argNode;
-    if (IsCoercionCall(f.m(), call, &coercion, &argNode))
-        return CheckCoercionArg(f, argNode, coercion, def, type);
 
     AsmJSSimdType simdType = global->simdCtorType();
     unsigned length = SimdTypeToLength(simdType);
@@ -8179,12 +8181,14 @@ StackDecrementForCall(MacroAssembler &masm, uint32_t alignment, const VectorT &a
 }
 
 #if defined(JS_CODEGEN_ARM)
-// The ARM system ABI also includes d15 in the non volatile float registers.
+// The ARM system ABI also includes d15 & s31 in the non volatile float registers.
 // Also exclude lr (a.k.a. r14) as we preserve it manually)
 static const RegisterSet NonVolatileRegs =
     RegisterSet(GeneralRegisterSet(Registers::NonVolatileMask &
                                    ~(uint32_t(1) << Registers::lr)),
-                FloatRegisterSet(FloatRegisters::NonVolatileMask | (1ULL << FloatRegisters::d15)));
+                FloatRegisterSet(FloatRegisters::NonVolatileMask
+                                 | (1ULL << FloatRegisters::d15)
+                                 | (1ULL << FloatRegisters::s31)));
 #else
 static const RegisterSet NonVolatileRegs =
     RegisterSet(GeneralRegisterSet(Registers::NonVolatileMask),
@@ -8214,7 +8218,7 @@ GenerateEntry(ModuleCompiler &m, unsigned exportIndex)
     MacroAssembler &masm = m.masm();
 
     Label begin;
-    masm.align(CodeAlignment);
+    masm.haltingAlign(CodeAlignment);
     masm.bind(&begin);
 
     // Save the return address if it wasn't already saved by the call insn.
@@ -8367,11 +8371,11 @@ GenerateEntry(ModuleCompiler &m, unsigned exportIndex)
         break;
       case RetType::Int32x4:
         // We don't have control on argv alignment, do an unaligned access.
-        masm.storeUnalignedInt32x4(ReturnSimdReg, Address(argv, 0));
+        masm.storeUnalignedInt32x4(ReturnInt32x4Reg, Address(argv, 0));
         break;
       case RetType::Float32x4:
         // We don't have control on argv alignment, do an unaligned access.
-        masm.storeUnalignedFloat32x4(ReturnSimdReg, Address(argv, 0));
+        masm.storeUnalignedFloat32x4(ReturnFloat32x4Reg, Address(argv, 0));
         break;
     }
 
@@ -8996,7 +9000,7 @@ static bool
 GenerateAsyncInterruptExit(ModuleCompiler &m, Label *throwLabel)
 {
     MacroAssembler &masm = m.masm();
-    masm.align(CodeAlignment);
+    masm.haltingAlign(CodeAlignment);
     masm.bind(&m.asyncInterruptLabel());
 
 #if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
@@ -9162,7 +9166,7 @@ static bool
 GenerateThrowStub(ModuleCompiler &m, Label *throwLabel)
 {
     MacroAssembler &masm = m.masm();
-    masm.align(CodeAlignment);
+    masm.haltingAlign(CodeAlignment);
     masm.bind(throwLabel);
 
     // We are about to pop all frames in this AsmJSActivation. Set fp to null to
@@ -9337,7 +9341,7 @@ EstablishPreconditions(ExclusiveContext *cx, AsmJSParser &parser)
     if (!parser.options().compileAndGo)
         return Warn(parser, JSMSG_USE_ASM_TYPE_FAIL, "Temporarily disabled for event-handler and other cloneable scripts");
 
-    if (cx->compartment()->isDebuggee())
+    if (cx->compartment()->debuggerObservesAsmJS())
         return Warn(parser, JSMSG_USE_ASM_TYPE_FAIL, "Disabled by debugger");
 
     if (parser.pc->isGenerator())
@@ -9396,7 +9400,6 @@ js::IsAsmJSCompilationAvailable(JSContext *cx, unsigned argc, Value *vp)
 #else
     bool available = cx->jitSupportsFloatingPoint() &&
                      cx->gcSystemPageSize() == AsmJSPageSize &&
-                     !cx->compartment()->isDebuggee() &&
                      cx->runtime()->options().asmJS();
 #endif
 

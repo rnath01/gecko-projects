@@ -67,6 +67,136 @@ public:
         m_formatter.oneByteOp(OP_NOP);
     }
 
+    /*
+     * The nop multibytes sequences are directly taken from the Intel's
+     * architecture software developer manual.
+     * They are defined for sequences of sizes from 1 to 9 included.
+     */
+    void nop_one()
+    {
+        m_formatter.oneByteOp(OP_NOP);
+    }
+
+    void nop_two()
+    {
+        m_formatter.oneByteOp(OP_NOP_66);
+        m_formatter.oneByteOp(OP_NOP);
+    }
+
+    void nop_three()
+    {
+        m_formatter.oneByteOp(OP_NOP_0F);
+        m_formatter.oneByteOp(OP_NOP_1F);
+        m_formatter.oneByteOp(OP_NOP_00);
+    }
+
+    void nop_four()
+    {
+        m_formatter.oneByteOp(OP_NOP_0F);
+        m_formatter.oneByteOp(OP_NOP_1F);
+        m_formatter.oneByteOp(OP_NOP_40);
+        m_formatter.oneByteOp(OP_NOP_00);
+    }
+
+    void nop_five()
+    {
+        m_formatter.oneByteOp(OP_NOP_0F);
+        m_formatter.oneByteOp(OP_NOP_1F);
+        m_formatter.oneByteOp(OP_NOP_44);
+        m_formatter.oneByteOp(OP_NOP_00);
+        m_formatter.oneByteOp(OP_NOP_00);
+    }
+
+    void nop_six()
+    {
+        m_formatter.oneByteOp(OP_NOP_66);
+        nop_five();
+    }
+
+    void nop_seven()
+    {
+        m_formatter.oneByteOp(OP_NOP_0F);
+        m_formatter.oneByteOp(OP_NOP_1F);
+        m_formatter.oneByteOp(OP_NOP_80);
+        for (int i = 0; i < 4; ++i)
+            m_formatter.oneByteOp(OP_NOP_00);
+    }
+
+    void nop_eight()
+    {
+        m_formatter.oneByteOp(OP_NOP_0F);
+        m_formatter.oneByteOp(OP_NOP_1F);
+        m_formatter.oneByteOp(OP_NOP_84);
+        for (int i = 0; i < 5; ++i)
+            m_formatter.oneByteOp(OP_NOP_00);
+    }
+
+    void nop_nine()
+    {
+        m_formatter.oneByteOp(OP_NOP_66);
+        nop_eight();
+    }
+
+    void insert_nop(int size)
+    {
+        switch (size) {
+          case 1:
+            nop_one();
+            break;
+          case 2:
+            nop_two();
+            break;
+          case 3:
+            nop_three();
+            break;
+          case 4:
+            nop_four();
+            break;
+          case 5:
+            nop_five();
+            break;
+          case 6:
+            nop_six();
+            break;
+          case 7:
+            nop_seven();
+            break;
+          case 8:
+            nop_eight();
+            break;
+          case 9:
+            nop_nine();
+            break;
+          case 10:
+            nop_three();
+            nop_seven();
+            break;
+          case 11:
+            nop_four();
+            nop_seven();
+            break;
+          case 12:
+            nop_six();
+            nop_six();
+            break;
+          case 13:
+            nop_six();
+            nop_seven();
+            break;
+          case 14:
+            nop_seven();
+            nop_seven();
+            break;
+          case 15:
+            nop_one();
+            nop_seven();
+            nop_seven();
+            break;
+          default:
+            MOZ_CRASH("Unhandled alignment");
+        }
+    }
+
     // Stack operations:
 
     void push_r(RegisterID reg)
@@ -1892,10 +2022,20 @@ public:
         m_formatter.immediate64(imm);
     }
 
-    void movsxd_rr(RegisterID src, RegisterID dst)
+    void movslq_rr(RegisterID src, RegisterID dst)
     {
-        spew("movsxd     %s, %s", GPReg32Name(src), GPReg64Name(dst));
+        spew("movslq     %s, %s", GPReg32Name(src), GPReg64Name(dst));
         m_formatter.oneByteOp64(OP_MOVSXD_GvEv, src, dst);
+    }
+    void movslq_mr(int32_t offset, RegisterID base, RegisterID dst)
+    {
+        spew("movslq     " MEM_ob ", %s", ADDR_ob(offset, base), GPReg64Name(dst));
+        m_formatter.oneByteOp64(OP_MOVSXD_GvEv, offset, base, dst);
+    }
+    void movslq_mr(int32_t offset, RegisterID base, RegisterID index, int scale, RegisterID dst)
+    {
+        spew("movslq     " MEM_obs ", %s", ADDR_obs(offset, base, index, scale), GPReg64Name(dst));
+        m_formatter.oneByteOp64(OP_MOVSXD_GvEv, offset, base, index, scale, dst);
     }
 
     MOZ_WARN_UNUSED_RESULT JmpSrc
@@ -2542,6 +2682,11 @@ public:
     void vshufps_imr(uint32_t mask, const void *address, XMMRegisterID src0, XMMRegisterID dst)
     {
         twoByteOpImmSimd("vshufps", VEX_PS, OP2_SHUFPS_VpsWpsIb, mask, address, src0, dst);
+    }
+
+    void vmovddup_rr(XMMRegisterID src, XMMRegisterID dst)
+    {
+        twoByteOpSimd("vmovddup", VEX_SD, OP2_MOVDDUP_VqWq, src, invalid_xmm, dst);
     }
 
     void vmovhlps_rr(XMMRegisterID src1, XMMRegisterID src0, XMMRegisterID dst)
@@ -3346,11 +3491,20 @@ threeByteOpImmSimd("vblendps", VEX_PD, OP3_BLENDPS_VpsWpsIb, ESCAPE_3A, imm, off
         return JmpDst(jump.offset() + offset);
     }
 
-    void align(int alignment)
+    void haltingAlign(int alignment)
     {
         spew(".balign %d, 0x%x   # hlt", alignment, OP_HLT);
         while (!m_formatter.isAligned(alignment))
             m_formatter.oneByteOp(OP_HLT);
+    }
+
+    void nopAlign(int alignment)
+    {
+        spew(".balign %d", alignment);
+
+        int remainder = m_formatter.size() % alignment;
+        if (remainder > 0)
+            insert_nop(alignment - remainder);
     }
 
     void jumpTablePointer(uintptr_t ptr)

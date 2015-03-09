@@ -160,6 +160,11 @@ class CodeGeneratorMIPS : public CodeGeneratorShared
     {
         emitBranch(value.typeReg(), (Imm32)ImmType(JSVAL_TYPE_OBJECT), cond, ifTrue, ifFalse);
     }
+    void testZeroEmitBranch(Assembler::Condition cond, Register reg,
+                            MBasicBlock *ifTrue, MBasicBlock *ifFalse)
+    {
+        emitBranch(reg, Imm32(0), cond, ifTrue, ifFalse);
+    }
 
     void emitTableSwitchDispatch(MTableSwitch *mir, Register index, Register base);
 
@@ -276,6 +281,7 @@ class CodeGeneratorMIPS : public CodeGeneratorShared
     void visitSimdSplatX4(LSimdSplatX4 *lir) { MOZ_CRASH("NYI"); }
     void visitInt32x4(LInt32x4 *ins) { MOZ_CRASH("NYI"); }
     void visitFloat32x4(LFloat32x4 *ins) { MOZ_CRASH("NYI"); }
+    void visitSimdReinterpretCast(LSimdReinterpretCast *ins) { MOZ_CRASH("NYI"); }
     void visitSimdExtractElementI(LSimdExtractElementI *ins) { MOZ_CRASH("NYI"); }
     void visitSimdExtractElementF(LSimdExtractElementF *ins) { MOZ_CRASH("NYI"); }
     void visitSimdSignMaskX4(LSimdSignMaskX4 *ins) { MOZ_CRASH("NYI"); }
@@ -284,6 +290,8 @@ class CodeGeneratorMIPS : public CodeGeneratorShared
     void visitSimdBinaryArithIx4(LSimdBinaryArithIx4 *lir) { MOZ_CRASH("NYI"); }
     void visitSimdBinaryArithFx4(LSimdBinaryArithFx4 *lir) { MOZ_CRASH("NYI"); }
     void visitSimdBinaryBitwiseX4(LSimdBinaryBitwiseX4 *lir) { MOZ_CRASH("NYI"); }
+    void visitSimdGeneralSwizzleI(LSimdGeneralSwizzleI *lir) { MOZ_CRASH("NYI"); }
+    void visitSimdGeneralSwizzleF(LSimdGeneralSwizzleF *lir) { MOZ_CRASH("NYI"); }
 };
 
 typedef CodeGeneratorMIPS CodeGeneratorSpecific;

@@ -15,6 +15,7 @@
 #include "nsThreadUtils.h"
 #include "mozilla/Preferences.h"
 
+
 // nsISupports implementation
 NS_IMPL_ISUPPORTS(nsHTTPCompressConv,
                   nsIStreamConverter,
@@ -97,11 +98,14 @@ NS_IMETHODIMP
 nsHTTPCompressConv::OnStopRequest(nsIRequest* request, nsISupports *aContext, 
                                   nsresult aStatus)
 {
-    if (!mStreamEnded && NS_SUCCEEDED(aStatus) && mFailUncleanStops) {
-        // This is not a clean end of stream, the transfer is incomplete.
+    // Framing integrity is enforced for content-encoding: gzip, but not for
+    // content-encoding: deflate. Note that gzip vs deflate is NOT determined
+    // by content sniffing but only via header.
+    if (!mStreamEnded && NS_SUCCEEDED(aStatus) &&
+        (mFailUncleanStops && (mMode == HTTP_COMPRESS_GZIP)) ) {
+        // This is not a clean end of gzip stream: the transfer is incomplete.
         aStatus = NS_ERROR_NET_PARTIAL_TRANSFER;
     }
-
     return mListener->OnStopRequest(request, aContext, aStatus);
 } 
 
