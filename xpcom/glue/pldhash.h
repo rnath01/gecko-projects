@@ -240,12 +240,14 @@ public:
   uint32_t EntryCount() const { return mEntryCount; }
   uint32_t Generation() const { return mGeneration; }
 
-  void Init(const PLDHashTableOps* aOps, uint32_t aEntrySize, uint32_t aLength);
+  bool Init(const PLDHashTableOps* aOps, uint32_t aEntrySize,
+            const mozilla::fallible_t&, uint32_t aLength);
 
   void Finish();
 
   PLDHashEntryHdr* Search(const void* aKey);
   PLDHashEntryHdr* Add(const void* aKey, const mozilla::fallible_t&);
+  PLDHashEntryHdr* Add(const void* aKey);
   void Remove(const void* aKey);
 
   void RawRemove(PLDHashEntryHdr* aEntry);
@@ -357,8 +359,7 @@ typedef void (*PLDHashClearEntry)(PLDHashTable* aTable,
  * new one.  At that point, aEntry->mKeyHash is not set yet, to avoid claiming
  * the last free entry in a severely overloaded table.
  */
-typedef bool (*PLDHashInitEntry)(PLDHashTable* aTable, PLDHashEntryHdr* aEntry,
-                                 const void* aKey);
+typedef void (*PLDHashInitEntry)(PLDHashEntryHdr* aEntry, const void* aKey);
 
 /*
  * Finally, the "vtable" structure for PLDHashTable.  The first four hooks
@@ -367,7 +368,6 @@ typedef bool (*PLDHashInitEntry)(PLDHashTable* aTable, PLDHashEntryHdr* aEntry,
  *
  * Summary of allocation-related hook usage with C++ placement new emphasis:
  *  initEntry           Call placement new using default key-based ctor.
- *                      Return true on success, false on error.
  *  moveEntry           Call placement new using copy ctor, run dtor on old
  *                      entry storage.
  *  clearEntry          Run dtor on entry.
@@ -434,6 +434,21 @@ void PL_DHashFreeStringKey(PLDHashTable* aTable, PLDHashEntryHdr* aEntry);
 const PLDHashTableOps* PL_DHashGetStubOps(void);
 
 /*
+ * Dynamically allocate a new PLDHashTable, initialize it using
+ * PL_DHashTableInit, and return its address. Return null on allocation failure.
+ */
+PLDHashTable* PL_NewDHashTable(
+  const PLDHashTableOps* aOps, uint32_t aEntrySize,
+  uint32_t aLength = PL_DHASH_DEFAULT_INITIAL_LENGTH);
+
+/*
+ * Free |aTable|'s entry storage and |aTable| itself (both via
+ * aTable->mOps->freeTable). Use this function to destroy a PLDHashTable that
+ * was allocated on the heap via PL_NewDHashTable().
+ */
+void PL_DHashTableDestroy(PLDHashTable* aTable);
+
+/*
  * Initialize aTable with aOps and aEntrySize. The table's initial capacity
  * will be chosen such that |aLength| elements can be inserted without
  * rehashing; if |aLength| is a power-of-two, this capacity will be |2*length|.
@@ -448,8 +463,18 @@ void PL_DHashTableInit(
   uint32_t aEntrySize, uint32_t aLength = PL_DHASH_DEFAULT_INITIAL_LENGTH);
 
 /*
- * Clear |aTable|'s elements (via aTable->mOps->clearEntry) and free its entry
- * storage, if has any.
+ * Initialize aTable. This is the same as PL_DHashTableInit, except that it
+ * returns a boolean indicating success, rather than crashing on failure.
+ */
+MOZ_WARN_UNUSED_RESULT bool PL_DHashTableInit(
+  PLDHashTable* aTable, const PLDHashTableOps* aOps,
+  uint32_t aEntrySize, const mozilla::fallible_t&,
+  uint32_t aLength = PL_DHASH_DEFAULT_INITIAL_LENGTH);
+
+/*
+ * Free |aTable|'s entry storage (via aTable->mOps->freeTable). Use this
+ * function to destroy a PLDHashTable that is allocated on the stack or in
+ * static memory and was created via PL_DHashTableInit().
  */
 void PL_DHashTableFinish(PLDHashTable* aTable);
 
@@ -469,10 +494,8 @@ PL_DHashTableSearch(PLDHashTable* aTable, const void* aKey);
  *
  *  entry = PL_DHashTableAdd(table, key, mozilla::fallible);
  *
- * If entry is null upon return, then either (a) the table is severely
- * overloaded and memory can't be allocated for entry storage, or (b)
- * aTable->mOps->initEntry is non-null and aTable->mOps->initEntry op has
- * returned false.
+ * If entry is null upon return, then the table is severely overloaded and
+ * memory can't be allocated for entry storage.
  *
  * Otherwise, aEntry->mKeyHash has been set so that
  * PLDHashTable::EntryIsFree(entry) is false, and it is up to the caller to

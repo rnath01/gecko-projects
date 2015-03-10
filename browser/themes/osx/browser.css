@@ -563,6 +563,11 @@ toolbarpaletteitem[place="palette"] > #personal-bookmarks > #bookmarks-toolbar-p
   }
 }
 
+/* #menu_readingList, svg icons don't work in the mac native menubar */
+#BMB_readingList {
+  list-style-image: url("chrome://browser/skin/readinglist/readinglist-icon.svg");
+}
+
 /* ----- PRIMARY TOOLBAR BUTTONS ----- */
 
 toolbar .toolbarbutton-1:not([type="menu-button"]),
@@ -2521,8 +2526,18 @@ richlistitem[type~="action"][actiontype="switchtab"][selected="true"] > .ac-url-
 /* Reader mode button */
 
 #reader-mode-button {
+  -moz-appearance: none;
+  padding: 0;
   list-style-image: url("chrome://browser/skin/reader-mode-16.png");
   -moz-image-region: rect(0, 16px, 16px, 0);
+}
+
+#reader-mode-button > .toolbarbutton-icon {
+  width: 16px;
+}
+
+#reader-mode-button:focus {
+  @hudButtonFocused@
 }
 
 #reader-mode-button:hover:active,
@@ -2531,10 +2546,9 @@ richlistitem[type~="action"][actiontype="switchtab"][selected="true"] > .ac-url-
 }
 
 @media (min-resolution: 2dppx) {
-  #reader-mode-button{
+  #reader-mode-button {
     list-style-image: url("chrome://browser/skin/reader-mode-16@2x.png");
     -moz-image-region: rect(0, 32px, 32px, 0);
-    width: 22px;
   }
 
   #reader-mode-button:hover:active,
@@ -4621,6 +4635,17 @@ window > chatbox {
 
 #eme-notification-icon:hover:active {
   list-style-image: url("chrome://browser/skin/drm-icon.svg#chains-pressed");
+}
+
+#eme-notification-icon[firstplay=true] {
+  animation: emeTeachingMoment 0.2s linear 0s 5 normal;
+}
+
+@keyframes emeTeachingMoment {
+  0% {transform: translateX(0); }
+  25% {transform: translateX(3px) }
+  75% {transform: translateX(-3px) }
+  100% { transform: translateX(0); }
 }
 
 /* Customization mode */

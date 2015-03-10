@@ -67,6 +67,136 @@ public:
         m_formatter.oneByteOp(OP_NOP);
     }
 
+    /*
+     * The nop multibytes sequences are directly taken from the Intel's
+     * architecture software developer manual.
+     * They are defined for sequences of sizes from 1 to 9 included.
+     */
+    void nop_one()
+    {
+        m_formatter.oneByteOp(OP_NOP);
+    }
+
+    void nop_two()
+    {
+        m_formatter.oneByteOp(OP_NOP_66);
+        m_formatter.oneByteOp(OP_NOP);
+    }
+
+    void nop_three()
+    {
+        m_formatter.oneByteOp(OP_NOP_0F);
+        m_formatter.oneByteOp(OP_NOP_1F);
+        m_formatter.oneByteOp(OP_NOP_00);
+    }
+
+    void nop_four()
+    {
+        m_formatter.oneByteOp(OP_NOP_0F);
+        m_formatter.oneByteOp(OP_NOP_1F);
+        m_formatter.oneByteOp(OP_NOP_40);
+        m_formatter.oneByteOp(OP_NOP_00);
+    }
+
+    void nop_five()
+    {
+        m_formatter.oneByteOp(OP_NOP_0F);
+        m_formatter.oneByteOp(OP_NOP_1F);
+        m_formatter.oneByteOp(OP_NOP_44);
+        m_formatter.oneByteOp(OP_NOP_00);
+        m_formatter.oneByteOp(OP_NOP_00);
+    }
+
+    void nop_six()
+    {
+        m_formatter.oneByteOp(OP_NOP_66);
+        nop_five();
+    }
+
+    void nop_seven()
+    {
+        m_formatter.oneByteOp(OP_NOP_0F);
+        m_formatter.oneByteOp(OP_NOP_1F);
+        m_formatter.oneByteOp(OP_NOP_80);
+        for (int i = 0; i < 4; ++i)
+            m_formatter.oneByteOp(OP_NOP_00);
+    }
+
+    void nop_eight()
+    {
+        m_formatter.oneByteOp(OP_NOP_0F);
+        m_formatter.oneByteOp(OP_NOP_1F);
+        m_formatter.oneByteOp(OP_NOP_84);
+        for (int i = 0; i < 5; ++i)
+            m_formatter.oneByteOp(OP_NOP_00);
+    }
+
+    void nop_nine()
+    {
+        m_formatter.oneByteOp(OP_NOP_66);
+        nop_eight();
+    }
+
+    void insert_nop(int size)
+    {
+        switch (size) {
+          case 1:
+            nop_one();
+            break;
+          case 2:
+            nop_two();
+            break;
+          case 3:
+            nop_three();
+            break;
+          case 4:
+            nop_four();
+            break;
+          case 5:
+            nop_five();
+            break;
+          case 6:
+            nop_six();
+            break;
+          case 7:
+            nop_seven();
+            break;
+          case 8:
+            nop_eight();
+            break;
+          case 9:
+            nop_nine();
+            break;
+          case 10:
+            nop_three();
+            nop_seven();
+            break;
+          case 11:
+            nop_four();
+            nop_seven();
+            break;
+          case 12:
+            nop_six();
+            nop_six();
+            break;
+          case 13:
+            nop_six();
+            nop_seven();
+            break;
+          case 14:
+            nop_seven();
+            nop_seven();
+            break;
+          case 15:
+            nop_one();
+            nop_seven();
+            nop_seven();
+            break;
+          default:
+            MOZ_CRASH("Unhandled alignment");
+        }
+    }
+
     // Stack operations:
 
     void push_r(RegisterID reg)
@@ -1741,28 +1871,33 @@ public:
         spew("movq       %s, %p", GPReg64Name(src), addr);
         m_formatter.oneByteOp64(OP_MOV_EvGv, addr, src);
     }
+#endif
 
-    void movq_rm(XMMRegisterID src, int32_t offset, RegisterID base)
+    void vmovq_rm(XMMRegisterID src, int32_t offset, RegisterID base)
     {
-        spew("movq       %s, " MEM_ob, XMMRegName(src), ADDR_ob(offset, base));
-        m_formatter.prefix(PRE_SSE_66);
-        m_formatter.twoByteOp64(OP2_MOVQ_EdVd, offset, base, src);
+        // vmovq_rm can be encoded either as a true vmovq or as a vmovd with a
+        // REX prefix modifying it to be 64-bit. We choose the vmovq encoding
+        // because it's smaller (when it doesn't need a REX prefix for other
+        // reasons) and because it works on 32-bit x86 too.
+        twoByteOpSimd("vmovq", VEX_PD, OP2_MOVQ_WdVd, offset, base, invalid_xmm, src);
     }
 
-    void movq_rm(XMMRegisterID src, int32_t offset, RegisterID base, RegisterID index, int scale)
+    void vmovq_rm_disp32(XMMRegisterID src, int32_t offset, RegisterID base)
     {
-        spew("movq       %s, " MEM_obs, XMMRegName(src), ADDR_obs(offset, base, index, scale));
-        m_formatter.prefix(PRE_SSE_66);
-        m_formatter.twoByteOp64(OP2_MOVQ_EdVd, offset, base, index, scale, src);
+        twoByteOpSimd_disp32("vmovq", VEX_PD, OP2_MOVQ_WdVd, offset, base, invalid_xmm, src);
     }
 
-    void movq_rm(XMMRegisterID src, const void *addr)
+    void vmovq_rm(XMMRegisterID src, int32_t offset, RegisterID base, RegisterID index, int scale)
     {
-        spew("movq       %s, %p", XMMRegName(src), addr);
-        m_formatter.prefix(PRE_SSE_66);
-        m_formatter.twoByteOp64(OP2_MOVQ_EdVd, addr, src);
+        twoByteOpSimd("vmovq", VEX_PD, OP2_MOVQ_WdVd, offset, base, index, scale, invalid_xmm, src);
     }
 
+    void vmovq_rm(XMMRegisterID src, const void *addr)
+    {
+        twoByteOpSimd("vmovq", VEX_PD, OP2_MOVQ_WdVd, addr, invalid_xmm, src);
+    }
+
+#ifdef JS_CODEGEN_X64
     void movq_mEAX(const void *addr)
     {
         if (IsAddressImmediate(addr)) {
@@ -1815,28 +1950,33 @@ public:
         spew("movq       %p, %s", addr, GPReg64Name(dst));
         m_formatter.oneByteOp64(OP_MOV_GvEv, addr, dst);
     }
+#endif
 
-    void movq_mr(int32_t offset, RegisterID base, XMMRegisterID dst)
+    void vmovq_mr(int32_t offset, RegisterID base, XMMRegisterID dst)
     {
-        spew("movq       " MEM_ob ", %s", ADDR_ob(offset, base), XMMRegName(dst));
-        m_formatter.prefix(PRE_SSE_66);
-        m_formatter.twoByteOp64(OP2_MOVQ_VdEd, offset, base, (RegisterID) dst);
+        // vmovq_mr can be encoded either as a true vmovq or as a vmovd with a
+        // REX prefix modifying it to be 64-bit. We choose the vmovq encoding
+        // because it's smaller (when it doesn't need a REX prefix for other
+        // reasons) and because it works on 32-bit x86 too.
+        twoByteOpSimd("vmovq", VEX_SS, OP2_MOVQ_VdWd, offset, base, invalid_xmm, dst);
     }
 
-    void movq_mr(int32_t offset, RegisterID base, RegisterID index, int32_t scale, XMMRegisterID dst)
+    void vmovq_mr_disp32(int32_t offset, RegisterID base, XMMRegisterID dst)
     {
-        spew("movq       " MEM_obs ", %s", ADDR_obs(offset, base, index, scale), XMMRegName(dst));
-        m_formatter.prefix(PRE_SSE_66);
-        m_formatter.twoByteOp64(OP2_MOVQ_VdEd, offset, base, index, scale, (RegisterID) dst);
+        twoByteOpSimd_disp32("vmovq", VEX_SS, OP2_MOVQ_VdWd, offset, base, invalid_xmm, dst);
     }
 
-    void movq_mr(const void *addr, XMMRegisterID dst)
+    void vmovq_mr(int32_t offset, RegisterID base, RegisterID index, int32_t scale, XMMRegisterID dst)
     {
-        spew("movq       %p, %s", addr, XMMRegName(dst));
-        m_formatter.prefix(PRE_SSE_66);
-        m_formatter.twoByteOp64(OP2_MOVQ_VdEd, addr, (RegisterID) dst);
+        twoByteOpSimd("vmovq", VEX_SS, OP2_MOVQ_VdWd, offset, base, index, scale, invalid_xmm, dst);
     }
 
+    void vmovq_mr(const void *addr, XMMRegisterID dst)
+    {
+        twoByteOpSimd("vmovq", VEX_SS, OP2_MOVQ_VdWd, addr, invalid_xmm, dst);
+    }
+
+#ifdef JS_CODEGEN_X64
     void leaq_mr(int32_t offset, RegisterID base, RegisterID index, int scale, RegisterID dst)
     {
         spew("leaq       " MEM_obs ", %s", ADDR_obs(offset, base, index, scale), GPReg64Name(dst)),
@@ -1882,10 +2022,20 @@ public:
         m_formatter.immediate64(imm);
     }
 
-    void movsxd_rr(RegisterID src, RegisterID dst)
+    void movslq_rr(RegisterID src, RegisterID dst)
     {
-        spew("movsxd     %s, %s", GPReg32Name(src), GPReg64Name(dst));
+        spew("movslq     %s, %s", GPReg32Name(src), GPReg64Name(dst));
         m_formatter.oneByteOp64(OP_MOVSXD_GvEv, src, dst);
+    }
+    void movslq_mr(int32_t offset, RegisterID base, RegisterID dst)
+    {
+        spew("movslq     " MEM_ob ", %s", ADDR_ob(offset, base), GPReg64Name(dst));
+        m_formatter.oneByteOp64(OP_MOVSXD_GvEv, offset, base, dst);
+    }
+    void movslq_mr(int32_t offset, RegisterID base, RegisterID index, int scale, RegisterID dst)
+    {
+        spew("movslq     " MEM_obs ", %s", ADDR_obs(offset, base, index, scale), GPReg64Name(dst));
+        m_formatter.oneByteOp64(OP_MOVSXD_GvEv, offset, base, index, scale, dst);
     }
 
     MOZ_WARN_UNUSED_RESULT JmpSrc
@@ -2534,6 +2684,11 @@ public:
         twoByteOpImmSimd("vshufps", VEX_PS, OP2_SHUFPS_VpsWpsIb, mask, address, src0, dst);
     }
 
+    void vmovddup_rr(XMMRegisterID src, XMMRegisterID dst)
+    {
+        twoByteOpSimd("vmovddup", VEX_SD, OP2_MOVDDUP_VqWq, src, invalid_xmm, dst);
+    }
+
     void vmovhlps_rr(XMMRegisterID src1, XMMRegisterID src0, XMMRegisterID dst)
     {
         twoByteOpSimd("vmovhlps", VEX_PS, OP2_MOVHLPS_VqUq, src1, src0, dst);
@@ -2662,11 +2817,15 @@ public:
 #ifdef JS_CODEGEN_X64
     void vmovq_rr(XMMRegisterID src, RegisterID dst)
     {
+        // While this is called "vmovq", it actually uses the vmovd encoding
+        // with a REX prefix modifying it to be 64-bit.
         twoByteOpSimdInt64("vmovq", VEX_PD, OP2_MOVD_EdVd, (XMMRegisterID)dst, (RegisterID)src);
     }
 
     void vmovq_rr(RegisterID src, XMMRegisterID dst)
     {
+        // While this is called "vmovq", it actually uses the vmovd encoding
+        // with a REX prefix modifying it to be 64-bit.
         twoByteOpInt64Simd("vmovq", VEX_PD, OP2_MOVD_VdEd, src, invalid_xmm, dst);
     }
 #endif
@@ -3332,11 +3491,20 @@ threeByteOpImmSimd("vblendps", VEX_PD, OP3_BLENDPS_VpsWpsIb, ESCAPE_3A, imm, off
         return JmpDst(jump.offset() + offset);
     }
 
-    void align(int alignment)
+    void haltingAlign(int alignment)
     {
         spew(".balign %d, 0x%x   # hlt", alignment, OP_HLT);
         while (!m_formatter.isAligned(alignment))
             m_formatter.oneByteOp(OP_HLT);
+    }
+
+    void nopAlign(int alignment)
+    {
+        spew(".balign %d", alignment);
+
+        int remainder = m_formatter.size() % alignment;
+        if (remainder > 0)
+            insert_nop(alignment - remainder);
     }
 
     void jumpTablePointer(uintptr_t ptr)

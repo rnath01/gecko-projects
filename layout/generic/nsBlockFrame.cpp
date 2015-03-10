@@ -1141,6 +1141,16 @@ nsBlockFrame::Reflow(nsPresContext*           aPresContext,
     PrepareResizeReflow(state);
   }
 
+  // The same for percentage text-indent, except conditioned on the
+  // parent resizing.
+  if (!(GetStateBits() & NS_FRAME_IS_DIRTY) &&
+      reflowState->mCBReflowState &&
+      reflowState->mCBReflowState->IsIResize() &&
+      reflowState->mStyleText->mTextIndent.HasPercent() &&
+      !mLines.empty()) {
+    mLines.front()->MarkDirty();
+  }
+
   LazyMarkLinesDirty();
 
   mState &= ~NS_FRAME_FIRST_REFLOW;
@@ -1262,7 +1272,7 @@ nsBlockFrame::Reflow(nsPresContext*           aPresContext,
   // physical origins.
   if (wm.IsVerticalRL()) {
     nscoord containerWidth = aMetrics.Width();
-    nscoord deltaX = containerWidth - state.mContainerWidth;
+    nscoord deltaX = containerWidth - state.ContainerWidth();
     if (deltaX) {
       for (line_iterator line = begin_lines(), end = end_lines();
            line != end; line++) {
@@ -1923,7 +1933,7 @@ nsBlockFrame::PropagateFloatDamage(nsBlockReflowState& aState,
     // Scrollable overflow should be sufficient for things that affect
     // layout.
     WritingMode wm = aState.mReflowState.GetWritingMode();
-    nscoord containerWidth = aState.mContainerWidth;
+    nscoord containerWidth = aState.ContainerWidth();
     LogicalRect overflow = aLine->GetOverflowArea(eScrollableOverflow, wm,
                                                   containerWidth);
     nscoord lineBCoordCombinedBefore = overflow.BStart(wm) + aDeltaBCoord;
@@ -2174,8 +2184,8 @@ nsBlockFrame::ReflowDirtyLines(nsBlockReflowState& aState)
     // If the container width has changed reset the container width. If the
     // line's writing mode is not ltr, or if the line is not left-aligned, also
     // mark the line dirty.
-    if (aState.mContainerWidth != line->mContainerWidth) {
-      line->mContainerWidth = aState.mContainerWidth;
+    if (aState.ContainerWidth() != line->mContainerWidth) {
+      line->mContainerWidth = aState.ContainerWidth();
 
       bool isLastLine = line == mLines.back() &&
                         !GetNextInFlow() &&
@@ -2691,7 +2701,7 @@ nsBlockFrame::ReflowLine(nsBlockReflowState& aState,
                          line_iterator aLine,
                          bool* aKeepReflowGoing)
 {
-  NS_ABORT_IF_FALSE(aLine->GetChildCount(), "reflowing empty line");
+  MOZ_ASSERT(aLine->GetChildCount(), "reflowing empty line");
 
   // Setup the line-layout for the new line
   aState.mCurrentLine = aLine;
@@ -2742,9 +2752,9 @@ nsBlockFrame::PullFrameFrom(nsLineBox*           aLine,
                             nsLineList::iterator aFromLine)
 {
   nsLineBox* fromLine = aFromLine;
-  NS_ABORT_IF_FALSE(fromLine, "bad line to pull from");
-  NS_ABORT_IF_FALSE(fromLine->GetChildCount(), "empty line");
-  NS_ABORT_IF_FALSE(aLine->GetChildCount(), "empty line");
+  MOZ_ASSERT(fromLine, "bad line to pull from");
+  MOZ_ASSERT(fromLine->GetChildCount(), "empty line");
+  MOZ_ASSERT(aLine->GetChildCount(), "empty line");
 
   NS_ASSERTION(fromLine->IsBlock() == fromLine->mFirstChild->IsBlockOutside(),
                "Disagreement about whether it's a block or not");
@@ -2812,7 +2822,7 @@ nsBlockFrame::SlideLine(nsBlockReflowState& aState,
   NS_PRECONDITION(aDeltaBCoord != 0, "why slide a line nowhere?");
 
   // Adjust line state
-  aLine->SlideBy(aDeltaBCoord, aState.mContainerWidth);
+  aLine->SlideBy(aDeltaBCoord, aState.ContainerWidth());
 
   // Adjust the frames in the line
   MoveChildFramesOfLine(aLine, aDeltaBCoord);
@@ -2884,7 +2894,8 @@ nsBlockFrame::AttributeChanged(int32_t         aNameSpaceID,
     return rv;
   }
   if (nsGkAtoms::start == aAttribute ||
-      (nsGkAtoms::reversed == aAttribute && mContent->IsHTML(nsGkAtoms::ol))) {
+      (nsGkAtoms::reversed == aAttribute &&
+       mContent->IsHTMLElement(nsGkAtoms::ol))) {
     nsPresContext* presContext = PresContext();
 
     // XXX Not sure if this is necessary anymore
@@ -2945,7 +2956,7 @@ IsNonAutoNonZeroBSize(const nsStyleCoord& aCoord)
     return nsRuleNode::ComputeCoordPercentCalc(aCoord, nscoord_MAX) > 0 ||
            nsRuleNode::ComputeCoordPercentCalc(aCoord, 0) > 0;
   }
-  NS_ABORT_IF_FALSE(false, "unexpected unit for height or min-height");
+  MOZ_ASSERT(false, "unexpected unit for height or min-height");
   return true;
 }
 
@@ -3699,7 +3710,7 @@ nsBlockFrame::DoReflowInlineFrames(nsBlockReflowState& aState,
   WritingMode lineWM = GetWritingMode(aLine->mFirstChild);
   LogicalRect lineRect =
     aFloatAvailableSpace.mRect.ConvertTo(lineWM, outerWM,
-                                         aState.mContainerWidth);
+                                         aState.ContainerWidth());
 
   nscoord iStart = lineRect.IStart(lineWM);
   nscoord availISize = lineRect.ISize(lineWM);
@@ -3720,7 +3731,7 @@ nsBlockFrame::DoReflowInlineFrames(nsBlockReflowState& aState,
                               availISize, availBSize,
                               aFloatAvailableSpace.mHasFloats,
                               false, /*XXX isTopOfPage*/
-                              lineWM, aState.mContainerWidth);
+                              lineWM, aState.mContainerSize);
 
   aState.SetFlag(BRS_LINE_LAYOUT_EMPTY, false);
 
@@ -4125,8 +4136,8 @@ nsBlockFrame::SplitFloat(nsBlockReflowState& aState,
   if (aFloat->StyleDisplay()->mFloats == NS_STYLE_FLOAT_LEFT) {
     aState.mFloatManager->SetSplitLeftFloatAcrossBreak();
   } else {
-    NS_ABORT_IF_FALSE(aFloat->StyleDisplay()->mFloats ==
-                        NS_STYLE_FLOAT_RIGHT, "unexpected float side");
+    MOZ_ASSERT(aFloat->StyleDisplay()->mFloats == NS_STYLE_FLOAT_RIGHT,
+               "unexpected float side");
     aState.mFloatManager->SetSplitRightFloatAcrossBreak();
   }
 
@@ -4171,10 +4182,10 @@ nsBlockFrame::SplitLine(nsBlockReflowState& aState,
                         nsIFrame* aFrame,
                         LineReflowStatus* aLineReflowStatus)
 {
-  NS_ABORT_IF_FALSE(aLine->IsInline(), "illegal SplitLine on block line");
+  MOZ_ASSERT(aLine->IsInline(), "illegal SplitLine on block line");
 
   int32_t pushCount = aLine->GetChildCount() - aLineLayout.GetCurrentSpanCount();
-  NS_ABORT_IF_FALSE(pushCount >= 0, "bad push count"); 
+  MOZ_ASSERT(pushCount >= 0, "bad push count"); 
 
 #ifdef DEBUG
   if (gNoisyReflow) {
@@ -4195,8 +4206,8 @@ nsBlockFrame::SplitLine(nsBlockReflowState& aState,
 #endif
 
   if (0 != pushCount) {
-    NS_ABORT_IF_FALSE(aLine->GetChildCount() > pushCount, "bad push");
-    NS_ABORT_IF_FALSE(nullptr != aFrame, "whoops");
+    MOZ_ASSERT(aLine->GetChildCount() > pushCount, "bad push");
+    MOZ_ASSERT(nullptr != aFrame, "whoops");
 #ifdef DEBUG
     {
       nsIFrame *f = aFrame;
@@ -6253,8 +6264,7 @@ static void ComputeVisualOverflowArea(nsLineList& aLines,
 bool
 nsBlockFrame::IsVisibleInSelection(nsISelection* aSelection)
 {
-  if (mContent->IsHTML() && (mContent->Tag() == nsGkAtoms::html ||
-                             mContent->Tag() == nsGkAtoms::body))
+  if (mContent->IsAnyOfHTMLElements(nsGkAtoms::html, nsGkAtoms::body))
     return true;
 
   nsCOMPtr<nsIDOMNode> node(do_QueryInterface(mContent));
@@ -6478,7 +6488,7 @@ nsBlockFrame::AccessibleType()
   }
 
   // block frame may be for <hr>
-  if (mContent->Tag() == nsGkAtoms::hr) {
+  if (mContent->IsHTMLElement(nsGkAtoms::hr)) {
     return a11y::eHTMLHRType;
   }
 
@@ -6791,7 +6801,7 @@ bool
 nsBlockFrame::FrameStartsCounterScope(nsIFrame* aFrame)
 {
   nsIContent* content = aFrame->GetContent();
-  if (!content || !content->IsHTML())
+  if (!content || !content->IsHTMLElement())
     return false;
 
   nsIAtom *localName = content->NodeInfo()->NameAtom();
@@ -6810,14 +6820,14 @@ nsBlockFrame::RenumberLists(nsPresContext* aPresContext)
     return false;
   }
 
-  MOZ_ASSERT(mContent->IsHTML(),
+  MOZ_ASSERT(mContent->IsHTMLElement(),
              "FrameStartsCounterScope should only return true for HTML elements");
 
   // Setup initial list ordinal value
   // XXX Map html's start property to counter-reset style
   int32_t ordinal = 1;
   int32_t increment;
-  if (mContent->Tag() == nsGkAtoms::ol &&
+  if (mContent->IsHTMLElement(nsGkAtoms::ol) &&
       mContent->HasAttr(kNameSpaceID_None, nsGkAtoms::reversed)) {
     increment = -1;
   } else {
@@ -6837,7 +6847,7 @@ nsBlockFrame::RenumberLists(nsPresContext* aPresContext)
     ordinal = 0;
     for (nsIContent* kid = mContent->GetFirstChild(); kid;
          kid = kid->GetNextSibling()) {
-      if (kid->IsHTML(nsGkAtoms::li)) {
+      if (kid->IsHTMLElement(nsGkAtoms::li)) {
         // FIXME: This isn't right in terms of what CSS says to do for
         // overflow of counters (but it only matters when this node has
         // more than numeric_limits<int32_t>::max() children).
@@ -7045,7 +7055,7 @@ nsBlockFrame::ReflowBullet(nsIFrame* aBulletFrame,
   aBulletFrame->SetRect(wm, LogicalRect(wm, iStart, bStart,
                                         aMetrics.ISize(wm),
                                         aMetrics.BSize(wm)),
-                        aState.mContainerWidth);
+                        aState.ContainerWidth());
   aBulletFrame->DidReflow(aState.mPresContext, &aState.mReflowState,
                           nsDidReflowStatus::FINISHED);
 }
@@ -7346,7 +7356,7 @@ nsBlockFrame::VerifyLines(bool aFinalCheckOK)
       cursor = nullptr;
     }
     if (aFinalCheckOK) {
-      NS_ABORT_IF_FALSE(line->GetChildCount(), "empty line");
+      MOZ_ASSERT(line->GetChildCount(), "empty line");
       if (line->IsBlock()) {
         NS_ASSERTION(1 == line->GetChildCount(), "bad first line");
       }

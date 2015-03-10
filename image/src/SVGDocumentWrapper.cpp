@@ -78,7 +78,7 @@ SVGDocumentWrapper::GetRootLayoutFrame()
 void
 SVGDocumentWrapper::UpdateViewportBounds(const nsIntSize& aViewportSize)
 {
-  NS_ABORT_IF_FALSE(!mIgnoreInvalidation, "shouldn't be reentrant");
+  MOZ_ASSERT(!mIgnoreInvalidation, "shouldn't be reentrant");
   mIgnoreInvalidation = true;
 
   nsIntRect currentBounds;
@@ -96,7 +96,7 @@ SVGDocumentWrapper::UpdateViewportBounds(const nsIntSize& aViewportSize)
 void
 SVGDocumentWrapper::FlushImageTransformInvalidation()
 {
-  NS_ABORT_IF_FALSE(!mIgnoreInvalidation, "shouldn't be reentrant");
+  MOZ_ASSERT(!mIgnoreInvalidation, "shouldn't be reentrant");
 
   SVGSVGElement* svgElem = GetRootSVGElem();
   if (!svgElem)
@@ -320,7 +320,8 @@ SVGDocumentWrapper::SetupViewer(nsIRequest* aRequest,
   nsCOMPtr<nsIStreamListener> listener;
   rv = docLoaderFactory->CreateInstance("external-resource", chan,
                                         newLoadGroup,
-                                        IMAGE_SVG_XML, nullptr, nullptr,
+                                        NS_LITERAL_CSTRING(IMAGE_SVG_XML),
+                                        nullptr, nullptr,
                                         getter_AddRefs(listener),
                                         getter_AddRefs(viewer));
   NS_ENSURE_SUCCESS(rv, rv);
@@ -346,8 +347,8 @@ SVGDocumentWrapper::SetupViewer(nsIRequest* aRequest,
 void
 SVGDocumentWrapper::RegisterForXPCOMShutdown()
 {
-  NS_ABORT_IF_FALSE(!mRegisteredForXPCOMShutdown,
-                    "re-registering for XPCOM shutdown");
+  MOZ_ASSERT(!mRegisteredForXPCOMShutdown,
+             "re-registering for XPCOM shutdown");
   // Listen for xpcom-shutdown so that we can drop references to our
   // helper-document at that point. (Otherwise, we won't get cleaned up
   // until imgLoader::Shutdown, which can happen after the JAR service
@@ -366,8 +367,8 @@ SVGDocumentWrapper::RegisterForXPCOMShutdown()
 void
 SVGDocumentWrapper::UnregisterForXPCOMShutdown()
 {
-  NS_ABORT_IF_FALSE(mRegisteredForXPCOMShutdown,
-                    "unregistering for XPCOM shutdown w/out being registered");
+  MOZ_ASSERT(mRegisteredForXPCOMShutdown,
+             "unregistering for XPCOM shutdown w/out being registered");
 
   nsresult rv;
   nsCOMPtr<nsIObserverService> obsSvc = do_GetService(OBSERVER_SVC_CID, &rv);
@@ -409,7 +410,7 @@ SVGDocumentWrapper::GetRootSVGElem()
     return nullptr; // Can happen during destruction
 
   Element* rootElem = mViewer->GetDocument()->GetRootElement();
-  if (!rootElem || !rootElem->IsSVG(nsGkAtoms::svg)) {
+  if (!rootElem || !rootElem->IsSVGElement(nsGkAtoms::svg)) {
     return nullptr;
   }
 

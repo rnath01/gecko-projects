@@ -47,6 +47,7 @@ DIRS += [
     'bindings',
     'battery',
     'browser-element',
+    'cache',
     'canvas',
     'cellbroadcast',
     'contacts',
@@ -134,6 +135,9 @@ if CONFIG['MOZ_GAMEPAD']:
 
 if CONFIG['MOZ_NFC']:
     DIRS += ['nfc']
+
+if CONFIG['MOZ_SECUREELEMENT']:
+    DIRS += ['secureelement']
 
 if CONFIG['MOZ_B2G']:
     DIRS += [

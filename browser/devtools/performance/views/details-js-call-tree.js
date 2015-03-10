@@ -64,8 +64,8 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
    */
   _prepareCallTree: function (profile, { startTime, endTime }, options) {
     let threadSamples = profile.threads[0].samples;
-    let contentOnly = !PerformanceController.getPref("show-platform-data");
-    let invertTree = PerformanceController.getPref("invert-call-tree");
+    let contentOnly = !PerformanceController.getOption("show-platform-data");
+    let invertTree = PerformanceController.getOption("invert-call-tree");
 
     let threadNode = new ThreadNode(threadSamples,
       { startTime, endTime, contentOnly, invertTree });
@@ -95,6 +95,9 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
     // Bind events.
     root.on("link", this._onLink);
 
+    // Pipe "focus" events to the view, mostly for tests
+    root.on("focus", () => this.emit("focus"));
+
     // Clear out other call trees.
     let container = $("#js-calltree-view > .call-tree-cells-container");
     container.innerHTML = "";
@@ -105,7 +108,7 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
 
     // When platform data isn't shown, hide the cateogry labels, since they're
     // only available for C++ frames.
-    let contentOnly = !PerformanceController.getPref("show-platform-data");
+    let contentOnly = !PerformanceController.getOption("show-platform-data");
     root.toggleCategories(!contentOnly);
   },
 

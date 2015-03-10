@@ -167,6 +167,25 @@ SizeOfEntryStore(uint32_t aCapacity, uint32_t aEntrySize, uint32_t* aNbytes)
   return uint64_t(*aNbytes) == nbytes64;   // returns false on overflow
 }
 
+PLDHashTable*
+PL_NewDHashTable(const PLDHashTableOps* aOps, uint32_t aEntrySize,
+                 uint32_t aLength)
+{
+  PLDHashTable* table = new PLDHashTable();
+  if (!PL_DHashTableInit(table, aOps, aEntrySize, fallible, aLength)) {
+    delete table;
+    return nullptr;
+  }
+  return table;
+}
+
+void
+PL_DHashTableDestroy(PLDHashTable* aTable)
+{
+  PL_DHashTableFinish(aTable);
+  delete aTable;
+}
+
 /*
  * Compute max and min load numbers (entry counts).  We have a secondary max
  * that allows us to overload a table reasonably if it cannot be grown further
@@ -196,12 +215,19 @@ MinCapacity(uint32_t aLength)
   return (aLength * 4 + (3 - 1)) / 3;   // == ceil(aLength * 4 / 3)
 }
 
-MOZ_ALWAYS_INLINE void
+MOZ_ALWAYS_INLINE bool
 PLDHashTable::Init(const PLDHashTableOps* aOps,
-                   uint32_t aEntrySize, uint32_t aLength)
+                   uint32_t aEntrySize, const fallible_t&, uint32_t aLength)
 {
+  MOZ_ASSERT(!IsInitialized());
+
+  // Check that the important fields have been set by the constructor.
+  MOZ_ASSERT(mOps == nullptr);
+  MOZ_ASSERT(mRecursionLevel == 0);
+  MOZ_ASSERT(mEntryStore == nullptr);
+
   if (aLength > PL_DHASH_MAX_INITIAL_LENGTH) {
-    MOZ_CRASH("Initial length is too large");
+    return false;
   }
 
   // Compute the smallest capacity allowing |aLength| elements to be inserted
@@ -215,30 +241,51 @@ PLDHashTable::Init(const PLDHashTableOps* aOps,
 
   capacity = 1u << log2;
   MOZ_ASSERT(capacity <= PL_DHASH_MAX_CAPACITY);
-  mOps = aOps;
   mHashShift = PL_DHASH_BITS - log2;
   mEntrySize = aEntrySize;
   mEntryCount = mRemovedCount = 0;
   mGeneration = 0;
   uint32_t nbytes;
   if (!SizeOfEntryStore(capacity, aEntrySize, &nbytes)) {
-    MOZ_CRASH("Initial entry store size is too large");
+    return false;  // overflowed
   }
 
   mEntryStore = nullptr;
 
   METER(memset(&mStats, 0, sizeof(mStats)));
 
+  // Set this only once we reach a point where we know we can't fail.
+  mOps = aOps;
+
 #ifdef DEBUG
   mRecursionLevel = 0;
 #endif
+
+  return true;
+}
+
+bool
+PL_DHashTableInit(PLDHashTable* aTable, const PLDHashTableOps* aOps,
+                  uint32_t aEntrySize,
+                  const fallible_t& aFallible, uint32_t aLength)
+{
+  return aTable->Init(aOps, aEntrySize, aFallible, aLength);
 }
 
 void
 PL_DHashTableInit(PLDHashTable* aTable, const PLDHashTableOps* aOps,
                   uint32_t aEntrySize, uint32_t aLength)
 {
-  aTable->Init(aOps, aEntrySize, aLength);
+  if (!PL_DHashTableInit(aTable, aOps, aEntrySize, fallible, aLength)) {
+    if (aLength > PL_DHASH_MAX_INITIAL_LENGTH) {
+      MOZ_CRASH();          // the asked-for length was too big
+    }
+    uint32_t capacity = MinCapacity(aLength), nbytes;
+    if (!SizeOfEntryStore(capacity, aEntrySize, &nbytes)) {
+      MOZ_CRASH();          // the required mEntryStore size was too big
+    }
+    NS_ABORT_OOM(nbytes);   // allocation failed
+  }
 }
 
 /*
@@ -280,6 +327,8 @@ PLDHashTable::EntryIsFree(PLDHashEntryHdr* aEntry)
 MOZ_ALWAYS_INLINE void
 PLDHashTable::Finish()
 {
+  MOZ_ASSERT(IsInitialized());
+
   INCREMENT_RECURSION_LEVEL(this);
 
   /* Clear any remaining live entries. */
@@ -502,6 +551,8 @@ PLDHashTable::ChangeTable(int aDeltaLog2)
 MOZ_ALWAYS_INLINE PLDHashNumber
 PLDHashTable::ComputeKeyHash(const void* aKey)
 {
+  MOZ_ASSERT(mEntryStore);
+
   PLDHashNumber keyHash = mOps->hashKey(this, aKey);
   keyHash *= PL_DHASH_GOLDEN_RATIO;
 
@@ -515,6 +566,8 @@ PLDHashTable::ComputeKeyHash(const void* aKey)
 MOZ_ALWAYS_INLINE PLDHashEntryHdr*
 PLDHashTable::Search(const void* aKey)
 {
+  MOZ_ASSERT(IsInitialized());
+
   INCREMENT_RECURSION_LEVEL(this);
 
   METER(mStats.mSearches++);
@@ -531,6 +584,8 @@ PLDHashTable::Search(const void* aKey)
 MOZ_ALWAYS_INLINE PLDHashEntryHdr*
 PLDHashTable::Add(const void* aKey, const mozilla::fallible_t&)
 {
+  MOZ_ASSERT(IsInitialized());
+
   PLDHashNumber keyHash;
   PLDHashEntryHdr* entry;
   uint32_t capacity;
@@ -541,8 +596,11 @@ PLDHashTable::Add(const void* aKey, const mozilla::fallible_t&)
   // Allocate the entry storage if it hasn't already been allocated.
   if (!mEntryStore) {
     uint32_t nbytes;
-    if (!SizeOfEntryStore(CapacityFromHashShift(), mEntrySize, &nbytes) ||
-        !(mEntryStore = (char*)malloc(nbytes))) {
+    // We already checked this in Init(), so it must still be true.
+    MOZ_RELEASE_ASSERT(SizeOfEntryStore(CapacityFromHashShift(), mEntrySize,
+                                        &nbytes));
+    mEntryStore = (char*)malloc(nbytes);
+    if (!mEntryStore) {
       METER(mStats.mAddFailures++);
       entry = nullptr;
       goto exit;
@@ -585,7 +643,7 @@ PLDHashTable::Add(const void* aKey, const mozilla::fallible_t&)
    * then skip it while growing the table and re-add it after.
    */
   keyHash = ComputeKeyHash(aKey);
-  entry = mEntryStore ? SearchTable<ForAdd>(aKey, keyHash) : nullptr;
+  entry = SearchTable<ForAdd>(aKey, keyHash);
   if (!ENTRY_IS_LIVE(entry)) {
     /* Initialize the entry, indicating that it's no longer free. */
     METER(mStats.mAddMisses++);
@@ -594,11 +652,8 @@ PLDHashTable::Add(const void* aKey, const mozilla::fallible_t&)
       mRemovedCount--;
       keyHash |= COLLISION_FLAG;
     }
-    if (mOps->initEntry && !mOps->initEntry(this, entry, aKey)) {
-      /* We haven't claimed entry yet; fail with null return. */
-      memset(entry + 1, 0, mEntrySize - sizeof(*entry));
-      entry = nullptr;
-      goto exit;
+    if (mOps->initEntry) {
+      mOps->initEntry(entry, aKey);
     }
     entry->mKeyHash = keyHash;
     mEntryCount++;
@@ -612,9 +667,32 @@ exit:
   return entry;
 }
 
+MOZ_ALWAYS_INLINE PLDHashEntryHdr*
+PLDHashTable::Add(const void* aKey)
+{
+  PLDHashEntryHdr* entry = Add(aKey, fallible);
+  if (!entry) {
+    if (!mEntryStore) {
+      // We OOM'd while allocating the initial entry storage.
+      uint32_t nbytes;
+      (void) SizeOfEntryStore(CapacityFromHashShift(), mEntrySize, &nbytes);
+      NS_ABORT_OOM(nbytes);
+    } else {
+      // We failed to resize the existing entry storage, either due to OOM or
+      // because we exceeded the maximum table capacity or size; report it as
+      // an OOM. The multiplication by 2 gets us the size we tried to allocate,
+      // which is double the current size.
+      NS_ABORT_OOM(2 * EntrySize() * EntryCount());
+    }
+  }
+  return entry;
+}
+
 MOZ_ALWAYS_INLINE void
 PLDHashTable::Remove(const void* aKey)
 {
+  MOZ_ASSERT(IsInitialized());
+
   MOZ_ASSERT(mRecursionLevel == 0);
   INCREMENT_RECURSION_LEVEL(this);
 
@@ -657,14 +735,7 @@ PL_DHashTableAdd(PLDHashTable* aTable, const void* aKey,
 PLDHashEntryHdr* PL_DHASH_FASTCALL
 PL_DHashTableAdd(PLDHashTable* aTable, const void* aKey)
 {
-  PLDHashEntryHdr* entry = PL_DHashTableAdd(aTable, aKey, fallible);
-  if (!entry) {
-    // There are two ways the Add could fail: (a) a entry storage reallocation
-    // failed, or (b) mOps->initEntry failed. The number we're reporting here
-    // is the one for case (a), which is the more likely of the two.
-    NS_ABORT_OOM(aTable->EntrySize() * aTable->EntryCount());
-  }
-  return entry;
+  return aTable->Add(aKey);
 }
 
 void PL_DHASH_FASTCALL
@@ -676,6 +747,9 @@ PL_DHashTableRemove(PLDHashTable* aTable, const void* aKey)
 MOZ_ALWAYS_INLINE void
 PLDHashTable::RawRemove(PLDHashEntryHdr* aEntry)
 {
+  MOZ_ASSERT(IsInitialized());
+  MOZ_ASSERT(mEntryStore);
+
   MOZ_ASSERT(mRecursionLevel != IMMUTABLE_RECURSION_LEVEL);
 
   NS_ASSERTION(ENTRY_IS_LIVE(aEntry), "ENTRY_IS_LIVE(aEntry)");
@@ -702,6 +776,12 @@ PL_DHashTableRawRemove(PLDHashTable* aTable, PLDHashEntryHdr* aEntry)
 MOZ_ALWAYS_INLINE uint32_t
 PLDHashTable::Enumerate(PLDHashEnumerator aEtor, void* aArg)
 {
+  MOZ_ASSERT(IsInitialized());
+
+  if (!mEntryStore) {
+    return 0;
+  }
+
   INCREMENT_RECURSION_LEVEL(this);
 
   // Please keep this method in sync with the PLDHashTable::Iterator constructor
@@ -723,7 +803,6 @@ PLDHashTable::Enumerate(PLDHashEnumerator aEtor, void* aArg)
     }
   }
 
-  MOZ_ASSERT_IF(capacity > 0, mEntryStore);
   for (uint32_t e = 0; e < capacity; ++e) {
     PLDHashEntryHdr* entry = (PLDHashEntryHdr*)entryAddr;
     if (ENTRY_IS_LIVE(entry)) {
@@ -803,6 +882,8 @@ PLDHashTable::SizeOfExcludingThis(
     PLDHashSizeOfEntryExcludingThisFun aSizeOfEntryExcludingThis,
     MallocSizeOf aMallocSizeOf, void* aArg /* = nullptr */) const
 {
+  MOZ_ASSERT(IsInitialized());
+
   if (!mEntryStore) {
     return 0;
   }
@@ -825,6 +906,8 @@ PLDHashTable::SizeOfIncludingThis(
     PLDHashSizeOfEntryExcludingThisFun aSizeOfEntryExcludingThis,
     MallocSizeOf aMallocSizeOf, void* aArg /* = nullptr */) const
 {
+  MOZ_ASSERT(IsInitialized());
+
   return aMallocSizeOf(this) +
          SizeOfExcludingThis(aSizeOfEntryExcludingThis, aMallocSizeOf, aArg);
 }
@@ -854,6 +937,8 @@ PLDHashTable::Iterator::Iterator(const PLDHashTable* aTable)
   mEntryAddr(mTable->mEntryStore),
   mEntryOffset(0)
 {
+  MOZ_ASSERT(mTable->IsInitialized());
+
   // Make sure that modifications can't simultaneously happen while the iterator
   // is active.
   INCREMENT_RECURSION_LEVEL(mTable);
@@ -882,6 +967,8 @@ PLDHashTable::Iterator::Iterator(const Iterator& aIterator)
   mEntryAddr(aIterator.mEntryAddr),
   mEntryOffset(aIterator.mEntryOffset)
 {
+  MOZ_ASSERT(mTable->IsInitialized());
+
   // We need the copy constructor only so that we can keep the recursion level
   // consistent.
   INCREMENT_RECURSION_LEVEL(mTable);
@@ -889,11 +976,15 @@ PLDHashTable::Iterator::Iterator(const Iterator& aIterator)
 
 PLDHashTable::Iterator::~Iterator()
 {
+  MOZ_ASSERT(mTable->IsInitialized());
+
   DECREMENT_RECURSION_LEVEL(mTable);
 }
 
 bool PLDHashTable::Iterator::HasMoreEntries() const
 {
+  MOZ_ASSERT(mTable->IsInitialized());
+
   // Check the number of live entries seen, not the total number of entries
   // seen. To see why, consider what happens if the last entry is not live: we
   // would have to iterate after returning an entry to see if more live entries
@@ -945,6 +1036,8 @@ PLDHashEntryHdr* PLDHashTable::Iterator::NextEntry()
 MOZ_ALWAYS_INLINE void
 PLDHashTable::MarkImmutable()
 {
+  MOZ_ASSERT(IsInitialized());
+
   mRecursionLevel = IMMUTABLE_RECURSION_LEVEL;
 }
 
@@ -961,6 +1054,8 @@ PL_DHashMarkTableImmutable(PLDHashTable* aTable)
 void
 PLDHashTable::DumpMeter(PLDHashEnumerator aDump, FILE* aFp)
 {
+  MOZ_ASSERT(IsInitialized());
+
   PLDHashNumber hash1, hash2, maxChainHash1, maxChainHash2;
   double sqsum, mean, variance, sigma;
   PLDHashEntryHdr* entry;

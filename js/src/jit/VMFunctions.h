@@ -252,11 +252,6 @@ struct VMFunction
     }
 
     VMFunction(const VMFunction &o) {
-        init(o);
-    }
-
-    void init(const VMFunction &o) {
-        MOZ_ASSERT(!wrapped);
         *this = o;
         addToFunctions();
     }
@@ -617,7 +612,13 @@ class AutoDetectInvalidation
     void setReturnOverride();
 
   public:
-    AutoDetectInvalidation(JSContext *cx, MutableHandleValue rval, IonScript *ionScript = nullptr);
+    AutoDetectInvalidation(JSContext *cx, MutableHandleValue rval, IonScript *ionScript)
+      : cx_(cx), ionScript_(ionScript), rval_(rval), disabled_(false)
+    {
+        MOZ_ASSERT(ionScript);
+    }
+
+    AutoDetectInvalidation(JSContext *cx, MutableHandleValue rval);
 
     void disable() {
         MOZ_ASSERT(!disabled_);
@@ -641,7 +642,8 @@ bool CheckOverRecursedWithExtra(JSContext *cx, BaselineFrame *frame,
 bool DefVarOrConst(JSContext *cx, HandlePropertyName dn, unsigned attrs, HandleObject scopeChain);
 bool SetConst(JSContext *cx, HandlePropertyName name, HandleObject scopeChain, HandleValue rval);
 bool MutatePrototype(JSContext *cx, HandlePlainObject obj, HandleValue value);
-bool InitProp(JSContext *cx, HandleNativeObject obj, HandlePropertyName name, HandleValue value);
+bool InitProp(JSContext *cx, HandleObject obj, HandlePropertyName name, HandleValue value,
+              jsbytecode *pc);
 
 template<bool Equal>
 bool LooselyEqual(JSContext *cx, MutableHandleValue lhs, MutableHandleValue rhs, bool *res);
@@ -656,8 +658,6 @@ bool GreaterThanOrEqual(JSContext *cx, MutableHandleValue lhs, MutableHandleValu
 
 template<bool Equal>
 bool StringsEqual(JSContext *cx, HandleString left, HandleString right, bool *res);
-
-JSObject *NewInitObject(JSContext *cx, HandlePlainObject templateObject);
 
 bool ArrayPopDense(JSContext *cx, HandleObject obj, MutableHandleValue rval);
 bool ArrayPushDense(JSContext *cx, HandleArrayObject obj, HandleValue v, uint32_t *length);
@@ -698,6 +698,7 @@ uint32_t GetIndexFromString(JSString *str);
 bool DebugPrologue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool *mustReturn);
 bool DebugEpilogue(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, bool ok);
 bool DebugEpilogueOnBaselineReturn(JSContext *cx, BaselineFrame *frame, jsbytecode *pc);
+void FrameIsDebuggeeCheck(BaselineFrame *frame);
 
 JSObject *CreateGenerator(JSContext *cx, BaselineFrame *frame);
 bool NormalSuspend(JSContext *cx, HandleObject obj, BaselineFrame *frame, jsbytecode *pc,

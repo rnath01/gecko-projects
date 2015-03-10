@@ -640,11 +640,17 @@ nsDOMWindowUtils::GetWidgetModifiers(int32_t aModifiers)
   if (aModifiers & nsIDOMWindowUtils::MODIFIER_FN) {
     result |= mozilla::MODIFIER_FN;
   }
+  if (aModifiers & nsIDOMWindowUtils::MODIFIER_FNLOCK) {
+    result |= mozilla::MODIFIER_FNLOCK;
+  }
   if (aModifiers & nsIDOMWindowUtils::MODIFIER_NUMLOCK) {
     result |= mozilla::MODIFIER_NUMLOCK;
   }
   if (aModifiers & nsIDOMWindowUtils::MODIFIER_SCROLLLOCK) {
     result |= mozilla::MODIFIER_SCROLLLOCK;
+  }
+  if (aModifiers & nsIDOMWindowUtils::MODIFIER_SYMBOL) {
+    result |= mozilla::MODIFIER_SYMBOL;
   }
   if (aModifiers & nsIDOMWindowUtils::MODIFIER_SYMBOLLOCK) {
     result |= mozilla::MODIFIER_SYMBOLLOCK;
@@ -1024,9 +1030,7 @@ nsDOMWindowUtils::SendWheelEvent(float aX,
 
   wheelEvent.refPoint = ToWidgetPoint(CSSPoint(aX, aY), offset, presContext);
 
-  nsEventStatus status;
-  nsresult rv = widget->DispatchEvent(&wheelEvent, status);
-  NS_ENSURE_SUCCESS(rv, rv);
+  widget->DispatchAPZAwareEvent(&wheelEvent);
 
   bool failedX = false;
   if ((aOptions & WHEEL_EVENT_EXPECTED_OVERFLOW_DELTA_X_ZERO) &&
@@ -1322,7 +1326,7 @@ nsDOMWindowUtils::SendNativeMouseEvent(int32_t aScreenX,
   if (!widget)
     return NS_ERROR_FAILURE;
 
-  return widget->SynthesizeNativeMouseEvent(nsIntPoint(aScreenX, aScreenY),
+  return widget->SynthesizeNativeMouseEvent(LayoutDeviceIntPoint(aScreenX, aScreenY),
                                             aNativeMessage, aModifierFlags);
 }
 
@@ -1345,8 +1349,8 @@ nsDOMWindowUtils::SendNativeMouseScrollEvent(int32_t aScreenX,
     return NS_ERROR_FAILURE;
   }
 
-  return widget->SynthesizeNativeMouseScrollEvent(nsIntPoint(aScreenX,
-                                                             aScreenY),
+  return widget->SynthesizeNativeMouseScrollEvent(LayoutDeviceIntPoint(aScreenX,
+                                                                       aScreenY),
                                                   aNativeMessage,
                                                   aDeltaX, aDeltaY, aDeltaZ,
                                                   aModifierFlags,
@@ -1650,20 +1654,18 @@ nsDOMWindowUtils::GetTranslationNodes(nsIDOMNode* aRoot,
   // skip the root tag from being a translation node.
   nsIContent* content = root;
   while ((limit > 0) && (content = content->GetNextNode(root))) {
-    if (!content->IsHTML()) {
+    if (!content->IsHTMLElement()) {
       continue;
     }
 
-    nsIAtom* localName = content->Tag();
-
     // Skip elements that usually contain non-translatable text content.
-    if (localName == nsGkAtoms::script ||
-        localName == nsGkAtoms::iframe ||
-        localName == nsGkAtoms::frameset ||
-        localName == nsGkAtoms::frame ||
-        localName == nsGkAtoms::code ||
-        localName == nsGkAtoms::noscript ||
-        localName == nsGkAtoms::style) {
+    if (content->IsAnyOfHTMLElements(nsGkAtoms::script,
+                                     nsGkAtoms::iframe,
+                                     nsGkAtoms::frameset,
+                                     nsGkAtoms::frame,
+                                     nsGkAtoms::code,
+                                     nsGkAtoms::noscript,
+                                     nsGkAtoms::style)) {
       continue;
     }
 
@@ -1716,9 +1718,9 @@ CanvasToDataSourceSurface(nsIDOMHTMLCanvasElement* aCanvas)
     return nullptr;
   }
 
-  NS_ABORT_IF_FALSE(node->IsElement(),
-                    "An nsINode that implements nsIDOMHTMLCanvasElement should "
-                    "be an element.");
+  MOZ_ASSERT(node->IsElement(),
+             "An nsINode that implements nsIDOMHTMLCanvasElement should "
+             "be an element.");
   nsLayoutUtils::SurfaceFromElementResult result =
     nsLayoutUtils::SurfaceFromElement(node->AsElement());
   return result.mSourceSurface->GetDataSurface();
@@ -2309,7 +2311,7 @@ nsDOMWindowUtils::GetClassName(JS::Handle<JS::Value> aObject, JSContext* aCx,
   }
 
   *aName = NS_strdup(JS_GetClass(aObject.toObjectOrNull())->name);
-  NS_ABORT_IF_FALSE(*aName, "NS_strdup should be infallible.");
+  MOZ_ASSERT(*aName, "NS_strdup should be infallible.");
   return NS_OK;
 }
 
@@ -2370,31 +2372,6 @@ nsDOMWindowUtils::IsInModalState(bool *retval)
   NS_ENSURE_STATE(window);
 
   *retval = static_cast<nsGlobalWindow*>(window.get())->IsInModalState();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDOMWindowUtils::GetParent(JS::Handle<JS::Value> aObject,
-                            JSContext* aCx,
-                            JS::MutableHandle<JS::Value> aParent)
-{
-  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
-
-  // First argument must be an object.
-  if (aObject.isPrimitive()) {
-    return NS_ERROR_XPC_BAD_CONVERT_JS;
-  }
-
-  JS::Rooted<JSObject*> parent(aCx, JS_GetParent(&aObject.toObject()));
-
-  // Outerize if necessary.
-  if (parent) {
-    if (js::ObjectOp outerize = js::GetObjectClass(parent)->ext.outerObject) {
-      parent = outerize(aCx, parent);
-    }
-  }
-
-  aParent.setObject(*parent);
   return NS_OK;
 }
 
@@ -2698,9 +2675,9 @@ nsDOMWindowUtils::ComputeAnimationDistance(nsIDOMElement* aElement,
     property = eCSSProperty_UNKNOWN;
   }
 
-  NS_ABORT_IF_FALSE(property == eCSSProperty_UNKNOWN ||
-                    !nsCSSProps::IsShorthand(property),
-                    "should not have shorthand");
+  MOZ_ASSERT(property == eCSSProperty_UNKNOWN ||
+             !nsCSSProps::IsShorthand(property),
+             "should not have shorthand");
 
   StyleAnimationValue v1, v2;
   if (property == eCSSProperty_UNKNOWN ||

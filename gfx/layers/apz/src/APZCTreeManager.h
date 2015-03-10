@@ -96,7 +96,6 @@ class APZCTreeManager {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(APZCTreeManager)
 
   typedef mozilla::layers::AllowedTouchBehavior AllowedTouchBehavior;
-  typedef uint32_t TouchBehaviorFlags;
 
   // Helper struct to hold some state while we build the hit-testing tree. The
   // sole purpose of this struct is to shorten the argument list to
@@ -137,7 +136,8 @@ public:
   /**
    * General handler for incoming input events. Manipulates the frame metrics
    * based on what type of input it is. For example, a PinchGestureEvent will
-   * cause scaling. This should only be called externally to this class.
+   * cause scaling. This should only be called externally to this class, and
+   * must be called on the controller thread.
    *
    * This function transforms |aEvent| to have its coordinates in DOM space.
    * This is so that the event can be passed through the DOM and content can
@@ -182,7 +182,9 @@ public:
    *
    * NOTE: Be careful of invoking the WidgetInputEvent variant. This can only be
    * called on the main thread. See widget/InputData.h for more information on
-   * why we have InputData and WidgetInputEvent separated.
+   * why we have InputData and WidgetInputEvent separated. If this function is
+   * used, the controller thread must be the main thread, or undefined behaviour
+   * may occur.
    * NOTE: On unix, mouse events are treated as touch and are forwarded
    * to the appropriate apz as such.
    *
@@ -213,7 +215,8 @@ public:
    * If we have touch listeners, this should always be called when we know
    * definitively whether or not content has preventDefaulted any touch events
    * that have come in. If |aPreventDefault| is true, any touch events in the
-   * queue will be discarded.
+   * queue will be discarded. This function must be called on the controller
+   * thread.
    */
   void ContentReceivedInputBlock(uint64_t aInputBlockId, bool aPreventDefault);
 
@@ -286,20 +289,13 @@ public:
   static float GetDPI() { return sDPI; }
 
   /**
-   * Returns values of allowed touch-behavior for the touches of aEvent via out parameter.
-   * Internally performs asks appropriate AsyncPanZoomController to perform
-   * hit testing on its own.
-   */
-  void GetAllowedTouchBehavior(WidgetInputEvent* aEvent,
-                               nsTArray<TouchBehaviorFlags>& aOutValues);
-
-  /**
    * Sets allowed touch behavior values for current touch-session for specific
    * input block (determined by aInputBlock).
    * Should be invoked by the widget. Each value of the aValues arrays
    * corresponds to the different touch point that is currently active.
    * Must be called after receiving the TOUCH_START event that starts the
    * touch-session.
+   * This must be called on the controller thread.
    */
   void SetAllowedTouchBehavior(uint64_t aInputBlockId,
                                const nsTArray<TouchBehaviorFlags>& aValues);
@@ -385,6 +381,15 @@ public:
    * Build the chain of APZCs that will handle overscroll for a pan starting at |aInitialTarget|.
    */
   nsRefPtr<const OverscrollHandoffChain> BuildOverscrollHandoffChain(const nsRefPtr<AsyncPanZoomController>& aInitialTarget);
+
+public:
+  // Returns whether or not a wheel event action will be (or was) performed by
+  // APZ. If this returns true, the event must not perform a synchronous
+  // scroll.
+  //
+  // Even if this returns false, all wheel events in APZ-aware widgets must
+  // be sent through APZ so they are transformed correctly for TabParent.
+  static bool WillHandleWheelEvent(WidgetWheelEvent* aEvent);
 
 protected:
   // Protected destructor, to discourage deletion outside of Release():

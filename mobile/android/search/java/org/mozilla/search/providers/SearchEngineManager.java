@@ -8,7 +8,6 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.text.TextUtils;
 import android.util.Log;
-
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.mozilla.gecko.AppConstants;
@@ -16,20 +15,18 @@ import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.Locales;
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.distribution.Distribution;
 import org.mozilla.gecko.util.FileUtils;
 import org.mozilla.gecko.util.GeckoJarReader;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.RawResource;
 import org.mozilla.gecko.util.ThreadUtils;
-import org.mozilla.gecko.distribution.Distribution;
-import org.mozilla.search.Constants;
 import org.xmlpull.v1.XmlPullParserException;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -38,7 +35,7 @@ import java.io.UnsupportedEncodingException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
-import java.util.List;
+import java.util.Collections;
 import java.util.Locale;
 
 public class SearchEngineManager implements SharedPreferences.OnSharedPreferenceChangeListener {
@@ -46,6 +43,9 @@ public class SearchEngineManager implements SharedPreferences.OnSharedPreference
 
     // Gecko pref that defines the name of the default search engine.
     private static final String PREF_GECKO_DEFAULT_ENGINE = "browser.search.defaultenginename";
+
+    // Gecko pref that defines the name of the default searchplugin locale.
+    private static final String PREF_GECKO_DEFAULT_LOCALE = "distribution.searchplugins.defaultLocale";
 
     // Key for shared preference that stores default engine name.
     private static final String PREF_DEFAULT_ENGINE_KEY = "search.engines.defaultname";
@@ -69,6 +69,10 @@ public class SearchEngineManager implements SharedPreferences.OnSharedPreference
     // Cached version of default locale included in Gecko chrome manifest.
     // This should only be accessed from the background thread.
     private String fallbackLocale;
+
+    // Cached version of default locale included in Distribution preferences.
+    // This should only be accessed from the background thread.
+    private String distributionLocale;
 
     public static interface SearchEngineCallback {
         public void execute(SearchEngine engine);
@@ -244,7 +248,16 @@ public class SearchEngineManager implements SharedPreferences.OnSharedPreference
         try {
             final JSONObject all = new JSONObject(FileUtils.getFileContents(prefFile));
 
-            // First, check to see if there's a locale-specific override.
+            // First, look for a default locale specified by the distribution.
+            if (all.has("Preferences")) {
+                final JSONObject prefs = all.getJSONObject("Preferences");
+                if (prefs.has(PREF_GECKO_DEFAULT_LOCALE)) {
+                    Log.d(LOG_TAG, "Found default searchplugin locale in distribution Preferences.");
+                    distributionLocale = prefs.getString(PREF_GECKO_DEFAULT_LOCALE);
+                }
+            }
+
+            // Then, check to see if there's a locale-specific default engine override.
             final String languageTag = Locales.getLanguageTag(Locale.getDefault());
             final String overridesKey = "LocalizablePreferences." + languageTag;
             if (all.has(overridesKey)) {
@@ -255,7 +268,7 @@ public class SearchEngineManager implements SharedPreferences.OnSharedPreference
                 }
             }
 
-            // Next, check to see if there's a non-override default pref.
+            // Next, check to see if there's a non-override default engine pref.
             if (all.has("LocalizablePreferences")) {
                 final JSONObject localizablePrefs = all.getJSONObject("LocalizablePreferences");
                 if (localizablePrefs.has(PREF_GECKO_DEFAULT_ENGINE)) {
@@ -448,12 +461,43 @@ public class SearchEngineManager implements SharedPreferences.OnSharedPreference
             return null;
         }
 
-        final File[] files = (new File(pluginsDir, "common")).listFiles();
-        if (files == null) {
+        // Collect an array of files to scan using the same approach as
+        // DirectoryService._appendDistroSearchDirs which states:
+        // Common engines are loaded for all locales. If there is no locale directory for
+        // the current locale, there is a pref: "distribution.searchplugins.defaultLocale",
+        // which specifies a default locale to use.
+        ArrayList<File> files = new ArrayList<>();
+
+        // Load files from the common folder first
+        final File[] commonFiles = (new File(pluginsDir, "common")).listFiles();
+        if (commonFiles != null) {
+            Collections.addAll(files, commonFiles);
+        }
+
+        // Next, check to see if there's a locale-specific override.
+        final File localeDir = new File(pluginsDir, "locale");
+        if (localeDir != null) {
+            final String languageTag = Locales.getLanguageTag(Locale.getDefault());
+            final File[] localeFiles = (new File(localeDir, languageTag)).listFiles();
+            if (localeFiles != null) {
+                Collections.addAll(files, localeFiles);
+            } else {
+                // We didn't append the locale dir - try the default one.
+                if (distributionLocale != null) {
+                    final File[] defaultLocaleFiles = (new File(localeDir, distributionLocale)).listFiles();
+                    if (defaultLocaleFiles != null) {
+                        Collections.addAll(files, defaultLocaleFiles);
+                    }
+                }
+            }
+        }
+
+        if (files.isEmpty()) {
             Log.e(LOG_TAG, "Could not find search plugin files in distribution directory");
             return null;
         }
-        return createEngineFromFileList(files, name);
+
+        return createEngineFromFileList(files.toArray(new File[files.size()]), name);
     }
 
     /**
@@ -532,7 +576,7 @@ public class SearchEngineManager implements SharedPreferences.OnSharedPreference
                     return engine;
                 }
             } catch (IOException e) {
-                Log.e(LOG_TAG, "Error creating earch engine from name: " + name, e);
+                Log.e(LOG_TAG, "Error creating search engine from name: " + name, e);
             }
         }
         return null;
@@ -573,7 +617,7 @@ public class SearchEngineManager implements SharedPreferences.OnSharedPreference
 
         // First, try a file path for the full locale.
         final String languageTag = Locales.getLanguageTag(locale);
-        String url = getSearchPluginsJarURL(languageTag, fileName);
+        String url = getSearchPluginsJarURL(context, languageTag, fileName);
 
         InputStream in = GeckoJarReader.getStream(url);
         if (in != null) {
@@ -583,7 +627,7 @@ public class SearchEngineManager implements SharedPreferences.OnSharedPreference
         // If that doesn't work, try a file path for just the language.
         final String language = Locales.getLanguage(locale);
         if (!languageTag.equals(language)) {
-            url = getSearchPluginsJarURL(language, fileName);
+            url = getSearchPluginsJarURL(context, language, fileName);
             in = GeckoJarReader.getStream(url);
             if (in != null) {
                 return in;
@@ -591,7 +635,7 @@ public class SearchEngineManager implements SharedPreferences.OnSharedPreference
         }
 
         // Finally, fall back to default locale defined in chrome registry.
-        url = getSearchPluginsJarURL(getFallbackLocale(), fileName);
+        url = getSearchPluginsJarURL(context, getFallbackLocale(), fileName);
         return GeckoJarReader.getStream(url);
     }
 
@@ -606,7 +650,7 @@ public class SearchEngineManager implements SharedPreferences.OnSharedPreference
             return fallbackLocale;
         }
 
-        final InputStream in = GeckoJarReader.getStream(getJarURL("!/chrome/chrome.manifest"));
+        final InputStream in = GeckoJarReader.getStream(GeckoJarReader.getJarURL(context, "chrome/chrome.manifest"));
         final BufferedReader br = getBufferedReader(in);
 
         try {
@@ -638,13 +682,9 @@ public class SearchEngineManager implements SharedPreferences.OnSharedPreference
      * @param fileName The name of the file to read.
      * @return URL for jar file.
      */
-    private String getSearchPluginsJarURL(String locale, String fileName) {
-        final String path = "!/chrome/" + locale + "/locale/" + locale + "/browser/searchplugins/" + fileName;
-        return getJarURL(path);
-    }
-
-    private String getJarURL(String path) {
-        return "jar:jar:file://" + context.getPackageResourcePath() + "!/" + AppConstants.OMNIJAR_NAME + path;
+    private static String getSearchPluginsJarURL(Context context, String locale, String fileName) {
+        final String path = "chrome/" + locale + "/locale/" + locale + "/browser/searchplugins/" + fileName;
+        return GeckoJarReader.getJarURL(context, path);
     }
 
     private BufferedReader getBufferedReader(InputStream in) {

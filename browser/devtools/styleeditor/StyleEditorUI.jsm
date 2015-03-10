@@ -339,7 +339,7 @@ StyleEditorUI.prototype = {
         // nothing selected
         return;
       }
-      NetUtil.asyncFetch(file, (stream, status) => {
+      NetUtil.asyncFetch2(file, (stream, status) => {
         if (!Components.isSuccessCode(status)) {
           this.emit("error", { key: LOAD_ERROR });
           return;
@@ -350,8 +350,12 @@ StyleEditorUI.prototype = {
         this._debuggee.addStyleSheet(source).then((styleSheet) => {
           this._onStyleSheetCreated(styleSheet, file);
         });
-      });
-
+      },
+      this._window.document,
+      null,  // aLoadingPrincipal
+      null,  // aTriggeringPrincipal
+      Ci.nsILoadInfo.SEC_NORMAL,
+      Ci.nsIContentPolicy.TYPE_OTHER);
     };
 
     showFilePicker(file, false, parentWindow, onFileSelected);
@@ -443,13 +447,15 @@ StyleEditorUI.prototype = {
    *         Editor to create UI for.
    */
   _sourceLoaded: function(editor) {
+    let ordinal = editor.styleSheet.styleSheetIndex;
+    ordinal = ordinal == -1 ? Number.MAX_SAFE_INTEGER : ordinal;
     // add new sidebar item and editor to the UI
     this._view.appendTemplatedItem(STYLE_EDITOR_TEMPLATE, {
       data: {
         editor: editor
       },
       disableAnimations: this._alwaysDisableAnimations,
-      ordinal: editor.styleSheet.styleSheetIndex,
+      ordinal: ordinal,
       onCreate: function(summary, details, data) {
         let editor = data.editor;
         editor.summary = summary;

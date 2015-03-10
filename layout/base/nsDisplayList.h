@@ -254,6 +254,13 @@ public:
    */
   ViewID GetCurrentScrollParentId() const { return mCurrentScrollParentId; }
   /**
+   * Get and set the flag that indicates if scroll parents should have layers
+   * forcibly created. This flag is set when a deeply nested scrollframe has
+   * a displayport, and for scroll handoff to work properly the ancestor
+   * scrollframes should also get their own scrollable layers.
+   */
+  void ForceLayerForScrollParent() { mForceLayerForScrollParent = true; }
+  /**
    * Get the ViewID and the scrollbar flags corresponding to the scrollbar for
    * which we are building display items at the moment.
    */
@@ -345,15 +352,10 @@ public:
     return CurrentPresShellState()->mInsidePointerEventsNoneDoc;
   }
 
-  bool GetAncestorHasTouchEventHandler() { return mAncestorHasTouchEventHandler; }
-  void SetAncestorHasTouchEventHandler(bool aValue)
+  bool GetAncestorHasApzAwareEventHandler() { return mAncestorHasApzAwareEventHandler; }
+  void SetAncestorHasApzAwareEventHandler(bool aValue)
   {
-    mAncestorHasTouchEventHandler = aValue;
-  }
-  bool GetAncestorHasScrollEventHandler() { return mAncestorHasScrollEventHandler; }
-  void SetAncestorHasScrollEventHandler(bool aValue)
-  {
-    mAncestorHasScrollEventHandler = aValue;
+    mAncestorHasApzAwareEventHandler = aValue;
   }
 
   bool HaveScrollableDisplayPort() const { return mHaveScrollableDisplayPort; }
@@ -432,9 +434,13 @@ public:
 
   /**
    * Return true if we're currently building a display list for the root
-   * presshell which is the presshell of a chrome document.
+   * presshell which is the presshell of a chrome document, or if we're
+   * building the display list for a popup and have not entered a subdocument
+   * inside that popup.
    */
-  bool IsInRootChromeDocument() { return mIsInRootChromeDocument; }
+  bool IsInRootChromeDocumentOrPopup() {
+    return (mIsInChromePresContext || mIsBuildingForPopup) && !IsInSubdocument();
+  }
 
   /**
    * @return true if images have been set to decode synchronously.
@@ -574,8 +580,7 @@ public:
         mPrevOffset(aBuilder->mCurrentOffsetToReferenceFrame),
         mPrevDirtyRect(aBuilder->mDirtyRect),
         mPrevIsAtRootOfPseudoStackingContext(aBuilder->mIsAtRootOfPseudoStackingContext),
-        mPrevAncestorHasTouchEventHandler(aBuilder->mAncestorHasTouchEventHandler),
-        mPrevAncestorHasScrollEventHandler(aBuilder->mAncestorHasScrollEventHandler)
+        mPrevAncestorHasApzAwareEventHandler(aBuilder->mAncestorHasApzAwareEventHandler)
     {
       if (aForChild->IsTransformed()) {
         aBuilder->mCurrentOffsetToReferenceFrame = nsPoint();
@@ -620,8 +625,7 @@ public:
       mBuilder->mCurrentOffsetToReferenceFrame = mPrevOffset;
       mBuilder->mDirtyRect = mPrevDirtyRect;
       mBuilder->mIsAtRootOfPseudoStackingContext = mPrevIsAtRootOfPseudoStackingContext;
-      mBuilder->mAncestorHasTouchEventHandler = mPrevAncestorHasTouchEventHandler;
-      mBuilder->mAncestorHasScrollEventHandler = mPrevAncestorHasScrollEventHandler;
+      mBuilder->mAncestorHasApzAwareEventHandler = mPrevAncestorHasApzAwareEventHandler;
       mBuilder->mCurrentAnimatedGeometryRoot = mPrevAnimatedGeometryRoot;
     }
   private:
@@ -633,8 +637,7 @@ public:
     nsPoint               mPrevOffset;
     nsRect                mPrevDirtyRect;
     bool                  mPrevIsAtRootOfPseudoStackingContext;
-    bool                  mPrevAncestorHasTouchEventHandler;
-    bool                  mPrevAncestorHasScrollEventHandler;
+    bool                  mPrevAncestorHasApzAwareEventHandler;
   };
 
   /**
@@ -664,15 +667,41 @@ public:
   class AutoCurrentScrollParentIdSetter {
   public:
     AutoCurrentScrollParentIdSetter(nsDisplayListBuilder* aBuilder, ViewID aScrollId)
-      : mBuilder(aBuilder), mOldValue(aBuilder->mCurrentScrollParentId) {
+      : mBuilder(aBuilder)
+      , mOldValue(aBuilder->mCurrentScrollParentId)
+      , mOldForceLayer(aBuilder->mForceLayerForScrollParent) {
+      // If this AutoCurrentScrollParentIdSetter has the same scrollId as the
+      // previous one on the stack, then that means the scrollframe that
+      // created this isn't actually scrollable and cannot participate in
+      // scroll handoff. We set mCanBeScrollParent to false to indicate this.
+      mCanBeScrollParent = (mOldValue != aScrollId);
       aBuilder->mCurrentScrollParentId = aScrollId;
+      aBuilder->mForceLayerForScrollParent = false;
     }
+    bool ShouldForceLayerForScrollParent() const {
+      // Only scrollframes participating in scroll handoff can be forced to
+      // layerize
+      return mCanBeScrollParent && mBuilder->mForceLayerForScrollParent;
+    };
     ~AutoCurrentScrollParentIdSetter() {
       mBuilder->mCurrentScrollParentId = mOldValue;
+      if (mCanBeScrollParent) {
+        // If this flag is set, caller code is responsible for having dealt
+        // with the current value of mBuilder->mForceLayerForScrollParent, so
+        // we can just restore the old value.
+        mBuilder->mForceLayerForScrollParent = mOldForceLayer;
+      } else {
+        // Otherwise we need to keep propagating the force-layerization flag
+        // upwards to the next ancestor scrollframe that does participate in
+        // scroll handoff.
+        mBuilder->mForceLayerForScrollParent |= mOldForceLayer;
+      }
     }
   private:
     nsDisplayListBuilder* mBuilder;
     ViewID                mOldValue;
+    bool                  mOldForceLayer;
+    bool                  mCanBeScrollParent;
   };
 
   /**
@@ -911,18 +940,19 @@ private:
   // True when we're building a display list that's directly or indirectly
   // under an nsDisplayTransform
   bool                           mInTransform;
-  bool                           mIsInRootChromeDocument;
+  bool                           mIsInChromePresContext;
   bool                           mSyncDecodeImages;
   bool                           mIsPaintingToWindow;
   bool                           mIsCompositingCheap;
   bool                           mContainsPluginItem;
-  bool                           mAncestorHasTouchEventHandler;
-  bool                           mAncestorHasScrollEventHandler;
+  bool                           mAncestorHasApzAwareEventHandler;
   // True when the first async-scrollable scroll frame for which we build a
   // display list has a display port. An async-scrollable scroll frame is one
   // which WantsAsyncScroll().
   bool                           mHaveScrollableDisplayPort;
   bool                           mWindowDraggingAllowed;
+  bool                           mIsBuildingForPopup;
+  bool                           mForceLayerForScrollParent;
 };
 
 class nsDisplayItem;
@@ -1162,16 +1192,6 @@ public:
   }
 
   /**
-   * For display items types that just draw a background we use this function
-   * to do any invalidation that might be needed if we are asked to sync decode
-   * images.
-   */
-  void AddInvalidRegionForSyncDecodeBackgroundImages(
-    nsDisplayListBuilder* aBuilder,
-    const nsDisplayItemGeometry* aGeometry,
-    nsRegion* aInvalidRegion);
-
-  /**
    * Called when the area rendered by this display item has changed (been
    * invalidated or changed geometry) since the last paint. This includes
    * when the display item was not rendered at all in the last paint.
@@ -1381,12 +1401,19 @@ public:
   virtual const nsRect& GetVisibleRectForChildren() const { return mVisibleRect; }
 
   /**
-   * Stores the given opacity value to be applied when drawing. Returns
-   * false if this isn't supported for this display item.
+   * Stores the given opacity value to be applied when drawing. It is an error to
+   * call this if CanApplyOpacity returned false.
    */
-  virtual bool ApplyOpacity(nsDisplayListBuilder* aBuilder,
+  virtual void ApplyOpacity(nsDisplayListBuilder* aBuilder,
                             float aOpacity,
                             const DisplayItemClip* aClip) {
+    NS_ASSERTION(CanApplyOpacity(), "ApplyOpacity not supported on this type");
+  }
+  /**
+   * Returns true if this display item would return true from ApplyOpacity without
+   * actually applying the opacity. Otherwise returns false.
+   */
+  virtual bool CanApplyOpacity() const {
     return false;
   }
 
@@ -2391,9 +2418,10 @@ public:
   virtual void HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
                        HitTestState* aState, nsTArray<nsIFrame*> *aOutFrames) MOZ_OVERRIDE;
 
-  virtual bool ApplyOpacity(nsDisplayListBuilder* aBuilder,
+  virtual void ApplyOpacity(nsDisplayListBuilder* aBuilder,
                             float aOpacity,
                             const DisplayItemClip* aClip) MOZ_OVERRIDE;
+  virtual bool CanApplyOpacity() const MOZ_OVERRIDE;
 
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) MOZ_OVERRIDE
   {
@@ -2500,14 +2528,18 @@ public:
                                          const nsDisplayItemGeometry* aGeometry,
                                          nsRegion* aInvalidRegion) MOZ_OVERRIDE;
   
-  virtual bool ApplyOpacity(nsDisplayListBuilder* aBuilder,
+  virtual void ApplyOpacity(nsDisplayListBuilder* aBuilder,
                             float aOpacity,
                             const DisplayItemClip* aClip) MOZ_OVERRIDE
   {
+    NS_ASSERTION(CanApplyOpacity(), "ApplyOpacity should be allowed");
     mOpacity = aOpacity;
     if (aClip) {
       IntersectClip(aBuilder, *aClip);
     }
+  }
+  virtual bool CanApplyOpacity() const MOZ_OVERRIDE
+  {
     return true;
   }
 
@@ -2642,7 +2674,23 @@ public:
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) MOZ_OVERRIDE
   {
     *aSnap = false;
+    return nsRect();
+  }
+  nsRect GetHitRegionBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
+  {
+    *aSnap = false;
     return mHitRegion.GetBounds().Union(mMaybeHitRegion.GetBounds());
+  }
+
+  virtual void ApplyOpacity(nsDisplayListBuilder* aBuilder,
+                            float aOpacity,
+                            const DisplayItemClip* aClip) MOZ_OVERRIDE
+  {
+    NS_ASSERTION(CanApplyOpacity(), "ApplyOpacity should be allowed");
+  }
+  virtual bool CanApplyOpacity() const MOZ_OVERRIDE
+  {
+    return true;
   }
 
   NS_DISPLAY_DECL_NAME("LayerEventRegions", TYPE_LAYER_EVENT_REGIONS)
@@ -2874,9 +2922,10 @@ public:
   {
     // We don't need to compute an invalidation region since we have LayerTreeInvalidation
   }
-  virtual bool ApplyOpacity(nsDisplayListBuilder* aBuilder,
+  virtual void ApplyOpacity(nsDisplayListBuilder* aBuilder,
                             float aOpacity,
                             const DisplayItemClip* aClip) MOZ_OVERRIDE;
+  virtual bool CanApplyOpacity() const MOZ_OVERRIDE;
   virtual bool ShouldFlattenAway(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE;
   bool NeedsActiveLayer(nsDisplayListBuilder* aBuilder);
   NS_DISPLAY_DECL_NAME("Opacity", TYPE_OPACITY)
@@ -3050,6 +3099,7 @@ public:
 
 protected:
   ViewID mScrollParentId;
+  bool mForceDispatchToContentRegion;
 };
 
 /**
@@ -3183,6 +3233,7 @@ public:
 
   static FrameMetrics ComputeFrameMetrics(nsIFrame* aForFrame,
                                           nsIFrame* aScrollFrame,
+                                          nsIContent* aContent,
                                           const nsIFrame* aReferenceFrame,
                                           Layer* aLayer,
                                           ViewID aScrollParentId,
@@ -3635,6 +3686,12 @@ public:
 
   explicit nsCharClipDisplayItem(nsIFrame* aFrame)
     : nsDisplayItem(aFrame) {}
+
+  virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE;
+
+  virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
+                                         const nsDisplayItemGeometry* aGeometry,
+                                         nsRegion* aInvalidRegion) MOZ_OVERRIDE;
 
   struct ClipEdges {
     ClipEdges(const nsDisplayItem& aItem,

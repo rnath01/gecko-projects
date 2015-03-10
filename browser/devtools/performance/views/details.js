@@ -3,22 +3,42 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const DEFAULT_DETAILS_SUBVIEW = "waterfall";
-
 /**
- * Details view containing profiler call tree and markers waterfall. Manages
- * subviews and toggles visibility between them.
+ * Details view containing call trees, flamegraphs and markers waterfall.
+ * Manages subviews and toggles visibility between them.
  */
 let DetailsView = {
   /**
-   * Name to node+object mapping of subviews.
+   * Name to (node id, view object, actor requirements, pref killswitch)
+   * mapping of subviews.
    */
   components: {
-    "waterfall": { id: "waterfall-view", view: WaterfallView },
-    "js-calltree": { id: "js-calltree-view", view: JsCallTreeView },
-    "js-flamegraph": { id: "js-flamegraph-view", view: JsFlameGraphView },
-    "memory-calltree": { id: "memory-calltree-view", view: MemoryCallTreeView, pref: "enable-memory" },
-    "memory-flamegraph": { id: "memory-flamegraph-view", view: MemoryFlameGraphView, pref: "enable-memory" }
+    "waterfall": {
+      id: "waterfall-view",
+      view: WaterfallView,
+      requires: ["timeline"]
+    },
+    "js-calltree": {
+      id: "js-calltree-view",
+      view: JsCallTreeView
+    },
+    "js-flamegraph": {
+      id: "js-flamegraph-view",
+      view: JsFlameGraphView,
+      requires: ["timeline"]
+    },
+    "memory-calltree": {
+      id: "memory-calltree-view",
+      view: MemoryCallTreeView,
+      requires: ["memory"],
+      pref: "enable-memory"
+    },
+    "memory-flamegraph": {
+      id: "memory-flamegraph-view",
+      view: MemoryFlameGraphView,
+      requires: ["memory", "timeline"],
+      pref: "enable-memory"
+    }
   },
 
   /**
@@ -29,15 +49,18 @@ let DetailsView = {
     this.toolbar = $("#performance-toolbar-controls-detail-views");
 
     this._onViewToggle = this._onViewToggle.bind(this);
+    this._onRecordingStoppedOrSelected = this._onRecordingStoppedOrSelected.bind(this);
     this.setAvailableViews = this.setAvailableViews.bind(this);
 
     for (let button of $$("toolbarbutton[data-view]", this.toolbar)) {
       button.addEventListener("command", this._onViewToggle);
     }
 
-    yield this.selectView(DEFAULT_DETAILS_SUBVIEW);
-    this.setAvailableViews();
+    yield this.selectDefaultView();
+    yield this.setAvailableViews();
 
+    PerformanceController.on(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
+    PerformanceController.on(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
     PerformanceController.on(EVENTS.PREF_CHANGED, this.setAvailableViews);
   }),
 
@@ -53,29 +76,37 @@ let DetailsView = {
       component.initialized && (yield component.view.destroy());
     }
 
+    PerformanceController.off(EVENTS.RECORDING_STOPPED, this._onRecordingStoppedOrSelected);
+    PerformanceController.off(EVENTS.RECORDING_SELECTED, this._onRecordingStoppedOrSelected);
     PerformanceController.off(EVENTS.PREF_CHANGED, this.setAvailableViews);
   }),
 
   /**
-   * Sets the possible views based off of prefs by hiding/showing the
+   * Sets the possible views based off of prefs and server actor support by hiding/showing the
    * buttons that select them and going to default view if currently selected.
    * Called when a preference changes in `devtools.performance.ui.`.
    */
-  setAvailableViews: function () {
-    for (let [name, { view, pref }] of Iterator(this.components)) {
-      if (!pref) {
-        continue;
-      }
-      let value = PerformanceController.getPref(pref);
-      $(`toolbarbutton[data-view=${name}]`).hidden = !value;
+  setAvailableViews: Task.async(function* () {
+    let mocks = gFront.getMocksInUse();
+
+    for (let [name, { view, pref, requires }] of Iterator(this.components)) {
+      let recording = PerformanceController.getCurrentRecording();
+
+      let isRecorded = recording && !recording.isRecording();
+      // View is enabled by its corresponding pref
+      let isEnabled = !pref || PerformanceController.getOption(pref);
+      // View is supported by the server actor, and the requried actor is not being mocked
+      let isSupported = !requires || requires.every(r => !mocks[r]);
+
+      $(`toolbarbutton[data-view=${name}]`).hidden = !isRecorded || !(isEnabled && isSupported);
 
       // If the view is currently selected and not enabled, go back to the
       // default view.
-      if (!value && this.isViewSelected(view)) {
-        this.selectView(DEFAULT_DETAILS_SUBVIEW);
+      if (!isEnabled && this.isViewSelected(view)) {
+        yield this.selectDefaultView();
       }
     }
-  },
+  }),
 
   /**
    * Select one of the DetailView's subviews to be rendered,
@@ -100,6 +131,22 @@ let DetailsView = {
 
     this.emit(EVENTS.DETAILS_VIEW_SELECTED, viewName);
   }),
+
+  /**
+   * Selects a default view based off of protocol support
+   * and preferences enabled.
+   */
+  selectDefaultView: function () {
+    let { timeline: mockTimeline } = gFront.getMocksInUse();
+    // If timelines are mocked, the first view available is the js-calltree.
+    if (mockTimeline) {
+      return this.selectView("js-calltree");
+    } else {
+      // In every other scenario with preferences and mocks, waterfall will
+      // be the default view.
+      return this.selectView("waterfall");
+    }
+  },
 
   /**
    * Checks if the provided view is currently selected.
@@ -158,6 +205,13 @@ let DetailsView = {
       component.view.shouldUpdateWhenShown = true;
     }
   }),
+
+  /**
+   * Called when recording stops or is selected.
+   */
+  _onRecordingStoppedOrSelected: function(_, recording) {
+    this.setAvailableViews();
+  },
 
   /**
    * Called when a view button is clicked.

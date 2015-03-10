@@ -20,6 +20,7 @@
 #include "nsIMemoryReporter.h"
 #include "nsIObserverService.h"
 #include "nsIDebug2.h"
+#include "nsIDocShell.h"
 #include "amIAddonManager.h"
 #include "nsPIDOMWindow.h"
 #include "nsPrintfCString.h"
@@ -1452,6 +1453,13 @@ XPCJSRuntime::InterruptCallback(JSContext *cx)
     if (!win)
         return true;
 
+    if (win->GetIsPrerendered()) {
+        // We cannot display a dialog if the page is being prerendered, so
+        // just kill the page.
+        mozilla::dom::HandlePrerenderingViolation(win);
+        return false;
+    }
+
     // Show the prompt to the user, and kill if requested.
     nsGlobalWindow::SlowScriptResponse response = win->ShowSlowScriptDialog();
     if (response == nsGlobalWindow::KillSlowScript)
@@ -1536,8 +1544,9 @@ void XPCJSRuntime::DestroyJSContextStack()
 
 void XPCJSRuntime::SystemIsBeingShutDown()
 {
-    mDetachedWrappedNativeProtoMap->
-        Enumerate(DetachedWrappedNativeProtoShutdownMarker, nullptr);
+    if (mDetachedWrappedNativeProtoMap)
+        mDetachedWrappedNativeProtoMap->
+            Enumerate(DetachedWrappedNativeProtoShutdownMarker, nullptr);
 }
 
 #define JS_OPTIONS_DOT_STR "javascript.options."
@@ -1619,33 +1628,51 @@ XPCJSRuntime::~XPCJSRuntime()
     JS_SetRuntimePrivate(Runtime(), nullptr);
 
     // clean up and destroy maps...
-    mWrappedJSMap->ShutdownMarker();
-    delete mWrappedJSMap;
-    mWrappedJSMap = nullptr;
+    if (mWrappedJSMap) {
+        mWrappedJSMap->ShutdownMarker();
+        delete mWrappedJSMap;
+        mWrappedJSMap = nullptr;
+    }
 
-    delete mWrappedJSClassMap;
-    mWrappedJSClassMap = nullptr;
+    if (mWrappedJSClassMap) {
+        delete mWrappedJSClassMap;
+        mWrappedJSClassMap = nullptr;
+    }
 
-    delete mIID2NativeInterfaceMap;
-    mIID2NativeInterfaceMap = nullptr;
+    if (mIID2NativeInterfaceMap) {
+        delete mIID2NativeInterfaceMap;
+        mIID2NativeInterfaceMap = nullptr;
+    }
 
-    delete mClassInfo2NativeSetMap;
-    mClassInfo2NativeSetMap = nullptr;
+    if (mClassInfo2NativeSetMap) {
+        delete mClassInfo2NativeSetMap;
+        mClassInfo2NativeSetMap = nullptr;
+    }
 
-    delete mNativeSetMap;
-    mNativeSetMap = nullptr;
+    if (mNativeSetMap) {
+        delete mNativeSetMap;
+        mNativeSetMap = nullptr;
+    }
 
-    delete mThisTranslatorMap;
-    mThisTranslatorMap = nullptr;
+    if (mThisTranslatorMap) {
+        delete mThisTranslatorMap;
+        mThisTranslatorMap = nullptr;
+    }
 
-    delete mNativeScriptableSharedMap;
-    mNativeScriptableSharedMap = nullptr;
+    if (mNativeScriptableSharedMap) {
+        delete mNativeScriptableSharedMap;
+        mNativeScriptableSharedMap = nullptr;
+    }
 
-    delete mDyingWrappedNativeProtoMap;
-    mDyingWrappedNativeProtoMap = nullptr;
+    if (mDyingWrappedNativeProtoMap) {
+        delete mDyingWrappedNativeProtoMap;
+        mDyingWrappedNativeProtoMap = nullptr;
+    }
 
-    delete mDetachedWrappedNativeProtoMap;
-    mDetachedWrappedNativeProtoMap = nullptr;
+    if (mDetachedWrappedNativeProtoMap) {
+        delete mDetachedWrappedNativeProtoMap;
+        mDetachedWrappedNativeProtoMap = nullptr;
+    }
 
 #ifdef MOZ_ENABLE_PROFILER_SPS
     // Tell the profiler that the runtime is gone
@@ -1868,6 +1895,19 @@ NS_IMPL_ISUPPORTS(JSMainRuntimeTemporaryPeakReporter, nsIMemoryReporter)
         rtTotal += amount;                                                    \
     } while (0)
 
+// Report GC thing bytes.
+#define MREPORT_BYTES(_path, _kind, _amount, _desc)                           \
+    do {                                                                      \
+        size_t amount = _amount;  /* evaluate _amount only once */            \
+        nsresult rv;                                                          \
+        rv = cb->Callback(EmptyCString(), _path,                              \
+                          nsIMemoryReporter::_kind,                           \
+                          nsIMemoryReporter::UNITS_BYTES, amount,             \
+                          NS_LITERAL_CSTRING(_desc), closure);                \
+        NS_ENSURE_SUCCESS(rv, rv);                                            \
+        gcThingTotal += amount;                                               \
+    } while (0)
+
 MOZ_DEFINE_MALLOC_SIZE_OF(JSMallocSizeOf)
 
 namespace xpc {
@@ -1894,8 +1934,8 @@ ReportZoneStats(const JS::ZoneStats &zStats,
         "Bookkeeping information and alignment padding within GC arenas.");
 
     ZCREPORT_GC_BYTES(pathPrefix + NS_LITERAL_CSTRING("unused-gc-things"),
-        zStats.unusedGCThings,
-        "Empty GC thing cells within non-empty arenas.");
+        zStats.unusedGCThings.totalSize(),
+        "Unused GC thing cells within non-empty arenas.");
 
     ZCREPORT_GC_BYTES(pathPrefix + NS_LITERAL_CSTRING("lazy-scripts/gc-heap"),
         zStats.lazyScriptsGCHeap,
@@ -2907,9 +2947,41 @@ JSReporter::CollectReports(WindowPaths *windowPaths,
         KIND_OTHER, rtStats.gcHeapUnusedArenas,
         "The same as 'explicit/js-non-window/gc-heap/unused-arenas'.");
 
-    REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/unused/gc-things"),
-        KIND_OTHER, rtStats.zTotals.unusedGCThings,
-        "The same as 'js-main-runtime/zones/unused-gc-things'.");
+    REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/unused/gc-things/objects"),
+        KIND_OTHER, rtStats.zTotals.unusedGCThings.object,
+        "Unused object cells within non-empty arenas.");
+
+    REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/unused/gc-things/strings"),
+        KIND_OTHER, rtStats.zTotals.unusedGCThings.string,
+        "Unused string cells within non-empty arenas.");
+
+    REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/unused/gc-things/symbols"),
+        KIND_OTHER, rtStats.zTotals.unusedGCThings.symbol,
+        "Unused symbol cells within non-empty arenas.");
+
+    REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/unused/gc-things/shapes"),
+        KIND_OTHER, rtStats.zTotals.unusedGCThings.shape,
+        "Unused shape cells within non-empty arenas.");
+
+    REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/unused/gc-things/base-shapes"),
+        KIND_OTHER, rtStats.zTotals.unusedGCThings.baseShape,
+        "Unused base shape cells within non-empty arenas.");
+
+    REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/unused/gc-things/object-groups"),
+        KIND_OTHER, rtStats.zTotals.unusedGCThings.objectGroup,
+        "Unused object group cells within non-empty arenas.");
+
+    REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/unused/gc-things/scripts"),
+        KIND_OTHER, rtStats.zTotals.unusedGCThings.script,
+        "Unused script cells within non-empty arenas.");
+
+    REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/unused/gc-things/lazy-scripts"),
+        KIND_OTHER, rtStats.zTotals.unusedGCThings.lazyScript,
+        "Unused lazy script cells within non-empty arenas.");
+
+    REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/unused/gc-things/jitcode"),
+        KIND_OTHER, rtStats.zTotals.unusedGCThings.jitcode,
+        "Unused jitcode cells within non-empty arenas.");
 
     REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/used/chunk-admin"),
         KIND_OTHER, rtStats.gcHeapChunkAdmin,
@@ -2919,9 +2991,46 @@ JSReporter::CollectReports(WindowPaths *windowPaths,
         KIND_OTHER, rtStats.zTotals.gcHeapArenaAdmin,
         "The same as 'js-main-runtime/zones/gc-heap-arena-admin'.");
 
-    REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/used/gc-things"),
-        KIND_OTHER, rtStats.gcHeapGCThings,
-        "GC things: objects, strings, scripts, etc.");
+    size_t gcThingTotal = 0;
+
+    MREPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/used/gc-things/objects"),
+        KIND_OTHER, rtStats.cTotals.classInfo.objectsGCHeap,
+        "Used object cells.");
+
+    MREPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/used/gc-things/strings"),
+        KIND_OTHER, rtStats.zTotals.stringInfo.sizeOfLiveGCThings(),
+        "Used string cells.");
+
+    MREPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/used/gc-things/symbols"),
+        KIND_OTHER, rtStats.zTotals.symbolsGCHeap,
+        "Used symbol cells.");
+
+    MREPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/used/gc-things/shapes"),
+        KIND_OTHER,
+        rtStats.cTotals.classInfo.shapesGCHeapTree + rtStats.cTotals.classInfo.shapesGCHeapDict,
+        "Used shape cells.");
+
+    MREPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/used/gc-things/base-shapes"),
+        KIND_OTHER, rtStats.cTotals.classInfo.shapesGCHeapBase,
+        "Used base shape cells.");
+
+    MREPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/used/gc-things/object-groups"),
+        KIND_OTHER, rtStats.zTotals.objectGroupsGCHeap,
+        "Used object group cells.");
+
+    MREPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/used/gc-things/scripts"),
+        KIND_OTHER, rtStats.cTotals.scriptsGCHeap,
+        "Used script cells.");
+
+    MREPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/used/gc-things/lazy-scripts"),
+        KIND_OTHER, rtStats.zTotals.lazyScriptsGCHeap,
+        "Used lazy script cells.");
+
+    MREPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime-gc-heap-committed/used/gc-things/jitcode"),
+        KIND_OTHER, rtStats.zTotals.jitCodesGCHeap,
+        "Used jitcode cells.");
+
+    MOZ_ASSERT(gcThingTotal == rtStats.gcHeapGCThings);
 
     // Report xpconnect.
 
@@ -3020,7 +3129,6 @@ AccumulateTelemetryCallback(int id, uint32_t sample, const char *key)
         Telemetry::Accumulate(Telemetry::GC_SCC_SWEEP_MAX_PAUSE_MS, sample);
         break;
       case JS_TELEMETRY_DEPRECATED_LANGUAGE_EXTENSIONS_IN_CONTENT:
-        MOZ_ASSERT(sample <= 5);
         Telemetry::Accumulate(Telemetry::JS_DEPRECATED_LANGUAGE_EXTENSIONS_IN_CONTENT, sample);
         break;
       case JS_TELEMETRY_ADDON_EXCEPTIONS:
@@ -3225,8 +3333,8 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     // OSX 64-bit Debug: 7MB stack, 636 stack frames => ~11.3k per stack frame
     // OSX64 Opt: 7MB stack, 2440 stack frames => ~3k per stack frame
     //
-    // Linux 32-bit Debug: 2MB stack, 447 stack frames => ~4.6k per stack frame
-    // Linux 64-bit Debug: 4MB stack, 501 stack frames => ~8.2k per stack frame
+    // Linux 32-bit Debug: 2MB stack, 426 stack frames => ~4.8k per stack frame
+    // Linux 64-bit Debug: 4MB stack, 455 stack frames => ~9.0k per stack frame
     //
     // Windows (Opt+Debug): 900K stack, 235 stack frames => ~3.4k per stack frame
     //
@@ -3258,9 +3366,9 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     // were not taken at the time of this writing, so we hazard a guess that
     // ASAN builds have roughly thrice the stack overhead as normal builds.
     // On normal builds, the largest stack frame size we might encounter is
-    // 8.2k, so let's use a buffer of 8.2 * 3 * 10 = 246k.
+    // 9.0k (see above), so let's use a buffer of 9.0 * 3 * 10 = 270k.
     const size_t kStackQuota =  2 * kDefaultStackQuota;
-    const size_t kTrustedScriptBuffer = 246 * 1024;
+    const size_t kTrustedScriptBuffer = 270 * 1024;
 #elif defined(XP_WIN)
     // 1MB is the default stack size on Windows, so use 900k.
     // Windows PGO stack frames have unfortunately gotten pretty large lately. :-(
@@ -3495,38 +3603,42 @@ XPCJSRuntime::DebugDump(int16_t depth)
         }
 
         XPC_LOG_ALWAYS(("mWrappedJSClassMap @ %x with %d wrapperclasses(s)",  \
-                        mWrappedJSClassMap, mWrappedJSClassMap->Count()));
+                        mWrappedJSClassMap, mWrappedJSClassMap ?              \
+                        mWrappedJSClassMap->Count() : 0));
         // iterate wrappersclasses...
-        if (depth && mWrappedJSClassMap->Count()) {
+        if (depth && mWrappedJSClassMap && mWrappedJSClassMap->Count()) {
             XPC_LOG_INDENT();
             mWrappedJSClassMap->Enumerate(WrappedJSClassMapDumpEnumerator, &depth);
             XPC_LOG_OUTDENT();
         }
         XPC_LOG_ALWAYS(("mWrappedJSMap @ %x with %d wrappers(s)",             \
-                        mWrappedJSMap, mWrappedJSMap->Count()));
+                        mWrappedJSMap, mWrappedJSMap ?                        \
+                        mWrappedJSMap->Count() : 0));
         // iterate wrappers...
-        if (depth && mWrappedJSMap->Count()) {
+        if (depth && mWrappedJSMap && mWrappedJSMap->Count()) {
             XPC_LOG_INDENT();
             mWrappedJSMap->Dump(depth);
             XPC_LOG_OUTDENT();
         }
 
         XPC_LOG_ALWAYS(("mIID2NativeInterfaceMap @ %x with %d interface(s)",  \
-                        mIID2NativeInterfaceMap,
-                        mIID2NativeInterfaceMap->Count()));
+                        mIID2NativeInterfaceMap, mIID2NativeInterfaceMap ?    \
+                        mIID2NativeInterfaceMap->Count() : 0));
 
         XPC_LOG_ALWAYS(("mClassInfo2NativeSetMap @ %x with %d sets(s)",       \
-                        mClassInfo2NativeSetMap,                              \
-                        mClassInfo2NativeSetMap->Count()));
+                        mClassInfo2NativeSetMap, mClassInfo2NativeSetMap ?    \
+                        mClassInfo2NativeSetMap->Count() : 0));
 
         XPC_LOG_ALWAYS(("mThisTranslatorMap @ %x with %d translator(s)",      \
-                        mThisTranslatorMap, mThisTranslatorMap->Count()));
+                        mThisTranslatorMap, mThisTranslatorMap ?              \
+                        mThisTranslatorMap->Count() : 0));
 
         XPC_LOG_ALWAYS(("mNativeSetMap @ %x with %d sets(s)",                 \
-                        mNativeSetMap, mNativeSetMap->Count()));
+                        mNativeSetMap, mNativeSetMap ?                        \
+                        mNativeSetMap->Count() : 0));
 
         // iterate sets...
-        if (depth && mNativeSetMap->Count()) {
+        if (depth && mNativeSetMap && mNativeSetMap->Count()) {
             XPC_LOG_INDENT();
             mNativeSetMap->Enumerate(NativeSetDumpEnumerator, &depth);
             XPC_LOG_OUTDENT();

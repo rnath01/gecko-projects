@@ -11,9 +11,9 @@
 #include "mozilla/Attributes.h"
 #include <map>
 
+#include "mozilla/layers/LayersTypes.h"
 #include "mozilla/layout/PRenderFrameParent.h"
 #include "nsDisplayList.h"
-#include "RenderFrameUtils.h"
 
 class nsFrameLoader;
 class nsSubDocumentFrame;
@@ -57,7 +57,6 @@ public:
    * them to asynchronously pan and zoom.
    */
   RenderFrameParent(nsFrameLoader* aFrameLoader,
-                    ScrollingBehavior aScrollingBehavior,
                     TextureFactoryIdentifier* aTextureFactoryIdentifier,
                     uint64_t* aId, bool* aSuccess);
   virtual ~RenderFrameParent();
@@ -94,8 +93,6 @@ public:
                              const ZoomConstraints& aConstraints);
 
   bool HitTest(const nsRect& aRect);
-
-  bool UseAsyncPanZoom() { return !!mContentController; }
 
   void GetTextureFactoryIdentifier(TextureFactoryIdentifier* aTextureFactoryIdentifier);
 
@@ -165,11 +162,8 @@ class nsDisplayRemote : public nsDisplayItem
   typedef mozilla::layout::RenderFrameParent RenderFrameParent;
 
 public:
-  nsDisplayRemote(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
-                  RenderFrameParent* aRemoteFrame)
-    : nsDisplayItem(aBuilder, aFrame)
-    , mRemoteFrame(aRemoteFrame)
-  {}
+  nsDisplayRemote(nsDisplayListBuilder* aBuilder, nsSubDocumentFrame* aFrame,
+                  RenderFrameParent* aRemoteFrame);
 
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
@@ -187,6 +181,7 @@ public:
 
 private:
   RenderFrameParent* mRemoteFrame;
+  mozilla::layers::EventRegionsOverride mEventRegionsOverride;
 };
 
 

@@ -167,7 +167,7 @@ let emulator = (function() {
     } else {
       return waitForEvent(aTarget, "callschanged",
                           event => event.call == aExpectedCall)
-               .then(event => event.call)
+               .then(event => event.call);
     }
   }
 
@@ -501,11 +501,6 @@ let emulator = (function() {
 
     let promises = [];
 
-    let promise = waitForNamedStateEvent(call, "connecting")
-      .then(() => waitForNamedStateEvent(call, "connected"));
-
-    promises.push(promise);
-
     // incoming call triggers conference state change. We should wait for
     // |conference.onstatechange| before checking the state of the conference
     // call.
@@ -520,8 +515,8 @@ let emulator = (function() {
       promises.push(promise);
     }
 
-    promise = call.answer();
-    promises.push(promise);
+    promises.push(waitForNamedStateEvent(call, "connected"));
+    promises.push(call.answer());
 
     return Promise.all(promises).then(() => call);
   }
@@ -538,12 +533,8 @@ let emulator = (function() {
 
     let promises = [];
 
-    let promise = waitForNamedStateEvent(call, "holding")
-      .then(() => waitForNamedStateEvent(call, "held"));
-    promises.push(promise);
-
-    promise = call.hold();
-    promises.push(promise);
+    promises.push(waitForNamedStateEvent(call, "held"));
+    promises.push(call.hold());
 
     return Promise.all(promises).then(() => call);
   }
@@ -560,12 +551,8 @@ let emulator = (function() {
 
     let promises = [];
 
-    let promise = waitForNamedStateEvent(call, "resuming")
-      .then(() => waitForNamedStateEvent(call, "connected"));
-    promises.push(promise);
-
-    promise = call.resume();
-    promises.push(promise);
+    promises.push(waitForNamedStateEvent(call, "connected"));
+    promises.push(call.resume());
 
     return Promise.all(promises).then(() => call);
   }
@@ -582,12 +569,8 @@ let emulator = (function() {
 
     let promises = [];
 
-    let promise = waitForNamedStateEvent(call, "disconnecting")
-      .then(() => waitForNamedStateEvent(call, "disconnected"));
-    promises.push(promise);
-
-    promise = call.hangUp();
-    promises.push(promise);
+    promises.push(waitForNamedStateEvent(call, "disconnected"));
+    promises.push(call.hangUp());
 
     return Promise.all(promises).then(() => call);
   }
@@ -728,9 +711,7 @@ let emulator = (function() {
     let promises = [];
 
     for (let call of callsInConference) {
-      let promise = waitForNamedStateEvent(call, "holding")
-        .then(() => waitForNamedStateEvent(call, "held"));
-      promises.push(promise);
+      promises.push(waitForNamedStateEvent(call, "held"));
     }
 
     let promise = waitForNamedStateEvent(conference, "holding")
@@ -763,9 +744,7 @@ let emulator = (function() {
     let promises = [];
 
     for (let call of callsInConference) {
-      let promise = waitForNamedStateEvent(call, "resuming")
-        .then(() => waitForNamedStateEvent(call, "connected"));
-      promises.push(promise);
+      promises.push(waitForNamedStateEvent(call, "connected"));
     }
 
     let promise = waitForNamedStateEvent(conference, "resuming")
@@ -1074,6 +1053,21 @@ let emulator = (function() {
     return Promise.all(promises);
   }
 
+  function setRadioEnabledAll(enabled) {
+    let promises = [];
+    let numOfSim = navigator.mozMobileConnections.length;
+
+    for (let i = 0; i < numOfSim; i++) {
+      let connection = navigator.mozMobileConnections[i];
+      ok(connection instanceof MozMobileConnection,
+         "connection[" + i + "] is instanceof " + connection.constructor);
+
+         promises.push(setRadioEnabled(connection, enabled));
+    }
+
+    return Promise.all(promises);
+  }
+
   /**
    * Public members.
    */
@@ -1108,21 +1102,38 @@ let emulator = (function() {
   this.gHangUpConference = hangUpConference;
   this.gSetupConference = setupConference;
   this.gSetRadioEnabled = setRadioEnabled;
+  this.gSetRadioEnabledAll = setRadioEnabledAll;
 }());
 
 function _startTest(permissions, test) {
-  function permissionSetUp() {
-    SpecialPowers.setBoolPref("dom.mozSettings.enabled", true);
-    for (let per of permissions) {
-      SpecialPowers.addPermission(per, true, document);
-    }
+  function typesToPermissions(types) {
+    return types.map(type => {
+      return {
+        "type": type,
+        "allow": 1,
+        "context": document
+      };
+    });
   }
 
-  function permissionTearDown() {
-    SpecialPowers.clearUserPref("dom.mozSettings.enabled");
-    for (let per of permissions) {
-      SpecialPowers.removePermission(per, document);
-    }
+  function ensureRadio() {
+    log("== Ensure Radio ==");
+    return new Promise(function(resolve, reject) {
+      SpecialPowers.pushPermissions(typesToPermissions(["mobileconnection"]), () => {
+        gSetRadioEnabledAll(true).then(() => {
+          SpecialPowers.popPermissions(() => {
+            resolve();
+          });
+        });
+      });
+    });
+  }
+
+  function permissionSetUp() {
+    log("== Permission SetUp ==");
+    return new Promise(function(resolve, reject) {
+      SpecialPowers.pushPermissions(typesToPermissions(permissions), resolve);
+    });
   }
 
   let debugPref;
@@ -1135,14 +1146,18 @@ function _startTest(permissions, test) {
     SpecialPowers.setBoolPref(kPrefRilDebuggingEnabled, true);
     log("Set debugging pref: " + debugPref + " => true");
 
-    permissionSetUp();
-
-    // Make sure that we get the telephony after adding permission.
-    telephony = window.navigator.mozTelephony;
-    ok(telephony);
-    conference = telephony.conferenceGroup;
-    ok(conference);
-    return gClearCalls().then(gCheckInitialState);
+    return Promise.resolve()
+      .then(ensureRadio)
+      .then(permissionSetUp)
+      .then(() => {
+        // Make sure that we get the telephony after adding permission.
+        telephony = window.navigator.mozTelephony;
+        ok(telephony);
+        conference = telephony.conferenceGroup;
+        ok(conference);
+      })
+      .then(gClearCalls)
+      .then(gCheckInitialState);
   }
 
   // Extend finish() with tear down.
@@ -1153,8 +1168,6 @@ function _startTest(permissions, test) {
       log("== Test TearDown ==");
       emulator.waitFinish()
         .then(() => {
-          permissionTearDown();
-
           // Restore debugging pref.
           SpecialPowers.setBoolPref(kPrefRilDebuggingEnabled, debugPref);
           log("Set debugging pref: true => " + debugPref);

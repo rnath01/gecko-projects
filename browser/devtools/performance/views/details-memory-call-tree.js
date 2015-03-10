@@ -62,7 +62,7 @@ let MemoryCallTreeView = Heritage.extend(DetailsSubview, {
    */
   _prepareCallTree: function (allocations, { startTime, endTime }, options) {
     let samples = RecordingUtils.getSamplesFromAllocations(allocations);
-    let invertTree = PerformanceController.getPref("invert-call-tree");
+    let invertTree = PerformanceController.getOption("invert-call-tree");
 
     let threadNode = new ThreadNode(samples,
       { startTime, endTime, invertTree });
@@ -93,6 +93,9 @@ let MemoryCallTreeView = Heritage.extend(DetailsSubview, {
 
     // Bind events.
     root.on("link", this._onLink);
+
+    // Pipe "focus" events to the view, mostly for tests
+    root.on("focus", () => this.emit("focus"));
 
     // Clear out other call trees.
     let container = $("#memory-calltree-view > .call-tree-cells-container");

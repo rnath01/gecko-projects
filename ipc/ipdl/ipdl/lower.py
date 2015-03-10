@@ -4,6 +4,7 @@
 
 import os, re, sys
 from copy import deepcopy
+from collections import OrderedDict
 
 import ipdl.ast
 import ipdl.builtin
@@ -310,7 +311,7 @@ function would return true for |Actor[]|."""
 
 def _abortIfFalse(cond, msg):
     return StmtExpr(ExprCall(
-        ExprVar('NS_ABORT_IF_FALSE'),
+        ExprVar('MOZ_ASSERT'),
         [ cond, ExprLiteral.String(msg) ]))
 
 def _runtimeAbort(msg):
@@ -2780,7 +2781,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
         bridgeActorsCreated = ProcessGraph.bridgeEndpointsOf(ptype, self.side)
         opensActorsCreated = ProcessGraph.opensEndpointsOf(ptype, self.side)
-        channelOpenedActors = bridgeActorsCreated + opensActorsCreated
+        channelOpenedActors = OrderedDict.fromkeys(bridgeActorsCreated + opensActorsCreated, None)
 
         friends = _FindFriends().findFriends(ptype)
         if ptype.isManaged():

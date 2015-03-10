@@ -40,6 +40,7 @@ Atomic<int32_t> CompositableForwarder::sSerialCounter(0);
 
 CompositorChild::CompositorChild(ClientLayerManager *aLayerManager)
   : mLayerManager(aLayerManager)
+  , mCanSend(true)
 {
 }
 
@@ -59,6 +60,7 @@ CompositorChild::Destroy()
       static_cast<LayerTransactionChild*>(ManagedPLayerTransactionChild()[i]);
     layers->Destroy();
   }
+  MOZ_ASSERT(!mCanSend);
   SendStop();
 }
 
@@ -118,14 +120,28 @@ CompositorChild::AllocPLayerTransactionChild(const nsTArray<LayersBackend>& aBac
                                              TextureFactoryIdentifier*,
                                              bool*)
 {
-  LayerTransactionChild* c = new LayerTransactionChild();
+  MOZ_ASSERT(mCanSend);
+  LayerTransactionChild* c = new LayerTransactionChild(aId);
   c->AddIPDLReference();
   return c;
+}
+
+/*static*/ PLDHashOperator
+CompositorChild::RemoveSharedMetricsForLayersId(const uint64_t& aKey,
+                                                nsAutoPtr<SharedFrameMetricsData>& aData,
+                                                void* aLayerTransactionChild)
+{
+  uint64_t childId = static_cast<LayerTransactionChild*>(aLayerTransactionChild)->GetId();
+  if (aData->GetLayersId() == childId) {
+    return PLDHashOperator::PL_DHASH_REMOVE;
+  }
+  return PLDHashOperator::PL_DHASH_NEXT;
 }
 
 bool
 CompositorChild::DeallocPLayerTransactionChild(PLayerTransactionChild* actor)
 {
+  mFrameMetricsTable.Enumerate(RemoveSharedMetricsForLayersId, actor);
   static_cast<LayerTransactionChild*>(actor)->ReleaseIPDLReference();
   return true;
 }
@@ -217,15 +233,17 @@ CompositorChild::RecvUpdatePluginConfigurations(const nsIntPoint& aContentOffset
                             bounds.width, bounds.height, false);
         NS_ASSERTION(NS_SUCCEEDED(rv), "widget call failure");
         nsTArray<nsIntRect> rectsOut;
+        // This call may change the value of isVisible
         CalculatePluginClip(bounds, aPlugins[pluginsIdx].clip(),
                             aContentOffset, aParentLayerVisibleRegion,
                             rectsOut, visibleBounds, isVisible);
-        if (isVisible) {
-          // content clipping region (widget origin)
-          rv = widget->SetWindowClipRegion(rectsOut, false);
-          NS_ASSERTION(NS_SUCCEEDED(rv), "widget call failure");
-        }
+        // content clipping region (widget origin)
+        rv = widget->SetWindowClipRegion(rectsOut, false);
+        NS_ASSERTION(NS_SUCCEEDED(rv), "widget call failure");
       }
+
+      rv = widget->Enable(isVisible);
+      NS_ASSERTION(NS_SUCCEEDED(rv), "widget call failure");
 
       // visible state - updated after clipping, prior to invalidating
       rv = widget->Show(isVisible);
@@ -252,6 +270,20 @@ CompositorChild::RecvUpdatePluginConfigurations(const nsIntPoint& aContentOffset
   // Any plugins we didn't update need to be hidden, as they are
   // not associated with visible content.
   nsIWidget::UpdateRegisteredPluginWindowVisibility(visiblePluginIds);
+  return true;
+#endif // !defined(XP_WIN) && !defined(MOZ_WIDGET_GTK)
+}
+
+bool
+CompositorChild::RecvUpdatePluginVisibility(nsTArray<uintptr_t>&& aVisibleIdList)
+{
+#if !defined(XP_WIN) && !defined(MOZ_WIDGET_GTK)
+  NS_NOTREACHED("CompositorChild::RecvUpdatePluginVisibility calls "
+                "unexpected on this platform.");
+  return false;
+#else
+  MOZ_ASSERT(NS_IsMainThread());
+  nsIWidget::UpdateRegisteredPluginWindowVisibility(aVisibleIdList);
   return true;
 #endif // !defined(XP_WIN) && !defined(MOZ_WIDGET_GTK)
 }
@@ -291,6 +323,7 @@ CompositorChild::AddOverfillObserver(ClientLayerManager* aLayerManager)
 void
 CompositorChild::ActorDestroy(ActorDestroyReason aWhy)
 {
+  MOZ_ASSERT(!mCanSend);
   MOZ_ASSERT(sCompositor == this);
 
 #ifdef MOZ_B2G
@@ -319,9 +352,11 @@ bool
 CompositorChild::RecvSharedCompositorFrameMetrics(
     const mozilla::ipc::SharedMemoryBasic::Handle& metrics,
     const CrossProcessMutexHandle& handle,
+    const uint64_t& aLayersId,
     const uint32_t& aAPZCId)
 {
-  SharedFrameMetricsData* data = new SharedFrameMetricsData(metrics, handle, aAPZCId);
+  SharedFrameMetricsData* data = new SharedFrameMetricsData(
+    metrics, handle, aLayersId, aAPZCId);
   mFrameMetricsTable.Put(data->GetViewID(), data);
   return true;
 }
@@ -344,9 +379,11 @@ CompositorChild::RecvReleaseSharedCompositorFrameMetrics(
 CompositorChild::SharedFrameMetricsData::SharedFrameMetricsData(
     const ipc::SharedMemoryBasic::Handle& metrics,
     const CrossProcessMutexHandle& handle,
-    const uint32_t& aAPZCId) :
-    mMutex(nullptr),
-    mAPZCId(aAPZCId)
+    const uint64_t& aLayersId,
+    const uint32_t& aAPZCId)
+  : mMutex(nullptr)
+  , mLayersId(aLayersId)
+  , mAPZCId(aAPZCId)
 {
   mBuffer = new ipc::SharedMemoryBasic(metrics);
   mBuffer->Map(sizeof(FrameMetrics));
@@ -381,6 +418,12 @@ CompositorChild::SharedFrameMetricsData::GetViewID()
   // Not locking to read of mScrollId since it should not change after being
   // initially set.
   return frame->GetScrollId();
+}
+
+uint64_t
+CompositorChild::SharedFrameMetricsData::GetLayersId() const
+{
+  return mLayersId;
 }
 
 uint32_t
@@ -434,6 +477,126 @@ CompositorChild::CancelNotifyAfterRemotePaint(TabChild* aTabChild)
     mWeakTabChild = nullptr;
   }
 }
+
+bool
+CompositorChild::SendWillStop()
+{
+  MOZ_ASSERT(mCanSend);
+  // From now on the only two messages we can send are WillStop and Stop.
+  mCanSend = false;
+  return PCompositorChild::SendWillStop();
+}
+
+bool
+CompositorChild::SendPause()
+{
+  MOZ_ASSERT(mCanSend);
+  if (!mCanSend) {
+    return true;
+  }
+  return PCompositorChild::SendPause();
+}
+
+bool
+CompositorChild::SendResume()
+{
+  MOZ_ASSERT(mCanSend);
+  if (!mCanSend) {
+    return true;
+  }
+  return PCompositorChild::SendResume();
+}
+
+bool
+CompositorChild::SendNotifyChildCreated(const uint64_t& id)
+{
+  MOZ_ASSERT(mCanSend);
+  if (!mCanSend) {
+    return true;
+  }
+  return PCompositorChild::SendNotifyChildCreated(id);
+}
+
+bool
+CompositorChild::SendAdoptChild(const uint64_t& id)
+{
+  MOZ_ASSERT(mCanSend);
+  if (!mCanSend) {
+    return true;
+  }
+  return PCompositorChild::SendAdoptChild(id);
+}
+
+bool
+CompositorChild::SendMakeSnapshot(const SurfaceDescriptor& inSnapshot, const nsIntRect& dirtyRect)
+{
+  MOZ_ASSERT(mCanSend);
+  if (!mCanSend) {
+    return true;
+  }
+  return PCompositorChild::SendMakeSnapshot(inSnapshot, dirtyRect);
+}
+
+bool
+CompositorChild::SendFlushRendering()
+{
+  MOZ_ASSERT(mCanSend);
+  if (!mCanSend) {
+    return true;
+  }
+  return PCompositorChild::SendFlushRendering();
+}
+
+bool
+CompositorChild::SendGetTileSize(int32_t* tileWidth, int32_t* tileHeight)
+{
+  MOZ_ASSERT(mCanSend);
+  if (!mCanSend) {
+    return true;
+  }
+  return PCompositorChild::SendGetTileSize(tileWidth, tileHeight);
+}
+
+bool
+CompositorChild::SendStartFrameTimeRecording(const int32_t& bufferSize, uint32_t* startIndex)
+{
+  MOZ_ASSERT(mCanSend);
+  if (!mCanSend) {
+    return true;
+  }
+  return PCompositorChild::SendStartFrameTimeRecording(bufferSize, startIndex);
+}
+
+bool
+CompositorChild::SendStopFrameTimeRecording(const uint32_t& startIndex, nsTArray<float>* intervals)
+{
+  MOZ_ASSERT(mCanSend);
+  if (!mCanSend) {
+    return true;
+  }
+  return PCompositorChild::SendStopFrameTimeRecording(startIndex, intervals);
+}
+
+bool
+CompositorChild::SendNotifyRegionInvalidated(const nsIntRegion& region)
+{
+  MOZ_ASSERT(mCanSend);
+  if (!mCanSend) {
+    return true;
+  }
+  return PCompositorChild::SendNotifyRegionInvalidated(region);
+}
+
+bool
+CompositorChild::SendRequestNotifyAfterRemotePaint()
+{
+  MOZ_ASSERT(mCanSend);
+  if (!mCanSend) {
+    return true;
+  }
+  return PCompositorChild::SendRequestNotifyAfterRemotePaint();
+}
+
 
 } // namespace layers
 } // namespace mozilla

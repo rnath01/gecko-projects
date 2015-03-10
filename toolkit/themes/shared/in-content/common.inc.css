@@ -7,7 +7,8 @@
 @namespace xul "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
 html|body,
-xul|page {
+xul|page,
+xul|window {
   font: message-box;
   -moz-appearance: none;
   background-color: #fbfbfb;
@@ -39,6 +40,7 @@ xul|caption {
   margin: 0;
 }
 
+xul|caption > xul|checkbox,
 xul|caption > xul|label {
   font-size: 1.3rem;
   font-weight: bold;
@@ -67,7 +69,7 @@ xul|prefpane > xul|*.content-box {
 xul|groupbox {
   -moz-appearance: none;
   border: none;
-  margin: 15px 0;
+  margin: 15px 0 0;
   -moz-padding-start: 0;
   -moz-padding-end: 0;
   font-size: 1.25rem;
@@ -204,7 +206,7 @@ xul|menulist > xul|*.menulist-label-box {
   padding-left: 10px !important;
 }
 
-xul|menulist > xul|*.menulist-label-box > xul|*.menulist-icon {
+xul|menulist > xul|*.menulist-label-box > xul|*.menulist-icon[src] {
   -moz-margin-end: 5px;
 }
 
@@ -363,7 +365,6 @@ xul|button[type="menu"] > xul|menupopup xul|menuseparator {
   height: 30px;
   color: #333;
   line-height: 20px;
-  text-shadow: 0 1px 1px #fefffe;
   padding-right: 10px;
   padding-left: 10px;
   border: 1px solid #c1c1c1;
@@ -547,6 +548,7 @@ xul|*#categories[keyboard-navigation="true"]:-moz-focusring > xul|*.category[cur
   padding-bottom: 2px;
   -moz-padding-start: 9px;
   margin: 0;
+  -moz-user-select: none;
 }
 
 *|*.category-icon {
@@ -568,6 +570,7 @@ xul|*#categories[keyboard-navigation="true"]:-moz-focusring > xul|*.category[cur
   font-weight: normal;
   line-height: 40px;
   margin: 0;
+  -moz-user-select: none;
 }
 
 /* File fields */
@@ -651,6 +654,11 @@ xul|tree {
   -moz-appearance: none;
   font-size: 1em;
   border: 1px solid #c1c1c1;
+}
+
+xul|tree:-moz-focusring,
+xul|richlistbox:-moz-focusring {
+  border: 1px dotted #0095dd;
 }
 
 xul|listheader,

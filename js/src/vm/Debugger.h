@@ -35,6 +35,10 @@ namespace js {
 class Breakpoint;
 class DebuggerMemory;
 
+typedef HashSet<ReadBarrieredGlobalObject,
+                DefaultHasher<ReadBarrieredGlobalObject>,
+                SystemAllocPolicy> WeakGlobalObjectSet;
+
 /*
  * A weakmap from GC thing keys to JSObject values that supports the keys being
  * in different compartments to the values. All values must be in the same
@@ -238,7 +242,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
 
   private:
     HeapPtrNativeObject object;         /* The Debugger object. Strong reference. */
-    GlobalObjectSet debuggees;          /* Debuggee globals. Cross-compartment weak references. */
+    WeakGlobalObjectSet debuggees;      /* Debuggee globals. Cross-compartment weak references. */
     js::HeapPtrObject uncaughtExceptionHook; /* Strong reference. */
     bool enabled;
     JSCList breakpoints;                /* Circular list of all js::Breakpoints in this debugger */
@@ -253,12 +257,17 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     };
     typedef mozilla::LinkedList<AllocationSite> AllocationSiteList;
 
+    bool allowUnobservedAsmJS;
+
     bool trackingAllocationSites;
     double allocationSamplingProbability;
     AllocationSiteList allocationsLog;
     size_t allocationsLogLength;
     size_t maxAllocationsLogLength;
+    bool allocationsLogOverflowed;
+
     static const size_t DEFAULT_MAX_ALLOCATIONS_LOG_LENGTH = 5000;
+
     bool appendAllocationSite(JSContext *cx, HandleSavedFrame frame, int64_t when);
     void emptyAllocationsLog();
 
@@ -320,7 +329,8 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     class ObjectQuery;
 
     bool addDebuggeeGlobal(JSContext *cx, Handle<GlobalObject*> obj);
-    void removeDebuggeeGlobal(FreeOp *fop, GlobalObject *global, GlobalObjectSet::Enum *debugEnum);
+    void removeDebuggeeGlobal(FreeOp *fop, GlobalObject *global,
+                              WeakGlobalObjectSet::Enum *debugEnum);
 
     /*
      * Cope with an error or exception in a debugger hook.
@@ -400,6 +410,8 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     static bool setOnPromiseSettled(JSContext *cx, unsigned argc, Value *vp);
     static bool getUncaughtExceptionHook(JSContext *cx, unsigned argc, Value *vp);
     static bool setUncaughtExceptionHook(JSContext *cx, unsigned argc, Value *vp);
+    static bool getAllowUnobservedAsmJS(JSContext *cx, unsigned argc, Value *vp);
+    static bool setAllowUnobservedAsmJS(JSContext *cx, unsigned argc, Value *vp);
     static bool getMemory(JSContext *cx, unsigned argc, Value *vp);
     static bool addDebuggee(JSContext *cx, unsigned argc, Value *vp);
     static bool addAllGlobalsAsDebuggees(JSContext *cx, unsigned argc, Value *vp);
@@ -434,18 +446,27 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
                                              IsObserving observing);
 
   public:
+    static bool ensureExecutionObservabilityOfOsrFrame(JSContext *cx, InterpreterFrame *frame);
+
     // Public for DebuggerScript_setBreakpoint.
     static bool ensureExecutionObservabilityOfScript(JSContext *cx, JSScript *script);
+
+    // Whether the Debugger instance needs to observe all non-AOT JS
+    // execution of its debugees.
+    IsObserving observesAllExecution() const;
+
+    // Whether the Debugger instance needs to observe AOT-compiled asm.js
+    // execution of its debuggees.
+    IsObserving observesAsmJS() const;
 
   private:
     static bool ensureExecutionObservabilityOfFrame(JSContext *cx, AbstractFramePtr frame);
     static bool ensureExecutionObservabilityOfCompartment(JSContext *cx, JSCompartment *comp);
 
     static bool hookObservesAllExecution(Hook which);
-    bool anyOtherDebuggerObservingAllExecution(GlobalObject *global) const;
-    bool hasAnyLiveHooksThatObserveAllExecution() const;
-    bool hasAnyHooksThatObserveAllExecution() const;
-    bool setObservesAllExecution(JSContext *cx, IsObserving observing);
+
+    bool updateObservesAllExecutionOnDebuggees(JSContext *cx, IsObserving observing);
+    void updateObservesAsmJSOnDebuggees(IsObserving observing);
 
     JSObject *getHook(Hook hook) const;
     bool hasAnyLiveHooks() const;
@@ -513,7 +534,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     bool hasMemory() const;
     DebuggerMemory &memory() const;
 
-    GlobalObjectSet::Range allDebuggees() const { return debuggees.all(); }
+    WeakGlobalObjectSet::Range allDebuggees() const { return debuggees.all(); }
 
     /*********************************** Methods for interaction with the GC. */
 
@@ -532,7 +553,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
      * Debugger objects that are definitely live but not yet marked, it marks
      * them and returns true. If not, it returns false.
      */
-    static void markAllCrossCompartmentEdges(JSTracer *tracer);
+    static void markIncomingCrossCompartmentEdges(JSTracer *tracer);
     static bool markAllIteratively(GCMarker *trc);
     static void markAll(JSTracer *trc);
     static void sweepAll(FreeOp *fop);
@@ -873,7 +894,8 @@ Debugger::observesNewGlobalObject() const
 bool
 Debugger::observesGlobal(GlobalObject *global) const
 {
-    return debuggees.has(global);
+    ReadBarriered<GlobalObject*> debuggee(global);
+    return debuggees.has(debuggee);
 }
 
 /* static */ void

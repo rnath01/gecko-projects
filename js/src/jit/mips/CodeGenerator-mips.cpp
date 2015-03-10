@@ -49,6 +49,9 @@ CodeGeneratorMIPS::generatePrologue()
     if (isProfilerInstrumentationEnabled())
         masm.profilerEnterFrame(StackPointer, CallTempReg0);
 
+    // Ensure that the Ion frames is properly aligned.
+    masm.assertStackAlignment(JitStackAlignment, 0);
+
     // Note that this automatically sets MacroAssembler::framePushed().
     masm.reserveStack(frameSize());
     masm.checkStackAlignment();
@@ -986,7 +989,7 @@ CodeGeneratorMIPS::visitOutOfLineTableSwitch(OutOfLineTableSwitch *ool)
 {
     MTableSwitch *mir = ool->mir();
 
-    masm.align(sizeof(void*));
+    masm.haltingAlign(sizeof(void*));
     masm.bind(ool->jumpLabel()->src());
     masm.addCodeLabel(*ool->jumpLabel());
 

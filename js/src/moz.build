@@ -51,7 +51,6 @@ EXPORTS += [
     'jsfriendapi.h',
     'jsprf.h',
     'jsprototypes.h',
-    'jsproxy.h',
     'jspubtd.h',
     'jstypes.h',
     'jsversion.h',
@@ -79,6 +78,7 @@ EXPORTS.js += [
     '../public/Principals.h',
     '../public/ProfilingFrameIterator.h',
     '../public/ProfilingStack.h',
+    '../public/Proxy.h',
     '../public/RequiredDefines.h',
     '../public/RootingAPI.h',
     '../public/SliceBudget.h',
@@ -120,6 +120,7 @@ UNIFIED_SOURCES += [
     'frontend/ParseMaps.cpp',
     'frontend/ParseNode.cpp',
     'frontend/TokenStream.cpp',
+    'gc/Allocator.cpp',
     'gc/Barrier.cpp',
     'gc/GCTrace.cpp',
     'gc/Iteration.cpp',
@@ -140,6 +141,7 @@ UNIFIED_SOURCES += [
     'irregexp/RegExpParser.cpp',
     'irregexp/RegExpStack.cpp',
     'jit/AliasAnalysis.cpp',
+    'jit/AlignmentMaskAnalysis.cpp',
     'jit/BacktrackingAllocator.cpp',
     'jit/Bailouts.cpp',
     'jit/BaselineBailouts.cpp',
@@ -156,6 +158,7 @@ UNIFIED_SOURCES += [
     'jit/CodeGenerator.cpp',
     'jit/CompileWrappers.cpp',
     'jit/Disassembler.cpp',
+    'jit/EagerSimdUnbox.cpp',
     'jit/EdgeCaseAnalysis.cpp',
     'jit/EffectiveAddressAnalysis.cpp',
     'jit/ExecutableAllocator.cpp',
@@ -209,7 +212,6 @@ UNIFIED_SOURCES += [
     'jsfriendapi.cpp',
     'jsfun.cpp',
     'jsgc.cpp',
-    'jsinfer.cpp',
     'jsiter.cpp',
     'jsnativestack.cpp',
     'jsnum.cpp',
@@ -273,6 +275,7 @@ UNIFIED_SOURCES += [
     'vm/StructuredClone.cpp',
     'vm/Symbol.cpp',
     'vm/TypedArrayObject.cpp',
+    'vm/TypeInference.cpp',
     'vm/UbiNode.cpp',
     'vm/UnboxedObject.cpp',
     'vm/Unicode.cpp',
@@ -494,6 +497,11 @@ if CONFIG['_MSC_VER']:
     # Prevent floating point errors caused by VC++ optimizations
     # XXX We should add this to CXXFLAGS, too?
     CFLAGS += ['-fp:precise']
+    # C4805 warns mixing bool with other integral types in computation.
+    # But given the conversion from bool is specified, and this is a
+    # pattern widely used in code in js/src, suppress this warning here.
+    CXXFLAGS += ['-wd4805']
+    CXXFLAGS += ['-we4067', '-we4258', '-we4275']
 
 if CONFIG['OS_ARCH'] not in ('WINNT', 'HP-UX'):
     OS_LIBS += [

@@ -10,9 +10,7 @@
 
 #include "nsISupports.idl"
 
-[ptr] native JSContext(JSContext);
-
-[scriptable, uuid(4f2927e5-ae85-4c6b-93d2-2f639af6a236)]
+[scriptable, uuid(28bfb2a2-5ea6-4738-918b-049dc4d51f0b)]
 interface nsIStackFrame : nsISupports
 {
     // see nsIProgrammingLanguage for list of language consts
@@ -24,6 +22,8 @@ interface nsIStackFrame : nsISupports
     readonly attribute int32_t                 lineNumber;
     readonly attribute int32_t                 columnNumber;
     readonly attribute AUTF8String             sourceLine;
+    readonly attribute AString                 asyncCause;
+    readonly attribute nsIStackFrame           asyncCaller;
     readonly attribute nsIStackFrame           caller;
 
     // Returns a formatted stack string that looks like the sort of
@@ -31,11 +31,11 @@ interface nsIStackFrame : nsISupports
     // Only works on JS-language stack frames.
     readonly attribute AString                 formattedStack;
 
-    AUTF8String toString();
+    // Returns the underlying SavedFrame object for native JavaScript stacks,
+    // or null if this is not a native JavaScript stack frame.
+    readonly attribute jsval                   nativeSavedFrame;
 
-    // Return whether this stack frame can be accessed by the caller.  This is
-    // safe to call on non-main threads, but will always report "yes" there.
-    [noscript, notxpcom, nostdcall] boolean callerSubsumes(in JSContext aCx);
+    AUTF8String toString();
 };
 
 [scriptable, uuid(1caf1461-be1d-4b79-a552-5292b6bf3c35)]
@@ -59,7 +59,7 @@ interface nsIException : nsISupports
     readonly attribute AString                 filename;
     // Valid line numbers begin at '1'. '0' indicates unknown.
     readonly attribute uint32_t                lineNumber;
-    // Valid column numbers begin at 0. 
+    // Valid column numbers begin at 0.
     // We don't have an unambiguous indicator for unknown.
     readonly attribute uint32_t                columnNumber;
 

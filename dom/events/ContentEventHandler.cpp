@@ -195,8 +195,7 @@ ContentEventHandler::QueryContentRect(nsIContent* aContent,
 // we don't want to include the bogus BRs at the end.
 static bool IsContentBR(nsIContent* aContent)
 {
-  return aContent->IsHTML() &&
-         aContent->Tag() == nsGkAtoms::br &&
+  return aContent->IsHTMLElement(nsGkAtoms::br) &&
          !aContent->AttrValueIs(kNameSpaceID_None,
                                 nsGkAtoms::type,
                                 nsGkAtoms::moz,
@@ -251,9 +250,8 @@ static uint32_t CountNewlinesInXPLength(nsIContent* aContent,
     return 0;
   }
   // For automated tests, we should abort on debug build.
-  NS_ABORT_IF_FALSE(
-    (aXPLength == UINT32_MAX || aXPLength <= text->GetLength()),
-    "aXPLength is out-of-bounds");
+  MOZ_ASSERT(aXPLength == UINT32_MAX || aXPLength <= text->GetLength(),
+             "aXPLength is out-of-bounds");
   const uint32_t length = std::min(aXPLength, text->GetLength());
   uint32_t newlines = 0;
   for (uint32_t i = 0; i < length; ++i) {
@@ -283,7 +281,7 @@ static uint32_t CountNewlinesInNativeLength(nsIContent* aContent,
        i < xpLength && nativeOffset < aNativeLength;
        ++i, ++nativeOffset) {
     // For automated tests, we should abort on debug build.
-    NS_ABORT_IF_FALSE(i < text->GetLength(), "i is out-of-bounds");
+    MOZ_ASSERT(i < text->GetLength(), "i is out-of-bounds");
     if (text->CharAt(i) == '\n') {
       ++newlines;
       ++nativeOffset;
@@ -943,8 +941,13 @@ ContentEventHandler::OnQueryTextRect(WidgetQueryContentEvent* aEvent)
   nsPoint ptOffset;
   firstFrame->GetPointFromOffset(nodeOffset, &ptOffset);
   // minus 1 to avoid creating an empty rect
-  rect.x += ptOffset.x - 1;
-  rect.width -= ptOffset.x - 1;
+  if (firstFrame->GetWritingMode().IsVertical()) {
+    rect.y += ptOffset.y - 1;
+    rect.height -= ptOffset.y - 1;
+  } else {
+    rect.x += ptOffset.x - 1;
+    rect.width -= ptOffset.x - 1;
+  }
 
   // get the ending frame
   nodeOffset = range->EndOffset();
@@ -985,7 +988,11 @@ ContentEventHandler::OnQueryTextRect(WidgetQueryContentEvent* aEvent)
   // get the ending frame rect
   lastFrame->GetPointFromOffset(nodeOffset, &ptOffset);
   // minus 1 to avoid creating an empty rect
-  frameRect.width -= lastFrame->GetRect().width - ptOffset.x - 1;
+  if (lastFrame->GetWritingMode().IsVertical()) {
+    frameRect.height -= lastFrame->GetRect().height - ptOffset.y - 1;
+  } else {
+    frameRect.width -= lastFrame->GetRect().width - ptOffset.x - 1;
+  }
 
   if (firstFrame == lastFrame) {
     rect.IntersectRect(rect, frameRect);
@@ -994,6 +1001,7 @@ ContentEventHandler::OnQueryTextRect(WidgetQueryContentEvent* aEvent)
   }
   aEvent->mReply.mRect = LayoutDevicePixel::FromUntyped(
       rect.ToOutsidePixels(mPresContext->AppUnitsPerDevPixel()));
+  aEvent->mReply.mWritingMode = lastFrame->GetWritingMode();
   aEvent->mSucceeded = true;
   return NS_OK;
 }
@@ -1382,8 +1390,8 @@ static void AdjustRangeForSelection(nsIContent* aRoot,
   }
 
   nsIContent* brContent = node->GetChildAt(nodeOffset - 1);
-  while (brContent && brContent->IsHTML()) {
-    if (brContent->Tag() != nsGkAtoms::br || IsContentBR(brContent)) {
+  while (brContent && brContent->IsHTMLElement()) {
+    if (!brContent->IsHTMLElement(nsGkAtoms::br) || IsContentBR(brContent)) {
       break;
     }
     brContent = node->GetChildAt(--nodeOffset - 1);

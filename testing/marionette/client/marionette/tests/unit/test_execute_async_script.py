@@ -2,9 +2,10 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from marionette_test import MarionetteTestCase
-from errors import JavascriptException, MarionetteException, ScriptTimeoutException
-import time
+from marionette import MarionetteTestCase
+from marionette_driver.errors import ( JavascriptException,
+                                       MarionetteException,
+                                       ScriptTimeoutException )
 
 
 class TestExecuteAsyncContent(MarionetteTestCase):
@@ -124,3 +125,17 @@ class TestExecuteAsyncChrome(TestExecuteAsyncContent):
 var c = Components.classes;
 marionetteScriptFinished(5);
 """))
+
+    def test_execute_async_js_exception(self):
+        # Javascript exceptions are not propagated in chrome code
+        self.marionette.set_script_timeout(200)
+        self.assertRaises(ScriptTimeoutException,
+            self.marionette.execute_async_script, """
+            var callback = arguments[arguments.length - 1];
+            setTimeout("callback(foo())", 50);
+            """)
+        self.assertRaises(JavascriptException,
+            self.marionette.execute_async_script, """
+            var callback = arguments[arguments.length - 1];
+            setTimeout("callback(foo())", 50);
+            """, debug_script=True)

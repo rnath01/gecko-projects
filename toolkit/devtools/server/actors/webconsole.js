@@ -1060,9 +1060,15 @@ WebConsoleActor.prototype =
    */
   evalWithDebugger: function WCA_evalWithDebugger(aString, aOptions = {})
   {
+    let trimmedString = aString.trim();
     // The help function needs to be easy to guess, so we make the () optional.
-    if (aString.trim() == "help" || aString.trim() == "?") {
+    if (trimmedString == "help" || trimmedString == "?") {
       aString = "help()";
+    }
+
+    // Add easter egg for console.mihai().
+    if (trimmedString == "console.mihai()" || trimmedString == "console.mihai();") {
+      aString = "\"http://incompleteness.me/blog/2015/02/09/console-dot-mihai/\"";
     }
 
     // Find the Debugger.Frame of the given FrameActor.
@@ -1497,6 +1503,9 @@ WebConsoleActor.prototype =
     // This method is called after this.window is changed,
     // so we register new listener on this new window
     this.onStartListeners({listeners: listeners});
+
+    // Also reset the cached top level chrome window being targeted
+    this._lastChromeWindow  = null;
   },
 };
 
@@ -1723,6 +1732,7 @@ NetworkEventActor.prototype =
       from: this.actorID,
       headers: this._request.headers,
       headersSize: this._request.headersSize,
+      rawHeaders: this._request.rawHeaders,
     };
   },
 
@@ -1781,6 +1791,7 @@ NetworkEventActor.prototype =
       from: this.actorID,
       headers: this._response.headers,
       headersSize: this._response.headersSize,
+      rawHeaders: this._response.rawHeaders,
     };
   },
 
@@ -1837,11 +1848,19 @@ NetworkEventActor.prototype =
    *
    * @param array aHeaders
    *        The request headers array.
+   * @param string aRawHeaders
+   *        The raw headers source.
    */
-  addRequestHeaders: function NEA_addRequestHeaders(aHeaders)
+  addRequestHeaders: function NEA_addRequestHeaders(aHeaders, aRawHeaders)
   {
     this._request.headers = aHeaders;
     this._prepareHeaders(aHeaders);
+
+    var rawHeaders = this.parent._createStringGrip(aRawHeaders);
+    if (typeof rawHeaders == "object") {
+      this._longStringActors.add(rawHeaders);
+    }
+    this._request.rawHeaders = rawHeaders;
 
     let packet = {
       from: this.actorID,
@@ -1905,9 +1924,17 @@ NetworkEventActor.prototype =
    *
    * @param object aInfo
    *        The response information.
+   * @param string aRawHeaders
+   *        The raw headers source.
    */
-  addResponseStart: function NEA_addResponseStart(aInfo)
+  addResponseStart: function NEA_addResponseStart(aInfo, aRawHeaders)
   {
+    var rawHeaders = this.parent._createStringGrip(aRawHeaders);
+    if (typeof rawHeaders == "object") {
+      this._longStringActors.add(rawHeaders);
+    }
+    this._response.rawHeaders = rawHeaders;
+
     this._response.httpVersion = aInfo.httpVersion;
     this._response.status = aInfo.status;
     this._response.statusText = aInfo.statusText;

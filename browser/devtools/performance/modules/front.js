@@ -15,13 +15,13 @@ loader.lazyRequireGetter(this, "TimelineFront",
   "devtools/server/actors/timeline", true);
 loader.lazyRequireGetter(this, "MemoryFront",
   "devtools/server/actors/memory", true);
-
 loader.lazyRequireGetter(this, "DevToolsUtils",
   "devtools/toolkit/DevToolsUtils");
+loader.lazyRequireGetter(this, "compatibility",
+  "devtools/performance/compatibility");
 
 loader.lazyImporter(this, "gDevTools",
   "resource:///modules/devtools/gDevTools.jsm");
-
 loader.lazyImporter(this, "setTimeout",
   "resource://gre/modules/Timer.jsm");
 loader.lazyImporter(this, "clearTimeout",
@@ -56,25 +56,6 @@ SharedPerformanceActors.forTarget = function(target) {
 };
 
 /**
- * A dummy front decorated with the provided methods.
- *
- * @param array blueprint
- *        A list of [funcName, retVal] describing the class.
- */
-function MockedFront(blueprint) {
-  EventEmitter.decorate(this);
-
-  for (let [funcName, retVal] of blueprint) {
-    this[funcName] = (x => x).bind(this, retVal);
-  }
-}
-
-MockedFront.prototype = {
-  initialize: function() {},
-  destroy: function() {}
-};
-
-/**
  * A connection to underlying actors (profiler, memory, framerate, etc.)
  * shared by all tools in a target.
  *
@@ -95,6 +76,11 @@ function PerformanceActorsConnection(target) {
 }
 
 PerformanceActorsConnection.prototype = {
+
+  // Properties set when mocks are being used
+  _usingMockMemory: false,
+  _usingMockTimeline: false,
+
   /**
    * Initializes a connection to the profiler and other miscellaneous actors.
    * If in the process of opening, or already open, nothing happens.
@@ -135,14 +121,9 @@ PerformanceActorsConnection.prototype = {
    * Initializes a connection to the profiler actor.
    */
   _connectProfilerActor: Task.async(function*() {
-    // Chrome debugging targets have already obtained a reference
-    // to the profiler actor.
-    if (this._target.chrome) {
-      this._profiler = this._target.form.profilerActor;
-    }
-    // When we are debugging content processes, we already have the tab
-    // specific one. Use it immediately.
-    else if (this._target.form && this._target.form.profilerActor) {
+    // Chrome and content process targets already have obtained a reference
+    // to the profiler tab actor. Use it immediately.
+    if (this._target.form && this._target.form.profilerActor) {
       this._profiler = this._target.form.profilerActor;
     }
     // Check if we already have a grip to the `listTabs` response object
@@ -158,36 +139,29 @@ PerformanceActorsConnection.prototype = {
 
   /**
    * Initializes a connection to a timeline actor.
-   * TODO: use framework level feature detection from bug 1069673
    */
   _connectTimelineActor: function() {
-    if (this._target.form && this._target.form.timelineActor) {
+    let supported = yield compatibility.timelineActorSupported(this._target);
+    if (supported) {
       this._timeline = new TimelineFront(this._target.client, this._target.form);
     } else {
-      this._timeline = new MockedFront([
-        ["start", 0],
-        ["stop", 0]
-      ]);
+      this._usingMockTimeline = true;
+      this._timeline = new compatibility.MockTimelineFront();
     }
   },
 
   /**
    * Initializes a connection to a memory actor.
-   * TODO: use framework level feature detection from bug 1069673
    */
-  _connectMemoryActor: function() {
-    if (this._target.form && this._target.form.memoryActor) {
+  _connectMemoryActor: Task.async(function* () {
+    let supported = yield compatibility.memoryActorSupported(this._target);
+    if (supported) {
       this._memory = new MemoryFront(this._target.client, this._target.form);
     } else {
-      this._memory = new MockedFront([
-        ["attach"],
-        ["detach"],
-        ["startRecordingAllocations", 0],
-        ["stopRecordingAllocations", 0],
-        ["getAllocations"]
-      ]);
+      this._usingMockMemory = true;
+      this._memory = new compatibility.MockMemoryFront();
     }
-  },
+  }),
 
   /**
    * Closes the connections to non-profiler actors.
@@ -251,11 +225,16 @@ function PerformanceFront(connection) {
   connection._timeline.on("memory", (delta, measurement) => this.emit("memory", delta, measurement));
   connection._timeline.on("ticks", (delta, timestamps) => this.emit("ticks", delta, timestamps));
 
+  // Set when mocks are being used
+  this._usingMockMemory = connection._usingMockMemory;
+  this._usingMockTimeline = connection._usingMockTimeline;
+
   this._pullAllocationSites = this._pullAllocationSites.bind(this);
   this._sitesPullTimeout = 0;
 }
 
 PerformanceFront.prototype = {
+
   /**
    * Manually begins a recording session.
    *
@@ -374,6 +353,7 @@ PerformanceFront.prototype = {
    */
   _pullAllocationSites: Task.async(function *() {
     let memoryData = yield this._request("memory", "getAllocations");
+    let isStillAttached = yield this._request("memory", "getState") == "attached";
 
     this.emit("allocations", {
       sites: memoryData.allocations,
@@ -382,8 +362,10 @@ PerformanceFront.prototype = {
       counts: memoryData.counts
     });
 
-    let delay = DEFAULT_ALLOCATION_SITES_PULL_TIMEOUT;
-    this._sitesPullTimeout = setTimeout(this._pullAllocationSites, delay);
+    if (isStillAttached) {
+      let delay = DEFAULT_ALLOCATION_SITES_PULL_TIMEOUT;
+      this._sitesPullTimeout = setTimeout(this._pullAllocationSites, delay);
+    }
   }),
 
   /**
@@ -395,7 +377,18 @@ PerformanceFront.prototype = {
   _customProfilerOptions: {
     entries: 1000000,
     interval: 1,
-    features: ["js"]
+    features: ["js"],
+    threadFilters: ["GeckoMain"]
+  },
+
+  /**
+   * Returns an object indicating if mock actors are being used or not.
+   */
+  getMocksInUse: function () {
+    return {
+      memory: this._usingMockMemory,
+      timeline: this._usingMockTimeline
+    };
   }
 };
 

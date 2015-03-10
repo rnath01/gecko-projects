@@ -98,7 +98,7 @@ function _imageFromURI(doc, uri, privateMode, callback) {
       // favicon).
       let defaultURI = faviconSvc.defaultFavicon;
       if (!defaultURI.equals(uri))
-        _imageFromURI(defaultURI, callback);
+        _imageFromURI(doc, defaultURI, privateMode, callback);
     }
   });
 }
@@ -387,9 +387,7 @@ PreviewController.prototype = {
             this.onTabPaint(r);
           }
         }
-        let preview = this.preview;
-        if (preview.visible)
-          preview.invalidate();
+        this.preview.invalidate();
         break;
       case "TabAttrModified":
         this.updateTitleAndTooltip();

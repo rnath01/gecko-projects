@@ -6,7 +6,6 @@
 
 #include "jit/MacroAssembler.h"
 
-#include "jsinfer.h"
 #include "jsprf.h"
 
 #include "builtin/TypedObject.h"
@@ -21,8 +20,6 @@
 #include "js/Conversions.h"
 #include "vm/TraceLogging.h"
 
-#include "jsgcinlines.h"
-#include "jsinferinlines.h"
 #include "jsobjinlines.h"
 #include "vm/Interpreter-inl.h"
 
@@ -140,20 +137,31 @@ MacroAssembler::guardTypeSet(const Source &address, const Set *types, BarrierKin
         jump(&matched);
         bind(&fail);
 
-        // Type set guards might miss when an object's type changes and its
-        // properties become unknown, so check for this case.
         if (obj == scratch)
             extractObject(address, scratch);
-        loadPtr(Address(obj, JSObject::offsetOfGroup()), scratch);
-        branchTestPtr(Assembler::NonZero,
-                      Address(scratch, ObjectGroup::offsetOfFlags()),
-                      Imm32(OBJECT_FLAG_UNKNOWN_PROPERTIES), &matched);
+        guardTypeSetMightBeIncomplete(obj, scratch, &matched);
 
         assumeUnreachable("Unexpected object type");
 #endif
     }
 
     bind(&matched);
+}
+
+void
+MacroAssembler::guardTypeSetMightBeIncomplete(Register obj, Register scratch, Label *label)
+{
+    // Type set guards might miss when an object's group changes. In this case
+    // either its properties will become unknown, or it will change to a native
+    // object with an original unboxed group. Jump to label if this might have
+    // happened for the input object.
+
+    loadPtr(Address(obj, JSObject::offsetOfGroup()), scratch);
+    load32(Address(scratch, ObjectGroup::offsetOfFlags()), scratch);
+    branchTest32(Assembler::NonZero, scratch, Imm32(OBJECT_FLAG_UNKNOWN_PROPERTIES), label);
+    and32(Imm32(OBJECT_FLAG_ADDENDUM_MASK), scratch);
+    branch32(Assembler::Equal,
+             scratch, Imm32(ObjectGroup::addendumOriginalUnboxedGroupValue()), label);
 }
 
 template <typename Set> void
@@ -285,6 +293,12 @@ StoreToTypedFloatArray(MacroAssembler &masm, int arrayType, const S &value, cons
 #endif
         masm.storeDouble(value, dest);
         break;
+      case Scalar::Float32x4:
+        masm.storeUnalignedFloat32x4(value, dest);
+        break;
+      case Scalar::Int32x4:
+        masm.storeUnalignedInt32x4(value, dest);
+        break;
       default:
         MOZ_CRASH("Invalid typed array type");
     }
@@ -346,6 +360,12 @@ MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const T &src, AnyRegi
         loadDouble(src, dest.fpu());
         if (canonicalizeDoubles)
             canonicalizeDouble(dest.fpu());
+        break;
+      case Scalar::Int32x4:
+        loadUnalignedInt32x4(src, dest.fpu());
+        break;
+      case Scalar::Float32x4:
+        loadUnalignedFloat32x4(src, dest.fpu());
         break;
       default:
         MOZ_CRASH("Invalid typed array type");
@@ -769,10 +789,17 @@ MacroAssembler::storeUnboxedProperty(T address, JSValueType type,
                 jump(failure);
             }
         } else {
-            if (failure)
-                branchTestNumber(Assembler::NotEqual, value.reg().valueReg(), failure);
-            unboxValue(value.reg().valueReg(), AnyRegister(ScratchDoubleReg));
+            ValueOperand reg = value.reg().valueReg();
+            Label notInt32, end;
+            branchTestInt32(Assembler::NotEqual, reg, &notInt32);
+            int32ValueToDouble(reg, ScratchDoubleReg);
             storeDouble(ScratchDoubleReg, address);
+            jump(&end);
+            bind(&notInt32);
+            if (failure)
+                branchTestDouble(Assembler::NotEqual, reg, failure);
+            storeValue(reg, address);
+            bind(&end);
         }
         break;
 
@@ -1191,8 +1218,10 @@ MacroAssembler::initGCThing(Register obj, Register slots, JSObject *templateObj,
 {
     // Fast initialization of an empty object returned by allocateObject().
 
-    storePtr(ImmGCPtr(templateObj->lastProperty()), Address(obj, JSObject::offsetOfShape()));
     storePtr(ImmGCPtr(templateObj->group()), Address(obj, JSObject::offsetOfGroup()));
+
+    if (Shape *shape = templateObj->maybeShape())
+        storePtr(ImmGCPtr(shape), Address(obj, JSObject::offsetOfShape()));
 
     if (templateObj->isNative()) {
         NativeObject *ntemplate = &templateObj->as<NativeObject>();
@@ -1208,8 +1237,6 @@ MacroAssembler::initGCThing(Register obj, Register slots, JSObject *templateObj,
                      Address(obj, NativeObject::offsetOfElements()));
         } else if (ntemplate->is<ArrayObject>()) {
             Register temp = slots;
-            MOZ_ASSERT(!ntemplate->getDenseInitializedLength());
-
             int elementsOffset = NativeObject::offsetOfFixedElements();
 
             computeEffectiveAddress(Address(obj, elementsOffset), temp);
@@ -1253,6 +1280,8 @@ MacroAssembler::initGCThing(Register obj, Register slots, JSObject *templateObj,
         }
     } else if (templateObj->is<UnboxedPlainObject>()) {
         const UnboxedLayout &layout = templateObj->as<UnboxedPlainObject>().layout();
+
+        storePtr(ImmWord(0), Address(obj, JSObject::offsetOfShape()));
 
         // Initialize reference fields of the object, per UnboxedPlainObject::create.
         if (const int32_t *list = layout.traceList()) {
@@ -1369,9 +1398,9 @@ MacroAssembler::linkExitFrame()
 }
 
 static void
-ReportOverRecursed(JSContext *cx)
+BailoutReportOverRecursed(JSContext *cx)
 {
-    js_ReportOverRecursed(cx);
+    ReportOverRecursed(cx);
 }
 
 void
@@ -1397,7 +1426,7 @@ MacroAssembler::generateBailoutTail(Register scratch, Register bailoutInfo)
         loadJSContext(ReturnReg);
         setupUnalignedABICall(1, scratch);
         passABIArg(ReturnReg);
-        callWithABI(JS_FUNC_TO_DATA_PTR(void *, ReportOverRecursed));
+        callWithABI(JS_FUNC_TO_DATA_PTR(void *, BailoutReportOverRecursed));
         jump(exceptionLabel());
     }
 
@@ -2290,4 +2319,87 @@ MacroAssembler::profilerPreCallImpl(Register reg, Register reg2)
     storePtr(reg, Address(reg2, JitActivation::offsetOfLastProfilingCallSite()));
 
     appendProfilerCallSite(label);
+}
+
+void
+MacroAssembler::alignJitStackBasedOnNArgs(Register nargs)
+{
+    const uint32_t alignment = JitStackAlignment / sizeof(Value);
+    if (alignment == 1)
+        return;
+
+    // A JitFrameLayout is composed of the following:
+    // [padding?] [argN] .. [arg1] [this] [[argc] [callee] [descr] [raddr]]
+    //
+    // We want to ensure that the |raddr| address is aligned.
+    // Which implies that we want to ensure that |this| is aligned.
+    static_assert(sizeof(JitFrameLayout) % JitStackAlignment == 0,
+      "No need to consider the JitFrameLayout for aligning the stack");
+
+    // Which implies that |argN| is aligned if |nargs| is even, and offset by
+    // |sizeof(Value)| if |nargs| is odd.
+    MOZ_ASSERT(alignment == 2);
+
+    // Thus the |padding| is offset by |sizeof(Value)| if |nargs| is even, and
+    // aligned if |nargs| is odd.
+
+    // if (nargs % 2 == 0) {
+    //     if (sp % JitStackAlignment == 0)
+    //         sp -= sizeof(Value);
+    //     MOZ_ASSERT(sp % JitStackAlignment == JitStackAlignment - sizeof(Value));
+    // } else {
+    //     sp = sp & ~(JitStackAlignment - 1);
+    // }
+    Label odd, end;
+    Label *maybeAssert = &end;
+#ifdef DEBUG
+    Label assert;
+    maybeAssert = &assert;
+#endif
+    assertStackAlignment(sizeof(Value), 0);
+    branchTestPtr(Assembler::NonZero, nargs, Imm32(1), &odd);
+    branchTestPtr(Assembler::NonZero, StackPointer, Imm32(JitStackAlignment - 1), maybeAssert);
+    subPtr(Imm32(sizeof(Value)), StackPointer);
+#ifdef DEBUG
+    bind(&assert);
+#endif
+    assertStackAlignment(JitStackAlignment, sizeof(Value));
+    jump(&end);
+    bind(&odd);
+    andPtr(Imm32(~(JitStackAlignment - 1)), StackPointer);
+    bind(&end);
+}
+
+void
+MacroAssembler::alignJitStackBasedOnNArgs(uint32_t nargs)
+{
+    const uint32_t alignment = JitStackAlignment / sizeof(Value);
+    if (alignment == 1)
+        return;
+
+    // A JitFrameLayout is composed of the following:
+    // [padding?] [argN] .. [arg1] [this] [[argc] [callee] [descr] [raddr]]
+    //
+    // We want to ensure that the |raddr| address is aligned.
+    // Which implies that we want to ensure that |this| is aligned.
+    static_assert(sizeof(JitFrameLayout) % JitStackAlignment == 0,
+      "No need to consider the JitFrameLayout for aligning the stack");
+
+    // Which implies that |argN| is aligned if |nargs| is even, and offset by
+    // |sizeof(Value)| if |nargs| is odd.
+    MOZ_ASSERT(alignment == 2);
+
+    // Thus the |padding| is offset by |sizeof(Value)| if |nargs| is even, and
+    // aligned if |nargs| is odd.
+
+    assertStackAlignment(sizeof(Value), 0);
+    if (nargs % 2 == 0) {
+        Label end;
+        branchTestPtr(Assembler::NonZero, StackPointer, Imm32(JitStackAlignment - 1), &end);
+        subPtr(Imm32(sizeof(Value)), StackPointer);
+        bind(&end);
+        assertStackAlignment(JitStackAlignment, sizeof(Value));
+    } else {
+        andPtr(Imm32(~(JitStackAlignment - 1)), StackPointer);
+    }
 }

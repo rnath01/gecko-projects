@@ -32,6 +32,7 @@ from mozbuild.util import (
     StrictOrderingOnAppendList,
     StrictOrderingOnAppendListWithFlagsFactory,
     TypedList,
+    TypedNamedTuple,
     UnsortedError,
 )
 
@@ -663,6 +664,33 @@ class TypedTestStrictOrderingOnAppendList(unittest.TestCase):
 
         self.assertEqual(len(l), 3)
 
+
+class TestTypedNamedTuple(unittest.TestCase):
+    def test_simple(self):
+        FooBar = TypedNamedTuple('FooBar', [('foo', unicode), ('bar', int)])
+
+        t = FooBar(foo='foo', bar=2)
+        self.assertEquals(type(t), FooBar)
+        self.assertEquals(t.foo, 'foo')
+        self.assertEquals(t.bar, 2)
+        self.assertEquals(t[0], 'foo')
+        self.assertEquals(t[1], 2)
+
+        FooBar('foo', 2)
+
+        with self.assertRaises(TypeError):
+            FooBar('foo', 'not integer')
+        with self.assertRaises(TypeError):
+            FooBar(2, 4)
+
+        # Passing a tuple as the first argument is the same as passing multiple
+        # arguments.
+        t1 = ('foo', 3)
+        t2 = FooBar(t1)
+        self.assertEquals(type(t2), FooBar)
+        self.assertEqual(FooBar(t1), FooBar('foo', 3))
+
+
 class TestGroupUnifiedFiles(unittest.TestCase):
     FILES = ['%s.cpp' % letter for letter in string.ascii_lowercase]
 
@@ -682,6 +710,15 @@ class TestGroupUnifiedFiles(unittest.TestCase):
         expected_amounts = [5, 5, 5, 5, 5, 1]
         for i, amount in enumerate(expected_amounts):
             check_mapping(i, amount)
+
+    def test_unsorted_files(self):
+        unsorted_files = ['a%d.cpp' % i for i in range(11)]
+        sorted_files = sorted(unsorted_files)
+        mapping = list(group_unified_files(unsorted_files, 'Unified', 'cpp', 5))
+
+        self.assertEqual(mapping[0][1], sorted_files[0:5])
+        self.assertEqual(mapping[1][1], sorted_files[5:10])
+        self.assertEqual(mapping[2][1], sorted_files[10:])
 
 if __name__ == '__main__':
     main()

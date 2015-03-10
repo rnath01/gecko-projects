@@ -8,6 +8,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/BasicEvents.h"
+#include "mozilla/EventDispatcher.h"
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/Likely.h"
 #include "mozilla/Maybe.h"
@@ -20,6 +21,7 @@
 #include "nsIDOMHTMLElement.h"
 #include "nsFrameList.h"
 #include "nsGkAtoms.h"
+#include "nsHtml5Atoms.h"
 #include "nsIAtom.h"
 #include "nsCSSPseudoElements.h"
 #include "nsCSSAnonBoxes.h"
@@ -94,6 +96,7 @@
 #include "FrameLayerBuilder.h"
 #include "mozilla/layers/APZCTreeManager.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/EventDispatcher.h"
 
 #ifdef MOZ_XUL
 #include "nsXULPopupManager.h"
@@ -103,7 +106,7 @@
 #include "nsAnimationManager.h"
 #include "nsTransitionManager.h"
 #include "RestyleManager.h"
-
+#include "mozilla/EventDispatcher.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -779,8 +782,8 @@ nsLayoutUtils::FindOrCreateIDFor(nsIContent* aContent)
 nsIContent*
 nsLayoutUtils::FindContentFor(ViewID aId)
 {
-  NS_ABORT_IF_FALSE(aId != FrameMetrics::NULL_SCROLL_ID,
-                    "Cannot find a content element in map for null IDs.");
+  MOZ_ASSERT(aId != FrameMetrics::NULL_SCROLL_ID,
+             "Cannot find a content element in map for null IDs.");
   nsIContent* content;
   bool exists = GetContentMap().Get(aId, &content);
 
@@ -866,6 +869,11 @@ GetDisplayPortFromMarginsData(nsIContent* aContent,
     // We want the scroll frame, the root scroll frame differs from all
     // others in that the primary frame is not the scroll frame.
     frame = frame->PresContext()->PresShell()->GetRootScrollFrame();
+    if (!frame) {
+      // If there is no root scrollframe, just exit.
+      return ApplyRectMultiplier(base, aMultiplier);
+    }
+
     isRoot = true;
   }
 
@@ -1183,7 +1191,7 @@ nsLayoutUtils::GetBeforeFrameForContent(nsIFrame* aFrame,
     const nsTArray<nsIContent*>& pseudos(*prop);
     for (uint32_t i = 0; i < pseudos.Length(); ++i) {
       if (pseudos[i]->GetParent() == aContent &&
-          pseudos[i]->Tag() == nsGkAtoms::mozgeneratedcontentbefore) {
+          pseudos[i]->NodeInfo()->NameAtom() == nsGkAtoms::mozgeneratedcontentbefore) {
         return pseudos[i]->GetPrimaryFrame();
       }
     }
@@ -1222,7 +1230,7 @@ nsLayoutUtils::GetAfterFrameForContent(nsIFrame* aFrame,
     const nsTArray<nsIContent*>& pseudos(*prop);
     for (uint32_t i = 0; i < pseudos.Length(); ++i) {
       if (pseudos[i]->GetParent() == aContent &&
-          pseudos[i]->Tag() == nsGkAtoms::mozgeneratedcontentafter) {
+          pseudos[i]->NodeInfo()->NameAtom() == nsGkAtoms::mozgeneratedcontentafter) {
         return pseudos[i]->GetPrimaryFrame();
       }
     }
@@ -1327,7 +1335,7 @@ nsLayoutUtils::IsGeneratedContentFor(nsIContent* aContent,
     return false;
   }
 
-  return (aFrame->GetContent()->Tag() == nsGkAtoms::mozgeneratedcontentbefore) ==
+  return (aFrame->GetContent()->NodeInfo()->NameAtom() == nsGkAtoms::mozgeneratedcontentbefore) ==
     (aPseudoElement == nsCSSPseudoElements::before);
 }
 
@@ -2189,10 +2197,10 @@ static bool
 CheckCorner(nscoord aXOffset, nscoord aYOffset,
             nscoord aXRadius, nscoord aYRadius)
 {
-  NS_ABORT_IF_FALSE(aXOffset > 0 && aYOffset > 0,
-                    "must not pass nonpositives to CheckCorner");
-  NS_ABORT_IF_FALSE(aXRadius >= 0 && aYRadius >= 0,
-                    "must not pass negatives to CheckCorner");
+  MOZ_ASSERT(aXOffset > 0 && aYOffset > 0,
+             "must not pass nonpositives to CheckCorner");
+  MOZ_ASSERT(aXRadius >= 0 && aYRadius >= 0,
+             "must not pass negatives to CheckCorner");
 
   // Avoid floating point math unless we're either (1) within the
   // quarter-ellipse area at the rounded corner or (2) outside the
@@ -2985,15 +2993,17 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
   if (aFlags & PAINT_IGNORE_SUPPRESSION) {
     builder.IgnorePaintSuppression();
   }
-  // Windowed plugins aren't allowed in popups
+
+  // If the root has embedded plugins, flag the builder so we know we'll need
+  // to update plugin geometry after painting.
   if ((aFlags & PAINT_WIDGET_LAYERS) &&
       !willFlushRetainedLayers &&
       !(aFlags & PAINT_DOCUMENT_RELATIVE) &&
       rootPresContext->NeedToComputePluginGeometryUpdates()) {
     builder.SetWillComputePluginGeometry(true);
   }
-  nsRect canvasArea(nsPoint(0, 0), aFrame->GetSize());
 
+  nsRect canvasArea(nsPoint(0, 0), aFrame->GetSize());
   bool ignoreViewportScrolling =
     aFrame->GetParent() ? false : presShell->IgnoringViewportScrolling();
   if (ignoreViewportScrolling && rootScrollFrame) {
@@ -3232,7 +3242,7 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
   if (gfxPrefs::DumpClientLayers()) {
     std::stringstream ss;
     FrameLayerBuilder::DumpRetainedLayerTree(layerManager, ss, false);
-    printf_stderr("%s", ss.str().c_str());
+    print_stderr(ss);
   }
 #endif
 
@@ -3255,28 +3265,25 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
   }
 
   if (builder.WillComputePluginGeometry()) {
-    rootPresContext->ComputePluginGeometryUpdates(aFrame, &builder, &list);
-
-    // We're not going to get a WillPaintWindow event here if we didn't do
-    // widget invalidation, so just apply the plugin geometry update here instead.
-    // We could instead have the compositor send back an equivalent to WillPaintWindow,
-    // but it should be close enough to now not to matter.
-    if (layerManager && !layerManager->NeedsWidgetInvalidation()) {
-#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
-      if (XRE_GetProcessType() == GeckoProcessType_Content) {
-        // If this is a remotely managed widget (PluginWidgetProxy in content)
-        // store this information in the compositor, which ships this
-        // over to chrome for application when we paint.
-        rootPresContext->CollectPluginGeometryUpdates(layerManager);
-      } else
-#endif
-      {
+    // For single process compute and apply plugin geometry updates to plugin
+    // windows, then request composition. For content processes skip eveything
+    // except requesting composition. Geometry updates were calculated and
+    // shipped to the chrome process in nsDisplayList when the layer
+    // transaction completed.
+    if (XRE_GetProcessType() == GeckoProcessType_Default) {
+      rootPresContext->ComputePluginGeometryUpdates(aFrame, &builder, &list);
+      // We're not going to get a WillPaintWindow event here if we didn't do
+      // widget invalidation, so just apply the plugin geometry update here
+      // instead. We could instead have the compositor send back an equivalent
+      // to WillPaintWindow, but it should be close enough to now not to matter.
+      if (layerManager && !layerManager->NeedsWidgetInvalidation()) {
         rootPresContext->ApplyPluginGeometryUpdates();
       }
     }
 
-    // We told the compositor thread not to composite when it received the transaction because
-    // we wanted to update plugins first. Schedule the composite now.
+    // We told the compositor thread not to composite when it received the
+    // transaction because we wanted to update plugins first. Schedule the
+    // composite now.
     if (layerManager) {
       layerManager->Composite();
     }
@@ -4876,15 +4883,26 @@ nsLayoutUtils::ComputeSizeWithIntrinsicDimensions(WritingMode aWM,
         tentBSize = nsPresContext::CSSPixelsToAppUnits(150);
       }
 
-      nsSize autoSize =
-        ComputeAutoSizeWithIntrinsicDimensions(minISize, minBSize,
-                                               maxISize, maxBSize,
-                                               tentISize, tentBSize);
-      // The nsSize that ComputeAutoSizeWithIntrinsicDimensions returns will
-      // actually contain logical values if the parameters passed to it were
-      // logical coordinates, so we do NOT perform a physical-to-logical
-      // conversion here, but just assign the fields directly to our result.
-      return LogicalSize(aWM, autoSize.width, autoSize.height);
+      if (aIntrinsicRatio != nsSize(0, 0)) {
+        nsSize autoSize =
+          ComputeAutoSizeWithIntrinsicDimensions(minISize, minBSize,
+                                                 maxISize, maxBSize,
+                                                 tentISize, tentBSize);
+        // The nsSize that ComputeAutoSizeWithIntrinsicDimensions returns will
+        // actually contain logical values if the parameters passed to it were
+        // logical coordinates, so we do NOT perform a physical-to-logical
+        // conversion here, but just assign the fields directly to our result.
+        iSize = autoSize.width;
+        bSize = autoSize.height;
+      } else {
+        // No intrinsic ratio, so just clamp the dimensions
+        // independently without calling
+        // ComputeAutoSizeWithIntrinsicDimensions, which deals with
+        // propagating these changes to the other dimension (and would
+        // be incorrect when there is no intrinsic ratio).
+        iSize = NS_CSS_MINMAX(tentISize, minISize, maxISize);
+        bSize = NS_CSS_MINMAX(tentBSize, minBSize, maxBSize);
+      }
     } else {
 
       // 'auto' iSize, non-'auto' bSize
@@ -5097,6 +5115,19 @@ nsLayoutUtils::GetSnappedBaselineY(nsIFrame* aFrame, gfxContext* aContext,
   if (!aContext->UserToDevicePixelSnapped(putativeRect, true))
     return baseline;
   return aContext->DeviceToUser(putativeRect.TopLeft()).y * appUnitsPerDevUnit;
+}
+
+gfxFloat
+nsLayoutUtils::GetSnappedBaselineX(nsIFrame* aFrame, gfxContext* aContext,
+                                   nscoord aX, nscoord aAscent)
+{
+  gfxFloat appUnitsPerDevUnit = aFrame->PresContext()->AppUnitsPerDevPixel();
+  gfxFloat baseline = gfxFloat(aX) + aAscent;
+  gfxRect putativeRect(baseline / appUnitsPerDevUnit, 0, 1, 1);
+  if (!aContext->UserToDevicePixelSnapped(putativeRect, true)) {
+    return baseline;
+  }
+  return aContext->DeviceToUser(putativeRect.TopLeft()).x * appUnitsPerDevUnit;
 }
 
 // Hard limit substring lengths to 8000 characters ... this lets us statically
@@ -5834,6 +5865,20 @@ ComputeSnappedImageDrawingParameters(gfxContext*     aCtx,
 
     gfxRect anchoredDestRect(anchorPoint, scaledDest);
     gfxRect anchoredImageRect(imageSpaceAnchorPoint, imageSize);
+
+    // Calculate anchoredDestRect with snapped fill rect when the devPixelFill rect
+    // corresponds to just a single tile in that direction
+    if (fill.Width() != devPixelFill.Width() &&
+        devPixelDest.x == devPixelFill.x &&
+        devPixelDest.XMost() == devPixelFill.XMost()) {
+      anchoredDestRect.width = fill.width;
+    }
+    if (fill.Height() != devPixelFill.Height() &&
+        devPixelDest.y == devPixelFill.y &&
+        devPixelDest.YMost() == devPixelFill.YMost()) {
+      anchoredDestRect.height = fill.height;
+    }
+
     transform = TransformBetweenRects(anchoredImageRect, anchoredDestRect);
     invTransform = TransformBetweenRects(anchoredDestRect, anchoredImageRect);
   }
@@ -7182,14 +7227,25 @@ nsLayoutUtils::FontSizeInflationInner(const nsIFrame *aFrame,
        f = f->GetParent()) {
     nsIContent* content = f->GetContent();
     nsIAtom* fType = f->GetType();
+    nsIFrame* parent = f->GetParent();
     // Also, if there is more than one frame corresponding to a single
     // content node, we want the outermost one.
-    if (!(f->GetParent() && f->GetParent()->GetContent() == content) &&
+    if (!(parent && parent->GetContent() == content) &&
         // ignore width/height on inlines since they don't apply
         fType != nsGkAtoms::inlineFrame &&
         // ignore width on radios and checkboxes since we enlarge them and
         // they have width/height in ua.css
         fType != nsGkAtoms::formControlFrame) {
+      // ruby annotations should have the same inflation as its
+      // grandparent, which is the ruby frame contains the annotation.
+      if (fType == nsGkAtoms::rubyTextFrame) {
+        MOZ_ASSERT(parent &&
+                   parent->GetType() == nsGkAtoms::rubyTextContainerFrame);
+        nsIFrame* grandparent = parent->GetParent();
+        MOZ_ASSERT(grandparent &&
+                   grandparent->GetType() == nsGkAtoms::rubyFrame);
+        return FontSizeInflationFor(grandparent);
+      }
       nsStyleCoord stylePosWidth = f->StylePosition()->mWidth;
       nsStyleCoord stylePosHeight = f->StylePosition()->mHeight;
       if (stylePosWidth.GetUnit() != eStyleUnit_Auto ||
@@ -7291,7 +7347,7 @@ nsLayoutUtils::InflationMinFontSizeFor(const nsIFrame *aFrame)
     }
   }
 
-  NS_ABORT_IF_FALSE(false, "root should always be container");
+  MOZ_ASSERT(false, "root should always be container");
 
   return 0;
 }
@@ -7451,7 +7507,11 @@ nsLayoutUtils::GetContentViewerSize(nsPresContext* aPresContext,
 /* static */ nsSize
 nsLayoutUtils::CalculateCompositionSizeForFrame(nsIFrame* aFrame)
 {
-  nsSize size(aFrame->GetSize());
+  // If we have a scrollable frame, restrict the composition bounds to its
+  // scroll port. The scroll port excludes the frame borders and the scroll
+  // bars, which we don't want to be part of the composition bounds.
+  nsIScrollableFrame* scrollableFrame = aFrame->GetScrollTargetFrame();
+  nsSize size = scrollableFrame ? scrollableFrame->GetScrollPortRect().Size() : aFrame->GetSize();
 
   nsPresContext* presContext = aFrame->PresContext();
   nsIPresShell* presShell = presContext->PresShell();
@@ -7500,15 +7560,13 @@ nsLayoutUtils::CalculateCompositionSizeForFrame(nsIFrame* aFrame)
           size = LayoutDevicePixel::ToAppUnits(contentSize, auPerDevPixel);
         }
       }
-    }
-  }
 
-  // Adjust composition bounds for the size of scroll bars.
-  nsIScrollableFrame* scrollableFrame = aFrame->GetScrollTargetFrame();
-  if (scrollableFrame && !LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars)) {
-    nsMargin margins = scrollableFrame->GetActualScrollbarSizes();
-    size.width -= margins.LeftRight();
-    size.height -= margins.TopBottom();
+      if (scrollableFrame && !LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars)) {
+        nsMargin margins = scrollableFrame->GetActualScrollbarSizes();
+        size.width -= margins.LeftRight();
+        size.height -= margins.TopBottom();
+      }
+    }
   }
 
   return size;
@@ -7837,4 +7895,35 @@ nsLayoutUtils::SetBSizeFromFontMetrics(const nsIFrame* aFrame,
   aMetrics.SetBlockStartAscent(aMetrics.BlockStartAscent() +
                                aFramePadding.BStart(aFrameWM));
   aMetrics.BSize(aLineWM) += aFramePadding.BStartEnd(aFrameWM);
+}
+
+/* static */ bool
+nsLayoutUtils::HasApzAwareListeners(EventListenerManager* aElm)
+{
+  if (!aElm) {
+    return false;
+  }
+  return aElm->HasListenersFor(nsGkAtoms::ontouchstart) ||
+         aElm->HasListenersFor(nsGkAtoms::ontouchmove) ||
+         aElm->HasListenersFor(nsGkAtoms::onwheel) ||
+         aElm->HasListenersFor(nsGkAtoms::onDOMMouseScroll) ||
+         aElm->HasListenersFor(nsHtml5Atoms::onmousewheel);
+}
+
+/* static */ bool
+nsLayoutUtils::HasDocumentLevelListenersForApzAwareEvents(nsIPresShell* aShell)
+{
+  if (nsIDocument* doc = aShell->GetDocument()) {
+    WidgetEvent event(true, NS_EVENT_NULL);
+    nsTArray<EventTarget*> targets;
+    nsresult rv = EventDispatcher::Dispatch(doc, nullptr, &event, nullptr,
+        nullptr, nullptr, &targets);
+    NS_ENSURE_SUCCESS(rv, false);
+    for (size_t i = 0; i < targets.Length(); i++) {
+      if (HasApzAwareListeners(targets[i]->GetExistingListenerManager())) {
+        return true;
+      }
+    }
+  }
+  return false;
 }

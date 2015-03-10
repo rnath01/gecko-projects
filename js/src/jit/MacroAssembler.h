@@ -280,21 +280,25 @@ class MacroAssembler : public MacroAssemblerSpecific
     template <typename Source>
     void guardType(const Source &address, TypeSet::Type type, Register scratch, Label *miss);
 
+    void guardTypeSetMightBeIncomplete(Register obj, Register scratch, Label *label);
+
     void loadObjShape(Register objReg, Register dest) {
         loadPtr(Address(objReg, JSObject::offsetOfShape()), dest);
     }
+    void loadObjGroup(Register objReg, Register dest) {
+        loadPtr(Address(objReg, JSObject::offsetOfGroup()), dest);
+    }
     void loadBaseShape(Register objReg, Register dest) {
-        loadPtr(Address(objReg, JSObject::offsetOfShape()), dest);
-
+        loadObjShape(objReg, dest);
         loadPtr(Address(dest, Shape::offsetOfBase()), dest);
     }
     void loadObjClass(Register objReg, Register dest) {
-        loadPtr(Address(objReg, JSObject::offsetOfGroup()), dest);
+        loadObjGroup(objReg, dest);
         loadPtr(Address(dest, ObjectGroup::offsetOfClasp()), dest);
     }
     void branchTestObjClass(Condition cond, Register obj, Register scratch, const js::Class *clasp,
                             Label *label) {
-        loadPtr(Address(obj, JSObject::offsetOfGroup()), scratch);
+        loadObjGroup(obj, scratch);
         branchPtr(cond, Address(scratch, ObjectGroup::offsetOfClasp()), ImmPtr(clasp), label);
     }
     void branchTestObjShape(Condition cond, Register obj, const Shape *shape, Label *label) {
@@ -302,6 +306,12 @@ class MacroAssembler : public MacroAssemblerSpecific
     }
     void branchTestObjShape(Condition cond, Register obj, Register shape, Label *label) {
         branchPtr(cond, Address(obj, JSObject::offsetOfShape()), shape, label);
+    }
+    void branchTestObjGroup(Condition cond, Register obj, ObjectGroup *group, Label *label) {
+        branchPtr(cond, Address(obj, JSObject::offsetOfGroup()), ImmGCPtr(group), label);
+    }
+    void branchTestObjGroup(Condition cond, Register obj, Register group, Label *label) {
+        branchPtr(cond, Address(obj, JSObject::offsetOfGroup()), group, label);
     }
     void branchTestProxyHandlerFamily(Condition cond, Register proxy, Register scratch,
                                       const void *handlerp, Label *label) {
@@ -422,6 +432,17 @@ class MacroAssembler : public MacroAssemblerSpecific
         } else {
             storeValue(ValueTypeFromMIRType(src.type()), src.typedReg().gpr(), dest);
         }
+    }
+
+    template <typename T>
+    void storeObjectOrNull(Register src, const T &dest) {
+        Label notNull, done;
+        branchTestPtr(Assembler::NonZero, src, src, &notNull);
+        storeValue(NullValue(), dest);
+        jump(&done);
+        bind(&notNull);
+        storeValue(JSVAL_TYPE_OBJECT, src, dest);
+        bind(&done);
     }
 
     template <typename T>
@@ -675,7 +696,7 @@ class MacroAssembler : public MacroAssemblerSpecific
         callPreBarrier(address, type);
         jump(&done);
 
-        align(8);
+        haltingAlign(8);
         bind(&done);
     }
 
@@ -1251,6 +1272,12 @@ class MacroAssembler : public MacroAssemblerSpecific
         MOZ_ASSERT(framePushed() == aic.initialStack);
         PopRegsInMask(liveRegs);
     }
+
+    // Align the stack pointer based on the number of arguments which are pushed
+    // on the stack, such that the JitFrameLayout would be correctly aligned on
+    // the JitStackAlignment.
+    void alignJitStackBasedOnNArgs(Register nargs);
+    void alignJitStackBasedOnNArgs(uint32_t nargs);
 
     void assertStackAlignment(uint32_t alignment, int32_t offset = 0) {
 #ifdef DEBUG

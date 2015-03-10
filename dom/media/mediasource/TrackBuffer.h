@@ -16,6 +16,7 @@
 #include "nsCOMPtr.h"
 #include "nsString.h"
 #include "nscore.h"
+#include "TimeUnits.h"
 
 namespace mozilla {
 
@@ -61,7 +62,7 @@ public:
   double Buffered(dom::TimeRanges* aRanges);
 
   // Mark the current decoder's resource as ended, clear mCurrentDecoder and
-  // reset mLast{Start,End}Timestamp.
+  // reset mLast{Start,End}Timestamp.  Main thread only.
   void DiscardCurrentDecoder();
   // Mark the current decoder's resource as ended.
   void EndCurrentDecoder();
@@ -81,9 +82,6 @@ public:
 
   void BreakCycles();
 
-  // Call ResetDecode() on each decoder in mDecoders.
-  void ResetDecode();
-
   // Run MSE Reset Parser State Algorithm.
   // 3.5.2 Reset Parser State
   // http://w3c.github.io/media-source/#sourcebuffer-reset-parser-state
@@ -99,10 +97,18 @@ public:
   // Implementation is only partial, we can only trim a buffer.
   // Returns true if data was evicted.
   // Times are in microseconds.
-  bool RangeRemoval(int64_t aStart, int64_t aEnd);
+  bool RangeRemoval(mozilla::media::Microseconds aStart,
+                    mozilla::media::Microseconds aEnd);
 
   // Abort any pending appendBuffer by rejecting any pending promises.
   void AbortAppendData();
+
+  // Return the size used by all decoders managed by this TrackBuffer.
+  int64_t GetSize();
+
+  // Return true if we have a partial media segment being appended that is
+  // currently not playable.
+  bool HasOnlyIncompleteMedia();
 
 #ifdef MOZ_EME
   nsresult SetCDMProxy(CDMProxy* aProxy);
@@ -156,6 +162,9 @@ private:
   // function.
   void RemoveDecoder(SourceBufferDecoder* aDecoder);
 
+  // Remove all empty decoders from the provided list;
+  void RemoveEmptyDecoders(nsTArray<SourceBufferDecoder*>& aDecoders);
+
   nsAutoPtr<ContainerParser> mParser;
 
   // A task queue using the shared media thread pool.  Used exclusively to
@@ -181,6 +190,7 @@ private:
   nsTArray<nsRefPtr<SourceBufferDecoder>> mWaitingDecoders;
 
   // The decoder that the owning SourceBuffer is currently appending data to.
+  // Modified on the main thread only.
   nsRefPtr<SourceBufferDecoder> mCurrentDecoder;
 
   nsRefPtr<MediaSourceDecoder> mParentDecoder;
@@ -190,9 +200,11 @@ private:
   // AppendData.  Accessed on the main thread only.
   int64_t mLastStartTimestamp;
   Maybe<int64_t> mLastEndTimestamp;
+  void AdjustDecodersTimestampOffset(int32_t aOffset);
 
   // The timestamp offset used by our current decoder, in microseconds.
   int64_t mLastTimestampOffset;
+  int64_t mAdjustedTimestamp;
 
   // Set when the first decoder used by this TrackBuffer is initialized.
   // Protected by mParentDecoder's monitor.

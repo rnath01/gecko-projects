@@ -25,13 +25,34 @@ loop.panel = (function(_, mozL10n) {
     propTypes: {
       buttonsHidden: React.PropTypes.array,
       // The selectedTab prop is used by the UI showcase.
-      selectedTab: React.PropTypes.string
+      selectedTab: React.PropTypes.string,
+      mozLoop: React.PropTypes.object
     },
 
     getDefaultProps: function() {
       return {
         buttonsHidden: []
       };
+    },
+
+    shouldComponentUpdate: function(nextProps, nextState) {
+      var tabChange = this.state.selectedTab !== nextState.selectedTab;
+      if (tabChange) {
+        this.props.mozLoop.notifyUITour("Loop:PanelTabChanged", nextState.selectedTab);
+      }
+
+      if (!tabChange && nextProps.buttonsHidden) {
+        if (nextProps.buttonsHidden.length !== this.props.buttonsHidden.length) {
+          tabChange = true;
+        } else {
+          for (var i = 0, l = nextProps.buttonsHidden.length; i < l && !tabChange; ++i) {
+            if (this.props.buttonsHidden.indexOf(nextProps.buttonsHidden[i]) === -1) {
+              tabChange = true;
+            }
+          }
+        }
+      }
+      return tabChange;
     },
 
     getInitialState: function() {
@@ -320,11 +341,6 @@ loop.panel = (function(_, mozL10n) {
     render: function() {
       var cx = React.addons.classSet;
 
-      // For now all of the menu entries require FxA so hide the whole gear if FxA is disabled.
-      if (!navigator.mozLoop.fxAEnabled) {
-        return null;
-      }
-
       return (
         <div className="settings-menu dropdown">
           <a className="button-settings" onClick={this.showDropdownMenu}
@@ -338,7 +354,7 @@ loop.panel = (function(_, mozL10n) {
             <SettingsDropdownEntry label={mozL10n.get("settings_menu_item_account")}
                                    onClick={this.handleClickAccountEntry}
                                    icon="account"
-                                   displayed={this._isSignedIn()} />
+                                   displayed={this._isSignedIn() && navigator.mozLoop.fxAEnabled} />
             <SettingsDropdownEntry icon="tour"
                                    label={mozL10n.get("tour_label")}
                                    onClick={this.openGettingStartedTour} />
@@ -799,7 +815,7 @@ loop.panel = (function(_, mozL10n) {
           <NotificationListView notifications={this.props.notifications}
                                 clearOnDocumentHidden={true} />
           <TabView ref="tabView" selectedTab={this.props.selectedTab}
-            buttonsHidden={hideButtons}>
+            buttonsHidden={hideButtons} mozLoop={this.props.mozLoop}>
             <Tab name="rooms">
               <RoomList dispatcher={this.props.dispatcher}
                         store={this.props.roomStore}

@@ -85,6 +85,14 @@ extern bool gBluetoothDebugFlag;
                                           BluetoothValue(value)))
 
 /**
+ * Wrap literal name and value into a BluetoothNamedValue
+ * and insert it to the array.
+ */
+#define BT_INSERT_NAMED_VALUE(array, index, name, value)                      \
+  array.InsertElementAt(index, BluetoothNamedValue(NS_LITERAL_STRING(name),   \
+                                                   BluetoothValue(value)))
+
+/**
  * Ensure success of system message broadcast with void return.
  */
 #define BT_ENSURE_TRUE_VOID_BROADCAST_SYSMSG(type, parameters)       \
@@ -195,6 +203,12 @@ extern bool gBluetoothDebugFlag;
  * dispatch an event.
  */
 #define REQUEST_MEDIA_PLAYSTATUS_ID          "requestmediaplaystatus"
+
+/**
+ * When a remote BLE device gets connected / disconnected, we'll dispatch an
+ * event
+ */
+#define GATT_CONNECTION_STATE_CHANGED_ID     "connectionstatechanged"
 
 // Bluetooth address format: xx:xx:xx:xx:xx:xx (or xx_xx_xx_xx_xx_xx)
 #define BLUETOOTH_ADDRESS_LENGTH 17
@@ -518,6 +532,11 @@ struct BluetoothAvrcpPlayerSettings {
   uint8_t mNumAttr;
   uint8_t mIds[256];
   uint8_t mValues[256];
+};
+
+enum BluetoothGattStatus {
+  GATT_STATUS_SUCCESS,
+  GATT_STATUS_ERROR
 };
 
 struct BluetoothGattAdvData {

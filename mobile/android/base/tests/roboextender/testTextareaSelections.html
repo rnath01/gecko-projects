@@ -4,6 +4,7 @@
     <meta name="viewport" content="initial-scale=1.0"/>
     <script type="application/javascript"
       src="chrome://mochikit/content/tests/SimpleTest/EventUtils.js"></script>
+    <script type="application/javascript" src="SelectionUtils.js"></script>
     <script type="application/javascript;version=1.8">
 
 // Used to create handle movement events for SelectionHandler.
@@ -17,11 +18,6 @@ const EST_SEL_TEXT_BOUND_CHARS = 5;
 // "into" the next/prev line vertically.
 const EST_SEL_LINE_CHG_PTS = 10;
 
-
-const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
-Cu.import("resource://gre/modules/Messaging.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import('resource://gre/modules/Geometry.jsm');
 
 // Distance between text selection lines. Reality tested, and also
 // Used to perform multi-line selection selections.
@@ -81,7 +77,8 @@ function testLTR_selectionPoints() {
     let midpointSelText = sh._getSelectedText();
 
     // Close selection and complete test.
-    Services.obs.notifyObservers(null, "TextSelection:End", {});
+    Services.obs.notifyObservers(null, "TextSelection:End",
+      JSON.stringify({selectionID: sh._selectionID}));
 
     return Promise.all([
       selectionExists(selection, "LTR Selection existed at points"),
@@ -125,7 +122,8 @@ function testRTL_selectionPoints() {
     let midpointSelText = sh._getSelectedText();
 
     // Close selection and complete test.
-    Services.obs.notifyObservers(null, "TextSelection:End", {});
+    Services.obs.notifyObservers(null, "TextSelection:End",
+      JSON.stringify({selectionID: sh._selectionID}));
 
     return Promise.all([
       selectionExists(selection, "RTL Selection existed at points"),
@@ -190,7 +188,8 @@ function test_selectionLineHeight() {
 
   ]).then(function() {
     // Complete test, and report.
-    Services.obs.notifyObservers(null, "TextSelection:End", {});
+    Services.obs.notifyObservers(null, "TextSelection:End",
+      JSON.stringify({selectionID: sh._selectionID}));
 
     return Promise.all([
       greaterThan(selectionLineHeight, 0, "Distance from one line to another " +
@@ -241,7 +240,8 @@ function testLTR_moveFocusHandleDown() {
                        focusPt : new Point(sh._cache.focusPt.x, sh._cache.focusPt.y) };
 
   // Complete test, and report.
-  Services.obs.notifyObservers(null, "TextSelection:End", {});
+  Services.obs.notifyObservers(null, "TextSelection:End",
+    JSON.stringify({selectionID: sh._selectionID}));
 
   return Promise.all([
     ok(true, "testLTR_moveFocusHandleDown - Test Starts."),
@@ -306,7 +306,8 @@ function testLTR_moveFocusHandleUp() {
                        focusPt : new Point(sh._cache.focusPt.x, sh._cache.focusPt.y) };
 
   // Complete test, and report.
-  Services.obs.notifyObservers(null, "TextSelection:End", {});
+  Services.obs.notifyObservers(null, "TextSelection:End",
+    JSON.stringify({selectionID: sh._selectionID}));
 
   return Promise.all([
     ok(true, "testLTR_moveFocusHandleUp - Test Starts."),
@@ -374,7 +375,8 @@ function testLTR_moveAnchorHandleUp() {
                        focusPt : new Point(sh._cache.focusPt.x, sh._cache.focusPt.y) };
 
   // Complete test, and report.
-  Services.obs.notifyObservers(null, "TextSelection:End", {});
+  Services.obs.notifyObservers(null, "TextSelection:End",
+    JSON.stringify({selectionID: sh._selectionID}));
 
   return Promise.all([
     ok(true, "testLTR_moveAnchorHandleUp - Test Starts."),
@@ -438,7 +440,8 @@ function testLTR_moveAnchorHandleDown() {
                        focusPt : new Point(sh._cache.focusPt.x, sh._cache.focusPt.y) };
 
   // Complete test, and report.
-  Services.obs.notifyObservers(null, "TextSelection:End", {});
+  Services.obs.notifyObservers(null, "TextSelection:End",
+    JSON.stringify({selectionID: sh._selectionID}));
 
   return Promise.all([
     ok(true, "testLTR_moveAnchorHandleDown - Test Starts."),
@@ -506,7 +509,8 @@ function testRTL_moveFocusHandleDown() {
                        focusPt : new Point(sh._cache.focusPt.x, sh._cache.focusPt.y) };
 
   // Complete test, and report.
-  Services.obs.notifyObservers(null, "TextSelection:End", {});
+  Services.obs.notifyObservers(null, "TextSelection:End",
+    JSON.stringify({selectionID: sh._selectionID}));
 
   return Promise.all([
     ok(true, "testRTL_moveFocusHandleDown - Test Starts."),
@@ -570,7 +574,8 @@ function testRTL_moveFocusHandleUp() {
                        focusPt : new Point(sh._cache.focusPt.x, sh._cache.focusPt.y) };
 
   // Complete test, and report.
-  Services.obs.notifyObservers(null, "TextSelection:End", {});
+  Services.obs.notifyObservers(null, "TextSelection:End",
+    JSON.stringify({selectionID: sh._selectionID}));
 
   return Promise.all([
     ok(true, "testRTL_moveFocusHandleUp - Test Starts."),
@@ -638,7 +643,8 @@ function testRTL_moveAnchorHandleUp() {
                        focusPt : new Point(sh._cache.focusPt.x, sh._cache.focusPt.y) };
 
   // Complete test, and report.
-  Services.obs.notifyObservers(null, "TextSelection:End", {});
+  Services.obs.notifyObservers(null, "TextSelection:End",
+    JSON.stringify({selectionID: sh._selectionID}));
 
   return Promise.all([
     ok(true, "testRTL_moveAnchorHandleUp - Test Starts."),
@@ -702,7 +708,8 @@ function testRTL_moveAnchorHandleDown() {
                        focusPt : new Point(sh._cache.focusPt.x, sh._cache.focusPt.y) };
 
   // Complete test, and report.
-  Services.obs.notifyObservers(null, "TextSelection:End", {});
+  Services.obs.notifyObservers(null, "TextSelection:End",
+    JSON.stringify({selectionID: sh._selectionID}));
 
   return Promise.all([
     ok(true, "testRTL_moveAnchorHandleDown - Test Starts."),
@@ -731,106 +738,6 @@ function testRTL_moveAnchorHandleDown() {
   ]);
 }
 
-/* =================================================================================
- *
- * After finish of all selection tests, wrap up and go home.
- *
- */
-function finishTests() {
-  Messaging.sendRequest({
-    type: "Robocop:testTextareaSelections",
-    result: true,
-    msg: "Done!",
-    done: true
-  });
-}
-
-/* ============================== Utility functions ======================
- *
- * Common functions available to all tests.
- *
- */
-function getSelectionHandler() {
-  return (!this._selectionHandler) ?
-    this._selectionHandler = Services.wm.getMostRecentWindow("navigator:browser").SelectionHandler :
-    this._selectionHandler;
-}
-
-function todo(result, msg) {
-  return Messaging.sendRequestForResult({
-    type: "Robocop:testTextareaSelections",
-    todo: result,
-    msg: msg
-  });
-}
-
-function ok(result, msg) {
-  return Messaging.sendRequestForResult({
-    type: "Robocop:testTextareaSelections",
-    result: result,
-    msg: msg
-  });
-}
-
-function is(one, two, msg) {
-  return Messaging.sendRequestForResult({
-    type: "Robocop:testTextareaSelections",
-    result: one === two,
-    msg: msg + " : " + one + " === " + two
-  });
-}
-
-function lessThan(n1, n2, msg) {
-  return Messaging.sendRequestForResult({
-    type: "Robocop:testTextareaSelections",
-    result: n1 < n2,
-    msg: msg + " : " + n1 + " < " + n2
-  });
-}
-
-function greaterThan(n1, n2, msg) {
-  return Messaging.sendRequestForResult({
-    type: "Robocop:testTextareaSelections",
-    result: n1 > n2,
-    msg: msg + " : " + n1 + " > " + n2
-  });
-}
-
-// Use fuzzy logic to compare screen coords.
-function truncPoint(point) {
-  return new Point(Math.trunc(point.x), Math.trunc(point.y));
-}
-
-function pointEquals(p1, p2, msg) {
-  return Messaging.sendRequestForResult({
-    type: "Robocop:testTextareaSelections",
-    result: truncPoint(p1).equals(truncPoint(p2)),
-    msg: msg + " : " + p1.toString() + " == " + p2.toString()
-  });
-}
-
-function pointNotEquals(p1, p2, msg) {
-  return Messaging.sendRequestForResult({
-    type: "Robocop:testTextareaSelections",
-    result: !truncPoint(p1).equals(truncPoint(p2)),
-    msg: msg + " : " + p1.toString() + " == " + p2.toString()
-  });
-}
-
-function selectionExists(selection, msg) {
-  return Messaging.sendRequestForResult({
-    type: "Robocop:testTextareaSelections",
-    result: !truncPoint(selection.anchorPt).equals(truncPoint(selection.focusPt)),
-    msg: msg + " : anchor:" + selection.anchorPt.toString() +
-      " focus:" + selection.focusPt.toString()
-  });
-}
-
-/* =================================================================================
- *
- * Page definition for all tests.
- *
- */
     </script>
   </head>
 

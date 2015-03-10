@@ -538,7 +538,13 @@ public:
       nsStyleContext* oldStyleContext = mStyleContext;
       mStyleContext = aContext;
       aContext->AddRef();
+#ifdef DEBUG
+      aContext->FrameAddRef();
+#endif
       DidSetStyleContext(oldStyleContext);
+#ifdef DEBUG
+      oldStyleContext->FrameRelease();
+#endif
       oldStyleContext->Release();
     }
   }
@@ -552,9 +558,15 @@ public:
   void SetStyleContextWithoutNotification(nsStyleContext* aContext)
   {
     if (aContext != mStyleContext) {
+#ifdef DEBUG
+      mStyleContext->FrameRelease();
+#endif
       mStyleContext->Release();
       mStyleContext = aContext;
       aContext->AddRef();
+#ifdef DEBUG
+      aContext->FrameAddRef();
+#endif
     }
   }
 
@@ -2224,6 +2236,9 @@ public:
    * If no layer is found, calls InvalidateFrame() instead.
    *
    * @param aDamageRect Area of the layer to invalidate.
+   * @param aFrameDamageRect If no layer is found, the area of the frame to
+   *                         invalidate. If null, the entire frame will be
+   *                         invalidated.
    * @param aDisplayItemKey Display item type.
    * @param aFlags UPDATE_IS_ASYNC : Will skip the invalidation
    * if the found layer is being composited by a remote
@@ -2233,7 +2248,10 @@ public:
   enum {
     UPDATE_IS_ASYNC = 1 << 0
   };
-  Layer* InvalidateLayer(uint32_t aDisplayItemKey, const nsIntRect* aDamageRect = nullptr, uint32_t aFlags = 0);
+  Layer* InvalidateLayer(uint32_t aDisplayItemKey,
+                         const nsIntRect* aDamageRect = nullptr,
+                         const nsRect* aFrameDamageRect = nullptr,
+                         uint32_t aFlags = 0);
 
   /**
    * Returns a rect that encompasses everything that might be painted by
@@ -2613,8 +2631,7 @@ NS_PTR_TO_INT32(frame->Properties().Get(nsIFrame::ParagraphDepthProperty()))
    * rect, with coordinates relative to this frame's origin. aRect must not be
    * null!
    */
-  bool GetClipPropClipRect(const nsStyleDisplay* aDisp, nsRect* aRect,
-                           const nsSize& aSize) const;
+  bool GetClipPropClipRect(nsRect* aRect, const nsSize& aSize) const;
 
   /**
    * Check if this frame is focusable and in the current tab order.
@@ -3128,8 +3145,8 @@ protected:
 private:
   nsOverflowAreas* GetOverflowAreasProperty();
   nsRect GetVisualOverflowFromDeltas() const {
-    NS_ABORT_IF_FALSE(mOverflow.mType != NS_FRAME_OVERFLOW_LARGE,
-                      "should not be called when overflow is in a property");
+    MOZ_ASSERT(mOverflow.mType != NS_FRAME_OVERFLOW_LARGE,
+               "should not be called when overflow is in a property");
     // Calculate the rect using deltas from the frame's border rect.
     // Note that the mOverflow.mDeltas fields are unsigned, but we will often
     // need to return negative values for the left and top, so take care

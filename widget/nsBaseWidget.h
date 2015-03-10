@@ -18,6 +18,7 @@
 #include "nsIObserver.h"
 #include "nsIWidgetListener.h"
 #include "nsPIDOMWindow.h"
+#include "nsWeakReference.h"
 #include <algorithm>
 class nsIContent;
 class nsAutoRollup;
@@ -36,7 +37,9 @@ class CompositorChild;
 class CompositorParent;
 class APZCTreeManager;
 class GeckoContentController;
+class APZEventState;
 struct ScrollableLayerGuid;
+struct SetTargetAPZCCallback;
 }
 
 class CompositorVsyncDispatcher;
@@ -77,7 +80,7 @@ public:
  * class, but it gives them a head start.)
  */
 
-class nsBaseWidget : public nsIWidget
+class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference
 {
   friend class nsAutoRollup;
 
@@ -90,6 +93,8 @@ protected:
   typedef mozilla::layers::APZCTreeManager APZCTreeManager;
   typedef mozilla::layers::GeckoContentController GeckoContentController;
   typedef mozilla::layers::ScrollableLayerGuid ScrollableLayerGuid;
+  typedef mozilla::layers::APZEventState APZEventState;
+  typedef mozilla::layers::SetTargetAPZCCallback SetTargetAPZCCallback;
   typedef mozilla::ScreenRotation ScreenRotation;
 
   virtual ~nsBaseWidget();
@@ -195,6 +200,12 @@ public:
   virtual nsresult        ActivateNativeMenuItemAt(const nsAString& indexString) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   virtual nsresult        ForceUpdateNativeMenuAt(const nsAString& indexString) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   NS_IMETHOD              NotifyIME(const IMENotification& aIMENotification) MOZ_OVERRIDE MOZ_FINAL;
+  NS_IMETHOD              StartPluginIME(const mozilla::WidgetKeyboardEvent& aKeyboardEvent,
+                                         int32_t aPanelX, int32_t aPanelY,
+                                         nsString& aCommitted) MOZ_OVERRIDE
+                          { return NS_ERROR_NOT_IMPLEMENTED; }
+  NS_IMETHOD              SetPluginFocused(bool& aFocused) MOZ_OVERRIDE
+                          { return NS_ERROR_NOT_IMPLEMENTED; }
   NS_IMETHOD              AttachNativeKeyEvent(mozilla::WidgetKeyboardEvent& aEvent) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   NS_IMETHOD_(bool)       ExecuteNativeKeyBinding(
                             NativeKeyBindingsType aType,
@@ -220,6 +231,9 @@ public:
   NS_IMETHOD              RegisterTouchWindow() MOZ_OVERRIDE;
   NS_IMETHOD              UnregisterTouchWindow() MOZ_OVERRIDE;
   NS_IMETHOD_(TextEventDispatcher*) GetTextEventDispatcher() MOZ_OVERRIDE MOZ_FINAL;
+
+  // Dispatch an event that must be first be routed through APZ.
+  nsEventStatus DispatchAPZAwareEvent(mozilla::WidgetInputEvent* aEvent) MOZ_OVERRIDE;
 
   void NotifyWindowDestroyed();
   void NotifySizeMoveDone();
@@ -316,11 +330,10 @@ protected:
   virtual void ConfigureAPZCTreeManager();
   virtual already_AddRefed<GeckoContentController> CreateRootContentController();
 
-  // Dispatch an event that has been routed through APZ directly from the
-  // widget.
-  nsEventStatus DispatchEventForAPZ(mozilla::WidgetGUIEvent* aEvent,
-                                    const ScrollableLayerGuid& aGuid,
-                                    uint64_t aInputBlockId);
+  // Dispatch an event that has already been routed through APZ.
+  nsEventStatus ProcessUntransformedAPZEvent(mozilla::WidgetInputEvent* aEvent,
+                                             const ScrollableLayerGuid& aGuid,
+                                             uint64_t aInputBlockId);
 
   const nsIntRegion RegionFromArray(const nsTArray<nsIntRect>& aRects);
   void ArrayFromRegion(const nsIntRegion& aRegion, nsTArray<nsIntRect>& aRects);
@@ -337,15 +350,15 @@ protected:
                                             const nsAString& aUnmodifiedCharacters) MOZ_OVERRIDE
   { return NS_ERROR_UNEXPECTED; }
 
-  virtual nsresult SynthesizeNativeMouseEvent(nsIntPoint aPoint,
+  virtual nsresult SynthesizeNativeMouseEvent(mozilla::LayoutDeviceIntPoint aPoint,
                                               uint32_t aNativeMessage,
                                               uint32_t aModifierFlags) MOZ_OVERRIDE
   { return NS_ERROR_UNEXPECTED; }
 
-  virtual nsresult SynthesizeNativeMouseMove(nsIntPoint aPoint) MOZ_OVERRIDE
+  virtual nsresult SynthesizeNativeMouseMove(mozilla::LayoutDeviceIntPoint aPoint) MOZ_OVERRIDE
   { return NS_ERROR_UNEXPECTED; }
 
-  virtual nsresult SynthesizeNativeMouseScrollEvent(nsIntPoint aPoint,
+  virtual nsresult SynthesizeNativeMouseScrollEvent(mozilla::LayoutDeviceIntPoint aPoint,
                                                     uint32_t aNativeMessage,
                                                     double aDeltaX,
                                                     double aDeltaY,
@@ -416,6 +429,8 @@ protected:
    */
   virtual void WindowUsesOMTC() {}
 
+  nsIDocument* GetDocument() const;
+
 protected:
   /**
    * Starts the OMTC compositor destruction sequence.
@@ -436,6 +451,8 @@ protected:
   nsRefPtr<CompositorParent> mCompositorParent;
   nsRefPtr<mozilla::CompositorVsyncDispatcher> mCompositorVsyncDispatcher;
   nsRefPtr<APZCTreeManager> mAPZC;
+  nsRefPtr<APZEventState> mAPZEventState;
+  nsRefPtr<SetTargetAPZCCallback> mSetTargetAPZCCallback;
   nsRefPtr<WidgetShutdownObserver> mShutdownObserver;
   nsRefPtr<TextEventDispatcher> mTextEventDispatcher;
   nsCursor          mCursor;

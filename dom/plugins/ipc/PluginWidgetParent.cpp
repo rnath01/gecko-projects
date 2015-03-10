@@ -41,8 +41,23 @@ static NS_DEFINE_CID(kWidgetCID, NS_CHILD_CID);
   }                                                           \
 }
 
-PluginWidgetParent::PluginWidgetParent() :
-  mActorDestroyed(false)
+/*
+ * Tear down scenarios
+ * layout (plugin content unloading):
+ *  - PluginWidgetProxy::Destroy() calls PluginWidgetChild::ProxyShutdown(), calls SendDestroy()
+ *  - PluginWidgetParent::RecvDestroy(), sends async ParentShutdown(CONTENT)
+ *  - PluginWidgetChild::RecvParentShutdown(CONTENT), calls Send__delete__()
+ *  - PluginWidgetParent::ActorDestroy() called in response to __delete__
+ * PBrowser teardown (tab closing):
+ *  - PluginWidgetParent::ParentDestroy() called by TabParent::Destroy(), sends async ParentShutdown(TAB_CLOSURE)
+ *  - PluginWidgetChild::RecvParentShutdown(TAB_CLOSURE) (PluginWidgetProxy disabled)
+ *  - PluginWidgetParent::ActorDestroy()
+ *  - PluginWidgetParent::~PluginWidgetParent() in response to PBrowserParent::DeallocSubtree()
+ *  - PluginWidgetChild::ActorDestroy() from PPluginWidgetChild::DestroySubtree
+ *  - ~PluginWidgetChild() in response to PBrowserChild::DeallocSubtree()
+ **/
+
+PluginWidgetParent::PluginWidgetParent()
 {
   PWLOG("PluginWidgetParent::PluginWidgetParent()\n");
   MOZ_COUNT_CTOR(PluginWidgetParent);
@@ -73,6 +88,14 @@ mozilla::dom::TabParent*
 PluginWidgetParent::GetTabParent()
 {
   return static_cast<mozilla::dom::TabParent*>(Manager());
+}
+
+void
+PluginWidgetParent::SetParent(nsIWidget* aParent)
+{
+  if (mWidget && aParent) {
+    mWidget->SetParent(aParent);
+  }
 }
 
 #if defined(XP_WIN)
@@ -144,10 +167,6 @@ PluginWidgetParent::RecvCreate(nsresult* aResult)
   DebugOnly<nsresult> drv;
   drv = mWidget->EnableDragDrop(true);
   NS_ASSERTION(NS_SUCCEEDED(drv), "widget call failure");
-  drv = mWidget->Show(true);
-  NS_ASSERTION(NS_SUCCEEDED(drv), "widget call failure");
-  drv = mWidget->Enable(true);
-  NS_ASSERTION(NS_SUCCEEDED(drv), "widget call failure");
 
 #if defined(MOZ_WIDGET_GTK)
   // For setup, initially GTK code expects 'window' to hold the parent.
@@ -173,45 +192,40 @@ PluginWidgetParent::RecvCreate(nsresult* aResult)
 }
 
 void
+PluginWidgetParent::Shutdown(ShutdownType aType)
+{
+  if (mWidget) {
+    mWidget->UnregisterPluginWindowForRemoteUpdates();
+    DebugOnly<nsresult> rv = mWidget->Destroy();
+    NS_ASSERTION(NS_SUCCEEDED(rv), "widget destroy failure");
+    mWidget = nullptr;
+    unused << SendParentShutdown(aType);
+  }
+}
+
+void
 PluginWidgetParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   PWLOG("PluginWidgetParent::ActorDestroy()\n");
 }
 
-void
-PluginWidgetParent::ShutdownCommon(bool aParentInitiated)
-{
-  if (mActorDestroyed || !mWidget) {
-    return;
-  }
-
-  PWLOG("PluginWidgetParent::ShutdownCommon()\n");
-  mWidget->UnregisterPluginWindowForRemoteUpdates();
-  DebugOnly<nsresult> rv = mWidget->Destroy();
-  NS_ASSERTION(NS_SUCCEEDED(rv), "widget destroy failure");
-  mWidget = nullptr;
-  mActorDestroyed = true;
-  unused << SendParentShutdown(aParentInitiated);
-}
-
 // Called by TabParent's Destroy() in response to an early tear down (Early
 // in that this is happening before layout in the child has had a chance
-// to destroy the child widget.) when the tab is closing. We will not receive
-// RecvDestroy here.
+// to destroy the child widget.) when the tab is closing.
 void
 PluginWidgetParent::ParentDestroy()
 {
   PWLOG("PluginWidgetParent::ParentDestroy()\n");
-  ShutdownCommon(true);
+  Shutdown(TAB_CLOSURE);
 }
 
 // Called by the child when a plugin is torn down within a tab
-// normally.
+// normally. Messages back via ParentShutdown().
 bool
 PluginWidgetParent::RecvDestroy()
 {
   PWLOG("PluginWidgetParent::RecvDestroy()\n");
-  ShutdownCommon(false);
+  Shutdown(CONTENT);
   return true;
 }
 

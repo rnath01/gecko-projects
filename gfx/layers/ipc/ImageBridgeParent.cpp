@@ -148,7 +148,7 @@ ImageBridgeParent::RecvUpdateNoSwap(EditArray&& aEdits)
 {
   InfallibleTArray<EditReply> noReplies;
   bool success = RecvUpdate(Move(aEdits), &noReplies);
-  NS_ABORT_IF_FALSE(noReplies.Length() == 0, "RecvUpdateNoSwap requires a sync Update to carry Edits");
+  MOZ_ASSERT(noReplies.Length() == 0, "RecvUpdateNoSwap requires a sync Update to carry Edits");
   return success;
 }
 
@@ -454,13 +454,11 @@ ImageBridgeParent::SendFenceHandleToTrackerIfPresent(base::ProcessId aChildProce
 /*static*/ void
 ImageBridgeParent::SendPendingAsyncMessges(base::ProcessId aChildProcessId)
 {
-#ifdef MOZ_WIDGET_GONK
   ImageBridgeParent* imageBridge = ImageBridgeParent::GetInstance(aChildProcessId);
   if (!imageBridge) {
     return;
   }
   imageBridge->SendPendingAsyncMessges();
-#endif
 }
 
 } // layers

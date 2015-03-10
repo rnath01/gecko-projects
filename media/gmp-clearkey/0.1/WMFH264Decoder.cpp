@@ -15,6 +15,7 @@
  */
 
 #include "WMFH264Decoder.h"
+#include <algorithm>
 
 namespace wmf {
 
@@ -232,10 +233,6 @@ WMFH264Decoder::CreateOutputSample(IMFSample** aOutSample)
   UINT32 alignment = (mOutputStreamInfo.cbAlignment > 1) ? mOutputStreamInfo.cbAlignment - 1 : 0;
   hr = MFCreateAlignedMemoryBuffer(bufferSize, alignment, &buffer);
   ENSURE(SUCCEEDED(hr), hr);
-
-  DWORD maxLength = 0;
-  DWORD currentLength = 0;
-  BYTE* dst = nullptr;
 
   hr = sample->AddBuffer(buffer);
   ENSURE(SUCCEEDED(hr), hr);

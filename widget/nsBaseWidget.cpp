@@ -46,10 +46,14 @@
 #include "mozilla/unused.h"
 #include "mozilla/VsyncDispatcher.h"
 #include "mozilla/layers/APZCTreeManager.h"
+#include "mozilla/layers/APZEventState.h"
+#include "mozilla/layers/APZThreadUtils.h"
 #include "mozilla/layers/ChromeProcessController.h"
 #include "mozilla/layers/InputAPZContext.h"
+#include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/dom/TabParent.h"
 #include "nsRefPtrHashtable.h"
+#include "TouchEvents.h"
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
 #endif
@@ -90,10 +94,6 @@ bool            gDisableNativeTheme               = false;
 #define TOUCH_INJECT_LONG_TAP_DEFAULT_MSEC 1500
 int32_t nsIWidget::sPointerIdCounter = 0;
 
-// nsBaseWidget
-NS_IMPL_ISUPPORTS(nsBaseWidget, nsIWidget)
-
-
 nsAutoRollup::nsAutoRollup()
 {
   // remember if mLastRollup was null, and only clear it upon destruction
@@ -108,6 +108,8 @@ nsAutoRollup::~nsAutoRollup()
     NS_RELEASE(nsBaseWidget::mLastRollup);
   }
 }
+
+NS_IMPL_ISUPPORTS(nsBaseWidget, nsIWidget, nsISupportsWeakReference)
 
 //-------------------------------------------------------------------------
 //
@@ -179,21 +181,24 @@ nsBaseWidget::Shutdown()
   mShutdownObserver = nullptr;
 }
 
-static void DeferredDestroyCompositor(CompositorParent* aCompositorParent,
-                              CompositorChild* aCompositorChild)
+static void DeferredDestroyCompositor(nsRefPtr<CompositorParent> aCompositorParent,
+                                      nsRefPtr<CompositorChild> aCompositorChild)
 {
     // Bug 848949 needs to be fixed before
     // we can close the channel properly
     //aCompositorChild->Close();
-    aCompositorParent->Release();
-    aCompositorChild->Release();
 }
 
 void nsBaseWidget::DestroyCompositor()
 {
   if (mCompositorChild) {
-    mCompositorChild->SendWillStop();
-    mCompositorChild->Destroy();
+    nsRefPtr<CompositorChild> compositorChild = mCompositorChild.forget();
+    nsRefPtr<CompositorParent> compositorParent = mCompositorParent.forget();
+
+    compositorChild->SendWillStop();
+    // New LayerManager, CompositorParent and CompositorChild might be created
+    // as a result of internal GetLayerManager() call.
+    compositorChild->Destroy();
 
     // The call just made to SendWillStop can result in IPC from the
     // CompositorParent to the CompositorChild (e.g. caused by the destruction
@@ -202,13 +207,12 @@ void nsBaseWidget::DestroyCompositor()
     // events already in the MessageLoop get processed before the
     // CompositorChild is destroyed, so we add a task to the MessageLoop to
     // handle compositor desctruction.
+
+    // The DefferedDestroyCompositor task takes ownership of compositorParent and
+    // will release them when it runs.
     MessageLoop::current()->PostTask(FROM_HERE,
-               NewRunnableFunction(DeferredDestroyCompositor, mCompositorParent,
-                                   mCompositorChild));
-    // The DestroyCompositor task we just added to the MessageLoop will handle
-    // releasing mCompositorParent and mCompositorChild.
-    unused << mCompositorParent.forget();
-    unused << mCompositorChild.forget();
+               NewRunnableFunction(DeferredDestroyCompositor, compositorParent,
+                                   compositorChild));
   }
 }
 
@@ -319,7 +323,7 @@ nsBaseWidget::CreateChild(const nsIntRect  &aRect,
     // nativeWidget parameter.
     nativeParent = parent ? parent->GetNativeData(NS_NATIVE_WIDGET) : nullptr;
     parent = nativeParent ? nullptr : parent;
-    NS_ABORT_IF_FALSE(!parent || !nativeParent, "messed up logic");
+    MOZ_ASSERT(!parent || !nativeParent, "messed up logic");
   }
 
   nsCOMPtr<nsIWidget> widget;
@@ -910,9 +914,46 @@ void nsBaseWidget::CreateCompositor()
 already_AddRefed<GeckoContentController>
 nsBaseWidget::CreateRootContentController()
 {
-  nsRefPtr<GeckoContentController> controller = new ChromeProcessController(this);
+  nsRefPtr<GeckoContentController> controller = new ChromeProcessController(this, mAPZEventState);
   return controller.forget();
 }
+
+class ChromeProcessSetTargetAPZCCallback : public SetTargetAPZCCallback {
+public:
+  explicit ChromeProcessSetTargetAPZCCallback(APZCTreeManager* aTreeManager)
+    : mTreeManager(aTreeManager)
+  {}
+
+  void Run(uint64_t aInputBlockId, const nsTArray<ScrollableLayerGuid>& aTargets) const MOZ_OVERRIDE {
+    MOZ_ASSERT(NS_IsMainThread());
+    // need a local var to disambiguate between the SetTargetAPZC overloads.
+    void (APZCTreeManager::*setTargetApzcFunc)(uint64_t, const nsTArray<ScrollableLayerGuid>&)
+        = &APZCTreeManager::SetTargetAPZC;
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
+        mTreeManager.get(), setTargetApzcFunc, aInputBlockId, aTargets));
+  }
+
+private:
+  nsRefPtr<APZCTreeManager> mTreeManager;
+};
+
+class ChromeProcessContentReceivedInputBlockCallback : public ContentReceivedInputBlockCallback {
+public:
+  explicit ChromeProcessContentReceivedInputBlockCallback(APZCTreeManager* aTreeManager)
+    : mTreeManager(aTreeManager)
+  {}
+
+  void Run(const ScrollableLayerGuid& aGuid, uint64_t aInputBlockId, bool aPreventDefault) const MOZ_OVERRIDE {
+    MOZ_ASSERT(NS_IsMainThread());
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
+        mTreeManager.get(), &APZCTreeManager::ContentReceivedInputBlock,
+        aInputBlockId, aPreventDefault));
+  }
+
+private:
+  nsRefPtr<APZCTreeManager> mTreeManager;
+};
+
 
 void nsBaseWidget::ConfigureAPZCTreeManager()
 {
@@ -921,6 +962,9 @@ void nsBaseWidget::ConfigureAPZCTreeManager()
   MOZ_ASSERT(mAPZC);
 
   mAPZC->SetDPI(GetDPI());
+  mAPZEventState = new APZEventState(this,
+      new ChromeProcessContentReceivedInputBlockCallback(mAPZC));
+  mSetTargetAPZCCallback = new ChromeProcessSetTargetAPZCCallback(mAPZC);
 
   nsRefPtr<GeckoContentController> controller = CreateRootContentController();
   if (controller) {
@@ -929,23 +973,64 @@ void nsBaseWidget::ConfigureAPZCTreeManager()
 }
 
 nsEventStatus
-nsBaseWidget::DispatchEventForAPZ(WidgetGUIEvent* aEvent,
-                                  const ScrollableLayerGuid& aGuid,
-                                  uint64_t aInputBlockId)
+nsBaseWidget::ProcessUntransformedAPZEvent(WidgetInputEvent* aEvent,
+                                           const ScrollableLayerGuid& aGuid,
+                                           uint64_t aInputBlockId)
 {
+  MOZ_ASSERT(NS_IsMainThread());
   InputAPZContext context(aGuid, aInputBlockId);
+
+  // If this is a touch event and APZ has targeted it to an APZC in the root
+  // process, apply that APZC's callback-transform before dispatching the
+  // event. If the event is instead targeted to an APZC in the child process,
+  // the transform will be applied in the child process before dispatching
+  // the event there (see e.g. TabChild::RecvRealTouchEvent()).
+  // TODO: Do other types of events (than touch) need this?
+  if (aEvent->AsTouchEvent() && aGuid.mLayersId == mCompositorParent->RootLayerTreeId()) {
+    APZCCallbackHelper::ApplyCallbackTransform(*aEvent->AsTouchEvent(), aGuid,
+        GetDefaultScale(), 1.0f);
+  }
 
   nsEventStatus status;
   DispatchEvent(aEvent, status);
 
   if (mAPZC && !context.WasRoutedToChildProcess()) {
-    // APZ did not find a dispatch-to-content region in the child process,
-    // and EventStateManager did not route the event into the child process.
+    // EventStateManager did not route the event into the child process.
     // It's safe to communicate to APZ that the event has been processed.
-    mAPZC->SetTargetAPZC(aInputBlockId, aGuid);
-    mAPZC->ContentReceivedInputBlock(aInputBlockId, aEvent->mFlags.mDefaultPrevented);
+    // TODO: Eventually we'll be able to move the SendSetTargetAPZCNotification
+    // call into APZEventState::Process*Event() as well.
+    if (WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent()) {
+      if (touchEvent->message == NS_TOUCH_START) {
+        APZCCallbackHelper::SendSetTargetAPZCNotification(this, GetDocument(), *aEvent,
+            aGuid, aInputBlockId, mSetTargetAPZCCallback);
+      }
+      mAPZEventState->ProcessTouchEvent(*touchEvent, aGuid, aInputBlockId);
+    } else if (WidgetWheelEvent* wheelEvent = aEvent->AsWheelEvent()) {
+      APZCCallbackHelper::SendSetTargetAPZCNotification(this, GetDocument(), *aEvent,
+                aGuid, aInputBlockId, mSetTargetAPZCCallback);
+      mAPZEventState->ProcessWheelEvent(*wheelEvent, aGuid, aInputBlockId);
+    }
   }
 
+  return status;
+}
+
+nsEventStatus
+nsBaseWidget::DispatchAPZAwareEvent(WidgetInputEvent* aEvent)
+{
+  if (mAPZC) {
+    uint64_t inputBlockId = 0;
+    ScrollableLayerGuid guid;
+
+    nsEventStatus result = mAPZC->ReceiveInputEvent(*aEvent, &guid, &inputBlockId);
+    if (result == nsEventStatus_eConsumeNoDefault) {
+        return result;
+    }
+    return ProcessUntransformedAPZEvent(aEvent, guid, inputBlockId);
+  }
+
+  nsEventStatus status;
+  DispatchEvent(aEvent, status);
   return status;
 }
 
@@ -957,6 +1042,17 @@ nsBaseWidget::GetPreferredCompositorBackends(nsTArray<LayersBackend>& aHints)
   }
 
   aHints.AppendElement(LayersBackend::LAYERS_BASIC);
+}
+
+nsIDocument*
+nsBaseWidget::GetDocument() const
+{
+  if (mWidgetListener) {
+    if (nsIPresShell* presShell = mWidgetListener->GetPresShell()) {
+      return presShell->GetDocument();
+    }
+  }
+  return nullptr;
 }
 
 void nsBaseWidget::CreateCompositorVsyncDispatcher()
@@ -1538,15 +1634,7 @@ void
 nsBaseWidget::NotifyUIStateChanged(UIStateChangeType aShowAccelerators,
                                    UIStateChangeType aShowFocusRings)
 {
-  if (!mWidgetListener)
-    return;
-
-  nsIPresShell* presShell = mWidgetListener->GetPresShell();
-  if (!presShell)
-    return;
-
-  nsIDocument* doc = presShell->GetDocument();
-  if (doc) {
+  if (nsIDocument* doc = GetDocument()) {
     nsPIDOMWindow* win = doc->GetWindow();
     if (win) {
       win->SetKeyboardIndicators(aShowAccelerators, aShowFocusRings);

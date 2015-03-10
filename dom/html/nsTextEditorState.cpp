@@ -133,7 +133,7 @@ nsITextControlElement::GetWrapPropertyEnum(nsIContent* aContent,
   aWrapProp = eHTMLTextWrap_Soft; // the default
 
   nsAutoString wrap;
-  if (aContent->IsHTML()) {
+  if (aContent->IsHTMLElement()) {
     static nsIContent::AttrValuesArray strings[] =
       {&nsGkAtoms::HARD, &nsGkAtoms::OFF, nullptr};
 
@@ -567,7 +567,7 @@ nsTextInputSelectionImpl::CompleteMove(bool aForward, bool aExtend)
     {
       nsIContent *child = parentDIV->GetLastChild();
 
-      if (child->Tag() == nsGkAtoms::br)
+      if (child->IsHTMLElement(nsGkAtoms::br))
       {
         --offset;
         hint = CARET_ASSOCIATE_AFTER; // for Bug 106855
@@ -1713,7 +1713,7 @@ nsTextEditorState::InitializeRootNode()
   nsAutoString classValue;
   classValue.AppendLiteral("anonymous-div");
   int32_t wrapCols = GetWrapCols();
-  if (wrapCols >= 0) {
+  if (wrapCols > 0) {
     classValue.AppendLiteral(" wrap");
   }
   if (!IsSingleLineTextControl()) {
@@ -2107,7 +2107,7 @@ nsTextEditorState::UpdatePlaceholderVisibility(bool aNotify)
 void
 nsTextEditorState::HideSelectionIfBlurred()
 {
-  NS_ABORT_IF_FALSE(mSelCon, "Should have a selection controller if we have a frame!");
+  MOZ_ASSERT(mSelCon, "Should have a selection controller if we have a frame!");
   nsCOMPtr<nsIContent> content = do_QueryInterface(mTextCtrlElement);
   if (!nsContentUtils::IsFocusedContent(content)) {
     mSelCon->SetDisplaySelection(nsISelectionController::SELECTION_HIDDEN);

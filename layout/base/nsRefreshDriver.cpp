@@ -849,9 +849,13 @@ CreateVsyncRefreshTimer()
   // ready.
   gfxPrefs::GetSingleton();
 
-  if (!gfxPrefs::VsyncAlignedRefreshDriver()) {
+  if (!gfxPrefs::VsyncAlignedRefreshDriver()
+        || !gfxPrefs::HardwareVsyncEnabled()
+        || gfxPlatform::IsInLayoutAsapMode()) {
     return;
   }
+
+  NS_WARNING("Enabling vsync refresh driver\n");
 
   if (XRE_IsParentProcess()) {
     // Make sure all vsync systems are ready.
@@ -1027,9 +1031,9 @@ nsRefreshDriver::nsRefreshDriver(nsPresContext* aPresContext)
 
 nsRefreshDriver::~nsRefreshDriver()
 {
-  NS_ABORT_IF_FALSE(ObserverCount() == 0,
-                    "observers should have unregistered");
-  NS_ABORT_IF_FALSE(!mActiveTimer, "timer should be gone");
+  MOZ_ASSERT(ObserverCount() == 0,
+             "observers should have unregistered");
+  MOZ_ASSERT(!mActiveTimer, "timer should be gone");
   
   if (mRootRefresh) {
     mRootRefresh->RemoveRefreshObserver(this, Flush_Style);
@@ -1354,7 +1358,7 @@ nsRefreshDriver::ArrayFor(mozFlushType aFlushType)
     case Flush_Display:
       return mObservers[2];
     default:
-      NS_ABORT_IF_FALSE(false, "bad flush type");
+      MOZ_ASSERT(false, "bad flush type");
       return *static_cast<ObserverArray*>(nullptr);
   }
 }
@@ -1696,7 +1700,6 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
       profilingDocShells[i]->AddProfileTimelineMarker("Paint",
                                                       TRACING_INTERVAL_START);
     }
-    profiler_tracing("Paint", "DisplayList", TRACING_INTERVAL_START);
 #ifdef MOZ_DUMP_PAINTING
     if (nsLayoutUtils::InvalidationDebuggingIsEnabled()) {
       printf_stderr("Starting ProcessPendingUpdates\n");
@@ -1715,7 +1718,6 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
       profilingDocShells[i]->AddProfileTimelineMarker("Paint",
                                                       TRACING_INTERVAL_END);
     }
-    profiler_tracing("Paint", "DisplayList", TRACING_INTERVAL_END);
 
     if (nsContentUtils::XPConnect()) {
       nsContentUtils::XPConnect()->NotifyDidPaint();
@@ -1739,7 +1741,7 @@ nsRefreshDriver::ImageRequestEnumerator(nsISupportsHashKey* aEntry,
   nsCOMArray<imgIContainer>* imagesToRefresh =
     static_cast<nsCOMArray<imgIContainer>*> (aUserArg);
   imgIRequest* req = static_cast<imgIRequest*>(aEntry->GetKey());
-  NS_ABORT_IF_FALSE(req, "Unable to retrieve the image request");
+  MOZ_ASSERT(req, "Unable to retrieve the image request");
   nsCOMPtr<imgIContainer> image;
   if (NS_SUCCEEDED(req->GetImage(getter_AddRefs(image)))) {
     imagesToRefresh->AppendElement(image);
@@ -1756,7 +1758,7 @@ nsRefreshDriver::BeginRefreshingImages(nsISupportsHashKey* aEntry,
     static_cast<ImageRequestParameters*> (aUserArg);
 
   imgIRequest* req = static_cast<imgIRequest*>(aEntry->GetKey());
-  NS_ABORT_IF_FALSE(req, "Unable to retrieve the image request");
+  MOZ_ASSERT(req, "Unable to retrieve the image request");
 
   parms->mRequests->PutEntry(req);
 

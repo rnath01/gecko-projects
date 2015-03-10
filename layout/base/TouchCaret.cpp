@@ -9,29 +9,30 @@
 
 #include <algorithm>
 
-#include "nsCOMPtr.h"
-#include "nsFrameSelection.h"
-#include "nsIFrame.h"
-#include "nsIScrollableFrame.h"
-#include "nsIDOMNode.h"
-#include "nsISelection.h"
-#include "nsISelectionPrivate.h"
-#include "nsIContent.h"
-#include "nsIPresShell.h"
-#include "nsCanvasFrame.h"
-#include "nsPresContext.h"
 #include "nsBlockFrame.h"
-#include "nsISelectionController.h"
-#include "mozilla/Preferences.h"
-#include "mozilla/BasicEvents.h"
-#include "nsIDOMWindow.h"
-#include "nsQueryContentEventResult.h"
-#include "nsIInterfaceRequestorUtils.h"
-#include "nsView.h"
-#include "nsDOMTokenList.h"
+#include "nsCanvasFrame.h"
 #include "nsCaret.h"
-#include "mozilla/dom/CustomEvent.h"
+#include "nsCOMPtr.h"
 #include "nsContentUtils.h"
+#include "nsDOMTokenList.h"
+#include "nsFrameSelection.h"
+#include "nsIContent.h"
+#include "nsIDOMNode.h"
+#include "nsIDOMWindow.h"
+#include "nsIFrame.h"
+#include "nsIInterfaceRequestorUtils.h"
+#include "nsIPresShell.h"
+#include "nsIScrollableFrame.h"
+#include "nsISelection.h"
+#include "nsISelectionController.h"
+#include "nsISelectionPrivate.h"
+#include "nsPresContext.h"
+#include "nsQueryContentEventResult.h"
+#include "nsView.h"
+#include "mozilla/dom/SelectionStateChangedEvent.h"
+#include "mozilla/dom/CustomEvent.h"
+#include "mozilla/BasicEvents.h"
+#include "mozilla/Preferences.h"
 
 using namespace mozilla;
 
@@ -945,25 +946,45 @@ TouchCaret::DispatchTapEvent()
     return;
   }
 
-  nsCOMPtr<nsIDocument> doc = presShell->GetDocument();
-  if (!doc) {
+  nsRefPtr<nsCaret> caret = presShell->GetCaret();
+  if (!caret) {
     return;
   }
 
-  ErrorResult res;
-  nsRefPtr<dom::Event> domEvent =
-    doc->CreateEvent(NS_LITERAL_STRING("CustomEvent"), res);
-  if (res.Failed()) {
+  dom::Selection* sel = static_cast<dom::Selection*>(caret->GetSelection());
+  if (!sel) {
     return;
   }
 
-  dom::CustomEvent* customEvent = static_cast<dom::CustomEvent*>(domEvent.get());
-  customEvent->InitCustomEvent(NS_LITERAL_STRING("touchcarettap"),
-                               true, false, nullptr);
-  customEvent->SetTrusted(true);
-  customEvent->GetInternalNSEvent()->mFlags.mOnlyChromeDispatch = true;
+  nsIDocument* doc = presShell->GetDocument();
+
+  MOZ_ASSERT(doc);
+
+  dom::SelectionStateChangedEventInit init;
+  init.mBubbles = true;
+
+  // XXX: Do we need to flush layout?
+  presShell->FlushPendingNotifications(Flush_Layout);
+  nsRect rect = nsContentUtils::GetSelectionBoundingRect(sel);
+  nsRefPtr<dom::DOMRect>domRect = new dom::DOMRect(ToSupports(doc));
+
+  domRect->SetLayoutRect(rect);
+  init.mBoundingClientRect = domRect;
+  init.mVisible = false;
+
+  sel->Stringify(init.mSelectedText);
+
+  dom::Sequence<dom::SelectionState> state;
+  state.AppendElement(dom::SelectionState::Taponcaret);
+  init.mStates = state;
+
+  nsRefPtr<dom::SelectionStateChangedEvent> event =
+    dom::SelectionStateChangedEvent::Constructor(doc, NS_LITERAL_STRING("mozselectionstatechanged"), init);
+
+  event->SetTrusted(true);
+  event->GetInternalNSEvent()->mFlags.mOnlyChromeDispatch = true;
   bool ret;
-  doc->DispatchEvent(domEvent, &ret);
+  doc->DispatchEvent(event, &ret);
 }
 
 void

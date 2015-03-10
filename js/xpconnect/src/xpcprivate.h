@@ -214,7 +214,7 @@ extern const char XPC_XPCONNECT_CONTRACTID[];
     return (result || !src) ? NS_OK : NS_ERROR_OUT_OF_MEMORY
 
 
-#define WRAPPER_SLOTS (JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS )
+#define WRAPPER_FLAGS (JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS )
 
 #define INVALID_OBJECT ((JSObject *)1)
 
@@ -507,7 +507,7 @@ public:
     // Mapping of often used strings to jsid atoms that live 'forever'.
     //
     // To add a new string: add to this list and to XPCJSRuntime::mStrings
-    // at the top of xpcjsruntime.cpp
+    // at the top of XPCJSRuntime.cpp
     enum {
         IDX_CONSTRUCTOR             = 0 ,
         IDX_TO_STRING               ,
@@ -959,6 +959,8 @@ extern const js::Class XPC_WN_NoMods_NoCall_Proto_JSClass;
 extern const js::Class XPC_WN_ModsAllowed_WithCall_Proto_JSClass;
 extern const js::Class XPC_WN_ModsAllowed_NoCall_Proto_JSClass;
 extern const js::Class XPC_WN_Tearoff_JSClass;
+#define XPC_WN_TEAROFF_RESERVED_SLOTS 1
+#define XPC_WN_TEAROFF_FLAT_OBJECT_SLOT 0
 extern const js::Class XPC_WN_NoHelper_Proto_JSClass;
 
 extern bool
@@ -975,10 +977,10 @@ XPC_WN_JSOp_ThisObject(JSContext *cx, JS::HandleObject obj);
     {                                                                         \
         nullptr, /* lookupProperty */                                         \
         nullptr, /* defineProperty */                                         \
+        nullptr, /* hasProperty */                                            \
         nullptr, /* getProperty    */                                         \
         nullptr, /* setProperty    */                                         \
         nullptr, /* getOwnPropertyDescriptor */                               \
-        nullptr, /* setPropertyAttributes  */                                 \
         nullptr, /* deleteProperty */                                         \
         nullptr, nullptr, /* watch/unwatch */                                 \
         nullptr, /* getElements */                                            \
@@ -990,10 +992,10 @@ XPC_WN_JSOp_ThisObject(JSContext *cx, JS::HandleObject obj);
     {                                                                         \
         nullptr, /* lookupProperty */                                         \
         nullptr, /* defineProperty */                                         \
+        nullptr, /* hasProperty */                                            \
         nullptr, /* getProperty    */                                         \
         nullptr, /* setProperty    */                                         \
         nullptr, /* getOwnPropertyDescriptor */                               \
-        nullptr, /* setPropertyAttributes  */                                 \
         nullptr, /* deleteProperty */                                         \
         nullptr, nullptr, /* watch/unwatch */                                 \
         nullptr, /* getElements */                                            \
@@ -1249,6 +1251,11 @@ private:
 };
 
 /***************************************************************************/
+// Slots we use for our functions
+#define XPC_FUNCTION_NATIVE_MEMBER_SLOT 0
+#define XPC_FUNCTION_PARENT_OBJECT_SLOT 1
+
+/***************************************************************************/
 // XPCNativeMember represents a single idl declared method, attribute or
 // constant.
 
@@ -1304,6 +1311,14 @@ public:
     void SetWritableAttribute()
         {MOZ_ASSERT(mFlags == GETTER,"bad"); mFlags = GETTER | SETTER_TOO;}
 
+    static uint16_t GetMaxIndexInInterface()
+        {return (1<<12) - 1;}
+
+    inline XPCNativeInterface* GetInterface() const;
+
+    void SetIndexInInterface(uint16_t index)
+        {mIndexInInterface = index;}
+
     /* default ctor - leave random contents */
     XPCNativeMember()  {MOZ_COUNT_CTOR(XPCNativeMember);}
     ~XPCNativeMember() {MOZ_COUNT_DTOR(XPCNativeMember);}
@@ -1317,13 +1332,24 @@ private:
         CONSTANT    = 0x02,
         GETTER      = 0x04,
         SETTER_TOO  = 0x08
+        // If you add a flag here, you may need to make mFlags wider and either
+        // make mIndexInInterface narrower (and adjust
+        // XPCNativeInterface::NewInstance accordingly) or make this object
+        // bigger.
     };
 
 private:
     // our only data...
     jsid     mName;
     uint16_t mIndex;
-    uint16_t mFlags;
+    // mFlags needs to be wide enogh to hold the flags in the above enum.
+    uint16_t mFlags : 4;
+    // mIndexInInterface is the index of this in our XPCNativeInterface's
+    // mMembers.  In theory our XPCNativeInterface could have as many as 2^15-1
+    // members (since mMemberCount is 15-bit) but in practice we prevent
+    // creation of XPCNativeInterfaces which have more than 2^12 members.
+    // If the width of this field changes, update GetMaxIndexInInterface.
+    uint16_t mIndexInInterface : 12;
 };
 
 /***************************************************************************/
@@ -1348,6 +1374,7 @@ class XPCNativeInterface
     inline XPCNativeMember* FindMember(jsid name) const;
 
     inline bool HasAncestor(const nsIID* iid) const;
+    static inline size_t OffsetOfMembers();
 
     uint16_t GetMemberCount() const {
         return mMemberCount;
@@ -1611,16 +1638,12 @@ public:
 #define GET_IT(f_) const {return 0 != (mFlags & nsIXPCScriptable:: f_ );}
 
     bool WantPreCreate()                GET_IT(WANT_PRECREATE)
-    bool WantCreate()                   GET_IT(WANT_CREATE)
-    bool WantPostCreate()               GET_IT(WANT_POSTCREATE)
     bool WantAddProperty()              GET_IT(WANT_ADDPROPERTY)
-    bool WantDelProperty()              GET_IT(WANT_DELPROPERTY)
     bool WantGetProperty()              GET_IT(WANT_GETPROPERTY)
     bool WantSetProperty()              GET_IT(WANT_SETPROPERTY)
     bool WantEnumerate()                GET_IT(WANT_ENUMERATE)
     bool WantNewEnumerate()             GET_IT(WANT_NEWENUMERATE)
     bool WantResolve()                  GET_IT(WANT_RESOLVE)
-    bool WantConvert()                  GET_IT(WANT_CONVERT)
     bool WantFinalize()                 GET_IT(WANT_FINALIZE)
     bool WantCall()                     GET_IT(WANT_CALL)
     bool WantConstruct()                GET_IT(WANT_CONSTRUCT)
@@ -2122,14 +2145,6 @@ public:
                 XPCNativeInterface* Interface,
                 XPCWrappedNative** wrapper);
 
-    static nsresult
-    ReparentWrapperIfFound(XPCWrappedNativeScope* aOldScope,
-                           XPCWrappedNativeScope* aNewScope,
-                           JS::HandleObject aNewParent,
-                           nsISupports* aCOMObj);
-
-    nsresult RescueOrphans();
-
     void FlatJSObjectFinalized();
     void FlatJSObjectMoved(JSObject *obj, const JSObject *old);
 
@@ -2244,7 +2259,7 @@ private:
 
 private:
 
-    bool Init(JS::HandleObject parent, const XPCNativeScriptableCreateInfo* sci);
+    bool Init(const XPCNativeScriptableCreateInfo* sci);
     bool FinishInit();
 
     bool ExtendSet(XPCNativeInterface* aInterface);
@@ -3380,6 +3395,7 @@ struct GlobalProperties {
     bool Blob : 1;
     bool File : 1;
     bool crypto : 1;
+    bool rtcIdentityProvider : 1;
 };
 
 // Infallible.
@@ -3489,8 +3505,7 @@ public:
     { }
 
     JSObject *ToJSObject(JSContext *cx) {
-        JS::RootedObject global(cx, JS::CurrentGlobalOrNull(cx));
-        JS::RootedObject obj(cx, JS_NewObjectWithGivenProto(cx, nullptr, JS::NullPtr(), global));
+        JS::RootedObject obj(cx, JS_NewObjectWithGivenProto(cx, nullptr, JS::NullPtr()));
         if (!obj)
             return nullptr;
 
@@ -3763,31 +3778,10 @@ ObjectScope(JSObject *obj)
     return CompartmentPrivate::Get(obj)->scope;
 }
 
-JSObject* NewOutObject(JSContext* cx, JSObject* scope);
+JSObject* NewOutObject(JSContext* cx);
 bool IsOutObject(JSContext* cx, JSObject* obj);
 
 nsresult HasInstance(JSContext *cx, JS::HandleObject objArg, const nsID *iid, bool *bp);
-
-/**
- * Define quick stubs on the given object, @a proto.
- *
- * @param cx
- *     A context.  Requires request.
- * @param proto
- *     The (newly created) prototype object for a DOM class.  The JS half
- *     of an XPCWrappedNativeProto.
- * @param flags
- *     Property flags for the quick stub properties--should be either
- *     JSPROP_ENUMERATE or 0.
- * @param interfaceCount
- *     The number of interfaces the class implements.
- * @param interfaceArray
- *     The interfaces the class implements; interfaceArray and
- *     interfaceCount are like what nsIClassInfo.getInterfaces returns.
- */
-bool
-DOM_DefineQuickStubs(JSContext *cx, JSObject *proto, uint32_t flags,
-                     uint32_t interfaceCount, const nsIID **interfaceArray);
 
 nsIPrincipal *GetObjectPrincipal(JSObject *obj);
 

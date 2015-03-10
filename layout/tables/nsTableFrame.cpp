@@ -47,6 +47,7 @@
 #include <algorithm>
 
 using namespace mozilla;
+using namespace mozilla::image;
 using namespace mozilla::layout;
 
 /********************************************************************************
@@ -1082,7 +1083,7 @@ nsDisplayTableItem::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
   return mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
 }
 
-/* static */ void
+void
 nsDisplayTableItem::UpdateForFrameBackground(nsIFrame* aFrame)
 {
   nsStyleContext *bgSC;
@@ -1092,6 +1093,39 @@ nsDisplayTableItem::UpdateForFrameBackground(nsIFrame* aFrame)
     return;
 
   mPartHasFixedBackground = true;
+}
+
+nsDisplayItemGeometry*
+nsDisplayTableItem::AllocateGeometry(nsDisplayListBuilder* aBuilder)
+{
+  return new nsDisplayTableItemGeometry(this, aBuilder,
+      mFrame->GetOffsetTo(mFrame->PresContext()->PresShell()->GetRootFrame()));
+}
+
+void
+nsDisplayTableItem::ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
+                                              const nsDisplayItemGeometry* aGeometry,
+                                              nsRegion *aInvalidRegion)
+{
+  auto geometry =
+    static_cast<const nsDisplayTableItemGeometry*>(aGeometry);
+
+  bool invalidateForAttachmentFixed = false;
+  if (mPartHasFixedBackground) {
+    nsPoint frameOffsetToViewport = mFrame->GetOffsetTo(
+        mFrame->PresContext()->PresShell()->GetRootFrame());
+    invalidateForAttachmentFixed =
+        frameOffsetToViewport != geometry->mFrameOffsetToViewport;
+  }
+
+  if (invalidateForAttachmentFixed ||
+      (aBuilder->ShouldSyncDecodeImages() &&
+       geometry->ShouldInvalidateToSyncDecodeImages())) {
+    bool snap;
+    aInvalidRegion->Or(*aInvalidRegion, GetBounds(aBuilder, &snap));
+  }
+
+  nsDisplayItem::ComputeInvalidationRegion(aBuilder, aGeometry, aInvalidRegion);
 }
 
 class nsDisplayTableBorderBackground : public nsDisplayTableItem {
@@ -1107,9 +1141,6 @@ public:
   }
 #endif
 
-  virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
-                                         const nsDisplayItemGeometry* aGeometry,
-                                         nsRegion *aInvalidRegion) MOZ_OVERRIDE;
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      nsRenderingContext* aCtx) MOZ_OVERRIDE;
   NS_DISPLAY_DECL_NAME("TableBorderBackground", TYPE_TABLE_BORDER_BACKGROUND)
@@ -1129,52 +1160,16 @@ IsFrameAllowedInTable(nsIAtom* aType)
 }
 #endif
 
-/* static */ bool
-nsTableFrame::AnyTablePartHasUndecodedBackgroundImage(nsIFrame* aStart,
-                                                      nsIFrame* aEnd)
-{
-  for (nsIFrame* f = aStart; f != aEnd; f = f->GetNextSibling()) {
-    NS_ASSERTION(IsFrameAllowedInTable(f->GetType()), "unexpected frame type");
-
-    if (!nsCSSRendering::AreAllBackgroundImagesDecodedForFrame(f))
-      return true;
-
-    nsTableCellFrame *cellFrame = do_QueryFrame(f);
-    if (cellFrame)
-      continue;
-
-    if (AnyTablePartHasUndecodedBackgroundImage(f->PrincipalChildList().FirstChild(), nullptr))
-      return true;
-  }
-  
-  return false;
-}
-
-void
-nsDisplayTableBorderBackground::ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
-                                                          const nsDisplayItemGeometry* aGeometry,
-                                                          nsRegion *aInvalidRegion)
-{
-  if (aBuilder->ShouldSyncDecodeImages()) {
-    if (nsTableFrame::AnyTablePartHasUndecodedBackgroundImage(mFrame, mFrame->GetNextSibling()) ||
-        nsTableFrame::AnyTablePartHasUndecodedBackgroundImage(
-          mFrame->GetChildList(nsIFrame::kColGroupList).FirstChild(), nullptr)) {
-      bool snap;
-      aInvalidRegion->Or(*aInvalidRegion, GetBounds(aBuilder, &snap));
-    }
-  }
-
-  nsDisplayTableItem::ComputeInvalidationRegion(aBuilder, aGeometry, aInvalidRegion);
-}
-
 void
 nsDisplayTableBorderBackground::Paint(nsDisplayListBuilder* aBuilder,
                                       nsRenderingContext* aCtx)
 {
-  static_cast<nsTableFrame*>(mFrame)->
+  DrawResult result = static_cast<nsTableFrame*>(mFrame)->
     PaintTableBorderBackground(*aCtx, mVisibleRect,
                                ToReferenceFrame(),
                                aBuilder->GetBackgroundPaintFlags());
+
+  nsDisplayTableItemGeometry::UpdateDrawResult(this, result);
 }
 
 static int32_t GetTablePartRank(nsDisplayItem* aItem)
@@ -1297,6 +1292,19 @@ AnyTablePartHasBorderOrBackground(nsIFrame* aStart, nsIFrame* aEnd)
   return false;
 }
 
+static void
+UpdateItemForColGroupBackgrounds(nsDisplayTableItem* item,
+                                 const nsFrameList& aFrames) {
+  for (nsFrameList::Enumerator e(aFrames); !e.AtEnd(); e.Next()) {
+    nsTableColGroupFrame* cg = static_cast<nsTableColGroupFrame*>(e.get());
+    item->UpdateForFrameBackground(cg);
+    for (nsTableColFrame* colFrame = cg->GetFirstColumn(); colFrame;
+         colFrame = colFrame->GetNextCol()) {
+      item->UpdateForFrameBackground(colFrame);
+    }
+  }
+}
+
 // table paint code is concerned primarily with borders and bg color
 // SEC: TODO: adjust the rect for captions
 void
@@ -1331,6 +1339,9 @@ nsTableFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     }
   }
   DisplayGenericTablePart(aBuilder, this, aDirtyRect, aLists, item);
+  if (item) {
+    UpdateItemForColGroupBackgrounds(item, mColGroups);
+  }
 }
 
 nsMargin
@@ -1345,7 +1356,7 @@ nsTableFrame::GetDeflationForBackground(nsPresContext* aPresContext) const
 
 // XXX We don't put the borders and backgrounds in tree order like we should.
 // That requires some major surgery which we aren't going to do right now.
-void
+DrawResult
 nsTableFrame::PaintTableBorderBackground(nsRenderingContext& aRenderingContext,
                                          const nsRect& aDirtyRect,
                                          nsPoint aPt, uint32_t aBGPaintFlags)
@@ -1358,8 +1369,8 @@ nsTableFrame::PaintTableBorderBackground(nsRenderingContext& aRenderingContext,
   nsMargin deflate = GetDeflationForBackground(presContext);
   // If 'deflate' is (0,0,0,0) then we'll paint the table background
   // in a separate display item, so don't do it here.
-  nsresult rv = painter.PaintTable(this, deflate, deflate != nsMargin(0, 0, 0, 0));
-  if (NS_FAILED(rv)) return;
+  DrawResult result =
+    painter.PaintTable(this, deflate, deflate != nsMargin(0, 0, 0, 0));
 
   if (StyleVisibility()->IsVisible()) {
     if (!IsBorderCollapse()) {
@@ -1383,6 +1394,8 @@ nsTableFrame::PaintTableBorderBackground(nsRenderingContext& aRenderingContext,
       PaintBCBorders(aRenderingContext, aDirtyRect - aPt);
     }
   }
+
+  return result;
 }
 
 nsIFrame::LogicalSides
@@ -1960,14 +1973,21 @@ nsTableFrame::FixupPositionedTableParts(nsPresContext*           aPresContext,
     // FIXME: Unconditionally using NS_UNCONSTRAINEDSIZE for the height and
     // ignoring any change to the reflow status aren't correct. We'll never
     // paginate absolutely positioned frames.
-    overflowTracker.AddFrame(positionedPart,
-      OverflowChangedTracker::CHILDREN_AND_PARENT_CHANGED);
     nsFrame* positionedFrame = static_cast<nsFrame*>(positionedPart);
     positionedFrame->FinishReflowWithAbsoluteFrames(PresContext(),
                                                     desiredSize,
                                                     reflowState,
                                                     reflowStatus,
                                                     true);
+
+    // FinishReflowWithAbsoluteFrames has updated overflow on
+    // |positionedPart|.  We need to make sure that update propagates
+    // through the intermediate frames between it and this frame.
+    nsIFrame* positionedFrameParent = positionedPart->GetParent();
+    if (positionedFrameParent != this) {
+      overflowTracker.AddFrame(positionedFrameParent,
+        OverflowChangedTracker::CHILDREN_CHANGED);
+    }
   }
 
   // Propagate updated overflow areas up the tree.

@@ -19,13 +19,13 @@
 #include "jsgc.h"
 #include "jsobj.h"
 #include "jsopcode.h"
-#include "jsproxy.h"
 #include "jsscript.h"
 #include "jstypes.h"
 #include "jsutil.h"
 
 #include "ds/Sort.h"
 #include "gc/Marking.h"
+#include "js/Proxy.h"
 #include "vm/GeneratorObject.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
@@ -33,8 +33,6 @@
 #include "vm/StopIterationObject.h"
 #include "vm/TypedArrayCommon.h"
 
-#include "jsinferinlines.h"
-#include "jsobjinlines.h"
 #include "jsscriptinlines.h"
 
 #include "vm/NativeObject-inl.h"
@@ -452,8 +450,8 @@ GetCustomIterator(JSContext *cx, HandleObject obj, unsigned flags, MutableHandle
         if (!AtomToPrintableString(cx, name, &bytes))
             return false;
         RootedValue val(cx, ObjectValue(*obj));
-        js_ReportValueError2(cx, JSMSG_BAD_TRAP_RETURN_VALUE,
-                             -1, val, js::NullPtr(), bytes.ptr());
+        ReportValueError2(cx, JSMSG_BAD_TRAP_RETURN_VALUE,
+                          -1, val, js::NullPtr(), bytes.ptr());
         return false;
     }
     objp.set(&rval.toObject());
@@ -602,7 +600,7 @@ VectorToKeyIterator(JSContext *cx, HandleObject obj, unsigned flags, AutoIdVecto
         JSObject *pobj = obj;
         size_t ind = 0;
         do {
-            ni->shapes_array[ind++] = pobj->lastProperty();
+            ni->shapes_array[ind++] = pobj->as<NativeObject>().lastProperty();
             pobj = pobj->getProto();
         } while (pobj);
         MOZ_ASSERT(ind == slength);
@@ -713,12 +711,12 @@ js::GetIterator(JSContext *cx, HandleObject obj, unsigned flags, MutableHandleOb
             if (!(lastni->flags & (JSITER_ACTIVE|JSITER_UNREUSABLE)) &&
                 obj->isNative() &&
                 obj->as<NativeObject>().hasEmptyElements() &&
-                obj->lastProperty() == lastni->shapes_array[0])
+                obj->as<NativeObject>().lastProperty() == lastni->shapes_array[0])
             {
                 JSObject *proto = obj->getProto();
                 if (proto->isNative() &&
                     proto->as<NativeObject>().hasEmptyElements() &&
-                    proto->lastProperty() == lastni->shapes_array[1] &&
+                    proto->as<NativeObject>().lastProperty() == lastni->shapes_array[1] &&
                     !proto->getProto())
                 {
                     objp.set(last);
@@ -749,7 +747,7 @@ js::GetIterator(JSContext *cx, HandleObject obj, unsigned flags, MutableHandleOb
                     shapes.clear();
                     goto miss;
                 }
-                Shape *shape = pobj->lastProperty();
+                Shape *shape = pobj->as<NativeObject>().lastProperty();
                 key = (key + (key << 16)) ^ (uintptr_t(shape) >> 3);
                 if (!shapes.append(shape))
                     return false;
@@ -860,7 +858,7 @@ js::IteratorConstructor(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     if (args.length() == 0) {
-        js_ReportMissingArg(cx, args.calleev(), 0);
+        ReportMissingArg(cx, args.calleev(), 0);
         return false;
     }
 
@@ -1412,7 +1410,7 @@ GlobalObject::initIteratorClasses(JSContext *cx, Handle<GlobalObject *> global)
     RootedObject proto(cx);
     if (global->getSlot(ARRAY_ITERATOR_PROTO).isUndefined()) {
         const Class *cls = &ArrayIteratorPrototypeClass;
-        proto = global->createBlankPrototypeInheriting(cx, cls, *iteratorProto);
+        proto = global->createBlankPrototypeInheriting(cx, cls, iteratorProto);
         if (!proto || !DefinePropertiesAndFunctions(cx, proto, nullptr, array_iterator_methods))
             return false;
         global->setReservedSlot(ARRAY_ITERATOR_PROTO, ObjectValue(*proto));
@@ -1449,7 +1447,7 @@ GlobalObject::initStopIterationClass(JSContext *cx, Handle<GlobalObject *> globa
 }
 
 JSObject *
-js_InitIteratorClasses(JSContext *cx, HandleObject obj)
+js::InitIteratorClasses(JSContext *cx, HandleObject obj)
 {
     Rooted<GlobalObject*> global(cx, &obj->as<GlobalObject>());
     if (!GlobalObject::initIteratorClasses(cx, global))

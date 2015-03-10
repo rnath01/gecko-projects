@@ -10,6 +10,7 @@
 #include "AsyncPanZoomController.h"     // for AsyncPanZoomController
 #include "mozilla/dom/AnimationPlayer.h" // for ComputedTimingFunction
 #include "mozilla/layers/APZCTreeManager.h" // for APZCTreeManager
+#include "mozilla/layers/APZThreadUtils.h" // for AssertOnControllerThread
 #include "FrameMetrics.h"               // for FrameMetrics
 #include "mozilla/Attributes.h"         // for MOZ_FINAL
 #include "mozilla/Preferences.h"        // for Preferences
@@ -39,7 +40,7 @@ Axis::Axis(AsyncPanZoomController* aAsyncPanZoomController)
     mAsyncPanZoomController(aAsyncPanZoomController),
     mOverscroll(0),
     mFirstOverscrollAnimationSample(0),
-    mOverscrollOffset(0),
+    mLastOverscrollPeak(0),
     mOverscrollScale(1.0f)
 {
 }
@@ -58,7 +59,7 @@ float Axis::ToLocalVelocity(float aVelocityInchesPerMs) const {
 
 void Axis::UpdateWithTouchAtDevicePoint(ParentLayerCoord aPos, uint32_t aTimestampMs) {
   // mVelocityQueue is controller-thread only
-  AsyncPanZoomController::AssertOnControllerThread();
+  APZThreadUtils::AssertOnControllerThread();
 
   if (aTimestampMs == mPosTimeMs) {
     // This could be a duplicate event, or it could be a legitimate event
@@ -118,10 +119,17 @@ void Axis::StartTouch(ParentLayerCoord aPos, uint32_t aTimestampMs) {
 
 bool Axis::AdjustDisplacement(ParentLayerCoord aDisplacement,
                               /* ParentLayerCoord */ float& aDisplacementOut,
-                              /* ParentLayerCoord */ float& aOverscrollAmountOut)
+                              /* ParentLayerCoord */ float&
+                              aOverscrollAmountOut,
+                              bool forceOverscroll /* = false */)
 {
   if (mAxisLocked) {
     aOverscrollAmountOut = 0;
+    aDisplacementOut = 0;
+    return false;
+  }
+  if (forceOverscroll) {
+    aOverscrollAmountOut = aDisplacement;
     aDisplacementOut = 0;
     return false;
   }
@@ -195,7 +203,7 @@ void Axis::OverscrollBy(ParentLayerCoord aOverscroll) {
 }
 
 ParentLayerCoord Axis::GetOverscroll() const {
-  ParentLayerCoord result = (mOverscroll - mOverscrollOffset) / mOverscrollScale;
+  ParentLayerCoord result = (mOverscroll - mLastOverscrollPeak) / mOverscrollScale;
 
   // Assert that we return overscroll in the correct direction
   MOZ_ASSERT((result.value * mFirstOverscrollAnimationSample.value) >= 0.0f);
@@ -249,19 +257,32 @@ void Axis::StepOverscrollAnimation(double aStepDurationMilliseconds) {
     // It's possible to start sampling overscroll with velocity == 0, or
     // velocity in the opposite direction of overscroll, so make sure we
     // correctly record the peak in this case.
-    if ((mOverscroll >= 0 ? oldVelocity : -oldVelocity) <= 0.0f) {
+    if (mOverscroll != 0 && ((mOverscroll > 0 ? oldVelocity : -oldVelocity) <= 0.0f)) {
       velocitySignChange = true;
     }
   }
   if (velocitySignChange) {
     bool oddOscillation = (mOverscroll.value * mFirstOverscrollAnimationSample.value) < 0.0f;
-    mOverscrollOffset = oddOscillation ? mOverscroll : -mOverscroll;
+    mLastOverscrollPeak = oddOscillation ? mOverscroll : -mOverscroll;
     mOverscrollScale = 2.0f;
   }
 
   // Adjust the amount of overscroll based on the velocity.
   // Note that we allow for oscillations.
   mOverscroll += (mVelocity * aStepDurationMilliseconds);
+
+  // Our mechanism for translating a set of mOverscroll values that oscillate
+  // around zero to a set of GetOverscroll() values that have the same sign
+  // (so content is always stretched, never compressed) assumes that
+  // mOverscroll does not exceed mLastOverscrollPeak in magnitude. If our
+  // calculations were exact, this would be the case, as a dampened spring
+  // should never attain a displacement greater in magnitude than a previous
+  // peak. In our approximation calculations, however, this may not hold
+  // exactly. To ensure the assumption is not violated, we clamp the magnitude
+  // of mOverscroll.
+  if (mLastOverscrollPeak != 0 && fabs(mOverscroll) > fabs(mLastOverscrollPeak)) {
+    mOverscroll = (mOverscroll >= 0) ? fabs(mLastOverscrollPeak) : -fabs(mLastOverscrollPeak);
+  }
 }
 
 bool Axis::SampleOverscrollAnimation(const TimeDuration& aDelta) {
@@ -313,7 +334,7 @@ bool Axis::IsOverscrolled() const {
 void Axis::ClearOverscroll() {
   mOverscroll = 0;
   mFirstOverscrollAnimationSample = 0;
-  mOverscrollOffset = 0;
+  mLastOverscrollPeak = 0;
   mOverscrollScale = 1.0f;
 }
 
@@ -331,7 +352,7 @@ ParentLayerCoord Axis::PanDistance(ParentLayerCoord aPos) const {
 
 void Axis::EndTouch(uint32_t aTimestampMs) {
   // mVelocityQueue is controller-thread only
-  AsyncPanZoomController::AssertOnControllerThread();
+  APZThreadUtils::AssertOnControllerThread();
 
   mVelocity = 0;
   int count = 0;
@@ -352,7 +373,7 @@ void Axis::EndTouch(uint32_t aTimestampMs) {
 
 void Axis::CancelTouch() {
   // mVelocityQueue is controller-thread only
-  AsyncPanZoomController::AssertOnControllerThread();
+  APZThreadUtils::AssertOnControllerThread();
 
   AXIS_LOG("%p|%s cancelling touch, clearing velocity queue\n",
     mAsyncPanZoomController, Name());

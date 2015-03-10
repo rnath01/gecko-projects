@@ -10,6 +10,7 @@
 #include "gfxPrefs.h"
 #include "InputBlockState.h"
 #include "LayersLogging.h"
+#include "mozilla/layers/APZThreadUtils.h"
 #include "OverscrollHandoffState.h"
 
 #define INPQ_LOG(...)
@@ -31,7 +32,7 @@ InputQueue::ReceiveInputEvent(const nsRefPtr<AsyncPanZoomController>& aTarget,
                               bool aTargetConfirmed,
                               const InputData& aEvent,
                               uint64_t* aOutInputBlockId) {
-  AsyncPanZoomController::AssertOnControllerThread();
+  APZThreadUtils::AssertOnControllerThread();
 
   switch (aEvent.mInputType) {
     case MULTITOUCH_INPUT: {
@@ -79,7 +80,23 @@ InputQueue::ReceiveTouchInput(const nsRefPtr<AsyncPanZoomController>& aTarget,
     block = StartNewTouchBlock(aTarget, aTargetConfirmed, false);
     INPQ_LOG("started new touch block %p for target %p\n", block, aTarget.get());
 
+    // XXX using the chain from |block| here may be wrong in cases where the
+    // target isn't confirmed and the real target turns out to be something
+    // else. For now assume this is rare enough that it's not an issue.
+    if (block == CurrentBlock() &&
+        aEvent.mTouches.Length() == 1 &&
+        block->GetOverscrollHandoffChain()->HasFastMovingApzc()) {
+      // If we're already in a fast fling, and a single finger goes down, then
+      // we want special handling for the touch event, because it shouldn't get
+      // delivered to content. Note that we don't set this flag when going
+      // from a fast fling to a pinch state (i.e. second finger goes down while
+      // the first finger is moving).
+      block->SetDuringFastMotion();
+      INPQ_LOG("block %p tagged as fast-motion\n", block);
+    }
+
     CancelAnimationsForNewBlock(block);
+
     MaybeRequestContentResponse(aTarget, block);
   } else {
     if (!mInputBlockQueue.IsEmpty()) {
@@ -175,17 +192,6 @@ InputQueue::CancelAnimationsForNewBlock(CancelableBlockState* aBlock)
   // being processed) we only do this animation-cancellation if there are no older
   // touch blocks still in the queue.
   if (aBlock == CurrentBlock()) {
-    // XXX using the chain from |block| here may be wrong in cases where the
-    // target isn't confirmed and the real target turns out to be something
-    // else. For now assume this is rare enough that it's not an issue.
-    if (aBlock->GetOverscrollHandoffChain()->HasFastMovingApzc()) {
-      // If we're already in a fast fling, then we want the touch event to stop the fling
-      // and to disallow the touch event from being used as part of a fling.
-      if (TouchBlockState* touch = aBlock->AsTouchBlock()) {
-        touch->SetDuringFastMotion();
-        INPQ_LOG("block %p tagged as fast-motion\n", touch);
-      }
-    }
     aBlock->GetOverscrollHandoffChain()->CancelAnimations(ExcludeOverscroll);
   }
 }
@@ -266,7 +272,7 @@ InputQueue::StartNewTouchBlock(const nsRefPtr<AsyncPanZoomController>& aTarget,
 CancelableBlockState*
 InputQueue::CurrentBlock() const
 {
-  AsyncPanZoomController::AssertOnControllerThread();
+  APZThreadUtils::AssertOnControllerThread();
 
   MOZ_ASSERT(!mInputBlockQueue.IsEmpty());
   return mInputBlockQueue[0].get();
@@ -298,7 +304,7 @@ InputQueue::ScheduleMainThreadTimeout(const nsRefPtr<AsyncPanZoomController>& aT
 
 void
 InputQueue::MainThreadTimeout(const uint64_t& aInputBlockId) {
-  AsyncPanZoomController::AssertOnControllerThread();
+  APZThreadUtils::AssertOnControllerThread();
 
   INPQ_LOG("got a main thread timeout; block=%" PRIu64 "\n", aInputBlockId);
   bool success = false;
@@ -319,7 +325,7 @@ InputQueue::MainThreadTimeout(const uint64_t& aInputBlockId) {
 
 void
 InputQueue::ContentReceivedInputBlock(uint64_t aInputBlockId, bool aPreventDefault) {
-  AsyncPanZoomController::AssertOnControllerThread();
+  APZThreadUtils::AssertOnControllerThread();
 
   INPQ_LOG("got a content response; block=%" PRIu64 "\n", aInputBlockId);
   bool success = false;
@@ -337,7 +343,7 @@ InputQueue::ContentReceivedInputBlock(uint64_t aInputBlockId, bool aPreventDefau
 
 void
 InputQueue::SetConfirmedTargetApzc(uint64_t aInputBlockId, const nsRefPtr<AsyncPanZoomController>& aTargetApzc) {
-  AsyncPanZoomController::AssertOnControllerThread();
+  APZThreadUtils::AssertOnControllerThread();
 
   INPQ_LOG("got a target apzc; block=%" PRIu64 " guid=%s\n",
     aInputBlockId, aTargetApzc ? Stringify(aTargetApzc->GetGuid()).c_str() : "");
@@ -357,7 +363,7 @@ InputQueue::SetConfirmedTargetApzc(uint64_t aInputBlockId, const nsRefPtr<AsyncP
 
 void
 InputQueue::SetAllowedTouchBehavior(uint64_t aInputBlockId, const nsTArray<TouchBehaviorFlags>& aBehaviors) {
-  AsyncPanZoomController::AssertOnControllerThread();
+  APZThreadUtils::AssertOnControllerThread();
 
   INPQ_LOG("got allowed touch behaviours; block=%" PRIu64 "\n", aInputBlockId);
   bool success = false;
@@ -381,7 +387,7 @@ InputQueue::SetAllowedTouchBehavior(uint64_t aInputBlockId, const nsTArray<Touch
 
 void
 InputQueue::ProcessInputBlocks() {
-  AsyncPanZoomController::AssertOnControllerThread();
+  APZThreadUtils::AssertOnControllerThread();
 
   do {
     CancelableBlockState* curBlock = CurrentBlock();

@@ -280,12 +280,14 @@ pref("browser.search.noCurrentEngine", true);
 
 // Control media casting & mirroring features
 pref("browser.casting.enabled", true);
-pref("browser.mirroring.enabled", true);
 #ifdef RELEASE_BUILD
 // Roku does not yet support mirroring in production
 pref("browser.mirroring.enabled.roku", false);
+// Chromecast mirroring is broken (bug 1131084)
+pref("browser.mirroring.enabled", false);
 #else
 pref("browser.mirroring.enabled.roku", true);
+pref("browser.mirroring.enabled", true);
 #endif
 
 // Enable sparse localization by setting a few package locale overrides
@@ -295,11 +297,6 @@ pref("chrome.override_package.passwordmgr", "browser");
 
 // enable xul error pages
 pref("browser.xul.error_pages.enabled", true);
-
-pref("browser.history.grouping", "day");
-pref("browser.history.showSessions", false);
-pref("browser.sessionhistory.max_entries", 50);
-pref("browser.history_expire_sites", 40000);
 
 // disable color management
 pref("gfx.color_management.mode", 0);
@@ -394,12 +391,13 @@ pref("devtools.errorconsole.enabled", false);
 // to communicate with a usb cable via adb forward.
 pref("devtools.debugger.unix-domain-socket", "/data/data/@ANDROID_PACKAGE_NAME@/firefox-debugger-socket");
 
-pref("font.size.inflation.minTwips", 120);
+pref("font.size.inflation.minTwips", 0);
 
 // When true, zooming will be enabled on all sites, even ones that declare user-scalable=no.
 pref("browser.ui.zoom.force-user-scalable", false);
 
 pref("ui.zoomedview.enabled", false);
+pref("ui.zoomedview.limitReadableSize", 8);  // value in layer pixels
 
 pref("ui.touch.radius.enabled", false);
 pref("ui.touch.radius.leftmm", 3);
@@ -847,10 +845,19 @@ pref("device.storage.enabled", true);
 // Enable meta-viewport support for font inflation code
 pref("dom.meta-viewport.enabled", true);
 
-// Enable the OpenH264 plugin support in the addon manager.
-pref("media.gmp-gmpopenh264.provider.enabled", true);
+// Enable GMP support in the addon manager.
+pref("media.gmp-provider.enabled", true);
 
-// The default color scheme in reader mode (light, dark, print, auto)
+// The default color scheme in reader mode (light, dark, auto)
 // auto = color automatically adjusts according to ambient light level
 // (auto only works on platforms where the 'devicelight' event is enabled)
 pref("reader.color_scheme", "auto");
+
+// Color scheme values available in reader mode UI.
+pref("reader.color_scheme.values", "[\"dark\",\"auto\",\"light\"]");
+
+// Whether to use a vertical or horizontal toolbar.
+pref("reader.toolbar.vertical", false);
+
+// Whether or not to display buttons related to reading list in reader view.
+pref("browser.readinglist.enabled", true);

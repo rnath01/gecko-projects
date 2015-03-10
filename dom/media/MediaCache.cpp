@@ -1173,8 +1173,10 @@ MediaCache::Update()
       actions.AppendElement(NONE);
 
       MediaCacheStream* stream = mStreams[i];
-      if (stream->mClosed)
+      if (stream->mClosed) {
+        CACHE_LOG(PR_LOG_DEBUG, ("Stream %p closed", stream));
         continue;
+      }
 
       // Figure out where we should be reading from. It's the first
       // uncached byte after the current mStreamOffset.
@@ -1280,7 +1282,7 @@ MediaCache::Update()
         for (uint32_t j = 0; j < i; ++j) {
           MediaCacheStream* other = mStreams[j];
           if (other->mResourceID == stream->mResourceID &&
-              !other->mClient->IsSuspended() &&
+              !other->mClosed && !other->mClient->IsSuspended() &&
               other->mChannelOffset/BLOCK_SIZE == desiredOffset/BLOCK_SIZE) {
             // This block is already going to be read by the other stream.
             // So don't try to read it from this stream as well.
@@ -2264,7 +2266,7 @@ MediaCacheStream::Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
         int64_t bytes = std::min<int64_t>(size, streamWithPartialBlock->mChannelOffset - mStreamOffset);
         // Clamp bytes until 64-bit file size issues are fixed.
         bytes = std::min(bytes, int64_t(INT32_MAX));
-        NS_ABORT_IF_FALSE(bytes >= 0 && bytes <= aCount, "Bytes out of range.");
+        MOZ_ASSERT(bytes >= 0 && bytes <= aCount, "Bytes out of range.");
         memcpy(aBuffer,
           reinterpret_cast<char*>(streamWithPartialBlock->mPartialBlockBuffer.get()) + offsetInStreamBlock, bytes);
         if (mCurrentMode == MODE_METADATA) {
@@ -2289,7 +2291,7 @@ MediaCacheStream::Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
 
     int64_t offset = cacheBlock*BLOCK_SIZE + offsetInStreamBlock;
     int32_t bytes;
-    NS_ABORT_IF_FALSE(size >= 0 && size <= INT32_MAX, "Size out of range.");
+    MOZ_ASSERT(size >= 0 && size <= INT32_MAX, "Size out of range.");
     nsresult rv = gMediaCache->ReadCacheFile(offset, aBuffer + count, int32_t(size), &bytes);
     if (NS_FAILED(rv)) {
       if (count == 0)
@@ -2361,7 +2363,7 @@ MediaCacheStream::ReadFromCache(char* aBuffer, int64_t aOffset, int64_t aCount)
       // Clamp bytes until 64-bit file size issues are fixed.
       int64_t toCopy = std::min<int64_t>(size, mChannelOffset - streamOffset);
       bytes = std::min(toCopy, int64_t(INT32_MAX));
-      NS_ABORT_IF_FALSE(bytes >= 0 && bytes <= toCopy, "Bytes out of range.");
+      MOZ_ASSERT(bytes >= 0 && bytes <= toCopy, "Bytes out of range.");
       memcpy(aBuffer + count,
         reinterpret_cast<char*>(mPartialBlockBuffer.get()) + offsetInStreamBlock, bytes);
     } else {
@@ -2370,7 +2372,7 @@ MediaCacheStream::ReadFromCache(char* aBuffer, int64_t aOffset, int64_t aCount)
         return NS_ERROR_FAILURE;
       }
       int64_t offset = cacheBlock*BLOCK_SIZE + offsetInStreamBlock;
-      NS_ABORT_IF_FALSE(size >= 0 && size <= INT32_MAX, "Size out of range.");
+      MOZ_ASSERT(size >= 0 && size <= INT32_MAX, "Size out of range.");
       nsresult rv = gMediaCache->ReadCacheFile(offset, aBuffer + count, int32_t(size), &bytes);
       if (NS_FAILED(rv)) {
         return rv;

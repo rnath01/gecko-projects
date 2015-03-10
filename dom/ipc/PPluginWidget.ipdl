@@ -48,11 +48,10 @@ parent:
 
 child:
   /**
-   * Sent from chrome when the chrome side widget is getting torn down.
-   * @param aParentInitiated - indicates if the shutdown is associated
-   * with a tab closure vs. content reload.
+   * Event indicating the parent is shutting down.
+   * aWhichSide - indicates which side intititated the shutdown.
    */
-  async ParentShutdown(bool aParentInitiated);
+  async ParentShutdown(uint16_t aWhichSide);
 
   /**
    * Requests a full update of the plugin window.

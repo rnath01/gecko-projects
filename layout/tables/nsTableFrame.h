@@ -7,6 +7,7 @@
 
 #include "mozilla/Attributes.h"
 #include "celldata.h"
+#include "imgIContainer.h"
 #include "nscore.h"
 #include "nsContainerFrame.h"
 #include "nsStyleCoord.h"
@@ -55,6 +56,11 @@ public:
   // overflow rect. This is also useful for row frames that have spanning
   // cells extending outside them.
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) MOZ_OVERRIDE;
+
+  virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE;
+  virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
+                                         const nsDisplayItemGeometry* aGeometry,
+                                         nsRegion *aInvalidRegion) MOZ_OVERRIDE;
 
   void UpdateForFrameBackground(nsIFrame* aFrame);
 
@@ -106,7 +112,10 @@ private:
   */
 class nsTableFrame : public nsContainerFrame
 {
+  typedef mozilla::image::DrawResult DrawResult;
+
 public:
+  NS_DECL_QUERYFRAME_TARGET(nsTableFrame)
   NS_DECL_FRAMEARENA_HELPERS
 
   NS_DECLARE_FRAME_PROPERTY(PositionedTablePartArray,
@@ -246,16 +255,9 @@ public:
    * columns, row groups, rows, and cells), and the table border, and all
    * internal borders if border-collapse is on.
    */
-  void PaintTableBorderBackground(nsRenderingContext& aRenderingContext,
-                                  const nsRect& aDirtyRect,
-                                  nsPoint aPt, uint32_t aBGPaintFlags);
-
-  /**
-   * Determines if any table part has a background image that is currently not
-   * decoded. Does not look into cell contents (ie only table parts).
-   */
-  static bool AnyTablePartHasUndecodedBackgroundImage(nsIFrame* aStart,
-                                                      nsIFrame* aEnd);
+  DrawResult PaintTableBorderBackground(nsRenderingContext& aRenderingContext,
+                                        const nsRect& aDirtyRect,
+                                        nsPoint aPt, uint32_t aBGPaintFlags);
 
   /** Get the outer half (i.e., the part outside the height and width of
    *  the table) of the largest segment (?) of border-collapsed border on

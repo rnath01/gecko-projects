@@ -17,6 +17,7 @@ namespace X86Encoding {
 static const size_t MaxInstructionSize = 16;
 
 enum OneByteOpcodeID {
+    OP_NOP_00                       = 0x00,
     OP_ADD_EbGb                     = 0x00,
     OP_ADD_EvGv                     = 0x01,
     OP_ADD_GvEv                     = 0x03,
@@ -26,6 +27,8 @@ enum OneByteOpcodeID {
     OP_OR_GvEv                      = 0x0B,
     OP_OR_EAXIv                     = 0x0D,
     OP_2BYTE_ESCAPE                 = 0x0F,
+    OP_NOP_0F                       = 0x0F,
+    OP_NOP_1F                       = 0x1F,
     OP_AND_EbGb                     = 0x20,
     OP_AND_EvGv                     = 0x21,
     OP_AND_GvEv                     = 0x23,
@@ -45,6 +48,8 @@ enum OneByteOpcodeID {
 #ifdef JS_CODEGEN_X64
     PRE_REX                         = 0x40,
 #endif
+    OP_NOP_40                       = 0x40,
+    OP_NOP_44                       = 0x44,
     OP_PUSH_EAX                     = 0x50,
     OP_POP_EAX                      = 0x58,
 #ifdef JS_CODEGEN_X86
@@ -56,15 +61,18 @@ enum OneByteOpcodeID {
 #endif
     PRE_OPERAND_SIZE                = 0x66,
     PRE_SSE_66                      = 0x66,
+    OP_NOP_66                       = 0x66,
     OP_PUSH_Iz                      = 0x68,
     OP_IMUL_GvEvIz                  = 0x69,
     OP_PUSH_Ib                      = 0x6a,
     OP_IMUL_GvEvIb                  = 0x6b,
     OP_JCC_rel8                     = 0x70,
     OP_GROUP1_EbIb                  = 0x80,
+    OP_NOP_80                       = 0x80,
     OP_GROUP1_EvIz                  = 0x81,
     OP_GROUP1_EvIb                  = 0x83,
     OP_TEST_EbGb                    = 0x84,
+    OP_NOP_84                       = 0x84,
     OP_TEST_EvGv                    = 0x85,
     OP_XCHG_GvEv                    = 0x87,
     OP_MOV_EbGv                     = 0x88,
@@ -122,6 +130,7 @@ enum TwoByteOpcodeID {
     OP2_MOVPS_VpsWps    = 0x10,
     OP2_MOVSD_WsdVsd    = 0x11,
     OP2_MOVPS_WpsVps    = 0x11,
+    OP2_MOVDDUP_VqWq    = 0x12,
     OP2_MOVHLPS_VqUq    = 0x12,
     OP2_MOVSLDUP_VpsWps = 0x12,
     OP2_UNPCKLPS_VsdWsd = 0x14,
@@ -167,7 +176,6 @@ enum TwoByteOpcodeID {
     OP2_XORPD_VpdWpd    = 0x57,
     OP2_PCMPGTD_VdqWdq  = 0x66,
     OP2_MOVD_VdEd       = 0x6E,
-    OP2_MOVQ_VdEd       = 0x6E,
     OP2_MOVDQ_VsdWsd    = 0x6F,
     OP2_MOVDQ_VdqWdq    = 0x6F,
     OP2_PSHUFD_VdqWdqIb = 0x70,
@@ -178,7 +186,7 @@ enum TwoByteOpcodeID {
     OP2_PCMPEQW         = 0x75,
     OP2_PCMPEQD_VdqWdq  = 0x76,
     OP2_MOVD_EdVd       = 0x7E,
-    OP2_MOVQ_EdVd       = 0x7E,
+    OP2_MOVQ_VdWd       = 0x7E,
     OP2_MOVDQ_WdqVdq    = 0x7F,
     OP2_JCC_rel32       = 0x80,
     OP_SETCC            = 0x90,
@@ -197,6 +205,7 @@ enum TwoByteOpcodeID {
     OP2_PEXTRW_GdUdIb   = 0xC5,
     OP2_SHUFPS_VpsWpsIb = 0xC6,
     OP2_PSRLD_VdqWdq    = 0xD2,
+    OP2_MOVQ_WdVd       = 0xD6,
     OP2_PANDDQ_VdqWdq   = 0xDB,
     OP2_PANDNDQ_VdqWdq  = 0xDF,
     OP2_PSRAD_VdqWdq    = 0xE2,

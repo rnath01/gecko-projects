@@ -19,6 +19,7 @@
 #include "mozilla/PublicSSL.h"
 #include "mozilla/ChaosMode.h"
 #include "mozilla/PodOperations.h"
+#include "mozilla/TimeStamp.h"
 #include "nsThreadUtils.h"
 #include "nsIFile.h"
 
@@ -40,6 +41,8 @@ PRThread                 *gSocketThread           = nullptr;
 #define SOCKET_LIMIT_TARGET 550U
 #define SOCKET_LIMIT_MIN     50U
 #define BLIP_INTERVAL_PREF "network.activity.blipIntervalMilliseconds"
+#define SERVE_MULTIPLE_EVENTS_PREF "network.sts.serve_multiple_events_per_poll_iteration"
+#define MAX_TIME_BETWEEN_TWO_POLLS "network.sts.max_time_for_events_between_two_polls"
 
 uint32_t nsSocketTransportService::gMaxCount;
 PRCallOnceType nsSocketTransportService::gMaxCountInitOnce;
@@ -67,6 +70,9 @@ nsSocketTransportService::nsSocketTransportService()
     , mKeepaliveRetryIntervalS(1)
     , mKeepaliveProbeCount(kDefaultTCPKeepCount)
     , mKeepaliveEnabledPref(false)
+    , mServeMultipleEventsPerPollIter(true)
+    , mServingPendingQueue(false)
+    , mMaxTimePerPollIter(100)
     , mProbedMaxCount(false)
 {
 #if defined(PR_LOGGING)
@@ -180,8 +186,8 @@ nsresult
 nsSocketTransportService::DetachSocket(SocketContext *listHead, SocketContext *sock)
 {
     SOCKET_LOG(("nsSocketTransportService::DetachSocket [handler=%p]\n", sock->mHandler));
-    NS_ABORT_IF_FALSE((listHead == mActiveList) || (listHead == mIdleList),
-                      "DetachSocket invalid head");
+    MOZ_ASSERT((listHead == mActiveList) || (listHead == mIdleList),
+               "DetachSocket invalid head");
 
     // inform the handler that this socket is going away
     sock->mHandler->OnSocketDetached(sock->mFD);
@@ -213,8 +219,8 @@ nsSocketTransportService::DetachSocket(SocketContext *listHead, SocketContext *s
 nsresult
 nsSocketTransportService::AddToPollList(SocketContext *sock)
 {
-    NS_ABORT_IF_FALSE(!(((uint32_t)(sock - mActiveList)) < mActiveListSize),
-                      "AddToPollList Socket Already Active");
+    MOZ_ASSERT(!(static_cast<uint32_t>(sock - mActiveList) < mActiveListSize),
+               "AddToPollList Socket Already Active");
 
     SOCKET_LOG(("nsSocketTransportService::AddToPollList [handler=%p]\n", sock->mHandler));
     if (mActiveCount == mActiveListSize) {
@@ -250,7 +256,7 @@ nsSocketTransportService::RemoveFromPollList(SocketContext *sock)
     SOCKET_LOG(("nsSocketTransportService::RemoveFromPollList [handler=%p]\n", sock->mHandler));
 
     uint32_t index = sock - mActiveList;
-    NS_ABORT_IF_FALSE(index < mActiveListSize, "invalid index");
+    MOZ_ASSERT(index < mActiveListSize, "invalid index");
 
     SOCKET_LOG(("  index=%u mActiveCount=%u\n", index, mActiveCount));
 
@@ -266,8 +272,8 @@ nsSocketTransportService::RemoveFromPollList(SocketContext *sock)
 nsresult
 nsSocketTransportService::AddToIdleList(SocketContext *sock)
 {
-    NS_ABORT_IF_FALSE(!(((uint32_t)(sock - mIdleList)) < mIdleListSize),
-                      "AddToIdlelList Socket Already Idle");
+    MOZ_ASSERT(!(static_cast<uint32_t>(sock - mIdleList) < mIdleListSize),
+               "AddToIdlelList Socket Already Idle");
 
     SOCKET_LOG(("nsSocketTransportService::AddToIdleList [handler=%p]\n", sock->mHandler));
     if (mIdleCount == mIdleListSize) {
@@ -481,6 +487,8 @@ nsSocketTransportService::Init()
         tmpPrefService->AddObserver(KEEPALIVE_IDLE_TIME_PREF, this, false);
         tmpPrefService->AddObserver(KEEPALIVE_RETRY_INTERVAL_PREF, this, false);
         tmpPrefService->AddObserver(KEEPALIVE_PROBE_COUNT_PREF, this, false);
+        tmpPrefService->AddObserver(SERVE_MULTIPLE_EVENTS_PREF, this, false);
+        tmpPrefService->AddObserver(MAX_TIME_BETWEEN_TWO_POLLS, this, false);
     }
     UpdatePrefs();
 
@@ -686,6 +694,12 @@ nsSocketTransportService::AfterProcessNextEvent(nsIThreadInternal* thread,
     return NS_OK;
 }
 
+void
+nsSocketTransportService::MarkTheLastElementOfPendingQueue()
+{
+    mServingPendingQueue = false;
+}
+
 #ifdef MOZ_NUWA_PROCESS
 #include "ipc/Nuwa.h"
 #endif
@@ -730,15 +744,39 @@ nsSocketTransportService::Run()
             // If there are pending events for this thread then
             // DoPollIteration() should service the network without blocking.
             DoPollIteration(!pendingEvents);
-            
+
             // If nothing was pending before the poll, it might be now
-            if (!pendingEvents)
+            if (!pendingEvents) {
                 thread->HasPendingEvents(&pendingEvents);
+            }
 
             if (pendingEvents) {
-                NS_ProcessNextEvent(thread);
-                pendingEvents = false;
-                thread->HasPendingEvents(&pendingEvents);
+                if (mServeMultipleEventsPerPollIter) {
+                    if (!mServingPendingQueue) {
+                        nsresult rv = Dispatch(NS_NewRunnableMethod(this,
+                            &nsSocketTransportService::MarkTheLastElementOfPendingQueue),
+                            nsIEventTarget::DISPATCH_NORMAL);
+                        if (NS_FAILED(rv)) {
+                            NS_WARNING("Could not dispatch a new event on the "
+                                       "socket thread.");
+                        } else {
+                            mServingPendingQueue = true;
+                        }
+                    }
+                    TimeStamp eventQueueStart = TimeStamp::NowLoRes();
+                    do {
+                        NS_ProcessNextEvent(thread);
+                        pendingEvents = false;
+                        thread->HasPendingEvents(&pendingEvents);
+                    } while (pendingEvents && mServingPendingQueue &&
+                             ((TimeStamp::NowLoRes() -
+                               eventQueueStart).ToMilliseconds() <
+                              mMaxTimePerPollIter));
+                } else {
+                    NS_ProcessNextEvent(thread);
+                    pendingEvents = false;
+                    thread->HasPendingEvents(&pendingEvents);
+                }
             }
         } while (pendingEvents);
 
@@ -981,6 +1019,20 @@ nsSocketTransportService::UpdatePrefs()
         if (NS_SUCCEEDED(rv) && keepaliveEnabled != mKeepaliveEnabledPref) {
             mKeepaliveEnabledPref = keepaliveEnabled;
             OnKeepaliveEnabledPrefChange();
+        }
+
+        bool serveMultiplePref = false;
+        rv = tmpPrefService->GetBoolPref(SERVE_MULTIPLE_EVENTS_PREF,
+                                         &serveMultiplePref);
+        if (NS_SUCCEEDED(rv)) {
+            mServeMultipleEventsPerPollIter = serveMultiplePref;
+        }
+
+        int32_t maxTimePref;
+        rv = tmpPrefService->GetIntPref(MAX_TIME_BETWEEN_TWO_POLLS,
+                                        &maxTimePref);
+        if (NS_SUCCEEDED(rv) && maxTimePref >= 0) {
+            mMaxTimePerPollIter = maxTimePref;
         }
     }
     

@@ -4,9 +4,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "jsproxy.h"
 #include "jswrapper.h" // UncheckedUnwrap
 
+#include "js/Proxy.h"
 #include "vm/ProxyObject.h"
 
 #include "jsobjinlines.h"
@@ -29,20 +29,17 @@ DirectProxyHandler::getOwnPropertyDescriptor(JSContext *cx, HandleObject proxy, 
 {
     assertEnteredPolicy(cx, proxy, id, GET | SET | GET_PROPERTY_DESCRIPTOR);
     RootedObject target(cx, proxy->as<ProxyObject>().target());
-    return js::GetOwnPropertyDescriptor(cx, target, id, desc);
+    return GetOwnPropertyDescriptor(cx, target, id, desc);
 }
 
 bool
 DirectProxyHandler::defineProperty(JSContext *cx, HandleObject proxy, HandleId id,
-                                   MutableHandle<PropertyDescriptor> desc) const
+                                   MutableHandle<PropertyDescriptor> desc,
+                                   ObjectOpResult &result) const
 {
     assertEnteredPolicy(cx, proxy, id, SET);
     RootedObject target(cx, proxy->as<ProxyObject>().target());
-    RootedValue v(cx, desc.value());
-    return CheckDefineProperty(cx, target, id, v, desc.attributes(),
-                               desc.getter(), desc.setter()) &&
-           DefineProperty(cx, target, id, v, desc.getter(), desc.setter(),
-                          desc.attributes());
+    return StandardDefineProperty(cx, target, id, desc, result);
 }
 
 bool
@@ -55,11 +52,12 @@ DirectProxyHandler::ownPropertyKeys(JSContext *cx, HandleObject proxy,
 }
 
 bool
-DirectProxyHandler::delete_(JSContext *cx, HandleObject proxy, HandleId id, bool *bp) const
+DirectProxyHandler::delete_(JSContext *cx, HandleObject proxy, HandleId id,
+                            ObjectOpResult &result) const
 {
     assertEnteredPolicy(cx, proxy, id, SET);
     RootedObject target(cx, proxy->as<ProxyObject>().target());
-    return DeleteProperty(cx, target, id, bp);
+    return DeleteProperty(cx, target, id, result);
 }
 
 bool
@@ -114,17 +112,18 @@ DirectProxyHandler::hasInstance(JSContext *cx, HandleObject proxy, MutableHandle
 }
 
 bool
-DirectProxyHandler::getPrototypeOf(JSContext *cx, HandleObject proxy, MutableHandleObject protop) const
+DirectProxyHandler::getPrototype(JSContext *cx, HandleObject proxy, MutableHandleObject protop) const
 {
     RootedObject target(cx, proxy->as<ProxyObject>().target());
     return GetPrototype(cx, target, protop);
 }
 
 bool
-DirectProxyHandler::setPrototypeOf(JSContext *cx, HandleObject proxy, HandleObject proto, bool *bp) const
+DirectProxyHandler::setPrototype(JSContext *cx, HandleObject proxy, HandleObject proto,
+                                 ObjectOpResult &result) const
 {
     RootedObject target(cx, proxy->as<ProxyObject>().target());
-    return SetPrototype(cx, target, proto, bp);
+    return SetPrototype(cx, target, proto, result);
 }
 
 bool
@@ -135,10 +134,10 @@ DirectProxyHandler::setImmutablePrototype(JSContext *cx, HandleObject proxy, boo
 }
 
 bool
-DirectProxyHandler::preventExtensions(JSContext *cx, HandleObject proxy, bool *succeeded) const
+DirectProxyHandler::preventExtensions(JSContext *cx, HandleObject proxy, ObjectOpResult &result) const
 {
     RootedObject target(cx, proxy->as<ProxyObject>().target());
-    return PreventExtensions(cx, target, succeeded);
+    return PreventExtensions(cx, target, result);
 }
 
 bool
@@ -226,11 +225,11 @@ DirectProxyHandler::get(JSContext *cx, HandleObject proxy, HandleObject receiver
 
 bool
 DirectProxyHandler::set(JSContext *cx, HandleObject proxy, HandleObject receiver,
-                        HandleId id, bool strict, MutableHandleValue vp) const
+                        HandleId id, MutableHandleValue vp, ObjectOpResult &result) const
 {
     assertEnteredPolicy(cx, proxy, id, SET);
     RootedObject target(cx, proxy->as<ProxyObject>().target());
-    return SetProperty(cx, target, receiver, id, vp, strict);
+    return SetProperty(cx, target, receiver, id, vp, result);
 }
 
 bool

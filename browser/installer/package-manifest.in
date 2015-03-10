@@ -263,7 +263,6 @@
 @RESPATH@/components/htmlparser.xpt
 @RESPATH@/components/identity.xpt
 @RESPATH@/components/imglib2.xpt
-@RESPATH@/components/imgicon.xpt
 @RESPATH@/components/inspector.xpt
 @RESPATH@/components/intl.xpt
 @RESPATH@/components/jar.xpt
@@ -477,6 +476,8 @@
 @RESPATH@/components/formautofill.manifest
 @RESPATH@/components/FormAutofillContentService.js
 @RESPATH@/components/FormAutofillStartup.js
+@RESPATH@/components/CSSUnprefixingService.js
+@RESPATH@/components/CSSUnprefixingService.manifest
 @RESPATH@/components/contentAreaDropListener.manifest
 @RESPATH@/components/contentAreaDropListener.js
 @RESPATH@/browser/components/BrowserProfileMigrators.manifest
@@ -579,6 +580,7 @@
 @RESPATH@/components/TCPSocket.manifest
 
 #ifdef MOZ_ACTIVITIES
+@RESPATH@/components/SystemMessageCache.js
 @RESPATH@/components/SystemMessageInternal.js
 @RESPATH@/components/SystemMessageManager.js
 @RESPATH@/components/SystemMessageManager.manifest

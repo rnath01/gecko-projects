@@ -48,10 +48,6 @@ XPCOMUtils.defineLazyServiceGetter(this, 'gSystemMessenger',
                                    '@mozilla.org/system-message-internal;1',
                                    'nsISystemMessagesInternal');
 
-XPCOMUtils.defineLazyServiceGetter(Services, 'fm',
-                                   '@mozilla.org/focus-manager;1',
-                                   'nsIFocusManager');
-
 XPCOMUtils.defineLazyGetter(this, "ppmm", function() {
   return Cc["@mozilla.org/parentprocessmessagemanager;1"]
          .getService(Ci.nsIMessageListenerManager);
@@ -68,6 +64,11 @@ XPCOMUtils.defineLazyGetter(this, "libcutils", function () {
 XPCOMUtils.defineLazyServiceGetter(Services, 'captivePortalDetector',
                                   '@mozilla.org/toolkit/captive-detector;1',
                                   'nsICaptivePortalDetector');
+#endif
+
+#ifdef MOZ_SAFE_BROWSING
+XPCOMUtils.defineLazyModuleGetter(this, "SafeBrowsing",
+              "resource://gre/modules/SafeBrowsing.jsm");
 #endif
 
 function getContentWindow() {
@@ -306,8 +307,7 @@ var shell = {
     systemAppFrame.setAttribute('mozbrowser', 'true');
     systemAppFrame.setAttribute('mozapp', manifestURL);
     systemAppFrame.setAttribute('allowfullscreen', 'true');
-    systemAppFrame.setAttribute('style', "overflow: hidden; height: 100%; width: 100%; border: none; position: absolute; left: 0; top: 0; right: 0; bottom: 0;");
-    systemAppFrame.setAttribute('src', "data:text/html;charset=utf-8,%3C!DOCTYPE html>%3Cbody style='background:black;");
+    systemAppFrame.setAttribute('src', 'blank.html');
     let container = document.getElementById('container');
 #ifdef MOZ_WIDGET_COCOA
     // See shell.html
@@ -340,14 +340,12 @@ var shell = {
     chromeEventHandler.addEventListener('keyup', this, true);
 
     window.addEventListener('MozApplicationManifest', this);
-    window.addEventListener('mozfullscreenchange', this);
     window.addEventListener('MozAfterPaint', this);
     window.addEventListener('sizemodechange', this);
     window.addEventListener('unload', this);
     this.contentBrowser.addEventListener('mozbrowserloadstart', this, true);
     this.contentBrowser.addEventListener('mozbrowserselectionstatechanged', this, true);
     this.contentBrowser.addEventListener('mozbrowserscrollviewchange', this, true);
-    this.contentBrowser.addEventListener('mozbrowsertouchcarettap', this, true);
 
     CustomEventManager.init();
     WebappsHelper.init();
@@ -362,6 +360,11 @@ var shell = {
     ppmm.addMessageListener("sms-handler", this);
     ppmm.addMessageListener("mail-handler", this);
     ppmm.addMessageListener("file-picker", this);
+#ifdef MOZ_SAFE_BROWSING
+    setTimeout(function() {
+      SafeBrowsing.init();
+    }, 5000);
+#endif
   },
 
   stop: function shell_stop() {
@@ -369,12 +372,10 @@ var shell = {
     window.removeEventListener('keydown', this, true);
     window.removeEventListener('keyup', this, true);
     window.removeEventListener('MozApplicationManifest', this);
-    window.removeEventListener('mozfullscreenchange', this);
     window.removeEventListener('sizemodechange', this);
     this.contentBrowser.removeEventListener('mozbrowserloadstart', this, true);
     this.contentBrowser.removeEventListener('mozbrowserselectionstatechanged', this, true);
     this.contentBrowser.removeEventListener('mozbrowserscrollviewchange', this, true);
-    this.contentBrowser.removeEventListener('mozbrowsertouchcarettap', this, true);
     ppmm.removeMessageListener("content-handler", this);
 
     UserAgentOverrides.uninit();
@@ -434,13 +435,6 @@ var shell = {
       case 'keyup':
         this.broadcastHardwareKeys(evt);
         break;
-      case 'mozfullscreenchange':
-        // When the screen goes fullscreen make sure to set the focus to the
-        // main window so noboby can prevent the ESC key to get out fullscreen
-        // mode
-        if (document.mozFullScreen)
-          Services.fm.focusedWindow = window;
-        break;
       case 'sizemodechange':
         if (window.windowState == window.STATE_MINIMIZED && !this.visibleNormalAudioActive) {
           this.contentBrowser.setVisible(false);
@@ -466,12 +460,6 @@ var shell = {
       case 'mozbrowserscrollviewchange':
         this.sendChromeEvent({
           type: 'scrollviewchange',
-          detail: evt.detail,
-        });
-        break;
-      case 'mozbrowsertouchcarettap':
-        this.sendChromeEvent({
-          type: 'touchcarettap',
           detail: evt.detail,
         });
         break;

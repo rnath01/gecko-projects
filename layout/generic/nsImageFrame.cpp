@@ -385,13 +385,8 @@ nsImageFrame::GetSourceToDestTransform(nsTransform2D& aTransform)
   return false;
 }
 
-/*
- * These two functions basically do the same check.  The first one
- * checks that the given request is the current request for our
- * mContent.  The second checks that the given image container the
- * same as the image container on the current request for our
- * mContent.
- */
+// This function checks whether the given request is the current request for our
+// mContent.
 bool
 nsImageFrame::IsPendingLoad(imgIRequest* aRequest) const
 {
@@ -403,33 +398,6 @@ nsImageFrame::IsPendingLoad(imgIRequest* aRequest) const
   imageLoader->GetRequestType(aRequest, &requestType);
 
   return requestType != nsIImageLoadingContent::CURRENT_REQUEST;
-}
-
-bool
-nsImageFrame::IsPendingLoad(imgIContainer* aContainer) const
-{
-  //  default to pending load in case of errors
-  if (!aContainer) {
-    NS_ERROR("No image container!");
-    return true;
-  }
-
-  nsCOMPtr<nsIImageLoadingContent> imageLoader(do_QueryInterface(mContent));
-  NS_ASSERTION(imageLoader, "No image loading content?");
-  
-  nsCOMPtr<imgIRequest> currentRequest;
-  imageLoader->GetRequest(nsIImageLoadingContent::CURRENT_REQUEST,
-                          getter_AddRefs(currentRequest));
-  if (!currentRequest) {
-    NS_ERROR("No current request");
-    return true;
-  }
-
-  nsCOMPtr<imgIContainer> currentContainer;
-  currentRequest->GetImage(getter_AddRefs(currentContainer));
-
-  return currentContainer != aContainer;
-  
 }
 
 nsRect
@@ -516,8 +484,8 @@ nsImageFrame::ShouldCreateImageFrameFor(Element* aElement,
   }
   else if (aElement->HasAttr(kNameSpaceID_None, nsGkAtoms::src) &&
            !aElement->HasAttr(kNameSpaceID_None, nsGkAtoms::alt) &&
-           !aElement->IsHTML(nsGkAtoms::object) &&
-           !aElement->IsHTML(nsGkAtoms::input)) {
+           !aElement->IsHTMLElement(nsGkAtoms::object) &&
+           !aElement->IsHTMLElement(nsGkAtoms::input)) {
     // Use a sized box if we have no alt text.  This means no alt attribute
     // and the node is not an object or an input (since those always have alt
     // text).
@@ -633,15 +601,6 @@ nsImageFrame::OnSizeAvailable(imgIRequest* aRequest, imgIContainer* aImage)
 nsresult
 nsImageFrame::OnFrameUpdate(imgIRequest* aRequest, const nsIntRect* aRect)
 {
-  if (mFirstFrameComplete) {
-    nsCOMPtr<imgIContainer> container;
-    aRequest->GetImage(getter_AddRefs(container));
-    return FrameChanged(aRequest, container);
-  }
-
-  // XXX do we need to make sure that the reflow from the OnSizeAvailable has
-  // been processed before we start calling invalidate?
-
   NS_ENSURE_ARG_POINTER(aRect);
 
   if (!(mState & IMAGE_GOTINITIALREFLOW)) {
@@ -649,29 +608,43 @@ nsImageFrame::OnFrameUpdate(imgIRequest* aRequest, const nsIntRect* aRect)
     return NS_OK;
   }
   
+  if (mFirstFrameComplete && !StyleVisibility()->IsVisible()) {
+    return NS_OK;
+  }
+
   if (IsPendingLoad(aRequest)) {
     // We don't care
     return NS_OK;
   }
 
-  nsIntRect rect = mImage ? mImage->GetImageSpaceInvalidationRect(*aRect)
-                          : *aRect;
+  nsIntRect layerInvalidRect = mImage
+                             ? mImage->GetImageSpaceInvalidationRect(*aRect)
+                             : *aRect;
 
-#ifdef DEBUG_decode
-  printf("Source rect (%d,%d,%d,%d)\n",
-         aRect->x, aRect->y, aRect->width, aRect->height);
-#endif
-
-  if (rect.IsEqualInterior(nsIntRect::GetMaxSizedIntRect())) {
-    InvalidateFrame(nsDisplayItem::TYPE_IMAGE);
-    InvalidateFrame(nsDisplayItem::TYPE_ALT_FEEDBACK);
-  } else {
-    nsRect invalid = SourceRectToDest(rect);
-    InvalidateFrameWithRect(invalid, nsDisplayItem::TYPE_IMAGE);
-    InvalidateFrameWithRect(invalid, nsDisplayItem::TYPE_ALT_FEEDBACK);
+  if (layerInvalidRect.IsEqualInterior(nsIntRect::GetMaxSizedIntRect())) {
+    // Invalidate our entire area.
+    InvalidateSelf(nullptr, nullptr);
+    return NS_OK;
   }
 
+  nsRect frameInvalidRect = SourceRectToDest(layerInvalidRect);
+  InvalidateSelf(&layerInvalidRect, &frameInvalidRect);
   return NS_OK;
+}
+
+void
+nsImageFrame::InvalidateSelf(const nsIntRect* aLayerInvalidRect,
+                             const nsRect* aFrameInvalidRect)
+{
+  InvalidateLayer(nsDisplayItem::TYPE_IMAGE,
+                  aLayerInvalidRect,
+                  aFrameInvalidRect);
+
+  if (!mFirstFrameComplete) {
+    InvalidateLayer(nsDisplayItem::TYPE_ALT_FEEDBACK,
+                    aLayerInvalidRect,
+                    aFrameInvalidRect);
+  }
 }
 
 nsresult
@@ -728,23 +701,6 @@ nsImageFrame::NotifyNewCurrentRequest(imgIRequest *aRequest,
     // Update border+content to account for image change
     InvalidateFrame();
   }
-}
-
-nsresult
-nsImageFrame::FrameChanged(imgIRequest *aRequest,
-                           imgIContainer *aContainer)
-{
-  if (!StyleVisibility()->IsVisible()) {
-    return NS_OK;
-  }
-
-  if (IsPendingLoad(aContainer)) {
-    // We don't care about it
-    return NS_OK;
-  }
-
-  InvalidateLayer(nsDisplayItem::TYPE_IMAGE);
-  return NS_OK;
 }
 
 void
@@ -1246,7 +1202,7 @@ nsImageFrame::DisplayAltFeedback(nsRenderingContext& aRenderingContext,
                                  nsPoint              aPt)
 {
   // We should definitely have a gIconLoad here.
-  NS_ABORT_IF_FALSE(gIconLoad, "How did we succeed in Init then?");
+  MOZ_ASSERT(gIconLoad, "How did we succeed in Init then?");
 
   // Calculate the inner area
   nsRect  inner = GetInnerArea() + aPt;
@@ -1367,7 +1323,8 @@ nsImageFrame::DisplayAltFeedback(nsRenderingContext& aRenderingContext,
     nsIContent* content = GetContent();
     if (content) {
       nsXPIDLString altText;
-      nsCSSFrameConstructor::GetAlternateTextFor(content, content->Tag(),
+      nsCSSFrameConstructor::GetAlternateTextFor(content,
+                                                 content->NodeInfo()->NameAtom(),
                                                  altText);
       DisplayAltText(PresContext(), aRenderingContext, altText, inner);
     }
@@ -1426,7 +1383,7 @@ nsDisplayImage::ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
     static_cast<const nsDisplayItemGenericImageGeometry*>(aGeometry);
 
   if (aBuilder->ShouldSyncDecodeImages() &&
-      geometry->LastDrawResult() != DrawResult::SUCCESS) {
+      geometry->ShouldInvalidateToSyncDecodeImages()) {
     bool snap;
     aInvalidRegion->Or(*aInvalidRegion, GetBounds(aBuilder, &snap));
   }

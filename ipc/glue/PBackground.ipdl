@@ -6,12 +6,19 @@ include protocol PBackgroundIDBFactory;
 include protocol PBackgroundTest;
 include protocol PBlob;
 include protocol PBroadcastChannel;
+include protocol PCache;
+include protocol PCacheStorage;
+include protocol PCacheStreamControl;
 include protocol PFileDescriptorSet;
 include protocol PVsync;
 
 include DOMTypes;
 include PBackgroundSharedTypes;
 include PBackgroundIDBSharedTypes;
+include ServiceWorkerRegistrarTypes;
+
+using mozilla::dom::cache::Namespace from "mozilla/dom/cache/Types.h";
+include "mozilla/dom/cache/IPCUtils.h";
 
 namespace mozilla {
 namespace ipc {
@@ -22,6 +29,9 @@ sync protocol PBackground
   manages PBackgroundTest;
   manages PBlob;
   manages PBroadcastChannel;
+  manages PCache;
+  manages PCacheStorage;
+  manages PCacheStreamControl;
   manages PFileDescriptorSet;
   manages PVsync;
 
@@ -34,6 +44,17 @@ parent:
   PVsync();
 
   PBroadcastChannel(PrincipalInfo pInfo, nsString origin, nsString channel);
+
+  RegisterServiceWorker(ServiceWorkerRegistrationData data);
+  UnregisterServiceWorker(PrincipalInfo principalInfo,
+                          nsString scope);
+  ShutdownServiceWorkerRegistrar();
+
+  PCacheStorage(Namespace aNamespace, PrincipalInfo aPrincipalInfo);
+
+child:
+  PCache();
+  PCacheStreamControl();
 
 both:
   PBlob(BlobConstructorParams params);

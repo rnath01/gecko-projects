@@ -20,7 +20,7 @@ public:
                        const mp4_demuxer::VideoDecoderConfig& aConfig,
                        layers::LayersBackend aLayersBackend,
                        layers::ImageContainer* aImageContainer,
-                       MediaTaskQueue* aVideoTaskQueue,
+                       FlushableMediaTaskQueue* aVideoTaskQueue,
                        MediaDataDecoderCallback* aCallback);
 
   virtual ~AVCCMediaDataDecoder();
@@ -35,6 +35,7 @@ public:
   virtual void AllocateMediaResources() MOZ_OVERRIDE;
   virtual void ReleaseMediaResources() MOZ_OVERRIDE;
   virtual void ReleaseDecoder() MOZ_OVERRIDE;
+  virtual bool IsHardwareAccelerated() const MOZ_OVERRIDE;
 
 private:
   // Will create the required MediaDataDecoder if we have a AVC SPS.
@@ -47,7 +48,7 @@ private:
   mp4_demuxer::VideoDecoderConfig mCurrentConfig;
   layers::LayersBackend mLayersBackend;
   nsRefPtr<layers::ImageContainer> mImageContainer;
-  nsRefPtr<MediaTaskQueue> mVideoTaskQueue;
+  nsRefPtr<FlushableMediaTaskQueue> mVideoTaskQueue;
   MediaDataDecoderCallback* mCallback;
   nsRefPtr<MediaDataDecoder> mDecoder;
   nsresult mLastError;
@@ -57,7 +58,7 @@ AVCCMediaDataDecoder::AVCCMediaDataDecoder(PlatformDecoderModule* aPDM,
                                            const mp4_demuxer::VideoDecoderConfig& aConfig,
                                            layers::LayersBackend aLayersBackend,
                                            layers::ImageContainer* aImageContainer,
-                                           MediaTaskQueue* aVideoTaskQueue,
+                                           FlushableMediaTaskQueue* aVideoTaskQueue,
                                            MediaDataDecoderCallback* aCallback)
   : mPDM(aPDM)
   , mCurrentConfig(aConfig)
@@ -87,7 +88,9 @@ AVCCMediaDataDecoder::Init()
 nsresult
 AVCCMediaDataDecoder::Input(mp4_demuxer::MP4Sample* aSample)
 {
-  mp4_demuxer::AnnexB::ConvertSampleToAVCC(aSample);
+  if (!mp4_demuxer::AnnexB::ConvertSampleToAVCC(aSample)) {
+    return NS_ERROR_FAILURE;
+  }
   if (!mDecoder) {
     // It is not possible to create an AVCC H264 decoder without SPS.
     // As such, creation will fail if the extra_data just extracted doesn't
@@ -209,6 +212,15 @@ AVCCMediaDataDecoder::CreateDecoderAndInit(mp4_demuxer::MP4Sample* aSample)
   return Init();
 }
 
+bool
+AVCCMediaDataDecoder::IsHardwareAccelerated() const
+{
+  if (mDecoder) {
+    return mDecoder->IsHardwareAccelerated();
+  }
+  return MediaDataDecoder::IsHardwareAccelerated();
+}
+
 // AVCCDecoderModule
 
 AVCCDecoderModule::AVCCDecoderModule(PlatformDecoderModule* aPDM)
@@ -237,7 +249,7 @@ already_AddRefed<MediaDataDecoder>
 AVCCDecoderModule::CreateVideoDecoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
                                       layers::LayersBackend aLayersBackend,
                                       layers::ImageContainer* aImageContainer,
-                                      MediaTaskQueue* aVideoTaskQueue,
+                                      FlushableMediaTaskQueue* aVideoTaskQueue,
                                       MediaDataDecoderCallback* aCallback)
 {
   nsRefPtr<MediaDataDecoder> decoder;
@@ -263,7 +275,7 @@ AVCCDecoderModule::CreateVideoDecoder(const mp4_demuxer::VideoDecoderConfig& aCo
 
 already_AddRefed<MediaDataDecoder>
 AVCCDecoderModule::CreateAudioDecoder(const mp4_demuxer::AudioDecoderConfig& aConfig,
-                                      MediaTaskQueue* aAudioTaskQueue,
+                                      FlushableMediaTaskQueue* aAudioTaskQueue,
                                       MediaDataDecoderCallback* aCallback)
 {
   return mPDM->CreateAudioDecoder(aConfig,

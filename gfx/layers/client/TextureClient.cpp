@@ -86,7 +86,6 @@ public:
   TextureChild()
   : mForwarder(nullptr)
   , mTextureClient(nullptr)
-  , mKeep(nullptr)
   , mIPCOpen(false)
   {
   }
@@ -135,7 +134,7 @@ private:
   RefPtr<CompositableForwarder> mForwarder;
   RefPtr<TextureClient> mWaitForRecycle;
   TextureClient* mTextureClient;
-  KeepAlive* mKeep;
+  UniquePtr<KeepAlive> mKeep;
   bool mIPCOpen;
 
   friend class TextureClient;
@@ -154,7 +153,7 @@ TextureChild::ActorDestroy(ActorDestroyReason why)
     mTextureClient->mActor = nullptr;
   }
   mWaitForRecycle = nullptr;
-  delete mKeep;
+  mKeep = nullptr;
 }
 
 // static
@@ -496,11 +495,11 @@ TextureClient::~TextureClient()
 }
 
 void
-TextureClient::KeepUntilFullDeallocation(KeepAlive* aKeep)
+TextureClient::KeepUntilFullDeallocation(UniquePtr<KeepAlive> aKeep)
 {
   MOZ_ASSERT(mActor);
   MOZ_ASSERT(!mActor->mKeep);
-  mActor->mKeep = aKeep;
+  mActor->mKeep = Move(aKeep);
 }
 
 void TextureClient::ForceRemove(bool sync)
@@ -746,7 +745,7 @@ BufferTextureClient::AllocateForSurface(gfx::IntSize aSize, TextureAllocationFla
   }
 
   uint32_t bufSize = ImageDataSerializer::ComputeMinBufferSize(aSize, mFormat);
-  if (!Allocate(bufSize)) {
+  if (!bufSize || !Allocate(bufSize)) {
     return false;
   }
 
@@ -861,7 +860,7 @@ BufferTextureClient::AllocateForYCbCr(gfx::IntSize aYSize,
 
   size_t bufSize = YCbCrImageDataSerializer::ComputeMinBufferSize(aYSize,
                                                                   aCbCrSize);
-  if (!Allocate(bufSize)) {
+  if (!bufSize || !Allocate(bufSize)) {
     return false;
   }
   YCbCrImageDataSerializer serializer(GetBuffer(), GetBufferSize());
@@ -881,20 +880,6 @@ BufferTextureClient::GetLockedData() const
   MOZ_ASSERT(serializer.IsValid());
 
   return serializer.GetData();
-}
-
-TemporaryRef<gfx::DataSourceSurface>
-BufferTextureClient::GetAsSurface()
-{
-  ImageDataSerializer serializer(GetBuffer(), GetBufferSize());
-  MOZ_ASSERT(serializer.IsValid());
-
-  RefPtr<gfx::DataSourceSurface> wrappingSurf =
-    gfx::Factory::CreateWrappingDataSourceSurface(serializer.GetData(),
-                                                  serializer.GetStride(),
-                                                  serializer.GetSize(),
-                                                  serializer.GetFormat());
-  return gfx::CreateDataSourceSurfaceByCloning(wrappingSurf);
 }
 
 ////////////////////////////////////////////////////////////////////////

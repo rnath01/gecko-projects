@@ -11,7 +11,7 @@ dictionary InstallParameters {
 
 dictionary LanguageDesc {
   DOMString target;
-  DOMString version;
+  long revision;
   DOMString name;
 };
 
@@ -106,6 +106,12 @@ interface DOMApplication : EventTarget {
 
   // Export this app as a shareable Blob.
   Promise<Blob> export();
+
+  // Returns the localized value of a property, using either the manifest or
+  // a langpack if one is available.
+  Promise<DOMString> getLocalizedValue(DOMString property,
+                                       DOMString locale,
+                                       optional DOMString entryPoint);
 };
 
 [JSImplementation="@mozilla.org/webapps/manager;1",
@@ -121,6 +127,8 @@ interface DOMApplicationsManager : EventTarget {
   Promise<any> extractManifest(Blob blob);
 
   void setEnabled(DOMApplication app, boolean state);
+  Promise<Blob> getIcon(DOMApplication app, DOMString iconID,
+                        optional DOMString entryPoint);
 
   attribute EventHandler oninstall;
   attribute EventHandler onuninstall;

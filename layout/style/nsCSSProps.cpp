@@ -73,15 +73,30 @@ static const char* const kCSSRawCounterDescs[] = {
 };
 
 static const char* const kCSSRawPredefinedCounterStyles[] = {
-  "none", "decimal", "decimal-leading-zero", "cjk-decimal",
-  "lower-roman", "upper-roman", "armenian", "georgian", "hebrew",
+  "none",
+  // 6 Simple Predefined Counter Styles
+  // 6.1 Numeric
+  "decimal", "decimal-leading-zero", "arabic-indic", "armenian",
+  "upper-armenian", "lower-armenian", "bengali", "cambodian", "khmer",
+  "cjk-decimal", "devanagari", "georgian", "gujarati", "gurmukhi", "hebrew",
+  "kannada", "lao", "malayalam", "mongolian", "myanmar", "oriya", "persian",
+  "lower-roman", "upper-roman", "tamil", "telugu", "thai", "tibetan",
+  // 6.2 Alphabetic
   "lower-alpha", "lower-latin", "upper-alpha", "upper-latin",
-  "lower-greek", "hiragana", "hiragana-iroha", "katakana", "katakana-iroha",
+  "cjk-earthly-branch", "cjk-heavenly-stem", "lower-greek",
+  "hiragana", "hiragana-iroha", "katakana", "katakana-iroha",
+  // 6.3 Symbolic
   "disc", "circle", "square", "disclosure-open", "disclosure-closed",
+  // 7 Complex Predefined Counter Styles
+  // 7.1 Longhand East Asian Counter Styles
+  // 7.1.1 Japanese
   "japanese-informal", "japanese-formal",
+  // 7.1.2 Korean
   "korean-hangul-formal", "korean-hanja-informal", "korean-hanja-formal",
+  // 7.1.3 Chinese
   "simp-chinese-informal", "simp-chinese-formal",
   "trad-chinese-informal", "trad-chinese-formal", "cjk-ideographic",
+  // 7.2 Ethiopic Numeric Counter Style
   "ethiopic-numeric"
 };
 
@@ -127,10 +142,10 @@ CreateStaticTable(const char* const aRawTable[], int32_t aLength)
       nsAutoCString temp1(aRawTable[index]);
       nsAutoCString temp2(aRawTable[index]);
       ToLowerCase(temp1);
-      NS_ABORT_IF_FALSE(temp1.Equals(temp2),
-                        "upper case char in case insensitive name table");
-      NS_ABORT_IF_FALSE(-1 == temp1.FindChar('_'),
-                        "underscore char in case insensitive name table");
+      MOZ_ASSERT(temp1.Equals(temp2),
+                 "upper case char in case insensitive name table");
+      MOZ_ASSERT(-1 == temp1.FindChar('_'),
+                 "underscore char in case insensitive name table");
     }
 #endif
     table->Init(aRawTable, aLength);
@@ -142,10 +157,10 @@ void
 nsCSSProps::AddRefTable(void)
 {
   if (0 == gPropertyTableRefCount++) {
-    NS_ABORT_IF_FALSE(!gPropertyTable, "pre existing array!");
-    NS_ABORT_IF_FALSE(!gFontDescTable, "pre existing array!");
-    NS_ABORT_IF_FALSE(!gCounterDescTable, "pre existing array!");
-    NS_ABORT_IF_FALSE(!gPredefinedCounterStyleTable, "pre existing array!");
+    MOZ_ASSERT(!gPropertyTable, "pre existing array!");
+    MOZ_ASSERT(!gFontDescTable, "pre existing array!");
+    MOZ_ASSERT(!gCounterDescTable, "pre existing array!");
+    MOZ_ASSERT(!gPredefinedCounterStyleTable, "pre existing array!");
 
     gPropertyTable = CreateStaticTable(
         kCSSRawProperties, eCSSProperty_COUNT_with_aliases);
@@ -251,9 +266,8 @@ nsCSSProps::BuildShorthandsContainingTable()
     for (const nsCSSProperty* subprops = SubpropertyEntryFor(shorthand);
          *subprops != eCSSProperty_UNKNOWN;
          ++subprops) {
-      NS_ABORT_IF_FALSE(0 <= *subprops &&
-                        *subprops < eCSSProperty_COUNT_no_shorthands,
-                        "subproperty must be a longhand");
+      MOZ_ASSERT(0 <= *subprops && *subprops < eCSSProperty_COUNT_no_shorthands,
+                 "subproperty must be a longhand");
       ++occurrenceCounts[*subprops];
       ++subpropCountsEntry.count;
     }
@@ -290,7 +304,7 @@ nsCSSProps::BuildShorthandsContainingTable()
         gShorthandsContainingTable[longhand] = lastTerminator;
       }
     }
-    NS_ABORT_IF_FALSE(poolCursor == lastTerminator, "miscalculation");
+    MOZ_ASSERT(poolCursor == lastTerminator, "miscalculation");
   }
 
   // Sort with lowest count at the start and highest at the end, and
@@ -357,9 +371,9 @@ nsCSSProps::BuildShorthandsContainingTable()
         if (*shcont == shorthand)
           ++count;
       }
-      NS_ABORT_IF_FALSE(count == 1,
-                        "subproperty of shorthand should have shorthand"
-                        " in its ShorthandsContaining() table");
+      MOZ_ASSERT(count == 1,
+                 "subproperty of shorthand should have shorthand"
+                 " in its ShorthandsContaining() table");
     }
   }
 
@@ -377,9 +391,9 @@ nsCSSProps::BuildShorthandsContainingTable()
         if (*subprops == longhand)
           ++count;
       }
-      NS_ABORT_IF_FALSE(count == 1,
-                        "longhand should be in subproperty table of "
-                        "property in its ShorthandsContaining() table");
+      MOZ_ASSERT(count == 1,
+                 "longhand should be in subproperty table of "
+                 "property in its ShorthandsContaining() table");
     }
   }
 #endif
@@ -436,7 +450,7 @@ nsCSSProperty
 nsCSSProps::LookupProperty(const nsACString& aProperty,
                            EnabledState aEnabled)
 {
-  NS_ABORT_IF_FALSE(gPropertyTable, "no lookup table, needs addref");
+  MOZ_ASSERT(gPropertyTable, "no lookup table, needs addref");
 
   if (nsLayoutUtils::CSSVariablesEnabled() &&
       IsCustomPropertyName(aProperty)) {
@@ -456,8 +470,8 @@ nsCSSProps::LookupProperty(const nsACString& aProperty,
   // for aliases yet because it's unlikely there will be a need for it.
   if (IsEnabled(res) || aEnabled == eIgnoreEnabledState) {
     res = gAliases[res - eCSSProperty_COUNT];
-    NS_ABORT_IF_FALSE(0 <= res && res < eCSSProperty_COUNT,
-                      "aliases must not point to other aliases");
+    MOZ_ASSERT(0 <= res && res < eCSSProperty_COUNT,
+               "aliases must not point to other aliases");
     if (IsEnabled(res) || aEnabled == eIgnoreEnabledState) {
       return res;
     }
@@ -476,7 +490,7 @@ nsCSSProps::LookupProperty(const nsAString& aProperty, EnabledState aEnabled)
   // This is faster than converting and calling
   // LookupProperty(nsACString&).  The table will do its own
   // converting and avoid a PromiseFlatCString() call.
-  NS_ABORT_IF_FALSE(gPropertyTable, "no lookup table, needs addref");
+  MOZ_ASSERT(gPropertyTable, "no lookup table, needs addref");
   nsCSSProperty res = nsCSSProperty(gPropertyTable->Lookup(aProperty));
   if (MOZ_LIKELY(res < eCSSProperty_COUNT)) {
     if (res != eCSSProperty_UNKNOWN && !IsEnabled(res, aEnabled)) {
@@ -490,8 +504,8 @@ nsCSSProps::LookupProperty(const nsAString& aProperty, EnabledState aEnabled)
   // because it's unlikely there will be a need for it.
   if (IsEnabled(res) || aEnabled == eIgnoreEnabledState) {
     res = gAliases[res - eCSSProperty_COUNT];
-    NS_ABORT_IF_FALSE(0 <= res && res < eCSSProperty_COUNT,
-                      "aliases must not point to other aliases");
+    MOZ_ASSERT(0 <= res && res < eCSSProperty_COUNT,
+               "aliases must not point to other aliases");
     if (IsEnabled(res) || aEnabled == eIgnoreEnabledState) {
       return res;
     }
@@ -502,14 +516,14 @@ nsCSSProps::LookupProperty(const nsAString& aProperty, EnabledState aEnabled)
 nsCSSFontDesc
 nsCSSProps::LookupFontDesc(const nsACString& aFontDesc)
 {
-  NS_ABORT_IF_FALSE(gFontDescTable, "no lookup table, needs addref");
+  MOZ_ASSERT(gFontDescTable, "no lookup table, needs addref");
   return nsCSSFontDesc(gFontDescTable->Lookup(aFontDesc));
 }
 
 nsCSSFontDesc
 nsCSSProps::LookupFontDesc(const nsAString& aFontDesc)
 {
-  NS_ABORT_IF_FALSE(gFontDescTable, "no lookup table, needs addref");
+  MOZ_ASSERT(gFontDescTable, "no lookup table, needs addref");
   nsCSSFontDesc which = nsCSSFontDesc(gFontDescTable->Lookup(aFontDesc));
 
   // check for unprefixed font-feature-settings/font-language-override
@@ -525,22 +539,22 @@ nsCSSProps::LookupFontDesc(const nsAString& aFontDesc)
 nsCSSCounterDesc
 nsCSSProps::LookupCounterDesc(const nsAString& aProperty)
 {
-  NS_ABORT_IF_FALSE(gCounterDescTable, "no lookup table, needs addref");
+  MOZ_ASSERT(gCounterDescTable, "no lookup table, needs addref");
   return nsCSSCounterDesc(gCounterDescTable->Lookup(aProperty));
 }
 
 nsCSSCounterDesc
 nsCSSProps::LookupCounterDesc(const nsACString& aProperty)
 {
-  NS_ABORT_IF_FALSE(gCounterDescTable, "no lookup table, needs addref");
+  MOZ_ASSERT(gCounterDescTable, "no lookup table, needs addref");
   return nsCSSCounterDesc(gCounterDescTable->Lookup(aProperty));
 }
 
 bool
 nsCSSProps::IsPredefinedCounterStyle(const nsAString& aStyle)
 {
-  NS_ABORT_IF_FALSE(gPredefinedCounterStyleTable,
-                    "no lookup table, needs addref");
+  MOZ_ASSERT(gPredefinedCounterStyleTable,
+             "no lookup table, needs addref");
   return gPredefinedCounterStyleTable->Lookup(aStyle) !=
     nsStaticCaseInsensitiveNameTable::NOT_FOUND;
 }
@@ -548,8 +562,8 @@ nsCSSProps::IsPredefinedCounterStyle(const nsAString& aStyle)
 bool
 nsCSSProps::IsPredefinedCounterStyle(const nsACString& aStyle)
 {
-  NS_ABORT_IF_FALSE(gPredefinedCounterStyleTable,
-                    "no lookup table, needs addref");
+  MOZ_ASSERT(gPredefinedCounterStyleTable,
+             "no lookup table, needs addref");
   return gPredefinedCounterStyleTable->Lookup(aStyle) !=
     nsStaticCaseInsensitiveNameTable::NOT_FOUND;
 }
@@ -557,7 +571,7 @@ nsCSSProps::IsPredefinedCounterStyle(const nsACString& aStyle)
 const nsAFlatCString&
 nsCSSProps::GetStringValue(nsCSSProperty aProperty)
 {
-  NS_ABORT_IF_FALSE(gPropertyTable, "no lookup table, needs addref");
+  MOZ_ASSERT(gPropertyTable, "no lookup table, needs addref");
   if (gPropertyTable) {
     return gPropertyTable->GetStringValue(int32_t(aProperty));
   } else {
@@ -569,7 +583,7 @@ nsCSSProps::GetStringValue(nsCSSProperty aProperty)
 const nsAFlatCString&
 nsCSSProps::GetStringValue(nsCSSFontDesc aFontDescID)
 {
-  NS_ABORT_IF_FALSE(gFontDescTable, "no lookup table, needs addref");
+  MOZ_ASSERT(gFontDescTable, "no lookup table, needs addref");
   if (gFontDescTable) {
     return gFontDescTable->GetStringValue(int32_t(aFontDescID));
   } else {
@@ -581,7 +595,7 @@ nsCSSProps::GetStringValue(nsCSSFontDesc aFontDescID)
 const nsAFlatCString&
 nsCSSProps::GetStringValue(nsCSSCounterDesc aCounterDesc)
 {
-  NS_ABORT_IF_FALSE(gCounterDescTable, "no lookup table, needs addref");
+  MOZ_ASSERT(gCounterDescTable, "no lookup table, needs addref");
   if (gCounterDescTable) {
     return gCounterDescTable->GetStringValue(int32_t(aCounterDesc));
   } else {
@@ -1624,6 +1638,14 @@ const KTableValue nsCSSProps::kResizeKTable[] = {
   eCSSKeyword_UNKNOWN,-1
 };
 
+const KTableValue nsCSSProps::kRubyAlignKTable[] = {
+  eCSSKeyword_start, NS_STYLE_RUBY_ALIGN_START,
+  eCSSKeyword_center, NS_STYLE_RUBY_ALIGN_CENTER,
+  eCSSKeyword_space_between, NS_STYLE_RUBY_ALIGN_SPACE_BETWEEN,
+  eCSSKeyword_space_around, NS_STYLE_RUBY_ALIGN_SPACE_AROUND,
+  eCSSKeyword_UNKNOWN, -1
+};
+
 const KTableValue nsCSSProps::kRubyPositionKTable[] = {
   eCSSKeyword_over, NS_STYLE_RUBY_POSITION_OVER,
   eCSSKeyword_under, NS_STYLE_RUBY_POSITION_UNDER,
@@ -1635,6 +1657,13 @@ const KTableValue nsCSSProps::kRubyPositionKTable[] = {
 const KTableValue nsCSSProps::kScrollBehaviorKTable[] = {
   eCSSKeyword_auto,       NS_STYLE_SCROLL_BEHAVIOR_AUTO,
   eCSSKeyword_smooth,     NS_STYLE_SCROLL_BEHAVIOR_SMOOTH,
+  eCSSKeyword_UNKNOWN,-1
+};
+
+const KTableValue nsCSSProps::kScrollSnapTypeKTable[] = {
+  eCSSKeyword_none,      NS_STYLE_SCROLL_SNAP_TYPE_NONE,
+  eCSSKeyword_mandatory, NS_STYLE_SCROLL_SNAP_TYPE_MANDATORY,
+  eCSSKeyword_proximity, NS_STYLE_SCROLL_SNAP_TYPE_PROXIMITY,
   eCSSKeyword_UNKNOWN,-1
 };
 
@@ -2125,8 +2154,8 @@ nsCSSProps::kKeywordTableTable[eCSSProperty_COUNT_no_shorthands] = {
 const nsAFlatCString&
 nsCSSProps::LookupPropertyValue(nsCSSProperty aProp, int32_t aValue)
 {
-  NS_ABORT_IF_FALSE(aProp >= 0 && aProp < eCSSProperty_COUNT,
-                    "property out of range");
+  MOZ_ASSERT(aProp >= 0 && aProp < eCSSProperty_COUNT,
+             "property out of range");
   NS_ASSERTION(KTableValue(aValue) == aValue, "Value out of range");
 
   const KTableValue* kwtable = nullptr;
@@ -2571,6 +2600,12 @@ static const nsCSSProperty gMozTransformSubpropTable[] = {
   eCSSProperty_UNKNOWN
 };
 
+static const nsCSSProperty gScrollSnapTypeSubpropTable[] = {
+  eCSSProperty_scroll_snap_type_x,
+  eCSSProperty_scroll_snap_type_y,
+  eCSSProperty_UNKNOWN
+};
+
 const nsCSSProperty *const
 nsCSSProps::kSubpropertyTable[eCSSProperty_COUNT - eCSSProperty_COUNT_no_shorthands] = {
 #define CSS_PROP_PUBLIC_OR_PRIVATE(publicname_, privatename_) privatename_
@@ -2641,11 +2676,10 @@ static const int gLogicalGroupMappingTable[] = {
 /* static */ const nsCSSProperty*
 nsCSSProps::LogicalGroup(nsCSSProperty aProperty)
 {
-  NS_ABORT_IF_FALSE(0 <= aProperty &&
-                      aProperty < eCSSProperty_COUNT_no_shorthands,
-                    "out of range");
-  NS_ABORT_IF_FALSE(nsCSSProps::PropHasFlags(aProperty, CSS_PROPERTY_LOGICAL),
-                    "aProperty must be a logical longhand property");
+  MOZ_ASSERT(0 <= aProperty && aProperty < eCSSProperty_COUNT_no_shorthands,
+             "out of range");
+  MOZ_ASSERT(nsCSSProps::PropHasFlags(aProperty, CSS_PROPERTY_LOGICAL),
+             "aProperty must be a logical longhand property");
 
   for (size_t i = 0; i < ArrayLength(gLogicalGroupMappingTable); i += 2) {
     if (gLogicalGroupMappingTable[i] == aProperty) {
@@ -2653,7 +2687,7 @@ nsCSSProps::LogicalGroup(nsCSSProperty aProperty)
     }
   }
 
-  NS_ABORT_IF_FALSE(false, "missing gLogicalGroupMappingTable entry");
+  MOZ_ASSERT(false, "missing gLogicalGroupMappingTable entry");
   return nullptr;
 }
 

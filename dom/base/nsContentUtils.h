@@ -157,7 +157,7 @@ struct EventNameMapping
 {
   // This holds pointers to nsGkAtoms members, and is therefore safe as a
   // non-owning reference.
-  nsIAtom* MOZ_OWNING_REF mAtom;
+  nsIAtom* MOZ_NON_OWNING_REF mAtom;
   uint32_t mId;
   int32_t  mType;
   mozilla::EventClassID mEventClassID;
@@ -361,7 +361,7 @@ public:
   /**
    * Is the HTML local name a block element?
    */
-  static bool IsHTMLBlock(nsIAtom* aLocalName);
+  static bool IsHTMLBlock(nsIContent* aContent);
 
   enum ParseHTMLIntegerResultFlags {
     eParseHTMLInteger_NoFlags               = 0,
@@ -614,6 +614,11 @@ public:
                            uint32_t aContentPolicyType = nsIContentPolicy::TYPE_IMAGE);
 
   /**
+   * Returns true if objects in aDocument shouldn't initiate image loads.
+   */
+  static bool DocumentInactiveForImageLoads(nsIDocument* aDocument);
+
+  /**
    * Method to start an image load.  This does not do any security checks.
    * This method will attempt to make aURI immutable; a caller that wants to
    * keep a mutable version around should pass in a clone.
@@ -646,7 +651,8 @@ public:
    * Null document/channel arguments return the public image loader.
    */
   static imgLoader* GetImgLoaderForDocument(nsIDocument* aDoc);
-  static imgLoader* GetImgLoaderForChannel(nsIChannel* aChannel);
+  static imgLoader* GetImgLoaderForChannel(nsIChannel* aChannel,
+                                           nsIDocument* aContext);
 
   /**
    * Returns whether the given URI is in the image cache.
@@ -1651,11 +1657,11 @@ public:
    * @note this should be used for HTML5 origin determination.
    */
   static nsresult GetASCIIOrigin(nsIPrincipal* aPrincipal,
-                                 nsCString& aOrigin);
-  static nsresult GetASCIIOrigin(nsIURI* aURI, nsCString& aOrigin);
+                                 nsACString& aOrigin);
+  static nsresult GetASCIIOrigin(nsIURI* aURI, nsACString& aOrigin);
   static nsresult GetUTFOrigin(nsIPrincipal* aPrincipal,
-                               nsString& aOrigin);
-  static nsresult GetUTFOrigin(nsIURI* aURI, nsString& aOrigin);
+                               nsAString& aOrigin);
+  static nsresult GetUTFOrigin(nsIURI* aURI, nsAString& aOrigin);
 
   /**
    * This method creates and dispatches "command" event, which implements
@@ -2014,7 +2020,7 @@ public:
   };
 
   static already_AddRefed<nsIDocumentLoaderFactory>
-  FindInternalContentViewer(const char* aType,
+  FindInternalContentViewer(const nsACString& aType,
                             ContentViewerType* aLoaderType = nullptr);
 
   /**
@@ -2175,6 +2181,14 @@ public:
                                         Element* aRoot,
                                         int32_t& aOutStartOffset,
                                         int32_t& aOutEndOffset);
+
+  /**
+   * Takes a selection, and return selection's bounding rect which is relative
+   * to root frame.
+   *
+   * @param aSel      Selection to check
+   */
+  static nsRect GetSelectionBoundingRect(mozilla::dom::Selection* aSel);
 
   /**
    * Takes a frame for anonymous content within a text control (<input> or

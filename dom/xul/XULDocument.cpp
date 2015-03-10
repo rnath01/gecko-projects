@@ -216,8 +216,7 @@ XULDocument::~XULDocument()
 
     // Destroy our broadcaster map.
     if (mBroadcasterMap) {
-        PL_DHashTableFinish(mBroadcasterMap);
-        delete mBroadcasterMap;
+        PL_DHashTableDestroy(mBroadcasterMap);
     }
 
     delete mTemplateBuilderTable;
@@ -769,8 +768,12 @@ XULDocument::AddBroadcastListenerFor(Element& aBroadcaster, Element& aListener,
     };
 
     if (! mBroadcasterMap) {
-        mBroadcasterMap = new PLDHashTable();
-        PL_DHashTableInit(mBroadcasterMap, &gOps, sizeof(BroadcasterMapEntry));
+        mBroadcasterMap = PL_NewDHashTable(&gOps, sizeof(BroadcasterMapEntry));
+
+        if (! mBroadcasterMap) {
+            aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
+            return;
+        }
     }
 
     BroadcasterMapEntry* entry =
@@ -927,7 +930,7 @@ XULDocument::AttributeWillChange(nsIDocument* aDocument,
                                  Element* aElement, int32_t aNameSpaceID,
                                  nsIAtom* aAttribute, int32_t aModType)
 {
-    NS_ABORT_IF_FALSE(aElement, "Null content!");
+    MOZ_ASSERT(aElement, "Null content!");
     NS_PRECONDITION(aAttribute, "Must have an attribute that's changing!");
 
     // XXXbz check aNameSpaceID, dammit!
@@ -4088,12 +4091,11 @@ XULDocument::BroadcasterHookup::~BroadcasterHookup()
 #ifdef PR_LOGGING
     if (PR_LOG_TEST(gXULLog, PR_LOG_WARNING) && !mResolved) {
         // Tell the world we failed
-        nsIAtom *tag = mObservesElement->Tag();
 
         nsAutoString broadcasterID;
         nsAutoString attribute;
 
-        if (tag == nsGkAtoms::observes) {
+        if (mObservesElement->IsXULElement(nsGkAtoms::observes)) {
             mObservesElement->GetAttr(kNameSpaceID_None, nsGkAtoms::element, broadcasterID);
             mObservesElement->GetAttr(kNameSpaceID_None, nsGkAtoms::attribute, attribute);
         }
@@ -4107,7 +4109,7 @@ XULDocument::BroadcasterHookup::~BroadcasterHookup()
         broadcasteridC.AssignWithConversion(broadcasterID);
         PR_LOG(gXULLog, PR_LOG_WARNING,
                ("xul: broadcaster hookup failed <%s attribute='%s'> to %s",
-                nsAtomCString(tag).get(),
+                nsAtomCString(mObservesElement->NodeInfo()->NameAtom()).get(),
                 attributeC.get(),
                 broadcasteridC.get()));
     }
@@ -4323,7 +4325,7 @@ XULDocument::CheckBroadcasterHookup(Element* aElement,
         broadcasteridC.AssignWithConversion(broadcasterID);
         PR_LOG(gXULLog, PR_LOG_NOTICE,
                ("xul: broadcaster hookup <%s attribute='%s'> to %s",
-                nsAtomCString(content->Tag()).get(),
+                nsAtomCString(content->NodeInfo()->NameAtom()).get(),
                 attributeC.get(),
                 broadcasteridC.get()));
     }

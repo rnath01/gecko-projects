@@ -13,9 +13,48 @@ XPCOMUtils.defineLazyModuleGetter(this, "PanelFrame", "resource:///modules/Panel
 
 (function() {
   LoopUI = {
+    /**
+     * @var {XULWidgetSingleWrapper} toolbarButton Getter for the Loop toolbarbutton
+     *                                             instance for this window.
+     */
     get toolbarButton() {
       delete this.toolbarButton;
       return this.toolbarButton = CustomizableUI.getWidget("loop-button").forWindow(window);
+    },
+
+    /**
+     * @var {XULElement} panel Getter for the Loop panel element.
+     */
+    get panel() {
+      delete this.panel;
+      return this.panel = document.getElementById("loop-notification-panel");
+    },
+
+    /**
+     * @var {XULElement|null} browser Getter for the Loop panel browser element.
+     *                                Will be NULL if the panel hasn't loaded yet.
+     */
+    get browser() {
+      let browser = document.querySelector("#loop-notification-panel > #loop-panel-iframe");
+      if (browser) {
+        delete this.browser;
+        this.browser = browser;
+      }
+      return browser;
+    },
+
+    /**
+     * @var {String|null} selectedTab Getter for the name of the currently selected
+     *                                tab inside the Loop panel. Will be NULL if
+     *                                the panel hasn't loaded yet.
+     */
+    get selectedTab() {
+      if (!this.browser) {
+        return null;
+      }
+
+      let selectedTab = this.browser.contentDocument.querySelector(".tab-view > .selected");
+      return selectedTab && selectedTab.getAttribute("data-tab-name");
     },
 
     /**
@@ -32,6 +71,26 @@ XPCOMUtils.defineLazyModuleGetter(this, "PanelFrame", "resource:///modules/Panel
           resolve();
         });
       });
+    },
+
+    /**
+     * Toggle between opening or hiding the Loop panel.
+     *
+     * @param {DOMEvent} [event] Optional event that triggered the call to this
+     *                           function.
+     * @param {String}   [tabId] Optional name of the tab to select after the panel
+     *                           has opened. Does nothing when the panel is hidden.
+     * @return {Promise}
+     */
+    togglePanel: function(event, tabId = null) {
+      if (this.panel.state == "open") {
+        return new Promise(resolve => {
+          this.panel.hidePopup();
+          resolve();
+        });
+      }
+
+      return this.openCallPanel(event, tabId);
     },
 
     /**
@@ -193,6 +252,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "PanelFrame", "resource:///modules/Panel
       let state = "";
       if (MozLoopService.errors.size) {
         state = "error";
+      } else if (MozLoopService.screenShareActive) {
+        state = "action";
       } else if (aReason == "login" && MozLoopService.userProfile) {
         state = "active";
       } else if (MozLoopService.doNotDisturb) {
@@ -281,6 +342,64 @@ XPCOMUtils.defineLazyModuleGetter(this, "PanelFrame", "resource:///modules/Panel
       this.activeSound.play();
 
       this.activeSound.addEventListener("ended", () => this.activeSound = undefined, false);
+    },
+
+    /**
+     * Adds a listener for browser sharing. It will inform the listener straight
+     * away for the current windowId, and then on every tab change.
+     *
+     * Listener parameters:
+     * - {Object}  err       If there is a error this will be defined, null otherwise.
+     * - {Integer} windowId  The new windowId for the browser.
+     *
+     * @param {Function} listener The listener to receive information on when the
+     *                            windowId changes.
+     */
+    addBrowserSharingListener: function(listener) {
+      if (!this._tabChangeListeners) {
+        this._tabChangeListeners = new Set();
+        gBrowser.addEventListener("select", this);
+      }
+
+      this._tabChangeListeners.add(listener);
+
+      // Get the first window Id for the listener.
+      listener(null, gBrowser.selectedTab.linkedBrowser.outerWindowID);
+    },
+
+    /**
+     * Removes a listener from browser sharing.
+     *
+     * @param {Function} listener The listener to remove from the list.
+     */
+    removeBrowserSharingListener: function(listener) {
+      if (!this._tabChangeListeners) {
+        return;
+      }
+
+      if (this._tabChangeListeners.has(listener)) {
+        this._tabChangeListeners.delete(listener);
+      }
+
+      if (!this._tabChangeListeners.size) {
+        gBrowser.removeEventListener("select", this);
+        delete this._tabChangeListeners;
+      }
+    },
+
+    /**
+     * Handles events from gBrowser.
+     */
+    handleEvent: function(event) {
+      // We only should get "select" events.
+      if (event.type != "select") {
+        return;
+      }
+
+      // We've changed the tab, so get the new window id.
+      for (let listener of this._tabChangeListeners) {
+        listener(null, gBrowser.selectedTab.linkedBrowser.outerWindowID);
+      };
     },
   };
 })();

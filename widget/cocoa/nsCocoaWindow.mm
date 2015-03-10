@@ -2068,7 +2068,7 @@ void nsCocoaWindow::SetDrawsInTitlebar(bool aState)
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
-NS_IMETHODIMP nsCocoaWindow::SynthesizeNativeMouseEvent(nsIntPoint aPoint,
+NS_IMETHODIMP nsCocoaWindow::SynthesizeNativeMouseEvent(LayoutDeviceIntPoint aPoint,
                                                         uint32_t aNativeMessage,
                                                         uint32_t aModifierFlags)
 {
@@ -2163,7 +2163,6 @@ nsCocoaWindow::ExecuteNativeKeyBinding(NativeKeyBindingsType aType,
   NativeKeyBindings* keyBindings = NativeKeyBindings::GetInstance(aType);
   return keyBindings->Execute(aEvent, aCallback, aCallbackData);
 }
-
 
 @implementation WindowDelegate
 
@@ -3272,10 +3271,6 @@ static const NSString* kStateShowsToolbarButton = @"showsToolbarButton";
 
   mUnifiedToolbarHeight = aHeight;
 
-  // Update sheet positioning hint
-  CGFloat topMargin = mUnifiedToolbarHeight - [self titlebarHeight];
-  [self setContentBorderThickness:topMargin forEdge:NSMaxYEdge];
-
   // Redraw the title bar. If we're inside painting, we'll do it right now,
   // otherwise we'll just invalidate it.
   BOOL needSyncRedraw = ([NSView focusView] != nil);
@@ -3315,6 +3310,12 @@ static const NSString* kStateShowsToolbarButton = @"showsToolbarButton";
   [self setTitlebarNeedsDisplayInRect:[self titlebarRect]];
 }
 
+- (void)setSheetAttachmentPosition:(CGFloat)aY
+{
+  CGFloat topMargin = aY - [self titlebarHeight];
+  [self setContentBorderThickness:topMargin forEdge:NSMaxYEdge];
+}
+
 - (void)placeWindowButtons:(NSRect)aRect
 {
   if (!NSEqualRects(mWindowButtonsRect, aRect)) {
@@ -3325,7 +3326,7 @@ static const NSString* kStateShowsToolbarButton = @"showsToolbarButton";
 
 - (NSPoint)windowButtonsPositionWithDefaultPosition:(NSPoint)aDefaultPosition
 {
-  if ([self drawsContentsIntoWindowFrame]) {
+  if ([self drawsContentsIntoWindowFrame] && !([self styleMask] & NSFullScreenWindowMask)) {
     if (NSIsEmptyRect(mWindowButtonsRect)) {
       // Empty rect. Let's hide the buttons.
       // Position is in non-flipped window coordinates. Using frame's height
@@ -3346,7 +3347,7 @@ static const NSString* kStateShowsToolbarButton = @"showsToolbarButton";
   }
 }
 
-- (NSPoint)fullScreenButtonPositionWithDefaultPosition:(NSPoint)aDefaultPosition;
+- (NSPoint)fullScreenButtonPositionWithDefaultPosition:(NSPoint)aDefaultPosition
 {
   if ([self drawsContentsIntoWindowFrame] && !NSIsEmptyRect(mFullScreenButtonRect)) {
     return NSMakePoint(std::min(mFullScreenButtonRect.origin.x, aDefaultPosition.x),

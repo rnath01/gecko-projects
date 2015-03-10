@@ -592,18 +592,8 @@ AppendErrorTextUntrusted(PRErrorCode errTrust,
   if (!errorID) {
     switch (errTrust) {
       case SEC_ERROR_UNKNOWN_ISSUER:
-      {
-        nsCOMPtr<nsIArray> chain;
-        ix509->GetChain(getter_AddRefs(chain));
-        uint32_t length = 0;
-        if (chain && NS_FAILED(chain->GetLength(&length)))
-          length = 0;
-        if (length == 1)
-          errorID = "certErrorTrust_MissingChain";
-        else
-          errorID = "certErrorTrust_UnknownIssuer";
+        errorID = "certErrorTrust_UnknownIssuer";
         break;
-      }
       case SEC_ERROR_CA_CERT_INVALID:
         errorID = "certErrorTrust_CaInvalid";
         break;
@@ -1098,15 +1088,16 @@ RememberCertErrorsTable::LookupCertErrorBits(TransportSecurityInfo* infoObject,
 }
 
 void
-TransportSecurityInfo::SetStatusErrorBits(nsIX509Cert & cert,
+TransportSecurityInfo::SetStatusErrorBits(nsNSSCertificate* cert,
                                           uint32_t collected_errors)
 {
   MutexAutoLock lock(mMutex);
 
-  if (!mSSLStatus)
+  if (!mSSLStatus) {
     mSSLStatus = new nsSSLStatus();
+  }
 
-  mSSLStatus->SetServerCert(&cert, nsNSSCertificate::ev_status_invalid);
+  mSSLStatus->SetServerCert(cert, nsNSSCertificate::ev_status_invalid);
 
   mSSLStatus->mHaveCertErrorBits = true;
   mSSLStatus->mIsDomainMismatch = 

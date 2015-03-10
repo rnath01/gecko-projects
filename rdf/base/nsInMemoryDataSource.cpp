@@ -162,9 +162,8 @@ Assertion::Assertion(nsIRDFResource* aSource)
 
     NS_ADDREF(mSource);
 
-    u.hash.mPropertyHash = new PLDHashTable();
-    PL_DHashTableInit(u.hash.mPropertyHash, PL_DHashGetStubOps(),
-                      sizeof(Entry));
+    u.hash.mPropertyHash =
+        PL_NewDHashTable(PL_DHashGetStubOps(), sizeof(Entry));
 }
 
 Assertion::Assertion(nsIRDFResource* aSource,
@@ -195,8 +194,7 @@ Assertion::~Assertion()
     if (mHashEntry && u.hash.mPropertyHash) {
         PL_DHashTableEnumerate(u.hash.mPropertyHash, DeletePropertyHashEntry,
                                nullptr);
-        PL_DHashTableFinish(u.hash.mPropertyHash);
-        delete u.hash.mPropertyHash;
+        PL_DHashTableDestroy(u.hash.mPropertyHash);
         u.hash.mPropertyHash = nullptr;
     }
 

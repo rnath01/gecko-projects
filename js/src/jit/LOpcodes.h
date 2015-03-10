@@ -22,11 +22,14 @@
     _(SimdSplatX4)                  \
     _(Int32x4)                      \
     _(Float32x4)                    \
+    _(SimdReinterpretCast)          \
     _(SimdExtractElementI)          \
     _(SimdExtractElementF)          \
     _(SimdInsertElementI)           \
     _(SimdInsertElementF)           \
     _(SimdSignMaskX4)               \
+    _(SimdGeneralSwizzleI)          \
+    _(SimdGeneralSwizzleF)          \
     _(SimdSwizzleI)                 \
     _(SimdSwizzleF)                 \
     _(SimdShuffle)                  \
@@ -118,10 +121,10 @@
     _(CompareVAndBranch)            \
     _(CompareVM)                    \
     _(BitAndAndBranch)              \
-    _(IsNullOrLikeUndefined)        \
-    _(IsNullOrLikeUndefinedAndBranch)\
-    _(EmulatesUndefined)            \
-    _(EmulatesUndefinedAndBranch)   \
+    _(IsNullOrLikeUndefinedV)       \
+    _(IsNullOrLikeUndefinedT)       \
+    _(IsNullOrLikeUndefinedAndBranchV)\
+    _(IsNullOrLikeUndefinedAndBranchT)\
     _(MinMaxI)                      \
     _(MinMaxD)                      \
     _(MinMaxF)                      \
@@ -200,7 +203,7 @@
     _(StoreSlotV)                   \
     _(StoreSlotT)                   \
     _(GuardShape)                   \
-    _(GuardShapePolymorphic)        \
+    _(GuardReceiverPolymorphic)     \
     _(GuardObjectGroup)             \
     _(GuardObjectIdentity)          \
     _(GuardClass)                   \
@@ -219,9 +222,11 @@
     _(LoadElementHole)              \
     _(LoadUnboxedPointerV)          \
     _(LoadUnboxedPointerT)          \
+    _(UnboxObjectOrNull)            \
     _(StoreElementV)                \
     _(StoreElementT)                \
     _(StoreUnboxedPointer)          \
+    _(ConvertUnboxedObjectToNative) \
     _(ArrayPopShiftV)               \
     _(ArrayPopShiftT)               \
     _(ArrayPushV)                   \
@@ -257,7 +262,6 @@
     _(CallGetProperty)              \
     _(GetNameCache)                 \
     _(CallGetIntrinsicValue)        \
-    _(CallsiteCloneCache)           \
     _(CallGetElement)               \
     _(CallSetElement)               \
     _(CallInitElementArray)         \

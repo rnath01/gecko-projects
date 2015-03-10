@@ -83,10 +83,17 @@ nsresult
 nsHTMLEntities::AddRefTable(void)
 {
   if (!gTableRefCnt) {
-    PL_DHashTableInit(&gEntityToUnicode, &EntityToUnicodeOps,
-                      sizeof(EntityNodeEntry), NS_HTML_ENTITY_COUNT);
-    PL_DHashTableInit(&gUnicodeToEntity, &UnicodeToEntityOps,
-                      sizeof(EntityNodeEntry), NS_HTML_ENTITY_COUNT);
+    if (!PL_DHashTableInit(&gEntityToUnicode, &EntityToUnicodeOps,
+                           sizeof(EntityNodeEntry),
+                           fallible, NS_HTML_ENTITY_COUNT)) {
+      return NS_ERROR_OUT_OF_MEMORY;
+    }
+    if (!PL_DHashTableInit(&gUnicodeToEntity, &UnicodeToEntityOps,
+                           sizeof(EntityNodeEntry),
+                           fallible, NS_HTML_ENTITY_COUNT)) {
+      PL_DHashTableFinish(&gEntityToUnicode);
+      return NS_ERROR_OUT_OF_MEMORY;
+    }
     for (const EntityNode *node = gEntityArray,
                  *node_end = ArrayEnd(gEntityArray);
          node < node_end; ++node) {

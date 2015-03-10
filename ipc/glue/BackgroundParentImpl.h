@@ -83,6 +83,35 @@ protected:
 
   virtual bool
   DeallocPBroadcastChannelParent(PBroadcastChannelParent* aActor) MOZ_OVERRIDE;
+
+  virtual bool
+  RecvRegisterServiceWorker(const ServiceWorkerRegistrationData& aData)
+                            MOZ_OVERRIDE;
+
+  virtual bool
+  RecvUnregisterServiceWorker(const PrincipalInfo& aPrincipalInfo,
+                              const nsString& aScope) MOZ_OVERRIDE;
+
+  virtual bool
+  RecvShutdownServiceWorkerRegistrar() MOZ_OVERRIDE;
+
+  virtual dom::cache::PCacheStorageParent*
+  AllocPCacheStorageParent(const dom::cache::Namespace& aNamespace,
+                           const PrincipalInfo& aPrincipalInfo) MOZ_OVERRIDE;
+
+  virtual bool
+  DeallocPCacheStorageParent(dom::cache::PCacheStorageParent* aActor) MOZ_OVERRIDE;
+
+  virtual dom::cache::PCacheParent* AllocPCacheParent() MOZ_OVERRIDE;
+
+  virtual bool
+  DeallocPCacheParent(dom::cache::PCacheParent* aActor) MOZ_OVERRIDE;
+
+  virtual dom::cache::PCacheStreamControlParent*
+  AllocPCacheStreamControlParent() MOZ_OVERRIDE;
+
+  virtual bool
+  DeallocPCacheStreamControlParent(dom::cache::PCacheStreamControlParent* aActor) MOZ_OVERRIDE;
 };
 
 } // namespace ipc

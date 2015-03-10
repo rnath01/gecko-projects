@@ -45,7 +45,7 @@ namespace JS {
 #define GCREASONS(D)                            \
     /* Reasons internal to the JS engine */     \
     D(API)                                      \
-    D(MAYBEGC)                                  \
+    D(EAGER_ALLOC_TRIGGER)                      \
     D(DESTROY_RUNTIME)                          \
     D(DESTROY_CONTEXT)                          \
     D(LAST_DITCH)                               \
@@ -58,6 +58,8 @@ namespace JS {
     D(EVICT_NURSERY)                            \
     D(FULL_STORE_BUFFER)                        \
     D(SHARED_MEMORY_LIMIT)                      \
+    D(PERIODIC_FULL_GC)                         \
+    D(INCREMENTAL_TOO_SLOW)                     \
                                                 \
     /* These are reserved for future use. */    \
     D(RESERVED0)                                \
@@ -77,8 +79,6 @@ namespace JS {
     D(RESERVED14)                               \
     D(RESERVED15)                               \
     D(RESERVED16)                               \
-    D(RESERVED17)                               \
-    D(RESERVED18)                               \
                                                 \
     /* Reasons from Firefox */                  \
     D(DOM_WINDOW_UTILS)                         \
@@ -99,7 +99,8 @@ namespace JS {
     D(REFRESH_FRAME)                            \
     D(FULL_GC_TIMER)                            \
     D(SHUTDOWN_CC)                              \
-    D(FINISH_LARGE_EVALUATE)
+    D(FINISH_LARGE_EVALUATE)                    \
+    D(USER_INACTIVE)
 
 namespace gcreason {
 
@@ -263,9 +264,10 @@ enum GCProgress {
 
 struct JS_PUBLIC_API(GCDescription) {
     bool isCompartment_;
+    JSGCInvocationKind invocationKind_;
 
-    explicit GCDescription(bool isCompartment)
-      : isCompartment_(isCompartment) {}
+    GCDescription(bool isCompartment, JSGCInvocationKind kind)
+      : isCompartment_(isCompartment), invocationKind_(kind) {}
 
     char16_t *formatMessage(JSRuntime *rt) const;
     char16_t *formatJSON(JSRuntime *rt, uint64_t timestamp) const;

@@ -14,8 +14,9 @@ FIREFOX_PREFERENCES = {
     "media.volume_scale": "0",
     "loop.gettingStarted.seen": True,
     "loop.seenToS": "seen",
-    "loop.screenshare.enabled": True,
 
     # this dialog is fragile, and likely to introduce intermittent failures
-    "media.navigator.permission.disabled": True
+    "media.navigator.permission.disabled": True,
+    # Use fake streams only
+    "media.navigator.streams.fake": True
 }

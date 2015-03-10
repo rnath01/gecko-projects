@@ -472,7 +472,7 @@ nsXPConnect::InitClassesWithNewWrappedGlobal(JSContext * aJSContext,
 
     // Grab a copy of the global and enter its compartment.
     RootedObject global(aJSContext, wrappedGlobal->GetFlatJSObject());
-    MOZ_ASSERT(!js::GetObjectParent(global));
+    MOZ_ASSERT(JS_IsGlobalObject(global));
 
     if (!InitGlobalObject(aJSContext, global, aFlags))
         return UnexpectedFailure(NS_ERROR_FAILURE);
@@ -687,71 +687,6 @@ nsXPConnect::GetWrappedNativeOfNativeObject(JSContext * aJSContext,
     if (NS_FAILED(rv))
         return NS_ERROR_FAILURE;
     *_retval = static_cast<nsIXPConnectWrappedNative*>(wrapper);
-    return NS_OK;
-}
-
-/* void reparentWrappedNativeIfFound (in JSContextPtr aJSContext,
- *                                    in JSObjectPtr aScope,
- *                                    in JSObjectPtr aNewParent,
- *                                    in nsISupports aCOMObj); */
-NS_IMETHODIMP
-nsXPConnect::ReparentWrappedNativeIfFound(JSContext * aJSContext,
-                                          JSObject * aScopeArg,
-                                          JSObject * aNewParentArg,
-                                          nsISupports *aCOMObj)
-{
-    RootedObject aScope(aJSContext, aScopeArg);
-    RootedObject aNewParent(aJSContext, aNewParentArg);
-
-    XPCWrappedNativeScope* scope = ObjectScope(aScope);
-    XPCWrappedNativeScope* scope2 = ObjectScope(aNewParent);
-    if (!scope || !scope2)
-        return UnexpectedFailure(NS_ERROR_FAILURE);
-
-    RootedObject newParent(aJSContext, aNewParent);
-    return XPCWrappedNative::
-        ReparentWrapperIfFound(scope, scope2, newParent, aCOMObj);
-}
-
-static PLDHashOperator
-MoveableWrapperFinder(PLDHashTable *table, PLDHashEntryHdr *hdr,
-                      uint32_t number, void *arg)
-{
-    nsTArray<nsRefPtr<XPCWrappedNative> > *array =
-        static_cast<nsTArray<nsRefPtr<XPCWrappedNative> > *>(arg);
-    XPCWrappedNative *wn = ((Native2WrappedNativeMap::Entry*)hdr)->value;
-
-    // If a wrapper is expired, then there are no references to it from JS, so
-    // we don't have to move it.
-    if (!wn->IsWrapperExpired())
-        array->AppendElement(wn);
-    return PL_DHASH_NEXT;
-}
-
-/* void rescueOrphansInScope(in JSContextPtr aJSContext, in JSObjectPtr  aScope); */
-NS_IMETHODIMP
-nsXPConnect::RescueOrphansInScope(JSContext *aJSContext, JSObject *aScopeArg)
-{
-    RootedObject aScope(aJSContext, aScopeArg);
-
-    XPCWrappedNativeScope *scope = ObjectScope(aScope);
-    if (!scope)
-        return UnexpectedFailure(NS_ERROR_FAILURE);
-
-    // First, look through the old scope and find all of the wrappers that we
-    // might need to rescue.
-    nsTArray<nsRefPtr<XPCWrappedNative> > wrappersToMove;
-
-    Native2WrappedNativeMap *map = scope->GetWrappedNativeMap();
-    wrappersToMove.SetCapacity(map->Count());
-    map->Enumerate(MoveableWrapperFinder, &wrappersToMove);
-
-    // Now that we have the wrappers, reparent them to the new scope.
-    for (uint32_t i = 0, stop = wrappersToMove.Length(); i < stop; ++i) {
-        nsresult rv = wrappersToMove[i]->RescueOrphans();
-        NS_ENSURE_SUCCESS(rv, rv);
-    }
-
     return NS_OK;
 }
 

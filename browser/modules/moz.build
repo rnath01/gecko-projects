@@ -25,11 +25,14 @@ EXTRA_JS_MODULES += [
     'Feeds.jsm',
     'FormSubmitObserver.jsm',
     'FormValidationHandler.jsm',
+    'HiddenFrame.jsm',
     'NetworkPrioritizer.jsm',
     'offlineAppCache.jsm',
     'PanelFrame.jsm',
     'ProcessHangMonitor.jsm',
+    'ReaderParent.jsm',
     'RemotePrompt.jsm',
+    'SelfSupportBackend.jsm',
     'SitePermissions.jsm',
     'Social.jsm',
     'TabCrashReporter.jsm',
@@ -51,7 +54,6 @@ if CONFIG['NIGHTLY_BUILD']:
 EXTRA_PP_JS_MODULES += [
     'AboutHome.jsm',
     'PluginContent.jsm',
-    'ReaderParent.jsm',
     'RecentWindow.jsm',
     'webrtcUI.jsm',
 ]

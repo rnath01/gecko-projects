@@ -50,7 +50,7 @@ using namespace mozilla::gfx;
 using namespace mozilla::jni;
 using namespace mozilla::widget;
 
-AndroidBridge* AndroidBridge::sBridge;
+AndroidBridge* AndroidBridge::sBridge = nullptr;
 pthread_t AndroidBridge::sJavaUiThread = -1;
 static unsigned sJavaEnvThreadIndex = 0;
 static jobject sGlobalContext = nullptr;
@@ -161,14 +161,12 @@ AndroidBridge::ConstructBridge(JNIEnv *jEnv, Object::Param clsLoader)
 
     PR_NewThreadPrivateIndex(&sJavaEnvThreadIndex, JavaThreadDetachFunc);
 
-    AndroidBridge *bridge = new AndroidBridge();
-    if (!bridge->Init(jEnv, clsLoader)) {
-        delete bridge;
-    }
-    sBridge = bridge;
+    MOZ_ASSERT(!sBridge);
+    sBridge = new AndroidBridge;
+    sBridge->Init(jEnv, clsLoader); // Success or crash
 }
 
-bool
+void
 AndroidBridge::Init(JNIEnv *jEnv, Object::Param clsLoader)
 {
     ALOG_BRIDGE("AndroidBridge::Init");
@@ -244,8 +242,6 @@ AndroidBridge::Init(JNIEnv *jEnv, Object::Param clsLoader)
     // jEnv should NOT be cached here by anything -- the jEnv here
     // is not valid for the real gecko main thread, which is set
     // at SetMainThread time.
-
-    return true;
 }
 
 bool
@@ -1468,7 +1464,7 @@ AndroidBridge::SyncViewportInfo(const LayerIntRect& aDisplayPort, const CSSToLay
             aDisplayPort.width, aDisplayPort.height,
             aDisplayResolution.scale, aLayersUpdated);
 
-    NS_ABORT_IF_FALSE(viewTransform, "No view transform object!");
+    MOZ_ASSERT(viewTransform, "No view transform object!");
 
     aScrollOffset = ParentLayerPoint(viewTransform->X(), viewTransform->Y());
     aScale.scale = viewTransform->Scale();
@@ -1500,7 +1496,7 @@ void AndroidBridge::SyncFrameMetrics(const ParentLayerPoint& aScrollOffset, floa
             aLayersUpdated, dp.x, dp.y, dp.width, dp.height, aDisplayResolution.scale,
             aIsFirstPaint);
 
-    NS_ABORT_IF_FALSE(viewTransform, "No view transform object!");
+    MOZ_ASSERT(viewTransform, "No view transform object!");
 
     aFixedLayerMargins.top = viewTransform->FixedLayerMarginTop();
     aFixedLayerMargins.right = viewTransform->FixedLayerMarginRight();

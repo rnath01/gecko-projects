@@ -50,6 +50,8 @@ public:
     nsWindow();
     virtual ~nsWindow();
 
+    NS_DECL_ISUPPORTS_INHERITED
+
     static void DoDraw(void);
     static nsEventStatus DispatchInputEvent(mozilla::WidgetGUIEvent& aEvent);
     static void DispatchTouchInput(mozilla::MultiTouchInput& aInput);
@@ -87,6 +89,9 @@ public:
     }
     virtual mozilla::LayoutDeviceIntPoint WidgetToScreenOffset();
     void DispatchTouchInputViaAPZ(mozilla::MultiTouchInput& aInput);
+    void DispatchTouchEventForAPZ(const mozilla::MultiTouchInput& aInput,
+                                  const ScrollableLayerGuid& aGuid,
+                                  const uint64_t aInputBlockId);
     NS_IMETHOD DispatchEvent(mozilla::WidgetGUIEvent* aEvent,
                              nsEventStatus& aStatus);
     virtual nsresult SynthesizeNativeTouchPoint(uint32_t aPointerId,

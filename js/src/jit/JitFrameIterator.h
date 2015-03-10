@@ -44,18 +44,17 @@ enum FrameType
     // mismatches in calls.
     JitFrame_Rectifier,
 
+    // Ion IC calling a scripted getter/setter.
+    JitFrame_IonAccessorIC,
+
     // An unwound JS frame is a JS frame signalling that its callee frame has been
     // turned into an exit frame (see EnsureExitFrame). Used by Ion bailouts and
     // Baseline exception unwinding.
     JitFrame_Unwound_BaselineJS,
     JitFrame_Unwound_IonJS,
-
-    // Like Unwound_IonJS, but the caller is a baseline stub frame.
     JitFrame_Unwound_BaselineStub,
-
-    // An unwound rectifier frame is a rectifier frame signalling that its callee
-    // frame has been turned into an exit frame (see EnsureExitFrame).
     JitFrame_Unwound_Rectifier,
+    JitFrame_Unwound_IonAccessorIC,
 
     // An exit frame is necessary for transitioning from a JS frame into C++.
     // From within C++, an exit frame is always the last frame in any
@@ -383,6 +382,7 @@ struct MaybeReadFallback
 
 
 class RResumePoint;
+class RSimdBox;
 
 // Reads frame information in snapshot-encoding order (that is, outermost frame
 // to innermost frame).
@@ -442,6 +442,10 @@ class SnapshotIterator
     bool allocationReadable(const RValueAllocation &a, ReadMethod rm = RM_Normal);
     void writeAllocationValuePayload(const RValueAllocation &a, Value v);
     void warnUnreadableAllocation();
+
+  private:
+    friend class RSimdBox;
+    const FloatRegisters::RegisterContent *floatAllocationPointer(const RValueAllocation &a) const;
 
   public:
     // Handle iterating over RValueAllocations of the snapshots.

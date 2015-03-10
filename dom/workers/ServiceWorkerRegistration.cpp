@@ -200,7 +200,7 @@ ServiceWorkerRegistration::Unregister(ErrorResult& aRv)
   nsRefPtr<UnregisterCallback> cb = new UnregisterCallback(promise);
 
   NS_ConvertUTF8toUTF16 scope(uriSpec);
-  aRv = swm->Unregister(cb, scope);
+  aRv = swm->Unregister(documentPrincipal, cb, scope);
   if (aRv.Failed()) {
     return nullptr;
   }
@@ -262,28 +262,6 @@ ServiceWorkerRegistration::InvalidateWorkerReference(WhichServiceWorker aWhichOn
 
   if (aWhichOnes & WhichServiceWorker::ACTIVE_WORKER) {
     mActiveWorker = nullptr;
-  }
-}
-
-void
-ServiceWorkerRegistration::QueueStateChangeEvent(WhichServiceWorker aWhichOne,
-                                                 ServiceWorkerState aState) const
-{
-  nsRefPtr<ServiceWorker> worker;
-  if (aWhichOne == WhichServiceWorker::INSTALLING_WORKER) {
-    worker = mInstallingWorker;
-  } else if (aWhichOne == WhichServiceWorker::WAITING_WORKER) {
-    worker = mWaitingWorker;
-  } else if (aWhichOne == WhichServiceWorker::ACTIVE_WORKER) {
-    worker = mActiveWorker;
-  } else {
-    MOZ_CRASH("Invalid case");
-  }
-
-  if (worker) {
-    worker->SetState(aState);
-    nsCOMPtr<nsIRunnable> r = NS_NewRunnableMethod(worker, &ServiceWorker::DispatchStateChange);
-    NS_DispatchToMainThread(r);
   }
 }
 
