@@ -264,7 +264,7 @@ public:
                                           IceConfiguration *aDst);
   static nsresult AddIceServer(const RTCIceServer& aServer,
                                IceConfiguration* aDst);
-  already_AddRefed<DOMMediaStream> MakeMediaStream(uint32_t aHint);
+  already_AddRefed<DOMMediaStream> MakeMediaStream();
 
   nsresult CreateRemoteSourceStreamInfo(nsRefPtr<RemoteSourceStreamInfo>* aInfo,
                                         const std::string& aId);
@@ -598,11 +598,12 @@ public:
   // PeerConnectionMedia can't do it because it doesn't know about principals
   virtual void PrincipalChanged(DOMMediaStream* aMediaStream) MOZ_OVERRIDE;
 
-  nsresult GetRemoteTrackId(DOMMediaStream* mediaStream,
+  nsresult GetRemoteTrackId(const std::string streamId,
                             TrackID numericTrackId,
                             std::string* trackId) const;
 #endif
 
+  static std::string GetStreamId(const DOMMediaStream& aStream);
   static std::string GetTrackId(const dom::MediaStreamTrack& track);
 
 private:

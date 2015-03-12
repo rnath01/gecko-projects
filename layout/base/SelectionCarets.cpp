@@ -186,6 +186,12 @@ SelectionCarets::HandleEvent(WidgetEvent* aEvent)
     movePoint = mouseEvent->AsGUIEvent()->refPoint;
   }
 
+  // XUL has no SelectionCarets elements.
+  if (!mPresShell->GetSelectionCaretsStartElement() ||
+      !mPresShell->GetSelectionCaretsEndElement()) {
+    return nsEventStatus_eIgnore;
+  }
+
   // Get event coordinate relative to root frame
   nsIFrame* rootFrame = mPresShell->GetRootFrame();
   if (!rootFrame) {
@@ -313,12 +319,6 @@ SelectionCarets::SetVisibility(bool aVisible)
 
   dom::Element* endElement = mPresShell->GetSelectionCaretsEndElement();
   SetElementVisibility(endElement, mVisible && mEndCaretVisible);
-
-  // We must call SetHasTouchCaret() in order to get APZC to wait until the
-  // event has been round-tripped and check whether it has been handled,
-  // otherwise B2G will end up panning the document when the user tries to drag
-  // selection caret.
-  mPresShell->SetMayHaveTouchCaret(mVisible);
 }
 
 void
@@ -457,7 +457,7 @@ SelectionCarets::UpdateSelectionCarets()
     return;
   }
 
-  int32_t rangeCount = selection->GetRangeCount();
+  int32_t rangeCount = selection->RangeCount();
   nsRefPtr<nsRange> firstRange = selection->GetRangeAt(0);
   nsRefPtr<nsRange> lastRange = selection->GetRangeAt(rangeCount - 1);
 
@@ -763,7 +763,7 @@ SelectionCarets::DragSelection(const nsPoint &movePoint)
     return nsEventStatus_eConsumeNoDefault;
   }
 
-  int32_t rangeCount = selection->GetRangeCount();
+  int32_t rangeCount = selection->RangeCount();
   if (rangeCount <= 0) {
     return nsEventStatus_eConsumeNoDefault;
   }
@@ -819,7 +819,7 @@ SelectionCarets::GetCaretYCenterPosition()
     return 0;
   }
 
-  int32_t rangeCount = selection->GetRangeCount();
+  int32_t rangeCount = selection->RangeCount();
   if (rangeCount <= 0) {
     return 0;
   }

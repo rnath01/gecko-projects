@@ -26,7 +26,7 @@ const STRING_TYPE_NAME       = "type.%ID%.name";
 
 const SEC_IN_A_DAY           = 24 * 60 * 60;
 
-const NS_GRE_BIN_DIR         = "GreD";
+const NS_GRE_DIR             = "GreD";
 const CLEARKEY_PLUGIN_ID     = "gmp-clearkey";
 const CLEARKEY_VERSION       = "0.1";
 
@@ -45,15 +45,18 @@ const KEY_PLUGIN_VERSION     = "media.{0}.version";
 const KEY_PLUGIN_AUTOUPDATE  = "media.{0}.autoupdate";
 const KEY_PLUGIN_HIDDEN      = "media.{0}.hidden";
 
-// Note regarding the value of |fullDescription| below: This is part of an awful
-// hack to include the licenses for GMP plugins without having bug 624602 fixed
-// yet, and intentionally ignores localisation.
+const GMP_LICENSE_INFO       = "gmp_license_info";
+const GMP_LEARN_MORE         = "learn_more_label";
+
 const GMP_PLUGINS = [
   {
     id:              "gmp-gmpopenh264",
     name:            "openH264_name",
     description:     "openH264_description",
-    fullDescription: "<xhtml:a href=\"chrome://mozapps/content/extensions/OpenH264-license.txt\" target=\"_blank\">License information</xhtml:a>.",
+    // The following licenseURL is part of an awful hack to include the OpenH264
+    // license without having bug 624602 fixed yet, and intentionally ignores
+    // localisation.
+    licenseURL:      "chrome://mozapps/content/extensions/OpenH264-license.txt",
     homepageURL:     "http://www.openh264.org/",
     optionsURL:      "chrome://mozapps/content/extensions/gmpPrefs.xul"
   },
@@ -61,8 +64,13 @@ const GMP_PLUGINS = [
     id:              "gmp-eme-adobe",
     name:            "eme-adobe_name",
     description:     "eme-adobe_description",
-    fullDescription: "<xhtml:a href=\"\" target=\"_blank\">License information</xhtml:a>.",
-    homepageURL:     "https://www.adobe.com/",
+    // The following learnMoreURL is another hack to be able to support a SUMO page for this
+    // feature.
+    get learnMoreURL() {
+      return Services.urlFormatter.formatURLPref("app.support.baseURL") + "drm-content";
+    },
+    licenseURL:      "http://help.adobe.com/en_US/primetime/drm/HTML5_CDM_EULA/index.html",
+    homepageURL:     "http://help.adobe.com/en_US/primetime/drm/index.html",
     optionsURL:      "chrome://mozapps/content/extensions/gmpPrefs.xul",
     isEME:           true
   }];
@@ -467,9 +475,9 @@ let GMPProvider = {
 
     if (Preferences.get(KEY_EME_ENABLED, false)) {
       try {
-        let greBinDir = Services.dirsvc.get(NS_GRE_BIN_DIR,
-                                            Ci.nsILocalFile);
-        let clearkeyPath = OS.Path.join(greBinDir.path,
+        let greDir = Services.dirsvc.get(NS_GRE_DIR,
+                                         Ci.nsILocalFile);
+        let clearkeyPath = OS.Path.join(greDir.path,
                                         CLEARKEY_PLUGIN_ID,
                                         CLEARKEY_VERSION);
         this._log.info("startup - adding clearkey CDM directory " +
@@ -538,7 +546,20 @@ let GMPProvider = {
     return GMPPrefs.get(KEY_PROVIDER_ENABLED, false);
   },
 
+  generateFullDescription: function(aPlugin) {
+    let rv = [];
+    for (let [urlProp, labelId] of [["learnMoreURL", GMP_LEARN_MORE],
+                                    ["licenseURL", GMP_LICENSE_INFO]]) {
+      if (aPlugin[urlProp]) {
+        let label = pluginsBundle.GetStringFromName(labelId);
+        rv.push(`<xhtml:a href="${aPlugin[urlProp]}" target="_blank">${label}</xhtml:a>.`);
+      }
+    }
+    return rv.length ? rv.join("<xhtml:br /><xhtml:br />") : undefined;
+  },
+
   buildPluginList: function() {
+
     let map = new Map();
     GMP_PLUGINS.forEach(aPlugin => {
       // Only show GMPs in addon manager that aren't hidden.
@@ -547,16 +568,16 @@ let GMPProvider = {
           id: aPlugin.id,
           name: pluginsBundle.GetStringFromName(aPlugin.name),
           description: pluginsBundle.GetStringFromName(aPlugin.description),
-          fullDescription: aPlugin.fullDescription,
           homepageURL: aPlugin.homepageURL,
           optionsURL: aPlugin.optionsURL,
           wrapper: null,
           isEME: aPlugin.isEME
         };
+        plugin.fullDescription = this.generateFullDescription(aPlugin);
         plugin.wrapper = new GMPWrapper(plugin);
         map.set(plugin.id, plugin);
       }
-    });
+    }, this);
     this._plugins = map;
   },
 };

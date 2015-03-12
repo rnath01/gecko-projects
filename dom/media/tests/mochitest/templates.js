@@ -142,10 +142,6 @@ var checkAllTrackStats = pc =>
 var commandsPeerConnectionInitial = [
   function PC_SETUP_SIGNALING_CLIENT(test) {
     if (test.steeplechase) {
-      setTimeout(() => {
-        ok(false, "PeerConnectionTest timed out");
-        test.teardown();
-      }, 30000);
       test.setupSignalingClient();
       test.registerSignalingCallback("ice_candidate", function (message) {
         var pc = test.pcRemote ? test.pcRemote : test.pcLocal;
@@ -279,7 +275,7 @@ var commandsPeerConnectionOfferAnswer = [
     });
   },
 
-  function PC_LOCAL_GET_EXPECTED_REMOTE_TRACKS(test) {
+  function PC_REMOTE_GET_EXPECTED_REMOTE_TRACKS(test) {
     if (test.steeplechase) {
       return test.getSignalingMessage("local_expected_tracks").then(
           message => {
@@ -486,14 +482,6 @@ var commandsPeerConnectionOfferAnswer = [
   function PC_REMOTE_CHECK_MEDIA_FLOW_PRESENT(test) {
     return test.pcRemote.checkMediaFlowPresent();
   },
-/* TODO: re-enable when Bug 1095218 lands
-  function PC_LOCAL_CHECK_MSID(test) {
-    test.pcLocal.checkMsids();
-  },
-  function PC_REMOTE_CHECK_MSID(test) {
-    test.pcRemote.checkMsids();
-  },
-*/
   function PC_LOCAL_CHECK_STATS(test) {
     return test.pcLocal.getStats(null).then(stats => {
       test.pcLocal.checkStats(stats, test.steeplechase);

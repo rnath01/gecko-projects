@@ -127,7 +127,7 @@ protected:
   }
 
   void
-  AddTracks(JsepSessionImpl* side)
+  AddTracks(JsepSessionImpl& side)
   {
     // Add tracks.
     if (types.empty()) {
@@ -142,7 +142,7 @@ protected:
   }
 
   void
-  AddTracks(JsepSessionImpl* side, const std::string& mediatypes)
+  AddTracks(JsepSessionImpl& side, const std::string& mediatypes)
   {
     AddTracks(side, BuildTypes(mediatypes));
   }
@@ -178,7 +178,7 @@ protected:
   }
 
   void
-  AddTracks(JsepSessionImpl* side,
+  AddTracks(JsepSessionImpl& side,
             const std::vector<SdpMediaSection::MediaType>& mediatypes)
   {
     FakeUuidGenerator uuid_gen;
@@ -187,12 +187,87 @@ protected:
 
     ASSERT_TRUE(uuid_gen.Generate(&stream_id));
 
+    AddTracksToStream(side, stream_id, mediatypes);
+  }
+
+  void
+  AddTracksToStream(JsepSessionImpl& side,
+                    const std::string stream_id,
+                    const std::string& mediatypes)
+  {
+    AddTracksToStream(side, stream_id, BuildTypes(mediatypes));
+  }
+
+  void
+  AddTracksToStream(JsepSessionImpl& side,
+                    const std::string stream_id,
+                    const std::vector<SdpMediaSection::MediaType>& mediatypes)
+
+  {
+    FakeUuidGenerator uuid_gen;
+    std::string track_id;
+
     for (auto track = mediatypes.begin(); track != mediatypes.end(); ++track) {
       ASSERT_TRUE(uuid_gen.Generate(&track_id));
 
       RefPtr<JsepTrack> mst(new JsepTrack(*track, stream_id, track_id));
-      side->AddTrack(mst);
+      side.AddTrack(mst);
     }
+  }
+
+  bool HasMediaStream(std::vector<RefPtr<JsepTrack>> tracks) const {
+    for (auto i = tracks.begin(); i != tracks.end(); ++i) {
+      if ((*i)->GetMediaType() != SdpMediaSection::kApplication) {
+        return 1;
+      }
+    }
+    return 0;
+  }
+
+  const std::string GetFirstLocalStreamId(JsepSessionImpl& side) const {
+    auto tracks = side.GetLocalTracks();
+    return (*tracks.begin())->GetStreamId();
+  }
+
+  std::vector<std::string>
+  GetMediaStreamIds(std::vector<RefPtr<JsepTrack>> tracks) const {
+    std::vector<std::string> ids;
+    for (auto i = tracks.begin(); i != tracks.end(); ++i) {
+      // data channels don't have msid's
+      if ((*i)->GetMediaType() == SdpMediaSection::kApplication) {
+        continue;
+      }
+      ids.push_back((*i)->GetStreamId());
+    }
+    return ids;
+  }
+
+  std::vector<std::string>
+  GetLocalMediaStreamIds(JsepSessionImpl& side) const {
+    return GetMediaStreamIds(side.GetLocalTracks());
+  }
+
+  std::vector<std::string>
+  GetRemoteMediaStreamIds(JsepSessionImpl& side) const {
+    return GetMediaStreamIds(side.GetRemoteTracks());
+  }
+
+  std::vector<std::string>
+  sortUniqueStrVector(std::vector<std::string> in) const {
+    std::sort(in.begin(), in.end());
+    auto it = std::unique(in.begin(), in.end());
+    in.resize( std::distance(in.begin(), it));
+    return in;
+  }
+
+  std::vector<std::string>
+  GetLocalUniqueStreamIds(JsepSessionImpl& side) const {
+    return sortUniqueStrVector(GetLocalMediaStreamIds(side));
+  }
+
+  std::vector<std::string>
+  GetRemoteUniqueStreamIds(JsepSessionImpl& side) const {
+    return sortUniqueStrVector(GetRemoteMediaStreamIds(side));
   }
 
   RefPtr<JsepTrack> GetTrack(JsepSessionImpl& side,
@@ -746,20 +821,20 @@ TEST_F(JsepSessionTestBase, CreateDestroy) {}
 
 TEST_P(JsepSessionTest, CreateOffer)
 {
-  AddTracks(&mSessionOff);
+  AddTracks(mSessionOff);
   CreateOffer();
 }
 
 TEST_P(JsepSessionTest, CreateOfferSetLocal)
 {
-  AddTracks(&mSessionOff);
+  AddTracks(mSessionOff);
   std::string offer = CreateOffer();
   SetLocalOffer(offer);
 }
 
 TEST_P(JsepSessionTest, CreateOfferSetLocalSetRemote)
 {
-  AddTracks(&mSessionOff);
+  AddTracks(mSessionOff);
   std::string offer = CreateOffer();
   SetLocalOffer(offer);
   SetRemoteOffer(offer);
@@ -767,32 +842,32 @@ TEST_P(JsepSessionTest, CreateOfferSetLocalSetRemote)
 
 TEST_P(JsepSessionTest, CreateOfferSetLocalSetRemoteCreateAnswer)
 {
-  AddTracks(&mSessionOff);
+  AddTracks(mSessionOff);
   std::string offer = CreateOffer();
   SetLocalOffer(offer);
   SetRemoteOffer(offer);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionAns);
   std::string answer = CreateAnswer();
 }
 
 TEST_P(JsepSessionTest, CreateOfferSetLocalSetRemoteCreateAnswerSetLocal)
 {
-  AddTracks(&mSessionOff);
+  AddTracks(mSessionOff);
   std::string offer = CreateOffer();
   SetLocalOffer(offer);
   SetRemoteOffer(offer);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionAns);
   std::string answer = CreateAnswer();
   SetLocalAnswer(answer);
 }
 
 TEST_P(JsepSessionTest, FullCall)
 {
-  AddTracks(&mSessionOff);
+  AddTracks(mSessionOff);
   std::string offer = CreateOffer();
   SetLocalOffer(offer);
   SetRemoteOffer(offer);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionAns);
   std::string answer = CreateAnswer();
   SetLocalAnswer(answer);
   SetRemoteAnswer(answer);
@@ -800,7 +875,7 @@ TEST_P(JsepSessionTest, FullCall)
 
 TEST_P(JsepSessionTest, RenegotiationNoChange)
 {
-  AddTracks(&mSessionOff);
+  AddTracks(mSessionOff);
   std::string offer = CreateOffer();
   SetLocalOffer(offer);
   SetRemoteOffer(offer);
@@ -810,7 +885,7 @@ TEST_P(JsepSessionTest, RenegotiationNoChange)
   ASSERT_EQ(types.size(), added.size());
   ASSERT_EQ(0U, removed.size());
 
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionAns);
   std::string answer = CreateAnswer();
   SetLocalAnswer(answer);
   SetRemoteAnswer(answer);
@@ -857,8 +932,8 @@ TEST_P(JsepSessionTest, RenegotiationNoChange)
 
 TEST_P(JsepSessionTest, RenegotiationOffererAddsTrack)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
 
   OfferAnswer();
 
@@ -868,7 +943,7 @@ TEST_P(JsepSessionTest, RenegotiationOffererAddsTrack)
   std::vector<SdpMediaSection::MediaType> extraTypes;
   extraTypes.push_back(SdpMediaSection::kAudio);
   extraTypes.push_back(SdpMediaSection::kVideo);
-  AddTracks(&mSessionOff, extraTypes);
+  AddTracks(mSessionOff, extraTypes);
   types.insert(types.end(), extraTypes.begin(), extraTypes.end());
 
   OfferAnswer(CHECK_SUCCESS);
@@ -901,8 +976,8 @@ TEST_P(JsepSessionTest, RenegotiationOffererAddsTrack)
 
 TEST_P(JsepSessionTest, RenegotiationAnswererAddsTrack)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
 
   OfferAnswer();
 
@@ -912,7 +987,7 @@ TEST_P(JsepSessionTest, RenegotiationAnswererAddsTrack)
   std::vector<SdpMediaSection::MediaType> extraTypes;
   extraTypes.push_back(SdpMediaSection::kAudio);
   extraTypes.push_back(SdpMediaSection::kVideo);
-  AddTracks(&mSessionAns, extraTypes);
+  AddTracks(mSessionAns, extraTypes);
   types.insert(types.end(), extraTypes.begin(), extraTypes.end());
 
   // We need to add a recvonly m-section to the offer for this to work
@@ -958,8 +1033,8 @@ TEST_P(JsepSessionTest, RenegotiationAnswererAddsTrack)
 
 TEST_P(JsepSessionTest, RenegotiationBothAddTrack)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
 
   OfferAnswer();
 
@@ -969,8 +1044,8 @@ TEST_P(JsepSessionTest, RenegotiationBothAddTrack)
   std::vector<SdpMediaSection::MediaType> extraTypes;
   extraTypes.push_back(SdpMediaSection::kAudio);
   extraTypes.push_back(SdpMediaSection::kVideo);
-  AddTracks(&mSessionAns, extraTypes);
-  AddTracks(&mSessionOff, extraTypes);
+  AddTracks(mSessionAns, extraTypes);
+  AddTracks(mSessionOff, extraTypes);
   types.insert(types.end(), extraTypes.begin(), extraTypes.end());
 
   OfferAnswer(CHECK_SUCCESS);
@@ -1003,10 +1078,59 @@ TEST_P(JsepSessionTest, RenegotiationBothAddTrack)
   }
 }
 
+TEST_P(JsepSessionTest, RenegotiationBothAddTracksToExistingStream)
+{
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
+  if (GetParam() == "datachannel") {
+    return;
+  }
+
+  OfferAnswer();
+
+  auto oHasStream = HasMediaStream(mSessionOff.GetLocalTracks());
+  auto aHasStream = HasMediaStream(mSessionAns.GetLocalTracks());
+  ASSERT_EQ(oHasStream, GetLocalUniqueStreamIds(mSessionOff).size());
+  ASSERT_EQ(aHasStream, GetLocalUniqueStreamIds(mSessionAns).size());
+  ASSERT_EQ(aHasStream, GetRemoteUniqueStreamIds(mSessionOff).size());
+  ASSERT_EQ(oHasStream, GetRemoteUniqueStreamIds(mSessionAns).size());
+
+  auto firstOffId = GetFirstLocalStreamId(mSessionOff);
+  auto firstAnsId = GetFirstLocalStreamId(mSessionAns);
+
+  auto offererPairs = GetTrackPairsByLevel(mSessionOff);
+  auto answererPairs = GetTrackPairsByLevel(mSessionAns);
+
+  std::vector<SdpMediaSection::MediaType> extraTypes;
+  extraTypes.push_back(SdpMediaSection::kAudio);
+  extraTypes.push_back(SdpMediaSection::kVideo);
+  AddTracksToStream(mSessionOff, firstOffId, extraTypes);
+  AddTracksToStream(mSessionAns, firstAnsId, extraTypes);
+  types.insert(types.end(), extraTypes.begin(), extraTypes.end());
+
+  OfferAnswer(CHECK_SUCCESS);
+
+  oHasStream = HasMediaStream(mSessionOff.GetLocalTracks());
+  aHasStream = HasMediaStream(mSessionAns.GetLocalTracks());
+
+  ASSERT_EQ(oHasStream, GetLocalUniqueStreamIds(mSessionOff).size());
+  ASSERT_EQ(aHasStream, GetLocalUniqueStreamIds(mSessionAns).size());
+  ASSERT_EQ(aHasStream, GetRemoteUniqueStreamIds(mSessionOff).size());
+  ASSERT_EQ(oHasStream, GetRemoteUniqueStreamIds(mSessionAns).size());
+  if (oHasStream) {
+    ASSERT_STREQ(firstOffId.c_str(),
+                 GetFirstLocalStreamId(mSessionOff).c_str());
+  }
+  if (aHasStream) {
+    ASSERT_STREQ(firstAnsId.c_str(),
+                 GetFirstLocalStreamId(mSessionAns).c_str());
+  }
+}
+
 TEST_P(JsepSessionTest, RenegotiationOffererRemovesTrack)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
   if (types.front() == SdpMediaSection::kApplication) {
     return;
   }
@@ -1083,8 +1207,8 @@ TEST_P(JsepSessionTest, RenegotiationOffererRemovesTrack)
 
 TEST_P(JsepSessionTest, RenegotiationAnswererRemovesTrack)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
   if (types.front() == SdpMediaSection::kApplication) {
     return;
   }
@@ -1161,8 +1285,8 @@ TEST_P(JsepSessionTest, RenegotiationAnswererRemovesTrack)
 
 TEST_P(JsepSessionTest, RenegotiationBothRemoveTrack)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
   if (types.front() == SdpMediaSection::kApplication) {
     return;
   }
@@ -1234,8 +1358,8 @@ TEST_P(JsepSessionTest, RenegotiationBothRemoveTrack)
 
 TEST_P(JsepSessionTest, RenegotiationBothRemoveTrackDifferentMsection)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
   if (types.front() == SdpMediaSection::kApplication) {
     return;
   }
@@ -1341,8 +1465,8 @@ TEST_P(JsepSessionTest, RenegotiationBothRemoveTrackDifferentMsection)
 
 TEST_P(JsepSessionTest, RenegotiationOffererReplacesTrack)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
 
   if (types.front() == SdpMediaSection::kApplication) {
     return;
@@ -1427,11 +1551,11 @@ TEST_P(JsepSessionTest, RenegotiationOffererReplacesTrack)
 // side doesn't use msid attributes) are stable across renegotiation.
 TEST_P(JsepSessionTest, RenegotiationAutoAssignedMsidIsStable)
 {
-  AddTracks(&mSessionOff);
+  AddTracks(mSessionOff);
   std::string offer = CreateOffer();
   SetLocalOffer(offer);
   SetRemoteOffer(offer);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionAns);
   std::string answer = CreateAnswer();
   SetLocalAnswer(answer);
 
@@ -1457,7 +1581,7 @@ TEST_P(JsepSessionTest, RenegotiationAutoAssignedMsidIsStable)
   offer = CreateOffer();
   SetLocalOffer(offer);
   SetRemoteOffer(offer);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionAns);
   answer = CreateAnswer();
   SetLocalAnswer(answer);
 
@@ -1477,11 +1601,11 @@ TEST_P(JsepSessionTest, RenegotiationAutoAssignedMsidIsStable)
 // but does on renegotiation.
 TEST_P(JsepSessionTest, RenegotiationAnswererEnablesMsid)
 {
-  AddTracks(&mSessionOff);
+  AddTracks(mSessionOff);
   std::string offer = CreateOffer();
   SetLocalOffer(offer);
   SetRemoteOffer(offer);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionAns);
   std::string answer = CreateAnswer();
   SetLocalAnswer(answer);
 
@@ -1494,7 +1618,7 @@ TEST_P(JsepSessionTest, RenegotiationAnswererEnablesMsid)
   offer = CreateOffer();
   SetLocalOffer(offer);
   SetRemoteOffer(offer);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionAns);
   answer = CreateAnswer();
   SetLocalAnswer(answer);
   SetRemoteAnswer(answer, CHECK_SUCCESS);
@@ -1522,11 +1646,11 @@ TEST_P(JsepSessionTest, RenegotiationAnswererEnablesMsid)
 
 TEST_P(JsepSessionTest, RenegotiationAnswererDisablesMsid)
 {
-  AddTracks(&mSessionOff);
+  AddTracks(mSessionOff);
   std::string offer = CreateOffer();
   SetLocalOffer(offer);
   SetRemoteOffer(offer);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionAns);
   std::string answer = CreateAnswer();
   SetLocalAnswer(answer);
   SetRemoteAnswer(answer, CHECK_SUCCESS);
@@ -1536,7 +1660,7 @@ TEST_P(JsepSessionTest, RenegotiationAnswererDisablesMsid)
   offer = CreateOffer();
   SetLocalOffer(offer);
   SetRemoteOffer(offer);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionAns);
   answer = CreateAnswer();
   SetLocalAnswer(answer);
 
@@ -1569,8 +1693,8 @@ TEST_P(JsepSessionTest, RenegotiationAnswererDisablesMsid)
 // but does on renegotiation.
 TEST_P(JsepSessionTest, RenegotiationOffererEnablesBundle)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
   std::string offer = CreateOffer();
 
   DisableBundle(&offer);
@@ -1628,8 +1752,8 @@ TEST_P(JsepSessionTest, RenegotiationOffererEnablesBundle)
 
 TEST_P(JsepSessionTest, RenegotiationOffererDisablesBundleTransport)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
 
   if (types.size() < 2) {
     return;
@@ -1680,8 +1804,8 @@ TEST_P(JsepSessionTest, RenegotiationOffererDisablesBundleTransport)
 
 TEST_P(JsepSessionTest, RenegotiationAnswererDisablesBundleTransport)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
 
   if (types.size() < 2) {
     return;
@@ -1732,7 +1856,7 @@ TEST_P(JsepSessionTest, RenegotiationAnswererDisablesBundleTransport)
 
 TEST_P(JsepSessionTest, FullCallWithCandidates)
 {
-  AddTracks(&mSessionOff);
+  AddTracks(mSessionOff);
   std::string offer = CreateOffer();
   SetLocalOffer(offer);
   GatherOffererCandidates();
@@ -1740,7 +1864,7 @@ TEST_P(JsepSessionTest, FullCallWithCandidates)
   SetRemoteOffer(offer);
   TrickleOffererCandidates();
   ValidateAnswererCandidates();
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionAns);
   std::string answer = CreateAnswer();
   SetLocalAnswer(answer);
   SetRemoteAnswer(answer);
@@ -1809,7 +1933,7 @@ TEST_F(JsepSessionTest, OfferAnswerRecvOnlyLines)
 
   SetLocalOffer(offer, CHECK_SUCCESS);
 
-  AddTracks(&mSessionAns, "audio,video");
+  AddTracks(mSessionAns, "audio,video");
   SetRemoteOffer(offer, CHECK_SUCCESS);
 
   std::string answer = CreateAnswer();
@@ -1832,7 +1956,7 @@ TEST_F(JsepSessionTest, OfferAnswerRecvOnlyLines)
 
 TEST_F(JsepSessionTest, OfferAnswerSendOnlyLines)
 {
-  AddTracks(&mSessionOff, "audio,video,video");
+  AddTracks(mSessionOff, "audio,video,video");
 
   JsepOfferOptions options;
   options.mOfferToReceiveAudio = Some(static_cast<size_t>(0U));
@@ -1868,7 +1992,7 @@ TEST_F(JsepSessionTest, OfferAnswerSendOnlyLines)
 
   SetLocalOffer(offer, CHECK_SUCCESS);
 
-  AddTracks(&mSessionAns, "audio,video");
+  AddTracks(mSessionAns, "audio,video");
   SetRemoteOffer(offer, CHECK_SUCCESS);
 
   std::string answer = CreateAnswer();
@@ -1938,23 +2062,27 @@ TEST_F(JsepSessionTest, ValidateOfferedCodecParams)
   auto& video_attrs = video_section.GetAttributeList();
   ASSERT_EQ(SdpDirectionAttribute::kSendrecv, video_attrs.GetDirection());
 
-  ASSERT_EQ(3U, video_section.GetFormats().size());
+  ASSERT_EQ(4U, video_section.GetFormats().size());
   ASSERT_EQ("120", video_section.GetFormats()[0]);
-  ASSERT_EQ("126", video_section.GetFormats()[1]);
-  ASSERT_EQ("97", video_section.GetFormats()[2]);
+  ASSERT_EQ("121", video_section.GetFormats()[1]);
+  ASSERT_EQ("126", video_section.GetFormats()[2]);
+  ASSERT_EQ("97", video_section.GetFormats()[3]);
 
   // Validate rtpmap
   ASSERT_TRUE(video_attrs.HasAttribute(SdpAttribute::kRtpmapAttribute));
   auto& rtpmaps = video_attrs.GetRtpmap();
   ASSERT_TRUE(rtpmaps.HasEntry("120"));
+  ASSERT_TRUE(rtpmaps.HasEntry("121"));
   ASSERT_TRUE(rtpmaps.HasEntry("126"));
   ASSERT_TRUE(rtpmaps.HasEntry("97"));
 
   auto& vp8_entry = rtpmaps.GetEntry("120");
+  auto& vp9_entry = rtpmaps.GetEntry("121");
   auto& h264_1_entry = rtpmaps.GetEntry("126");
   auto& h264_0_entry = rtpmaps.GetEntry("97");
 
   ASSERT_EQ("VP8", vp8_entry.name);
+  ASSERT_EQ("VP9", vp9_entry.name);
   ASSERT_EQ("H264", h264_1_entry.name);
   ASSERT_EQ("H264", h264_0_entry.name);
 
@@ -1962,7 +2090,7 @@ TEST_F(JsepSessionTest, ValidateOfferedCodecParams)
   ASSERT_TRUE(video_attrs.HasAttribute(SdpAttribute::kFmtpAttribute));
   auto& fmtps = video_attrs.GetFmtp().mFmtps;
 
-  ASSERT_EQ(3U, fmtps.size());
+  ASSERT_EQ(4U, fmtps.size());
 
   // VP8
   ASSERT_EQ("120", fmtps[0].format);
@@ -1976,27 +2104,39 @@ TEST_F(JsepSessionTest, ValidateOfferedCodecParams)
   ASSERT_EQ((uint32_t)12288, parsed_vp8_params.max_fs);
   ASSERT_EQ((uint32_t)60, parsed_vp8_params.max_fr);
 
-  // H264 packetization mode 1
-  ASSERT_EQ("126", fmtps[1].format);
+  // VP9
+  ASSERT_EQ("121", fmtps[1].format);
   ASSERT_TRUE(!!fmtps[1].parameters);
-  ASSERT_EQ(SdpRtpmapAttributeList::kH264, fmtps[1].parameters->codec_type);
+  ASSERT_EQ(SdpRtpmapAttributeList::kVP9, fmtps[1].parameters->codec_type);
+
+  auto& parsed_vp9_params =
+      *static_cast<const SdpFmtpAttributeList::VP8Parameters*>(
+          fmtps[1].parameters.get());
+
+  ASSERT_EQ((uint32_t)12288, parsed_vp9_params.max_fs);
+  ASSERT_EQ((uint32_t)60, parsed_vp9_params.max_fr);
+
+  // H264 packetization mode 1
+  ASSERT_EQ("126", fmtps[2].format);
+  ASSERT_TRUE(!!fmtps[2].parameters);
+  ASSERT_EQ(SdpRtpmapAttributeList::kH264, fmtps[2].parameters->codec_type);
 
   auto& parsed_h264_1_params =
       *static_cast<const SdpFmtpAttributeList::H264Parameters*>(
-          fmtps[1].parameters.get());
+          fmtps[2].parameters.get());
 
   ASSERT_EQ((uint32_t)0x42e00d, parsed_h264_1_params.profile_level_id);
   ASSERT_TRUE(parsed_h264_1_params.level_asymmetry_allowed);
   ASSERT_EQ(1U, parsed_h264_1_params.packetization_mode);
 
   // H264 packetization mode 0
-  ASSERT_EQ("97", fmtps[2].format);
-  ASSERT_TRUE(!!fmtps[2].parameters);
-  ASSERT_EQ(SdpRtpmapAttributeList::kH264, fmtps[2].parameters->codec_type);
+  ASSERT_EQ("97", fmtps[3].format);
+  ASSERT_TRUE(!!fmtps[3].parameters);
+  ASSERT_EQ(SdpRtpmapAttributeList::kH264, fmtps[3].parameters->codec_type);
 
   auto& parsed_h264_0_params =
       *static_cast<const SdpFmtpAttributeList::H264Parameters*>(
-          fmtps[2].parameters.get());
+          fmtps[3].parameters.get());
 
   ASSERT_EQ((uint32_t)0x42e00d, parsed_h264_0_params.profile_level_id);
   ASSERT_TRUE(parsed_h264_0_params.level_asymmetry_allowed);
@@ -2174,8 +2314,8 @@ TEST_F(JsepSessionTest, ValidateAnsweredCodecParams)
 
 TEST_P(JsepSessionTest, TestRejectMline)
 {
-  AddTracks(&mSessionOff);
-  AddTracks(&mSessionAns);
+  AddTracks(mSessionOff);
+  AddTracks(mSessionAns);
 
   switch (types.front()) {
     case SdpMediaSection::kAudio:
@@ -2248,8 +2388,8 @@ TEST_F(JsepSessionTest, CreateOfferNoMlines)
 
 TEST_F(JsepSessionTest, TestIceLite)
 {
-  AddTracks(&mSessionOff, "audio");
-  AddTracks(&mSessionAns, "audio");
+  AddTracks(mSessionOff, "audio");
+  AddTracks(mSessionAns, "audio");
   std::string offer = CreateOffer();
   SetLocalOffer(offer, CHECK_SUCCESS);
 
@@ -2268,8 +2408,8 @@ TEST_F(JsepSessionTest, TestIceLite)
 
 TEST_F(JsepSessionTest, TestIceOptions)
 {
-  AddTracks(&mSessionOff, "audio");
-  AddTracks(&mSessionAns, "audio");
+  AddTracks(mSessionOff, "audio");
+  AddTracks(mSessionAns, "audio");
   std::string offer = CreateOffer();
   SetLocalOffer(offer, CHECK_SUCCESS);
   SetRemoteOffer(offer, CHECK_SUCCESS);
@@ -2286,8 +2426,8 @@ TEST_F(JsepSessionTest, TestIceOptions)
 
 TEST_F(JsepSessionTest, TestExtmap)
 {
-  AddTracks(&mSessionOff, "audio");
-  AddTracks(&mSessionAns, "audio");
+  AddTracks(mSessionOff, "audio");
+  AddTracks(mSessionAns, "audio");
   // ssrc-audio-level will be extmap 1 for both
   mSessionOff.AddAudioRtpExtension("foo"); // Default mapping of 2
   mSessionOff.AddAudioRtpExtension("bar"); // Default mapping of 3
@@ -2332,8 +2472,8 @@ TEST_F(JsepSessionTest, TestExtmap)
 
 TEST_F(JsepSessionTest, TestRtcpFbStar)
 {
-  AddTracks(&mSessionOff, "video");
-  AddTracks(&mSessionAns, "video");
+  AddTracks(mSessionOff, "video");
+  AddTracks(mSessionAns, "video");
 
   std::string offer = CreateOffer();
 
@@ -2368,8 +2508,8 @@ TEST_F(JsepSessionTest, TestUniquePayloadTypes)
 {
   // The audio payload types will all appear more than once, but the video
   // payload types will be unique.
-  AddTracks(&mSessionOff, "audio,audio,video");
-  AddTracks(&mSessionAns, "audio,audio,video");
+  AddTracks(mSessionOff, "audio,audio,video");
+  AddTracks(mSessionAns, "audio,audio,video");
 
   std::string offer = CreateOffer();
   SetLocalOffer(offer, CHECK_SUCCESS);

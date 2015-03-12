@@ -147,7 +147,8 @@ class RemoteSourceStreamInfo : public SourceStreamInfo {
   RemoteSourceStreamInfo(already_AddRefed<DOMMediaStream> aMediaStream,
                          PeerConnectionMedia *aParent,
                          const std::string& aId)
-    : SourceStreamInfo(aMediaStream, aParent, aId)
+    : SourceStreamInfo(aMediaStream, aParent, aId),
+      mReceiving(false)
   {
   }
 
@@ -186,6 +187,17 @@ class RemoteSourceStreamInfo : public SourceStreamInfo {
     return NS_OK;
   }
 
+  void StartReceiving();
+
+  /**
+   * Returns true if a |MediaPipeline| should be queueing its track instead of
+   * adding it to the |SourceMediaStream| directly.
+   */
+  bool ShouldQueueTracks() const
+  {
+    return !mReceiving;
+  }
+
  private:
   // For remote streams, the MediaStreamGraph API forces us to select a
   // numeric track id before creation of the MediaStreamTrack, and does not
@@ -195,6 +207,10 @@ class RemoteSourceStreamInfo : public SourceStreamInfo {
   // and have the numeric track id selected for us, in which case this variable
   // and its dependencies can go away.
   std::vector<std::string> mTrackIdMap;
+
+  // True iff SetPullEnabled(true) has been called on the DOMMediaStream. This
+  // happens when offer/answer concludes.
+  bool mReceiving;
 };
 
 class PeerConnectionMedia : public sigslot::has_slots<> {
@@ -241,10 +257,8 @@ class PeerConnectionMedia : public sigslot::has_slots<> {
   nsresult UpdateMediaPipelines(const JsepSession& session);
 
   // Add a track (main thread only)
-  // TODO(bug 1089798): Once DOMMediaStream has an id field, use it instead of
-  // letting PCMedia choose a streamId
   nsresult AddTrack(DOMMediaStream* aMediaStream,
-                    std::string* streamId,
+                    const std::string& streamId,
                     const std::string& trackId);
 
   nsresult RemoveLocalTrack(const std::string& streamId,
@@ -252,7 +266,7 @@ class PeerConnectionMedia : public sigslot::has_slots<> {
   nsresult RemoveRemoteTrack(const std::string& streamId,
                             const std::string& trackId);
 
-  nsresult GetRemoteTrackId(DOMMediaStream* mediaStream,
+  nsresult GetRemoteTrackId(const std::string streamId,
                             TrackID numericTrackId,
                             std::string* trackId) const;
 
@@ -263,8 +277,6 @@ class PeerConnectionMedia : public sigslot::has_slots<> {
   }
   LocalSourceStreamInfo* GetLocalStreamByIndex(int index);
   LocalSourceStreamInfo* GetLocalStreamById(const std::string& id);
-  LocalSourceStreamInfo* GetLocalStreamByDomStream(
-      const DOMMediaStream& stream);
 
   // Get a specific remote stream
   uint32_t RemoteStreamsLength()
@@ -274,8 +286,6 @@ class PeerConnectionMedia : public sigslot::has_slots<> {
 
   RemoteSourceStreamInfo* GetRemoteStreamByIndex(size_t index);
   RemoteSourceStreamInfo* GetRemoteStreamById(const std::string& id);
-  RemoteSourceStreamInfo* GetRemoteStreamByDomStream(
-      const DOMMediaStream& stream);
 
   // Add a remote stream.
   nsresult AddRemoteStream(nsRefPtr<RemoteSourceStreamInfo> aInfo);

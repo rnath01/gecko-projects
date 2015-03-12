@@ -328,6 +328,30 @@ PuppetWidget::DispatchEvent(WidgetGUIEvent* event, nsEventStatus& aStatus)
 }
 
 
+nsEventStatus
+PuppetWidget::DispatchAPZAwareEvent(WidgetInputEvent* aEvent)
+{
+  if (!gfxPrefs::AsyncPanZoomEnabled()) {
+    nsEventStatus status = nsEventStatus_eIgnore;
+    DispatchEvent(aEvent, status);
+    return status;
+  }
+
+  if (!mTabChild) {
+    return nsEventStatus_eIgnore;
+  }
+
+  switch (aEvent->mClass) {
+    case eWheelEventClass:
+      mTabChild->SendSynthesizedMouseWheelEvent(*aEvent->AsWheelEvent());
+      break;
+    default:
+      MOZ_ASSERT_UNREACHABLE("unsupported event type");
+  }
+
+  return nsEventStatus_eIgnore;
+}
+
 NS_IMETHODIMP_(bool)
 PuppetWidget::ExecuteNativeKeyBinding(NativeKeyBindingsType aType,
                                       const mozilla::WidgetKeyboardEvent& aEvent,
@@ -437,6 +461,28 @@ PuppetWidget::NotifyIMEInternal(const IMENotification& aIMENotification)
     default:
       return NS_ERROR_NOT_IMPLEMENTED;
   }
+}
+
+NS_IMETHODIMP
+PuppetWidget::StartPluginIME(const mozilla::WidgetKeyboardEvent& aKeyboardEvent,
+                             int32_t aPanelX, int32_t aPanelY,
+                             nsString& aCommitted)
+{
+  if (!mTabChild ||
+      !mTabChild->SendStartPluginIME(aKeyboardEvent, aPanelX,
+                                     aPanelY, &aCommitted)) {
+    return NS_ERROR_FAILURE;
+  }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+PuppetWidget::SetPluginFocused(bool& aFocused)
+{
+  if (!mTabChild || !mTabChild->SendSetPluginFocused(aFocused)) {
+    return NS_ERROR_FAILURE;
+  }
+  return NS_OK;
 }
 
 NS_IMETHODIMP_(void)

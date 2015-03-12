@@ -131,14 +131,18 @@ class Fake_SourceMediaStream : public Fake_MediaStream {
                              mStop(false),
                              mPeriodic(new Fake_MediaPeriodic(this)) {}
 
+  enum {
+    ADDTRACK_QUEUED    = 0x01 // Queue track add until FinishAddTracks()
+  };
   void AddTrack(mozilla::TrackID aID, mozilla::StreamTime aStart,
-                mozilla::MediaSegment* aSegment) {
+                mozilla::MediaSegment* aSegment, uint32_t aFlags = 0) {
     delete aSegment;
   }
   void AddAudioTrack(mozilla::TrackID aID, mozilla::TrackRate aRate, mozilla::StreamTime aStart,
-                     mozilla::AudioSegment* aSegment) {
+                     mozilla::AudioSegment* aSegment, uint32_t aFlags = 0) {
     delete aSegment;
   }
+  void FinishAddTracks() {}
   void EndTrack(mozilla::TrackID aID) {}
 
   bool AppendToTrack(mozilla::TrackID aID, mozilla::MediaSegment* aSegment,
@@ -265,12 +269,18 @@ public:
   explicit Fake_DOMMediaStream(Fake_MediaStream *stream = nullptr)
     : mMediaStream(stream ? stream : new Fake_MediaStream())
     , mVideoTrack(new Fake_MediaStreamTrack(true, this))
-    , mAudioTrack(new Fake_MediaStreamTrack(false, this)) {}
+    , mAudioTrack(new Fake_MediaStreamTrack(false, this))
+    {
+      static size_t counter = 0;
+      std::ostringstream os;
+      os << counter++;
+      mID = os.str();
+    }
 
   NS_DECL_THREADSAFE_ISUPPORTS
 
   static already_AddRefed<Fake_DOMMediaStream>
-  CreateSourceStream(nsIDOMWindow* aWindow, uint32_t aHintContents) {
+  CreateSourceStream(nsIDOMWindow* aWindow, uint32_t aHintContents = 0) {
     Fake_SourceMediaStream *source = new Fake_SourceMediaStream();
 
     nsRefPtr<Fake_DOMMediaStream> ds = new Fake_DOMMediaStream(source);
@@ -285,6 +295,8 @@ public:
   virtual void RemoveDirectListener(Fake_MediaStreamListener *aListener) {}
 
   Fake_MediaStream *GetStream() { return mMediaStream; }
+  std::string GetId() const { return mID; }
+  void AssignId(const std::string& id) { mID = id; }
 
   // Hints to tell the SDP generator about whether this
   // MediaStream probably has audio and/or video
@@ -343,6 +355,8 @@ private:
   uint32_t mHintContents;
   nsRefPtr<Fake_MediaStreamTrack> mVideoTrack;
   nsRefPtr<Fake_MediaStreamTrack> mAudioTrack;
+
+  std::string mID;
 };
 
 class Fake_MediaStreamBase : public Fake_MediaStream {

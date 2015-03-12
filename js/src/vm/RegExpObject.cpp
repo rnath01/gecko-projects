@@ -66,8 +66,8 @@ RegExpObjectBuilder::getOrCreateClone(HandleObjectGroup group)
 {
     MOZ_ASSERT(!reobj_);
     MOZ_ASSERT(group->clasp() == &RegExpObject::class_);
-
-    RootedObject parent(cx, group->proto().toObject()->getParent());
+    group->proto().toObject()->assertParentIs(&group->proto().toObject()->global());
+    RootedObject parent(cx, &group->proto().toObject()->global());
 
     // Note: RegExp objects are always allocated in the tenured heap. This is
     // not strictly required, but simplifies embedding them in jitcode.
@@ -113,7 +113,8 @@ RegExpObjectBuilder::clone(Handle<RegExpObject *> other)
      * the clone -- if the |RegExpStatics| provides more flags we'll
      * need a different |RegExpShared|.
      */
-    RegExpStatics *res = other->getProto()->getParent()->as<GlobalObject>().getRegExpStatics(cx);
+    other->getProto()->assertParentIs(&other->getProto()->global());
+    RegExpStatics *res = other->getProto()->global().getRegExpStatics(cx);
     if (!res)
         return nullptr;
 
@@ -880,7 +881,7 @@ RegExpCompartment::init(JSContext *cx)
 {
     if (!set_.init(0)) {
         if (cx)
-            js_ReportOutOfMemory(cx);
+            ReportOutOfMemory(cx);
         return false;
     }
 
@@ -946,7 +947,7 @@ RegExpCompartment::get(JSContext *cx, JSAtom *source, RegExpFlag flags, RegExpGu
         return false;
 
     if (!set_.add(p, shared)) {
-        js_ReportOutOfMemory(cx);
+        ReportOutOfMemory(cx);
         return false;
     }
 
@@ -1056,7 +1057,7 @@ js::ParseRegExpFlags(JSContext *cx, JSString *flagStr, RegExpFlag *flagsOut)
         char charBuf[2];
         charBuf[0] = char(lastParsed);
         charBuf[1] = '\0';
-        JS_ReportErrorFlagsAndNumber(cx, JSREPORT_ERROR, js_GetErrorMessage, nullptr,
+        JS_ReportErrorFlagsAndNumber(cx, JSREPORT_ERROR, GetErrorMessage, nullptr,
                                      JSMSG_BAD_REGEXP_FLAG, charBuf);
         return false;
     }

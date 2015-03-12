@@ -128,6 +128,7 @@ public:
   void InitEvent(WidgetGUIEvent& aEvent, nsIntPoint* aPoint = nullptr);
 
   NS_IMETHOD DispatchEvent(WidgetGUIEvent* aEvent, nsEventStatus& aStatus) MOZ_OVERRIDE;
+  nsEventStatus DispatchAPZAwareEvent(WidgetInputEvent* aEvent) MOZ_OVERRIDE;
 
   NS_IMETHOD CaptureRollupEvents(nsIRollupListener* aListener,
                                  bool aDoCapture) MOZ_OVERRIDE
@@ -195,6 +196,12 @@ public:
 
   // Get the screen position of the application window.
   nsIntPoint GetWindowPosition();
+
+  NS_IMETHOD StartPluginIME(const mozilla::WidgetKeyboardEvent& aKeyboardEvent,
+                            int32_t aPanelX, int32_t aPanelY,
+                            nsString& aCommitted) MOZ_OVERRIDE;
+
+  NS_IMETHOD SetPluginFocused(bool& aFocused) MOZ_OVERRIDE;
 
 protected:
   bool mEnabled;

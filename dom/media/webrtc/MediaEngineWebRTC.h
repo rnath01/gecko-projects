@@ -89,7 +89,7 @@ public:
     Init();
   }
 
-  virtual nsresult Allocate(const VideoTrackConstraintsN& aConstraints,
+  virtual nsresult Allocate(const dom::MediaTrackConstraints& aConstraints,
                             const MediaEnginePrefs& aPrefs) MOZ_OVERRIDE;
   virtual nsresult Deallocate() MOZ_OVERRIDE;
   virtual nsresult Start(SourceMediaStream*, TrackID) MOZ_OVERRIDE;
@@ -109,9 +109,6 @@ public:
 
   void Refresh(int aIndex);
 
-  bool SatisfiesConstraintSets(
-      const nsTArray<const dom::MediaTrackConstraintSet*>& aConstraintSets) MOZ_OVERRIDE;
-
 protected:
   ~MediaEngineWebRTCVideoSource() { Shutdown(); }
 
@@ -129,10 +126,8 @@ private:
   int mMinFps; // Min rate we want to accept
   dom::MediaSourceEnum mMediaSource; // source of media (camera | application | screen)
 
-  static bool SatisfiesConstraintSet(const dom::MediaTrackConstraintSet& aConstraints,
-                                     const webrtc::CaptureCapability& aCandidate);
-  void ChooseCapability(const VideoTrackConstraintsN& aConstraints,
-                        const MediaEnginePrefs& aPrefs);
+  size_t NumCapabilities() MOZ_OVERRIDE;
+  void GetCapability(size_t aIndex, webrtc::CaptureCapability& aOut) MOZ_OVERRIDE;
 };
 
 class MediaEngineWebRTCAudioSource : public MediaEngineAudioSource,
@@ -165,7 +160,7 @@ public:
   virtual void GetName(nsAString& aName) MOZ_OVERRIDE;
   virtual void GetUUID(nsAString& aUUID) MOZ_OVERRIDE;
 
-  virtual nsresult Allocate(const AudioTrackConstraintsN& aConstraints,
+  virtual nsresult Allocate(const dom::MediaTrackConstraints& aConstraints,
                             const MediaEnginePrefs& aPrefs) MOZ_OVERRIDE;
   virtual nsresult Deallocate() MOZ_OVERRIDE;
   virtual nsresult Start(SourceMediaStream* aStream, TrackID aID) MOZ_OVERRIDE;
@@ -224,7 +219,7 @@ private:
   // from kStarted to kStopped (which are combined with EndTrack()).
   // mSources[] is accessed from webrtc threads.
   Monitor mMonitor;
-  nsTArray<SourceMediaStream*> mSources; // When this goes empty, we shut down HW
+  nsTArray<nsRefPtr<SourceMediaStream>> mSources; // When this goes empty, we shut down HW
   nsCOMPtr<nsIThread> mThread;
   int mCapIndex;
   int mChannel;
@@ -260,7 +255,7 @@ public:
 private:
   ~MediaEngineWebRTC() {
     Shutdown();
-#ifdef MOZ_B2G_CAMERA
+#if defined(MOZ_B2G_CAMERA) && defined(MOZ_WIDGET_GONK)
     AsyncLatencyLogger::Get()->Release();
 #endif
     gFarendObserver = nullptr;
