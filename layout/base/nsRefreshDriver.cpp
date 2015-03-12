@@ -774,16 +774,6 @@ public:
     MOZ_ASSERT(NS_IsMainThread());
   }
 
-  static void CreateVsyncActor(PBackgroundChild* aPBackgroundChild)
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-    MOZ_ASSERT(aPBackgroundChild);
-
-    layout::PVsyncChild* actor = aPBackgroundChild->SendPVsyncConstructor();
-    layout::VsyncChild* child = static_cast<layout::VsyncChild*>(actor);
-    nsRefreshDriver::PVsyncActorCreated(child);
-  }
-
 private:
   virtual ~VsyncChildCreateCallback() {}
 
@@ -791,7 +781,9 @@ private:
   {
     MOZ_ASSERT(NS_IsMainThread());
     MOZ_ASSERT(aPBackgroundChild);
-    CreateVsyncActor(aPBackgroundChild);
+    layout::PVsyncChild* actor = aPBackgroundChild->SendPVsyncConstructor();
+    layout::VsyncChild* child = static_cast<layout::VsyncChild*>(actor);
+    nsRefreshDriver::PVsyncActorCreated(child);
   }
 
   virtual void ActorFailed() MOZ_OVERRIDE
@@ -819,20 +811,6 @@ CreateContentVsyncRefreshTimer(void*)
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(!XRE_IsParentProcess());
 
-  // Create the PVsync actor child for vsync-base refresh timer.
-  // PBackgroundChild is created asynchronously. If PBackgroundChild is still
-  // unavailable, setup VsyncChildCreateCallback callback to handle the async
-  // connect. We will still use software timer before PVsync ready, and change
-  // to use hw timer when the connection is done. Please check
-  // VsyncChildCreateCallback::CreateVsyncActor() and
-  // nsRefreshDriver::PVsyncActorCreated().
-  PBackgroundChild* backgroundChild = BackgroundChild::GetForCurrentThread();
-  if (backgroundChild) {
-    // If we already have PBackgroundChild, create the
-    // child VsyncRefreshDriverTimer here.
-    VsyncChildCreateCallback::CreateVsyncActor(backgroundChild);
-    return;
-  }
   // Setup VsyncChildCreateCallback callback
   nsRefPtr<nsIIPCBackgroundChildCreateCallback> callback = new VsyncChildCreateCallback();
   if (NS_WARN_IF(!BackgroundChild::GetOrCreateForCurrentThread(callback))) {
