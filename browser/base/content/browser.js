@@ -2949,7 +2949,10 @@ function BrowserFullScreen()
 }
 
 function mirrorShow(popup) {
-  let services = CastingApps.getServicesForMirroring();
+  let services = [];
+  if (Services.prefs.getBoolPref("browser.casting.enabled")) {
+    services = CastingApps.getServicesForMirroring();
+  }
   popup.ownerDocument.getElementById("menu_mirrorTabCmd").hidden = !services.length;
 }
 
@@ -2959,8 +2962,11 @@ function mirrorMenuItemClicked(event) {
 }
 
 function populateMirrorTabMenu(popup) {
-  let videoEl = this.target;
   popup.innerHTML = null;
+  if (!Services.prefs.getBoolPref("browser.casting.enabled")) {
+    return;
+  }
+  let videoEl = this.target;
   let doc = popup.ownerDocument;
   let services = CastingApps.getServicesForMirroring();
   services.forEach(service => {
@@ -6481,17 +6487,6 @@ function AddKeywordForSearchField() {
                                                  , "tags"
                                                  , "loadInSidebar" ]
                                    }, window);
-}
-
-function SwitchDocumentDirection(aWindow) {
-  // document.dir can also be "auto", in which case it won't change
-  if (aWindow.document.dir == "ltr" || aWindow.document.dir == "") {
-    aWindow.document.dir = "rtl";
-  } else if (aWindow.document.dir == "rtl") {
-    aWindow.document.dir = "ltr";
-  }
-  for (var run = 0; run < aWindow.frames.length; run++)
-    SwitchDocumentDirection(aWindow.frames[run]);
 }
 
 function convertFromUnicode(charset, str)

@@ -161,11 +161,14 @@ class TreeMetadataEmitter(LoggingMixin):
             else:
                 raise Exception('Unhandled output type: %s' % type(out))
 
-        start = time.time()
-        objs = list(self._emit_libs_derived(contexts))
-        emitter_time += time.time() - start
+        # Don't emit Linkable objects when COMPILE_ENVIRONMENT is explicitely
+        # set to a value meaning false (usually '').
+        if self.config.substs.get('COMPILE_ENVIRONMENT', True):
+            start = time.time()
+            objs = list(self._emit_libs_derived(contexts))
+            emitter_time += time.time() - start
 
-        for o in emit_objs(objs): yield o
+            for o in emit_objs(objs): yield o
 
         yield ReaderSummary(file_count, sandbox_execution_time, emitter_time)
 
@@ -580,7 +583,14 @@ class TreeMetadataEmitter(LoggingMixin):
                     else:
                         resolved = context.resolve_path(s)
                         if '*' in s:
-                            srcdir_pattern_files[path].append(s);
+                            if s[0] == '/':
+                                pattern_start = resolved.index('*')
+                                base_path = mozpath.dirname(resolved[:pattern_start])
+                                pattern = resolved[len(base_path)+1:]
+                            else:
+                                base_path = context.srcdir
+                                pattern = s
+                            srcdir_pattern_files[path].append((base_path, pattern));
                         elif not os.path.exists(resolved):
                             raise SandboxValidationError(
                                 'File listed in TEST_HARNESS_FILES does not exist: %s' % s, context)

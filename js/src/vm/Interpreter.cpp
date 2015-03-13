@@ -166,8 +166,7 @@ js::OnUnknownMethod(JSContext *cx, HandleObject obj, Value idval_, MutableHandle
         return false;
 
     if (value.isObject()) {
-        NativeObject *obj = NewNativeObjectWithClassProto(cx, &js_NoSuchMethodClass, NullPtr(),
-                                                          NullPtr());
+        NativeObject *obj = NewNativeObjectWithClassProto(cx, &js_NoSuchMethodClass, NullPtr());
         if (!obj)
             return false;
 
@@ -181,6 +180,17 @@ js::OnUnknownMethod(JSContext *cx, HandleObject obj, Value idval_, MutableHandle
 static bool
 NoSuchMethod(JSContext *cx, unsigned argc, Value *vp)
 {
+    if (JSScript *script = cx->currentScript()) {
+        const char *filename = script->filename();
+        cx->compartment()->addTelemetry(filename, JSCompartment::DeprecatedNoSuchMethod);
+    }
+
+    if (!cx->compartment()->warnedAboutNoSuchMethod) {
+        if (!JS_ReportWarning(cx, "__noSuchMethod__ is deprecated"))
+            return false;
+        cx->compartment()->warnedAboutNoSuchMethod = true;
+    }
+
     InvokeArgs args(cx);
     if (!args.init(2))
         return false;
@@ -199,12 +209,6 @@ NoSuchMethod(JSContext *cx, unsigned argc, Value *vp)
     args[1].setObject(*argsobj);
     bool ok = Invoke(cx, args);
     vp[0] = args.rval();
-
-    if (JSScript *script = cx->currentScript()) {
-        const char *filename = script->filename();
-        cx->compartment()->addTelemetry(filename, JSCompartment::DeprecatedNoSuchMethod);
-    }
-
     return ok;
 }
 
@@ -270,7 +274,7 @@ GetPropertyOperation(JSContext *cx, InterpreterFrame *fp, HandleScript script, j
 }
 
 static inline bool
-NameOperation(JSContext *cx, InterpreterFrame *fp, jsbytecode *pc, MutableHandleValue vp)
+GetNameOperation(JSContext *cx, InterpreterFrame *fp, jsbytecode *pc, MutableHandleValue vp)
 {
     JSObject *obj = fp->scopeChain();
     PropertyName *name = fp->script()->getName(pc);
@@ -629,10 +633,7 @@ js::ExecuteKernel(JSContext *cx, HandleScript script, JSObject &scopeChainArg, c
                   ExecuteType type, AbstractFramePtr evalInFrame, Value *result)
 {
     MOZ_ASSERT_IF(evalInFrame, type == EXECUTE_DEBUG);
-    MOZ_ASSERT_IF(type == EXECUTE_GLOBAL,
-                  !scopeChainArg.is<ScopeObject>() ||
-                  (scopeChainArg.is<DynamicWithObject>() &&
-                   !scopeChainArg.as<DynamicWithObject>().isSyntactic()));
+    MOZ_ASSERT_IF(type == EXECUTE_GLOBAL, IsValidTerminatingScope(&scopeChainArg));
 #ifdef DEBUG
     if (thisv.isObject()) {
         RootedObject thisObj(cx, &thisv.toObject());
@@ -1650,9 +1651,6 @@ CASE(EnableInterruptsPseudoOpcode)
 /* Various 1-byte no-ops. */
 CASE(JSOP_NOP)
 CASE(JSOP_UNUSED2)
-CASE(JSOP_UNUSED51)
-CASE(JSOP_UNUSED52)
-CASE(JSOP_UNUSED83)
 CASE(JSOP_UNUSED92)
 CASE(JSOP_UNUSED103)
 CASE(JSOP_UNUSED104)
@@ -2713,7 +2711,7 @@ CASE(JSOP_GETNAME)
 {
     RootedValue &rval = rootValue0;
 
-    if (!NameOperation(cx, REGS.fp(), REGS.pc, &rval))
+    if (!GetNameOperation(cx, REGS.fp(), REGS.pc, &rval))
         goto error;
 
     PUSH_COPY(rval);
@@ -2780,10 +2778,10 @@ END_CASE(JSOP_SYMBOL)
 
 CASE(JSOP_OBJECT)
 {
-    RootedNativeObject &ref = rootNativeObject0;
+    RootedObject &ref = rootObject0;
     ref = script->getObject(REGS.pc);
     if (JS::CompartmentOptionsRef(cx).cloneSingletons()) {
-        JSObject *obj = js::DeepCloneObjectLiteral(cx, ref, js::MaybeSingletonObject);
+        JSObject *obj = DeepCloneObjectLiteral(cx, ref, js::MaybeSingletonObject);
         if (!obj)
             goto error;
         PUSH_OBJECT(*obj);
@@ -3527,6 +3525,70 @@ CASE(JSOP_ARRAYPUSH)
 }
 END_CASE(JSOP_ARRAYPUSH)
 
+CASE(JSOP_CLASSHERITAGE)
+{
+    RootedValue &val = rootValue0;
+    val = REGS.sp[-1];
+
+    RootedValue &objProto = rootValue1;
+    RootedObject &funcProto = rootObject0;
+    if (val.isNull()) {
+        objProto.setNull();
+        if (!GetBuiltinPrototype(cx, JSProto_Function, &funcProto))
+            goto error;
+    } else {
+        if (!val.isObject() || !val.toObject().isConstructor()) {
+            ReportIsNotFunction(cx, val, 0, CONSTRUCT);
+            goto error;
+        }
+
+        funcProto = &val.toObject();
+
+        if (!GetProperty(cx, funcProto, funcProto, cx->names().prototype, &objProto))
+            goto error;
+
+        if (!objProto.isObjectOrNull()) {
+            ReportValueError(cx, JSMSG_PROTO_NOT_OBJORNULL, -1, objProto, NullPtr());
+            goto error;
+        }
+    }
+
+    REGS.sp[-1] = objProto;
+    PUSH_OBJECT(*funcProto);
+}
+END_CASE(JSOP_CLASSHERITAGE)
+
+CASE(JSOP_FUNWITHPROTO)
+{
+    RootedObject &proto = rootObject1;
+    proto = &REGS.sp[-1].toObject();
+
+    /* Load the specified function object literal. */
+    RootedFunction &fun = rootFunction0;
+    fun = script->getFunction(GET_UINT32_INDEX(REGS.pc));
+
+    JSObject *obj = CloneFunctionObjectIfNotSingleton(cx, fun, REGS.fp()->scopeChain(),
+                                                      proto, GenericObject);
+    if (!obj)
+        goto error;
+
+    REGS.sp[-1].setObject(*obj);
+}
+END_CASE(JSOP_FUNWITHPROTO)
+
+CASE(JSOP_OBJWITHPROTO)
+{
+    RootedObject &proto = rootObject0;
+    proto = REGS.sp[-1].toObjectOrNull();
+
+    JSObject *obj = NewObjectWithGivenProto<PlainObject>(cx, proto, cx->global());
+    if (!obj)
+        goto error;
+
+    REGS.sp[-1].setObject(*obj);
+}
+END_CASE(JSOP_OBJWITHPROTO)
+
 DEFAULT()
 {
     char numBuf[12];
@@ -3652,12 +3714,8 @@ js::GetScopeName(JSContext *cx, HandleObject scopeChain, HandlePropertyName name
     if (!LookupName(cx, name, scopeChain, &obj, &pobj, &shape))
         return false;
 
-    if (!shape) {
-        JSAutoByteString printable;
-        if (AtomToPrintableString(cx, name, &printable))
-            ReportIsNotDefined(cx, printable.ptr());
-        return false;
-    }
+    if (!shape)
+        return ReportIsNotDefined(cx, name);
 
     if (!GetProperty(cx, obj, obj, name, vp))
         return false;
@@ -3709,7 +3767,8 @@ js::LambdaArrow(JSContext *cx, HandleFunction fun, HandleObject parent, HandleVa
 {
     MOZ_ASSERT(fun->isArrow());
 
-    RootedObject clone(cx, CloneFunctionObjectIfNotSingleton(cx, fun, parent, TenuredObject));
+    RootedObject clone(cx, CloneFunctionObjectIfNotSingleton(cx, fun, parent, NullPtr(),
+                                                             TenuredObject));
     if (!clone)
         return nullptr;
 
@@ -3735,7 +3794,7 @@ js::DefFunOperation(JSContext *cx, HandleScript script, HandleObject scopeChain,
      */
     RootedFunction fun(cx, funArg);
     if (fun->isNative() || fun->environment() != scopeChain) {
-        fun = CloneFunctionObjectIfNotSingleton(cx, fun, scopeChain, TenuredObject);
+        fun = CloneFunctionObjectIfNotSingleton(cx, fun, scopeChain, NullPtr(), TenuredObject);
         if (!fun)
             return false;
     } else {

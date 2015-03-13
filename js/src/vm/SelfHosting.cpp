@@ -173,7 +173,7 @@ js::intrinsic_ThrowError(JSContext *cx, unsigned argc, Value *vp)
         } else if (val.isString()) {
             errorArgs[i - 1].encodeLatin1(cx, val.toString());
         } else {
-            errorArgs[i - 1].initBytes(DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, val, NullPtr()));
+            errorArgs[i - 1].initBytes(DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, val, NullPtr()).release());
         }
         if (!errorArgs[i - 1])
             return false;
@@ -367,26 +367,26 @@ js::intrinsic_DefineDataProperty(JSContext *cx, unsigned argc, Value *vp)
     RootedValue value(cx, args[2]);
     unsigned attributes = args[3].toInt32();
 
-    Rooted<PropDesc> desc(cx);
+    Rooted<PropertyDescriptor> desc(cx);
+    unsigned attrs = 0;
 
     MOZ_ASSERT(bool(attributes & ATTR_ENUMERABLE) != bool(attributes & ATTR_NONENUMERABLE),
                "_DefineDataProperty must receive either ATTR_ENUMERABLE xor ATTR_NONENUMERABLE");
-    PropDesc::Enumerability enumerable =
-        PropDesc::Enumerability(bool(attributes & ATTR_ENUMERABLE));
+    if (attributes & ATTR_ENUMERABLE)
+        attrs |= JSPROP_ENUMERATE;
 
     MOZ_ASSERT(bool(attributes & ATTR_CONFIGURABLE) != bool(attributes & ATTR_NONCONFIGURABLE),
                "_DefineDataProperty must receive either ATTR_CONFIGURABLE xor "
                "ATTR_NONCONFIGURABLE");
-    PropDesc::Configurability configurable =
-        PropDesc::Configurability(bool(attributes & ATTR_CONFIGURABLE));
+    if (attributes & ATTR_NONCONFIGURABLE)
+        attrs |= JSPROP_PERMANENT;
 
     MOZ_ASSERT(bool(attributes & ATTR_WRITABLE) != bool(attributes & ATTR_NONWRITABLE),
                "_DefineDataProperty must receive either ATTR_WRITABLE xor ATTR_NONWRITABLE");
-    PropDesc::Writability writable =
-        PropDesc::Writability(bool(attributes & ATTR_WRITABLE));
+    if (attributes & ATTR_NONWRITABLE)
+        attrs |= JSPROP_READONLY;
 
-    desc = PropDesc(value, writable, enumerable, configurable);
-
+    desc.setDataDescriptor(value, attrs);
     return StandardDefineProperty(cx, obj, id, desc);
 }
 
