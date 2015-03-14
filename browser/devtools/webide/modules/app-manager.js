@@ -217,11 +217,25 @@ let AppManager = exports.AppManager = {
 
   getTarget: function() {
     if (this.selectedProject.type == "mainProcess") {
-      return devtools.TargetFactory.forRemoteTab({
-        form: this._listTabsResponse,
-        client: this.connection.client,
-        chrome: true
-      });
+      // Fx >=37 exposes a ChromeActor to debug the main process
+      if (this.connection.client.mainRoot.traits.allowChromeProcess) {
+        return this.connection.client.attachProcess()
+                   .then(aResponse => {
+                     return devtools.TargetFactory.forRemoteTab({
+                       form: aResponse.form,
+                       client: this.connection.client,
+                       chrome: true
+                     });
+                   });
+      } else {
+        // Fx <37 exposes tab actors on the root actor
+        return devtools.TargetFactory.forRemoteTab({
+          form: this._listTabsResponse,
+          client: this.connection.client,
+          chrome: true,
+          isTabActor: false
+        });
+      }
     }
 
     if (this.selectedProject.type == "tab") {
@@ -313,15 +327,17 @@ let AppManager = exports.AppManager = {
     return this._selectedProject;
   },
 
-  removeSelectedProject: function() {
+  removeSelectedProject: Task.async(function*() {
     let location = this.selectedProject.location;
     AppManager.selectedProject = null;
     // If the user cancels the removeProject operation, don't remove the project
     if (AppManager.selectedProject != null) {
       return;
     }
-    return AppProjects.remove(location);
-  },
+
+    yield AppProjects.remove(location);
+    AppManager.update("project-removed");
+  }),
 
   packageProject: Task.async(function*(project) {
     if (!project) {
@@ -414,8 +430,13 @@ let AppManager = exports.AppManager = {
   },
 
   isMainProcessDebuggable: function() {
-    return this._listTabsResponse &&
-           this._listTabsResponse.consoleActor;
+    // Fx <37 exposes chrome tab actors on RootActor
+    // Fx >=37 exposes a dedicated actor via attachProcess request
+    return this.connection.client &&
+           this.connection.client.mainRoot &&
+           this.connection.client.mainRoot.traits.allowChromeProcess ||
+           (this._listTabsResponse &&
+            this._listTabsResponse.consoleActor);
   },
 
   get deviceFront() {

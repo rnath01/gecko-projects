@@ -182,7 +182,9 @@ let PerformanceController = {
     // ToolbarView, so that they may be accessible via the "gear" menu.
     // Every other pref should be registered here.
     this._nonBooleanPrefs = new ViewHelpers.Prefs("devtools.performance", {
-      "hidden-markers": ["Json", "timeline.hidden-markers"]
+      "hidden-markers": ["Json", "timeline.hidden-markers"],
+      "memory-sample-probability": ["Float", "memory.sample-probability"],
+      "memory-max-log-length": ["Int", "memory.max-log-length"]
     });
 
     this._nonBooleanPrefs.registerObserver();
@@ -259,14 +261,16 @@ let PerformanceController = {
    * when the front has started to record.
    */
   startRecording: Task.async(function *() {
-    let withMemory = this.getOption("enable-memory");
-    let withTicks = this.getOption("enable-framerate");
-    let withAllocations = this.getOption("enable-memory");
-
-    let recording = this._createRecording({ withMemory, withTicks, withAllocations });
+    let recording = this._createRecording({
+      withMemory: this.getOption("enable-memory"),
+      withTicks: this.getOption("enable-framerate"),
+      withAllocations: this.getOption("enable-memory"),
+      allocationsSampleProbability: this.getPref("memory-sample-probability"),
+      allocationsMaxLogLength: this.getPref("memory-max-log-length")
+    });
 
     this.emit(EVENTS.RECORDING_WILL_START, recording);
-    yield recording.startRecording({ withTicks, withMemory, withAllocations });
+    yield recording.startRecording();
     this.emit(EVENTS.RECORDING_STARTED, recording);
 
     this.setCurrentRecording(recording);
@@ -338,12 +342,10 @@ let PerformanceController = {
    *         The newly created recording model.
    */
   _createRecording: function (options={}) {
-    let { withMemory, withTicks, withAllocations } = options;
-    let front = gFront;
-
-    let recording = new RecordingModel(
-      { front, performance, withMemory, withTicks, withAllocations });
-
+    let recording = new RecordingModel(Heritage.extend(options, {
+      front: gFront,
+      performance: window.performance
+    }));
     this._recordings.push(recording);
     return recording;
   },

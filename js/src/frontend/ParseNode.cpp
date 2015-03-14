@@ -268,11 +268,19 @@ PushNodeChildren(ParseNode *pn, NodeStack *stack)
       case PNK_WHILE:
       case PNK_SWITCH:
       case PNK_LETBLOCK:
-      case PNK_CLASSNAMES:
       case PNK_CLASSMETHOD:
       case PNK_FOR: {
         MOZ_ASSERT(pn->isArity(PN_BINARY));
         stack->push(pn->pn_left);
+        stack->push(pn->pn_right);
+        return PushResult::Recyclable;
+      }
+
+      // Named class expressions do not have outer binding nodes
+      case PNK_CLASSNAMES: {
+        MOZ_ASSERT(pn->isArity(PN_BINARY));
+        if (pn->pn_left)
+            stack->push(pn->pn_left);
         stack->push(pn->pn_right);
         return PushResult::Recyclable;
       }
@@ -383,10 +391,11 @@ PushNodeChildren(ParseNode *pn, NodeStack *stack)
         return PushResult::Recyclable;
       }
 
-      // classes might have an optinal node for the heritage
+      // classes might have an optional node for the heritage, as well as the names
       case PNK_CLASS: {
         MOZ_ASSERT(pn->isArity(PN_TERNARY));
-        stack->push(pn->pn_kid1);
+        if (pn->pn_kid1)
+            stack->push(pn->pn_kid1);
         if (pn->pn_kid2)
             stack->push(pn->pn_kid2);
         stack->push(pn->pn_kid3);
@@ -569,7 +578,7 @@ ParseNodeAllocator::allocNode()
 
     void *p = alloc.alloc(sizeof (ParseNode));
     if (!p)
-        js_ReportOutOfMemory(cx);
+        ReportOutOfMemory(cx);
     return p;
 }
 
@@ -629,6 +638,11 @@ ParseNode *
 Parser<FullParseHandler>::cloneParseTree(ParseNode *opn)
 {
     JS_CHECK_RECURSION(context, return nullptr);
+
+    if (opn->isKind(PNK_COMPUTED_NAME)) {
+        report(ParseError, false, opn, JSMSG_COMPUTED_NAME_IN_PATTERN);
+        return null();
+    }
 
     ParseNode *pn = handler.new_<ParseNode>(opn->getKind(), opn->getOp(), opn->getArity(),
                                             opn->pn_pos);
@@ -744,14 +758,8 @@ Parser<FullParseHandler>::cloneDestructuringDefault(ParseNode *opn)
 {
     MOZ_ASSERT(opn->isKind(PNK_ASSIGN));
 
-    ParseNode *target = cloneLeftHandSide(opn->pn_left);
-    if (!target)
-        return nullptr;
-    ParseNode *defaultNode = cloneParseTree(opn->pn_right);
-    if (!defaultNode)
-        return nullptr;
-
-    return handler.new_<BinaryNode>(opn->getKind(), JSOP_NOP, opn->pn_pos, target, defaultNode);
+    report(ParseError, false, opn, JSMSG_DEFAULT_IN_PATTERN);
+    return null();
 }
 
 /*

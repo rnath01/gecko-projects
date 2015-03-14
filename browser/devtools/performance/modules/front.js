@@ -121,14 +121,9 @@ PerformanceActorsConnection.prototype = {
    * Initializes a connection to the profiler actor.
    */
   _connectProfilerActor: Task.async(function*() {
-    // Chrome debugging targets have already obtained a reference
-    // to the profiler actor.
-    if (this._target.chrome) {
-      this._profiler = this._target.form.profilerActor;
-    }
-    // When we are debugging content processes, we already have the tab
-    // specific one. Use it immediately.
-    else if (this._target.form && this._target.form.profilerActor) {
+    // Chrome and content process targets already have obtained a reference
+    // to the profiler tab actor. Use it immediately.
+    if (this._target.form && this._target.form.profilerActor) {
       this._profiler = this._target.form.profilerActor;
     }
     // Check if we already have a grip to the `listTabs` response object
@@ -327,20 +322,23 @@ PerformanceFront.prototype = {
   }),
 
   /**
-   * Starts the timeline actor, if necessary.
+   * Starts recording allocations in the memory actor, if necessary.
    */
   _startMemory: Task.async(function *(options) {
     if (!options.withAllocations) {
       return 0;
     }
     yield this._request("memory", "attach");
-    let memoryStartTime = yield this._request("memory", "startRecordingAllocations");
+    let memoryStartTime = yield this._request("memory", "startRecordingAllocations", {
+      probability: options.allocationsSampleProbability,
+      maxLogLength: options.allocationsMaxLogLength
+    });
     yield this._pullAllocationSites();
     return memoryStartTime;
   }),
 
   /**
-   * Stops the timeline actor, if necessary.
+   * Stops recording allocations in the memory actor, if necessary.
    */
   _stopMemory: Task.async(function *(options) {
     if (!options.withAllocations) {
@@ -357,6 +355,11 @@ PerformanceFront.prototype = {
    * them to consumers.
    */
   _pullAllocationSites: Task.async(function *() {
+    let isDetached = (yield this._request("memory", "getState")) !== "attached";
+    if (isDetached) {
+      return;
+    }
+
     let memoryData = yield this._request("memory", "getAllocations");
 
     this.emit("allocations", {

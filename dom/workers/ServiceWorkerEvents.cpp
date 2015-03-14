@@ -28,7 +28,6 @@ BEGIN_WORKERS_NAMESPACE
 
 FetchEvent::FetchEvent(EventTarget* aOwner)
 : Event(aOwner, nullptr, nullptr)
-, mWindowId(0)
 , mIsReload(false)
 , mWaitToRespond(false)
 {
@@ -41,11 +40,11 @@ FetchEvent::~FetchEvent()
 void
 FetchEvent::PostInit(nsMainThreadPtrHandle<nsIInterceptedChannel>& aChannel,
                      nsMainThreadPtrHandle<ServiceWorker>& aServiceWorker,
-                     uint64_t aWindowId)
+                     nsAutoPtr<ServiceWorkerClientInfo>& aClientInfo)
 {
   mChannel = aChannel;
   mServiceWorker = aServiceWorker;
-  mWindowId = aWindowId;
+  mClientInfo = aClientInfo;
 }
 
 /*static*/ already_AddRefed<FetchEvent>
@@ -244,43 +243,17 @@ FetchEvent::RespondWith(Promise& aPromise, ErrorResult& aRv)
 }
 
 already_AddRefed<ServiceWorkerClient>
-FetchEvent::Client()
+FetchEvent::GetClient()
 {
   if (!mClient) {
-    mClient = new ServiceWorkerClient(GetParentObject(), mWindowId);
+    if (!mClientInfo) {
+      return nullptr;
+    }
+
+    mClient = new ServiceWorkerClient(GetParentObject(), *mClientInfo);
   }
   nsRefPtr<ServiceWorkerClient> client = mClient;
   return client.forget();
-}
-
-already_AddRefed<Promise>
-FetchEvent::ForwardTo(const nsAString& aUrl)
-{
-  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(GetParentObject());
-  MOZ_ASSERT(global);
-  ErrorResult result;
-  nsRefPtr<Promise> promise = Promise::Create(global, result);
-  if (NS_WARN_IF(result.Failed())) {
-    return nullptr;
-  }
-
-  promise->MaybeReject(NS_ERROR_NOT_AVAILABLE);
-  return promise.forget();
-}
-
-already_AddRefed<Promise>
-FetchEvent::Default()
-{
-  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(GetParentObject());
-  MOZ_ASSERT(global);
-  ErrorResult result;
-  nsRefPtr<Promise> promise = Promise::Create(global, result);
-  if (result.Failed()) {
-    return nullptr;
-  }
-
-  promise->MaybeReject(NS_ERROR_NOT_AVAILABLE);
-  return promise.forget();
 }
 
 NS_IMPL_ADDREF_INHERITED(FetchEvent, Event)
