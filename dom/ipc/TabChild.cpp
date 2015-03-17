@@ -199,14 +199,14 @@ TabChildBase::InitializeRootMetrics()
   mLastRootMetrics.mCompositionBounds = ParentLayerRect(
       ParentLayerPoint(),
       ParentLayerSize(ViewAs<ParentLayerPixel>(mInnerSize, PixelCastJustification::ScreenIsParentLayerForRoot)));
-  mLastRootMetrics.SetZoom(mLastRootMetrics.CalculateIntrinsicScale());
+  mLastRootMetrics.SetZoom(CSSToParentLayerScale2D(mLastRootMetrics.CalculateIntrinsicScale()));
   mLastRootMetrics.SetDevPixelsPerCSSPixel(WebWidget()->GetDefaultScale());
   // We use ParentLayerToLayerScale(1) below in order to turn the
   // async zoom amount into the gecko zoom amount.
   mLastRootMetrics.SetCumulativeResolution(mLastRootMetrics.GetZoom() / mLastRootMetrics.GetDevPixelsPerCSSPixel() * ParentLayerToLayerScale(1));
   // This is the root layer, so the cumulative resolution is the same
   // as the resolution.
-  mLastRootMetrics.SetPresShellResolution(mLastRootMetrics.GetCumulativeResolution().scale);
+  mLastRootMetrics.SetPresShellResolution(mLastRootMetrics.GetCumulativeResolution().ToScaleFactor().scale);
   mLastRootMetrics.SetScrollOffset(CSSPoint(0, 0));
 
   TABC_LOG("After InitializeRootMetrics, mLastRootMetrics is %s\n",
@@ -372,7 +372,7 @@ TabChildBase::HandlePossibleViewportChange(const ScreenIntSize& aOldScreenSize)
     CSSToScreenScale defaultZoom = viewportInfo.GetDefaultZoom();
     MOZ_ASSERT(viewportInfo.GetMinZoom() <= defaultZoom &&
                defaultZoom <= viewportInfo.GetMaxZoom());
-    metrics.SetZoom(ConvertScaleForRoot(defaultZoom));
+    metrics.SetZoom(CSSToParentLayerScale2D(ConvertScaleForRoot(defaultZoom)));
 
     metrics.SetScrollId(viewId);
   }
@@ -389,8 +389,8 @@ TabChildBase::HandlePossibleViewportChange(const ScreenIntSize& aOldScreenSize)
                                 * ParentLayerToLayerScale(1));
   // This is the root layer, so the cumulative resolution is the same
   // as the resolution.
-  metrics.SetPresShellResolution(metrics.GetCumulativeResolution().scale);
-  utils->SetResolutionAndScaleTo(metrics.GetPresShellResolution(), metrics.GetPresShellResolution());
+  metrics.SetPresShellResolution(metrics.GetCumulativeResolution().ToScaleFactor().scale);
+  utils->SetResolutionAndScaleTo(metrics.GetPresShellResolution());
 
   CSSSize scrollPort = metrics.CalculateCompositedSizeInCssPixels();
   utils->SetScrollPositionClampingScrollPortSize(scrollPort.width, scrollPort.height);
@@ -917,8 +917,7 @@ TabChild::Observe(nsISupports *aSubject,
         // until we we get an inner size.
         if (HasValidInnerSize()) {
           InitializeRootMetrics();
-          utils->SetResolutionAndScaleTo(mLastRootMetrics.GetPresShellResolution(),
-                                         mLastRootMetrics.GetPresShellResolution());
+          utils->SetResolutionAndScaleTo(mLastRootMetrics.GetPresShellResolution());
           HandlePossibleViewportChange(mInnerSize);
         }
       }
@@ -2344,7 +2343,7 @@ TabChild::GetPresShellResolution() const
   if (!shell) {
     return 1.0f;
   }
-  return shell->GetXResolution();
+  return shell->GetResolution();
 }
 
 bool
