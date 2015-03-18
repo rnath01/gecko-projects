@@ -57,8 +57,7 @@ extern JS_FRIEND_API(bool)
 JS_SplicePrototype(JSContext *cx, JS::HandleObject obj, JS::HandleObject proto);
 
 extern JS_FRIEND_API(JSObject *)
-JS_NewObjectWithUniqueType(JSContext *cx, const JSClass *clasp, JS::HandleObject proto,
-                           JS::HandleObject parent);
+JS_NewObjectWithUniqueType(JSContext *cx, const JSClass *clasp, JS::HandleObject proto);
 
 // Allocate an object in exactly the same way as JS_NewObjectWithGivenProto, but
 // without invoking the metadata callback on it.  This allows creation of
@@ -737,11 +736,11 @@ DefineFunctionWithReserved(JSContext *cx, JSObject *obj, const char *name, JSNat
 
 JS_FRIEND_API(JSFunction *)
 NewFunctionWithReserved(JSContext *cx, JSNative call, unsigned nargs, unsigned flags,
-                        JSObject *parent, const char *name);
+                        const char *name);
 
 JS_FRIEND_API(JSFunction *)
 NewFunctionByIdWithReserved(JSContext *cx, JSNative native, unsigned nargs, unsigned flags,
-                            JSObject *parent, jsid id);
+                            jsid id);
 
 JS_FRIEND_API(const JS::Value &)
 GetFunctionNativeReserved(JSObject *fun, size_t which);
@@ -2626,17 +2625,15 @@ ForwardToNative(JSContext *cx, JSNative native, const JS::CallArgs &args);
  *
  * SetPropertyIgnoringNamedGetter is exposed to make it easier to override
  * set() in this way.  It carries out all the steps of BaseProxyHandler::set()
- * except the initial getOwnPropertyDescriptor()/getPropertyDescriptor() calls.
- * The caller must supply those results as the 'desc' and 'descIsOwn'
- * parameters.
+ * except the initial getOwnPropertyDescriptor() call.  The caller must supply
+ * that descriptor as the 'ownDesc' parameter.
  *
- * Implemented in jsproxy.cpp.
+ * Implemented in proxy/BaseProxyHandler.cpp.
  */
 JS_FRIEND_API(bool)
-SetPropertyIgnoringNamedGetter(JSContext *cx, const BaseProxyHandler *handler,
-                               JS::HandleObject proxy, JS::HandleObject receiver,
-                               JS::HandleId id, JS::MutableHandle<JSPropertyDescriptor> desc,
-                               bool descIsOwn, JS::MutableHandleValue vp,
+SetPropertyIgnoringNamedGetter(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
+                               JS::MutableHandleValue vp, JS::HandleObject receiver,
+                               JS::MutableHandle<JSPropertyDescriptor> ownDesc,
                                JS::ObjectOpResult &result);
 
 JS_FRIEND_API(void)

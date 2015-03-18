@@ -191,12 +191,12 @@ void MediaDecoder::UpdateDormantState(bool aDormantTimeout, bool aActivity)
   if (mIsDormant) {
     DECODER_LOG("UpdateDormantState() entering DORMANT state");
     // enter dormant state
-    nsCOMPtr<nsIRunnable> event =
+    RefPtr<nsRunnable> event =
       NS_NewRunnableMethodWithArg<bool>(
         mDecoderStateMachine,
         &MediaDecoderStateMachine::SetDormant,
         true);
-    mDecoderStateMachine->GetStateMachineThread()->Dispatch(event, NS_DISPATCH_NORMAL);
+    mDecoderStateMachine->TaskQueue()->Dispatch(event);
 
     if (IsEnded()) {
       mWasEndedWhenEnteredDormant = true;
@@ -207,12 +207,12 @@ void MediaDecoder::UpdateDormantState(bool aDormantTimeout, bool aActivity)
     DECODER_LOG("UpdateDormantState() leaving DORMANT state");
     // exit dormant state
     // trigger to state machine.
-    nsCOMPtr<nsIRunnable> event =
+    RefPtr<nsRunnable> event =
       NS_NewRunnableMethodWithArg<bool>(
         mDecoderStateMachine,
         &MediaDecoderStateMachine::SetDormant,
         false);
-    mDecoderStateMachine->GetStateMachineThread()->Dispatch(event, NS_DISPATCH_NORMAL);
+    mDecoderStateMachine->TaskQueue()->Dispatch(event);
   }
 }
 
@@ -368,7 +368,7 @@ public:
       MediaStreamGraph* aGraph,
       MediaStreamListener::MediaStreamGraphEvent event) MOZ_OVERRIDE {
     if (event == EVENT_FINISHED) {
-      nsRefPtr<nsIRunnable> r = NS_NewRunnableMethod(
+      nsCOMPtr<nsIRunnable> r = NS_NewRunnableMethod(
           this, &OutputStreamListener::DoNotifyFinished);
       aGraph->DispatchToMainThreadAfterStreamStateUpdate(r.forget());
     }
@@ -750,7 +750,8 @@ nsresult MediaDecoder::ScheduleStateMachineThread()
   if (mShuttingDown)
     return NS_OK;
   ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
-  return mDecoderStateMachine->ScheduleStateMachine();
+  mDecoderStateMachine->ScheduleStateMachine();
+  return NS_OK;
 }
 
 nsresult MediaDecoder::Play()
@@ -763,8 +764,7 @@ nsresult MediaDecoder::Play()
   if (mPausedForPlaybackRateNull) {
     return NS_OK;
   }
-  nsresult res = ScheduleStateMachineThread();
-  NS_ENSURE_SUCCESS(res,res);
+  ScheduleStateMachineThread();
   if (IsEnded()) {
     return Seek(0, SeekTarget::PrevSyncPoint);
   } else if (mPlayState == PLAY_STATE_LOADING || mPlayState == PLAY_STATE_SEEKING) {
@@ -1317,7 +1317,7 @@ void MediaDecoder::ApplyStateToStateMachine(PlayState aState)
         mDecoderStateMachine->Play();
         break;
       case PLAY_STATE_SEEKING:
-        mSeekRequest.Begin(ProxyMediaCall(mDecoderStateMachine->GetStateMachineThread(),
+        mSeekRequest.Begin(ProxyMediaCall(mDecoderStateMachine->TaskQueue(),
                                           mDecoderStateMachine.get(), __func__,
                                           &MediaDecoderStateMachine::Seek, mRequestedSeekTarget)
           ->RefableThen(NS_GetCurrentThread(), __func__, this,
@@ -1522,7 +1522,6 @@ void MediaDecoder::StartProgressUpdates()
   mIgnoreProgressData = false;
   if (mResource) {
     mResource->SetReadMode(MediaCacheStream::MODE_PLAYBACK);
-    mDecoderPosition = mPlaybackPosition = mResource->Tell();
   }
 }
 
@@ -1537,7 +1536,7 @@ void MediaDecoder::SetLoadInBackground(bool aLoadInBackground)
 void MediaDecoder::UpdatePlaybackOffset(int64_t aOffset)
 {
   ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
-  mPlaybackPosition = std::max(aOffset, mPlaybackPosition);
+  mPlaybackPosition = aOffset;
 }
 
 bool MediaDecoder::OnStateMachineThread() const
@@ -1609,7 +1608,7 @@ void MediaDecoder::Invalidate()
 // Constructs the time ranges representing what segments of the media
 // are buffered and playable.
 nsresult MediaDecoder::GetBuffered(dom::TimeRanges* aBuffered) {
-  NS_ENSURE_TRUE(mDecoderStateMachine, NS_ERROR_FAILURE);
+  NS_ENSURE_TRUE(mDecoderStateMachine && !mShuttingDown, NS_ERROR_FAILURE);
   return mDecoderStateMachine->GetBuffered(aBuffered);
 }
 

@@ -2523,6 +2523,8 @@ richlistitem[type~="action"][actiontype="switchtab"][selected="true"] > .ac-url-
   }
 }
 
+%include ../shared/readinglist.inc.css
+
 /* Reader mode button */
 
 #reader-mode-button {
@@ -4113,6 +4115,27 @@ menulist.translate-infobar-element > .menulist-dropmarker {
 
   menulist.translate-infobar-element > .menulist-dropmarker > .dropmarker-icon {
     width: 8px;
+  }
+}
+
+/* Loop/ Hello browser styles */
+
+notification[value="loop-sharing-notification"] .notification-button {
+  padding: 1px 5px;
+}
+
+notification[value="loop-sharing-notification"] .button-menubutton-button {
+  -moz-appearance: none;
+  min-width: 0;
+  margin: 0;
+}
+
+notification[value="loop-sharing-notification"] .messageImage {
+  list-style-image: url(chrome://browser/skin/webRTC-sharingScreen-menubar.png);
+}
+@media (min-resolution: 2dppx) {
+  notification[value="loop-sharing-notification"] .messageImage {
+    list-style-image: url(chrome://browser/skin/webRTC-sharingScreen-menubar@2x.png);
   }
 }
 

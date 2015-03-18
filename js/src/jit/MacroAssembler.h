@@ -30,6 +30,7 @@
 #include "jit/VMFunctions.h"
 #include "vm/ProxyObject.h"
 #include "vm/Shape.h"
+#include "vm/UnboxedObject.h"
 
 #ifdef IS_LITTLE_ENDIAN
 #define IMM32_16ADJ(X) X << 16
@@ -747,9 +748,14 @@ class MacroAssembler : public MacroAssemblerSpecific
     void compareExchangeToTypedIntArray(Scalar::Type arrayType, const T &mem, Register oldval, Register newval,
                                         Register temp, AnyRegister output);
 
+    // Generating a result.
     template<typename S, typename T>
     void atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType, const S &value,
                                     const T &mem, Register temp1, Register temp2, AnyRegister output);
+
+    // Generating no result.
+    template<typename S, typename T>
+    void atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType, const S &value, const T &mem);
 
     void storeToTypedFloatArray(Scalar::Type arrayType, FloatRegister value, const BaseIndex &dest);
     void storeToTypedFloatArray(Scalar::Type arrayType, FloatRegister value, const Address &dest);
@@ -817,10 +823,10 @@ class MacroAssembler : public MacroAssemblerSpecific
   private:
     void checkAllocatorState(Label *fail);
     bool shouldNurseryAllocate(gc::AllocKind allocKind, gc::InitialHeap initialHeap);
-    void nurseryAllocate(Register result, Register slots, gc::AllocKind allocKind,
+    void nurseryAllocate(Register result, Register temp, gc::AllocKind allocKind,
                          size_t nDynamicSlots, gc::InitialHeap initialHeap, Label *fail);
     void freeListAllocate(Register result, Register temp, gc::AllocKind allocKind, Label *fail);
-    void allocateObject(Register result, Register slots, gc::AllocKind allocKind,
+    void allocateObject(Register result, Register temp, gc::AllocKind allocKind,
                         uint32_t nDynamicSlots, gc::InitialHeap initialHeap, Label *fail);
     void allocateNonObject(Register result, Register temp, gc::AllocKind allocKind, Label *fail);
     void copySlotsFromTemplate(Register obj, const NativeObject *templateObj,
@@ -829,18 +835,20 @@ class MacroAssembler : public MacroAssemblerSpecific
                                     const Value &v);
     void fillSlotsWithUndefined(Address addr, Register temp, uint32_t start, uint32_t end);
     void fillSlotsWithUninitialized(Address addr, Register temp, uint32_t start, uint32_t end);
-    void initGCSlots(Register obj, Register temp, NativeObject *templateObj, bool initFixedSlots);
+    void initGCSlots(Register obj, Register temp, NativeObject *templateObj, bool initContents);
 
   public:
     void callMallocStub(size_t nbytes, Register result, Label *fail);
     void callFreeStub(Register slots);
     void createGCObject(Register result, Register temp, JSObject *templateObj,
-                        gc::InitialHeap initialHeap, Label *fail, bool initFixedSlots = true);
+                        gc::InitialHeap initialHeap, Label *fail, bool initContents = true);
 
     void newGCThing(Register result, Register temp, JSObject *templateObj,
                      gc::InitialHeap initialHeap, Label *fail);
     void initGCThing(Register obj, Register temp, JSObject *templateObj,
-                     bool initFixedSlots = true);
+                     bool initContents = true);
+
+    void initUnboxedObjectContents(Register object, UnboxedPlainObject *templateObject);
 
     void newGCString(Register result, Register temp, Label *fail);
     void newGCFatInlineString(Register result, Register temp, Label *fail);
@@ -860,10 +868,14 @@ class MacroAssembler : public MacroAssemblerSpecific
     void linkExitFrame();
 
   public:
+    void PushStubCode() {
+        exitCodePatch_ = PushWithPatch(ImmWord(-1));
+    }
+
     void enterExitFrame(const VMFunction *f = nullptr) {
         linkExitFrame();
         // Push the ioncode. (Bailout or VM wrapper)
-        exitCodePatch_ = PushWithPatch(ImmWord(-1));
+        PushStubCode();
         // Push VMFunction pointer, to mark arguments.
         Push(ImmPtr(f));
     }
@@ -876,8 +888,8 @@ class MacroAssembler : public MacroAssemblerSpecific
         Push(ImmPtr(nullptr));
     }
 
-    void leaveExitFrame() {
-        freeStack(ExitFooterFrame::Size());
+    void leaveExitFrame(size_t extraFrame = 0) {
+        freeStack(ExitFooterFrame::Size() + extraFrame);
     }
 
     bool hasEnteredExitFrame() const {

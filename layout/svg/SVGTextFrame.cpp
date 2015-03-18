@@ -42,6 +42,7 @@
 #include "SVGTextPathElement.h"
 #include "nsLayoutUtils.h"
 #include "nsFrameSelection.h"
+#include "nsStyleStructInlines.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -2523,7 +2524,8 @@ CharIterator::IsOriginalCharTrimmed() const
   return !((index >= mTrimmedOffset &&
             index < mTrimmedOffset + mTrimmedLength) ||
            (index >= mTrimmedOffset + mTrimmedLength &&
-            mFrameForTrimCheck->StyleText()->NewlineIsSignificant() &&
+            mFrameForTrimCheck->StyleText()->
+              NewlineIsSignificant(mFrameForTrimCheck) &&
             mFrameForTrimCheck->GetContent()->GetText()->CharAt(index) == '\n'));
 }
 
@@ -4424,7 +4426,7 @@ SVGTextFrame::ResolvePositions(nsIContent* aContent,
 
     // Get x, y, dx, dy.
     SVGUserUnitList x, y, dx, dy;
-    element->GetAnimatedLengthListValues(&x, &y, &dx, &dy);
+    element->GetAnimatedLengthListValues(&x, &y, &dx, &dy, nullptr);
 
     // Get rotate.
     const SVGNumberList* rotate = nullptr;

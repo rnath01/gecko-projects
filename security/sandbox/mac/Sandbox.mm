@@ -59,7 +59,7 @@ static const char contentSandboxRules[] =
   "(if \n"
   "  (or\n"
   "    (< macosMinorVersion 9)\n"
-  "    (= sandbox-level 0))\n"
+  "    (< sandbox-level 1))\n"
   "  (allow default)\n"
   "  (begin\n"
   "    (deny default)\n"
@@ -228,11 +228,16 @@ static const char contentSandboxRules[] =
   "\n"
   "; the following rules should be removed when printing and \n"
   "; opening a file from disk are brokered through the main process\n"
-  "    (allow file*\n"
-  "        (require-all\n"
-  "            (subpath home-path)\n"
-  "            (require-not\n"
-  "                (home-subpath \"/Library\"))))\n"
+  "    (if\n"
+  "      (< sandbox-level 2)\n"
+  "      (allow file*\n"
+  "          (require-not\n"
+  "              (home-subpath \"/Library\")))\n"
+  "      (allow file*\n"
+  "          (require-all\n"
+  "              (subpath home-path)\n"
+  "              (require-not\n"
+  "                  (home-subpath \"/Library\")))))\n"
   "\n"
   "; printing\n"
   "    (allow authorization-right-obtain\n"
@@ -308,7 +313,7 @@ bool StartMacSandbox(MacSandboxInfo aInfo, nsCString &aErrorMessage)
   }
   else if (aInfo.type == MacSandboxType_Content) {
     profile.AppendPrintf(contentSandboxRules,
-                         Preferences::GetInt("security.sandbox.macos.content.level"),
+                         Preferences::GetInt("security.sandbox.content.level"),
                          nsCocoaFeatures::OSXVersionMajor(),
                          nsCocoaFeatures::OSXVersionMinor(),
                          aInfo.appPath.get(),

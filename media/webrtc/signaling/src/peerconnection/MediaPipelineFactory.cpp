@@ -20,6 +20,7 @@
 #include "nsIPrincipal.h"
 #include "nsIDocument.h"
 #include "mozilla/Preferences.h"
+#include "MediaEngine.h"
 #endif
 
 #include "GmpVideoCodec.h"
@@ -427,7 +428,7 @@ MediaPipelineFactory::CreateMediaPipelineReceiving(
   TrackID numericTrackId = stream->GetNumericTrackId(aTrack.GetTrackId());
   MOZ_ASSERT(numericTrackId != TRACK_INVALID);
 
-  bool queue_track = stream->QueueTracks();
+  bool queue_track = stream->ShouldQueueTracks();
 
   MOZ_MTLOG(ML_DEBUG, __FUNCTION__ << ": Creating pipeline for "
             << numericTrackId << " -> " << aTrack.GetTrackId());
@@ -482,9 +483,6 @@ MediaPipelineFactory::CreateMediaPipelineReceiving(
 
   stream->SyncPipeline(pipeline);
 
-  if (queue_track) {
-    stream->TrackQueued(aTrack.GetTrackId());
-  }
   return NS_OK;
 }
 
@@ -756,6 +754,11 @@ MediaPipelineFactory::GetOrCreateVideoConduit(
     if (NS_FAILED(rv))
       return rv;
 
+    rv = ConfigureVideoCodecMode(aTrack,*conduit);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+
     // Take possession of this pointer
     ScopedDeletePtr<VideoCodecConfig> config(configRaw);
 
@@ -774,6 +777,61 @@ MediaPipelineFactory::GetOrCreateVideoConduit(
 
   *aConduitp = conduit;
 
+  return NS_OK;
+}
+
+nsresult
+MediaPipelineFactory::ConfigureVideoCodecMode(const JsepTrack& aTrack,
+                                              VideoSessionConduit& aConduit)
+{
+#ifdef MOZILLA_INTERNAL_API
+  nsRefPtr<LocalSourceStreamInfo> stream =
+    mPCMedia->GetLocalStreamById(aTrack.GetStreamId());
+
+  //get video track
+  nsRefPtr<mozilla::dom::VideoStreamTrack> videotrack =
+    stream->GetVideoTrackByTrackId(aTrack.GetTrackId());
+
+  if (!videotrack) {
+    MOZ_MTLOG(ML_ERROR, "video track not available");
+    return NS_ERROR_FAILURE;
+  }
+
+  //get video source type
+  nsRefPtr<DOMMediaStream> mediastream =
+    mPCMedia->GetLocalStreamById(aTrack.GetStreamId())->GetMediaStream();
+
+  DOMLocalMediaStream* domLocalStream = mediastream->AsDOMLocalMediaStream();
+  if (!domLocalStream) {
+    return NS_OK;
+  }
+
+  MediaEngineSource *engine =
+    domLocalStream->GetMediaEngine(videotrack->GetTrackID());
+
+  dom::MediaSourceEnum source = engine->GetMediaSource();
+  webrtc::VideoCodecMode mode = webrtc::kRealtimeVideo;
+  switch (source) {
+    case dom::MediaSourceEnum::Browser:
+    case dom::MediaSourceEnum::Screen:
+    case dom::MediaSourceEnum::Application:
+    case dom::MediaSourceEnum::Window:
+      mode = webrtc::kScreensharing;
+      break;
+
+    case dom::MediaSourceEnum::Camera:
+    default:
+      mode = webrtc::kRealtimeVideo;
+      break;
+  }
+
+  auto error = aConduit.ConfigureCodecMode(mode);
+  if (error) {
+    MOZ_MTLOG(ML_ERROR, "ConfigureCodecMode failed: " << error);
+    return NS_ERROR_FAILURE;
+  }
+
+#endif
   return NS_OK;
 }
 

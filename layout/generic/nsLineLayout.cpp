@@ -207,10 +207,10 @@ nsLineLayout::BeginLineReflow(nscoord aICoord, nscoord aBCoord,
   psd->mIEnd = aICoord + aISize;
   mContainerSize = aContainerSize;
 
-  // If we're in a constrained height frame, then we don't allow a
+  // If we're in a constrained block-size frame, then we don't allow a
   // max line box width to take effect.
   if (!(LineContainerFrame()->GetStateBits() &
-        NS_FRAME_IN_CONSTRAINED_HEIGHT)) {
+        NS_FRAME_IN_CONSTRAINED_BSIZE)) {
 
     // If the available size is greater than the maximum line box width (if
     // specified), then we need to adjust the line box width to be at the max
@@ -457,7 +457,7 @@ nsLineLayout::BeginSpan(nsIFrame* aFrame,
   nsIFrame* frame = aSpanReflowState->frame;
   psd->mNoWrap = !frame->StyleText()->WhiteSpaceCanWrap(frame) ||
                  mSuppressLineWrap ||
-                 frame->StyleContext()->IsInlineDescendantOfRuby();
+                 frame->StyleContext()->ShouldSuppressLineBreak();
   psd->mWritingMode = aSpanReflowState->GetWritingMode();
 
   // Switch to new span
@@ -1234,8 +1234,8 @@ nsLineLayout::GetCurrentFrameInlineDistanceFromBlock()
  * containers from their rect. It is necessary because:
  * Containers are not part of the line in their levels, which means
  * their bounds are not set properly before.
- * Ruby annotations' block-axis coordinate may have been changed when
- * reflowing their containers.
+ * Ruby annotations' position may have been changed when reflowing
+ * their containers.
  */
 void
 nsLineLayout::SyncAnnotationBounds(PerFrameData* aRubyFrame)
@@ -1245,20 +1245,20 @@ nsLineLayout::SyncAnnotationBounds(PerFrameData* aRubyFrame)
 
   PerSpanData* span = aRubyFrame->mSpan;
   WritingMode lineWM = mRootSpan->mWritingMode;
-  nscoord containerWidth = ContainerWidthForSpan(span);
   for (PerFrameData* pfd = span->mFirstFrame; pfd; pfd = pfd->mNext) {
     for (PerFrameData* rtc = pfd->mNextAnnotation;
          rtc; rtc = rtc->mNextAnnotation) {
-      LogicalRect rtcBounds(lineWM, rtc->mFrame->GetRect(), containerWidth);
+      // When the annotation container is reflowed, the width of the
+      // ruby container is unknown, hence zero should be used here
+      // as container width to get the correct logical rect.
+      LogicalRect rtcBounds(lineWM, rtc->mFrame->GetRect(), 0);
       rtc->mBounds = rtcBounds;
       nscoord rtcWidth = rtcBounds.Width(lineWM);
       for (PerFrameData* rt = rtc->mSpan->mFirstFrame; rt; rt = rt->mNext) {
         LogicalRect rtBounds = rt->mFrame->GetLogicalRect(lineWM, rtcWidth);
-        MOZ_ASSERT(rt->mBounds.IStart(lineWM) == rtBounds.IStart(lineWM) &&
-                   rt->mBounds.ISize(lineWM) == rtBounds.ISize(lineWM) &&
-                   rt->mBounds.BSize(lineWM) == rtBounds.BSize(lineWM),
-                   "Metrics other than bstart should not have been changed");
-        rt->mBounds.BStart(lineWM) = rtBounds.BStart(lineWM);
+        MOZ_ASSERT(rt->mBounds.Size(lineWM) == rtBounds.Size(lineWM),
+                   "Size of the annotation should not have been changed");
+        rt->mBounds.SetOrigin(lineWM, rtBounds.Origin(lineWM));
       }
     }
   }
@@ -2790,8 +2790,13 @@ nsLineLayout::AdvanceAnnotationInlineBounds(PerFrameData* aPFD,
       // This ruby text container is a span.
       (psd->mFirstFrame == psd->mLastFrame && psd->mFirstFrame &&
        !psd->mFirstFrame->mIsLinkedToBase)) {
-    nscoord reservedISize = RubyUtils::GetReservedISize(frame);
-    RubyUtils::SetReservedISize(frame, reservedISize + aDeltaISize);
+    // For ruby text frames, only increase frames
+    // which are not auto-hidden.
+    if (frameType != nsGkAtoms::rubyTextFrame ||
+        !static_cast<nsRubyTextFrame*>(frame)->IsAutoHidden()) {
+      nscoord reservedISize = RubyUtils::GetReservedISize(frame);
+      RubyUtils::SetReservedISize(frame, reservedISize + aDeltaISize);
+    }
   } else {
     // It is a normal ruby text container. Its children will expand
     // themselves properly. We only need to expand its own size here.
@@ -2891,7 +2896,7 @@ nsLineLayout::ApplyFrameJustification(PerSpanData* aPSD,
 static nsIFrame*
 FindNearestRubyBaseAncestor(nsIFrame* aFrame)
 {
-  MOZ_ASSERT(aFrame->StyleContext()->IsInlineDescendantOfRuby());
+  MOZ_ASSERT(aFrame->StyleContext()->ShouldSuppressLineBreak());
   while (aFrame && aFrame->GetType() != nsGkAtoms::rubyBaseFrame) {
     aFrame = aFrame->GetParent();
   }
@@ -2964,8 +2969,24 @@ nsLineLayout::ExpandRubyBoxWithAnnotations(PerFrameData* aFrame,
     ExpandRubyBox(aFrame, reservedISize, aContainerWidth);
   }
 
+  WritingMode lineWM = mRootSpan->mWritingMode;
+  bool isLevelContainer =
+    aFrame->mFrame->GetType() == nsGkAtoms::rubyBaseContainerFrame;
   for (PerFrameData* annotation = aFrame->mNextAnnotation;
        annotation; annotation = annotation->mNextAnnotation) {
+    if (isLevelContainer) {
+      nsIFrame* rtcFrame = annotation->mFrame;
+      MOZ_ASSERT(rtcFrame->GetType() == nsGkAtoms::rubyTextContainerFrame);
+      // It is necessary to set the rect again because the container
+      // width was unknown, and zero was used instead when we reflow
+      // them. The corresponding base containers were repositioned in
+      // VerticalAlignFrames and PlaceTopBottomFrames.
+      MOZ_ASSERT(
+        rtcFrame->GetLogicalSize(lineWM) == annotation->mBounds.Size(lineWM));
+      rtcFrame->SetPosition(lineWM, annotation->mBounds.Origin(lineWM),
+                            aContainerWidth);
+    }
+
     nscoord reservedISize = RubyUtils::GetReservedISize(annotation->mFrame);
     if (!reservedISize) {
       continue;
@@ -3066,7 +3087,7 @@ nsLineLayout::TextAlignLine(nsLineBox* aLine,
     ComputeFrameJustification(psd, computeState);
     if (mHasRuby && computeState.mFirstParticipant) {
       PerFrameData* firstFrame = computeState.mFirstParticipant;
-      if (firstFrame->mFrame->StyleContext()->IsInlineDescendantOfRuby()) {
+      if (firstFrame->mFrame->StyleContext()->ShouldSuppressLineBreak()) {
         MOZ_ASSERT(!firstFrame->mJustificationAssignment.mGapsAtStart);
         nsIFrame* rubyBase = FindNearestRubyBaseAncestor(firstFrame->mFrame);
         if (rubyBase && IsRubyAlignSpaceAround(rubyBase)) {
@@ -3075,7 +3096,7 @@ nsLineLayout::TextAlignLine(nsLineBox* aLine,
         }
       }
       PerFrameData* lastFrame = computeState.mLastParticipant;
-      if (lastFrame->mFrame->StyleContext()->IsInlineDescendantOfRuby()) {
+      if (lastFrame->mFrame->StyleContext()->ShouldSuppressLineBreak()) {
         MOZ_ASSERT(!lastFrame->mJustificationAssignment.mGapsAtEnd);
         nsIFrame* rubyBase = FindNearestRubyBaseAncestor(lastFrame->mFrame);
         if (rubyBase && IsRubyAlignSpaceAround(rubyBase)) {

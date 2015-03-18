@@ -52,6 +52,7 @@ using mozilla::CeilingLog2;
 using mozilla::CheckedInt;
 using mozilla::DebugOnly;
 using mozilla::IsNaN;
+using mozilla::UniquePtr;
 
 using JS::AutoCheckCannotGC;
 using JS::ToUint32;
@@ -3220,12 +3221,11 @@ CreateArrayPrototype(JSContext *cx, JSProtoKey key)
         return nullptr;
 
     RootedShape shape(cx, EmptyShape::getInitialShape(cx, &ArrayObject::class_, TaggedProto(proto),
-                                                      proto->getParent(), metadata,
-                                                      gc::FINALIZE_OBJECT0));
+                                                      metadata, gc::AllocKind::OBJECT0));
     if (!shape)
         return nullptr;
 
-    RootedArrayObject arrayProto(cx, ArrayObject::createArray(cx, gc::FINALIZE_OBJECT4,
+    RootedArrayObject arrayProto(cx, ArrayObject::createArray(cx, gc::AllocKind::OBJECT4,
                                                               gc::TenuredHeap, shape, group, 0));
     if (!arrayProto ||
         !JSObject::setSingleton(cx, arrayProto) ||
@@ -3349,8 +3349,8 @@ NewArray(ExclusiveContext *cxArg, uint32_t length,
      * See JSObject::createArray.
      */
     RootedShape shape(cxArg, EmptyShape::getInitialShape(cxArg, &ArrayObject::class_,
-                                                         TaggedProto(proto), cxArg->global(),
-                                                         metadata, gc::FINALIZE_OBJECT0));
+                                                         TaggedProto(proto),
+                                                         metadata, gc::AllocKind::OBJECT0));
     if (!shape)
         return nullptr;
 
@@ -3545,19 +3545,18 @@ js::ArrayInfo(JSContext *cx, unsigned argc, Value *vp)
     for (unsigned i = 0; i < args.length(); i++) {
         RootedValue arg(cx, args[i]);
 
-        char *bytes = DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, arg, NullPtr());
+        UniquePtr<char[], JS::FreePolicy> bytes =
+            DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, arg, NullPtr());
         if (!bytes)
             return false;
         if (arg.isPrimitive() ||
             !(obj = arg.toObjectOrNull())->is<ArrayObject>()) {
-            fprintf(stderr, "%s: not array\n", bytes);
-            js_free(bytes);
+            fprintf(stderr, "%s: not array\n", bytes.get());
             continue;
         }
-        fprintf(stderr, "%s: (len %u", bytes, obj->as<ArrayObject>().length());
+        fprintf(stderr, "%s: (len %u", bytes.get(), obj->as<ArrayObject>().length());
         fprintf(stderr, ", capacity %u", obj->as<ArrayObject>().getDenseCapacity());
         fputs(")\n", stderr);
-        js_free(bytes);
     }
 
     args.rval().setUndefined();

@@ -229,6 +229,7 @@ WEBIDL_FILES = [
     'HTMLTrackElement.webidl',
     'HTMLUListElement.webidl',
     'HTMLVideoElement.webidl',
+    'IccCardLockError.webidl',
     'IDBCursor.webidl',
     'IDBDatabase.webidl',
     'IDBEnvironment.webidl',
@@ -243,7 +244,6 @@ WEBIDL_FILES = [
     'IDBRequest.webidl',
     'IDBTransaction.webidl',
     'IDBVersionChangeEvent.webidl',
-    'Identity.webidl',
     'ImageCapture.webidl',
     'ImageData.webidl',
     'ImageDocument.webidl',
@@ -288,6 +288,9 @@ WEBIDL_FILES = [
     'MozActivity.webidl',
     'MozCellBroadcast.webidl',
     'MozCellBroadcastMessage.webidl',
+    'MozIcc.webidl',
+    'MozIccInfo.webidl',
+    'MozIccManager.webidl',
     'MozMmsMessage.webidl',
     'MozMobileCellInfo.webidl',
     'MozMobileConnection.webidl',
@@ -649,14 +652,6 @@ if CONFIG['MOZ_B2G_BT']:
             'BluetoothManager.webidl',
         ]
 
-if CONFIG['MOZ_B2G_RIL']:
-    WEBIDL_FILES += [
-        'IccCardLockError.webidl',
-        'MozIcc.webidl',
-        'MozIccInfo.webidl',
-        'MozIccManager.webidl',
-    ]
-
 if CONFIG['MOZ_NFC']:
     WEBIDL_FILES += [
          'MozIsoDepTech.webidl',
@@ -826,4 +821,9 @@ if CONFIG['MOZ_EME']:
 if CONFIG['MOZ_PAY']:
     WEBIDL_FILES += [
         'MozPaymentProvider.webidl'
+    ]
+
+if CONFIG['MOZ_B2G']:
+    WEBIDL_FILES += [
+        'Identity.webidl'
     ]

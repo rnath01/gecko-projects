@@ -228,10 +228,7 @@ FetchName(JSContext *cx, HandleObject obj, HandleObject obj2, HandlePropertyName
             vp.setUndefined();
             return true;
         }
-        JSAutoByteString printable;
-        if (AtomToPrintableString(cx, name, &printable))
-            ReportIsNotDefined(cx, printable.ptr());
-        return false;
+        return ReportIsNotDefined(cx, name);
     }
 
     /* Take the slow path if shape was not found in a native object. */
@@ -369,10 +366,11 @@ DefVarOrConstOperation(JSContext *cx, HandleObject varobj, HandlePropertyName dn
 
         JSAutoByteString bytes;
         if (AtomToPrintableString(cx, dn, &bytes)) {
+            bool isConst = desc.hasWritable() && !desc.writable();
             JS_ALWAYS_FALSE(JS_ReportErrorFlagsAndNumber(cx, JSREPORT_ERROR,
                                                          GetErrorMessage,
                                                          nullptr, JSMSG_REDECLARED_VAR,
-                                                         desc.isReadonly() ? "const" : "var",
+                                                         isConst ? "const" : "var",
                                                          bytes.ptr()));
         }
         return false;

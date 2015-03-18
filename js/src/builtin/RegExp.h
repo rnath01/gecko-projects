@@ -16,9 +16,6 @@
 
 namespace js {
 
-bool
-regexp_flags(JSContext *cx, unsigned argc, JS::Value *vp);
-
 JSObject *
 InitRegExpClass(JSContext *cx, HandleObject obj);
 
@@ -28,6 +25,9 @@ enum RegExpStaticsUpdate { UpdateRegExpStatics, DontUpdateRegExpStatics };
 
 // Whether RegExp statics should be used to create a RegExp instance.
 enum RegExpStaticsUse { UseRegExpStatics, DontUseRegExpStatics };
+
+// This enum is used to indicate whether 'CompileRegExpObject' is called from 'regexp_compile'.
+enum RegExpCreationMode { CreateForCompile, CreateForConstruct };
 
 RegExpRunStatus
 ExecuteRegExp(JSContext *cx, HandleObject regexp, HandleString string,

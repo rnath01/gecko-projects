@@ -549,6 +549,9 @@ private:
 
     virtual bool DeallocPHalParent(PHalParent*) MOZ_OVERRIDE;
 
+    virtual PIccParent* AllocPIccParent(const uint32_t& aServiceId) MOZ_OVERRIDE;
+    virtual bool DeallocPIccParent(PIccParent* aActor) MOZ_OVERRIDE;
+
     virtual PMemoryReportRequestParent*
     AllocPMemoryReportRequestParent(const uint32_t& aGeneration,
                                     const bool &aAnonymize,
@@ -762,7 +765,7 @@ private:
     RecvBackUpXResources(const FileDescriptor& aXSocketFd) MOZ_OVERRIDE;
 
     virtual bool
-    RecvOpenAnonymousTemporaryFile(FileDescriptor* aFD) MOZ_OVERRIDE;
+    RecvOpenAnonymousTemporaryFile(FileDescOrError* aFD) MOZ_OVERRIDE;
 
     virtual bool
     RecvKeygenProcessValue(const nsString& oldValue, const nsString& challenge,

@@ -212,7 +212,6 @@ public:
                             const mozilla::WidgetKeyboardEvent& aEvent,
                             DoCommandCallback aCallback,
                             void* aCallbackData) MOZ_OVERRIDE { return false; }
-  NS_IMETHOD              SetLayersAcceleration(bool aEnabled) MOZ_OVERRIDE;
   virtual bool            ComputeShouldAccelerate(bool aDefault);
   NS_IMETHOD              GetToggledKeyState(uint32_t aKeyCode, bool* aLEDState) MOZ_OVERRIDE { return NS_ERROR_NOT_IMPLEMENTED; }
   virtual nsIMEUpdatePreference GetIMEUpdatePreference() MOZ_OVERRIDE { return nsIMEUpdatePreference(); }
@@ -231,6 +230,10 @@ public:
   NS_IMETHOD              RegisterTouchWindow() MOZ_OVERRIDE;
   NS_IMETHOD              UnregisterTouchWindow() MOZ_OVERRIDE;
   NS_IMETHOD_(TextEventDispatcher*) GetTextEventDispatcher() MOZ_OVERRIDE MOZ_FINAL;
+
+  // Helper function for dispatching events which are not processed by APZ,
+  // but need to be transformed by APZ.
+  nsEventStatus DispatchInputEvent(mozilla::WidgetInputEvent* aEvent);
 
   // Dispatch an event that must be first be routed through APZ.
   nsEventStatus DispatchAPZAwareEvent(mozilla::WidgetInputEvent* aEvent) MOZ_OVERRIDE;

@@ -543,10 +543,10 @@ void MediaPipeline::RtcpPacketReceived(TransportLayer *layer,
   if (!NS_SUCCEEDED(res))
     return;
 
-  MediaPipelineFilter::Result filter_result = MediaPipelineFilter::PASS;
-  if (filter_) {
-    filter_result = filter_->FilterRTCP(inner_data, out_len);
-    if (filter_result == MediaPipelineFilter::FAIL) {
+  // We do not filter RTCP for send pipelines, since the webrtc.org code for
+  // senders already has logic to ignore RRs that do not apply.
+  if (filter_ && direction_ == RECEIVE) {
+    if (!filter_->FilterSenderReport(inner_data, out_len)) {
       MOZ_MTLOG(ML_NOTICE, "Dropping rtcp packet");
       return;
     }
@@ -630,12 +630,12 @@ void MediaPipelineTransmit::AttachToTrack(const std::string& track_id) {
 
   stream_->AddListener(listener_);
 
-  // Is this a gUM mediastream?  If so, also register the Listener directly with
-  // the SourceMediaStream that's attached to the TrackUnion so we can get direct
-  // unqueued (and not resampled) data
-  if (domstream_->AddDirectListener(listener_)) {
-    listener_->direct_connect_ = true;
-  }
+ // // Is this a gUM mediastream?  If so, also register the Listener directly with
+ // // the SourceMediaStream that's attached to the TrackUnion so we can get direct
+ // // unqueued (and not resampled) data
+ // if (domstream_->AddDirectListener(listener_)) {
+ //   listener_->direct_connect_ = true;
+ // }
 
 #ifndef MOZILLA_INTERNAL_API
   // this enables the unit tests that can't fiddle with principals and the like
@@ -1441,17 +1441,15 @@ void MediaPipelineReceiveVideo::PipelineListener::RenderVideoFrame(
     nsRefPtr<layers::Image> image = image_container_->CreateImage(format);
     layers::PlanarYCbCrImage* yuvImage = static_cast<layers::PlanarYCbCrImage*>(image.get());
     uint8_t* frame = const_cast<uint8_t*>(static_cast<const uint8_t*> (buffer));
-    const uint8_t lumaBpp = 8;
-    const uint8_t chromaBpp = 4;
 
     layers::PlanarYCbCrData yuvData;
     yuvData.mYChannel = frame;
     yuvData.mYSize = IntSize(width_, height_);
-    yuvData.mYStride = width_ * lumaBpp/ 8;
-    yuvData.mCbCrStride = width_ * chromaBpp / 8;
+    yuvData.mYStride = width_;
+    yuvData.mCbCrStride = (width_ + 1) >> 1;
     yuvData.mCbChannel = frame + height_ * yuvData.mYStride;
-    yuvData.mCrChannel = yuvData.mCbChannel + height_ * yuvData.mCbCrStride / 2;
-    yuvData.mCbCrSize = IntSize(width_/ 2, height_/ 2);
+    yuvData.mCrChannel = yuvData.mCbChannel + ((height_ + 1) >> 1) * yuvData.mCbCrStride;
+    yuvData.mCbCrSize = IntSize((width_ + 1) >> 1, (height_ + 1) >> 1);
     yuvData.mPicX = 0;
     yuvData.mPicY = 0;
     yuvData.mPicSize = IntSize(width_, height_);

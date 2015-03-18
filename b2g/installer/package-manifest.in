@@ -69,7 +69,6 @@
 @BINPATH@/@DLL_PREFIX@plds4@DLL_SUFFIX@
 @BINPATH@/@DLL_PREFIX@nspr4@DLL_SUFFIX@
 #endif
-@BINPATH@/@DLL_PREFIX@mozalloc@DLL_SUFFIX@
 #ifdef MOZ_DMD
 @BINPATH@/@DLL_PREFIX@dmd@DLL_SUFFIX@
 #endif
@@ -179,12 +178,14 @@
 @RESPATH@/components/dom_system_gonk.xpt
 #endif
 #ifdef MOZ_B2G_RIL
-@RESPATH@/components/dom_icc.xpt
 @RESPATH@/components/dom_wappush.xpt
 @RESPATH@/components/dom_mobileconnection.xpt
 #endif
 #ifdef MOZ_B2G_BT
 @RESPATH@/components/dom_bluetooth.xpt
+#endif
+#ifdef MOZ_B2G_CAMERA
+@BINPATH@/components/dom_camera.xpt
 #endif
 @RESPATH@/components/dom_canvas.xpt
 @RESPATH@/components/dom_contacts.xpt
@@ -216,6 +217,7 @@
 @RESPATH@/components/dom_permissionsettings.xpt
 @RESPATH@/components/dom_sidebar.xpt
 @RESPATH@/components/dom_cellbroadcast.xpt
+@RESPATH@/components/dom_icc.xpt
 @RESPATH@/components/dom_mobilemessage.xpt
 @RESPATH@/components/dom_storage.xpt
 @RESPATH@/components/dom_stylesheets.xpt
@@ -457,6 +459,12 @@
 @RESPATH@/components/WifiWorker.manifest
 #endif // MOZ_WIDGET_GONK
 
+; Camera
+#ifdef MOZ_B2G_CAMERA
+@BINPATH@/components/CameraTestHardware.js
+@BINPATH@/components/CameraTestHardware.manifest
+#endif // MOZ_B2G_CAMERA
+
 ; Tethering
 #ifdef MOZ_WIDGET_GONK
 @RESPATH@/components/TetheringManager.js
@@ -475,6 +483,8 @@
 #if defined(MOZ_WIDGET_GONK) && defined(MOZ_B2G_RIL)
 @RESPATH@/components/CellBroadcastService.js
 @RESPATH@/components/CellBroadcastService.manifest
+@BINPATH@/components/IccService.js
+@BINPATH@/components/IccService.manifest
 @RESPATH@/components/MmsService.js
 @RESPATH@/components/MmsService.manifest
 @RESPATH@/components/MobileMessageDatabaseService.js
@@ -857,12 +867,6 @@ bin/libfreebl_32int64_3.so
 #endif
 #endif
 @RESPATH@/crashreporter-override.ini
-#endif
-
-; [Extensions]
-;
-#ifdef MOZ_ENABLE_GNOMEVFS
-bin/components/@DLL_PREFIX@nkgnomevfs@DLL_SUFFIX@
 #endif
 
 [b2g]

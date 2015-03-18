@@ -21,6 +21,7 @@ include protocol PFileDescriptorSet;
 include protocol PFMRadio;
 include protocol PFileSystemRequest;
 include protocol PHal;
+include protocol PIcc;
 include protocol PProcessHangMonitor;
 include protocol PImageBridge;
 include protocol PMemoryReportRequest;
@@ -335,6 +336,11 @@ union MaybeFileDesc {
     void_t;
 };
 
+union FileDescOrError {
+    FileDescriptor;
+    nsresult;
+};
+
 union OptionalContentId
 {
   ContentParentId;
@@ -365,6 +371,7 @@ prio(normal upto urgent) sync protocol PContent
     manages PFileDescriptorSet;
     manages PFMRadio;
     manages PHal;
+    manages PIcc;
     manages PMemoryReportRequest;
     manages PMobileConnection;
     manages PNecko;
@@ -639,6 +646,8 @@ parent:
 
     PHal();
 
+    PIcc(uint32_t serviceId);
+
     PMobileConnection(uint32_t clientId);
 
     PNecko();
@@ -827,7 +836,7 @@ parent:
      */
     BackUpXResources(FileDescriptor aXSocketFd);
 
-    sync OpenAnonymousTemporaryFile() returns (FileDescriptor aFD);
+    sync OpenAnonymousTemporaryFile() returns (FileDescOrError aFD);
 
     /**
      * Keygen requires us to call it after a <keygen> element is parsed and

@@ -332,7 +332,7 @@ DeclEnvObject::createTemplateObject(JSContext *cx, HandleFunction fun, gc::Initi
 
     RootedShape emptyDeclEnvShape(cx);
     emptyDeclEnvShape = EmptyShape::getInitialShape(cx, &class_, TaggedProto(nullptr),
-                                                    cx->global(), nullptr, FINALIZE_KIND,
+                                                    nullptr, FINALIZE_KIND,
                                                     BaseShape::DELEGATE);
     if (!emptyDeclEnvShape)
         return nullptr;
@@ -405,7 +405,7 @@ StaticWithObject::create(ExclusiveContext *cx)
         return nullptr;
 
     RootedShape shape(cx, EmptyShape::getInitialShape(cx, &class_, TaggedProto(nullptr),
-                                                      nullptr, nullptr, FINALIZE_KIND));
+                                                      nullptr, FINALIZE_KIND));
     if (!shape)
         return nullptr;
 
@@ -439,8 +439,7 @@ DynamicWithObject::create(JSContext *cx, HandleObject object, HandleObject enclo
         return nullptr;
 
     RootedShape shape(cx, EmptyShape::getInitialShape(cx, &class_, TaggedProto(staticWith),
-                                                      &enclosing->global(), nullptr,
-                                                      FINALIZE_KIND));
+                                                      nullptr, FINALIZE_KIND));
     if (!shape)
         return nullptr;
 
@@ -573,7 +572,7 @@ StaticEvalObject::create(JSContext *cx, HandleObject enclosing)
         return nullptr;
 
     RootedShape shape(cx, EmptyShape::getInitialShape(cx, &class_, TaggedProto(nullptr),
-                                                      cx->global(), nullptr, FINALIZE_KIND,
+                                                      nullptr, FINALIZE_KIND,
                                                       BaseShape::DELEGATE));
     if (!shape)
         return nullptr;
@@ -612,14 +611,6 @@ ClonedBlockObject::create(JSContext *cx, Handle<StaticBlockObject *> block, Hand
                                                                   gc::TenuredHeap, shape, group)));
     if (!obj)
         return nullptr;
-
-    /* Set the parent if necessary, as for call objects. */
-    if (&enclosing->global() != obj->getParent()) {
-        MOZ_ASSERT(obj->getParent() == nullptr);
-        Rooted<GlobalObject*> global(cx, &enclosing->global());
-        if (!JSObject::setParent(cx, obj, global))
-            return nullptr;
-    }
 
     MOZ_ASSERT(!obj->inDictionaryMode());
     MOZ_ASSERT(obj->slotSpan() >= block->numVariables() + RESERVED_SLOTS);
@@ -680,7 +671,7 @@ StaticBlockObject::create(ExclusiveContext *cx)
         return nullptr;
 
     RootedShape emptyBlockShape(cx);
-    emptyBlockShape = EmptyShape::getInitialShape(cx, &BlockObject::class_, TaggedProto(nullptr), nullptr,
+    emptyBlockShape = EmptyShape::getInitialShape(cx, &BlockObject::class_, TaggedProto(nullptr),
                                                   nullptr, FINALIZE_KIND, BaseShape::DELEGATE);
     if (!emptyBlockShape)
         return nullptr;
@@ -892,7 +883,7 @@ UninitializedLexicalObject::create(JSContext *cx, HandleObject enclosing)
         return nullptr;
 
     RootedShape shape(cx, EmptyShape::getInitialShape(cx, &class_, TaggedProto(nullptr),
-                                                      nullptr, nullptr, FINALIZE_KIND));
+                                                      nullptr, FINALIZE_KIND));
     if (!shape)
         return nullptr;
 
@@ -2450,7 +2441,7 @@ static JSObject *
 GetDebugScopeForNonScopeObject(const ScopeIter &si)
 {
     JSObject &enclosing = si.enclosingScope();
-    MOZ_ASSERT(!enclosing.is<ScopeObject>());
+    MOZ_ASSERT(IsValidTerminatingScope(&enclosing));
 #ifdef DEBUG
     JSObject *o = &enclosing;
     while ((o = o->enclosingScope()))
@@ -2503,13 +2494,51 @@ JS_FRIEND_API(JSObject *)
 js::GetObjectEnvironmentObjectForFunction(JSFunction *fun)
 {
     if (!fun->isInterpreted())
-        return fun->getParent();
+        return &fun->global();
 
     JSObject *env = fun->environment();
     if (!env || !env->is<DynamicWithObject>())
-        return fun->getParent();
+        return &fun->global();
 
     return &env->as<DynamicWithObject>().object();
+}
+
+bool
+js::CreateScopeObjectsForScopeChain(JSContext *cx, AutoObjectVector &scopeChain,
+                                    HandleObject dynamicTerminatingScope,
+                                    MutableHandleObject dynamicScopeObj,
+                                    MutableHandleObject staticScopeObj)
+{
+#ifdef DEBUG
+    for (size_t i = 0; i < scopeChain.length(); ++i) {
+        assertSameCompartment(cx, scopeChain[i]);
+        MOZ_ASSERT(!scopeChain[i]->is<GlobalObject>());
+    }
+#endif
+
+    // Construct With object wrappers for the things on this scope
+    // chain and use the result as the thing to scope the function to.
+    Rooted<StaticWithObject*> staticWith(cx);
+    RootedObject staticEnclosingScope(cx);
+    Rooted<DynamicWithObject*> dynamicWith(cx);
+    RootedObject dynamicEnclosingScope(cx, dynamicTerminatingScope);
+    for (size_t i = scopeChain.length(); i > 0; ) {
+        staticWith = StaticWithObject::create(cx);
+        if (!staticWith)
+            return false;
+        staticWith->initEnclosingNestedScope(staticEnclosingScope);
+        staticEnclosingScope = staticWith;
+
+        dynamicWith = DynamicWithObject::create(cx, scopeChain[--i], dynamicEnclosingScope,
+                                                staticWith, DynamicWithObject::NonSyntacticWith);
+        if (!dynamicWith)
+            return false;
+        dynamicEnclosingScope = dynamicWith;
+    }
+
+    dynamicScopeObj.set(dynamicEnclosingScope);
+    staticScopeObj.set(staticEnclosingScope);
+    return true;
 }
 
 #ifdef DEBUG

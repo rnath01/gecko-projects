@@ -118,6 +118,7 @@
   <string name="overlay_share_no_url">&overlay_share_no_url;</string>
   <string name="overlay_share_retry">&overlay_share_retry;</string>
   <string name="overlay_share_select_device">&overlay_share_select_device;</string>
+  <string name="overlay_no_synced_devices">&overlay_no_synced_devices;</string>
 
   <string name="settings">&settings;</string>
   <string name="settings_title">&settings_title;</string>
@@ -305,6 +306,8 @@
   <string name="site_settings_no_settings">&site_settings_no_settings;</string>
 
   <string name="reading_list_added">&reading_list_added;</string>
+  <string name="reading_list_removed">&reading_list_removed;</string>
+  <string name="reading_list_remove">&reading_list_remove;</string>
   <string name="reading_list_duplicate">&reading_list_duplicate;</string>
   <string name="reading_list_time_minutes">&reading_list_time_minutes2;</string>
   <string name="reading_list_time_over_an_hour">&reading_list_time_over_an_hour;</string>

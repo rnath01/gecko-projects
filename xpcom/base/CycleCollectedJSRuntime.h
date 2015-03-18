@@ -259,7 +259,7 @@ public:
   already_AddRefed<nsIException> GetPendingException() const;
   void SetPendingException(nsIException* aException);
 
-  nsTArray<nsRefPtr<nsIRunnable>>& GetPromiseMicroTaskQueue();
+  nsTArray<nsCOMPtr<nsIRunnable>>& GetPromiseMicroTaskQueue();
 
   nsCycleCollectionParticipant* GCThingParticipant();
   nsCycleCollectionParticipant* ZoneParticipant();
@@ -301,7 +301,6 @@ private:
 
   nsDataHashtable<nsPtrHashKey<void>, nsScriptObjectTracer*> mJSHolders;
 
-  nsTArray<nsISupports*> mDeferredSupports;
   typedef nsDataHashtable<nsFuncPtrHashKey<DeferredFinalizeFunction>, void*>
     DeferredFinalizerTable;
   DeferredFinalizerTable mDeferredFinalizerTable;
@@ -310,7 +309,7 @@ private:
 
   nsCOMPtr<nsIException> mPendingException;
 
-  nsTArray<nsRefPtr<nsIRunnable>> mPromiseMicroTaskQueue;
+  nsTArray<nsCOMPtr<nsIRunnable>> mPromiseMicroTaskQueue;
 
   OOMState mOutOfMemoryState;
   OOMState mLargeAllocationFailureState;

@@ -105,6 +105,9 @@ addMessageListener("MixedContent:ReenableProtection", function() {
 });
 
 addMessageListener("SecondScreen:tab-mirror", function(message) {
+  if (!Services.prefs.getBoolPref("browser.casting.enabled")) {
+    return;
+  }
   let app = SimpleServiceDiscovery.findAppForService(message.data.service);
   if (app) {
     let width = content.innerWidth;
@@ -1014,12 +1017,12 @@ addEventListener("pageshow", function(event) {
 });
 
 let PageMetadataMessenger = {
-  init: function() {
+  init() {
     addMessageListener("PageMetadata:GetPageData", this);
     addMessageListener("PageMetadata:GetMicrodata", this);
   },
-  receiveMessage: function(aMessage) {
-    switch(aMessage.name) {
+  receiveMessage(message) {
+    switch(message.name) {
       case "PageMetadata:GetPageData": {
         let result = PageMetadata.getData(content.document);
         sendAsyncMessage("PageMetadata:PageDataResult", result);
@@ -1027,7 +1030,7 @@ let PageMetadataMessenger = {
       }
 
       case "PageMetadata:GetMicrodata": {
-        let target = aMessage.objects;
+        let target = message.objects;
         let result = PageMetadata.getMicrodata(content.document, target);
         sendAsyncMessage("PageMetadata:MicrodataResult", result);
         break;

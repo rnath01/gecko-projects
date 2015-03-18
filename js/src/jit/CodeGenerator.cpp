@@ -1942,7 +1942,7 @@ CodeGenerator::visitTableSwitchV(LTableSwitchV *ins)
     emitTableSwitchDispatch(mir, index, ToRegisterOrInvalid(ins->tempPointer()));
 }
 
-typedef NativeObject *(*DeepCloneObjectLiteralFn)(JSContext *, HandleNativeObject, NewObjectKind);
+typedef JSObject *(*DeepCloneObjectLiteralFn)(JSContext *, HandleObject, NewObjectKind);
 static const VMFunction DeepCloneObjectLiteralInfo =
     FunctionInfo<DeepCloneObjectLiteralFn>(DeepCloneObjectLiteral);
 
@@ -4383,9 +4383,9 @@ CodeGenerator::visitNewObject(LNewObject *lir)
     OutOfLineNewObject *ool = new(alloc()) OutOfLineNewObject(lir);
     addOutOfLineCode(ool, lir->mir());
 
-    bool initFixedSlots = ShouldInitFixedSlots(lir, templateObject);
+    bool initContents = ShouldInitFixedSlots(lir, templateObject);
     masm.createGCObject(objReg, tempReg, templateObject, lir->mir()->initialHeap(), ool->entry(),
-                        initFixedSlots);
+                        initContents);
 
     masm.bind(ool->rejoin());
 }
@@ -4560,9 +4560,9 @@ CodeGenerator::visitNewDeclEnvObject(LNewDeclEnvObject *lir)
                                     Imm32(gc::DefaultHeap)),
                                    StoreRegisterTo(objReg));
 
-    bool initFixedSlots = ShouldInitFixedSlots(lir, templateObj);
+    bool initContents = ShouldInitFixedSlots(lir, templateObj);
     masm.createGCObject(objReg, tempReg, templateObj, gc::DefaultHeap, ool->entry(),
-                        initFixedSlots);
+                        initContents);
 
     masm.bind(ool->rejoin());
 }
@@ -4588,9 +4588,9 @@ CodeGenerator::visitNewCallObject(LNewCallObject *lir)
                                    StoreRegisterTo(objReg));
 
     // Inline call object creation, using the OOL path only for tricky cases.
-    bool initFixedSlots = ShouldInitFixedSlots(lir, templateObj);
+    bool initContents = ShouldInitFixedSlots(lir, templateObj);
     masm.createGCObject(objReg, tempReg, templateObj, gc::DefaultHeap, ool->entry(),
-                        initFixedSlots);
+                        initContents);
 
     masm.bind(ool->rejoin());
 }
@@ -4778,7 +4778,8 @@ CodeGenerator::visitCreateThisWithProto(LCreateThisWithProto *lir)
 }
 
 typedef JSObject *(*NewGCObjectFn)(JSContext *cx, gc::AllocKind allocKind,
-                                   gc::InitialHeap initialHeap, const js::Class *clasp);
+                                   gc::InitialHeap initialHeap, size_t ndynamic,
+                                   const js::Class *clasp);
 static const VMFunction NewGCObjectInfo =
     FunctionInfo<NewGCObjectFn>(js::jit::NewGCObject);
 
@@ -4789,12 +4790,15 @@ CodeGenerator::visitCreateThisWithTemplate(LCreateThisWithTemplate *lir)
     gc::AllocKind allocKind = templateObject->asTenured().getAllocKind();
     gc::InitialHeap initialHeap = lir->mir()->initialHeap();
     const js::Class *clasp = templateObject->getClass();
+    size_t ndynamic = 0;
+    if (templateObject->isNative())
+        ndynamic = templateObject->as<NativeObject>().numDynamicSlots();
     Register objReg = ToRegister(lir->output());
     Register tempReg = ToRegister(lir->temp());
 
     OutOfLineCode *ool = oolCallVM(NewGCObjectInfo, lir,
-                                   (ArgList(), Imm32(allocKind), Imm32(initialHeap),
-                                    ImmPtr(clasp)),
+                                   (ArgList(), Imm32(int32_t(allocKind)), Imm32(initialHeap),
+                                    Imm32(ndynamic), ImmPtr(clasp)),
                                    StoreRegisterTo(objReg));
 
     // Allocate. If the FreeList is empty, call to VM, which may GC.
@@ -4803,9 +4807,9 @@ CodeGenerator::visitCreateThisWithTemplate(LCreateThisWithTemplate *lir)
     // Initialize based on the templateObject.
     masm.bind(ool->rejoin());
 
-    bool initFixedSlots = !templateObject->is<PlainObject>() ||
+    bool initContents = !templateObject->is<PlainObject>() ||
                           ShouldInitFixedSlots(lir, &templateObject->as<PlainObject>());
-    masm.initGCThing(objReg, tempReg, templateObject, initFixedSlots);
+    masm.initGCThing(objReg, tempReg, templateObject, initContents);
 }
 
 typedef JSObject *(*NewIonArgumentsObjectFn)(JSContext *cx, JitFrameLayout *frame, HandleObject);
@@ -6139,32 +6143,37 @@ JitRuntime::generateLazyLinkStub(JSContext *cx)
 {
     MacroAssembler masm(cx);
 #ifdef JS_USE_LINK_REGISTER
-    masm.push(lr);
+    masm.pushReturnAddress();
 #endif
 
-    Label call;
     GeneralRegisterSet regs = GeneralRegisterSet::Volatile();
     Register temp0 = regs.takeAny();
 
-    masm.callWithExitFrame(&call);
-#ifdef JS_USE_LINK_REGISTER
-    // sigh, this should probably attempt to bypass the push lr that starts off the block
-    // but oh well.
-    masm.pop(lr);
-#endif
-    masm.jump(ReturnReg);
+    // The caller did not push an exit frame on the stack, it pushed a
+    // JitFrameLayout.  We modify the descriptor to be a valid exit frame and
+    // restore it once the lazy link is complete.
+    Address descriptor(StackPointer, CommonFrameLayout::offsetOfDescriptor());
+    size_t convertToExitFrame = JitFrameLayout::Size() - ExitFrameLayout::Size();
+    masm.addPtr(Imm32(convertToExitFrame << FRAMESIZE_SHIFT), descriptor);
 
-    masm.bind(&call);
-#ifdef JS_USE_LINK_REGISTER
-        masm.push(lr);
-#endif
-    masm.enterExitFrame();
+    masm.enterFakeExitFrame(LazyLinkExitFrameLayout::Token());
+    masm.PushStubCode();
+
     masm.setupUnalignedABICall(1, temp0);
     masm.loadJSContext(temp0);
     masm.passABIArg(temp0);
     masm.callWithABI(JS_FUNC_TO_DATA_PTR(void *, LazyLinkTopActivation));
-    masm.leaveExitFrame();
-    masm.retn(Imm32(sizeof(ExitFrameLayout)));
+
+    masm.leaveExitFrame(/* stub code */ sizeof(JitCode*));
+
+    masm.addPtr(Imm32(- (convertToExitFrame << FRAMESIZE_SHIFT)), descriptor);
+
+#ifdef JS_USE_LINK_REGISTER
+    // Restore the return address such that the emitPrologue function of the
+    // CodeGenerator can push it back on the stack with pushReturnAddress.
+    masm.pop(lr);
+#endif
+    masm.jump(ReturnReg);
 
     Linker linker(masm);
     AutoFlushICache afc("LazyLinkStub");
@@ -8658,15 +8667,14 @@ CodeGenerator::visitUnboxObjectOrNull(LUnboxObjectOrNull *lir)
 }
 
 void
-CodeGenerator::visitLoadTypedArrayElement(LLoadTypedArrayElement *lir)
+CodeGenerator::visitLoadUnboxedScalar(LLoadUnboxedScalar *lir)
 {
     Register elements = ToRegister(lir->elements());
     Register temp = lir->temp()->isBogusTemp() ? InvalidReg : ToRegister(lir->temp());
     AnyRegister out = ToAnyRegister(lir->output());
 
-    Scalar::Type arrayType = lir->mir()->arrayType();
     Scalar::Type readType  = lir->mir()->readType();
-    int width = Scalar::byteSize(arrayType);
+    int width = Scalar::byteSize(lir->mir()->indexType());
 
     Label fail;
     if (lir->index()->isConstant()) {
@@ -8743,13 +8751,13 @@ StoreToTypedArray(MacroAssembler &masm, Scalar::Type writeType, const LAllocatio
 }
 
 void
-CodeGenerator::visitStoreTypedArrayElement(LStoreTypedArrayElement *lir)
+CodeGenerator::visitStoreUnboxedScalar(LStoreUnboxedScalar *lir)
 {
     Register elements = ToRegister(lir->elements());
     const LAllocation *value = lir->value();
 
     Scalar::Type writeType = lir->mir()->writeType();
-    int width = Scalar::byteSize(lir->mir()->arrayType());
+    int width = Scalar::byteSize(lir->mir()->indexType());
 
     if (lir->index()->isConstant()) {
         Address dest(elements, ToInt32(lir->index()) * width + lir->mir()->offsetAdjustment());
@@ -8839,6 +8847,8 @@ AtomicBinopToTypedArray(MacroAssembler &masm, AtomicOp op,
 void
 CodeGenerator::visitAtomicTypedArrayElementBinop(LAtomicTypedArrayElementBinop *lir)
 {
+    MOZ_ASSERT(lir->mir()->hasUses());
+
     AnyRegister output = ToAnyRegister(lir->output());
     Register elements = ToRegister(lir->elements());
     Register temp1 = lir->temp1()->isBogusTemp() ? InvalidReg : ToRegister(lir->temp1());
@@ -8854,6 +8864,36 @@ CodeGenerator::visitAtomicTypedArrayElementBinop(LAtomicTypedArrayElementBinop *
     } else {
         BaseIndex mem(elements, ToRegister(lir->index()), ScaleFromElemWidth(width));
         AtomicBinopToTypedArray(masm, lir->mir()->operation(), arrayType, value, mem, temp1, temp2, output);
+    }
+}
+
+template <typename T>
+static inline void
+AtomicBinopToTypedArray(MacroAssembler &masm, AtomicOp op,
+                        Scalar::Type arrayType, const LAllocation *value, const T &mem)
+{
+    if (value->isConstant())
+        masm.atomicBinopToTypedIntArray(op, arrayType, Imm32(ToInt32(value)), mem);
+    else
+        masm.atomicBinopToTypedIntArray(op, arrayType, ToRegister(value), mem);
+}
+
+void
+CodeGenerator::visitAtomicTypedArrayElementBinopForEffect(LAtomicTypedArrayElementBinopForEffect *lir)
+{
+    MOZ_ASSERT(!lir->mir()->hasUses());
+
+    Register elements = ToRegister(lir->elements());
+    const LAllocation* value = lir->value();
+    Scalar::Type arrayType = lir->mir()->arrayType();
+    int width = Scalar::byteSize(arrayType);
+
+    if (lir->index()->isConstant()) {
+        Address mem(elements, ToInt32(lir->index()) * width);
+        AtomicBinopToTypedArray(masm, lir->mir()->operation(), arrayType, value, mem);
+    } else {
+        BaseIndex mem(elements, ToRegister(lir->index()), ScaleFromElemWidth(width));
+        AtomicBinopToTypedArray(masm, lir->mir()->operation(), arrayType, value, mem);
     }
 }
 

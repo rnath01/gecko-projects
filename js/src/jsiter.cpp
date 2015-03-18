@@ -52,7 +52,7 @@ using mozilla::PodZero;
 
 typedef Rooted<PropertyIteratorObject*> RootedPropertyIteratorObject;
 
-static const gc::AllocKind ITERATOR_FINALIZE_KIND = gc::FINALIZE_OBJECT2_BACKGROUND;
+static const gc::AllocKind ITERATOR_FINALIZE_KIND = gc::AllocKind::OBJECT2_BACKGROUND;
 
 void
 NativeIterator::mark(JSTracer *trc)
@@ -327,7 +327,7 @@ Snapshot(JSContext *cx, HandleObject pobj_, unsigned flags, AutoIdVector *props)
                     if (!(flags & JSITER_HIDDEN)) {
                         if (!Proxy::getOwnPropertyDescriptor(cx, pobj, proxyProps[n], &desc))
                             return false;
-                        enumerable = desc.isEnumerable();
+                        enumerable = desc.enumerable();
                     }
 
                     if (!Enumerate(cx, pobj, proxyProps[n], enumerable, flags, ht, props))
@@ -491,7 +491,7 @@ NewPropertyIteratorObject(JSContext *cx, unsigned flags)
             return nullptr;
 
         const Class *clasp = &PropertyIteratorObject::class_;
-        RootedShape shape(cx, EmptyShape::getInitialShape(cx, clasp, TaggedProto(nullptr), nullptr, metadata,
+        RootedShape shape(cx, EmptyShape::getInitialShape(cx, clasp, TaggedProto(nullptr), metadata,
                                                           ITERATOR_FINALIZE_KIND));
         if (!shape)
             return nullptr;
@@ -824,7 +824,7 @@ js::CreateItrResultObject(JSContext *cx, HandleValue value, bool done)
     if (!proto)
         return nullptr;
 
-    RootedPlainObject obj(cx, NewObjectWithGivenProto<PlainObject>(cx, proto, cx->global()));
+    RootedPlainObject obj(cx, NewObjectWithGivenProto<PlainObject>(cx, proto));
     if (!obj)
         return nullptr;
 
@@ -1175,7 +1175,7 @@ SuppressDeletedPropertyHelper(JSContext *cx, HandleObject obj, StringPredicate p
                             return false;
 
                         if (desc.object()) {
-                            if (desc.isEnumerable())
+                            if (desc.enumerable())
                                 continue;
                         }
                     }

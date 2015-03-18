@@ -34,7 +34,14 @@ let AppManager = exports.AppManager = {
   DEFAULT_PROJECT_ICON: "chrome://browser/skin/devtools/app-manager/default-app-icon.png",
   DEFAULT_PROJECT_NAME: "--",
 
+  _initialized: false,
+
   init: function() {
+    if (this._initialized) {
+      return;
+    }
+    this._initialized = true;
+
     let port = Services.prefs.getIntPref("devtools.debugger.remote-port");
     this.connection = ConnectionManager.createConnection("localhost", port);
     this.onConnectionChanged = this.onConnectionChanged.bind(this);
@@ -57,7 +64,12 @@ let AppManager = exports.AppManager = {
     this._telemetry = new Telemetry();
   },
 
-  uninit: function() {
+  destroy: function() {
+    if (!this._initialized) {
+      return;
+    }
+    this._initialized = false;
+
     this.selectedProject = null;
     this.selectedRuntime = null;
     RuntimeScanners.off("runtime-list-updated", this._rebuildRuntimeList);
@@ -327,15 +339,17 @@ let AppManager = exports.AppManager = {
     return this._selectedProject;
   },
 
-  removeSelectedProject: function() {
+  removeSelectedProject: Task.async(function*() {
     let location = this.selectedProject.location;
     AppManager.selectedProject = null;
     // If the user cancels the removeProject operation, don't remove the project
     if (AppManager.selectedProject != null) {
       return;
     }
-    return AppProjects.remove(location);
-  },
+
+    yield AppProjects.remove(location);
+    AppManager.update("project-removed");
+  }),
 
   packageProject: Task.async(function*(project) {
     if (!project) {
@@ -431,6 +445,7 @@ let AppManager = exports.AppManager = {
     // Fx <37 exposes chrome tab actors on RootActor
     // Fx >=37 exposes a dedicated actor via attachProcess request
     return this.connection.client &&
+           this.connection.client.mainRoot &&
            this.connection.client.mainRoot.traits.allowChromeProcess ||
            (this._listTabsResponse &&
             this._listTabsResponse.consoleActor);

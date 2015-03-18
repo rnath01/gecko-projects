@@ -39,6 +39,7 @@
 #include "jsscriptinlines.h"
 
 #include "frontend/ParseNode-inl.h"
+#include "vm/ScopeObject-inl.h"
 
 using namespace js;
 using namespace js::gc;
@@ -1236,7 +1237,7 @@ Parser<ParseHandler>::newFunction(HandleAtom atom, FunctionSyntaxKind kind, Hand
     gc::AllocKind allocKind = JSFunction::FinalizeKind;
     if (kind == Arrow)
         allocKind = JSFunction::ExtendedFinalizeKind;
-    fun = NewFunctionWithProto(context, NullPtr(), nullptr, 0, flags, NullPtr(), atom, proto,
+    fun = NewFunctionWithProto(context, nullptr, 0, flags, NullPtr(), atom, proto,
                                allocKind, MaybeSingletonObject);
     if (!fun)
         return nullptr;
@@ -2555,7 +2556,7 @@ Parser<ParseHandler>::functionArgsAndBodyGeneric(Node pn, HandleFunction fun, Fu
     if (!body)
         return false;
 
-    if (kind != Method && kind != Lazy && 
+    if (kind != Method && kind != Lazy &&
         fun->name() && !checkStrictBinding(fun->name(), pn))
     {
         return false;
@@ -5825,9 +5826,11 @@ Parser<ParseHandler>::debuggerStatement()
 
 template <>
 ParseNode *
-Parser<FullParseHandler>::classStatement()
+Parser<FullParseHandler>::classDefinition(ClassContext classContext)
 {
     MOZ_ASSERT(tokenStream.isCurrentTokenType(TOK_CLASS));
+
+    bool savedStrictness = setLocalStrictMode(true);
 
     TokenKind tt;
     if (!tokenStream.getToken(&tt))
@@ -5840,10 +5843,13 @@ Parser<FullParseHandler>::classStatement()
         if (!checkYieldNameValidity())
             return null();
         name = tokenStream.currentName();
-    } else {
+    } else if (classContext == ClassStatement) {
         // Class statements must have a bound name
         report(ParseError, false, null(), JSMSG_UNNAMED_CLASS_STMT);
         return null();
+    } else {
+        // Make sure to put it back, whatever it was
+        tokenStream.ungetToken();
     }
 
     if (name == context->names().let) {
@@ -5851,49 +5857,72 @@ Parser<FullParseHandler>::classStatement()
         return null();
     }
 
+    ParseNode *classBlock = null();
+    StmtInfoPC classStmt(context);
+    if (name) {
+        classBlock = pushLexicalScope(&classStmt);
+        if (!classBlock)
+            return null();
+    }
+
     // Because the binding definitions keep track of their blockId, we need to
     // create at least the inner binding later. Keep track of the name's position
     // in order to provide it for the nodes created later.
     TokenPos namePos = pos();
 
-    MUST_MATCH_TOKEN(TOK_LC, JSMSG_CURLY_BEFORE_CLASS);
-
-    bool savedStrictness = setLocalStrictMode(true);
-
-    StmtInfoPC classStmt(context);
-    ParseNode *classBlock = pushLexicalScope(&classStmt);
-    if (!classBlock)
+    ParseNode *classHeritage = null();
+    bool hasHeritage;
+    if (!tokenStream.matchToken(&hasHeritage, TOK_EXTENDS))
         return null();
+    if (hasHeritage) {
+        if (!tokenStream.getToken(&tt))
+            return null();
+        classHeritage = memberExpr(tt, true);
+        if (!classHeritage)
+            return null();
+    }
+
+    MUST_MATCH_TOKEN(TOK_LC, JSMSG_CURLY_BEFORE_CLASS);
 
     ParseNode *classMethods = propertyList(ClassBody);
     if (!classMethods)
         return null();
-    handler.setLexicalScopeBody(classBlock, classMethods);
 
-    ParseNode *innerBinding = makeInitializedLexicalBinding(name, true, namePos);
-    if (!innerBinding)
-        return null();
+    ParseNode *nameNode = null();
+    ParseNode *methodsOrBlock = classMethods;
+    if (name) {
+        ParseNode *innerBinding = makeInitializedLexicalBinding(name, true, namePos);
+        if (!innerBinding)
+            return null();
 
-    PopStatementPC(tokenStream, pc);
+        MOZ_ASSERT(classBlock);
+        handler.setLexicalScopeBody(classBlock, classMethods);
+        methodsOrBlock = classBlock;
 
-    ParseNode *outerBinding = makeInitializedLexicalBinding(name, false, namePos);
-    if (!outerBinding)
-        return null();
+        PopStatementPC(tokenStream, pc);
 
-    ParseNode *nameNode = handler.newClassNames(outerBinding, innerBinding, namePos);
-    if (!nameNode)
-        return null();
+        ParseNode *outerBinding = null();
+        if (classContext == ClassStatement) {
+            outerBinding = makeInitializedLexicalBinding(name, false, namePos);
+            if (!outerBinding)
+                return null();
+        }
+
+        nameNode = handler.newClassNames(outerBinding, innerBinding, namePos);
+        if (!nameNode)
+            return null();
+    }
 
     MOZ_ALWAYS_TRUE(setLocalStrictMode(savedStrictness));
 
-    return handler.newClass(nameNode, null(), classBlock);
+    return handler.newClass(nameNode, classHeritage, methodsOrBlock);
 }
 
 template <>
 SyntaxParseHandler::Node
-Parser<SyntaxParseHandler>::classStatement()
+Parser<SyntaxParseHandler>::classDefinition(ClassContext classContext)
 {
-    JS_ALWAYS_FALSE(abortIfSyntaxParser());
+    MOZ_ALWAYS_FALSE(abortIfSyntaxParser());
     return SyntaxParseHandler::NodeFailure;
 }
 
@@ -5967,7 +5996,7 @@ Parser<ParseHandler>::statement(bool canHaveDirectives)
       case TOK_CLASS:
         if (!abortIfSyntaxParser())
             return null();
-        return classStatement();
+        return classDefinition(ClassStatement);
 
 
       /* TOK_CATCH and TOK_FINALLY are both handled in the TOK_TRY case */
@@ -6386,6 +6415,15 @@ Parser<ParseHandler>::assignExpr(InvokedPrediction invoked)
       case TOK_MODASSIGN:    kind = PNK_MODASSIGN;    op = JSOP_MOD;    break;
 
       case TOK_ARROW: {
+        // A line terminator between ArrowParameters and the => should trigger a SyntaxError.
+        tokenStream.ungetToken();
+        TokenKind next;
+        if (!tokenStream.peekTokenSameLine(&next) || next != TOK_ARROW) {
+            report(ParseError, false, null(), JSMSG_UNEXPECTED_TOKEN,
+                   "expression", TokenKindToDesc(TOK_ARROW));
+            return null();
+        }
+
         tokenStream.seek(start);
         if (!abortIfSyntaxParser())
             return null();
@@ -8329,6 +8367,9 @@ Parser<ParseHandler>::primaryExpr(TokenKind tt, InvokedPrediction invoked)
       case TOK_FUNCTION:
         return functionExpr(invoked);
 
+      case TOK_CLASS:
+        return classDefinition(ClassExpression);
+
       case TOK_LB:
         return arrayInitializer();
 
@@ -8419,7 +8460,7 @@ Parser<ParseHandler>::primaryExpr(TokenKind tt, InvokedPrediction invoked)
             return null();
         }
 
-        if (!tokenStream.peekToken(&next))
+        if (!tokenStream.peekTokenSameLine(&next))
             return null();
         if (next != TOK_ARROW) {
             report(ParseError, false, null(), JSMSG_UNEXPECTED_TOKEN,
