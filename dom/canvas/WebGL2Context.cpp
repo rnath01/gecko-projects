@@ -40,9 +40,9 @@ WebGL2Context::Create()
 }
 
 JSObject*
-WebGL2Context::WrapObject(JSContext* cx)
+WebGL2Context::WrapObject(JSContext* cx, JS::Handle<JSObject*> aGivenProto)
 {
-    return dom::WebGL2RenderingContextBinding::Wrap(cx, this);
+    return dom::WebGL2RenderingContextBinding::Wrap(cx, this, aGivenProto);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -141,15 +141,11 @@ WebGLContext::InitWebGL2()
     gl->GetUIntegerv(LOCAL_GL_MAX_UNIFORM_BUFFER_BINDINGS,
                      &mGLMaxUniformBufferBindings);
 
-    mBoundTransformFeedbackBuffers =
-        MakeUnique<WebGLRefPtr<WebGLBuffer>[]>(mGLMaxTransformFeedbackSeparateAttribs);
-    mBoundUniformBuffers =
-        MakeUnique<WebGLRefPtr<WebGLBuffer>[]>(mGLMaxUniformBufferBindings);
+    mBoundTransformFeedbackBuffers.SetLength(mGLMaxTransformFeedbackSeparateAttribs);
+    mBoundUniformBuffers.SetLength(mGLMaxUniformBufferBindings);
 
     mDefaultTransformFeedback = new WebGLTransformFeedback(this, 0);
     mBoundTransformFeedback = mDefaultTransformFeedback;
-    auto xfBuffers = new WebGLRefPtr<WebGLBuffer>[mGLMaxTransformFeedbackSeparateAttribs];
-    mBoundTransformFeedbackBuffers.reset(xfBuffers);
 
     mBypassShaderValidation = true;
 

@@ -128,16 +128,6 @@ SelectionCarets::~SelectionCarets()
   SELECTIONCARETS_LOG("Destructor");
   MOZ_ASSERT(NS_IsMainThread());
 
-  if (mLongTapDetectorTimer) {
-    mLongTapDetectorTimer->Cancel();
-    mLongTapDetectorTimer = nullptr;
-  }
-
-  if (mScrollEndDetectorTimer) {
-    mScrollEndDetectorTimer->Cancel();
-    mScrollEndDetectorTimer = nullptr;
-  }
-
   mPresShell = nullptr;
 }
 
@@ -148,6 +138,16 @@ SelectionCarets::Terminate()
   if (docShell) {
     docShell->RemoveWeakReflowObserver(this);
     docShell->RemoveWeakScrollObserver(this);
+  }
+
+  if (mLongTapDetectorTimer) {
+    mLongTapDetectorTimer->Cancel();
+    mLongTapDetectorTimer = nullptr;
+  }
+
+  if (mScrollEndDetectorTimer) {
+    mScrollEndDetectorTimer->Cancel();
+    mScrollEndDetectorTimer = nullptr;
   }
 
   mPresShell = nullptr;
@@ -214,13 +214,13 @@ SelectionCarets::HandleEvent(WidgetEvent* aEvent)
     if (IsOnStartFrameInner(ptInRoot)) {
       mDragMode = START_FRAME;
       mCaretCenterToDownPointOffsetY = GetCaretYCenterPosition() - ptInRoot.y;
-      SetSelectionDirection(false);
+      SetSelectionDirection(eDirPrevious);
       SetSelectionDragState(true);
       return nsEventStatus_eConsumeNoDefault;
     } else if (IsOnEndFrameInner(ptInRoot)) {
       mDragMode = END_FRAME;
       mCaretCenterToDownPointOffsetY = GetCaretYCenterPosition() - ptInRoot.y;
-      SetSelectionDirection(true);
+      SetSelectionDirection(eDirNext);
       SetSelectionDragState(true);
       return nsEventStatus_eConsumeNoDefault;
     } else {
@@ -783,6 +783,9 @@ SelectionCarets::DragSelection(const nsPoint &movePoint)
     return nsEventStatus_eConsumeNoDefault;
   }
 
+  // Clear maintain selection so that we can drag caret freely.
+  fs->MaintainSelection(eSelectNoAmount);
+
   // Move caret postion.
   nsIFrame *scrollable =
     nsLayoutUtils::GetClosestFrameOfType(anchorFrame, nsGkAtoms::scrollFrame);
@@ -867,11 +870,11 @@ SelectionCarets::SetSelectionDragState(bool aState)
 }
 
 void
-SelectionCarets::SetSelectionDirection(bool aForward)
+SelectionCarets::SetSelectionDirection(nsDirection aDir)
 {
   nsRefPtr<dom::Selection> selection = GetSelection();
   if (selection) {
-    selection->SetDirection(aForward ? eDirNext : eDirPrevious);
+    selection->AdjustAnchorFocusForMultiRange(aDir);
   }
 }
 

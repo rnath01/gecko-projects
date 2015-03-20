@@ -4635,7 +4635,8 @@ nsDocShell::IsNavigationAllowed(bool aDisplayPrintErrorDialog,
                                 bool aCheckIfUnloadFired)
 {
   bool isAllowed = !IsPrintingOrPP(aDisplayPrintErrorDialog) &&
-                   (!aCheckIfUnloadFired || !mFiredUnloadEvent);
+                   (!aCheckIfUnloadFired || !mFiredUnloadEvent) &&
+                   !mBlockNavigation;
   if (!isAllowed) {
     return false;
   }
@@ -4735,17 +4736,19 @@ nsDocShell::LoadURI(const char16_t* aURI,
                     nsIInputStream* aPostStream,
                     nsIInputStream* aHeaderStream)
 {
-  return LoadURIWithBase(aURI, aLoadFlags, aReferringURI, aPostStream,
-                         aHeaderStream, nullptr);
+  return LoadURIWithOptions(aURI, aLoadFlags, aReferringURI,
+                            mozilla::net::RP_Default, aPostStream,
+                            aHeaderStream, nullptr);
 }
 
 NS_IMETHODIMP
-nsDocShell::LoadURIWithBase(const char16_t* aURI,
-                            uint32_t aLoadFlags,
-                            nsIURI* aReferringURI,
-                            nsIInputStream* aPostStream,
-                            nsIInputStream* aHeaderStream,
-                            nsIURI* aBaseURI)
+nsDocShell::LoadURIWithOptions(const char16_t* aURI,
+                               uint32_t aLoadFlags,
+                               nsIURI* aReferringURI,
+                               uint32_t aReferrerPolicy,
+                               nsIInputStream* aPostStream,
+                               nsIInputStream* aHeaderStream,
+                               nsIURI* aBaseURI)
 {
   NS_ASSERTION((aLoadFlags & 0xf) == 0, "Unexpected flags");
 
@@ -4855,6 +4858,7 @@ nsDocShell::LoadURIWithBase(const char16_t* aURI,
   loadInfo->SetLoadType(ConvertLoadTypeToDocShellLoadInfo(loadType));
   loadInfo->SetPostDataStream(postStream);
   loadInfo->SetReferrer(aReferringURI);
+  loadInfo->SetReferrerPolicy(aReferrerPolicy);
   loadInfo->SetHeadersStream(aHeaderStream);
   loadInfo->SetBaseURI(aBaseURI);
 
@@ -9996,13 +10000,18 @@ nsDocShell::InternalLoad(nsIURI* aURI,
       GetCurScrollPos(ScrollOrientation_X, &cx);
       GetCurScrollPos(ScrollOrientation_Y, &cy);
 
-      // ScrollToAnchor doesn't necessarily cause us to scroll the window;
-      // the function decides whether a scroll is appropriate based on the
-      // arguments it receives.  But even if we don't end up scrolling,
-      // ScrollToAnchor performs other important tasks, such as informing
-      // the presShell that we have a new hash.  See bug 680257.
-      rv = ScrollToAnchor(curHash, newHash, aLoadType);
-      NS_ENSURE_SUCCESS(rv, rv);
+      {
+        AutoRestore<bool> scrollingToAnchor(mBlockNavigation);
+        mBlockNavigation = true;
+
+        // ScrollToAnchor doesn't necessarily cause us to scroll the window;
+        // the function decides whether a scroll is appropriate based on the
+        // arguments it receives.  But even if we don't end up scrolling,
+        // ScrollToAnchor performs other important tasks, such as informing
+        // the presShell that we have a new hash.  See bug 680257.
+        rv = ScrollToAnchor(curHash, newHash, aLoadType);
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
 
       // Reset mLoadType to its original value once we exit this block,
       // because this short-circuited load might have started after a

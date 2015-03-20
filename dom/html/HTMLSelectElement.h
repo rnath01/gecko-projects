@@ -148,7 +148,7 @@ public:
   virtual int32_t TabIndexDefault() MOZ_OVERRIDE;
 
   // Element
-  virtual bool IsInteractiveHTMLContent() const MOZ_OVERRIDE
+  virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const MOZ_OVERRIDE
   {
     return true;
   }
@@ -272,7 +272,7 @@ public:
 
 
   // nsINode
-  virtual JSObject* WrapNode(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) MOZ_OVERRIDE;
 
   // nsIContent
   virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) MOZ_OVERRIDE;

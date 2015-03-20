@@ -16,7 +16,10 @@ function checkResponse(r) {
   is(r.statusText, response.statusText,
      "Both responses should have the same status text");
   return r.text().then(function(text) {
-    is(text, responseText, "The response body should be correct");
+    // Avoid dumping out the large response text to the log if they're equal.
+    if (text !== responseText) {
+      is(text, responseText, "The response body should be correct");
+    }
   });
 }
 
@@ -57,6 +60,24 @@ function testRequest(request, unknownRequest, requestWithAlternateQueryString,
     return c.match(request);
   }).then(function(r) {
     return checkResponse(r);
+  }).then(function() {
+    return c.match(new Request(request, {method: "HEAD"}));
+  }).then(function(r) {
+    return checkResponse(r);
+  }).then(function() {
+    return Promise.all(
+      ["POST", "PUT", "DELETE", "OPTIONS"]
+        .map(function(method) {
+          var req = new Request(request, {method: method});
+          return c.match(req)
+            .then(function(r) {
+              is(typeof r, "undefined", "Searching for a request with a non-GET/HEAD method should not succeed");
+              return c.match(req, {ignoreMethod: true});
+            }).then(function(r) {
+              return checkResponse(r);
+            });
+        })
+    );
   }).then(function() {
     return caches.match(request);
   }).then(function(r) {

@@ -513,11 +513,11 @@ MarkStack::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const
  */
 GCMarker::GCMarker(JSRuntime *rt)
   : JSTracer(rt, nullptr, DoNotTraceWeakMaps),
+    bufferingGrayRootsFailed(false),
     stack(size_t(-1)),
     color(BLACK),
     unmarkedArenaStackTop(nullptr),
     markLaterArenas(0),
-    grayBufferState(GRAY_BUFFER_UNUSED),
     started(false),
     strictCompartmentChecking(false)
 {
@@ -554,9 +554,6 @@ GCMarker::stop()
 
     /* Free non-ballast stack memory. */
     stack.reset();
-
-    resetBufferedGrayRoots();
-    grayBufferState = GRAY_BUFFER_UNUSED;
 }
 
 void
@@ -647,53 +644,26 @@ GCMarker::checkZone(void *p)
 }
 #endif
 
-bool
-GCMarker::hasBufferedGrayRoots() const
-{
-    return grayBufferState == GRAY_BUFFER_OK;
-}
-
 void
-GCMarker::startBufferingGrayRoots()
+GCRuntime::resetBufferedGrayRoots() const
 {
-    MOZ_ASSERT(grayBufferState == GRAY_BUFFER_UNUSED);
-    grayBufferState = GRAY_BUFFER_OK;
-    for (GCZonesIter zone(runtime()); !zone.done(); zone.next())
-        MOZ_ASSERT(zone->gcGrayRoots.empty());
-
-    MOZ_ASSERT(!callback);
-    callback = GrayCallback;
-    MOZ_ASSERT(IS_GC_MARKING_TRACER(this));
-}
-
-void
-GCMarker::endBufferingGrayRoots()
-{
-    MOZ_ASSERT(callback == GrayCallback);
-    callback = nullptr;
-    MOZ_ASSERT(IS_GC_MARKING_TRACER(this));
-    MOZ_ASSERT(grayBufferState == GRAY_BUFFER_OK ||
-               grayBufferState == GRAY_BUFFER_FAILED);
-}
-
-void
-GCMarker::resetBufferedGrayRoots()
-{
-    for (GCZonesIter zone(runtime()); !zone.done(); zone.next())
+    MOZ_ASSERT(grayBufferState != GrayBufferState::Okay,
+               "Do not clear the gray buffers unless we are Failed or becoming Unused");
+    for (GCZonesIter zone(rt); !zone.done(); zone.next())
         zone->gcGrayRoots.clearAndFree();
 }
 
 void
-GCMarker::markBufferedGrayRoots(JS::Zone *zone)
+GCRuntime::markBufferedGrayRoots(JS::Zone *zone)
 {
-    MOZ_ASSERT(grayBufferState == GRAY_BUFFER_OK);
+    MOZ_ASSERT(grayBufferState == GrayBufferState::Okay);
     MOZ_ASSERT(zone->isGCMarkingGray() || zone->isGCCompacting());
 
     for (GrayRoot *elem = zone->gcGrayRoots.begin(); elem != zone->gcGrayRoots.end(); elem++) {
 #ifdef DEBUG
-        setTracingDetails(elem->debugPrinter, elem->debugPrintArg, elem->debugPrintIndex);
+        marker.setTracingDetails(elem->debugPrinter, elem->debugPrintArg, elem->debugPrintIndex);
 #endif
-        MarkKind(this, &elem->thing, elem->kind);
+        MarkKind(&marker, &elem->thing, elem->kind);
     }
 }
 
@@ -702,7 +672,7 @@ GCMarker::appendGrayRoot(void *thing, JSGCTraceKind kind)
 {
     MOZ_ASSERT(started);
 
-    if (grayBufferState == GRAY_BUFFER_FAILED)
+    if (bufferingGrayRootsFailed)
         return;
 
     GrayRoot root(thing, kind);
@@ -728,10 +698,8 @@ GCMarker::appendGrayRoot(void *thing, JSGCTraceKind kind)
           default:
             break;
         }
-        if (!zone->gcGrayRoots.append(root)) {
-            resetBufferedGrayRoots();
-            grayBufferState = GRAY_BUFFER_FAILED;
-        }
+        if (!zone->gcGrayRoots.append(root))
+            bufferingGrayRootsFailed = true;
     }
 }
 

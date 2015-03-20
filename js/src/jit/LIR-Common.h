@@ -5094,6 +5094,35 @@ class LAtomicTypedArrayElementBinop : public LInstructionHelper<1, 3, 2>
     }
 };
 
+// Atomic binary operation where the result is discarded.
+class LAtomicTypedArrayElementBinopForEffect : public LInstructionHelper<0, 3, 0>
+{
+  public:
+    LIR_HEADER(AtomicTypedArrayElementBinopForEffect)
+
+    LAtomicTypedArrayElementBinopForEffect(const LAllocation &elements, const LAllocation &index,
+                                           const LAllocation &value)
+    {
+        setOperand(0, elements);
+        setOperand(1, index);
+        setOperand(2, value);
+    }
+
+    const LAllocation *elements() {
+        return getOperand(0);
+    }
+    const LAllocation *index() {
+        return getOperand(1);
+    }
+    const LAllocation *value() {
+        return getOperand(2);
+    }
+
+    const MAtomicTypedArrayElementBinop *mir() const {
+        return mir_->toAtomicTypedArrayElementBinop();
+    }
+};
+
 class LEffectiveAddress : public LInstructionHelper<1, 2, 0>
 {
   public:
@@ -6495,6 +6524,39 @@ class LAsmJSAtomicBinopHeap : public LInstructionHelper<1, 2, 2>
     }
 };
 
+// Atomic binary operation where the result is discarded.
+class LAsmJSAtomicBinopHeapForEffect : public LInstructionHelper<0, 2, 1>
+{
+  public:
+    LIR_HEADER(AsmJSAtomicBinopHeapForEffect);
+    LAsmJSAtomicBinopHeapForEffect(const LAllocation &ptr, const LAllocation &value)
+    {
+        setOperand(0, ptr);
+        setOperand(1, value);
+        setTemp(0, LDefinition::BogusTemp());
+    }
+    const LAllocation *ptr() {
+        return getOperand(0);
+    }
+    const LAllocation *value() {
+        return getOperand(1);
+    }
+    const LDefinition *temp() {
+        return getTemp(0);
+    }
+    const LDefinition *addrTemp() {
+        return getTemp(0);
+    }
+
+    void setAddrTemp(const LDefinition &addrTemp) {
+        setTemp(0, addrTemp);
+    }
+
+    MAsmJSAtomicBinopHeap *mir() const {
+        return mir_->toAsmJSAtomicBinopHeap();
+    }
+};
+
 class LAsmJSLoadGlobalVar : public LInstructionHelper<1, 0, 0>
 {
   public:
@@ -6735,6 +6797,28 @@ class LAssertRangeV : public LInstructionHelper<0, BOX_PIECES, 3>
     const Range *range() {
         return mir()->assertedRange();
     }
+};
+
+class LAssertResultT : public LInstructionHelper<0, 1, 0>
+{
+  public:
+    LIR_HEADER(AssertResultT)
+
+    explicit LAssertResultT(const LAllocation &input) {
+        setOperand(0, input);
+    }
+
+    const LAllocation *input() {
+        return getOperand(0);
+    }
+};
+
+class LAssertResultV : public LInstructionHelper<0, BOX_PIECES, 0>
+{
+  public:
+    LIR_HEADER(AssertResultV)
+
+    static const size_t Input = 0;
 };
 
 class LRecompileCheck : public LInstructionHelper<0, 0, 1>

@@ -82,7 +82,7 @@ function runTests(testFile, order) {
 
   if (typeof order == "undefined") {
     order = "sequential"; // sequential by default, see bug 1143222.
-    // TODO: Make this "both".
+    // TODO: Make this "both" again.
   }
 
   ok(order == "parallel" || order == "sequential" || order == "both",

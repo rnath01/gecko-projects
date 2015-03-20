@@ -24,7 +24,7 @@ public:
   explicit HTMLAudioElement(already_AddRefed<NodeInfo>& aNodeInfo);
 
   // Element
-  virtual bool IsInteractiveHTMLContent() const MOZ_OVERRIDE;
+  virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const MOZ_OVERRIDE;
 
   // nsIDOMHTMLMediaElement
   using HTMLMediaElement::GetPaused;
@@ -43,7 +43,7 @@ public:
 protected:
   virtual ~HTMLAudioElement();
 
-  virtual JSObject* WrapNode(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) MOZ_OVERRIDE;
 };
 
 } // namespace dom

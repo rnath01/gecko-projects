@@ -748,9 +748,14 @@ class MacroAssembler : public MacroAssemblerSpecific
     void compareExchangeToTypedIntArray(Scalar::Type arrayType, const T &mem, Register oldval, Register newval,
                                         Register temp, AnyRegister output);
 
+    // Generating a result.
     template<typename S, typename T>
     void atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType, const S &value,
                                     const T &mem, Register temp1, Register temp2, AnyRegister output);
+
+    // Generating no result.
+    template<typename S, typename T>
+    void atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType, const S &value, const T &mem);
 
     void storeToTypedFloatArray(Scalar::Type arrayType, FloatRegister value, const BaseIndex &dest);
     void storeToTypedFloatArray(Scalar::Type arrayType, FloatRegister value, const Address &dest);
@@ -836,12 +841,13 @@ class MacroAssembler : public MacroAssemblerSpecific
     void callMallocStub(size_t nbytes, Register result, Label *fail);
     void callFreeStub(Register slots);
     void createGCObject(Register result, Register temp, JSObject *templateObj,
-                        gc::InitialHeap initialHeap, Label *fail, bool initContents = true);
+                        gc::InitialHeap initialHeap, Label *fail, bool initContents = true,
+                        bool convertDoubleElements = false);
 
     void newGCThing(Register result, Register temp, JSObject *templateObj,
                      gc::InitialHeap initialHeap, Label *fail);
     void initGCThing(Register obj, Register temp, JSObject *templateObj,
-                     bool initContents = true);
+                     bool initContents = true, bool convertDoubleElements = false);
 
     void initUnboxedObjectContents(Register object, UnboxedPlainObject *templateObject);
 

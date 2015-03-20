@@ -149,7 +149,7 @@ NS_IMPL_STRING_ATTR(HTMLImageElement, UseMap, usemap)
 NS_IMPL_INT_ATTR(HTMLImageElement, Vspace, vspace)
 
 bool
-HTMLImageElement::IsInteractiveHTMLContent() const
+HTMLImageElement::IsInteractiveHTMLContent(bool aIgnoreTabindex) const
 {
   return HasAttr(kNameSpaceID_None, nsGkAtoms::usemap);
 }
@@ -802,9 +802,9 @@ HTMLImageElement::GetCORSMode()
 }
 
 JSObject*
-HTMLImageElement::WrapNode(JSContext* aCx)
+HTMLImageElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return HTMLImageElementBinding::Wrap(aCx, this);
+  return HTMLImageElementBinding::Wrap(aCx, this, aGivenProto);
 }
 
 #ifdef DEBUG

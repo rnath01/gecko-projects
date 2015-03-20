@@ -2858,18 +2858,11 @@ class MNewArray
     // Allocate space at initialization or not
     AllocatingBehaviour allocating_;
 
+    // Whether values written to this array should be converted to double first.
+    bool convertDoubleElements_;
+
     MNewArray(CompilerConstraintList *constraints, uint32_t count, MConstant *templateConst,
-              gc::InitialHeap initialHeap, AllocatingBehaviour allocating)
-      : MUnaryInstruction(templateConst),
-        count_(count),
-        initialHeap_(initialHeap),
-        allocating_(allocating)
-    {
-        ArrayObject *obj = templateObject();
-        setResultType(MIRType_Object);
-        if (!obj->isSingleton())
-            setResultTypeSet(MakeSingletonTypeSet(constraints, obj));
-    }
+              gc::InitialHeap initialHeap, AllocatingBehaviour allocating);
 
   public:
     INSTRUCTION_HEADER(NewArray)
@@ -2895,6 +2888,10 @@ class MNewArray
 
     AllocatingBehaviour allocatingBehaviour() const {
         return allocating_;
+    }
+
+    bool convertDoubleElements() const {
+        return convertDoubleElements_;
     }
 
     // Returns true if the code generator should call through to the
@@ -7341,12 +7338,13 @@ struct LambdaFunctionInfo
     // information while still on the main thread to avoid races.
     AlwaysTenuredFunction fun;
     uint16_t flags;
+    uint16_t nargs;
     gc::Cell *scriptOrLazyScript;
     bool singletonType;
     bool useSingletonForClone;
 
     explicit LambdaFunctionInfo(JSFunction *fun)
-      : fun(fun), flags(fun->flags()),
+      : fun(fun), flags(fun->flags()), nargs(fun->nargs()),
         scriptOrLazyScript(fun->hasScript()
                            ? (gc::Cell *) fun->nonLazyScript()
                            : (gc::Cell *) fun->lazyScript()),
@@ -7354,19 +7352,16 @@ struct LambdaFunctionInfo
         useSingletonForClone(ObjectGroup::useSingletonForClone(fun))
     {}
 
-    LambdaFunctionInfo(const LambdaFunctionInfo &info)
-      : fun((JSFunction *) info.fun), flags(info.flags),
-        scriptOrLazyScript(info.scriptOrLazyScript),
-        singletonType(info.singletonType),
-        useSingletonForClone(info.useSingletonForClone)
-    {}
+  private:
+    LambdaFunctionInfo(const LambdaFunctionInfo &) = delete;
+    void operator=(const LambdaFunctionInfo &) = delete;
 };
 
 class MLambda
   : public MBinaryInstruction,
     public SingleObjectPolicy::Data
 {
-    LambdaFunctionInfo info_;
+    const LambdaFunctionInfo info_;
 
     MLambda(CompilerConstraintList *constraints, MDefinition *scopeChain, MConstant *cst)
       : MBinaryInstruction(scopeChain, cst), info_(&cst->value().toObject().as<JSFunction>())
@@ -7403,7 +7398,7 @@ class MLambdaArrow
   : public MBinaryInstruction,
     public MixPolicy<ObjectPolicy<0>, BoxPolicy<1> >::Data
 {
-    LambdaFunctionInfo info_;
+    const LambdaFunctionInfo info_;
 
     MLambdaArrow(CompilerConstraintList *constraints, MDefinition *scopeChain,
                  MDefinition *this_, JSFunction *fun)
@@ -7494,6 +7489,7 @@ class MElements
     AliasSet getAliasSet() const MOZ_OVERRIDE {
         return AliasSet::Load(AliasSet::ObjectFields);
     }
+    bool mightAlias(const MDefinition *store) const MOZ_OVERRIDE;
 
     ALLOW_CLONE(MElements)
 };
@@ -7681,6 +7677,7 @@ class MInitializedLength
     AliasSet getAliasSet() const MOZ_OVERRIDE {
         return AliasSet::Load(AliasSet::ObjectFields);
     }
+    bool mightAlias(const MDefinition *store) const MOZ_OVERRIDE;
 
     void computeRange(TempAllocator &alloc) MOZ_OVERRIDE;
 
@@ -8184,6 +8181,7 @@ class MLoadElement
     AliasSet getAliasSet() const MOZ_OVERRIDE {
         return AliasSet::Load(AliasSet::Element);
     }
+    bool mightAlias(const MDefinition *store) const MOZ_OVERRIDE;
 
     ALLOW_CLONE(MLoadElement)
 };
@@ -10157,13 +10155,15 @@ class MGuardObjectGroup
     AlwaysTenured<ObjectGroup *> group_;
     bool bailOnEquality_;
     BailoutKind bailoutKind_;
+    bool checkUnboxedExpando_;
 
     MGuardObjectGroup(MDefinition *obj, ObjectGroup *group, bool bailOnEquality,
-                      BailoutKind bailoutKind)
+                      BailoutKind bailoutKind, bool checkUnboxedExpando)
       : MUnaryInstruction(obj),
         group_(group),
         bailOnEquality_(bailOnEquality),
-        bailoutKind_(bailoutKind)
+        bailoutKind_(bailoutKind),
+        checkUnboxedExpando_(checkUnboxedExpando)
     {
         setGuard();
         setMovable();
@@ -10178,8 +10178,10 @@ class MGuardObjectGroup
     INSTRUCTION_HEADER(GuardObjectGroup)
 
     static MGuardObjectGroup *New(TempAllocator &alloc, MDefinition *obj, ObjectGroup *group,
-                                  bool bailOnEquality, BailoutKind bailoutKind) {
-        return new(alloc) MGuardObjectGroup(obj, group, bailOnEquality, bailoutKind);
+                                  bool bailOnEquality, BailoutKind bailoutKind,
+                                  bool checkUnboxedExpando) {
+        return new(alloc) MGuardObjectGroup(obj, group, bailOnEquality, bailoutKind,
+                                            checkUnboxedExpando);
     }
 
     MDefinition *obj() const {
@@ -10193,6 +10195,9 @@ class MGuardObjectGroup
     }
     BailoutKind bailoutKind() const {
         return bailoutKind_;
+    }
+    bool checkUnboxedExpando() const {
+        return checkUnboxedExpando_;
     }
     bool congruentTo(const MDefinition *ins) const MOZ_OVERRIDE {
         if (!ins->isGuardObjectGroup())

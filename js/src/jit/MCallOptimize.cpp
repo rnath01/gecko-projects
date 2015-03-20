@@ -75,8 +75,6 @@ IonBuilder::inlineNativeCall(CallInfo &callInfo, JSFunction *target)
         return inlineArrayPush(callInfo);
     if (native == js::array_concat)
         return inlineArrayConcat(callInfo);
-    if (native == js::array_join)
-        return inlineArrayJoin(callInfo);
     if (native == js::array_splice)
         return inlineArraySplice(callInfo);
 
@@ -496,13 +494,6 @@ IonBuilder::inlineArray(CallInfo &callInfo)
         }
     }
 
-    TemporaryTypeSet::DoubleConversion conversion =
-        getInlineReturnTypeSet()->convertDoubleElements(constraints());
-    if (conversion == TemporaryTypeSet::AlwaysConvertToDoubles)
-        templateArray->setShouldConvertDoubleElements();
-    else
-        templateArray->clearShouldConvertDoubleElements();
-
     // A single integer argument denotes initial length.
     if (callInfo.argc() == 1) {
         if (callInfo.getArg(0)->type() != MIRType_Int32)
@@ -566,7 +557,7 @@ IonBuilder::inlineArray(CallInfo &callInfo)
             current->add(id);
 
             MDefinition *value = callInfo.getArg(i);
-            if (conversion == TemporaryTypeSet::AlwaysConvertToDoubles) {
+            if (ins->convertDoubleElements()) {
                 MInstruction *valueDouble = MToDouble::New(alloc(), value);
                 current->add(valueDouble);
                 value = valueDouble;

@@ -268,6 +268,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitStoreTypedArrayElementHole(LStoreTypedArrayElementHole *lir);
     void visitCompareExchangeTypedArrayElement(LCompareExchangeTypedArrayElement *lir);
     void visitAtomicTypedArrayElementBinop(LAtomicTypedArrayElementBinop *lir);
+    void visitAtomicTypedArrayElementBinopForEffect(LAtomicTypedArrayElementBinopForEffect *lir);
     void visitClampIToUint8(LClampIToUint8 *lir);
     void visitClampDToUint8(LClampDToUint8 *lir);
     void visitClampVToUint8(LClampVToUint8 *lir);
@@ -354,6 +355,11 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitAssertRangeD(LAssertRangeD *ins);
     void visitAssertRangeF(LAssertRangeF *ins);
     void visitAssertRangeV(LAssertRangeV *ins);
+
+    void visitAssertResultV(LAssertResultV *ins);
+    void visitAssertResultT(LAssertResultT *ins);
+    void emitAssertResultV(const ValueOperand output, TemporaryTypeSet *typeset);
+    void emitAssertObjectOrStringResult(Register input, MIRType type, TemporaryTypeSet *typeset);
 
     void visitInterruptCheck(LInterruptCheck *lir);
     void visitAsmJSInterruptCheck(LAsmJSInterruptCheck *lir);
@@ -458,9 +464,10 @@ class CodeGenerator : public CodeGeneratorSpecific
     void emitAssertRangeD(const Range *r, FloatRegister input, FloatRegister temp);
 
     Vector<CodeOffsetLabel, 0, JitAllocPolicy> ionScriptLabels_;
-#ifdef DEBUG
+
     void branchIfInvalidated(Register temp, Label *invalidated);
 
+#ifdef DEBUG
     void emitDebugResultChecks(LInstruction *ins);
     void emitObjectOrStringResultChecks(LInstruction *lir, MDefinition *mir);
     void emitValueResultChecks(LInstruction *lir, MDefinition *mir);

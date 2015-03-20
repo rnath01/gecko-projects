@@ -41,7 +41,7 @@ HTMLAudioElement::~HTMLAudioElement()
 }
 
 bool
-HTMLAudioElement::IsInteractiveHTMLContent() const
+HTMLAudioElement::IsInteractiveHTMLContent(bool aIgnoreTabindex) const
 {
   return HasAttr(kNameSpaceID_None, nsGkAtoms::controls);
 }
@@ -96,9 +96,9 @@ nsresult HTMLAudioElement::SetAcceptHeader(nsIHttpChannel* aChannel)
 }
 
 JSObject*
-HTMLAudioElement::WrapNode(JSContext* aCx)
+HTMLAudioElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return HTMLAudioElementBinding::Wrap(aCx, this);
+  return HTMLAudioElementBinding::Wrap(aCx, this, aGivenProto);
 }
 
 } // namespace dom

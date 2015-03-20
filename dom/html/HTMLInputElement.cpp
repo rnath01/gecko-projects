@@ -3222,7 +3222,7 @@ HTMLInputElement::Focus(ErrorResult& aError)
 }
 
 bool
-HTMLInputElement::IsInteractiveHTMLContent() const
+HTMLInputElement::IsInteractiveHTMLContent(bool aIgnoreTabindex) const
 {
   return mType != NS_FORM_INPUT_HIDDEN;
 }
@@ -7569,9 +7569,9 @@ HTMLInputElement::PickerClosed()
 }
 
 JSObject*
-HTMLInputElement::WrapNode(JSContext* aCx)
+HTMLInputElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return HTMLInputElementBinding::Wrap(aCx, this);
+  return HTMLInputElementBinding::Wrap(aCx, this, aGivenProto);
 }
 
 } // namespace dom

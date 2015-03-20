@@ -43,7 +43,7 @@ public:
   virtual bool Draggable() const MOZ_OVERRIDE;
 
   // Element
-  virtual bool IsInteractiveHTMLContent() const MOZ_OVERRIDE
+  virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const MOZ_OVERRIDE
   {
     return true;
   }
@@ -229,7 +229,7 @@ protected:
 
   virtual void GetItemValueText(DOMString& text) MOZ_OVERRIDE;
   virtual void SetItemValueText(const nsAString& text) MOZ_OVERRIDE;
-  virtual JSObject* WrapNode(JSContext *aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) MOZ_OVERRIDE;
   nsRefPtr<nsDOMTokenList > mRelList;
 };
 
