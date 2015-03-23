@@ -94,7 +94,7 @@ void SandboxFilterImpl::AllowThreadClone() {
 #ifdef MOZ_CONTENT_SANDBOX
 class SandboxFilterImplContent : public SandboxFilterImpl {
 protected:
-  virtual void Build() MOZ_OVERRIDE;
+  virtual void Build() override;
 };
 
 void
@@ -177,6 +177,7 @@ SandboxFilterImplContent::Build() {
 #else
   Allow(SYSCALL(select));
 #endif
+  Allow(SYSCALL(pselect6));
   // Some archs used to have 16-bit uid/gid instead of 32-bit.
 #if SYSCALL_EXISTS(getuid32)
   Allow(SYSCALL(getuid32));
@@ -351,7 +352,7 @@ SandboxFilterImplContent::Build() {
 #ifdef MOZ_GMP_SANDBOX
 class SandboxFilterImplGMP : public SandboxFilterImpl {
 protected:
-  virtual void Build() MOZ_OVERRIDE;
+  virtual void Build() override;
 };
 
 void SandboxFilterImplGMP::Build() {

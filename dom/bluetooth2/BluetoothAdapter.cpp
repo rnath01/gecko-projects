@@ -40,7 +40,7 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 NS_IMPL_ADDREF_INHERITED(BluetoothAdapter, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(BluetoothAdapter, DOMEventTargetHelper)
 
-class StartDiscoveryTask MOZ_FINAL : public BluetoothReplyRunnable
+class StartDiscoveryTask final : public BluetoothReplyRunnable
 {
 public:
   StartDiscoveryTask(BluetoothAdapter* aAdapter, Promise* aPromise)
@@ -78,7 +78,7 @@ public:
   }
 
   virtual void
-  ReleaseMembers() MOZ_OVERRIDE
+  ReleaseMembers() override
   {
     BluetoothReplyRunnable::ReleaseMembers();
     mAdapter = nullptr;
@@ -1322,7 +1322,7 @@ BluetoothAdapter::SendMediaPlayStatus(const MediaPlayStatus& aMediaPlayStatus, E
 }
 
 JSObject*
-BluetoothAdapter::WrapObject(JSContext* aCx)
+BluetoothAdapter::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return BluetoothAdapterBinding::Wrap(aCx, this);
+  return BluetoothAdapterBinding::Wrap(aCx, this, aGivenProto);
 }

@@ -965,17 +965,26 @@ MSimdSwizzle::foldsTo(TempAllocator &alloc)
 }
 
 MDefinition *
-MSimdGeneralSwizzle::foldsTo(TempAllocator &alloc)
+MSimdGeneralShuffle::foldsTo(TempAllocator &alloc)
 {
-    int32_t lanes[4];
-    for (size_t i = 0; i < 4; i++) {
+    FixedList<uint32_t> lanes;
+    if (!lanes.init(alloc, numLanes()))
+        return this;
+
+    for (size_t i = 0; i < numLanes(); i++) {
         if (!lane(i)->isConstant() || lane(i)->type() != MIRType_Int32)
             return this;
-        lanes[i] = lane(i)->toConstant()->value().toInt32();
-        if (lanes[i] < 0 || lanes[i] >= 4)
+        int32_t temp = lane(i)->toConstant()->value().toInt32();
+        if (temp < 0 || uint32_t(temp) >= numLanes() * numVectors())
             return this;
+        lanes[i] = uint32_t(temp);
     }
-    return MSimdSwizzle::New(alloc, input(), type(), lanes[0], lanes[1], lanes[2], lanes[3]);
+
+    if (numVectors() == 1)
+        return MSimdSwizzle::New(alloc, vector(0), type(), lanes[0], lanes[1], lanes[2], lanes[3]);
+
+    MOZ_ASSERT(numVectors() == 2);
+    return MSimdShuffle::New(alloc, vector(0), vector(1), type(), lanes[0], lanes[1], lanes[2], lanes[3]);
 }
 
 template <typename T>
@@ -3937,6 +3946,24 @@ MArrayState::Copy(TempAllocator &alloc, MArrayState *state)
     for (size_t i = 0; i < res->numElements(); i++)
         res->initElement(i, state->getElement(i));
     return res;
+}
+
+MNewArray::MNewArray(CompilerConstraintList *constraints, uint32_t count, MConstant *templateConst,
+                     gc::InitialHeap initialHeap, AllocatingBehaviour allocating)
+  : MUnaryInstruction(templateConst),
+    count_(count),
+    initialHeap_(initialHeap),
+    allocating_(allocating),
+    convertDoubleElements_(false)
+{
+    ArrayObject *obj = templateObject();
+    setResultType(MIRType_Object);
+    if (!obj->isSingleton()) {
+        TemporaryTypeSet *types = MakeSingletonTypeSet(constraints, obj);
+        setResultTypeSet(types);
+        if (types->convertDoubleElements(constraints) == TemporaryTypeSet::AlwaysConvertToDoubles)
+            convertDoubleElements_ = true;
+    }
 }
 
 bool

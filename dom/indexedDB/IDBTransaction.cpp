@@ -67,7 +67,7 @@ RunBeforeNextEvent(IDBTransaction* aTransaction)
 
 } // anonymous namespace
 
-class IDBTransaction::WorkerFeature MOZ_FINAL
+class IDBTransaction::WorkerFeature final
   : public mozilla::dom::workers::WorkerFeature
 {
   WorkerPrivate* mWorkerPrivate;
@@ -100,7 +100,7 @@ public:
 
 private:
   virtual bool
-  Notify(JSContext* aCx, Status aStatus) MOZ_OVERRIDE;
+  Notify(JSContext* aCx, Status aStatus) override;
 };
 
 IDBTransaction::IDBTransaction(IDBDatabase* aDatabase,
@@ -977,11 +977,11 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(IDBTransaction, IDBWrapperCache)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 JSObject*
-IDBTransaction::WrapObject(JSContext* aCx)
+IDBTransaction::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
   AssertIsOnOwningThread();
 
-  return IDBTransactionBinding::Wrap(aCx, this);
+  return IDBTransactionBinding::Wrap(aCx, this, aGivenProto);
 }
 
 nsresult

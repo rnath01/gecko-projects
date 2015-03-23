@@ -424,7 +424,7 @@ IsSameHost(nsIURI* aUri1, nsIURI* aUri2)
   return host1.Equals(host2);
 }
 
-class nsPingListener MOZ_FINAL
+class nsPingListener final
   : public nsIStreamListener
   , public nsIInterfaceRequestor
   , public nsIChannelEventSink
@@ -859,6 +859,7 @@ nsDocShell::nsDocShell()
   , mAllowDNSPrefetch(true)
   , mAllowWindowControl(true)
   , mAllowContentRetargeting(true)
+  , mAllowContentRetargetingOnChildren(true)
   , mCreatingDocument(false)
   , mUseErrorPages(false)
   , mObserveErrorPages(true)
@@ -2587,7 +2588,22 @@ nsDocShell::GetAllowContentRetargeting(bool* aAllowContentRetargeting)
 NS_IMETHODIMP
 nsDocShell::SetAllowContentRetargeting(bool aAllowContentRetargeting)
 {
+  mAllowContentRetargetingOnChildren = aAllowContentRetargeting;
   mAllowContentRetargeting = aAllowContentRetargeting;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDocShell::GetAllowContentRetargetingOnChildren(bool* aAllowContentRetargetingOnChildren)
+{
+  *aAllowContentRetargetingOnChildren = mAllowContentRetargetingOnChildren;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDocShell::SetAllowContentRetargetingOnChildren(bool aAllowContentRetargetingOnChildren)
+{
+  mAllowContentRetargetingOnChildren = aAllowContentRetargetingOnChildren;
   return NS_OK;
 }
 
@@ -3461,7 +3477,7 @@ nsDocShell::SetDocLoaderParent(nsDocLoader* aParent)
     if (NS_SUCCEEDED(parentAsDocShell->GetAllowWindowControl(&value))) {
       SetAllowWindowControl(value);
     }
-    SetAllowContentRetargeting(parentAsDocShell->GetAllowContentRetargeting());
+    SetAllowContentRetargeting(parentAsDocShell->GetAllowContentRetargetingOnChildren());
     if (NS_SUCCEEDED(parentAsDocShell->GetIsActive(&value))) {
       SetIsActive(value);
     }
@@ -4635,7 +4651,8 @@ nsDocShell::IsNavigationAllowed(bool aDisplayPrintErrorDialog,
                                 bool aCheckIfUnloadFired)
 {
   bool isAllowed = !IsPrintingOrPP(aDisplayPrintErrorDialog) &&
-                   (!aCheckIfUnloadFired || !mFiredUnloadEvent);
+                   (!aCheckIfUnloadFired || !mFiredUnloadEvent) &&
+                   !mBlockNavigation;
   if (!isAllowed) {
     return false;
   }
@@ -8737,6 +8754,7 @@ nsDocShell::RestoreFromHistory()
     childShell->GetAllowDNSPrefetch(&allowDNSPrefetch);
 
     bool allowContentRetargeting = childShell->GetAllowContentRetargeting();
+    bool allowContentRetargetingOnChildren = childShell->GetAllowContentRetargetingOnChildren();
 
     uint32_t defaultLoadFlags;
     childShell->GetDefaultLoadFlags(&defaultLoadFlags);
@@ -8755,6 +8773,7 @@ nsDocShell::RestoreFromHistory()
     childShell->SetAllowMedia(allowMedia);
     childShell->SetAllowDNSPrefetch(allowDNSPrefetch);
     childShell->SetAllowContentRetargeting(allowContentRetargeting);
+    childShell->SetAllowContentRetargetingOnChildren(allowContentRetargetingOnChildren);
     childShell->SetDefaultLoadFlags(defaultLoadFlags);
 
     rv = childShell->BeginRestore(nullptr, false);
@@ -9360,7 +9379,7 @@ namespace {
 #ifdef MOZ_PLACES
 // Callback used by CopyFavicon to inform the favicon service that one URI
 // (mNewURI) has the same favicon URI (OnComplete's aFaviconURI) as another.
-class nsCopyFaviconCallback MOZ_FINAL : public nsIFaviconDataCallback
+class nsCopyFaviconCallback final : public nsIFaviconDataCallback
 {
 public:
   NS_DECL_ISUPPORTS
@@ -9373,7 +9392,7 @@ public:
 
   NS_IMETHODIMP
   OnComplete(nsIURI* aFaviconURI, uint32_t aDataLen,
-             const uint8_t* aData, const nsACString& aMimeType) MOZ_OVERRIDE
+             const uint8_t* aData, const nsACString& aMimeType) override
   {
     // Continue only if there is an associated favicon.
     if (!aFaviconURI) {
@@ -9544,6 +9563,8 @@ nsDocShell::InternalLoad(nsIURI* aURI,
                          nsIDocShell** aDocShell,
                          nsIRequest** aRequest)
 {
+  MOZ_RELEASE_ASSERT(!mBlockNavigation);
+
   nsresult rv = NS_OK;
   mOriginalUriString.Truncate();
 
@@ -9999,13 +10020,18 @@ nsDocShell::InternalLoad(nsIURI* aURI,
       GetCurScrollPos(ScrollOrientation_X, &cx);
       GetCurScrollPos(ScrollOrientation_Y, &cy);
 
-      // ScrollToAnchor doesn't necessarily cause us to scroll the window;
-      // the function decides whether a scroll is appropriate based on the
-      // arguments it receives.  But even if we don't end up scrolling,
-      // ScrollToAnchor performs other important tasks, such as informing
-      // the presShell that we have a new hash.  See bug 680257.
-      rv = ScrollToAnchor(curHash, newHash, aLoadType);
-      NS_ENSURE_SUCCESS(rv, rv);
+      {
+        AutoRestore<bool> scrollingToAnchor(mBlockNavigation);
+        mBlockNavigation = true;
+
+        // ScrollToAnchor doesn't necessarily cause us to scroll the window;
+        // the function decides whether a scroll is appropriate based on the
+        // arguments it receives.  But even if we don't end up scrolling,
+        // ScrollToAnchor performs other important tasks, such as informing
+        // the presShell that we have a new hash.  See bug 680257.
+        rv = ScrollToAnchor(curHash, newHash, aLoadType);
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
 
       // Reset mLoadType to its original value once we exit this block,
       // because this short-circuited load might have started after a

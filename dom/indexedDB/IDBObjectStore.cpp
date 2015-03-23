@@ -136,7 +136,7 @@ struct IDBObjectStore::StructuredCloneWriteInfo
 
 namespace {
 
-struct MOZ_STACK_CLASS MutableFileData MOZ_FINAL
+struct MOZ_STACK_CLASS MutableFileData final
 {
   nsString type;
   nsString name;
@@ -152,7 +152,7 @@ struct MOZ_STACK_CLASS MutableFileData MOZ_FINAL
   }
 };
 
-struct MOZ_STACK_CLASS BlobOrFileData MOZ_FINAL
+struct MOZ_STACK_CLASS BlobOrFileData final
 {
   uint32_t tag;
   uint64_t size;
@@ -174,7 +174,7 @@ struct MOZ_STACK_CLASS BlobOrFileData MOZ_FINAL
   }
 };
 
-struct MOZ_STACK_CLASS GetAddInfoClosure MOZ_FINAL
+struct MOZ_STACK_CLASS GetAddInfoClosure final
 {
   IDBObjectStore::StructuredCloneWriteInfo& mCloneWriteInfo;
   JS::Handle<JS::Value> mValue;
@@ -585,7 +585,7 @@ public:
                              aFile.mFileInfo.forget());
     MOZ_ASSERT(mutableFile);
 
-    JS::Rooted<JSObject*> result(aCx, mutableFile->WrapObject(aCx));
+    JS::Rooted<JSObject*> result(aCx, mutableFile->WrapObject(aCx, JS::NullPtr()));
     if (NS_WARN_IF(!result)) {
       return false;
     }
@@ -1496,9 +1496,9 @@ NS_IMPL_CYCLE_COLLECTING_ADDREF(IDBObjectStore)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(IDBObjectStore)
 
 JSObject*
-IDBObjectStore::WrapObject(JSContext* aCx)
+IDBObjectStore::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return IDBObjectStoreBinding::Wrap(aCx, this);
+  return IDBObjectStoreBinding::Wrap(aCx, this, aGivenProto);
 }
 
 nsPIDOMWindow*

@@ -57,14 +57,14 @@ ServiceWorkerClientInfo::ServiceWorkerClientInfo(nsIDocument* aDoc)
 }
 
 JSObject*
-ServiceWorkerClient::WrapObject(JSContext* aCx)
+ServiceWorkerClient::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return ClientBinding::Wrap(aCx, this);
+  return ClientBinding::Wrap(aCx, this, aGivenProto);
 }
 
 namespace {
 
-class ServiceWorkerClientPostMessageRunnable MOZ_FINAL : public nsRunnable
+class ServiceWorkerClientPostMessageRunnable final : public nsRunnable
 {
   uint64_t mWindowId;
   JSAutoStructuredCloneBuffer mBuffer;

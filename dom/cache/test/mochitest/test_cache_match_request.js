@@ -61,6 +61,24 @@ function testRequest(request, unknownRequest, requestWithAlternateQueryString,
   }).then(function(r) {
     return checkResponse(r);
   }).then(function() {
+    return c.match(new Request(request, {method: "HEAD"}));
+  }).then(function(r) {
+    return checkResponse(r);
+  }).then(function() {
+    return Promise.all(
+      ["POST", "PUT", "DELETE", "OPTIONS"]
+        .map(function(method) {
+          var req = new Request(request, {method: method});
+          return c.match(req)
+            .then(function(r) {
+              is(typeof r, "undefined", "Searching for a request with a non-GET/HEAD method should not succeed");
+              return c.match(req, {ignoreMethod: true});
+            }).then(function(r) {
+              return checkResponse(r);
+            });
+        })
+    );
+  }).then(function() {
     return caches.match(request);
   }).then(function(r) {
     return checkResponse(r);
@@ -84,6 +102,11 @@ function testRequest(request, unknownRequest, requestWithAlternateQueryString,
       }, function(err) {
         is(err.name, "NotFoundError", "Searching in the wrong cache should not succeed");
       });
+  }).then(function() {
+    // Make sure that cacheName is ignored on Cache
+    return c.match(request, {cacheName: name + "mambojambo"});
+  }).then(function(r) {
+    return checkResponse(r);
   }).then(function() {
     return c.match(unknownRequest);
   }).then(function(r) {
@@ -109,5 +132,8 @@ function testRequest(request, unknownRequest, requestWithAlternateQueryString,
     return cache.match(request);
   }).then(function(r) {
     is(typeof r, "undefined", "Searching in the cache after deletion should not succeed");
+    return caches.delete(name);
+  }).then(function(deleted) {
+    ok(deleted, "The cache should be deleted successfully");
   });
 }

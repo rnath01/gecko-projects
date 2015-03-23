@@ -24,7 +24,7 @@ class Headers;
 class InternalHeaders;
 class Promise;
 
-class Response MOZ_FINAL : public nsISupports
+class Response final : public nsISupports
                          , public FetchBody<Response>
                          , public nsWrapperCache
 {
@@ -37,9 +37,9 @@ public:
   Response(const Response& aOther) = delete;
 
   JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override
   {
-    return ResponseBinding::Wrap(aCx, this);
+    return ResponseBinding::Wrap(aCx, this, aGivenProto);
   }
 
   ResponseType

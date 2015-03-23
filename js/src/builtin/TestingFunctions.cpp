@@ -195,6 +195,14 @@ GetBuildConfiguration(JSContext *cx, unsigned argc, jsval *vp)
     if (!JS_SetProperty(cx, info, "mapped-array-buffer", value))
         return false;
 
+#ifdef MOZ_MEMORY
+    value = BooleanValue(true);
+#else
+    value = BooleanValue(false);
+#endif
+    if (!JS_SetProperty(cx, info, "moz-memory", value))
+        return false;
+
     args.rval().setObject(*info);
     return true;
 }
@@ -2273,10 +2281,11 @@ EvalReturningScope(JSContext *cx, unsigned argc, jsval *vp)
     options.setFileAndLine(filename.get(), lineno);
     options.setNoScriptRval(true);
     options.setCompileAndGo(false);
+    options.setHasPollutedScope(true);
 
     JS::SourceBufferHolder srcBuf(src, srclen, JS::SourceBufferHolder::NoOwnership);
     RootedScript script(cx);
-    if (!JS::Compile(cx, JS::NullPtr(), options, srcBuf, &script))
+    if (!JS::Compile(cx, options, srcBuf, &script))
         return false;
 
     if (global) {
@@ -2347,7 +2356,7 @@ ShellCloneAndExecuteScript(JSContext *cx, unsigned argc, Value *vp)
 
     JS::SourceBufferHolder srcBuf(src, srclen, JS::SourceBufferHolder::NoOwnership);
     RootedScript script(cx);
-    if (!JS::Compile(cx, JS::NullPtr(), options, srcBuf, &script))
+    if (!JS::Compile(cx, options, srcBuf, &script))
         return false;
 
     global = CheckedUnwrap(global);
@@ -2362,7 +2371,7 @@ ShellCloneAndExecuteScript(JSContext *cx, unsigned argc, Value *vp)
 
     AutoCompartment ac(cx, global);
 
-    if (!JS::CloneAndExecuteScript(cx, global, script))
+    if (!JS::CloneAndExecuteScript(cx, script))
         return false;
 
     args.rval().setUndefined();
@@ -2413,6 +2422,23 @@ SetImmutablePrototype(JSContext *cx, unsigned argc, Value *vp)
     args.rval().setBoolean(succeeded);
     return true;
 }
+
+#ifdef DEBUG
+static bool
+DumpStringRepresentation(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    RootedString str(cx, ToString(cx, args.get(0)));
+    if (!str)
+        return false;
+
+    str->dumpRepresentation(stderr, 0);
+
+    args.rval().setUndefined();
+    return true;
+}
+#endif
 
 static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("gc", ::GC, 0, 0,
@@ -2789,6 +2815,12 @@ gc::ZealModeHelpText),
 "  immutable (or if it already was immutable), false otherwise.  Throws in case\n"
 "  of internal error, or if the operation doesn't even make sense (for example,\n"
 "  because the object is a revoked proxy)."),
+
+#ifdef DEBUG
+    JS_FN_HELP("dumpStringRepresentation", DumpStringRepresentation, 1, 0,
+"dumpStringRepresentation(str)",
+"  Print a human-readable description of how the string |str| is represented.\n"),
+#endif
 
     JS_FS_HELP_END
 };
