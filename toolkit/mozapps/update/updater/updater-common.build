@@ -4,10 +4,10 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-SOURCES += [
-    '%sarchivereader.cpp' % updater_rel_path,
-    '%sbspatch.cpp' % updater_rel_path,
-    '%supdater.cpp' % updater_rel_path,
+srcs = [
+    'archivereader.cpp',
+    'bspatch.cpp',
+    'updater.cpp',
 ]
 
 have_progressui = 0
@@ -19,10 +19,10 @@ if CONFIG['MOZ_VERIFY_MAR_SIGNATURE']:
 
 if CONFIG['OS_ARCH'] == 'WINNT':
     have_progressui = 1
-    SOURCES += [
-        '%sloaddlls.cpp' % updater_rel_path,
-        '%sprogressui_win.cpp' % updater_rel_path,
-        '%swin_dirent.cpp' % updater_rel_path,
+    srcs += [
+        'loaddlls.cpp',
+        'progressui_win.cpp',
+        'win_dirent.cpp',
     ]
     RCINCLUDE = '%supdater.rc' % updater_rel_path
     DEFINES['UNICODE'] = True
@@ -70,22 +70,22 @@ else:
 
 if CONFIG['MOZ_ENABLE_GTK']:
     have_progressui = 1
-    SOURCES += [
-        '%sprogressui_gtk.cpp' % updater_rel_path,
+    srcs += [
+        'progressui_gtk.cpp',
     ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     have_progressui = 1
-    SOURCES += [
-        '%slaunchchild_osx.mm' % updater_rel_path,
-        '%sprogressui_osx.mm' % updater_rel_path,
+    srcs += [
+        'launchchild_osx.mm',
+        'progressui_osx.mm',
     ]
     OS_LIBS += ['-framework Cocoa -framework Security']
 elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
     have_progressui = 1
-    SOURCES += [
-        '%sautomounter_gonk.cpp' % updater_rel_path,
-        '%sprogressui_gonk.cpp' % updater_rel_path,
+    srcs += [
+        'automounter_gonk.cpp',
+        'progressui_gonk.cpp',
     ]
     DISABLE_STL_WRAPPING = True
     OS_LIBS += [
@@ -94,9 +94,12 @@ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
     ]
 
 if have_progressui == 0:
-    SOURCES += [
-        '%sprogressui_null.cpp' % updater_rel_path,
+    srcs += [
+        'progressui_null.cpp',
     ]
+
+srcs.sort()
+SOURCES += ['%s%s' % (updater_rel_path, f) for f in srcs]
 
 DEFINES['NS_NO_XPCOM'] = True
 DISABLE_STL_WRAPPING = True
