@@ -1282,6 +1282,7 @@ static const char* const gMachineStateStr[] = {
   "NONE",
   "DECODING_METADATA",
   "WAIT_FOR_RESOURCES",
+  "WAIT_FOR_CDM",
   "DECODING_FIRSTFRAME",
   "DORMANT",
   "DECODING",
@@ -1582,13 +1583,19 @@ void MediaDecoderStateMachine::DoNotifyWaitingForResourcesStatusChanged()
 {
   NS_ASSERTION(OnDecodeThread(), "Should be on decode thread.");
   ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
-  if (mState != DECODER_STATE_WAIT_FOR_RESOURCES) {
-    return;
-  }
+
   DECODER_LOG("DoNotifyWaitingForResourcesStatusChanged");
-  // The reader is no longer waiting for resources (say a hardware decoder),
-  // we can now proceed to decode metadata.
-  SetState(DECODER_STATE_DECODING_NONE);
+
+  if (mState == DECODER_STATE_WAIT_FOR_RESOURCES) {
+    // The reader is no longer waiting for resources (say a hardware decoder),
+    // we can now proceed to decode metadata.
+    SetState(DECODER_STATE_DECODING_NONE);
+  } else if (mState == DECODER_STATE_WAIT_FOR_CDM &&
+             !mReader->IsWaitingOnCDMResource()) {
+    SetState(DECODER_STATE_DECODING_FIRSTFRAME);
+    EnqueueDecodeFirstFrameTask();
+  }
+
   ScheduleStateMachine();
 }
 
@@ -2269,6 +2276,13 @@ nsresult MediaDecoderStateMachine::DecodeMetadata()
   }
 
   if (mState == DECODER_STATE_DECODING_METADATA) {
+    if (mReader->IsWaitingOnCDMResource()) {
+      // Metadata parsing was successful but we're still waiting for CDM caps
+      // to become available so that we can build the correct decryptor/decoder.
+      SetState(DECODER_STATE_WAIT_FOR_CDM);
+      return NS_OK;
+    }
+
     SetState(DECODER_STATE_DECODING_FIRSTFRAME);
     res = EnqueueDecodeFirstFrameTask();
     if (NS_FAILED(res)) {
@@ -2518,7 +2532,7 @@ MediaDecoderStateMachine::SeekCompleted()
   // call MediaDecoderStateMachine::Seek to reset our state to SEEKING
   // if we need to seek again.
 
-  bool isLiveStream = mDecoder->GetResource()->GetLength() == -1;
+  bool isLiveStream = mDecoder->GetResource()->IsLiveStream();
   if (mPendingSeek.Exists()) {
     // A new seek target came in while we were processing the old one. No rest
     // for the seeking.
@@ -2678,6 +2692,7 @@ nsresult MediaDecoderStateMachine::RunStateMachine()
       return NS_OK;
     }
 
+    case DECODER_STATE_WAIT_FOR_CDM:
     case DECODER_STATE_WAIT_FOR_RESOURCES: {
       return NS_OK;
     }
@@ -2725,7 +2740,7 @@ nsresult MediaDecoderStateMachine::RunStateMachine()
       // downloaded a reasonable amount of data inside our buffering time.
       if (mReader->UseBufferingHeuristics()) {
         TimeDuration elapsed = now - mBufferingStart;
-        bool isLiveStream = resource->GetLength() == -1;
+        bool isLiveStream = resource->IsLiveStream();
         if ((isLiveStream || !mDecoder->CanPlayThrough()) &&
               elapsed < TimeDuration::FromSeconds(mBufferingWait * mPlaybackRate) &&
               (mQuickBuffering ? HasLowDecodedData(mQuickBufferingLowDataThresholdUsecs)

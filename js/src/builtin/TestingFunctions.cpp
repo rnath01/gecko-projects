@@ -195,6 +195,14 @@ GetBuildConfiguration(JSContext *cx, unsigned argc, jsval *vp)
     if (!JS_SetProperty(cx, info, "mapped-array-buffer", value))
         return false;
 
+#ifdef MOZ_MEMORY
+    value = BooleanValue(true);
+#else
+    value = BooleanValue(false);
+#endif
+    if (!JS_SetProperty(cx, info, "moz-memory", value))
+        return false;
+
     args.rval().setObject(*info);
     return true;
 }
@@ -2273,6 +2281,7 @@ EvalReturningScope(JSContext *cx, unsigned argc, jsval *vp)
     options.setFileAndLine(filename.get(), lineno);
     options.setNoScriptRval(true);
     options.setCompileAndGo(false);
+    options.setHasPollutedScope(true);
 
     JS::SourceBufferHolder srcBuf(src, srclen, JS::SourceBufferHolder::NoOwnership);
     RootedScript script(cx);
@@ -2362,7 +2371,7 @@ ShellCloneAndExecuteScript(JSContext *cx, unsigned argc, Value *vp)
 
     AutoCompartment ac(cx, global);
 
-    if (!JS::CloneAndExecuteScript(cx, global, script))
+    if (!JS::CloneAndExecuteScript(cx, script))
         return false;
 
     args.rval().setUndefined();
@@ -2430,6 +2439,23 @@ DumpStringRepresentation(JSContext *cx, unsigned argc, Value *vp)
     return true;
 }
 #endif
+
+static bool
+SetLazyParsingEnabled(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (argc < 1) {
+        JS_ReportError(cx, "setLazyParsingEnabled: need an argument");
+        return false;
+    }
+
+    bool arg = ToBoolean(args.get(0));
+    JS::CompartmentOptionsRef(cx->compartment()).setDiscardSource(!arg);
+
+    args.rval().setUndefined();
+    return true;
+}
 
 static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("gc", ::GC, 0, 0,
@@ -2812,6 +2838,10 @@ gc::ZealModeHelpText),
 "dumpStringRepresentation(str)",
 "  Print a human-readable description of how the string |str| is represented.\n"),
 #endif
+
+    JS_FN_HELP("setLazyParsingEnabled", SetLazyParsingEnabled, 1, 0,
+"setLazyParsingEnabled(bool)",
+"  Enable or disable lazy parsing in the current compartment.  The default is enabled."),
 
     JS_FS_HELP_END
 };

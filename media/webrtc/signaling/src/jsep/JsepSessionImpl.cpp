@@ -916,8 +916,12 @@ JsepSessionImpl::AddCommonCodecs(const SdpMediaSection& remoteMsection,
   for (auto fmt = formats.begin(); fmt != formats.end(); ++fmt) {
     JsepCodecDescription* codec = FindMatchingCodec(*fmt, remoteMsection);
     if (codec) {
-      codec->mDefaultPt = *fmt; // Reflect the other side's PT
-      codec->AddToMediaSection(*msection);
+      UniquePtr<JsepCodecDescription> negotiated(
+          codec->MakeNegotiatedCodec(*fmt, remoteMsection));
+      if (negotiated) {
+        negotiated->AddToMediaSection(*msection);
+        codec->mDefaultPt = *fmt; // Remember the other side's PT
+      }
       // TODO(bug 1099351): Once bug 1073475 is fixed on all supported
       // versions, we can remove this limitation.
       break;
@@ -1183,6 +1187,11 @@ JsepSessionImpl::CreateAnswerMSection(const JsepAnswerOptions& options,
 
   // Add extmap attributes.
   AddCommonExtmaps(remoteMsection, msection);
+
+  if (!msection->IsReceiving() && !msection->IsSending()) {
+    DisableMsection(sdp, msection);
+    return NS_OK;
+  }
 
   if (msection->GetFormats().empty()) {
     // Could not negotiate anything. Disable m-section.
@@ -1676,14 +1685,25 @@ JsepSessionImpl::NegotiateTrack(const SdpMediaSection& remoteMsection,
 
     bool sending = (direction == JsepTrack::kJsepTrackSending);
 
-    // We need to take the remote side's parameters into account so we can
-    // configure our send media.
-    // |codec| is assumed to have the necessary state about our own config
-    // in order to negotiate.
-    JsepCodecDescription* negotiated =
-        codec->MakeNegotiatedCodec(remoteMsection, *fmt, sending);
+    // Everywhere else in JsepSessionImpl, a JsepCodecDescription describes
+    // what one side puts in its SDP. However, we don't want that here; we want
+    // a JsepCodecDescription that instead encapsulates all the parameters
+    // that deal with sending (or receiving). For sending, some of these
+    // parameters will come from the local codec config (eg; rtcp-fb), others
+    // will come from the remote SDP (eg; max-fps), and still others can only be
+    // determined by inspecting both local config and remote SDP (eg;
+    // profile-level-id when level-asymmetry-allowed is 0).
+    UniquePtr<JsepCodecDescription> sendOrReceiveCodec;
 
-    if (!negotiated) {
+    if (sending) {
+      sendOrReceiveCodec =
+        Move(codec->MakeSendCodec(remoteMsection, *fmt));
+    } else {
+      sendOrReceiveCodec =
+        Move(codec->MakeRecvCodec(remoteMsection, *fmt));
+    }
+
+    if (!sendOrReceiveCodec) {
       continue;
     }
 
@@ -1691,7 +1711,7 @@ JsepSessionImpl::NegotiateTrack(const SdpMediaSection& remoteMsection,
         remoteMsection.GetMediaType() == SdpMediaSection::kVideo) {
       // Sanity-check that payload type can work with RTP
       uint16_t payloadType;
-      if (!negotiated->GetPtAsInt(&payloadType) ||
+      if (!sendOrReceiveCodec->GetPtAsInt(&payloadType) ||
           payloadType > UINT8_MAX) {
         JSEP_SET_ERROR("audio/video payload type is not an 8 bit unsigned int: "
                        << *fmt);
@@ -1699,7 +1719,7 @@ JsepSessionImpl::NegotiateTrack(const SdpMediaSection& remoteMsection,
       }
     }
 
-    negotiatedDetails->mCodecs.push_back(negotiated);
+    negotiatedDetails->mCodecs.push_back(sendOrReceiveCodec.release());
     break;
   }
 
@@ -1870,7 +1890,7 @@ JsepSessionImpl::CopyStickyParams(const SdpMediaSection& source,
         new SdpFlagAttribute(SdpAttribute::kRtcpMuxAttribute));
   }
 
-  // mid must stay the same
+  // mid should stay the same
   if (sourceAttrs.HasAttribute(SdpAttribute::kMidAttribute)) {
     destAttrs.SetAttribute(
         new SdpStringAttribute(SdpAttribute::kMidAttribute,
@@ -2154,7 +2174,8 @@ JsepSessionImpl::ValidateRemoteDescription(const Sdp& description)
   for (size_t i = 0;
        i < mCurrentRemoteDescription->GetMediaSectionCount();
        ++i) {
-    if (MsectionIsDisabled(description.GetMediaSection(i))) {
+    if (MsectionIsDisabled(description.GetMediaSection(i)) ||
+        MsectionIsDisabled(mCurrentRemoteDescription->GetMediaSection(i))) {
       continue;
     }
 
@@ -2163,15 +2184,7 @@ JsepSessionImpl::ValidateRemoteDescription(const Sdp& description)
     const SdpAttributeList& oldAttrs(
         mCurrentRemoteDescription->GetMediaSection(i).GetAttributeList());
 
-    // We have already verified the presence of these attributes in ParseSdp.
-    if (newAttrs.GetMid() != oldAttrs.GetMid()) {
-      JSEP_SET_ERROR("New remote description changes mid for level " << i
-                     << ", was \'" << oldAttrs.GetMid()
-                     << "\" now \'" << newAttrs.GetMid() << "\'");
-      return NS_ERROR_INVALID_ARG;
-    }
-
-    if (oldBundleMids.count(newAttrs.GetMid()) &&
+    if (oldBundleMids.count(oldAttrs.GetMid()) &&
         !newBundleMids.count(newAttrs.GetMid())) {
       JSEP_SET_ERROR("Removing m-sections from a bundle group is unsupported "
                      "at this time.");
@@ -2222,6 +2235,17 @@ JsepSessionImpl::ValidateAnswer(const Sdp& offer, const Sdp& answer)
     if (!offerMsection.IsReceiving() && answerMsection.IsSending()) {
       JSEP_SET_ERROR("Answer tried to set send when offer did not set recv");
       return NS_ERROR_INVALID_ARG;
+    }
+
+    if (!MsectionIsDisabled(answerMsection)) {
+      if (offerMsection.GetAttributeList().GetMid() !=
+          answerMsection.GetAttributeList().GetMid()) {
+        JSEP_SET_ERROR("Answer changes mid for level, was \'"
+                       << offerMsection.GetAttributeList().GetMid()
+                       << "\', now \'"
+                       << answerMsection.GetAttributeList().GetMid() << "\'");
+        return NS_ERROR_INVALID_ARG;
+      }
     }
   }
 
@@ -2688,7 +2712,7 @@ JsepSessionImpl::GetBundleInfo(const Sdp& sdp,
   }
 
   if (!bundleMids->empty()) {
-    if (!bundleMsection) {
+    if (!*bundleMsection) {
       JSEP_SET_ERROR("mid specified for bundle transport in group attribute"
           " does not exist in the SDP. (mid="
           << group->tags[0] << ")");

@@ -176,8 +176,10 @@ UnboxedLayout::makeConstructorCode(JSContext *cx, HandleObjectGroup group)
 
             Register payloadReg = masm.extractObject(valueOperand, scratch1);
 
-            if (!types->hasType(TypeSet::AnyObjectType()))
-                masm.guardObjectType(payloadReg, types, scratch2, &failureStoreObject);
+            if (!types->hasType(TypeSet::AnyObjectType())) {
+                Register scratch = (payloadReg == scratch1) ? scratch2 : scratch1;
+                masm.guardObjectType(payloadReg, types, scratch, &failureStoreObject);
+            }
 
             masm.storeUnboxedProperty(targetAddress, JSVAL_TYPE_OBJECT,
                                       TypedOrValueRegister(MIRType_Object,
@@ -207,7 +209,7 @@ UnboxedLayout::makeConstructorCode(JSContext *cx, HandleObjectGroup group)
     for (GeneralRegisterBackwardIterator iter(savedNonVolatileRegisters); iter.more(); ++iter)
         masm.Pop(*iter);
 
-    masm.ret();
+    masm.abiret();
 
     masm.bind(&failureStoreOther);
 
@@ -241,7 +243,7 @@ UnboxedLayout::makeConstructorCode(JSContext *cx, HandleObjectGroup group)
     masm.jump(&done);
 
     Linker linker(masm);
-    AutoFlushICache afc("RegExp");
+    AutoFlushICache afc("UnboxedObject");
     JitCode *code = linker.newCode<NoGC>(cx, OTHER_CODE);
     if (!code)
         return false;
@@ -700,8 +702,6 @@ UnboxedPlainObject::obj_defineProperty(JSContext *cx, HandleObject obj, HandleId
         return DefineProperty(cx, obj, id, v, getter, setter, attrs);
     }
 
-    // Expandos are currently disabled. FIXME bug 1137180
-#if 0
     // Define the property on the expando object.
     Rooted<UnboxedExpandoObject *> expando(cx, ensureExpando(cx, obj.as<UnboxedPlainObject>()));
     if (!expando)
@@ -711,12 +711,6 @@ UnboxedPlainObject::obj_defineProperty(JSContext *cx, HandleObject obj, HandleId
     AddTypePropertyId(cx, obj, id, v);
 
     return DefineProperty(cx, expando, id, v, getter, setter, attrs, result);
-#else
-    if (!convertToNative(cx, obj))
-        return false;
-
-    return DefineProperty(cx, obj, id, v, getter, setter, attrs, result);
-#endif
 }
 
 /* static */ bool

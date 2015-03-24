@@ -584,7 +584,8 @@ class FunctionExtended : public JSFunction
 };
 
 extern bool
-CloneFunctionObjectUseSameScript(JSCompartment *compartment, HandleFunction fun);
+CloneFunctionObjectUseSameScript(JSCompartment *compartment, HandleFunction fun,
+                                 HandleObject newParent);
 
 extern JSFunction *
 CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent,
@@ -653,7 +654,8 @@ XDRInterpretedFunction(XDRState<mode> *xdr, HandleObject enclosingScope,
                        HandleScript enclosingScript, MutableHandleFunction objp);
 
 extern JSObject *
-CloneFunctionAndScript(JSContext *cx, HandleObject enclosingScope, HandleFunction fun);
+CloneFunctionAndScript(JSContext *cx, HandleObject enclosingScope, HandleFunction fun,
+                       PollutedGlobalScopeOption polluted);
 
 /*
  * Report an error that call.thisv is not compatible with the specified class,
