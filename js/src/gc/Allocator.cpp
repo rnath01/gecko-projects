@@ -93,10 +93,6 @@ GCRuntime::checkIncrementalZoneState(ExclusiveContext *cx, T *t)
 #endif
 }
 
-// Allocate a new GC thing. After a successful allocation the caller must
-// fully initialize the thing before calling any function that can potentially
-// trigger GC. This will ensure that GC tracing never sees junk values stored
-// in the partially initialized thing.
 template <typename T, AllowGC allowGC /* = CanGC */>
 JSObject *
 js::Allocate(ExclusiveContext *cx, AllocKind kind, size_t nDynamicSlots, InitialHeap heap,
@@ -165,20 +161,6 @@ GCRuntime::tryNewNurseryObject(JSContext *cx, size_t thingSize, size_t nDynamicS
         }
     }
     return nullptr;
-}
-
-typedef mozilla::UniquePtr<HeapSlot, JS::FreePolicy> UniqueSlots;
-
-static inline UniqueSlots
-MakeSlotArray(ExclusiveContext *cx, size_t count)
-{
-    HeapSlot *slots = nullptr;
-    if (count) {
-        slots = cx->zone()->pod_malloc<HeapSlot>(count);
-        if (slots)
-            Debug_SetSlotRangeToCrashOnTouch(slots, count);
-    }
-    return UniqueSlots(slots);
 }
 
 template <AllowGC allowGC>

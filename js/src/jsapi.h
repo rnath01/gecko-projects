@@ -1724,9 +1724,6 @@ JS_AddFinalizeCallback(JSRuntime *rt, JSFinalizeCallback cb, void *data);
 extern JS_PUBLIC_API(void)
 JS_RemoveFinalizeCallback(JSRuntime *rt, JSFinalizeCallback cb);
 
-extern JS_PUBLIC_API(bool)
-JS_IsGCMarkingTracer(JSTracer *trc);
-
 /*
  * Weak pointers and garbage collection
  *
@@ -5256,7 +5253,6 @@ GetSavedFrameParent(JSContext *cx, HandleObject savedFrame, MutableHandleObject 
  */
 extern JS_PUBLIC_API(bool)
 StringifySavedFrameStack(JSContext *cx, HandleObject stack, MutableHandleString stringp);
-
 
 } /* namespace JS */
 
