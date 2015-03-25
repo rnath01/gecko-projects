@@ -8,6 +8,7 @@ ac_add_options --with-mozilla-api-keyfile=/builds/mozilla-desktop-geoloc-api.key
 
 MOZ_AUTOMATION_UPLOAD_SYMBOLS=1
 MOZ_AUTOMATION_UPDATE_PACKAGING=1
+MOZ_AUTOMATION_SDK=1
 
 . $topsrcdir/build/unix/mozconfig.linux32
 

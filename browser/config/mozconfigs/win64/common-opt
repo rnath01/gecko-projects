@@ -8,6 +8,7 @@ ac_add_options --enable-jemalloc
 
 MOZ_AUTOMATION_UPLOAD_SYMBOLS=1
 MOZ_AUTOMATION_UPDATE_PACKAGING=1
+MOZ_AUTOMATION_SDK=1
 
 if [ -f /c/builds/gapi.data ]; then
   _gapi_keyfile=/c/builds/gapi.data
