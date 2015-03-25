@@ -782,12 +782,11 @@ struct JSCountHeapNode {
 
 typedef HashSet<void *, PointerHasher<void *, 3>, SystemAllocPolicy> VisitedSet;
 
-class CountHeapTracer
+class CountHeapTracer : public JS::CallbackTracer
 {
   public:
-    CountHeapTracer(JSRuntime *rt, JSTraceCallback callback) : base(rt, callback) {}
+    CountHeapTracer(JSRuntime *rt, JSTraceCallback callback) : CallbackTracer(rt, callback) {}
 
-    JSTracer            base;
     VisitedSet          visited;
     JSCountHeapNode     *traceList;
     JSCountHeapNode     *recycleList;
@@ -795,10 +794,8 @@ class CountHeapTracer
 };
 
 static void
-CountHeapNotify(JSTracer *trc, void **thingp, JSGCTraceKind kind)
+CountHeapNotify(JS::CallbackTracer *trc, void **thingp, JSGCTraceKind kind)
 {
-    MOZ_ASSERT(trc->callback == CountHeapNotify);
-
     CountHeapTracer *countTracer = (CountHeapTracer *)trc;
     void *thing = *thingp;
 
@@ -906,9 +903,9 @@ CountHeap(JSContext *cx, unsigned argc, jsval *vp)
     countTracer.recycleList = nullptr;
 
     if (startValue.isUndefined()) {
-        JS_TraceRuntime(&countTracer.base);
+        JS_TraceRuntime(&countTracer);
     } else {
-        JS_CallUnbarrieredValueTracer(&countTracer.base, startValue.address(), "root");
+        JS_CallUnbarrieredValueTracer(&countTracer, startValue.address(), "root");
     }
 
     JSCountHeapNode *node;
@@ -926,7 +923,7 @@ CountHeap(JSContext *cx, unsigned argc, jsval *vp)
         countTracer.traceList = node->next;
         node->next = countTracer.recycleList;
         countTracer.recycleList = node;
-        JS_TraceChildren(&countTracer.base, node->thing, node->kind);
+        JS_TraceChildren(&countTracer, node->thing, node->kind);
     }
     while ((node = countTracer.recycleList) != nullptr) {
         countTracer.recycleList = node->next;
@@ -1491,6 +1488,63 @@ js::testingFunc_bailout(JSContext *cx, unsigned argc, jsval *vp)
 
     // NOP when not in IonMonkey
     args.rval().setUndefined();
+    return true;
+}
+
+bool
+js::testingFunc_inJit(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (!IsBaselineEnabled(cx)) {
+        JSString *error = JS_NewStringCopyZ(cx, "Baseline is disabled.");
+        if(!error)
+            return false;
+
+        args.rval().setString(error);
+        return true;
+    }
+
+    JSScript *script = cx->currentScript();
+    if (script && script->getWarmUpResetCount() >= 20) {
+        JSString *error = JS_NewStringCopyZ(cx, "Compilation is being repeatedly prevented. Giving up.");
+        if (!error)
+            return false;
+
+        args.rval().setString(error);
+        return true;
+    }
+
+    args.rval().setBoolean(cx->currentlyRunningInJit());
+    return true;
+}
+
+bool
+js::testingFunc_inIon(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (!IsIonEnabled(cx)) {
+        JSString *error = JS_NewStringCopyZ(cx, "Ion is disabled.");
+        if (!error)
+            return false;
+
+        args.rval().setString(error);
+        return true;
+    }
+
+    JSScript *script = cx->currentScript();
+    if (script && script->getWarmUpResetCount() >= 20) {
+        JSString *error = JS_NewStringCopyZ(cx, "Compilation is being repeatedly prevented. Giving up.");
+        if (!error)
+            return false;
+
+        args.rval().setString(error);
+        return true;
+    }
+
+    // false when not in ionMonkey
+    args.rval().setBoolean(false);
     return true;
 }
 
@@ -2440,6 +2494,23 @@ DumpStringRepresentation(JSContext *cx, unsigned argc, Value *vp)
 }
 #endif
 
+static bool
+SetLazyParsingEnabled(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (argc < 1) {
+        JS_ReportError(cx, "setLazyParsingEnabled: need an argument");
+        return false;
+    }
+
+    bool arg = ToBoolean(args.get(0));
+    JS::CompartmentOptionsRef(cx->compartment()).setDiscardSource(!arg);
+
+    args.rval().setUndefined();
+    return true;
+}
+
 static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("gc", ::GC, 0, 0,
 "gc([obj] | 'compartment' [, 'shrinking'])",
@@ -2699,6 +2770,20 @@ gc::ZealModeHelpText),
 "bailout()",
 "  Force a bailout out of ionmonkey (if running in ionmonkey)."),
 
+    JS_FN_HELP("inJit", testingFunc_inJit, 0, 0,
+"inJit()",
+"  Returns true when called within (jit-)compiled code. When jit compilation is disabled this\n"
+"  function returns an error string. This function returns false in all other cases.\n"
+"  Depending on truthiness, you should continue to wait for compilation to happen or stop execution.\n"),
+
+    JS_FN_HELP("inIon", testingFunc_inIon, 0, 0,
+"inIon()",
+"  Returns true when called within ion. When ion is disabled or when compilation is abnormally\n"
+"  slow to start, this function returns an error string. Otherwise, this function returns false.\n"
+"  This behaviour ensures that a falsy value means that we are not in ion, but expect a\n"
+"  compilation to occur in the future. Conversely, a truthy value means that we are either in\n"
+"  ion or that there is litle or no chance of ion ever compiling the current script."),
+
     JS_FN_HELP("assertJitStackInvariants", TestingFunc_assertJitStackInvariants, 0, 0,
 "assertJitStackInvariants()",
 "  Iterates the Jit stack and check that stack invariants hold."),
@@ -2821,6 +2906,10 @@ gc::ZealModeHelpText),
 "dumpStringRepresentation(str)",
 "  Print a human-readable description of how the string |str| is represented.\n"),
 #endif
+
+    JS_FN_HELP("setLazyParsingEnabled", SetLazyParsingEnabled, 1, 0,
+"setLazyParsingEnabled(bool)",
+"  Enable or disable lazy parsing in the current compartment.  The default is enabled."),
 
     JS_FS_HELP_END
 };

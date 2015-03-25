@@ -643,7 +643,8 @@ template bool
 js::XDRInterpretedFunction(XDRState<XDR_DECODE> *, HandleObject, HandleScript, MutableHandleFunction);
 
 JSObject *
-js::CloneFunctionAndScript(JSContext *cx, HandleObject enclosingScope, HandleFunction srcFun)
+js::CloneFunctionAndScript(JSContext *cx, HandleObject enclosingScope, HandleFunction srcFun,
+                           PollutedGlobalScopeOption polluted)
 {
     /* NB: Keep this in sync with XDRInterpretedFunction. */
     RootedObject cloneProto(cx);
@@ -665,7 +666,7 @@ js::CloneFunctionAndScript(JSContext *cx, HandleObject enclosingScope, HandleFun
     RootedScript srcScript(cx, srcFun->getOrCreateScript(cx));
     if (!srcScript)
         return nullptr;
-    RootedScript clonedScript(cx, CloneScript(cx, enclosingScope, clone, srcScript));
+    RootedScript clonedScript(cx, CloneScript(cx, enclosingScope, clone, srcScript, polluted));
     if (!clonedScript)
         return nullptr;
 
@@ -744,7 +745,7 @@ JSFunction::trace(JSTracer *trc)
             // self-hosted function which can be cloned over again. The latter
             // is stored in the first extended slot.
             JSRuntime *rt = trc->runtime();
-            if (IsMarkingTracer(trc) &&
+            if (trc->isMarkingTracer() &&
                 (rt->allowRelazificationForTesting || !compartment()->hasBeenEntered()) &&
                 !compartment()->isDebuggee() && !compartment()->isSelfHosting &&
                 u.i.s.script_->isRelazifiable() && (!isSelfHostedBuiltin() || isExtended()))

@@ -161,6 +161,7 @@ let RLSidebar = {
     } else {
       thumb.style.removeProperty("background-image");
     }
+    thumb.classList.toggle("preview-available", !!item.preview);
   },
 
   /**
@@ -200,7 +201,7 @@ let RLSidebar = {
       return;
     }
 
-    log.debug(`Setting activeItem: ${node ? node.id : null}`);
+    log.trace(`Setting activeItem: ${node ? node.id : null}`);
 
     if (node && node.classList.contains("active")) {
       return;
@@ -233,7 +234,7 @@ let RLSidebar = {
       return;
     }
 
-    log.debug(`Setting activeItem: ${node ? node.id : null}`);
+    log.trace(`Setting selectedItem: ${node ? node.id : null}`);
 
     let prevItem = document.querySelector("#list > .item.selected");
     if (prevItem) {
@@ -270,7 +271,7 @@ let RLSidebar = {
   },
 
   set selectedIndex(index) {
-    log.debug(`Setting selectedIndex: ${index}`);
+    log.trace(`Setting selectedIndex: ${index}`);
 
     if (index == -1) {
       this.selectedItem = null;
@@ -300,6 +301,11 @@ let RLSidebar = {
                            .rootTreeItem
                            .QueryInterface(Ci.nsIInterfaceRequestor)
                            .getInterface(Ci.nsIDOMWindow);
+
+    let currentUrl = mainWindow.gBrowser.currentURI.spec;
+    if (currentUrl.startsWith("about:reader"))
+      url = "about:reader?url=" + encodeURIComponent(url);
+
     mainWindow.openUILink(url, event);
   },
 
@@ -401,6 +407,10 @@ let RLSidebar = {
       // TODO: Refactor this so we pass a direction to a generic method.
       // See autocomplete.xml's getNextIndex
       event.preventDefault();
+
+      if (!this.numItems) {
+        return;
+      }
       let index = this.selectedIndex + 1;
       if (index >= this.numItems) {
         index = 0;
@@ -411,6 +421,9 @@ let RLSidebar = {
     } else if (event.keyCode == KeyEvent.DOM_VK_UP) {
       event.preventDefault();
 
+      if (!this.numItems) {
+        return;
+      }
       let index = this.selectedIndex - 1;
       if (index < 0) {
         index = this.numItems - 1;
@@ -421,7 +434,7 @@ let RLSidebar = {
     } else if (event.keyCode == KeyEvent.DOM_VK_RETURN) {
       let selectedItem = this.selectedItem;
       if (selectedItem) {
-        this.activeItem = this.selectedItem;
+        this.activeItem = selectedItem;
         this.openActiveItem(event);
       }
     }

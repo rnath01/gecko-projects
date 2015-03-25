@@ -1415,12 +1415,6 @@ JS_RemoveExtraGCRootsTracer(JSRuntime *rt, JSTraceDataOp traceOp, void *data)
     return rt->gc.removeBlackRootsTracer(traceOp, data);
 }
 
-extern JS_PUBLIC_API(bool)
-JS_IsGCMarkingTracer(JSTracer *trc)
-{
-    return js::IsMarkingTracer(trc);
-}
-
 JS_PUBLIC_API(void)
 JS_GC(JSRuntime *rt)
 {
@@ -2205,10 +2199,12 @@ DefinePropertyById(JSContext *cx, HandleObject obj, HandleId id, HandleValue val
     // it's just a plain old data property. However the JS_Define* APIs use
     // null getter and setter to mean "default to the Class getProperty and
     // setProperty ops".
-    if (!getter)
-        getter = obj->getClass()->getProperty;
-    if (!setter)
-        setter = obj->getClass()->setProperty;
+    if (!(attrs & (JSPROP_GETTER | JSPROP_SETTER))) {
+        if (!getter)
+            getter = obj->getClass()->getProperty;
+        if (!setter)
+            setter = obj->getClass()->setProperty;
+    }
     if (getter == JS_PropertyStub)
         getter = nullptr;
     if (setter == JS_StrictPropertyStub)
