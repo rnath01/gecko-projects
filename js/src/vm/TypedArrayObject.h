@@ -215,6 +215,7 @@ class TypedArrayObject : public NativeObject
     static bool is(HandleValue v);
 
     static bool set(JSContext *cx, unsigned argc, Value *vp);
+    static bool subarray(JSContext *cx, unsigned argc, Value *vp);
 };
 
 inline bool
