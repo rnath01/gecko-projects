@@ -325,6 +325,7 @@ RasterImage::Init(const char* aMimeType,
 
   // Lock this image's surfaces in the SurfaceCache if we're not discardable.
   if (!mDiscardable) {
+    mLockCount++;
     SurfaceCache::LockImage(ImageKey(this));
   }
 
@@ -1467,13 +1468,6 @@ RasterImage::RequestDecodeForSize(const nsIntSize& aSize, uint32_t aFlags)
   LookupFrame(0, targetSize, flags);
 
   return NS_OK;
-}
-
-bool
-RasterImage::IsDecoded()
-{
-  // XXX(seth): We need to get rid of this; it's not reliable.
-  return mHasBeenDecoded || mError || (mDecodeOnDraw && mHasSourceData);
 }
 
 NS_IMETHODIMP

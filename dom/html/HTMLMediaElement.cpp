@@ -1166,6 +1166,14 @@ nsresult HTMLMediaElement::LoadResource()
   // Set the media element's CORS mode only when loading a resource
   mCORSMode = AttrValueToCORSMode(GetParsedAttr(nsGkAtoms::crossorigin));
 
+#ifdef MOZ_EME
+  if (mMediaKeys &&
+      !IsMediaStreamURI(mLoadingSrc) &&
+      Preferences::GetBool("media.eme.mse-only", true)) {
+    return NS_ERROR_DOM_NOT_SUPPORTED_ERR;
+  }
+#endif
+
   HTMLMediaElement* other = LookupMediaElementURITable(mLoadingSrc);
   if (other && other->mDecoder) {
     // Clone it.
@@ -2069,11 +2077,11 @@ HTMLMediaElement::HTMLMediaElement(already_AddRefed<mozilla::dom::NodeInfo>& aNo
     mCORSMode(CORS_NONE),
     mHasAudio(false),
     mHasVideo(false),
+    mIsEncrypted(false),
     mDownloadSuspendedByCache(false),
     mAudioChannelFaded(false),
     mPlayingThroughTheAudioChannel(false),
     mDisableVideo(false),
-    mWaitingFor(MediaWaitingFor::None),
     mElementInTreeState(ELEMENT_NOT_INTREE)
 {
 #ifdef PR_LOGGING
@@ -3024,6 +3032,7 @@ void HTMLMediaElement::MetadataLoaded(const MediaInfo* aInfo,
 {
   mHasAudio = aInfo->HasAudio();
   mHasVideo = aInfo->HasVideo();
+  mIsEncrypted = aInfo->mIsEncrypted;
   mTags = aTags.forget();
   mLoadedDataFired = false;
   ChangeReadyState(nsIDOMHTMLMediaElement::HAVE_METADATA);
@@ -3254,7 +3263,7 @@ void HTMLMediaElement::CheckProgress(bool aHaveNewProgress)
   if (now - mDataTime >= TimeDuration::FromMilliseconds(STALL_MS)) {
     DispatchAsyncEvent(NS_LITERAL_STRING("stalled"));
 
-    if (IsMediaSourceURI(mLoadingSrc)) {
+    if (mLoadingSrc && IsMediaSourceURI(mLoadingSrc)) {
       ChangeDelayLoadStatus(false);
     }
 
@@ -3319,6 +3328,15 @@ void HTMLMediaElement::DownloadProgressed()
 bool HTMLMediaElement::ShouldCheckAllowOrigin()
 {
   return mCORSMode != CORS_NONE;
+}
+
+bool HTMLMediaElement::IsCORSSameOrigin()
+{
+  bool subsumes;
+  nsRefPtr<nsIPrincipal> principal = GetCurrentPrincipal();
+  return
+    (NS_SUCCEEDED(NodePrincipal()->Subsumes(principal, &subsumes)) && subsumes) ||
+    ShouldCheckAllowOrigin();
 }
 
 void HTMLMediaElement::UpdateReadyStateForData(MediaDecoderOwner::NextFrameStatus aNextFrame)
@@ -3666,22 +3684,13 @@ void HTMLMediaElement::NotifyDecoderPrincipalChanged()
 {
   nsRefPtr<nsIPrincipal> principal = GetCurrentPrincipal();
 
-  bool subsumes;
-  mDecoder->UpdateSameOriginStatus(
-    !principal ||
-    (NS_SUCCEEDED(NodePrincipal()->Subsumes(principal, &subsumes)) && subsumes) ||
-    mCORSMode != CORS_NONE);
+  mDecoder->UpdateSameOriginStatus(!principal || IsCORSSameOrigin());
 
   for (uint32_t i = 0; i < mOutputStreams.Length(); ++i) {
     OutputMediaStream* ms = &mOutputStreams[i];
     ms->mStream->SetCORSMode(mCORSMode);
     ms->mStream->CombineWithPrincipal(principal);
   }
-#ifdef MOZ_EME
-  if (mMediaKeys && NS_FAILED(mMediaKeys->CheckPrincipals())) {
-    mMediaKeys->Shutdown();
-  }
-#endif
 }
 
 void HTMLMediaElement::UpdateMediaSize(nsIntSize size)
@@ -4324,6 +4333,13 @@ HTMLMediaElement::SetMediaKeys(mozilla::dom::MediaKeys* aMediaKeys,
     mMediaKeys->Shutdown();
     mMediaKeys = nullptr;
   }
+  if (mDecoder &&
+      !mMediaSource &&
+      Preferences::GetBool("media.eme.mse-only", true)) {
+    ShutdownDecoder();
+    promise->MaybeReject(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+    return promise.forget();
+  }
 
   mMediaKeys = aMediaKeys;
   if (mMediaKeys) {
@@ -4335,17 +4351,9 @@ HTMLMediaElement::SetMediaKeys(mozilla::dom::MediaKeys* aMediaKeys,
     if (mDecoder) {
       mDecoder->SetCDMProxy(mMediaKeys->GetCDMProxy());
     }
-    // Update the same-origin status.
-    NotifyDecoderPrincipalChanged();
   }
   promise->MaybeResolve(JS::UndefinedHandleValue);
   return promise.forget();
-}
-
-MediaWaitingFor
-HTMLMediaElement::WaitingFor() const
-{
-  return mWaitingFor;
 }
 
 EventHandlerNonNull*
@@ -4369,8 +4377,13 @@ void
 HTMLMediaElement::DispatchEncrypted(const nsTArray<uint8_t>& aInitData,
                                     const nsAString& aInitDataType)
 {
-  nsRefPtr<MediaEncryptedEvent> event(
-    MediaEncryptedEvent::Constructor(this, aInitDataType, aInitData));
+  nsRefPtr<MediaEncryptedEvent> event;
+  if (IsCORSSameOrigin()) {
+    event = MediaEncryptedEvent::Constructor(this, aInitDataType, aInitData);
+  } else {
+    event = MediaEncryptedEvent::Constructor(this);
+  }
+
   nsRefPtr<AsyncEventDispatcher> asyncDispatcher =
     new AsyncEventDispatcher(this, event);
   asyncDispatcher->PostDOMEvent();

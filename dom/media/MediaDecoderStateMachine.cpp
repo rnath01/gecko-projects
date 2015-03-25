@@ -244,6 +244,8 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
   mCancelingSeek(false),
   mCurrentTimeBeforeSeek(0),
   mLastFrameStatus(MediaDecoderOwner::NEXT_FRAME_UNINITIALIZED),
+  mCorruptFrames(30),
+  mDisabledHardwareAcceleration(false),
   mDecodingFrozenAtStateDecoding(false),
   mSentLoadedMetadataEvent(false),
   mSentFirstFrameLoadedEvent(false)
@@ -262,7 +264,7 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
                                  MIN_VIDEO_QUEUE_SIZE);
   }
 
-  mBufferingWait = IsRealTime() ? 0 : 30;
+  mBufferingWait = IsRealTime() ? 0 : 15;
   mLowDataThresholdUsecs = IsRealTime() ? 0 : detail::LOW_DATA_THRESHOLD_USECS;
 
 #ifdef XP_WIN
@@ -832,6 +834,10 @@ MediaDecoderStateMachine::OnNotDecoded(MediaData::Type aType,
     mAudioDataRequest.Complete();
   } else {
     mVideoDataRequest.Complete();
+  }
+  if (IsShutdown()) {
+    // Already shutdown;
+    return;
   }
 
   // If this is a decode error, delegate to the generic error path.
@@ -1912,6 +1918,10 @@ MediaDecoderStateMachine::DispatchAudioDecodeTaskIfNeeded()
   NS_ASSERTION(OnStateMachineThread() || OnDecodeThread(),
                "Should be on state machine or decode thread.");
 
+  if (IsShutdown()) {
+    return NS_ERROR_FAILURE;
+  }
+
   if (NeedToDecodeAudio()) {
     return EnsureAudioDecodeTaskQueued();
   }
@@ -1959,6 +1969,10 @@ MediaDecoderStateMachine::DispatchVideoDecodeTaskIfNeeded()
   ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
   NS_ASSERTION(OnStateMachineThread() || OnDecodeThread(),
                "Should be on state machine or decode thread.");
+
+  if (IsShutdown()) {
+    return NS_ERROR_FAILURE;
+  }
 
   if (NeedToDecodeVideo()) {
     return EnsureVideoDecodeTaskQueued();
@@ -2070,6 +2084,13 @@ bool MediaDecoderStateMachine::HasLowDecodedData(int64_t aAudioUsecs)
   return ((IsAudioDecoding() && AudioDecodedUsecs() < aAudioUsecs) ||
          (IsVideoDecoding() &&
           static_cast<uint32_t>(VideoQueue().GetSize()) < LOW_VIDEO_FRAMES));
+}
+
+bool MediaDecoderStateMachine::OutOfDecodedAudio()
+{
+    return IsAudioDecoding() && !AudioQueue().IsFinished() &&
+           AudioQueue().GetSize() == 0 &&
+           (!mAudioSink || !mAudioSink->HasUnplayedFrames());
 }
 
 bool MediaDecoderStateMachine::HasLowUndecodedData()
@@ -2984,6 +3005,22 @@ void MediaDecoderStateMachine::RenderVideoFrame(VideoData* aData,
 
   VideoFrameContainer* container = mDecoder->GetVideoFrameContainer();
   if (container) {
+    if (aData->mImage && !aData->mImage->IsValid()) {
+      MediaDecoder::FrameStatistics& frameStats = mDecoder->GetFrameStatistics();
+      frameStats.NotifyCorruptFrame();
+      // If more than 10% of the last 30 frames have been corrupted, then try disabling
+      // hardware acceleration. We use 10 as the corrupt value because RollingMean<>
+      // only supports integer types.
+      mCorruptFrames.insert(10);
+      if (!mDisabledHardwareAcceleration &&
+          frameStats.GetPresentedFrames() > 30 &&
+          mCorruptFrames.mean() >= 1 /* 10% */) {
+        DecodeTaskQueue()->Dispatch(NS_NewRunnableMethod(mReader, &MediaDecoderReader::DisableHardwareAcceleration));
+        mDisabledHardwareAcceleration = true;
+      }
+    } else {
+      mCorruptFrames.insert(0);
+    }
     container->SetCurrentFrame(ThebesIntSize(aData->mDisplay), aData->mImage,
                                aTarget);
     MOZ_ASSERT(container->GetFrameDelay() >= 0 || IsRealTime());
@@ -3089,12 +3126,13 @@ void MediaDecoderStateMachine::AdvanceFrame()
 #endif
     while (IsRealTime() || clock_time >= frame->mTime) {
       mVideoFrameEndTime = frame->GetEndTime();
-#ifdef PR_LOGGING
       if (currentFrame) {
+        mDecoder->NotifyDecodedFrames(0, 0, 1);
+#ifdef PR_LOGGING
         VERBOSE_LOG("discarding video frame mTime=%lld clock_time=%lld (%d so far)",
                     currentFrame->mTime, clock_time, ++droppedFrames);
-      }
 #endif
+      }
       currentFrame = frame;
       nsRefPtr<VideoData> releaseMe = VideoQueue().PopFront();
       // Notify the decode thread that the video queue's buffers may have

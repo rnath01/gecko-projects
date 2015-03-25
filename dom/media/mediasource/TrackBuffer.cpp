@@ -639,6 +639,10 @@ TrackBuffer::InitializeDecoder(SourceBufferDecoder* aDecoder)
     MSE_DEBUG("was shut down while reading metadata. Aborting initialization.");
     return;
   }
+  if (mCurrentDecoder != aDecoder) {
+    MSE_DEBUG("append was cancelled. Aborting initialization.");
+    return;
+  }
 
   if (NS_SUCCEEDED(rv) && reader->IsWaitingOnCDMResource()) {
     mWaitingDecoders.AppendElement(aDecoder);
@@ -836,14 +840,6 @@ TrackBuffer::BreakCycles()
 }
 
 void
-TrackBuffer::ResetDecode()
-{
-  for (uint32_t i = 0; i < mDecoders.Length(); ++i) {
-    mDecoders[i]->GetReader()->ResetDecode();
-  }
-}
-
-void
 TrackBuffer::ResetParserState()
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -1005,10 +1001,10 @@ TrackBuffer::RangeRemoval(int64_t aStart, int64_t aEnd)
     for (size_t i = 0; i < decoders.Length(); ++i) {
       nsRefPtr<dom::TimeRanges> buffered = new dom::TimeRanges();
       decoders[i]->GetBuffered(buffered);
-      if (buffered->GetEndTime() < aEnd) {
+      if (int64_t(buffered->GetEndTime() * USECS_PER_S) < aEnd) {
         // Can be fully removed.
-        MSE_DEBUG("remove all bufferedEnd=%f time=%f, size=%lld",
-                  buffered->GetEndTime(), time,
+        MSE_DEBUG("remove all bufferedEnd=%f size=%lld",
+                  buffered->GetEndTime(),
                   decoders[i]->GetResource()->GetSize());
         decoders[i]->GetResource()->EvictAll();
       } else {
@@ -1024,7 +1020,7 @@ TrackBuffer::RangeRemoval(int64_t aStart, int64_t aEnd)
   } else {
     // Only trimming existing buffers.
     for (size_t i = 0; i < decoders.Length(); ++i) {
-      if (aStart <= buffered->GetStartTime()) {
+      if (aStart <= int64_t(buffered->GetStartTime() * USECS_PER_S)) {
         // It will be entirely emptied, can clear all data.
         decoders[i]->GetResource()->EvictAll();
       } else {

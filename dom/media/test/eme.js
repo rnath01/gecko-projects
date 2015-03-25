@@ -118,8 +118,22 @@ function UpdateSessionFunc(test, token, sessionType, resolve, reject) {
   }
 }
 
+function MaybeCrossOriginURI(test, uri)
+{
+  if (test.crossOrigin) {
+    return "http://test2.mochi.test:8888/tests/dom/media/test/allowed.sjs?" + uri;
+  } else {
+    return uri;
+  }
+}
+
 function PlayFragmented(test, elem, token)
 {
+  if (!test.fragments) {
+    ok(false, token + " test does not have a fragments list");
+    return Promise.reject();
+  }
+
   return new Promise(function(resolve, reject) {
     var ms = new MediaSource();
     elem.src = URL.createObjectURL(ms);
@@ -144,7 +158,7 @@ function PlayFragmented(test, elem, token)
         return;
       }
 
-      var fragmentFile = test.fragments[curFragment++];
+      var fragmentFile = MaybeCrossOriginURI(test, test.fragments[curFragment++]);
 
       var req = new XMLHttpRequest();
       req.open("GET", fragmentFile);
@@ -172,25 +186,10 @@ function PlayFragmented(test, elem, token)
   });
 }
 
-// Returns a promise that is resovled when the media element is ready to have
-// its play() function called; when it's loaded MSE fragments, or once the load
-// has started for non-MSE video.
-function LoadTest(test, elem, token)
-{
-  if (test.fragments) {
-    return PlayFragmented(test, elem, token);
-  }
-
-  // This file isn't fragmented; set the media source normally.
-  return new Promise(function(resolve, reject) {
-    elem.src = test.name;
-    resolve();
-  });
-}
-
 function SetupEME(test, token, params)
 {
   var v = document.createElement("video");
+  v.crossOrigin = test.crossOrigin || false;
 
   // Log events dispatched to make debugging easier...
   [ "canplay", "canplaythrough", "ended", "error", "loadeddata",
@@ -201,6 +200,9 @@ function SetupEME(test, token, params)
       Log(token, "" + e);
     }, false);
   });
+
+  // Finish the test when error is encountered.
+  v.onerror = bail(token + " got error event");
 
   var onSetKeysFail = (params && params.onSetKeysFail)
     ? params.onSetKeysFail
