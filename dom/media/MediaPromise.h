@@ -9,6 +9,8 @@
 
 #include "prlog.h"
 
+#include "AbstractThread.h"
+
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
 
@@ -23,7 +25,6 @@
 #define __func__ __FUNCTION__
 #endif
 
-class nsIEventTarget;
 namespace mozilla {
 
 extern PRLogModuleInfo* gMediaPromiseLog;
@@ -31,19 +32,6 @@ extern PRLogModuleInfo* gMediaPromiseLog;
 #define PROMISE_LOG(x, ...) \
   MOZ_ASSERT(gMediaPromiseLog); \
   PR_LOG(gMediaPromiseLog, PR_LOG_DEBUG, (x, ##__VA_ARGS__))
-
-class MediaTaskQueue;
-namespace detail {
-
-nsresult DispatchMediaPromiseRunnable(MediaTaskQueue* aQueue, nsIRunnable* aRunnable);
-nsresult DispatchMediaPromiseRunnable(nsIEventTarget* aTarget, nsIRunnable* aRunnable);
-
-#ifdef DEBUG
-void AssertOnThread(MediaTaskQueue* aQueue);
-void AssertOnThread(nsIEventTarget* aTarget);
-#endif
-
-} // namespace detail
 
 /*
  * A promise manages an asynchronous request that may or may not be able to be
@@ -218,12 +206,11 @@ protected:
       ((*aThisVal).*aMethod)();
   }
 
-  template<typename TargetType, typename ThisType,
-           typename ResolveMethodType, typename RejectMethodType>
+  template<typename ThisType, typename ResolveMethodType, typename RejectMethodType>
   class ThenValue : public ThenValueBase
   {
   public:
-    ThenValue(TargetType* aResponseTarget, ThisType* aThisVal,
+    ThenValue(AbstractThread* aResponseTarget, ThisType* aThisVal,
               ResolveMethodType aResolveMethod, RejectMethodType aRejectMethod,
               const char* aCallSite)
       : ThenValueBase(aCallSite)
@@ -232,7 +219,7 @@ protected:
       , mResolveMethod(aResolveMethod)
       , mRejectMethod(aRejectMethod) {}
 
-    void Dispatch(MediaPromise *aPromise) MOZ_OVERRIDE
+    void Dispatch(MediaPromise *aPromise) override
     {
       aPromise->mMutex.AssertCurrentThreadOwns();
       MOZ_ASSERT(!aPromise->IsPending());
@@ -243,8 +230,7 @@ protected:
       PROMISE_LOG("%s Then() call made from %s [Runnable=%p, Promise=%p, ThenValue=%p]",
                   resolved ? "Resolving" : "Rejecting", ThenValueBase::mCallSite,
                   runnable.get(), aPromise, this);
-      nsresult rv = detail::DispatchMediaPromiseRunnable(mResponseTarget, runnable);
-      unused << rv;
+      nsresult rv = mResponseTarget->Dispatch(runnable.forget());
 
       // NB: mDisconnected is only supposed to be accessed on the dispatch
       // thread. However, we require the consumer to have disconnected any
@@ -253,18 +239,19 @@ protected:
       // failing involves the target thread being unable to manipulate the
       // ThenValue (since it's been disconnected), so it's safe to read here.
       MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv) || Consumer::mDisconnected);
+      unused << rv;
     }
 
 #ifdef DEBUG
   void AssertOnDispatchThread()
   {
-    detail::AssertOnThread(mResponseTarget);
+    MOZ_ASSERT(mResponseTarget->IsCurrentThreadIn());
   }
 #else
   void AssertOnDispatchThread() {}
 #endif
 
-  virtual void Disconnect() MOZ_OVERRIDE
+  virtual void Disconnect() override
   {
     AssertOnDispatchThread();
     MOZ_DIAGNOSTIC_ASSERT(!Consumer::mComplete);
@@ -277,7 +264,7 @@ protected:
   }
 
   protected:
-    virtual void DoResolve(ResolveValueType aResolveValue) MOZ_OVERRIDE
+    virtual void DoResolve(ResolveValueType aResolveValue) override
     {
       Consumer::mComplete = true;
       if (Consumer::mDisconnected) {
@@ -294,7 +281,7 @@ protected:
       mThisVal = nullptr;
     }
 
-    virtual void DoReject(RejectValueType aRejectValue) MOZ_OVERRIDE
+    virtual void DoReject(RejectValueType aRejectValue) override
     {
       Consumer::mComplete = true;
       if (Consumer::mDisconnected) {
@@ -312,7 +299,7 @@ protected:
     }
 
   private:
-    nsRefPtr<TargetType> mResponseTarget; // May be released on any thread.
+    nsRefPtr<AbstractThread> mResponseTarget; // May be released on any thread.
     nsRefPtr<ThisType> mThisVal; // Only accessed and refcounted on dispatch thread.
     ResolveMethodType mResolveMethod;
     RejectMethodType mRejectMethod;
@@ -327,10 +314,9 @@ public:
     MutexAutoLock lock(mMutex);
     MOZ_DIAGNOSTIC_ASSERT(!IsExclusive || !mHaveConsumer);
     mHaveConsumer = true;
-    nsRefPtr<ThenValueBase> thenValue = new ThenValue<TargetType, ThisType, ResolveMethodType,
-                                                      RejectMethodType>(aResponseTarget, aThisVal,
-                                                                        aResolveMethod, aRejectMethod,
-                                                                        aCallSite);
+    nsRefPtr<AbstractThread> responseTarget = AbstractThread::Create(aResponseTarget);
+    nsRefPtr<ThenValueBase> thenValue = new ThenValue<ThisType, ResolveMethodType, RejectMethodType>(
+                                              responseTarget, aThisVal, aResolveMethod, aRejectMethod, aCallSite);
     PROMISE_LOG("%s invoking Then() [this=%p, thenValue=%p, aThisVal=%p, isPending=%d]",
                 aCallSite, this, thenValue.get(), aThisVal, (int) IsPending());
     if (!IsPending()) {
@@ -605,7 +591,7 @@ public:
   typedef nsRefPtr<PromiseType>(ThisType::*Type)();
   MethodCallWithNoArgs(ThisType* aThisVal, Type aMethod)
     : mThisVal(aThisVal), mMethod(aMethod) {}
-  nsRefPtr<PromiseType> Invoke() MOZ_OVERRIDE { return ((*mThisVal).*mMethod)(); }
+  nsRefPtr<PromiseType> Invoke() override { return ((*mThisVal).*mMethod)(); }
 protected:
   nsRefPtr<ThisType> mThisVal;
   Type mMethod;
@@ -618,7 +604,7 @@ public:
   typedef nsRefPtr<PromiseType>(ThisType::*Type)(Arg1Type);
   MethodCallWithOneArg(ThisType* aThisVal, Type aMethod, Arg1Type aArg1)
     : mThisVal(aThisVal), mMethod(aMethod), mArg1(aArg1) {}
-  nsRefPtr<PromiseType> Invoke() MOZ_OVERRIDE { return ((*mThisVal).*mMethod)(mArg1); }
+  nsRefPtr<PromiseType> Invoke() override { return ((*mThisVal).*mMethod)(mArg1); }
 protected:
   nsRefPtr<ThisType> mThisVal;
   Type mMethod;
@@ -632,7 +618,7 @@ public:
   typedef nsRefPtr<PromiseType>(ThisType::*Type)(Arg1Type, Arg2Type);
   MethodCallWithTwoArgs(ThisType* aThisVal, Type aMethod, Arg1Type aArg1, Arg2Type aArg2)
     : mThisVal(aThisVal), mMethod(aMethod), mArg1(aArg1), mArg2(aArg2) {}
-  nsRefPtr<PromiseType> Invoke() MOZ_OVERRIDE { return ((*mThisVal).*mMethod)(mArg1, mArg2); }
+  nsRefPtr<PromiseType> Invoke() override { return ((*mThisVal).*mMethod)(mArg1, mArg2); }
 protected:
   nsRefPtr<ThisType> mThisVal;
   Type mMethod;
@@ -664,9 +650,10 @@ template<typename PromiseType, typename TargetType>
 static nsRefPtr<PromiseType>
 ProxyInternal(TargetType* aTarget, MethodCallBase<PromiseType>* aMethodCall, const char* aCallerName)
 {
+  nsRefPtr<AbstractThread> target = AbstractThread::Create(aTarget);
   nsRefPtr<typename PromiseType::Private> p = new (typename PromiseType::Private)(aCallerName);
   nsRefPtr<ProxyRunnable<PromiseType>> r = new ProxyRunnable<PromiseType>(p, aMethodCall);
-  nsresult rv = detail::DispatchMediaPromiseRunnable(aTarget, r);
+  nsresult rv = target->Dispatch(r.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
   unused << rv;
   return Move(p);

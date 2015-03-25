@@ -42,12 +42,13 @@ struct js::Nursery::FreeHugeSlotsTask : public GCParallelTask
     explicit FreeHugeSlotsTask(FreeOp *fop) : fop_(fop) {}
     bool init() { return slots_.init(); }
     void transferSlotsToFree(HugeSlotsSet &slotsToFree);
+    ~FreeHugeSlotsTask() override { join(); }
 
   private:
     FreeOp *fop_;
     HugeSlotsSet slots_;
 
-    virtual void run() MOZ_OVERRIDE;
+    virtual void run() override;
 };
 
 bool
@@ -805,6 +806,8 @@ js::Nursery::collect(JSRuntime *rt, JS::gcreason::Reason reason, ObjectGroupList
         sb.clear();
         return;
     }
+
+    rt->gc.incMinorGcNumber();
 
     rt->gc.stats.count(gcstats::STAT_MINOR_GC);
 

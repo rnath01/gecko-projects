@@ -283,7 +283,7 @@ function injectLoopAPI(targetWindow) {
       writable: true,
       value: function(listener) {
         let win = Services.wm.getMostRecentWindow("navigator:browser");
-        let browser = win && win.gBrowser.selectedTab.linkedBrowser;
+        let browser = win && win.gBrowser.selectedBrowser;
         if (!win || !browser) {
           // This may happen when an undocked conversation window is the only
           // window left.
@@ -636,6 +636,13 @@ function injectLoopAPI(targetWindow) {
       enumerable: true,
       get: function() {
         return Cu.cloneInto(TWO_WAY_MEDIA_CONN_LENGTH, targetWindow);
+      }
+    },
+
+    SHARING_STATE_CHANGE: {
+      enumerable: true,
+      get: function() {
+        return Cu.cloneInto(SHARING_STATE_CHANGE, targetWindow);
       }
     },
 

@@ -258,7 +258,7 @@ static void SetRunning(ProxyAutoConfig *arg)
 }
 
 // The PACResolver is used for dnsResolve()
-class PACResolver MOZ_FINAL : public nsIDNSListener
+class PACResolver final : public nsIDNSListener
                             , public nsITimerCallback
 {
 public:
@@ -272,7 +272,7 @@ public:
   // nsIDNSListener
   NS_IMETHODIMP OnLookupComplete(nsICancelable *request,
                                  nsIDNSRecord *record,
-                                 nsresult status) MOZ_OVERRIDE
+                                 nsresult status) override
   {
     if (mTimer) {
       mTimer->Cancel();
@@ -286,7 +286,7 @@ public:
   }
 
   // nsITimerCallback
-  NS_IMETHODIMP Notify(nsITimer *timer) MOZ_OVERRIDE
+  NS_IMETHODIMP Notify(nsITimer *timer) override
   {
     if (mRequest)
       mRequest->Cancel(NS_ERROR_NET_TIMEOUT);
@@ -666,8 +666,8 @@ ProxyAutoConfig::SetupJS()
   JS::CompileOptions options(cx);
   options.setFileAndLine(mPACURI.get(), 1);
   JS::Rooted<JSScript*> script(cx);
-  if (!JS_CompileScript(cx, global, mPACScript.get(),
-                        mPACScript.Length(), options, &script) ||
+  if (!JS_CompileScript(cx, mPACScript.get(), mPACScript.Length(), options,
+                        &script) ||
       !JS_ExecuteScript(cx, script))
   {
     nsString alertMessage(NS_LITERAL_STRING("PAC file failed to install from "));

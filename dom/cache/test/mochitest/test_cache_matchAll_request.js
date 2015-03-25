@@ -18,7 +18,10 @@ function checkResponse(r, response, responseText) {
   is(r.statusText, response.statusText,
      "Both responses should have the same status text");
   return r.text().then(function(text) {
-    is(text, responseText, "The response body should be correct");
+    // Avoid dumping out the large response text to the log if they're equal.
+    if (text !== responseText) {
+      is(text, responseText, "The response body should be correct");
+    }
   });
 }
 
@@ -72,13 +75,33 @@ function testRequest(request1, request2, request3, unknownRequest,
     is(r.length, 1, "Should only find 1 item");
     return checkResponse(r[0], response1, response1Text);
   }).then(function() {
+    return c.matchAll(new Request(request1, {method: "HEAD"}));
+  }).then(function(r) {
+    is(r.length, 1, "Should only find 1 item");
+    return checkResponse(r[0], response1, response1Text);
+  }).then(function() {
+    return Promise.all(
+      ["POST", "PUT", "DELETE", "OPTIONS"]
+        .map(function(method) {
+          var req = new Request(request1, {method: method});
+          return c.matchAll(req)
+            .then(function(r) {
+              is(r.length, 0, "Searching for a request with a non-GET/HEAD method should not succeed");
+              return c.matchAll(req, {ignoreMethod: true});
+            }).then(function(r) {
+              is(r.length, 1, "Should only find 1 item");
+              return checkResponse(r[0], response1, response1Text);
+            });
+        })
+    );
+  }).then(function() {
     return c.matchAll(requestWithDifferentFragment);
   }).then(function(r) {
     is(r.length, 1, "Should only find 1 item");
     return checkResponse(r[0], response1, response1Text);
   }).then(function() {
     return c.matchAll(requestWithAlternateQueryString,
-                      {ignoreSearch: true, cacheName: name});
+                      {ignoreSearch: true});
   }).then(function(r) {
     is(r.length, 2, "Should find 2 items");
     return Promise.all([
@@ -99,16 +122,25 @@ function testRequest(request1, request2, request3, unknownRequest,
       checkResponse(r[1], response3, response3Text)
     ]);
   }).then(function() {
-    return c.matchAll({cacheName: name + "mambojambo"});
-  }).then(function(r) {
-    is(r.length, 0, "Searching in the wrong cache should not succeed");
+    return caches.match(request1, {cacheName: name + "mambojambo"})
+      .then(function() {
+        ok(false, "Promise should be rejected");
+      }, function(err) {
+        is(err.name, "NotFoundError", "Searching in the wrong cache should not succeed");
+      });
   }).then(function() {
     return c.matchAll(unknownRequest);
   }).then(function(r) {
     is(r.length, 0, "Searching for an unknown request should not succeed");
-    return c.matchAll(unknownRequest, {cacheName: name});
+    return caches.match(unknownRequest, {cacheName: name});
   }).then(function(r) {
-    is(r.length, 0, "Searching for an unknown request should not succeed");
+    is(typeof r, "undefined", "Searching for an unknown request should not succeed");
+    // Make sure that cacheName is ignored on Cache
+    return c.matchAll(request1, {cacheName: name + "mambojambo"});
+  }).then(function(r) {
+    is(r.length, 1, "Should only find 1 item");
+    return checkResponse(r[0], response1, response1Text);
+  }).then(function() {
     return caches.delete(name);
   }).then(function(success) {
     ok(success, "We should be able to delete the cache successfully");
@@ -138,5 +170,8 @@ function testRequest(request1, request2, request3, unknownRequest,
     return cache.matchAll();
   }).then(function(r) {
     is(r.length, 0, "Searching in the cache after deletion should not succeed");
+    return caches.delete(name);
+  }).then(function(deleted) {
+    ok(deleted, "The cache should be deleted successfully");
   });
 }

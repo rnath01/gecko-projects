@@ -5,6 +5,7 @@
 
 #include "APZCCallbackHelper.h"
 
+#include "ContentHelper.h"
 #include "gfxPlatform.h" // For gfxPlatform::UseTiling
 #include "mozilla/dom/TabParent.h"
 #include "nsIScrollableFrame.h"
@@ -569,7 +570,7 @@ public:
   {
   }
 
-  void DidRefresh() MOZ_OVERRIDE {
+  void DidRefresh() override {
     if (!mCallback) {
       MOZ_ASSERT_UNREACHABLE("Post-refresh observer fired again after failed attempt at unregistering it");
       return;
@@ -649,6 +650,38 @@ APZCCallbackHelper::SendSetTargetAPZCNotification(nsIWidget* aWidget,
       }
     }
   }
+}
+
+void
+APZCCallbackHelper::SendSetAllowedTouchBehaviorNotification(
+        nsIWidget* aWidget,
+        const WidgetTouchEvent& aEvent,
+        uint64_t aInputBlockId,
+        const nsRefPtr<SetAllowedTouchBehaviorCallback>& aCallback)
+{
+  nsTArray<TouchBehaviorFlags> flags;
+  for (uint32_t i = 0; i < aEvent.touches.Length(); i++) {
+    flags.AppendElement(widget::ContentHelper::GetAllowedTouchBehavior(aWidget, aEvent.touches[i]->mRefPoint));
+  }
+  aCallback->Run(aInputBlockId, flags);
+}
+
+void
+APZCCallbackHelper::NotifyMozMouseScrollEvent(const FrameMetrics::ViewID& aScrollId, const nsString& aEvent)
+{
+  nsCOMPtr<nsIContent> targetContent = nsLayoutUtils::FindContentFor(aScrollId);
+  if (!targetContent) {
+    return;
+  }
+  nsCOMPtr<nsIDocument> ownerDoc = targetContent->OwnerDoc();
+  if (!ownerDoc) {
+    return;
+  }
+
+  nsContentUtils::DispatchTrustedEvent(
+    ownerDoc, targetContent,
+    aEvent,
+    true, true);
 }
 
 }

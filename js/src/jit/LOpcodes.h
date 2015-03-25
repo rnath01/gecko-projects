@@ -28,8 +28,8 @@
     _(SimdInsertElementI)           \
     _(SimdInsertElementF)           \
     _(SimdSignMaskX4)               \
-    _(SimdGeneralSwizzleI)          \
-    _(SimdGeneralSwizzleF)          \
+    _(SimdGeneralShuffleI)          \
+    _(SimdGeneralShuffleF)          \
     _(SimdSwizzleI)                 \
     _(SimdSwizzleF)                 \
     _(SimdShuffle)                  \
@@ -339,6 +339,8 @@
     _(AssertRangeD)                 \
     _(AssertRangeF)                 \
     _(AssertRangeV)                 \
+    _(AssertResultV)                \
+    _(AssertResultT)                \
     _(LexicalCheck)                 \
     _(ThrowUninitializedLexical)    \
     _(NurseryObject)                \

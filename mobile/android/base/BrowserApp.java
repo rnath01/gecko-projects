@@ -2982,13 +2982,15 @@ public class BrowserApp extends GeckoApp
 
         final boolean inGuestMode = GeckoProfile.get(this).inGuestMode();
 
-        bookmark.setEnabled(!AboutPages.isAboutReader(tab.getURL()));
+        final boolean isAboutReader = AboutPages.isAboutReader(tab.getURL());
+        bookmark.setEnabled(!isAboutReader);
         bookmark.setVisible(!inGuestMode);
         bookmark.setCheckable(true);
         bookmark.setChecked(tab.isBookmark());
         bookmark.setIcon(resolveBookmarkIconID(tab.isBookmark()));
+        bookmark.setTitle(resolveBookmarkTitleID(tab.isBookmark()));
 
-        reader.setEnabled(true);
+        reader.setEnabled(isAboutReader || !AboutPages.isAboutPage(tab.getURL()));
         reader.setVisible(!inGuestMode);
         reader.setCheckable(true);
         final boolean isPageInReadingList = tab.isInReadingList();
@@ -3115,6 +3117,10 @@ public class BrowserApp extends GeckoApp
         }
     }
 
+    private int resolveBookmarkTitleID(final boolean isBookmark) {
+        return (isBookmark ? R.string.bookmark_remove : R.string.bookmark);
+    }
+
     private int resolveReadingListIconID(final boolean isInReadingList) {
         return (isInReadingList ? R.drawable.ic_menu_reader_remove : R.drawable.ic_menu_reader_add);
     }
@@ -3145,10 +3151,12 @@ public class BrowserApp extends GeckoApp
                     Telemetry.sendUIEvent(TelemetryContract.Event.UNSAVE, TelemetryContract.Method.MENU, "bookmark");
                     tab.removeBookmark();
                     item.setIcon(resolveBookmarkIconID(false));
+                    item.setTitle(resolveBookmarkTitleID(false));
                 } else {
                     Telemetry.sendUIEvent(TelemetryContract.Event.SAVE, TelemetryContract.Method.MENU, "bookmark");
                     tab.addBookmark();
                     item.setIcon(resolveBookmarkIconID(true));
+                    item.setTitle(resolveBookmarkTitleID(true));
                 }
             }
             return true;

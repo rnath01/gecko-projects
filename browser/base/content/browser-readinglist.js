@@ -58,6 +58,11 @@ let ReadingListUI = {
     for (let msg of this.MESSAGES) {
       mm.removeMessageListener(msg, this);
     }
+
+    if (this.listenerRegistered) {
+      ReadingList.removeListener(this);
+      this.listenerRegistered = false;
+    }
   },
 
   /**
@@ -91,7 +96,7 @@ let ReadingListUI = {
         // This is safe to call if we're not currently registered, but we don't
         // want to forcibly load the normally lazy-loaded module on startup.
         ReadingList.removeListener(this);
-        this.listenerRegistered = true;
+        this.listenerRegistered = false;
       }
 
       this.hideSidebar();
@@ -178,7 +183,7 @@ let ReadingListUI = {
       });
 
       target.insertBefore(menuitem, insertPoint);
-    });
+    }, {sort: "addedOn", descending: true});
 
     if (!hasItems) {
       let menuitem = document.createElement("menuitem");
@@ -232,12 +237,36 @@ let ReadingListUI = {
       // nothing to do if we have no button.
       return;
     }
-    if (!this.enabled || state == "invalid") {
+
+    let uri;
+    if (this.enabled && state == "valid") {
+      uri = gBrowser.currentURI;
+      if (uri.schemeIs("about"))
+        uri = ReaderParent.parseReaderUrl(uri.spec);
+      else if (!uri.schemeIs("http") && !uri.schemeIs("https"))
+        uri = null;
+    }
+
+    let msg = {topic: "UpdateActiveItem", url: null};
+    if (!uri) {
       this.toolbarButton.setAttribute("hidden", true);
+      if (this.isSidebarOpen)
+        document.getElementById("sidebar").contentWindow.postMessage(msg, "*");
       return;
     }
 
-    let isInList = yield ReadingList.containsURL(gBrowser.currentURI);
+    let isInList = yield ReadingList.hasItemForURL(uri);
+
+    if (window.closed) {
+      // Skip updating the UI if the window was closed since our hasItemForURL call.
+      return;
+    }
+
+    if (this.isSidebarOpen) {
+      if (isInList)
+        msg.url = typeof uri == "string" ? uri : uri.spec;
+      document.getElementById("sidebar").contentWindow.postMessage(msg, "*");
+    }
     this.setToolbarButtonState(isInList);
   }),
 
@@ -268,11 +297,17 @@ let ReadingListUI = {
    * @returns {Promise} Promise resolved when operation has completed.
    */
   togglePageByBrowser: Task.async(function* (browser) {
-    let item = yield ReadingList.getItemForURL(browser.currentURI);
+    let uri = browser.currentURI;
+    if (uri.spec.startsWith("about:reader?"))
+      uri = ReaderParent.parseReaderUrl(uri.spec);
+    if (!uri)
+      return;
+
+    let item = yield ReadingList.itemForURL(uri);
     if (item) {
       yield item.delete();
     } else {
-      yield ReadingList.addItemFromBrowser(browser);
+      yield ReadingList.addItemFromBrowser(browser, uri);
     }
   }),
 
@@ -284,6 +319,9 @@ let ReadingListUI = {
    */
   isItemForCurrentBrowser(item) {
     let currentURL = gBrowser.currentURI.spec;
+    if (currentURL.startsWith("about:reader?"))
+      currentURL = ReaderParent.parseReaderUrl(currentURL);
+
     if (item.url == currentURL || item.resolvedURL == currentURL) {
       return true;
     }
@@ -296,8 +334,15 @@ let ReadingListUI = {
    * @param {ReadingListItem} item - Item added.
    */
   onItemAdded(item) {
+    if (!Services.prefs.getBoolPref("browser.readinglist.sidebarEverOpened")) {
+      SidebarUI.show("readingListSidebar");
+    }
     if (this.isItemForCurrentBrowser(item)) {
       this.setToolbarButtonState(true);
+      if (this.isSidebarOpen) {
+        let msg = {topic: "UpdateActiveItem", url: item.url};
+        document.getElementById("sidebar").contentWindow.postMessage(msg, "*");
+      }
     }
   },
 

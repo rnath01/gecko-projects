@@ -110,7 +110,6 @@ struct CrossCompartmentKey
 struct WrapperHasher : public DefaultHasher<CrossCompartmentKey>
 {
     static HashNumber hash(const CrossCompartmentKey &key) {
-        MOZ_ASSERT(!IsPoisonedPtr(key.wrapped));
         static_assert(sizeof(HashNumber) == sizeof(uint32_t),
                       "subsequent code assumes a four-byte hash");
         return uint32_t(uintptr_t(key.wrapped)) | uint32_t(key.kind);
@@ -150,6 +149,7 @@ struct JSCompartment
     bool                         isSelfHosting;
     bool                         marked;
     bool                         warnedAboutNoSuchMethod;
+    bool                         warnedAboutFlagsArgument;
 
     // A null add-on ID means that the compartment is not associated with an
     // add-on.
@@ -548,6 +548,7 @@ struct JSCompartment
         DeprecatedLetBlock = 4,             // Added in JS 1.7
         DeprecatedLetExpression = 5,        // Added in JS 1.7
         DeprecatedNoSuchMethod = 6,         // JS 1.7+
+        DeprecatedFlagsArgument = 7,        // JS 1.3 or older
         DeprecatedLanguageExtensionCount
     };
 

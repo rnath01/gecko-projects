@@ -643,7 +643,8 @@ template bool
 js::XDRInterpretedFunction(XDRState<XDR_DECODE> *, HandleObject, HandleScript, MutableHandleFunction);
 
 JSObject *
-js::CloneFunctionAndScript(JSContext *cx, HandleObject enclosingScope, HandleFunction srcFun)
+js::CloneFunctionAndScript(JSContext *cx, HandleObject enclosingScope, HandleFunction srcFun,
+                           PollutedGlobalScopeOption polluted)
 {
     /* NB: Keep this in sync with XDRInterpretedFunction. */
     RootedObject cloneProto(cx);
@@ -665,7 +666,7 @@ js::CloneFunctionAndScript(JSContext *cx, HandleObject enclosingScope, HandleFun
     RootedScript srcScript(cx, srcFun->getOrCreateScript(cx));
     if (!srcScript)
         return nullptr;
-    RootedScript clonedScript(cx, CloneScript(cx, enclosingScope, clone, srcScript));
+    RootedScript clonedScript(cx, CloneScript(cx, enclosingScope, clone, srcScript, polluted));
     if (!clonedScript)
         return nullptr;
 
@@ -744,7 +745,7 @@ JSFunction::trace(JSTracer *trc)
             // self-hosted function which can be cloned over again. The latter
             // is stored in the first extended slot.
             JSRuntime *rt = trc->runtime();
-            if (IS_GC_MARKING_TRACER(trc) &&
+            if (IsMarkingTracer(trc) &&
                 (rt->allowRelazificationForTesting || !compartment()->hasBeenEntered()) &&
                 !compartment()->isDebuggee() && !compartment()->isSelfHosting &&
                 u.i.s.script_->isRelazifiable() && (!isSelfHostedBuiltin() || isExtended()))
@@ -900,6 +901,7 @@ const Class JSFunction::class_ = {
     {
         CreateFunctionConstructor,
         CreateFunctionPrototype,
+        nullptr,
         nullptr,
         function_methods,
         function_properties
@@ -2080,11 +2082,33 @@ js::NewFunctionWithProto(ExclusiveContext *cx, Native native,
 }
 
 bool
-js::CloneFunctionObjectUseSameScript(JSCompartment *compartment, HandleFunction fun)
+js::CloneFunctionObjectUseSameScript(JSCompartment *compartment, HandleFunction fun,
+                                     HandleObject newParent)
 {
-    return compartment == fun->compartment() &&
-           !fun->isSingleton() &&
-           !ObjectGroup::useSingletonForClone(fun);
+    if (compartment != fun->compartment() ||
+        fun->isSingleton() ||
+        ObjectGroup::useSingletonForClone(fun))
+    {
+        return false;
+    }
+
+    if (newParent->is<GlobalObject>())
+        return true;
+
+    // Don't need to clone the script if newParent is a syntactic scope, since
+    // in that case we have some actual scope objects on our scope chain and
+    // whatnot; whoever put them there should be responsible for setting our
+    // script's flags appropriately.  We hit this case for JSOP_LAMBDA, for
+    // example.
+    if (IsSyntacticScope(newParent))
+        return true;
+
+    // We need to clone the script if we're interpreted and not already marked
+    // as having a polluted scope.  If we're lazy, go ahead and clone the
+    // script; see the big comment at the end of CloneScript for the explanation
+    // of what's going on there.
+    return !fun->isInterpreted() ||
+           (fun->hasScript() && fun->nonLazyScript()->hasPollutedGlobalScope());
 }
 
 JSFunction *
@@ -2096,7 +2120,7 @@ js::CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent,
     MOZ_ASSERT(parent);
     MOZ_ASSERT(!fun->isBoundFunction());
 
-    bool useSameScript = CloneFunctionObjectUseSameScript(cx->compartment(), fun);
+    bool useSameScript = CloneFunctionObjectUseSameScript(cx->compartment(), fun, parent);
 
     if (!useSameScript && fun->isInterpretedLazy()) {
         JSAutoCompartment ac(cx, fun);
@@ -2175,13 +2199,19 @@ js::CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent,
     RootedFunction cloneRoot(cx, clone);
 
     /*
-     * Across compartments we have to clone the script for interpreted
-     * functions. Cross-compartment cloning only happens via JSAPI
-     * (JS::CloneFunctionObject) which dynamically ensures that 'script' has
-     * no enclosing lexical scope (only the global scope).
+     * Across compartments or if we have to introduce a polluted scope we have
+     * to clone the script for interpreted functions. Cross-compartment cloning
+     * only happens via JSAPI (JS::CloneFunctionObject) which dynamically
+     * ensures that 'script' has no enclosing lexical scope (only the global
+     * scope or other non-lexical scope).
      */
-    if (cloneRoot->isInterpreted() && !CloneFunctionScript(cx, fun, cloneRoot, newKindArg))
+    PollutedGlobalScopeOption globalScopeOption = parent->is<GlobalObject>() ?
+        HasCleanGlobalScope : HasPollutedGlobalScope;
+    if (cloneRoot->isInterpreted() &&
+        !CloneFunctionScript(cx, fun, cloneRoot, globalScopeOption, newKindArg))
+    {
         return nullptr;
+    }
 
     return cloneRoot;
 }

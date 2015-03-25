@@ -7,6 +7,7 @@
 
 #include "mozilla/DOMEventTargetHelper.h"
 #include "nsCycleCollectionParticipant.h"
+#include "nsIIccProvider.h"
 #include "nsTArrayHelpers.h"
 
 namespace mozilla {
@@ -15,7 +16,7 @@ namespace dom {
 class Icc;
 class IccListener;
 
-class IccManager MOZ_FINAL : public DOMEventTargetHelper
+class IccManager final : public DOMEventTargetHelper
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
@@ -24,7 +25,7 @@ public:
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(IccManager, DOMEventTargetHelper)
 
-  explicit IccManager(nsPIDOMWindow* aWindow);
+  IccManager(nsPIDOMWindow* aWindow);
 
   void
   Shutdown();
@@ -48,7 +49,7 @@ public:
   GetParentObject() const { return GetOwner(); }
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
 private:
   ~IccManager();

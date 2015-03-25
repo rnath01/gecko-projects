@@ -14,14 +14,16 @@
 #include "mozIStorageStatement.h"
 #include "nsCOMPtr.h"
 #include "nsTArray.h"
+#include "nsCRT.h"
+#include "nsHttp.h"
 
 namespace mozilla {
 namespace dom {
 namespace cache {
 
 
-const int32_t DBSchema::kMaxWipeSchemaVersion = 3;
-const int32_t DBSchema::kLatestSchemaVersion = 3;
+const int32_t DBSchema::kMaxWipeSchemaVersion = 4;
+const int32_t DBSchema::kLatestSchemaVersion = 4;
 const int32_t DBSchema::kMaxEntriesPerStatement = 255;
 
 using mozilla::void_t;
@@ -87,6 +89,7 @@ DBSchema::CreateSchema(mozIStorageConnection* aConn)
         "request_headers_guard INTEGER NOT NULL, "
         "request_mode INTEGER NOT NULL, "
         "request_credentials INTEGER NOT NULL, "
+        "request_cache INTEGER NOT NULL, "
         "request_body_id TEXT NULL, "
         "response_type INTEGER NOT NULL, "
         "response_url TEXT NOT NULL, "
@@ -794,8 +797,6 @@ DBSchema::MatchByVaryHeader(mozIStorageConnection* aConn,
 
   nsRefPtr<InternalHeaders> cachedHeaders = new InternalHeaders(HeadersGuardEnum::None);
 
-  ErrorResult errorResult;
-
   while (NS_SUCCEEDED(state->ExecuteStep(&hasMoreData)) && hasMoreData) {
     nsAutoCString name;
     nsAutoCString value;
@@ -803,6 +804,8 @@ DBSchema::MatchByVaryHeader(mozIStorageConnection* aConn,
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
     rv = state->GetUTF8String(1, value);
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+    ErrorResult errorResult;
 
     cachedHeaders->Append(name, value, errorResult);
     if (errorResult.Failed()) { return errorResult.ErrorCode(); };
@@ -815,20 +818,41 @@ DBSchema::MatchByVaryHeader(mozIStorageConnection* aConn,
   bool varyHeadersMatch = true;
 
   for (uint32_t i = 0; i < varyValues.Length(); ++i) {
-    if (varyValues[i].EqualsLiteral("*")) {
-      continue;
+    // Extract the header names inside the Vary header value.
+    nsAutoCString varyValue(varyValues[i]);
+    char* rawBuffer = varyValue.BeginWriting();
+    char* token = nsCRT::strtok(rawBuffer, NS_HTTP_HEADER_SEPS, &rawBuffer);
+    bool bailOut = false;
+    for (; token;
+         token = nsCRT::strtok(rawBuffer, NS_HTTP_HEADER_SEPS, &rawBuffer)) {
+      nsDependentCString header(token);
+      if (header.EqualsLiteral("*")) {
+        continue;
+      }
+
+      ErrorResult errorResult;
+      nsAutoCString queryValue;
+      queryHeaders->Get(header, queryValue, errorResult);
+      if (errorResult.Failed()) {
+        errorResult.ClearMessage();
+        MOZ_ASSERT(queryValue.IsEmpty());
+      }
+
+      nsAutoCString cachedValue;
+      cachedHeaders->Get(header, cachedValue, errorResult);
+      if (errorResult.Failed()) {
+        errorResult.ClearMessage();
+        MOZ_ASSERT(cachedValue.IsEmpty());
+      }
+
+      if (queryValue != cachedValue) {
+        varyHeadersMatch = false;
+        bailOut = true;
+        break;
+      }
     }
 
-    nsAutoCString queryValue;
-    queryHeaders->Get(varyValues[i], queryValue, errorResult);
-    if (errorResult.Failed()) { return errorResult.ErrorCode(); };
-
-    nsAutoCString cachedValue;
-    cachedHeaders->Get(varyValues[i], cachedValue, errorResult);
-    if (errorResult.Failed()) { return errorResult.ErrorCode(); };
-
-    if (queryValue != cachedValue) {
-      varyHeadersMatch = false;
+    if (bailOut) {
       break;
     }
   }
@@ -947,6 +971,7 @@ DBSchema::InsertEntry(mozIStorageConnection* aConn, CacheId aCacheId,
       "request_headers_guard, "
       "request_mode, "
       "request_credentials, "
+      "request_cache, "
       "request_body_id, "
       "response_type, "
       "response_url, "
@@ -956,7 +981,7 @@ DBSchema::InsertEntry(mozIStorageConnection* aConn, CacheId aCacheId,
       "response_body_id, "
       "response_security_info, "
       "cache_id "
-    ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)"
+    ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)"
   ), getter_AddRefs(state));
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
@@ -983,34 +1008,38 @@ DBSchema::InsertEntry(mozIStorageConnection* aConn, CacheId aCacheId,
     static_cast<int32_t>(aRequest.credentials()));
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  rv = BindId(state, 7, aRequestBodyId);
+  rv = state->BindInt32Parameter(7,
+    static_cast<int32_t>(aRequest.requestCache()));
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  rv = state->BindInt32Parameter(8, static_cast<int32_t>(aResponse.type()));
+  rv = BindId(state, 8, aRequestBodyId);
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  rv = state->BindStringParameter(9, aResponse.url());
+  rv = state->BindInt32Parameter(9, static_cast<int32_t>(aResponse.type()));
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  rv = state->BindInt32Parameter(10, aResponse.status());
+  rv = state->BindStringParameter(10, aResponse.url());
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  rv = state->BindUTF8StringParameter(11, aResponse.statusText());
+  rv = state->BindInt32Parameter(11, aResponse.status());
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  rv = state->BindInt32Parameter(12,
+  rv = state->BindUTF8StringParameter(12, aResponse.statusText());
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  rv = state->BindInt32Parameter(13,
     static_cast<int32_t>(aResponse.headersGuard()));
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  rv = BindId(state, 13, aResponseBodyId);
+  rv = BindId(state, 14, aResponseBodyId);
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  rv = state->BindBlobParameter(14, reinterpret_cast<const uint8_t*>
+  rv = state->BindBlobParameter(15, reinterpret_cast<const uint8_t*>
                                   (aResponse.securityInfo().get()),
                                 aResponse.securityInfo().Length());
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  rv = state->BindInt32Parameter(15, aCacheId);
+  rv = state->BindInt32Parameter(16, aCacheId);
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
   rv = state->Execute();
@@ -1196,6 +1225,7 @@ DBSchema::ReadRequest(mozIStorageConnection* aConn, EntryId aEntryId,
       "request_headers_guard, "
       "request_mode, "
       "request_credentials, "
+      "request_cache, "
       "request_body_id "
     "FROM entries "
     "WHERE id=?1;"
@@ -1238,13 +1268,19 @@ DBSchema::ReadRequest(mozIStorageConnection* aConn, EntryId aEntryId,
   aSavedRequestOut->mValue.credentials() =
     static_cast<RequestCredentials>(credentials);
 
+  int32_t requestCache;
+  rv = state->GetInt32(7, &requestCache);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+  aSavedRequestOut->mValue.requestCache() =
+    static_cast<RequestCache>(requestCache);
+
   bool nullBody = false;
-  rv = state->GetIsNull(7, &nullBody);
+  rv = state->GetIsNull(8, &nullBody);
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
   aSavedRequestOut->mHasBodyId = !nullBody;
 
   if (aSavedRequestOut->mHasBodyId) {
-    rv = ExtractId(state, 7, &aSavedRequestOut->mBodyId);
+    rv = ExtractId(state, 8, &aSavedRequestOut->mBodyId);
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
   }
 

@@ -56,7 +56,7 @@ public:
   {
   }
 
-  NS_IMETHOD Run() MOZ_OVERRIDE MOZ_FINAL {
+  NS_IMETHOD Run() override final {
 
     mSourceBuffer->AppendData(mData, mTimestampOffset, mUpdateID);
 
@@ -80,7 +80,7 @@ public:
   , mEnd(aEnd)
   { }
 
-  NS_IMETHOD Run() MOZ_OVERRIDE MOZ_FINAL {
+  NS_IMETHOD Run() override final {
 
     if (!mSourceBuffer->mUpdating) {
       // abort was called in between.
@@ -322,6 +322,7 @@ SourceBuffer::SourceBuffer(MediaSource* aMediaSource, const nsACString& aType)
   , mTimestampOffset(0)
   , mAppendMode(SourceBufferAppendMode::Segments)
   , mUpdating(false)
+  , mActive(false)
   , mUpdateID(0)
   , mType(aType)
 {
@@ -348,9 +349,9 @@ SourceBuffer::GetParentObject() const
 }
 
 JSObject*
-SourceBuffer::WrapObject(JSContext* aCx)
+SourceBuffer::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return SourceBufferBinding::Wrap(aCx, this);
+  return SourceBufferBinding::Wrap(aCx, this, aGivenProto);
 }
 
 void
@@ -475,7 +476,11 @@ SourceBuffer::AppendDataCompletedWithSuccess(bool aGotMedia)
   }
 
   if (mTrackBuffer->HasInitSegment()) {
-    mMediaSource->QueueInitializationEvent();
+    if (!mActive) {
+      mActive = true;
+      mMediaSource->SourceBufferIsActive(this);
+      mMediaSource->QueueInitializationEvent();
+    }
   }
 
   if (aGotMedia) {

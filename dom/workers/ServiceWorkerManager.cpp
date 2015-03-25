@@ -60,6 +60,15 @@ using namespace mozilla::ipc;
 
 BEGIN_WORKERS_NAMESPACE
 
+static_assert(nsIHttpChannelInternal::CORS_MODE_SAME_ORIGIN == static_cast<uint32_t>(RequestMode::Same_origin),
+              "RequestMode enumeration value should match Necko CORS mode value.");
+static_assert(nsIHttpChannelInternal::CORS_MODE_NO_CORS == static_cast<uint32_t>(RequestMode::No_cors),
+              "RequestMode enumeration value should match Necko CORS mode value.");
+static_assert(nsIHttpChannelInternal::CORS_MODE_CORS == static_cast<uint32_t>(RequestMode::Cors),
+              "RequestMode enumeration value should match Necko CORS mode value.");
+static_assert(nsIHttpChannelInternal::CORS_MODE_CORS_WITH_FORCED_PREFLIGHT == static_cast<uint32_t>(RequestMode::Cors_with_forced_preflight),
+              "RequestMode enumeration value should match Necko CORS mode value.");
+
 struct ServiceWorkerManager::PendingOperation
 {
   nsCOMPtr<nsIRunnable> mRunnable;
@@ -222,7 +231,7 @@ NS_IMPL_ISUPPORTS0(ContinueLifecycleTask);
 
 class ServiceWorkerRegisterJob;
 
-class ContinueInstallTask MOZ_FINAL : public ContinueLifecycleTask
+class ContinueInstallTask final : public ContinueLifecycleTask
 {
   nsRefPtr<ServiceWorkerRegisterJob> mJob;
 
@@ -231,10 +240,10 @@ public:
     : mJob(aJob)
   { }
 
-  void ContinueAfterWorkerEvent(bool aSuccess, bool aActivateImmediately) MOZ_OVERRIDE;
+  void ContinueAfterWorkerEvent(bool aSuccess, bool aActivateImmediately) override;
 };
 
-class ContinueActivateTask MOZ_FINAL : public ContinueLifecycleTask
+class ContinueActivateTask final : public ContinueLifecycleTask
 {
   nsRefPtr<ServiceWorkerRegistrationInfo> mRegistration;
 
@@ -244,10 +253,10 @@ public:
   { }
 
   void
-  ContinueAfterWorkerEvent(bool aSuccess, bool aActivateImmediately /* unused */) MOZ_OVERRIDE;
+  ContinueAfterWorkerEvent(bool aSuccess, bool aActivateImmediately /* unused */) override;
 };
 
-class ContinueLifecycleRunnable MOZ_FINAL : public nsRunnable
+class ContinueLifecycleRunnable final : public nsRunnable
 {
   nsMainThreadPtrHandle<ContinueLifecycleTask> mTask;
   bool mSuccess;
@@ -265,7 +274,7 @@ public:
   }
 
   NS_IMETHOD
-  Run() MOZ_OVERRIDE
+  Run() override
   {
     AssertIsOnMainThread();
     mTask->ContinueAfterWorkerEvent(mSuccess, mActivateImmediately);
@@ -279,7 +288,7 @@ public:
  * ServiceWorkers, so the parent thread -> worker thread requirement for
  * runnables is satisfied.
  */
-class LifecycleEventWorkerRunnable MOZ_FINAL : public WorkerRunnable
+class LifecycleEventWorkerRunnable final : public WorkerRunnable
 {
   nsString mEventName;
   nsMainThreadPtrHandle<ContinueLifecycleTask> mTask;
@@ -297,7 +306,7 @@ public:
   }
 
   bool
-  WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) MOZ_OVERRIDE
+  WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
   {
     MOZ_ASSERT(aWorkerPrivate);
     return DispatchLifecycleEvent(aCx, aWorkerPrivate);
@@ -331,7 +340,7 @@ public:
   { }
 };
 
-class ServiceWorkerResolveWindowPromiseOnUpdateCallback MOZ_FINAL : public ServiceWorkerUpdateFinishCallback
+class ServiceWorkerResolveWindowPromiseOnUpdateCallback final : public ServiceWorkerUpdateFinishCallback
 {
   nsRefPtr<nsPIDOMWindow> mWindow;
   // The promise "returned" by the call to Update up to
@@ -349,7 +358,7 @@ public:
   }
 
   void
-  UpdateSucceeded(ServiceWorkerRegistrationInfo* aInfo) MOZ_OVERRIDE
+  UpdateSucceeded(ServiceWorkerRegistrationInfo* aInfo) override
   {
     nsRefPtr<ServiceWorkerRegistration> swr =
       new ServiceWorkerRegistration(mWindow,
@@ -358,13 +367,13 @@ public:
   }
 
   void
-  UpdateFailed(nsresult aStatus) MOZ_OVERRIDE
+  UpdateFailed(nsresult aStatus) override
   {
     mPromise->MaybeReject(aStatus);
   }
 
   void
-  UpdateFailed(const ErrorEventInit& aErrorDesc) MOZ_OVERRIDE
+  UpdateFailed(const ErrorEventInit& aErrorDesc) override
   {
     AutoJSAPI jsapi;
     jsapi.Init(mWindow);
@@ -401,7 +410,7 @@ public:
   }
 };
 
-class ContinueUpdateRunnable MOZ_FINAL : public nsRunnable
+class ContinueUpdateRunnable final : public nsRunnable
 {
   nsMainThreadPtrHandle<nsISupports> mJob;
 public:
@@ -414,7 +423,7 @@ public:
   NS_IMETHOD Run();
 };
 
-class CheckWorkerEvaluationAndContinueUpdateWorkerRunnable MOZ_FINAL : public WorkerRunnable
+class CheckWorkerEvaluationAndContinueUpdateWorkerRunnable final : public WorkerRunnable
 {
   const nsMainThreadPtrHandle<nsISupports> mJob;
 public:
@@ -427,7 +436,7 @@ public:
   }
 
   bool
-  WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) MOZ_OVERRIDE
+  WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
   {
     aWorkerPrivate->AssertIsOnWorkerThread();
     if (aWorkerPrivate->WorkerScriptExecutedSuccessfully()) {
@@ -474,7 +483,7 @@ GetRequiredScopeStringPrefix(const nsACString& aScriptSpec, nsACString& aPrefix)
 }
 } // anonymous namespace
 
-class ServiceWorkerRegisterJob MOZ_FINAL : public ServiceWorkerJob,
+class ServiceWorkerRegisterJob final : public ServiceWorkerJob,
                                            public nsIStreamLoaderObserver
 {
   friend class ContinueInstallTask;
@@ -522,7 +531,7 @@ public:
   { }
 
   void
-  Start() MOZ_OVERRIDE
+  Start() override
   {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -562,7 +571,7 @@ public:
   NS_IMETHOD
   OnStreamComplete(nsIStreamLoader* aLoader, nsISupports* aContext,
                    nsresult aStatus, uint32_t aLen,
-                   const uint8_t* aString) MOZ_OVERRIDE
+                   const uint8_t* aString) override
   {
     if (NS_WARN_IF(NS_FAILED(aStatus))) {
       Fail(NS_ERROR_DOM_TYPE_ERR);
@@ -1010,7 +1019,7 @@ ServiceWorkerManager::AppendPendingOperation(nsIRunnable* aRunnable)
  * Used to handle ExtendableEvent::waitUntil() and proceed with
  * installation/activation.
  */
-class LifecycleEventPromiseHandler MOZ_FINAL : public PromiseNativeHandler
+class LifecycleEventPromiseHandler final : public PromiseNativeHandler
 {
   nsMainThreadPtrHandle<ContinueLifecycleTask> mTask;
   bool mActivateImmediately;
@@ -1029,7 +1038,7 @@ public:
   }
 
   void
-  ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) MOZ_OVERRIDE
+  ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
   {
     WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
     MOZ_ASSERT(workerPrivate);
@@ -1041,7 +1050,7 @@ public:
   }
 
   void
-  RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) MOZ_OVERRIDE
+  RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
   {
     WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
     MOZ_ASSERT(workerPrivate);
@@ -1540,7 +1549,7 @@ ServiceWorkerManager::CheckReadyPromise(nsPIDOMWindow* aWindow,
   return false;
 }
 
-class ServiceWorkerUnregisterJob MOZ_FINAL : public ServiceWorkerJob
+class ServiceWorkerUnregisterJob final : public ServiceWorkerJob
 {
   nsRefPtr<ServiceWorkerRegistrationInfo> mRegistration;
   const nsCString mScope;
@@ -1564,7 +1573,7 @@ public:
   }
 
   void
-  Start() MOZ_OVERRIDE
+  Start() override
   {
     AssertIsOnMainThread();
     nsCOMPtr<nsIRunnable> r =
@@ -2131,15 +2140,23 @@ class FetchEventRunnable : public WorkerRunnable
   nsCString mSpec;
   nsCString mMethod;
   bool mIsReload;
+  RequestMode mRequestMode;
+  RequestCredentials mRequestCredentials;
 public:
   FetchEventRunnable(WorkerPrivate* aWorkerPrivate,
                      nsMainThreadPtrHandle<nsIInterceptedChannel>& aChannel,
                      nsMainThreadPtrHandle<ServiceWorker>& aServiceWorker,
-                     nsAutoPtr<ServiceWorkerClientInfo>& aClientInfo)
+                     nsAutoPtr<ServiceWorkerClientInfo>& aClientInfo,
+                     bool aIsReload)
     : WorkerRunnable(aWorkerPrivate, WorkerThreadModifyBusyCount)
     , mInterceptedChannel(aChannel)
     , mServiceWorker(aServiceWorker)
     , mClientInfo(aClientInfo)
+    , mIsReload(aIsReload)
+    , mRequestMode(RequestMode::No_cors)
+    // By default we set it to same-origin since normal HTTP fetches always
+    // send credentials to same-origin websites unless explicitly forbidden.
+    , mRequestCredentials(RequestCredentials::Same_origin)
   {
     MOZ_ASSERT(aWorkerPrivate);
   }
@@ -2147,7 +2164,7 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
 
   NS_IMETHOD
-  VisitHeader(const nsACString& aHeader, const nsACString& aValue) MOZ_OVERRIDE
+  VisitHeader(const nsACString& aHeader, const nsACString& aValue) override
   {
     mHeaderNames.AppendElement(aHeader);
     mHeaderValues.AppendElement(aValue);
@@ -2157,6 +2174,7 @@ public:
   nsresult
   Init()
   {
+    AssertIsOnMainThread();
     nsCOMPtr<nsIChannel> channel;
     nsresult rv = mInterceptedChannel->GetChannel(getter_AddRefs(channel));
     NS_ENSURE_SUCCESS(rv, rv);
@@ -2178,8 +2196,35 @@ public:
     rv = channel->GetLoadFlags(&loadFlags);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    //TODO(jdm): we should probably include reload-ness in the loadinfo or as a separate load flag
-    mIsReload = false;
+    nsCOMPtr<nsIHttpChannelInternal> internalChannel = do_QueryInterface(httpChannel);
+    NS_ENSURE_TRUE(internalChannel, NS_ERROR_NOT_AVAILABLE);
+
+    uint32_t mode;
+    internalChannel->GetCorsMode(&mode);
+    switch (mode) {
+      case nsIHttpChannelInternal::CORS_MODE_SAME_ORIGIN:
+        mRequestMode = RequestMode::Same_origin;
+        break;
+      case nsIHttpChannelInternal::CORS_MODE_NO_CORS:
+        mRequestMode = RequestMode::No_cors;
+        break;
+      case nsIHttpChannelInternal::CORS_MODE_CORS:
+      case nsIHttpChannelInternal::CORS_MODE_CORS_WITH_FORCED_PREFLIGHT:
+        mRequestMode = RequestMode::Cors;
+        break;
+      default:
+        MOZ_CRASH("Unexpected CORS mode");
+    }
+
+    if (loadFlags & nsIRequest::LOAD_ANONYMOUS) {
+      mRequestCredentials = RequestCredentials::Omit;
+    } else {
+      bool includeCrossOrigin;
+      internalChannel->GetCorsIncludeCredentials(&includeCrossOrigin);
+      if (includeCrossOrigin) {
+        mRequestCredentials = RequestCredentials::Include;
+      }
+    }
 
     rv = httpChannel->VisitRequestHeaders(this);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -2188,7 +2233,7 @@ public:
   }
 
   bool
-  WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) MOZ_OVERRIDE
+  WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
   {
     MOZ_ASSERT(aWorkerPrivate);
     return DispatchFetchEvent(aCx, aWorkerPrivate);
@@ -2197,7 +2242,7 @@ public:
 private:
   ~FetchEventRunnable() {}
 
-  class ResumeRequest MOZ_FINAL : public nsRunnable {
+  class ResumeRequest final : public nsRunnable {
     nsMainThreadPtrHandle<nsIInterceptedChannel> mChannel;
   public:
     explicit ResumeRequest(nsMainThreadPtrHandle<nsIInterceptedChannel>& aChannel)
@@ -2244,7 +2289,9 @@ private:
     reqInit.mHeaders.Value().SetAsHeaders() = headers;
 
     //TODO(jdm): set request body
-    //TODO(jdm): set request same-origin mode and credentials
+
+    reqInit.mMode.Construct(mRequestMode);
+    reqInit.mCredentials.Construct(mRequestCredentials);
 
     ErrorResult rv;
     nsRefPtr<Request> request = Request::Constructor(globalObj, requestInfo, reqInit, rv);
@@ -2280,7 +2327,8 @@ private:
 NS_IMPL_ISUPPORTS_INHERITED(FetchEventRunnable, WorkerRunnable, nsIHttpHeaderVisitor)
 
 NS_IMETHODIMP
-ServiceWorkerManager::DispatchFetchEvent(nsIDocument* aDoc, nsIInterceptedChannel* aChannel)
+ServiceWorkerManager::DispatchFetchEvent(nsIDocument* aDoc, nsIInterceptedChannel* aChannel,
+                                         bool aIsReload)
 {
   MOZ_ASSERT(aChannel);
   nsCOMPtr<nsISupports> serviceWorker;
@@ -2330,7 +2378,7 @@ ServiceWorkerManager::DispatchFetchEvent(nsIDocument* aDoc, nsIInterceptedChanne
 
   // clientInfo is null if we don't have a controlled document
   nsRefPtr<FetchEventRunnable> event =
-    new FetchEventRunnable(sw->GetWorkerPrivate(), handle, serviceWorkerHandle, clientInfo);
+    new FetchEventRunnable(sw->GetWorkerPrivate(), handle, serviceWorkerHandle, clientInfo, aIsReload);
   rv = event->Init();
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -2361,7 +2409,10 @@ ServiceWorkerManager::IsControlled(nsIDocument* aDoc, bool* aIsControlled)
   MOZ_ASSERT(aIsControlled);
   nsRefPtr<ServiceWorkerRegistrationInfo> registration;
   nsresult rv = GetDocumentRegistration(aDoc, getter_AddRefs(registration));
-  NS_ENSURE_SUCCESS(rv, rv);
+  if (NS_WARN_IF(NS_FAILED(rv) && rv != NS_ERROR_NOT_AVAILABLE)) {
+    // It's OK to ignore the case where we don't have a registration.
+    return rv;
+  }
   *aIsControlled = !!registration;
   return NS_OK;
 }
@@ -2372,7 +2423,7 @@ ServiceWorkerManager::GetDocumentRegistration(nsIDocument* aDoc,
 {
   nsRefPtr<ServiceWorkerRegistrationInfo> registration;
   if (!mControlledDocuments.Get(aDoc, getter_AddRefs(registration))) {
-    return NS_ERROR_FAILURE;
+    return NS_ERROR_NOT_AVAILABLE;
   }
 
   // If the document is controlled, the current worker MUST be non-null.

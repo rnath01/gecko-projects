@@ -280,7 +280,8 @@ template void MacroAssembler::guardType(const ValueOperand &value, TypeSet::Type
 
 template<typename S, typename T>
 static void
-StoreToTypedFloatArray(MacroAssembler &masm, int arrayType, const S &value, const T &dest)
+StoreToTypedFloatArray(MacroAssembler &masm, int arrayType, const S &value, const T &dest,
+                       unsigned numElems)
 {
     switch (arrayType) {
       case Scalar::Float32:
@@ -294,10 +295,38 @@ StoreToTypedFloatArray(MacroAssembler &masm, int arrayType, const S &value, cons
         masm.storeDouble(value, dest);
         break;
       case Scalar::Float32x4:
-        masm.storeUnalignedFloat32x4(value, dest);
+        switch (numElems) {
+          case 1:
+            masm.storeFloat32(value, dest);
+            break;
+          case 2:
+            masm.storeDouble(value, dest);
+            break;
+          case 3:
+            masm.storeFloat32x3(value, dest);
+            break;
+          case 4:
+            masm.storeUnalignedFloat32x4(value, dest);
+            break;
+          default: MOZ_CRASH("unexpected number of elements in simd write");
+        }
         break;
       case Scalar::Int32x4:
-        masm.storeUnalignedInt32x4(value, dest);
+        switch (numElems) {
+          case 1:
+            masm.storeInt32x1(value, dest);
+            break;
+          case 2:
+            masm.storeInt32x2(value, dest);
+            break;
+          case 3:
+            masm.storeInt32x3(value, dest);
+            break;
+          case 4:
+            masm.storeUnalignedInt32x4(value, dest);
+            break;
+          default: MOZ_CRASH("unexpected number of elements in simd write");
+        }
         break;
       default:
         MOZ_CRASH("Invalid typed array type");
@@ -306,21 +335,21 @@ StoreToTypedFloatArray(MacroAssembler &masm, int arrayType, const S &value, cons
 
 void
 MacroAssembler::storeToTypedFloatArray(Scalar::Type arrayType, FloatRegister value,
-                                       const BaseIndex &dest)
+                                       const BaseIndex &dest, unsigned numElems)
 {
-    StoreToTypedFloatArray(*this, arrayType, value, dest);
+    StoreToTypedFloatArray(*this, arrayType, value, dest, numElems);
 }
 void
 MacroAssembler::storeToTypedFloatArray(Scalar::Type arrayType, FloatRegister value,
-                                       const Address &dest)
+                                       const Address &dest, unsigned numElems)
 {
-    StoreToTypedFloatArray(*this, arrayType, value, dest);
+    StoreToTypedFloatArray(*this, arrayType, value, dest, numElems);
 }
 
 template<typename T>
 void
 MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const T &src, AnyRegister dest, Register temp,
-                                   Label *fail, bool canonicalizeDoubles)
+                                   Label *fail, bool canonicalizeDoubles, unsigned numElems)
 {
     switch (arrayType) {
       case Scalar::Int8:
@@ -362,10 +391,38 @@ MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const T &src, AnyRegi
             canonicalizeDouble(dest.fpu());
         break;
       case Scalar::Int32x4:
-        loadUnalignedInt32x4(src, dest.fpu());
+        switch (numElems) {
+          case 1:
+            loadInt32x1(src, dest.fpu());
+            break;
+          case 2:
+            loadInt32x2(src, dest.fpu());
+            break;
+          case 3:
+            loadInt32x3(src, dest.fpu());
+            break;
+          case 4:
+            loadUnalignedInt32x4(src, dest.fpu());
+            break;
+          default: MOZ_CRASH("unexpected number of elements in SIMD load");
+        }
         break;
       case Scalar::Float32x4:
-        loadUnalignedFloat32x4(src, dest.fpu());
+        switch (numElems) {
+          case 1:
+            loadFloat32(src, dest.fpu());
+            break;
+          case 2:
+            loadDouble(src, dest.fpu());
+            break;
+          case 3:
+            loadFloat32x3(src, dest.fpu());
+            break;
+          case 4:
+            loadUnalignedFloat32x4(src, dest.fpu());
+            break;
+          default: MOZ_CRASH("unexpected number of elements in SIMD load");
+        }
         break;
       default:
         MOZ_CRASH("Invalid typed array type");
@@ -373,9 +430,11 @@ MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const T &src, AnyRegi
 }
 
 template void MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const Address &src, AnyRegister dest,
-                                                 Register temp, Label *fail, bool canonicalizeDoubles);
+                                                 Register temp, Label *fail, bool canonicalizeDoubles,
+                                                 unsigned numElems);
 template void MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const BaseIndex &src, AnyRegister dest,
-                                                 Register temp, Label *fail, bool canonicalizeDoubles);
+                                                 Register temp, Label *fail, bool canonicalizeDoubles,
+                                                 unsigned numElems);
 
 template<typename T>
 void
@@ -1131,7 +1190,8 @@ MacroAssembler::newGCThing(Register result, Register temp, JSObject *templateObj
 
 void
 MacroAssembler::createGCObject(Register obj, Register temp, JSObject *templateObj,
-                               gc::InitialHeap initialHeap, Label *fail, bool initContents)
+                               gc::InitialHeap initialHeap, Label *fail, bool initContents,
+                               bool convertDoubleElements)
 {
     gc::AllocKind allocKind = templateObj->asTenured().getAllocKind();
     MOZ_ASSERT(allocKind <= gc::AllocKind::OBJECT_LAST);
@@ -1148,7 +1208,7 @@ MacroAssembler::createGCObject(Register obj, Register temp, JSObject *templateOb
     }
 
     allocateObject(obj, temp, allocKind, nDynamicSlots, initialHeap, fail);
-    initGCThing(obj, temp, templateObj, initContents);
+    initGCThing(obj, temp, templateObj, initContents, convertDoubleElements);
 }
 
 
@@ -1309,7 +1369,7 @@ MacroAssembler::initGCSlots(Register obj, Register temp, NativeObject *templateO
 
 void
 MacroAssembler::initGCThing(Register obj, Register temp, JSObject *templateObj,
-                            bool initContents)
+                            bool initContents, bool convertDoubleElements)
 {
     // Fast initialization of an empty object returned by allocateObject().
 
@@ -1317,6 +1377,8 @@ MacroAssembler::initGCThing(Register obj, Register temp, JSObject *templateObj,
 
     if (Shape *shape = templateObj->maybeShape())
         storePtr(ImmGCPtr(shape), Address(obj, JSObject::offsetOfShape()));
+
+    MOZ_ASSERT_IF(convertDoubleElements, templateObj->is<ArrayObject>());
 
     if (templateObj->isNative()) {
         NativeObject *ntemplate = &templateObj->as<NativeObject>();
@@ -1343,7 +1405,7 @@ MacroAssembler::initGCThing(Register obj, Register temp, JSObject *templateObj,
                     Address(obj, elementsOffset + ObjectElements::offsetOfInitializedLength()));
             store32(Imm32(ntemplate->as<ArrayObject>().length()),
                     Address(obj, elementsOffset + ObjectElements::offsetOfLength()));
-            store32(Imm32(ntemplate->shouldConvertDoubleElements()
+            store32(Imm32(convertDoubleElements
                           ? ObjectElements::CONVERT_DOUBLE_ELEMENTS
                           : 0),
                     Address(obj, elementsOffset + ObjectElements::offsetOfFlags()));
@@ -1373,8 +1435,7 @@ MacroAssembler::initGCThing(Register obj, Register temp, JSObject *templateObj,
             offset += sizeof(uintptr_t);
         }
     } else if (templateObj->is<UnboxedPlainObject>()) {
-        storePtr(ImmWord(0), Address(obj, JSObject::offsetOfShape()));
-
+        storePtr(ImmWord(0), Address(obj, UnboxedPlainObject::offsetOfExpando()));
         if (initContents)
             initUnboxedObjectContents(obj, &templateObj->as<UnboxedPlainObject>());
     } else {

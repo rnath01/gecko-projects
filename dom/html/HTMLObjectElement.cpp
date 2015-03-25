@@ -50,9 +50,10 @@ HTMLObjectElement::~HTMLObjectElement()
 }
 
 bool
-HTMLObjectElement::IsInteractiveHTMLContent() const
+HTMLObjectElement::IsInteractiveHTMLContent(bool aIgnoreTabindex) const
 {
-  return HasAttr(kNameSpaceID_None, nsGkAtoms::usemap);
+  return HasAttr(kNameSpaceID_None, nsGkAtoms::usemap) ||
+         nsGenericHTMLFormElement::IsInteractiveHTMLContent(aIgnoreTabindex);
 }
 
 bool
@@ -501,10 +502,10 @@ HTMLObjectElement::CopyInnerTo(Element* aDest)
 }
 
 JSObject*
-HTMLObjectElement::WrapNode(JSContext* aCx)
+HTMLObjectElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
   JS::Rooted<JSObject*> obj(aCx,
-    HTMLObjectElementBinding::Wrap(aCx, this));
+    HTMLObjectElementBinding::Wrap(aCx, this, aGivenProto));
   if (!obj) {
     return nullptr;
   }
