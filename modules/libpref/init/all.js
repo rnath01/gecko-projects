@@ -427,10 +427,10 @@ pref("media.getusermedia.screensharing.enabled", true);
 #endif
 
 #ifdef RELEASE_BUILD
-pref("media.getusermedia.screensharing.allowed_domains", "webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,example.com");
+pref("media.getusermedia.screensharing.allowed_domains", "webex.com,*.webex.com,ciscospark.com,*.ciscospark.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,free.gotomeeting.com,g2m.me,*.g2m.me,example.com");
 #else
  // temporary value, not intended for release - bug 1049087
-pref("media.getusermedia.screensharing.allowed_domains", "mozilla.github.io,webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,example.com");
+pref("media.getusermedia.screensharing.allowed_domains", "mozilla.github.io,webex.com,*.webex.com,ciscospark.com,*.ciscospark.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,free.gotomeeting.com,g2m.me,*.g2m.me,example.com");
 #endif
 // OS/X 10.6 and XP have screen/window sharing off by default due to various issues - Caveat emptor
 pref("media.getusermedia.screensharing.allow_on_old_platforms", false);
@@ -837,6 +837,9 @@ pref("devtools.remote.wifi.visible", false);
 // Client must complete TLS handshake within this window (ms)
 pref("devtools.remote.tls-handshake-timeout", 10000);
 
+// URL of the remote JSON catalog used for device simulation
+pref("devtools.devices.url", "https://code.cdn.mozilla.net/devices/devices.json");
+
 // view source
 pref("view_source.syntax_highlight", true);
 pref("view_source.wrap_long_lines", false);
@@ -1042,7 +1045,7 @@ pref("dom.webcomponents.enabled",           false);
 pref("javascript.enabled",                  true);
 pref("javascript.options.strict",           false);
 #ifdef DEBUG
-pref("javascript.options.strict.debug",     true);
+pref("javascript.options.strict.debug",     false);
 #endif
 pref("javascript.options.baselinejit",      true);
 pref("javascript.options.ion",              true);
@@ -2174,7 +2177,7 @@ pref("layout.css.prefixes.font-features", true);
 
 // Is the CSS Unprefixing Service enabled? (This service emulates support
 // for certain vendor-prefixed properties & values, for sites on a "fixlist".)
-pref("layout.css.unprefixing-service.enabled", false);
+pref("layout.css.unprefixing-service.enabled", true);
 
 // Is support for the :scope selector enabled?
 pref("layout.css.scope-pseudo.enabled", true);
@@ -2183,7 +2186,11 @@ pref("layout.css.scope-pseudo.enabled", true);
 pref("layout.css.background-blend-mode.enabled", true);
 
 // Is support for CSS vertical text enabled?
+#ifdef RELEASE_BUILD
 pref("layout.css.vertical-text.enabled", false);
+#else
+pref("layout.css.vertical-text.enabled", true);
+#endif
 
 // Is support for object-fit and object-position enabled?
 pref("layout.css.object-fit-and-position.enabled", true);
@@ -3001,7 +3008,7 @@ pref("intl.keyboard.per_window_layout", false);
 
 #ifdef NS_ENABLE_TSF
 // Enable/Disable TSF support on Vista or later.
-#ifdef NIGHTLY_BUILD
+#ifndef RELEASE_BUILD
 pref("intl.tsf.enable", true);
 #else
 pref("intl.tsf.enable", false);
@@ -3024,6 +3031,14 @@ pref("intl.tsf.hack.atok.create_native_caret", true);
 pref("intl.tsf.hack.free_chang_jie.do_not_return_no_layout_error", true);
 // For Easy Changjei
 pref("intl.tsf.hack.easy_changjei.do_not_return_no_layout_error", true);
+// Whether use previous character rect for the result of
+// ITfContextView::GetTextExt() if the specified range is the first character
+// of selected clause of composition string.
+pref("intl.tsf.hack.google_ja_input.do_not_return_no_layout_error_at_first_char", true);
+// Whether use previous character rect for the result of
+// ITfContextView::GetTextExt() if the specified range is the caret of
+// composition string.
+pref("intl.tsf.hack.google_ja_input.do_not_return_no_layout_error_at_caret", true);
 #endif
 
 // See bug 448927, on topmost panel, some IMEs are not usable on Windows.
@@ -3810,6 +3825,10 @@ pref("image.cache.size", 5242880);
 // Size is given a weight of 1000 - timeweight.
 pref("image.cache.timeweight", 500);
 
+// Prevents images from automatically being decoded on load, instead allowing
+// them to be decoded on demand when they are drawn.
+pref("image.decode-only-on-draw.enabled", true);
+
 // Whether we attempt to downscale images during decoding.
 pref("image.downscale-during-decode.enabled", false);
 
@@ -3836,10 +3855,6 @@ pref("image.single-color-optimization.enabled", true);
 // Discards inactive image frames and re-decodes them on demand from
 // compressed data.
 pref("image.mem.discardable", true);
-
-// Prevents images from automatically being decoded on load, instead allowing
-// them to be decoded on demand when they are drawn.
-pref("image.mem.decodeondraw", true);
 
 // Allows image locking of decoded image data in content processes.
 pref("image.mem.allow_locking_in_content_processes", true);
@@ -4466,7 +4481,11 @@ pref("camera.control.face_detection.enabled", true);
 
 
 // SW Cache API
+#ifdef RELEASE_BUILD
 pref("dom.caches.enabled", false);
+#else
+pref("dom.caches.enabled", true);
+#endif // RELEASE_BUILD
 
 #ifdef MOZ_WIDGET_GONK
 // Empirically, this is the value returned by hal::GetTotalSystemMemory()
@@ -4517,7 +4536,7 @@ pref("browser.addon-watch.interval", 15000);
 #else
 pref("browser.addon-watch.interval", -1);
 #endif
-pref("browser.addon-watch.ignore", "[\"mochikit@mozilla.org\",\"special-powers@mozilla.org\"]");
+pref("browser.addon-watch.ignore", "[\"mochikit@mozilla.org\",\"special-powers@mozilla.org\",\"fxdevtools-adapters@mozilla.org\",\"fx-devtools\"]");
 // the percentage of time addons are allowed to use without being labeled slow
 pref("browser.addon-watch.percentage-limit", 5);
 
@@ -4577,9 +4596,6 @@ pref("media.gmp-manager.certs.1.issuerName", "CN=DigiCert Secure Server CA,O=Dig
 pref("media.gmp-manager.certs.1.commonName", "aus4.mozilla.org");
 pref("media.gmp-manager.certs.2.issuerName", "CN=Thawte SSL CA,O=\"Thawte, Inc.\",C=US");
 pref("media.gmp-manager.certs.2.commonName", "aus4.mozilla.org");
-
-// Adobe EME is currently pref'd off by default and hidden in the addon manager.
-pref("media.gmp-eme-adobe.hidden", true);
 #endif
 
 // Whether or not to perform reader mode article parsing on page load.
@@ -4620,14 +4636,10 @@ pref("media.gmp.insecure.allow", false);
 
 // Use vsync aligned rendering. b2g prefs are in b2g.js
 // Only supported on windows, os x, and b2g
-#if defined(XP_MACOSX)
+#if defined(XP_MACOSX) || defined(XP_WIN)
 pref("gfx.vsync.hw-vsync.enabled", true);
 pref("gfx.vsync.compositor", true);
-pref("gfx.vsync.refreshdriver", false);
-#elif defined(XP_WIN)
-pref("gfx.vsync.hw-vsync.enabled", false);
-pref("gfx.vsync.compositor", false);
-pref("gfx.vsync.refreshdriver", false);
+pref("gfx.vsync.refreshdriver", true);
 #endif
 
 // Secure Element API

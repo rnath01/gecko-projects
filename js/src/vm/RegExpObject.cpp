@@ -11,6 +11,7 @@
 
 #include "jsstr.h"
 
+#include "builtin/RegExp.h"
 #include "frontend/TokenStream.h"
 #include "irregexp/RegExpParser.h"
 #include "vm/MatchPairs.h"
@@ -66,12 +67,10 @@ RegExpObjectBuilder::getOrCreateClone(HandleObjectGroup group)
 {
     MOZ_ASSERT(!reobj_);
     MOZ_ASSERT(group->clasp() == &RegExpObject::class_);
-    group->proto().toObject()->assertParentIs(&group->proto().toObject()->global());
-    RootedObject parent(cx, &group->proto().toObject()->global());
 
     // Note: RegExp objects are always allocated in the tenured heap. This is
     // not strictly required, but simplifies embedding them in jitcode.
-    reobj_ = NewObjectWithGroup<RegExpObject>(cx->asJSContext(), group, parent, TenuredObject);
+    reobj_ = NewObjectWithGroup<RegExpObject>(cx->asJSContext(), group, TenuredObject);
     if (!reobj_)
         return false;
     reobj_->initPrivate(nullptr);
@@ -113,7 +112,6 @@ RegExpObjectBuilder::clone(Handle<RegExpObject *> other)
      * the clone -- if the |RegExpStatics| provides more flags we'll
      * need a different |RegExpShared|.
      */
-    other->getProto()->assertParentIs(&other->getProto()->global());
     RegExpStatics *res = other->getProto()->global().getRegExpStatics(cx);
     if (!res)
         return nullptr;
@@ -248,10 +246,10 @@ RegExpObject::trace(JSTracer *trc, JSObject *obj)
     // conditions, since:
     //   1. During TraceRuntime, isHeapBusy() is true, but the tracer might not
     //      be a marking tracer.
-    //   2. When a write barrier executes, IS_GC_MARKING_TRACER is true, but
+    //   2. When a write barrier executes, IsMarkingTracer is true, but
     //      isHeapBusy() will be false.
     if (trc->runtime()->isHeapBusy() &&
-        IS_GC_MARKING_TRACER(trc) &&
+        trc->isMarkingTracer() &&
         !obj->asTenured().zone()->isPreservingCode())
     {
         obj->as<RegExpObject>().NativeObject::setPrivate(nullptr);
@@ -276,7 +274,17 @@ const Class RegExpObject::class_ = {
     nullptr, /* call */
     nullptr, /* hasInstance */
     nullptr, /* construct */
-    RegExpObject::trace
+    RegExpObject::trace,
+
+    // ClassSpec
+    {
+        GenericCreateConstructor<js::regexp_construct, 2, JSFunction::FinalizeKind>,
+        CreateRegExpPrototype,
+        nullptr,
+        js::regexp_static_props,
+        js::regexp_methods,
+        js::regexp_properties
+    }
 };
 
 RegExpObject *
@@ -569,7 +577,7 @@ RegExpShared::~RegExpShared()
 void
 RegExpShared::trace(JSTracer *trc)
 {
-    if (IS_GC_MARKING_TRACER(trc))
+    if (trc->isMarkingTracer())
         marked_ = true;
 
     if (source)

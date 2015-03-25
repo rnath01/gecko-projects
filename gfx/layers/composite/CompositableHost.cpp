@@ -53,7 +53,7 @@ public:
     CompositableMap::Erase(mHost->GetAsyncID());
   }
 
-  virtual void ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE
+  virtual void ActorDestroy(ActorDestroyReason why) override
   {
     if (mHost) {
       mHost->Detach(nullptr, CompositableHost::FORCE_DETACH);
@@ -109,7 +109,9 @@ CompositableHost::UseTextureHost(TextureHost* aTexture)
   if (!aTexture) {
     return;
   }
-  aTexture->SetCompositor(GetCompositor());
+  if (GetCompositor()) {
+    aTexture->SetCompositor(GetCompositor());
+  }
 }
 
 void

@@ -136,7 +136,6 @@ MOZ_ALWAYS_INLINE void
 JSDependentString::init(js::ExclusiveContext *cx, JSLinearString *base, size_t start,
                         size_t length)
 {
-    MOZ_ASSERT(!js::IsPoisonedPtr(base));
     MOZ_ASSERT(start + length <= base->length());
     d.u1.length = length;
     JS::AutoCheckCannotGC nogc;
@@ -351,7 +350,7 @@ MOZ_ALWAYS_INLINE void
 JSString::finalize(js::FreeOp *fop)
 {
     /* FatInline strings are in a different arena. */
-    MOZ_ASSERT(getAllocKind() != js::gc::FINALIZE_FAT_INLINE_STRING);
+    MOZ_ASSERT(getAllocKind() != js::gc::AllocKind::FAT_INLINE_STRING);
 
     if (isFlat())
         asFlat().finalize(fop);
@@ -362,7 +361,7 @@ JSString::finalize(js::FreeOp *fop)
 inline void
 JSFlatString::finalize(js::FreeOp *fop)
 {
-    MOZ_ASSERT(getAllocKind() != js::gc::FINALIZE_FAT_INLINE_STRING);
+    MOZ_ASSERT(getAllocKind() != js::gc::AllocKind::FAT_INLINE_STRING);
 
     if (!isInline())
         fop->free_(nonInlineCharsRaw());
@@ -371,7 +370,7 @@ JSFlatString::finalize(js::FreeOp *fop)
 inline void
 JSFatInlineString::finalize(js::FreeOp *fop)
 {
-    MOZ_ASSERT(getAllocKind() == js::gc::FINALIZE_FAT_INLINE_STRING);
+    MOZ_ASSERT(getAllocKind() == js::gc::AllocKind::FAT_INLINE_STRING);
 
     if (!isInline())
         fop->free_(nonInlineCharsRaw());

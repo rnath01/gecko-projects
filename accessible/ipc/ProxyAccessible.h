@@ -42,6 +42,9 @@ public:
 
   uint32_t ChildrenCount() const { return mChildren.Length(); }
   ProxyAccessible* ChildAt(uint32_t aIdx) const { return mChildren[aIdx]; }
+
+  // XXX evaluate if this is fast enough.
+  size_t IndexInParent() const { return mParent->mChildren.IndexOf(this); }
   bool MustPruneChildren() const;
 
   void Shutdown();
@@ -173,6 +176,10 @@ public:
   void DeleteText(int32_t aStartPos, int32_t aEndPos);
 
   void PasteText(int32_t aPosition);
+
+  nsIntPoint ImagePosition(uint32_t aCoordType);
+
+  nsIntSize ImageSize();
 
   /**
    * Allow the platform to store a pointers worth of data on us.

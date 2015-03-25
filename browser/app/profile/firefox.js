@@ -37,6 +37,8 @@ pref("extensions.minCompatibleAppVersion", "4.0");
 // extensions.checkCompatibility=false has been set.
 pref("extensions.checkCompatibility.temporaryThemeOverride_minAppVersion", "29.0a1");
 
+pref("xpinstall.customConfirmationUI", true);
+
 // Preferences for AMO integration
 pref("extensions.getAddons.cache.enabled", true);
 pref("extensions.getAddons.maxResults", 15);
@@ -285,7 +287,7 @@ pref("browser.slowStartup.maxSamples", 5);
 pref("browser.aboutHomeSnippets.updateUrl", "https://snippets.cdn.mozilla.net/%STARTPAGE_VERSION%/%NAME%/%VERSION%/%APPBUILDID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/");
 
 pref("browser.enable_automatic_image_resizing", true);
-pref("browser.casting.enabled", true);
+pref("browser.casting.enabled", false);
 pref("browser.chrome.site_icons", true);
 pref("browser.chrome.favicons", true);
 // browser.warnOnQuit == false will override all other possible prompts when quitting or restarting
@@ -1231,7 +1233,7 @@ pref("security.sandbox.windows.log.stackTraceDepth", 0);
 // This setting is read when the content process is started. On Mac the content
 // process is killed when all windows are closed, so a change will take effect
 // when the 1st window is opened.
-pref("security.sandbox.content.level", 0);
+pref("security.sandbox.content.level", 1);
 #endif
 
 // This pref governs whether we attempt to work around problems caused by
@@ -1298,7 +1300,7 @@ pref("services.sync.prefs.sync.extensions.update.enabled", true);
 pref("services.sync.prefs.sync.intl.accept_languages", true);
 pref("services.sync.prefs.sync.javascript.enabled", true);
 pref("services.sync.prefs.sync.layout.spellcheckDefault", true);
-pref("services.sync.prefs.sync.lightweightThemes.isThemeSelected", true);
+pref("services.sync.prefs.sync.lightweightThemes.selectedThemeID", true);
 pref("services.sync.prefs.sync.lightweightThemes.usedThemes", true);
 pref("services.sync.prefs.sync.network.cookie.cookieBehavior", true);
 pref("services.sync.prefs.sync.network.cookie.lifetimePolicy", true);
@@ -1433,33 +1435,8 @@ pref("devtools.debugger.ui.variables-sorting-enabled", true);
 pref("devtools.debugger.ui.variables-only-enum-visible", false);
 pref("devtools.debugger.ui.variables-searchbox-visible", false);
 
-// Enable the Profiler
-pref("devtools.profiler.enabled", true);
-
-// Timeline panel settings
-#ifdef NIGHTLY_BUILD
-pref("devtools.timeline.enabled", true);
-#else
-pref("devtools.timeline.enabled", false);
-#endif
-
-// TODO remove `devtools.timeline.hiddenMarkers.` branches when performance
-// tool lands (bug 1075567)
-pref("devtools.timeline.hiddenMarkers", "[]");
-
-// Enable perftools via build command
-#ifdef MOZ_DEVTOOLS_PERFTOOLS
-  pref("devtools.performance_dev.enabled", true);
-#else
-  pref("devtools.performance_dev.enabled", false);
-#endif
-
-// The default Profiler UI settings
-// TODO remove `devtools.profiler.ui.` branches when performance
-// tool lands (bug 1075567)
-pref("devtools.profiler.ui.flatten-tree-recursion", true);
-pref("devtools.profiler.ui.show-platform-data", false);
-pref("devtools.profiler.ui.show-idle-blocks", true);
+// Enable the Performance tools
+pref("devtools.performance.enabled", true);
 
 // The default Performance UI settings
 pref("devtools.performance.memory.sample-probability", "0.05");
@@ -1723,10 +1700,11 @@ pref("loop.debug.loglevel", "Error");
 pref("loop.debug.dispatcher", false);
 pref("loop.debug.websocket", false);
 pref("loop.debug.sdk", false);
+pref("loop.debug.twoWayMediaTelemetry", false);
 #ifdef DEBUG
-pref("loop.CSP", "default-src 'self' about: file: chrome: http://localhost:*; img-src 'self' data: https://www.gravatar.com/ about: file: chrome:; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net http://localhost:* ws://localhost:*; media-src blob:");
+pref("loop.CSP", "default-src 'self' about: file: chrome: http://localhost:*; img-src *; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net http://localhost:* ws://localhost:*; media-src blob:");
 #else
-pref("loop.CSP", "default-src 'self' about: file: chrome:; img-src 'self' data: https://www.gravatar.com/ about: file: chrome:; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net; media-src blob:");
+pref("loop.CSP", "default-src 'self' about: file: chrome:; img-src *; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net; media-src blob:");
 #endif
 pref("loop.oauth.google.redirect_uri", "urn:ietf:wg:oauth:2.0:oob:auto");
 pref("loop.oauth.google.scope", "https://www.google.com/m8/feeds");
@@ -1736,6 +1714,7 @@ pref("loop.support_url", "https://support.mozilla.org/kb/group-conversations-fir
 pref("loop.contacts.gravatars.show", false);
 pref("loop.contacts.gravatars.promo", true);
 pref("loop.browserSharing.showInfoBar", true);
+pref("loop.contextInConverations.enabled", false);
 
 // serverURL to be assigned by services team
 pref("services.push.serverURL", "wss://push.services.mozilla.com/");
@@ -1902,5 +1881,9 @@ pref("dom.ipc.reportProcessHangs", true);
 pref("reader.parse-on-load.enabled", false);
 #endif
 
-// Disable ReadingList by default.
-pref("browser.readinglist.enabled", false);
+// Enable ReadingList browser UI by default.
+pref("browser.readinglist.enabled", true);
+pref("browser.readinglist.sidebarEverOpened", false);
+// Enable the readinglist engine by default.
+pref("readinglist.scheduler.enabled", true);
+pref("readinglist.server", "https://readinglist.services.mozilla.com/v1");

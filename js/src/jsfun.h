@@ -431,11 +431,11 @@ class JSFunction : public js::NativeObject
     }
 
 #if JS_BITS_PER_WORD == 32
-    static const js::gc::AllocKind FinalizeKind = js::gc::FINALIZE_OBJECT2_BACKGROUND;
-    static const js::gc::AllocKind ExtendedFinalizeKind = js::gc::FINALIZE_OBJECT4_BACKGROUND;
+    static const js::gc::AllocKind FinalizeKind = js::gc::AllocKind::OBJECT2_BACKGROUND;
+    static const js::gc::AllocKind ExtendedFinalizeKind = js::gc::AllocKind::OBJECT4_BACKGROUND;
 #else
-    static const js::gc::AllocKind FinalizeKind = js::gc::FINALIZE_OBJECT4_BACKGROUND;
-    static const js::gc::AllocKind ExtendedFinalizeKind = js::gc::FINALIZE_OBJECT8_BACKGROUND;
+    static const js::gc::AllocKind FinalizeKind = js::gc::AllocKind::OBJECT4_BACKGROUND;
+    static const js::gc::AllocKind ExtendedFinalizeKind = js::gc::AllocKind::OBJECT8_BACKGROUND;
 #endif
 
     inline void trace(JSTracer *trc);
@@ -515,17 +515,22 @@ NewNativeConstructor(ExclusiveContext *cx, JSNative native, unsigned nargs, Hand
                      NewObjectKind newKind = GenericObject,
                      JSFunction::Flags flags = JSFunction::NATIVE_CTOR);
 
-// Allocate a new scripted function.
+// Allocate a new scripted function.  If enclosingDynamicScope is null, the
+// global will be used.  In all cases the parent of the resulting object will be
+// the global.
 extern JSFunction *
-NewScriptedFunction(ExclusiveContext *cx, unsigned nargs,
-                    JSFunction::Flags flags, HandleObject parent, HandleAtom atom,
-                    gc::AllocKind allocKind = JSFunction::FinalizeKind,
-                    NewObjectKind newKind = GenericObject);
+NewScriptedFunction(ExclusiveContext *cx, unsigned nargs, JSFunction::Flags flags,
+                    HandleAtom atom, gc::AllocKind allocKind = JSFunction::FinalizeKind,
+                    NewObjectKind newKind = GenericObject,
+                    HandleObject enclosingDynamicScope = NullPtr());
 
-// If proto is nullptr, Function.prototype is used instead.
+// If proto is nullptr, Function.prototype is used instead.  If
+// enclosingDynamicScope is null, the function will have a null environment()
+// (yes, null, not the global).  In all cases, the global will be used as the
+// parent.
 extern JSFunction *
 NewFunctionWithProto(ExclusiveContext *cx, JSNative native, unsigned nargs,
-                     JSFunction::Flags flags, HandleObject parent, HandleAtom atom,
+                     JSFunction::Flags flags, HandleObject enclosingDynamicScope, HandleAtom atom,
                      HandleObject proto, gc::AllocKind allocKind = JSFunction::FinalizeKind,
                      NewObjectKind newKind = GenericObject);
 
@@ -579,7 +584,8 @@ class FunctionExtended : public JSFunction
 };
 
 extern bool
-CloneFunctionObjectUseSameScript(JSCompartment *compartment, HandleFunction fun);
+CloneFunctionObjectUseSameScript(JSCompartment *compartment, HandleFunction fun,
+                                 HandleObject newParent);
 
 extern JSFunction *
 CloneFunctionObject(JSContext *cx, HandleFunction fun, HandleObject parent,
@@ -648,7 +654,8 @@ XDRInterpretedFunction(XDRState<mode> *xdr, HandleObject enclosingScope,
                        HandleScript enclosingScript, MutableHandleFunction objp);
 
 extern JSObject *
-CloneFunctionAndScript(JSContext *cx, HandleObject enclosingScope, HandleFunction fun);
+CloneFunctionAndScript(JSContext *cx, HandleObject enclosingScope, HandleFunction fun,
+                       PollutedGlobalScopeOption polluted);
 
 /*
  * Report an error that call.thisv is not compatible with the specified class,

@@ -3220,14 +3220,12 @@ CreateArrayPrototype(JSContext *cx, JSProtoKey key)
     if (!NewObjectMetadata(cx, &metadata))
         return nullptr;
 
-    proto->assertParentIs(cx->global());
     RootedShape shape(cx, EmptyShape::getInitialShape(cx, &ArrayObject::class_, TaggedProto(proto),
-                                                      cx->global(), metadata,
-                                                      gc::FINALIZE_OBJECT0));
+                                                      metadata, gc::AllocKind::OBJECT0));
     if (!shape)
         return nullptr;
 
-    RootedArrayObject arrayProto(cx, ArrayObject::createArray(cx, gc::FINALIZE_OBJECT4,
+    RootedArrayObject arrayProto(cx, ArrayObject::createArray(cx, gc::AllocKind::OBJECT4,
                                                               gc::TenuredHeap, shape, group, 0));
     if (!arrayProto ||
         !JSObject::setSingleton(cx, arrayProto) ||
@@ -3267,6 +3265,7 @@ const Class ArrayObject::class_ = {
         GenericCreateConstructor<ArrayConstructor, 1, JSFunction::FinalizeKind>,
         CreateArrayPrototype,
         array_static_methods,
+        nullptr,
         array_methods
     }
 };
@@ -3351,8 +3350,8 @@ NewArray(ExclusiveContext *cxArg, uint32_t length,
      * See JSObject::createArray.
      */
     RootedShape shape(cxArg, EmptyShape::getInitialShape(cxArg, &ArrayObject::class_,
-                                                         TaggedProto(proto), cxArg->global(),
-                                                         metadata, gc::FINALIZE_OBJECT0));
+                                                         TaggedProto(proto),
+                                                         metadata, gc::AllocKind::OBJECT0));
     if (!shape)
         return nullptr;
 
@@ -3419,7 +3418,7 @@ js::NewDenseUnallocatedArray(ExclusiveContext *cx, uint32_t length,
 
 ArrayObject *
 js::NewDenseArray(ExclusiveContext *cx, uint32_t length, HandleObjectGroup group,
-                  AllocatingBehaviour allocating)
+                  AllocatingBehaviour allocating, bool convertDoubleElements)
 {
     NewObjectKind newKind = !group ? SingletonObject : GenericObject;
     if (group && group->shouldPreTenure())
@@ -3439,6 +3438,9 @@ js::NewDenseArray(ExclusiveContext *cx, uint32_t length, HandleObjectGroup group
 
     if (group)
         arr->setGroup(group);
+
+    if (convertDoubleElements)
+        arr->setShouldConvertDoubleElements();
 
     // If the length calculation overflowed, make sure that is marked for the
     // new group.

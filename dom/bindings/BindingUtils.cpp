@@ -752,7 +752,7 @@ NativeInterface2JSObjectAndThrowIfFailed(JSContext* aCx,
   if (cache && cache->IsDOMBinding()) {
       JS::Rooted<JSObject*> obj(aCx, cache->GetWrapper());
       if (!obj) {
-          obj = cache->WrapObject(aCx);
+        obj = cache->WrapObject(aCx, JS::NullPtr());
       }
 
       if (obj && aAllowNativeWrapper && !JS_WrapObject(aCx, &obj)) {
@@ -2299,7 +2299,7 @@ IsInCertifiedApp(JSContext* aCx, JSObject* aObj)
 
 #ifdef DEBUG
 void
-VerifyTraceProtoAndIfaceCacheCalled(JSTracer *trc, void **thingp,
+VerifyTraceProtoAndIfaceCacheCalled(JS::CallbackTracer *trc, void **thingp,
                                     JSGCTraceKind kind)
 {
     // We don't do anything here, we only want to verify that

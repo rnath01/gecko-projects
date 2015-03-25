@@ -42,6 +42,7 @@
 <!ENTITY url_bar_default_text2 "Search or enter address">
 
 <!ENTITY bookmark "Bookmark">
+<!ENTITY bookmark_remove "Remove bookmark">
 <!ENTITY bookmark_added "Bookmark added">
 <!ENTITY bookmark_removed "Bookmark removed">
 <!ENTITY bookmark_updated "Bookmark updated">
@@ -115,6 +116,10 @@
 <!ENTITY overlay_share_no_url "No link found in this share">
 <!ENTITY overlay_share_retry "Try again">
 <!ENTITY overlay_share_select_device "Select device">
+<!-- Localization note (overlay_no_synced_devices) : Used when the menu option
+     to send a tab to a synced device is pressed and no other synced devices
+     are found. -->
+<!ENTITY overlay_no_synced_devices "No Firefox Account connected devices found">
 
 <!ENTITY pref_category_search3 "Search">
 <!ENTITY pref_category_search_summary "Customize your search providers">
@@ -179,6 +184,23 @@
 <!ENTITY pref_tracking_protection_summary "&brandShortName; will prevent sites from tracking you">
 <!ENTITY pref_donottrack_title "Do not track">
 <!ENTITY pref_donottrack_summary "&brandShortName; will tell sites that you do not want to be tracked">
+
+<!ENTITY tab_queue_toast_message "Open later">
+<!ENTITY tab_queue_toast_action "Open now">
+<!-- Localization note (tab_queue_notification_text_plural) : The
+     formatD is replaced with the number of tabs queued.  The
+     number of tabs queued is always more than one.  We can't use
+     Android plural forms, sadly. See Bug #753859. -->
+<!ENTITY tab_queue_notification_text_plural "&formatD; tabs queued">
+<!-- Localization note (tab_queue_notification_title_plural) : This is the
+     title of a notification; we expect more than one tab queued. -->
+<!ENTITY tab_queue_notification_title_plural "Tabs Queued">
+<!-- Localization note (tab_queue_notification_title_singular) : This is the
+     title of a notification; we expect only one tab queued. -->
+<!ENTITY tab_queue_notification_title_singular "Tab Queued">
+<!-- Localization note (tab_queue_notification_text_singular) : This is the
+     text of a notification; we expect only one tab queued. -->
+<!ENTITY tab_queue_notification_text_singular "1 tab queued">
 
 <!ENTITY pref_char_encoding "Character encoding">
 <!ENTITY pref_char_encoding_on "Show menu">

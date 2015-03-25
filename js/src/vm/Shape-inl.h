@@ -25,10 +25,9 @@ namespace js {
 
 inline
 StackBaseShape::StackBaseShape(ExclusiveContext *cx, const Class *clasp,
-                               JSObject *parent, JSObject *metadata, uint32_t objectFlags)
+                               JSObject *metadata, uint32_t objectFlags)
   : flags(objectFlags),
     clasp(clasp),
-    parent(parent),
     metadata(metadata),
     compartment(cx->compartment_)
 {}
@@ -163,10 +162,7 @@ AutoRooterGetterSetter::Inner::Inner(ExclusiveContext *cx, uint8_t attrs,
                                      GetterOp *pgetter_, SetterOp *psetter_)
   : CustomAutoRooter(cx), attrs(attrs),
     pgetter(pgetter_), psetter(psetter_)
-{
-    MOZ_ASSERT_IF(attrs & JSPROP_GETTER, !IsPoisonedPtr(*pgetter));
-    MOZ_ASSERT_IF(attrs & JSPROP_SETTER, !IsPoisonedPtr(*psetter));
-}
+{}
 
 inline
 AutoRooterGetterSetter::AutoRooterGetterSetter(ExclusiveContext *cx, uint8_t attrs,

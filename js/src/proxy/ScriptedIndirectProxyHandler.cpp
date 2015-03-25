@@ -10,6 +10,7 @@
 #include "jsapi.h"
 #include "jscntxt.h"
 
+#include "jscntxtinlines.h"
 #include "jsobjinlines.h"
 
 using namespace js;
@@ -202,7 +203,7 @@ ScriptedIndirectProxyHandler::defineProperty(JSContext *cx, HandleObject proxy, 
     RootedObject handler(cx, GetIndirectProxyHandlerObject(proxy));
     RootedValue fval(cx), value(cx);
     return GetFundamentalTrap(cx, handler, cx->names().defineProperty, &fval) &&
-           NewPropertyDescriptorObject(cx, desc, &value) &&
+           FromPropertyDescriptor(cx, desc, &value) &&
            Trap2(cx, handler, fval, id, value, &value) &&
            result.succeed();
 }
@@ -324,6 +325,26 @@ ScriptedIndirectProxyHandler::set(JSContext *cx, HandleObject proxy, HandleObjec
     return result.succeed();
 }
 
+static bool
+CallSetter(JSContext *cx, HandleObject obj, HandleId id, SetterOp op, unsigned attrs,
+           MutableHandleValue vp, ObjectOpResult &result)
+{
+    if (attrs & JSPROP_SETTER) {
+        RootedValue opv(cx, CastAsObjectJsval(op));
+        if (!InvokeGetterOrSetter(cx, obj, opv, 1, vp.address(), vp))
+            return false;
+        return result.succeed();
+    }
+
+    if (attrs & JSPROP_GETTER)
+        return result.fail(JSMSG_GETTER_ONLY);
+
+    if (!op)
+        return result.succeed();
+
+    return CallJSSetterOp(cx, op, obj, id, vp, result);
+}
+
 bool
 ScriptedIndirectProxyHandler::derivedSet(JSContext *cx, HandleObject proxy, HandleObject receiver,
                                          HandleId id, MutableHandleValue vp,
@@ -353,7 +374,7 @@ ScriptedIndirectProxyHandler::derivedSet(JSContext *cx, HandleObject proxy, Hand
         MOZ_ASSERT(desc.setter() != JS_StrictPropertyStub);
 
         // Check for read-only properties.
-        if (desc.isReadonly())
+        if (desc.isDataDescriptor() && !desc.writable())
             return result.fail(descIsOwn ? JSMSG_READ_ONLY : JSMSG_CANT_REDEFINE_PROP);
 
         if (desc.hasSetterObject() || desc.setter()) {

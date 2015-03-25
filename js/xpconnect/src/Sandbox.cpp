@@ -204,7 +204,7 @@ SandboxCreateCrypto(JSContext *cx, JS::HandleObject obj)
 
     dom::Crypto* crypto = new dom::Crypto();
     crypto->Init(native);
-    JS::RootedObject wrapped(cx, crypto->WrapObject(cx));
+    JS::RootedObject wrapped(cx, crypto->WrapObject(cx, JS::NullPtr()));
     return JS_DefineProperty(cx, obj, "crypto", wrapped, JSPROP_ENUMERATE);
 }
 
@@ -218,7 +218,7 @@ SandboxCreateRTCIdentityProvider(JSContext *cx, JS::HandleObject obj)
 
     dom::RTCIdentityProviderRegistrar* registrar =
             new dom::RTCIdentityProviderRegistrar(nativeGlobal);
-    JS::RootedObject wrapped(cx, registrar->WrapObject(cx));
+    JS::RootedObject wrapped(cx, registrar->WrapObject(cx, JS::NullPtr()));
     return JS_DefineProperty(cx, obj, "rtcIdentityProvider", wrapped, JSPROP_ENUMERATE);
 }
 
@@ -440,7 +440,7 @@ sandbox_addProperty(JSContext *cx, HandleObject obj, HandleId id, MutableHandleV
     // readonly. We have to use JS_CopyPropertyFrom since it ignores the
     // readonly attribute (as it calls JSObject::defineProperty). See bug
     // 1019181.
-    if (pd.object() && pd.isPermanent()) {
+    if (pd.object() && !pd.configurable()) {
         if (!JS_SetPropertyById(cx, proto, id, vp))
             return false;
     } else {
@@ -1532,8 +1532,8 @@ xpc::EvalInSandbox(JSContext *cx, HandleObject sandboxArg, const nsAString& sour
         JS::CompileOptions options(sandcx);
         options.setFileAndLine(filenameBuf.get(), lineNo)
                .setVersion(jsVersion);
-        JS::RootedObject rootedSandbox(sandcx, sandbox);
-        ok = JS::Evaluate(sandcx, rootedSandbox, options,
+        MOZ_ASSERT(JS_IsGlobalObject(sandbox));
+        ok = JS::Evaluate(sandcx, options,
                           PromiseFlatString(source).get(), source.Length(), &v);
 
         // If the sandbox threw an exception, grab it off the context.

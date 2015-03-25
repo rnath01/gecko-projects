@@ -456,7 +456,7 @@ HandleExceptionIon(JSContext *cx, const InlineFrameIterator &frame, ResumeFromEx
             continue;
 
         switch (tn->kind) {
-          case JSTRY_ITER: {
+          case JSTRY_FOR_IN: {
             MOZ_ASSERT(JSOp(*(script->main() + tn->start + tn->length)) == JSOP_ENDITER);
             MOZ_ASSERT(tn->stackDepth > 0);
 
@@ -465,6 +465,7 @@ HandleExceptionIon(JSContext *cx, const InlineFrameIterator &frame, ResumeFromEx
             break;
           }
 
+          case JSTRY_FOR_OF:
           case JSTRY_LOOP:
             break;
 
@@ -666,7 +667,7 @@ HandleExceptionBaseline(JSContext *cx, const JitFrameIterator &frame, ResumeFrom
             }
             break;
 
-          case JSTRY_ITER: {
+          case JSTRY_FOR_IN: {
             Value iterValue(* (Value *) rfe->stackPointer);
             RootedObject iterObject(cx, &iterValue.toObject());
             if (cx->isExceptionPending())
@@ -676,6 +677,7 @@ HandleExceptionBaseline(JSContext *cx, const JitFrameIterator &frame, ResumeFrom
             break;
           }
 
+          case JSTRY_FOR_OF:
           case JSTRY_LOOP:
             break;
 
@@ -988,16 +990,14 @@ ReadAllocation(const JitFrameIterator &frame, const LAllocation *a)
 #endif
 
 static void
-MarkThisAndArguments(JSTracer *trc, const JitFrameIterator &frame)
+MarkThisAndArguments(JSTracer *trc, JitFrameLayout *layout)
 {
     // Mark |this| and any extra actual arguments for an Ion frame. Marking of
     // formal arguments is taken care of by the frame's safepoint/snapshot,
     // except when the script might have lazy arguments, in which case we mark
     // them as well.
 
-    JitFrameLayout *layout = frame.jsFrame();
-
-    size_t nargs = frame.numActualArgs();
+    size_t nargs = layout->numActualArgs();
     size_t nformals = 0;
     if (CalleeTokenIsFunction(layout->calleeToken())) {
         JSFunction *fun = CalleeTokenToFunction(layout->calleeToken());
@@ -1012,6 +1012,13 @@ MarkThisAndArguments(JSTracer *trc, const JitFrameIterator &frame)
     // Trace actual arguments beyond the formals. Note + 1 for thisv.
     for (size_t i = nformals + 1; i < nargs + 1; i++)
         gc::MarkValueRoot(trc, &argv[i], "ion-argv");
+}
+
+static void
+MarkThisAndArguments(JSTracer *trc, const JitFrameIterator &frame)
+{
+    JitFrameLayout *layout = frame.jsFrame();
+    MarkThisAndArguments(trc, layout);
 }
 
 #ifdef JS_NUNBOX32
@@ -1349,6 +1356,16 @@ MarkJitExitFrame(JSTracer *trc, const JitFrameIterator &frame)
         } else {
             gc::MarkValueRoot(trc, dom->vp(), "ion-dom-args");
         }
+        return;
+    }
+
+    if (frame.isExitFrameLayout<LazyLinkExitFrameLayout>()) {
+        LazyLinkExitFrameLayout *ll = frame.exitFrame()->as<LazyLinkExitFrameLayout>();
+        JitFrameLayout *layout = ll->jsFrame();
+
+        gc::MarkJitCodeRoot(trc, ll->stubCode(), "lazy-link-code");
+        layout->replaceCalleeToken(MarkCalleeToken(trc, layout->calleeToken()));
+        MarkThisAndArguments(trc, layout);
         return;
     }
 
@@ -2479,9 +2496,10 @@ InlineFrameIterator::computeScopeChain(Value scopeChainValue, MaybeReadFallback 
     if (isFunctionFrame())
         return callee(fallback)->environment();
 
-    // Ion does not handle scripts that are not compile-and-go.
+    // Ion does not handle non-function scripts that have anything other than
+    // the global on their scope chain.
     MOZ_ASSERT(!script()->isForEval());
-    MOZ_ASSERT(script()->compileAndGo());
+    MOZ_ASSERT(!script()->hasPollutedGlobalScope());
     return &script()->global();
 }
 

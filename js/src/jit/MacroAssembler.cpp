@@ -280,7 +280,8 @@ template void MacroAssembler::guardType(const ValueOperand &value, TypeSet::Type
 
 template<typename S, typename T>
 static void
-StoreToTypedFloatArray(MacroAssembler &masm, int arrayType, const S &value, const T &dest)
+StoreToTypedFloatArray(MacroAssembler &masm, int arrayType, const S &value, const T &dest,
+                       unsigned numElems)
 {
     switch (arrayType) {
       case Scalar::Float32:
@@ -294,10 +295,38 @@ StoreToTypedFloatArray(MacroAssembler &masm, int arrayType, const S &value, cons
         masm.storeDouble(value, dest);
         break;
       case Scalar::Float32x4:
-        masm.storeUnalignedFloat32x4(value, dest);
+        switch (numElems) {
+          case 1:
+            masm.storeFloat32(value, dest);
+            break;
+          case 2:
+            masm.storeDouble(value, dest);
+            break;
+          case 3:
+            masm.storeFloat32x3(value, dest);
+            break;
+          case 4:
+            masm.storeUnalignedFloat32x4(value, dest);
+            break;
+          default: MOZ_CRASH("unexpected number of elements in simd write");
+        }
         break;
       case Scalar::Int32x4:
-        masm.storeUnalignedInt32x4(value, dest);
+        switch (numElems) {
+          case 1:
+            masm.storeInt32x1(value, dest);
+            break;
+          case 2:
+            masm.storeInt32x2(value, dest);
+            break;
+          case 3:
+            masm.storeInt32x3(value, dest);
+            break;
+          case 4:
+            masm.storeUnalignedInt32x4(value, dest);
+            break;
+          default: MOZ_CRASH("unexpected number of elements in simd write");
+        }
         break;
       default:
         MOZ_CRASH("Invalid typed array type");
@@ -306,21 +335,21 @@ StoreToTypedFloatArray(MacroAssembler &masm, int arrayType, const S &value, cons
 
 void
 MacroAssembler::storeToTypedFloatArray(Scalar::Type arrayType, FloatRegister value,
-                                       const BaseIndex &dest)
+                                       const BaseIndex &dest, unsigned numElems)
 {
-    StoreToTypedFloatArray(*this, arrayType, value, dest);
+    StoreToTypedFloatArray(*this, arrayType, value, dest, numElems);
 }
 void
 MacroAssembler::storeToTypedFloatArray(Scalar::Type arrayType, FloatRegister value,
-                                       const Address &dest)
+                                       const Address &dest, unsigned numElems)
 {
-    StoreToTypedFloatArray(*this, arrayType, value, dest);
+    StoreToTypedFloatArray(*this, arrayType, value, dest, numElems);
 }
 
 template<typename T>
 void
 MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const T &src, AnyRegister dest, Register temp,
-                                   Label *fail, bool canonicalizeDoubles)
+                                   Label *fail, bool canonicalizeDoubles, unsigned numElems)
 {
     switch (arrayType) {
       case Scalar::Int8:
@@ -362,10 +391,38 @@ MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const T &src, AnyRegi
             canonicalizeDouble(dest.fpu());
         break;
       case Scalar::Int32x4:
-        loadUnalignedInt32x4(src, dest.fpu());
+        switch (numElems) {
+          case 1:
+            loadInt32x1(src, dest.fpu());
+            break;
+          case 2:
+            loadInt32x2(src, dest.fpu());
+            break;
+          case 3:
+            loadInt32x3(src, dest.fpu());
+            break;
+          case 4:
+            loadUnalignedInt32x4(src, dest.fpu());
+            break;
+          default: MOZ_CRASH("unexpected number of elements in SIMD load");
+        }
         break;
       case Scalar::Float32x4:
-        loadUnalignedFloat32x4(src, dest.fpu());
+        switch (numElems) {
+          case 1:
+            loadFloat32(src, dest.fpu());
+            break;
+          case 2:
+            loadDouble(src, dest.fpu());
+            break;
+          case 3:
+            loadFloat32x3(src, dest.fpu());
+            break;
+          case 4:
+            loadUnalignedFloat32x4(src, dest.fpu());
+            break;
+          default: MOZ_CRASH("unexpected number of elements in SIMD load");
+        }
         break;
       default:
         MOZ_CRASH("Invalid typed array type");
@@ -373,9 +430,11 @@ MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const T &src, AnyRegi
 }
 
 template void MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const Address &src, AnyRegister dest,
-                                                 Register temp, Label *fail, bool canonicalizeDoubles);
+                                                 Register temp, Label *fail, bool canonicalizeDoubles,
+                                                 unsigned numElems);
 template void MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const BaseIndex &src, AnyRegister dest,
-                                                 Register temp, Label *fail, bool canonicalizeDoubles);
+                                                 Register temp, Label *fail, bool canonicalizeDoubles,
+                                                 unsigned numElems);
 
 template<typename T>
 void
@@ -641,6 +700,98 @@ template void
 MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
                                            const Register &value, const BaseIndex &mem,
                                            Register temp1, Register temp2, AnyRegister output);
+
+// Binary operation for effect, result discarded.
+template<typename S, typename T>
+void
+MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType, const S &value,
+                                           const T &mem)
+{
+    // Uint8Clamped is explicitly not supported here
+    switch (arrayType) {
+      case Scalar::Int8:
+      case Scalar::Uint8:
+        switch (op) {
+          case AtomicFetchAddOp:
+            atomicAdd8(value, mem);
+            break;
+          case AtomicFetchSubOp:
+            atomicSub8(value, mem);
+            break;
+          case AtomicFetchAndOp:
+            atomicAnd8(value, mem);
+            break;
+          case AtomicFetchOrOp:
+            atomicOr8(value, mem);
+            break;
+          case AtomicFetchXorOp:
+            atomicXor8(value, mem);
+            break;
+          default:
+            MOZ_CRASH("Invalid typed array atomic operation");
+        }
+        break;
+      case Scalar::Int16:
+      case Scalar::Uint16:
+        switch (op) {
+          case AtomicFetchAddOp:
+            atomicAdd16(value, mem);
+            break;
+          case AtomicFetchSubOp:
+            atomicSub16(value, mem);
+            break;
+          case AtomicFetchAndOp:
+            atomicAnd16(value, mem);
+            break;
+          case AtomicFetchOrOp:
+            atomicOr16(value, mem);
+            break;
+          case AtomicFetchXorOp:
+            atomicXor16(value, mem);
+            break;
+          default:
+            MOZ_CRASH("Invalid typed array atomic operation");
+        }
+        break;
+      case Scalar::Int32:
+      case Scalar::Uint32:
+        switch (op) {
+          case AtomicFetchAddOp:
+            atomicAdd32(value, mem);
+            break;
+          case AtomicFetchSubOp:
+            atomicSub32(value, mem);
+            break;
+          case AtomicFetchAndOp:
+            atomicAnd32(value, mem);
+            break;
+          case AtomicFetchOrOp:
+            atomicOr32(value, mem);
+            break;
+          case AtomicFetchXorOp:
+            atomicXor32(value, mem);
+            break;
+          default:
+            MOZ_CRASH("Invalid typed array atomic operation");
+        }
+        break;
+      default:
+        MOZ_CRASH("Invalid typed array type");
+    }
+}
+
+template void
+MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
+                                           const Imm32 &value, const Address &mem);
+template void
+MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
+                                           const Imm32 &value, const BaseIndex &mem);
+template void
+MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
+                                           const Register &value, const Address &mem);
+template void
+MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
+                                           const Register &value, const BaseIndex &mem);
 
 template <typename T>
 void
@@ -993,7 +1144,7 @@ void
 MacroAssembler::allocateObject(Register result, Register temp, gc::AllocKind allocKind,
                                uint32_t nDynamicSlots, gc::InitialHeap initialHeap, Label *fail)
 {
-    MOZ_ASSERT(allocKind >= gc::FINALIZE_OBJECT0 && allocKind <= gc::FINALIZE_OBJECT_LAST);
+    MOZ_ASSERT(allocKind <= gc::AllocKind::OBJECT_LAST);
 
     checkAllocatorState(fail);
 
@@ -1029,7 +1180,7 @@ MacroAssembler::newGCThing(Register result, Register temp, JSObject *templateObj
                            gc::InitialHeap initialHeap, Label *fail)
 {
     gc::AllocKind allocKind = templateObj->asTenured().getAllocKind();
-    MOZ_ASSERT(allocKind >= gc::FINALIZE_OBJECT0 && allocKind <= gc::FINALIZE_OBJECT_LAST);
+    MOZ_ASSERT(allocKind <= gc::AllocKind::OBJECT_LAST);
 
     size_t ndynamic = 0;
     if (templateObj->isNative())
@@ -1039,10 +1190,11 @@ MacroAssembler::newGCThing(Register result, Register temp, JSObject *templateObj
 
 void
 MacroAssembler::createGCObject(Register obj, Register temp, JSObject *templateObj,
-                               gc::InitialHeap initialHeap, Label *fail, bool initFixedSlots)
+                               gc::InitialHeap initialHeap, Label *fail, bool initContents,
+                               bool convertDoubleElements)
 {
     gc::AllocKind allocKind = templateObj->asTenured().getAllocKind();
-    MOZ_ASSERT(allocKind >= gc::FINALIZE_OBJECT0 && allocKind <= gc::FINALIZE_OBJECT_LAST);
+    MOZ_ASSERT(allocKind <= gc::AllocKind::OBJECT_LAST);
 
     uint32_t nDynamicSlots = 0;
     if (templateObj->isNative()) {
@@ -1052,11 +1204,11 @@ MacroAssembler::createGCObject(Register obj, Register temp, JSObject *templateOb
         // elements header. The template object, which owns the original
         // elements, might have another allocation kind.
         if (templateObj->as<NativeObject>().denseElementsAreCopyOnWrite())
-            allocKind = gc::FINALIZE_OBJECT0_BACKGROUND;
+            allocKind = gc::AllocKind::OBJECT0_BACKGROUND;
     }
 
     allocateObject(obj, temp, allocKind, nDynamicSlots, initialHeap, fail);
-    initGCThing(obj, temp, templateObj, initFixedSlots);
+    initGCThing(obj, temp, templateObj, initContents, convertDoubleElements);
 }
 
 
@@ -1073,13 +1225,13 @@ MacroAssembler::allocateNonObject(Register result, Register temp, gc::AllocKind 
 void
 MacroAssembler::newGCString(Register result, Register temp, Label *fail)
 {
-    allocateNonObject(result, temp, js::gc::FINALIZE_STRING, fail);
+    allocateNonObject(result, temp, js::gc::AllocKind::STRING, fail);
 }
 
 void
 MacroAssembler::newGCFatInlineString(Register result, Register temp, Label *fail)
 {
-    allocateNonObject(result, temp, js::gc::FINALIZE_FAT_INLINE_STRING, fail);
+    allocateNonObject(result, temp, js::gc::AllocKind::FAT_INLINE_STRING, fail);
 }
 
 void
@@ -1156,7 +1308,7 @@ FindStartOfUndefinedAndUninitializedSlots(NativeObject *templateObj, uint32_t ns
 
 void
 MacroAssembler::initGCSlots(Register obj, Register temp, NativeObject *templateObj,
-                            bool initFixedSlots)
+                            bool initContents)
 {
     // Slots of non-array objects are required to be initialized.
     // Use the values currently in the template object.
@@ -1191,7 +1343,7 @@ MacroAssembler::initGCSlots(Register obj, Register temp, NativeObject *templateO
     copySlotsFromTemplate(obj, templateObj, 0, startOfUndefined);
 
     // Fill the rest of the fixed slots with undefined and uninitialized.
-    if (initFixedSlots) {
+    if (initContents) {
         fillSlotsWithUndefined(Address(obj, NativeObject::getFixedSlotOffset(startOfUndefined)), temp,
                                startOfUndefined, Min(startOfUninitialized, nfixed));
         size_t offset = NativeObject::getFixedSlotOffset(startOfUninitialized);
@@ -1217,7 +1369,7 @@ MacroAssembler::initGCSlots(Register obj, Register temp, NativeObject *templateO
 
 void
 MacroAssembler::initGCThing(Register obj, Register temp, JSObject *templateObj,
-                            bool initFixedSlots)
+                            bool initContents, bool convertDoubleElements)
 {
     // Fast initialization of an empty object returned by allocateObject().
 
@@ -1225,6 +1377,8 @@ MacroAssembler::initGCThing(Register obj, Register temp, JSObject *templateObj,
 
     if (Shape *shape = templateObj->maybeShape())
         storePtr(ImmGCPtr(shape), Address(obj, JSObject::offsetOfShape()));
+
+    MOZ_ASSERT_IF(convertDoubleElements, templateObj->is<ArrayObject>());
 
     if (templateObj->isNative()) {
         NativeObject *ntemplate = &templateObj->as<NativeObject>();
@@ -1251,7 +1405,7 @@ MacroAssembler::initGCThing(Register obj, Register temp, JSObject *templateObj,
                     Address(obj, elementsOffset + ObjectElements::offsetOfInitializedLength()));
             store32(Imm32(ntemplate->as<ArrayObject>().length()),
                     Address(obj, elementsOffset + ObjectElements::offsetOfLength()));
-            store32(Imm32(ntemplate->shouldConvertDoubleElements()
+            store32(Imm32(convertDoubleElements
                           ? ObjectElements::CONVERT_DOUBLE_ELEMENTS
                           : 0),
                     Address(obj, elementsOffset + ObjectElements::offsetOfFlags()));
@@ -1259,7 +1413,7 @@ MacroAssembler::initGCThing(Register obj, Register temp, JSObject *templateObj,
         } else {
             storePtr(ImmPtr(emptyObjectElements), Address(obj, NativeObject::offsetOfElements()));
 
-            initGCSlots(obj, temp, ntemplate, initFixedSlots);
+            initGCSlots(obj, temp, ntemplate, initContents);
 
             if (ntemplate->hasPrivate()) {
                 uint32_t nfixed = ntemplate->numFixedSlots();
@@ -1281,26 +1435,9 @@ MacroAssembler::initGCThing(Register obj, Register temp, JSObject *templateObj,
             offset += sizeof(uintptr_t);
         }
     } else if (templateObj->is<UnboxedPlainObject>()) {
-        const UnboxedLayout &layout = templateObj->as<UnboxedPlainObject>().layout();
-
-        storePtr(ImmWord(0), Address(obj, JSObject::offsetOfShape()));
-
-        // Initialize reference fields of the object, per UnboxedPlainObject::create.
-        if (const int32_t *list = layout.traceList()) {
-            while (*list != -1) {
-                storePtr(ImmGCPtr(GetJitContext()->runtime->names().empty),
-                         Address(obj, UnboxedPlainObject::offsetOfData() + *list));
-                list++;
-            }
-            list++;
-            while (*list != -1) {
-                storePtr(ImmWord(0),
-                         Address(obj, UnboxedPlainObject::offsetOfData() + *list));
-                list++;
-            }
-            // Unboxed objects don't have Values to initialize.
-            MOZ_ASSERT(*(list + 1) == -1);
-        }
+        storePtr(ImmWord(0), Address(obj, UnboxedPlainObject::offsetOfExpando()));
+        if (initContents)
+            initUnboxedObjectContents(obj, &templateObj->as<UnboxedPlainObject>());
     } else {
         MOZ_CRASH("Unknown object");
     }
@@ -1319,6 +1456,29 @@ MacroAssembler::initGCThing(Register obj, Register temp, JSObject *templateObj,
 
     PopRegsInMask(RegisterSet::Volatile());
 #endif
+}
+
+void
+MacroAssembler::initUnboxedObjectContents(Register object, UnboxedPlainObject *templateObject)
+{
+    const UnboxedLayout &layout = templateObject->layout();
+
+    // Initialize reference fields of the object, per UnboxedPlainObject::create.
+    if (const int32_t *list = layout.traceList()) {
+        while (*list != -1) {
+            storePtr(ImmGCPtr(GetJitContext()->runtime->names().empty),
+                     Address(object, UnboxedPlainObject::offsetOfData() + *list));
+            list++;
+        }
+        list++;
+        while (*list != -1) {
+            storePtr(ImmWord(0),
+                     Address(object, UnboxedPlainObject::offsetOfData() + *list));
+            list++;
+        }
+        // Unboxed objects don't have Values to initialize.
+        MOZ_ASSERT(*(list + 1) == -1);
+    }
 }
 
 void

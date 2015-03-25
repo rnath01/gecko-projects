@@ -96,7 +96,7 @@ GetDataProperty(JSContext *cx, HandleValue objVal, HandlePropertyName field, Mut
     if (!desc.object())
         return LinkFail(cx, "property not present on object");
 
-    if (desc.hasGetterOrSetterObject())
+    if (!desc.isDataDescriptor())
         return LinkFail(cx, "property is not a data property");
 
     v.set(desc.value());
@@ -751,7 +751,7 @@ CallAsmJS(JSContext *cx, unsigned argc, Value *vp)
 
         // Call the per-exported-function trampoline created by GenerateEntry.
         AsmJSModule::CodePtr enter = module.entryTrampoline(func);
-        if (!CALL_GENERATED_ASMJS(enter, coercedArgs.begin(), module.globalData()))
+        if (!CALL_GENERATED_2(enter, coercedArgs.begin(), module.globalData()))
             return false;
     }
 
@@ -824,7 +824,7 @@ HandleDynamicLinkFailure(JSContext *cx, CallArgs args, AsmJSModule &module, Hand
         return false;
 
     RootedFunction fun(cx, NewScriptedFunction(cx, 0, JSFunction::INTERPRETED,
-                                               cx->global(), name, JSFunction::FinalizeKind,
+                                               name, JSFunction::FinalizeKind,
                                                TenuredObject));
     if (!fun)
         return false;

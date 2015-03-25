@@ -61,6 +61,7 @@ BEGIN_WORKERS_NAMESPACE
 class AutoSyncLoopHolder;
 class MessagePort;
 class SharedWorker;
+class ServiceWorkerClientInfo;
 class WorkerControlRunnable;
 class WorkerDebugger;
 class WorkerDebuggerGlobalScope;
@@ -76,7 +77,7 @@ class SharedMutex
 {
   typedef mozilla::Mutex Mutex;
 
-  class RefCountedMutex MOZ_FINAL : public Mutex
+  class RefCountedMutex final : public Mutex
   {
   public:
     explicit RefCountedMutex(const char* aName)
@@ -221,8 +222,9 @@ private:
 
   void
   PostMessageInternal(JSContext* aCx, JS::Handle<JS::Value> aMessage,
-                      const Optional<Sequence<JS::Value> >& aTransferable,
+                      const Optional<Sequence<JS::Value>>& aTransferable,
                       bool aToMessagePort, uint64_t aMessagePortSerial,
+                      ServiceWorkerClientInfo* aClientInfo,
                       ErrorResult& aRv);
 
   nsresult
@@ -230,7 +232,7 @@ private:
 
 public:
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(WorkerPrivateParent,
@@ -327,8 +329,14 @@ public:
               const Optional<Sequence<JS::Value> >& aTransferable,
               ErrorResult& aRv)
   {
-    PostMessageInternal(aCx, aMessage, aTransferable, false, 0, aRv);
+    PostMessageInternal(aCx, aMessage, aTransferable, false, 0, nullptr, aRv);
   }
+
+  void
+  PostMessageToServiceWorker(JSContext* aCx, JS::Handle<JS::Value> aMessage,
+                             const Optional<Sequence<JS::Value>>& aTransferable,
+                             nsAutoPtr<ServiceWorkerClientInfo>& aClientInfo,
+                             ErrorResult& aRv);
 
   void
   PostMessageToMessagePort(JSContext* aCx,
@@ -721,6 +729,7 @@ class WorkerDebugger : public nsIWorkerDebugger {
   bool mIsEnabled;
 
   // Only touched on the main thread.
+  bool mIsInitialized;
   nsTArray<nsCOMPtr<nsIWorkerDebuggerListener>> mListeners;
 
 public:
@@ -729,18 +738,30 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIWORKERDEBUGGER
 
-  void AssertIsOnParentThread();
+  void
+  AssertIsOnParentThread();
 
-  void WaitIsEnabled(bool aIsEnabled);
+  void
+  WaitIsEnabled(bool aIsEnabled);
 
-  void Enable();
+  void
+  Enable();
 
-  void Disable();
+  void
+  Disable();
+
+  void
+  PostMessageToDebugger(const nsAString& aMessage);
 
 private:
-  virtual ~WorkerDebugger();
+  virtual
+  ~WorkerDebugger();
 
-  void NotifyIsEnabled(bool aIsEnabled);
+  void
+  NotifyIsEnabled(bool aIsEnabled);
+
+  void
+  PostMessageToDebuggerOnMainThread(const nsAString& aMessage);
 };
 
 class WorkerPrivate : public WorkerPrivateParent<WorkerPrivate>
@@ -940,6 +961,9 @@ public:
                              JS::Handle<JS::Value> aMessage,
                              const Optional<Sequence<JS::Value>>& aTransferable,
                              ErrorResult& aRv);
+
+  void
+  PostMessageToDebugger(const nsAString& aMessage);
 
   bool
   NotifyInternal(JSContext* aCx, Status aStatus);
@@ -1285,6 +1309,7 @@ GetCurrentThreadJSContext();
 enum WorkerStructuredDataType
 {
   DOMWORKER_SCTAG_BLOB = SCTAG_DOM_MAX,
+  DOMWORKER_SCTAG_FORMDATA = SCTAG_DOM_MAX + 1,
 
   DOMWORKER_SCTAG_END
 };

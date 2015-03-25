@@ -24,7 +24,6 @@
 #include "js/HashTable.h"
 #include "vm/Debugger.h"
 #include "vm/JSONParser.h"
-#include "vm/PropDesc.h"
 
 #include "jsgcinlines.h"
 #include "jsobjinlines.h"
@@ -52,12 +51,6 @@ MarkBindingsRoot(JSTracer *trc, Bindings *bindings, const char *name)
 
 void
 MarkPropertyDescriptorRoot(JSTracer *trc, JSPropertyDescriptor *pd, const char *name)
-{
-    pd->trace(trc);
-}
-
-void
-MarkPropDescRoot(JSTracer *trc, PropDesc *pd, const char *name)
 {
     pd->trace(trc);
 }
@@ -116,7 +109,6 @@ MarkExactStackRootsAcrossTypes(T context, JSTracer *trc)
     MarkExactStackRootList<Bindings, MarkBindingsRoot>(trc, context, "Bindings");
     MarkExactStackRootList<JSPropertyDescriptor, MarkPropertyDescriptorRoot>(
         trc, context, "JSPropertyDescriptor");
-    MarkExactStackRootList<PropDesc, MarkPropDescRoot>(trc, context, "PropDesc");
 }
 
 static void
@@ -149,8 +141,8 @@ AutoGCRooter::trace(JSTracer *trc)
       }
 
       case DESCVECTOR: {
-        AutoPropDescVector::VectorImpl &descriptors =
-            static_cast<AutoPropDescVector *>(this)->vector;
+        AutoPropertyDescriptorVector::VectorImpl &descriptors =
+            static_cast<AutoPropertyDescriptorVector *>(this)->vector;
         for (size_t i = 0, len = descriptors.length(); i < len; i++)
             descriptors[i].trace(trc);
         return;
@@ -165,6 +157,15 @@ AutoGCRooter::trace(JSTracer *trc)
       case IDVECTOR: {
         AutoIdVector::VectorImpl &vector = static_cast<AutoIdVector *>(this)->vector;
         MarkIdRootRange(trc, vector.length(), vector.begin(), "js::AutoIdVector.vector");
+        return;
+      }
+
+      case IDVALVECTOR: {
+        AutoIdValueVector::VectorImpl &vector = static_cast<AutoIdValueVector *>(this)->vector;
+        for (size_t i = 0; i < vector.length(); i++) {
+            MarkIdRoot(trc, &vector[i].id, "js::AutoIdValueVector id");
+            MarkValueRoot(trc, &vector[i].value, "js::AutoIdValueVector value");
+        }
         return;
       }
 
@@ -417,7 +418,6 @@ js::gc::GCRuntime::markRuntime(JSTracer *trc,
 {
     gcstats::AutoPhase ap(stats, gcstats::PHASE_MARK_ROOTS);
 
-    MOZ_ASSERT(trc->callback != GCMarker::GrayCallback);
     MOZ_ASSERT(traceOrMark == TraceRuntime || traceOrMark == MarkRuntime);
     MOZ_ASSERT(rootsSource == TraceRoots || rootsSource == UseSavedRoots);
 
@@ -485,7 +485,7 @@ js::gc::GCRuntime::markRuntime(JSTracer *trc,
 
         /* Do not discard scripts with counts while profiling. */
         if (rt->profilingScripts && !isHeapMinorCollecting()) {
-            for (ZoneCellIterUnderGC i(zone, FINALIZE_SCRIPT); !i.done(); i.next()) {
+            for (ZoneCellIterUnderGC i(zone, AllocKind::SCRIPT); !i.done(); i.next()) {
                 JSScript *script = i.get<JSScript>();
                 if (script->hasScriptCounts()) {
                     MarkScriptRoot(trc, &script, "profilingScripts");
@@ -555,8 +555,81 @@ js::gc::GCRuntime::markRuntime(JSTracer *trc,
 void
 js::gc::GCRuntime::bufferGrayRoots()
 {
-    marker.startBufferingGrayRoots();
+    // Precondition: the state has been reset to "unused" after the last GC
+    //               and the zone's buffers have been cleared.
+    MOZ_ASSERT(grayBufferState == GrayBufferState::Unused);
+    for (GCZonesIter zone(rt); !zone.done(); zone.next())
+        MOZ_ASSERT(zone->gcGrayRoots.empty());
+
+
+    BufferGrayRootsTracer grayBufferer(rt);
     if (JSTraceDataOp op = grayRootTracer.op)
-        (*op)(&marker, grayRootTracer.data);
-    marker.endBufferingGrayRoots();
+        (*op)(&grayBufferer, grayRootTracer.data);
+
+    // Propagate the failure flag from the marker to the runtime.
+    if (grayBufferer.failed()) {
+      grayBufferState = GrayBufferState::Failed;
+      resetBufferedGrayRoots();
+    } else {
+      grayBufferState = GrayBufferState::Okay;
+    }
+}
+
+void
+BufferGrayRootsTracer::appendGrayRoot(void *thing, JSGCTraceKind kind)
+{
+    MOZ_ASSERT(runtime()->isHeapBusy());
+
+    if (bufferingGrayRootsFailed)
+        return;
+
+    GrayRoot root(thing, kind);
+#ifdef DEBUG
+    root.debugPrinter = debugPrinter();
+    root.debugPrintArg = debugPrintArg();
+    root.debugPrintIndex = debugPrintIndex();
+#endif
+
+    Zone *zone = TenuredCell::fromPointer(thing)->zone();
+    if (zone->isCollecting()) {
+        // See the comment on SetMaybeAliveFlag to see why we only do this for
+        // objects and scripts. We rely on gray root buffering for this to work,
+        // but we only need to worry about uncollected dead compartments during
+        // incremental GCs (when we do gray root buffering).
+        switch (kind) {
+          case JSTRACE_OBJECT:
+            static_cast<JSObject *>(thing)->compartment()->maybeAlive = true;
+            break;
+          case JSTRACE_SCRIPT:
+            static_cast<JSScript *>(thing)->compartment()->maybeAlive = true;
+            break;
+          default:
+            break;
+        }
+        if (!zone->gcGrayRoots.append(root))
+            bufferingGrayRootsFailed = true;
+    }
+}
+
+void
+GCRuntime::markBufferedGrayRoots(JS::Zone *zone)
+{
+    MOZ_ASSERT(grayBufferState == GrayBufferState::Okay);
+    MOZ_ASSERT(zone->isGCMarkingGray() || zone->isGCCompacting());
+
+    for (GrayRoot *elem = zone->gcGrayRoots.begin(); elem != zone->gcGrayRoots.end(); elem++) {
+#ifdef DEBUG
+        marker.setTracingDetails(elem->debugPrinter, elem->debugPrintArg, elem->debugPrintIndex);
+#endif
+        MarkKind(&marker, &elem->thing, elem->kind);
+    }
+}
+
+void
+GCRuntime::resetBufferedGrayRoots() const
+{
+    MOZ_ASSERT(grayBufferState != GrayBufferState::Okay,
+               "Do not clear the gray buffers unless we are Failed or becoming Unused");
+    for (GCZonesIter zone(rt); !zone.done(); zone.next())
+        zone->gcGrayRoots.clearAndFree();
 }

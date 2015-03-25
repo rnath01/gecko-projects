@@ -156,10 +156,11 @@ MediaSourceDecoder::OnTrackBufferConfigured(TrackBuffer* aTrackBuffer, const Med
 }
 
 void
-MediaSourceDecoder::Ended()
+MediaSourceDecoder::Ended(bool aEnded)
 {
   ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
-  mReader->Ended();
+  static_cast<MediaSourceResource*>(GetResource())->SetEnded(aEnded);
+  mReader->Ended(aEnded);
   mon.NotifyAll();
 }
 
@@ -180,7 +181,7 @@ public:
     , mNewDuration(aNewDuration)
   { }
 
-  NS_IMETHOD Run() MOZ_OVERRIDE MOZ_FINAL {
+  NS_IMETHOD Run() override final {
     mDecoder->DurationChanged(mOldDuration, mNewDuration);
     return NS_OK;
   }
@@ -261,7 +262,7 @@ MediaSourceDecoder::ScheduleDurationChange(double aOldDuration,
     if (NS_IsMainThread()) {
       DurationChanged(aOldDuration, aNewDuration);
     } else {
-      nsRefPtr<nsIRunnable> task =
+      nsCOMPtr<nsIRunnable> task =
         new DurationChangedRunnable(this, aOldDuration, aNewDuration);
       NS_DispatchToMainThread(task);
     }

@@ -46,6 +46,7 @@ JSCompartment::JSCompartment(Zone *zone, const JS::CompartmentOptions &options =
     isSelfHosting(false),
     marked(true),
     warnedAboutNoSuchMethod(false),
+    warnedAboutFlagsArgument(false),
     addonId(options.addonIdOrNull()),
 #ifdef DEBUG
     firedOnNewGlobalObject(false),
@@ -252,9 +253,6 @@ bool
 JSCompartment::putWrapper(JSContext *cx, const CrossCompartmentKey &wrapped, const js::Value &wrapper)
 {
     MOZ_ASSERT(wrapped.wrapped);
-    MOZ_ASSERT(!IsPoisonedPtr(wrapped.wrapped));
-    MOZ_ASSERT(!IsPoisonedPtr(wrapped.debugger));
-    MOZ_ASSERT(!IsPoisonedPtr(wrapper.toGCThing()));
     MOZ_ASSERT_IF(wrapped.kind == CrossCompartmentKey::StringWrapper, wrapper.isString());
     MOZ_ASSERT_IF(wrapped.kind != CrossCompartmentKey::StringWrapper, wrapper.isObject());
     bool success = crossCompartmentWrappers.put(wrapped, ReadBarriered<Value>(wrapper));
@@ -428,14 +426,11 @@ JSCompartment::wrap(JSContext *cx, MutableHandleObject obj, HandleObject existin
     if (WrapperMap::Ptr p = crossCompartmentWrappers.lookup(CrossCompartmentKey(key))) {
         obj.set(&p->value().get().toObject());
         MOZ_ASSERT(obj->is<CrossCompartmentWrapperObject>());
-        obj->assertParentIs(global);
         return true;
     }
 
     RootedObject existing(cx, existingArg);
     if (existing) {
-        // existing is known to be a proxy, so we know its parent global.
-        existing->assertParentIs(global);
         // Is it possible to reuse |existing|?
         if (!existing->getTaggedProto().isLazy() ||
             // Note: Class asserted above, so all that's left to check is callability
@@ -473,35 +468,6 @@ JSCompartment::wrap(JSContext *cx, MutableHandle<PropertyDescriptor> desc)
     }
 
     return wrap(cx, desc.value());
-}
-
-bool
-JSCompartment::wrap(JSContext *cx, MutableHandle<PropDesc> desc)
-{
-    if (desc.isUndefined())
-        return true;
-
-    JSCompartment *comp = cx->compartment();
-
-    if (desc.hasValue()) {
-        RootedValue value(cx, desc.value());
-        if (!comp->wrap(cx, &value))
-            return false;
-        desc.setValue(value);
-    }
-    if (desc.hasGet()) {
-        RootedValue get(cx, desc.getterValue());
-        if (!comp->wrap(cx, &get))
-            return false;
-        desc.setGetter(get);
-    }
-    if (desc.hasSet()) {
-        RootedValue set(cx, desc.setterValue());
-        if (!comp->wrap(cx, &set))
-            return false;
-        desc.setSetter(set);
-    }
-    return true;
 }
 
 /*
@@ -760,7 +726,7 @@ CreateLazyScriptsForCompartment(JSContext *cx)
     // which do not have an uncompiled enclosing script. The last condition is
     // so that we don't compile lazy scripts whose enclosing scripts failed to
     // compile, indicating that the lazy script did not escape the script.
-    for (gc::ZoneCellIter i(cx->zone(), gc::FINALIZE_LAZY_SCRIPT); !i.done(); i.next()) {
+    for (gc::ZoneCellIter i(cx->zone(), gc::AllocKind::LAZY_SCRIPT); !i.done(); i.next()) {
         LazyScript *lazy = i.get<LazyScript>();
         JSFunction *fun = lazy->functionNonDelazifying();
         if (fun->compartment() == cx->compartment() &&
@@ -839,7 +805,7 @@ JSCompartment::unsetIsDebuggee()
 void
 JSCompartment::clearBreakpointsIn(FreeOp *fop, js::Debugger *dbg, HandleObject handler)
 {
-    for (gc::ZoneCellIter i(zone(), gc::FINALIZE_SCRIPT); !i.done(); i.next()) {
+    for (gc::ZoneCellIter i(zone(), gc::AllocKind::SCRIPT); !i.done(); i.next()) {
         JSScript *script = i.get<JSScript>();
         if (script->compartment() == this && script->hasAnyBreakpointsOrStepMode())
             script->clearBreakpointsIn(fop, dbg, handler);

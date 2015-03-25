@@ -85,6 +85,7 @@ APZEventState::APZEventState(nsIWidget* aWidget,
   , mPendingTouchPreventedBlockId(0)
   , mEndTouchIsClick(false)
   , mTouchEndCancelled(false)
+  , mActiveAPZTransforms(0)
 {
   nsresult rv;
   mWidget = do_GetWeakReference(aWidget, &rv);
@@ -102,7 +103,7 @@ APZEventState::APZEventState(nsIWidget* aWidget,
 APZEventState::~APZEventState()
 {}
 
-class DelayedFireSingleTapEvent MOZ_FINAL : public nsITimerCallback
+class DelayedFireSingleTapEvent final : public nsITimerCallback
 {
 public:
   NS_DECL_ISUPPORTS
@@ -119,7 +120,7 @@ public:
   {
   }
 
-  NS_IMETHODIMP Notify(nsITimer*) MOZ_OVERRIDE
+  NS_IMETHODIMP Notify(nsITimer*) override
   {
     if (nsCOMPtr<nsIWidget> widget = do_QueryReferent(mWidget)) {
       APZCCallbackHelper::FireSingleTapEvent(mPoint, mModifiers, widget);
@@ -233,17 +234,6 @@ APZEventState::ProcessLongTap(const nsCOMPtr<nsIDOMWindowUtils>& aUtils,
 }
 
 void
-APZEventState::ProcessLongTapUp(const CSSPoint& aPoint,
-                                Modifiers aModifiers,
-                                const ScrollableLayerGuid& aGuid,
-                                float aPresShellResolution)
-{
-  APZES_LOG("Handling long tap up at %s\n", Stringify(aPoint).c_str());
-
-  ProcessSingleTap(aPoint, aModifiers, aGuid, aPresShellResolution);
-}
-
-void
 APZEventState::ProcessTouchEvent(const WidgetTouchEvent& aEvent,
                                  const ScrollableLayerGuid& aGuid,
                                  uint64_t aInputBlockId)
@@ -281,7 +271,7 @@ APZEventState::ProcessTouchEvent(const WidgetTouchEvent& aEvent,
     }
     // fall through
   case NS_TOUCH_CANCEL:
-    mActiveElementManager->HandleTouchEnd(mEndTouchIsClick);
+    mActiveElementManager->HandleTouchEndEvent(mEndTouchIsClick);
     // fall through
   case NS_TOUCH_MOVE: {
     SendPendingTouchPreventedResponse(isTouchPrevented, aGuid);
@@ -320,17 +310,19 @@ APZEventState::ProcessAPZStateChange(const nsCOMPtr<nsIDocument>& aDocument,
       scrollbarMediator->ScrollbarActivityStarted();
     }
 
-    if (aDocument) {
+    if (aDocument && mActiveAPZTransforms == 0) {
       nsCOMPtr<nsIDocShell> docshell(aDocument->GetDocShell());
       if (docshell && sf) {
         nsDocShell* nsdocshell = static_cast<nsDocShell*>(docshell.get());
         nsdocshell->NotifyAsyncPanZoomStarted(sf->GetScrollPositionCSSPixels());
       }
     }
+    mActiveAPZTransforms++;
     break;
   }
   case APZStateChange::TransformEnd:
   {
+    mActiveAPZTransforms--;
     nsIScrollableFrame* sf = nsLayoutUtils::FindScrollableFrameFor(aViewId);
     if (sf) {
       sf->SetTransformingByAPZ(false);
@@ -340,7 +332,7 @@ APZEventState::ProcessAPZStateChange(const nsCOMPtr<nsIDocument>& aDocument,
       scrollbarMediator->ScrollbarActivityStopped();
     }
 
-    if (aDocument) {
+    if (aDocument && mActiveAPZTransforms == 0) {
       nsCOMPtr<nsIDocShell> docshell(aDocument->GetDocShell());
       if (docshell && sf) {
         nsDocShell* nsdocshell = static_cast<nsDocShell*>(docshell.get());
@@ -362,6 +354,7 @@ APZEventState::ProcessAPZStateChange(const nsCOMPtr<nsIDocument>& aDocument,
   case APZStateChange::EndTouch:
   {
     mEndTouchIsClick = aArg;
+    mActiveElementManager->HandleTouchEnd();
     break;
   }
   default:

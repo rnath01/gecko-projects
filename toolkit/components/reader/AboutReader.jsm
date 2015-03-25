@@ -17,13 +17,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "UITelemetry", "resource://gre/modules/U
 
 const READINGLIST_COMMAND_ID = "readingListSidebar";
 
-function dump(s) {
-  Services.console.logStringMessage("AboutReader: " + s);
-}
-
 let gStrings = Services.strings.createBundle("chrome://global/locale/aboutReader.properties");
 
-let AboutReader = function(mm, win) {
+let AboutReader = function(mm, win, articlePromise) {
   let doc = win.document;
 
   this._mm = mm;
@@ -37,6 +33,10 @@ let AboutReader = function(mm, win) {
 
   this._article = null;
 
+  if (articlePromise) {
+    this._articlePromise = articlePromise;
+  }
+
   this._headerElementRef = Cu.getWeakReference(doc.getElementById("reader-header"));
   this._domainElementRef = Cu.getWeakReference(doc.getElementById("reader-domain"));
   this._titleElementRef = Cu.getWeakReference(doc.getElementById("reader-title"));
@@ -44,8 +44,6 @@ let AboutReader = function(mm, win) {
   this._contentElementRef = Cu.getWeakReference(doc.getElementById("reader-content"));
   this._toolbarElementRef = Cu.getWeakReference(doc.getElementById("reader-toolbar"));
   this._messageElementRef = Cu.getWeakReference(doc.getElementById("reader-message"));
-
-  this._toolbarEnabled = false;
 
   this._scrollOffset = win.pageYOffset;
 
@@ -227,6 +225,7 @@ AboutReader.prototype = {
         this._mm.removeMessageListener("Reader:Removed", this);
         this._mm.removeMessageListener("Sidebar:VisibilityChange", this);
         this._mm.removeMessageListener("ReadingList:VisibilityStatus", this);
+        this._windowUnloaded = true;
         break;
     }
   },
@@ -256,7 +255,8 @@ AboutReader.prototype = {
 
           // Display the toolbar when all its initial component states are known
           if (isInitialStateChange) {
-            this._setToolbarVisibility(true);
+            // Hacks! Delay showing the toolbar to avoid position: fixed; jankiness. See bug 975533.
+            this._win.setTimeout(() => this._setToolbarVisibility(true), 500);
           }
         }
       }
@@ -524,24 +524,22 @@ AboutReader.prototype = {
   },
 
   _getToolbarVisibility: function Reader_getToolbarVisibility() {
-    return !this._toolbarElement.classList.contains("toolbar-hidden");
+    return this._toolbarElement.hasAttribute("visible");
   },
 
   _setToolbarVisibility: function Reader_setToolbarVisibility(visible) {
     let dropdown = this._doc.getElementById("style-dropdown");
     dropdown.classList.remove("open");
 
-    if (!this._toolbarEnabled)
+    if (this._getToolbarVisibility() === visible) {
       return;
+    }
 
-    // Don't allow visible toolbar until banner state is known
-    if (this._isReadingListItem == -1)
-      return;
-
-    if (this._getToolbarVisibility() === visible)
-      return;
-
-    this._toolbarElement.classList.toggle("toolbar-hidden");
+    if (visible) {
+      this._toolbarElement.setAttribute("visible", true);
+    } else {
+      this._toolbarElement.removeAttribute("visible");
+    }
     this._setSystemUIVisibility(visible);
 
     if (!visible) {
@@ -561,7 +559,17 @@ AboutReader.prototype = {
     let url = this._getOriginalUrl();
     this._showProgressDelayed();
 
-    let article = yield this._getArticle(url);
+    let article;
+    if (this._articlePromise) {
+      article = yield this._articlePromise;
+    } else {
+      article = yield this._getArticle(url);
+    }
+
+    if (this._windowUnloaded) {
+      return;
+    }
+
     if (article && article.url == url) {
       this._showContent(article);
     } else {
@@ -711,9 +719,6 @@ AboutReader.prototype = {
     this._updateImageMargins();
     this._requestReadingListStatus();
 
-    this._toolbarEnabled = true;
-    this._setToolbarVisibility(true);
-
     this._requestFavicon();
   },
 
@@ -724,10 +729,11 @@ AboutReader.prototype = {
 
   _showProgressDelayed: function Reader_showProgressDelayed() {
     this._win.setTimeout(function() {
-      // Article has already been loaded, no need to show
-      // progress anymore.
-      if (this._article)
+      // No need to show progress if the article has been loaded,
+      // or if the window has been unloaded.
+      if (this._article || this._windowUnloaded) {
         return;
+      }
 
       this._headerElement.style.display = "none";
       this._contentElement.style.display = "none";

@@ -17,6 +17,7 @@ let loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
                .getService(Ci.mozIJSSubScriptLoader);
 loader.loadSubScript("chrome://marionette/content/marionette-simpletest.js");
 loader.loadSubScript("chrome://marionette/content/marionette-common.js");
+loader.loadSubScript("chrome://marionette/content/marionette-actions.js");
 Cu.import("resource://gre/modules/Services.jsm");
 loader.loadSubScript("chrome://marionette/content/marionette-frame-manager.js");
 Cu.import("chrome://marionette/content/marionette-elements.js");
@@ -189,6 +190,8 @@ function MarionetteServerConnection(aPrefix, aTransport, aServer)
 
   this.observing = null;
   this._browserIds = new WeakMap();
+  this.quitFlags = null;
+  this.actions = new ActionChain(utils);
 }
 
 MarionetteServerConnection.prototype = {
@@ -228,6 +231,12 @@ MarionetteServerConnection.prototype = {
   onClosed: function MSC_onClosed(aStatus) {
     this.server._connectionClosed(this);
     this.sessionTearDown();
+
+    if (this.quitFlags !== null) {
+      let flags = this.quitFlags;
+      this.quitFlags = null;
+      Services.startup.quit(flags);
+    }
   },
 
   /**
@@ -616,7 +625,7 @@ MarionetteServerConnection.prototype = {
 
     this.scriptTimeout = 10000;
     if (aRequest && aRequest.parameters) {
-      this.sessionId = aRequest.parameters.sessionId || aRequest.parameters.session_id || null;
+      this.sessionId = aRequest.parameters.sessionId ? aRequest.parameters.sessionId : aRequest.parameters.session_id;
       logger.info("Session Id is set to: " + this.sessionId);
       try {
         this.setSessionCapabilities(aRequest.parameters.capabilities);
@@ -1871,18 +1880,36 @@ MarionetteServerConnection.prototype = {
    *        'value' represents a nested array: inner array represents each event; outer array represents collection of events
    */
   actionChain: function MDA_actionChain(aRequest) {
-    this.command_id = this.getCommandId();
+    let command_id = this.command_id = this.getCommandId();
+    let chain = aRequest.parameters.chain;
+    let nextId = aRequest.parameters.nextId;
     if (this.context == "chrome") {
-      this.sendError("Command 'actionChain' is not available in chrome context", 500, null, this.command_id);
-    }
-    else {
+      if (appName != 'Firefox') {
+        // Be conservative until this has a use case and is established to work as
+        // expected on b2g/fennec.
+        this.sendError("Command 'actionChain' is not available in chrome context",
+                       500, null, this.command_id);
+      }
+
+      let callbacks = {};
+      callbacks.onSuccess = (value) => {
+        this.sendResponse(value, command_id);
+      };
+      callbacks.onError = (message, code, trace) => {
+        this.sendError(message, code, trace, command_id);
+      };
+
+      let currWin = this.getCurrentWindow();
+      let elementManager = this.curBrowser.elementManager;
+      this.actions.dispatchActions(chain, nextId, currWin, elementManager, callbacks);
+    } else {
       this.addFrameCloseListener("action chain");
       this.sendAsync("actionChain",
                      {
-                       chain: aRequest.parameters.chain,
-                       nextId: aRequest.parameters.nextId
+                       chain: chain,
+                       nextId: nextId
                      },
-                     this.command_id);
+                     command_id);
     }
   },
 
@@ -2629,7 +2656,23 @@ MarionetteServerConnection.prototype = {
       this.sendError("Could not delete session", 500, e.name + ": " + e.message, command_id);
       return;
     }
+
+    if (specialpowers.hasOwnProperty('specialPowersObserver')) {
+      specialpowers.specialPowersObserver.uninit();
+      specialpowers = {};
+    }
+
     this.sendOk(command_id);
+
+    let prefTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+    prefTimer.initWithCallback(function() {
+      prefTimer.cancel();
+      if (this.enabled_security_pref) {
+        Services.prefs.clearUserPref(SECURITY_PREF);
+        this.enabled_security_pref = false;
+      }
+    }, 0, Ci.nsITimer.TYPE_ONE_SHOT);
+
   },
 
   /**
@@ -2637,7 +2680,7 @@ MarionetteServerConnection.prototype = {
    * current session.
    */
   quitApplication: function MDA_quitApplication (aRequest) {
-    let command_id = this.getCommandId();
+    let command_id = this.command_id = this.getCommandId();
     if (appName != "Firefox") {
       this.sendError("In app initiated quit only supported on Firefox", 500, null, command_id);
     }
@@ -2648,8 +2691,13 @@ MarionetteServerConnection.prototype = {
       flags |= Ci.nsIAppStartup[k];
     }
 
-    this.sessionTearDown();
-    Services.startup.quit(flags);
+    // Close the listener so we can't re-connect until after the restart.
+    this.server.closeListener();
+    this.quitFlags = flags;
+
+    // This notifies the client it's safe to begin attempting to reconnect.
+    // The actual quit will happen when the current socket connection is closed.
+    this.sendOk(command_id);
   },
 
   /**

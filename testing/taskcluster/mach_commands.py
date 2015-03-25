@@ -208,7 +208,7 @@ class Graph(object):
         default=os.environ.get('GECKO_HEAD_REV'),
         help='Commit revision to use from head repository')
     @CommandArgument('--mozharness-rev',
-        default='emulator-perf',
+        default='default',
         help='Commit revision to use from mozharness repository')
     @CommandArgument('--message',
         help='Commit message to be parsed. Example: "try: -b do -p all -u all"')
@@ -336,15 +336,20 @@ class Graph(object):
                 test_parameters = copy.copy(build_parameters)
                 test_parameters['build_url'] = build_url
                 test_parameters['tests_url'] = tests_url
-                test_parameters['total_chunks'] = 1
 
+                test_definition = templates.load(test['task'], {})['task']
+                chunk_config = test_definition['extra']['chunks']
+
+                # Allow branch configs to override task level chunking...
                 if 'chunks' in test:
-                    test_parameters['total_chunks'] = test['chunks']
+                    chunk_config['total'] = test['chunks']
 
-                for chunk in range(1, test_parameters['total_chunks'] + 1):
+                test_parameters['total_chunks'] = chunk_config['total']
+
+                for chunk in range(1, chunk_config['total'] + 1):
                     if 'only_chunks' in test and \
                         chunk not in test['only_chunks']:
-                        continue;
+                        continue
 
                     test_parameters['chunk'] = chunk
                     test_task = templates.load(test['task'], test_parameters)

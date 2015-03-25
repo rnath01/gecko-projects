@@ -230,8 +230,8 @@ nsPluginInstanceOwner::GetImageContainer()
 
   // NotifySize() causes Flash to do a bunch of stuff like ask for surfaces to render
   // into, set y-flip flags, etc, so we do this at the beginning.
-  gfxSize resolution = mPluginFrame->PresContext()->PresShell()->GetCumulativeResolution();
-  ScreenSize screenSize = (r * LayoutDeviceToScreenScale(resolution.width, resolution.height)).Size();
+  float resolution = mPluginFrame->PresContext()->PresShell()->GetCumulativeResolution();
+  ScreenSize screenSize = (r * LayoutDeviceToScreenScale(resolution)).Size();
   mInstance->NotifySize(nsIntSize(screenSize.width, screenSize.height));
 
   container = LayerManager::CreateImageContainer();
@@ -580,8 +580,9 @@ NS_IMETHODIMP nsPluginInstanceOwner::ShowStatus(const char16_t *aStatusMsg)
 
 NS_IMETHODIMP nsPluginInstanceOwner::GetDocument(nsIDocument* *aDocument)
 {
-  if (!aDocument)
+  if (!aDocument || !mContent) {
     return NS_ERROR_NULL_POINTER;
+  }
 
   // XXX sXBL/XBL2 issue: current doc or owner doc?
   // But keep in mind bug 322414 comment 33
@@ -1466,6 +1467,23 @@ nsPluginInstanceOwner::NotifyHostCreateWidget()
     CallSetWindow();
   }
 #endif
+}
+
+void
+nsPluginInstanceOwner::NotifyDestroyPending()
+{
+  if (!mInstance) {
+    return;
+  }
+  bool isOOP = false;
+  if (NS_FAILED(mInstance->GetIsOOP(&isOOP)) || !isOOP) {
+    return;
+  }
+  NPP npp = nullptr;
+  if (NS_FAILED(mInstance->GetNPP(&npp)) || !npp) {
+    return;
+  }
+  PluginAsyncSurrogate::NotifyDestroyPending(npp);
 }
 
 nsresult nsPluginInstanceOwner::DispatchFocusToPlugin(nsIDOMEvent* aFocusEvent)

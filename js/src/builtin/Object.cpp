@@ -47,8 +47,8 @@ js::obj_construct(JSContext *cx, unsigned argc, Value *vp)
 }
 
 /* ES5 15.2.4.7. */
-static bool
-obj_propertyIsEnumerable(JSContext *cx, unsigned argc, Value *vp)
+bool
+js::obj_propertyIsEnumerable(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
@@ -96,7 +96,7 @@ obj_propertyIsEnumerable(JSContext *cx, unsigned argc, Value *vp)
         return false;
 
     /* Steps 4-5. */
-    args.rval().setBoolean(desc.object() && desc.isEnumerable());
+    args.rval().setBoolean(desc.object() && desc.enumerable());
     return true;
 }
 
@@ -196,7 +196,7 @@ js::ObjectToSource(JSContext *cx, HandleObject obj)
 
         int valcnt = 0;
         if (desc.object()) {
-            if (desc.hasGetterOrSetterObject()) {
+            if (desc.isAccessorDescriptor()) {
                 if (desc.hasGetterObject() && desc.getterObject()) {
                     val[valcnt].setObject(*desc.getterObject());
                     gsop[valcnt].set(cx->names().get);
@@ -631,11 +631,10 @@ js::ObjectCreateImpl(JSContext *cx, HandleObject proto, NewObjectKind newKind,
 
         MOZ_ASSERT(!ngroup->proto().toObjectOrNull());
 
-        return NewObjectWithGroup<PlainObject>(cx, ngroup, cx->global(), allocKind,
-                                               newKind);
+        return NewObjectWithGroup<PlainObject>(cx, ngroup, allocKind, newKind);
     }
 
-    return NewObjectWithGivenProto<PlainObject>(cx, proto, cx->global(), allocKind, newKind);
+    return NewObjectWithGivenProto<PlainObject>(cx, proto, allocKind, newKind);
 }
 
 PlainObject *
@@ -708,7 +707,7 @@ js::obj_getOwnPropertyDescriptor(JSContext *cx, unsigned argc, Value *vp)
     // Steps 5-7.
     Rooted<PropertyDescriptor> desc(cx);
     return GetOwnPropertyDescriptor(cx, obj, id, &desc) &&
-           NewPropertyDescriptorObject(cx, desc, args.rval());
+           FromPropertyDescriptor(cx, desc, args.rval());
 }
 
 // ES6 draft rev27 (2014/08/24) 19.1.2.14 Object.keys(O)
@@ -803,26 +802,28 @@ obj_getOwnPropertySymbols(JSContext *cx, unsigned argc, Value *vp)
                               JSITER_OWNONLY | JSITER_HIDDEN | JSITER_SYMBOLS | JSITER_SYMBOLSONLY);
 }
 
-/* ES5 15.2.3.6: Object.defineProperty(O, P, Attributes) */
+/* ES6 draft rev 32 (2015 Feb 2) 19.1.2.4: Object.defineProperty(O, P, Attributes) */
 bool
 js::obj_defineProperty(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
+
+    // Steps 1-3.
     RootedObject obj(cx);
     if (!GetFirstArgumentAsObject(cx, args, "Object.defineProperty", &obj))
         return false;
-
     RootedId id(cx);
     if (!ValueToId<CanGC>(cx, args.get(1), &id))
         return false;
 
-    Rooted<PropDesc> desc(cx);
-    if (!desc.initialize(cx, args.get(2)))
+    // Steps 4-5.
+    Rooted<PropertyDescriptor> desc(cx);
+    if (!ToPropertyDescriptor(cx, args.get(2), true, &desc))
         return false;
 
+    // Steps 6-8.
     if (!StandardDefineProperty(cx, obj, id, desc))
         return false;
-
     args.rval().setObject(*obj);
     return true;
 }
@@ -1091,17 +1092,15 @@ CreateObjectConstructor(JSContext *cx, JSProtoKey key)
 static JSObject *
 CreateObjectPrototype(JSContext *cx, JSProtoKey key)
 {
-    Rooted<GlobalObject*> self(cx, cx->global());
-
     MOZ_ASSERT(!cx->runtime()->isAtomsCompartment(cx->compartment()));
-    MOZ_ASSERT(self->isNative());
+    MOZ_ASSERT(cx->global()->isNative());
 
     /*
      * Create |Object.prototype| first, mirroring CreateBlankProto but for the
      * prototype of the created object.
      */
     RootedPlainObject objectProto(cx, NewObjectWithGivenProto<PlainObject>(cx, NullPtr(),
-                                                                           self, SingletonObject));
+                                                                           SingletonObject));
     if (!objectProto)
         return nullptr;
 
@@ -1133,7 +1132,7 @@ FinishObjectClassInit(JSContext *cx, JS::HandleObject ctor, JS::HandleObject pro
     if (isSelfHostingGlobal) {
         intrinsicsHolder = self;
     } else {
-        intrinsicsHolder = NewObjectWithGivenProto<PlainObject>(cx, proto, self, TenuredObject);
+        intrinsicsHolder = NewObjectWithGivenProto<PlainObject>(cx, proto, TenuredObject);
         if (!intrinsicsHolder)
             return false;
     }
@@ -1190,6 +1189,7 @@ const Class PlainObject::class_ = {
         CreateObjectConstructor,
         CreateObjectPrototype,
         object_static_methods,
+        nullptr,
         object_methods,
         object_properties,
         FinishObjectClassInit

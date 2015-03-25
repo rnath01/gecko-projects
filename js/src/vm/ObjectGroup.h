@@ -71,13 +71,11 @@ struct RootKind<TaggedProto>
 template <> struct GCMethods<const TaggedProto>
 {
     static TaggedProto initial() { return TaggedProto(); }
-    static bool poisoned(const TaggedProto &v) { return IsPoisonedPtr(v.raw()); }
 };
 
 template <> struct GCMethods<TaggedProto>
 {
     static TaggedProto initial() { return TaggedProto(); }
-    static bool poisoned(const TaggedProto &v) { return IsPoisonedPtr(v.raw()); }
 };
 
 template<class Outer>
@@ -130,6 +128,36 @@ AsTaggedProto(HandleObject obj)
 namespace gc {
 void MergeCompartments(JSCompartment *source, JSCompartment *target);
 }
+
+/*
+ * The NewObjectKind allows an allocation site to specify the type properties
+ * and lifetime requirements that must be fixed at allocation time.
+ */
+enum NewObjectKind {
+    /* This is the default. Most objects are generic. */
+    GenericObject,
+
+    /*
+     * Singleton objects are treated specially by the type system. This flag
+     * ensures that the new object is automatically set up correctly as a
+     * singleton and is allocated in the correct heap.
+     */
+    SingletonObject,
+
+    /*
+     * Objects which may be marked as a singleton after allocation must still
+     * be allocated on the correct heap, but are not automatically setup as a
+     * singleton after allocation.
+     */
+    MaybeSingletonObject,
+
+    /*
+     * Objects which will not benefit from being allocated in the nursery
+     * (e.g. because they are known to have a long lifetime) may be allocated
+     * with this kind to place them immediately into the tenured generation.
+     */
+    TenuredObject
+};
 
 /*
  * Lazy object groups overview.
@@ -398,7 +426,8 @@ class ObjectGroup : public gc::TenuredCell
      * objects, property types account for plain data properties (those with a
      * slot and no getter or setter hook) and dense elements. In typed objects
      * and unboxed objects, property types account for object and value
-     * properties and elements in the object.
+     * properties and elements in the object, and expando properties in unboxed
+     * objects.
      *
      * For accesses on these properties, the correspondence is as follows:
      *
@@ -558,6 +587,10 @@ class ObjectGroup : public gc::TenuredCell
         return offsetof(ObjectGroup, flags_);
     }
 
+    const ObjectGroupFlags *addressOfFlags() const {
+        return &flags_;
+    }
+
     // Get the bit pattern stored in an object's addendum when it has an
     // original unboxed group.
     static inline int32_t addendumOriginalUnboxedGroupValue() {
@@ -602,15 +635,17 @@ class ObjectGroup : public gc::TenuredCell
 
     // Static accessors for ObjectGroupCompartment ArrayObjectTable and PlainObjectTable.
 
-    // Update the group of a freshly created array or plain object according to
+    // Update the group of a freshly created array according to
     // the object's current contents.
     static void fixArrayGroup(ExclusiveContext *cx, ArrayObject *obj);
-    static void fixPlainObjectGroup(ExclusiveContext *cx, PlainObject *obj);
 
     // Update the group of a freshly created 'rest' arguments object.
     static void fixRestArgumentsGroup(ExclusiveContext *cx, ArrayObject *obj);
 
-    static PlainObject *newPlainObject(JSContext *cx, IdValuePair *properties, size_t nproperties);
+    // Create a PlainObject or UnboxedPlainObject with the specified properties.
+    static JSObject *newPlainObject(ExclusiveContext *cx,
+                                    IdValuePair *properties, size_t nproperties,
+                                    NewObjectKind newKind);
 
     // Static accessors for ObjectGroupCompartment AllocationSiteTable.
 
@@ -732,9 +767,11 @@ class ObjectGroupCompartment
 
     static void newTablePostBarrier(ExclusiveContext *cx, NewTable *table,
                                     const Class *clasp, TaggedProto proto, JSObject *associated);
-    static void updatePlainObjectEntryTypes(ExclusiveContext *cx, PlainObjectEntry &entry,
-                                            IdValuePair *properties, size_t nproperties);
 };
+
+PlainObject *
+NewPlainObjectWithProperties(ExclusiveContext *cx, IdValuePair *properties, size_t nproperties,
+                             NewObjectKind newKind);
 
 } // namespace js
 

@@ -29,7 +29,7 @@ ProxyAccessible::Shutdown()
     if (mChildren.Length() != 1)
       MOZ_CRASH("outer doc doesn't own adoc!");
 
-    static_cast<DocAccessibleParent*>(mChildren[0])->Destroy();
+    static_cast<DocAccessibleParent*>(mChildren[0])->Unbind();
   }
 
   mChildren.Clear();
@@ -361,6 +361,22 @@ void
 ProxyAccessible::PasteText(int32_t aPosition)
 {
   unused << mDoc->SendPasteText(mID, aPosition);
+}
+
+nsIntPoint
+ProxyAccessible::ImagePosition(uint32_t aCoordType)
+{
+  nsIntPoint retVal;
+  unused << mDoc->SendImagePosition(mID, aCoordType, &retVal);
+  return retVal;
+}
+
+nsIntSize
+ProxyAccessible::ImageSize()
+{
+  nsIntSize retVal;
+  unused << mDoc->SendImageSize(mID, &retVal);
+  return retVal;
 }
 
 }

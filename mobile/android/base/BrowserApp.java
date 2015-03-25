@@ -58,6 +58,7 @@ import org.mozilla.gecko.mozglue.ContextUtils;
 import org.mozilla.gecko.mozglue.ContextUtils.SafeIntent;
 import org.mozilla.gecko.mozglue.RobocopTarget;
 import org.mozilla.gecko.firstrun.FirstrunPane;
+import org.mozilla.gecko.overlays.ui.ShareDialog;
 import org.mozilla.gecko.preferences.ClearOnShutdownPref;
 import org.mozilla.gecko.preferences.GeckoPreferences;
 import org.mozilla.gecko.prompts.Prompt;
@@ -2981,13 +2982,15 @@ public class BrowserApp extends GeckoApp
 
         final boolean inGuestMode = GeckoProfile.get(this).inGuestMode();
 
-        bookmark.setEnabled(!AboutPages.isAboutReader(tab.getURL()));
+        final boolean isAboutReader = AboutPages.isAboutReader(tab.getURL());
+        bookmark.setEnabled(!isAboutReader);
         bookmark.setVisible(!inGuestMode);
         bookmark.setCheckable(true);
         bookmark.setChecked(tab.isBookmark());
         bookmark.setIcon(resolveBookmarkIconID(tab.isBookmark()));
+        bookmark.setTitle(resolveBookmarkTitleID(tab.isBookmark()));
 
-        reader.setEnabled(true);
+        reader.setEnabled(isAboutReader || !AboutPages.isAboutPage(tab.getURL()));
         reader.setVisible(!inGuestMode);
         reader.setCheckable(true);
         final boolean isPageInReadingList = tab.isInReadingList();
@@ -3048,6 +3051,7 @@ public class BrowserApp extends GeckoApp
                 shareIntent.putExtra(Intent.EXTRA_TEXT, url);
                 shareIntent.putExtra(Intent.EXTRA_SUBJECT, tab.getDisplayTitle());
                 shareIntent.putExtra(Intent.EXTRA_TITLE, tab.getDisplayTitle());
+                shareIntent.putExtra(ShareDialog.INTENT_EXTRA_DEVICES_ONLY, true);
 
                 // Clear the existing thumbnail extras so we don't share an old thumbnail.
                 shareIntent.removeExtra("share_screenshot_uri");
@@ -3113,6 +3117,10 @@ public class BrowserApp extends GeckoApp
         }
     }
 
+    private int resolveBookmarkTitleID(final boolean isBookmark) {
+        return (isBookmark ? R.string.bookmark_remove : R.string.bookmark);
+    }
+
     private int resolveReadingListIconID(final boolean isInReadingList) {
         return (isInReadingList ? R.drawable.ic_menu_reader_remove : R.drawable.ic_menu_reader_add);
     }
@@ -3143,10 +3151,12 @@ public class BrowserApp extends GeckoApp
                     Telemetry.sendUIEvent(TelemetryContract.Event.UNSAVE, TelemetryContract.Method.MENU, "bookmark");
                     tab.removeBookmark();
                     item.setIcon(resolveBookmarkIconID(false));
+                    item.setTitle(resolveBookmarkTitleID(false));
                 } else {
                     Telemetry.sendUIEvent(TelemetryContract.Event.SAVE, TelemetryContract.Method.MENU, "bookmark");
                     tab.addBookmark();
                     item.setIcon(resolveBookmarkIconID(true));
+                    item.setTitle(resolveBookmarkTitleID(true));
                 }
             }
             return true;

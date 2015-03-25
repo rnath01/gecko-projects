@@ -190,6 +190,10 @@ GlobalObject::resolveConstructor(JSContext *cx, Handle<GlobalObject*> global, JS
             if (!JS_DefineFunctions(cx, ctor, funs, DontDefineLateProperties))
                 return false;
         }
+        if (const JSPropertySpec *props = clasp->spec.constructorProperties) {
+            if (!JS_DefineProperties(cx, ctor, props))
+                return false;
+        }
     }
 
     // If the prototype exists, link it with the constructor.
@@ -238,7 +242,7 @@ GlobalObject::createInternal(JSContext *cx, const Class *clasp)
     MOZ_ASSERT(clasp->flags & JSCLASS_IS_GLOBAL);
     MOZ_ASSERT(clasp->trace == JS_GlobalObjectTraceHook);
 
-    JSObject *obj = NewObjectWithGivenProto(cx, clasp, NullPtr(), NullPtr(), SingletonObject);
+    JSObject *obj = NewObjectWithGivenProto(cx, clasp, NullPtr(), SingletonObject);
     if (!obj)
         return nullptr;
 
@@ -597,7 +601,7 @@ GlobalObject::getSelfHostedFunction(JSContext *cx, HandleAtom selfHostedName, Ha
 
     JSFunction *fun =
         NewScriptedFunction(cx, nargs, JSFunction::INTERPRETED_LAZY,
-                            holder, name, JSFunction::ExtendedFinalizeKind, SingletonObject);
+                            name, JSFunction::ExtendedFinalizeKind, SingletonObject);
     if (!fun)
         return false;
     fun->setIsSelfHostedBuiltin();

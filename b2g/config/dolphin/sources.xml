@@ -15,15 +15,15 @@
   <project name="platform_build" path="build" remote="b2g" revision="ef937d1aca7c4cf89ecb5cc43ae8c21c2000a9db">
     <copyfile dest="Makefile" src="core/root.mk"/>
   </project>
-  <project name="gaia" path="gaia" remote="mozillaorg" revision="eabe35cf054d47087b37c1ca7db8143717fbd7f3"/>
+  <project name="gaia" path="gaia" remote="mozillaorg" revision="aebfbd998041e960cea0468533c0b5041b504850"/>
   <project name="fake-libdvm" path="dalvik" remote="b2g" revision="d50ae982b19f42f0b66d08b9eb306be81687869f"/>
-  <project name="gonk-misc" path="gonk-misc" remote="b2g" revision="c82a532ee1f14b9733214022b1e2d55a0b030be8"/>
+  <project name="gonk-misc" path="gonk-misc" remote="b2g" revision="86cd7486d8e50eaac8ef6fe2f51f09d25194577b"/>
   <project name="librecovery" path="librecovery" remote="b2g" revision="1b3591a50ed352fc6ddb77462b7b35d0bfa555a3"/>
   <project name="moztt" path="external/moztt" remote="b2g" revision="ed2cf97a6c37a4bbd0bbbbffe06ec7136d8c79ff"/>
   <project name="rilproxy" path="rilproxy" remote="b2g" revision="5ef30994f4778b4052e58a4383dbe7890048c87e"/>
   <project name="valgrind" path="external/valgrind" remote="b2g" revision="daa61633c32b9606f58799a3186395fd2bbb8d8c"/>
   <project name="vex" path="external/VEX" remote="b2g" revision="47f031c320888fe9f3e656602588565b52d43010"/>
-  <project name="apitrace" path="external/apitrace" remote="apitrace" revision="1a1e326a7804a62de8f61fab705f7e1974cad818"/>
+  <project name="apitrace" path="external/apitrace" remote="apitrace" revision="b685e3aab4fde7624d78993877a8f7910f2a5f06"/>
   <!-- Stock Android things -->
   <project groups="linux" name="platform/prebuilts/gcc/linux-x86/host/i686-linux-glibc2.7-4.6" path="prebuilts/gcc/linux-x86/host/i686-linux-glibc2.7-4.6" revision="95bb5b66b3ec5769c3de8d3f25d681787418e7d2"/>
   <project groups="linux" name="platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.7-4.6" path="prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.7-4.6" revision="ebdad82e61c16772f6cd47e9f11936bf6ebe9aa0"/>
@@ -128,17 +128,17 @@
   <!-- Stock Android things -->
   <project name="platform/external/icu4c" path="external/icu4c" revision="2bb01561780583cc37bc667f0ea79f48a122d8a2"/>
   <!-- dolphin specific things -->
-  <project name="device/sprd" path="device/sprd" revision="e37e2ab9e0ac5fd78607cbbe3505f9a0a40d7a14"/>
+  <project name="device/sprd" path="device/sprd" revision="1eb575040af22c58a16f90ecd04b6e1ebdee5c80"/>
   <project name="platform/external/wpa_supplicant_8" path="external/wpa_supplicant_8" revision="2ea7f18a7bc45e16cb97a835dc86ee64d2d6b0b3"/>
   <project name="platform/frameworks/av" path="frameworks/av" revision="fd359e3a74a658d9eaab1c683440ba5412535777"/>
   <project name="platform/hardware/akm" path="hardware/akm" revision="6d3be412647b0eab0adff8a2768736cf4eb68039"/>
   <project groups="invensense" name="platform/hardware/invensense" path="hardware/invensense" revision="e6d9ab28b4f4e7684f6c07874ee819c9ea0002a2"/>
   <project name="platform/hardware/ril" path="hardware/ril" revision="865ce3b4a2ba0b3a31421ca671f4d6c5595f8690"/>
-  <project name="kernel/common" path="kernel" revision="0b521c3d9b4a8d551848829af0cd656a487af2ee"/>
+  <project name="kernel/common" path="kernel" revision="df636d2c31ad4434a7de2565359ad982b3767118"/>
   <project name="platform/system/core" path="system/core" revision="a626f6c0ef9e88586569331bd7387b569eaa5ed2"/>
   <project name="u-boot" path="u-boot" revision="f1502910977ac88f43da7bf9277c3523ad4b0b2f"/>
   <project name="vendor/sprd/gps" path="vendor/sprd/gps" revision="4c59900937dc2e978b7b14b7f1ea617e3d5d550e"/>
-  <project name="vendor/sprd/open-source" path="vendor/sprd/open-source" revision="1344e9e5b9d0b6c8f7909731f9d14fabeb1bdc8f"/>
+  <project name="vendor/sprd/open-source" path="vendor/sprd/open-source" revision="c5206aa084ad36037b8ee4b405a71ec7bd88b41c"/>
   <project name="vendor/sprd/partner" path="vendor/sprd/partner" revision="8649c7145972251af11b0639997edfecabfc7c2e"/>
   <project name="vendor/sprd/proprietories" path="vendor/sprd/proprietories" revision="d2466593022f7078aaaf69026adf3367c2adb7bb"/>
 </manifest>

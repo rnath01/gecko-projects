@@ -31,7 +31,7 @@ BEGIN_TEST(testGCOutOfMemory)
         "    array = []; array.push(0);"
         "})();";
     JS::CompileOptions opts(cx);
-    bool ok = JS::Evaluate(cx, global, opts, source, strlen(source), &root);
+    bool ok = JS::Evaluate(cx, opts, source, strlen(source), &root);
 
     /* Check that we get OOM. */
     CHECK(!ok);
@@ -52,7 +52,7 @@ BEGIN_TEST(testGCOutOfMemory)
     return true;
 }
 
-virtual JSRuntime * createRuntime() MOZ_OVERRIDE {
+virtual JSRuntime * createRuntime() override {
     // Note that the max nursery size must be less than the whole heap size, or
     // the test will fail because 'max' (the number of allocations required for
     // OOM) will be based on the nursery size, and that will overflow the
@@ -67,7 +67,7 @@ virtual JSRuntime * createRuntime() MOZ_OVERRIDE {
     return rt;
 }
 
-virtual void destroyRuntime() MOZ_OVERRIDE {
+virtual void destroyRuntime() override {
     JS_DestroyRuntime(rt);
 }
 

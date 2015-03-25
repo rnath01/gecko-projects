@@ -257,7 +257,7 @@ public:
  * to an nsIChannel, which holds a reference to this listener.
  * We break the reference cycle in OnStartRequest by clearing mElement.
  */
-class HTMLMediaElement::MediaLoadListener MOZ_FINAL : public nsIStreamListener,
+class HTMLMediaElement::MediaLoadListener final : public nsIStreamListener,
                                                       public nsIChannelEventSink,
                                                       public nsIInterfaceRequestor,
                                                       public nsIObserver
@@ -1219,6 +1219,9 @@ nsresult HTMLMediaElement::LoadResource()
     mMediaSource = source.forget();
     nsRefPtr<MediaResource> resource =
       MediaSourceDecoder::CreateResource(mMediaSource->GetPrincipal());
+    if (IsAutoplayEnabled()) {
+      mJoinLatency.Start();
+    }
     return FinishDecoderSetup(decoder, resource, nullptr, nullptr);
   }
 
@@ -2585,6 +2588,14 @@ HTMLMediaElement::ReportMSETelemetry()
 
   Telemetry::Accumulate(Telemetry::VIDEO_MSE_UNLOAD_STATE, state);
   LOG(PR_LOG_DEBUG, ("%p VIDEO_MSE_UNLOAD_STATE = %d", this, state));
+
+  Telemetry::Accumulate(Telemetry::VIDEO_MSE_PLAY_TIME_MS, SECONDS_TO_MS(mPlayTime.Total()));
+  LOG(PR_LOG_DEBUG, ("%p VIDEO_MSE_PLAY_TIME_MS = %f", this, mPlayTime.Total()));
+
+  double latency = mJoinLatency.Count() ? mJoinLatency.Total() / mJoinLatency.Count() : 0.0;
+  Telemetry::Accumulate(Telemetry::VIDEO_MSE_JOIN_LATENCY_MS, SECONDS_TO_MS(latency));
+  LOG(PR_LOG_DEBUG, ("%p VIDEO_MSE_JOIN_LATENCY = %f (%d ms) count=%d\n",
+                     this, latency, SECONDS_TO_MS(latency), mJoinLatency.Count()));
 }
 
 void HTMLMediaElement::UnbindFromTree(bool aDeep,
@@ -2866,7 +2877,7 @@ public:
 
   // These notifications run on the media graph thread so we need to
   // dispatch events to the main thread.
-  virtual void NotifyBlockingChanged(MediaStreamGraph* aGraph, Blocking aBlocked) MOZ_OVERRIDE
+  virtual void NotifyBlockingChanged(MediaStreamGraph* aGraph, Blocking aBlocked) override
   {
     nsCOMPtr<nsIRunnable> event;
     if (aBlocked == BLOCKED) {
@@ -2877,7 +2888,7 @@ public:
     aGraph->DispatchToMainThreadAfterStreamStateUpdate(event.forget());
   }
   virtual void NotifyEvent(MediaStreamGraph* aGraph,
-                           MediaStreamListener::MediaStreamGraphEvent event) MOZ_OVERRIDE
+                           MediaStreamListener::MediaStreamGraphEvent event) override
   {
     if (event == EVENT_FINISHED) {
       nsCOMPtr<nsIRunnable> event =
@@ -2885,7 +2896,7 @@ public:
       aGraph->DispatchToMainThreadAfterStreamStateUpdate(event.forget());
     }
   }
-  virtual void NotifyHasCurrentData(MediaStreamGraph* aGraph) MOZ_OVERRIDE
+  virtual void NotifyHasCurrentData(MediaStreamGraph* aGraph) override
   {
     MutexAutoLock lock(mMutex);
     nsCOMPtr<nsIRunnable> event =
@@ -2893,7 +2904,7 @@ public:
     aGraph->DispatchToMainThreadAfterStreamStateUpdate(event.forget());
   }
   virtual void NotifyOutput(MediaStreamGraph* aGraph,
-                            GraphTime aCurrentTime) MOZ_OVERRIDE
+                            GraphTime aCurrentTime) override
   {
     MutexAutoLock lock(mMutex);
     if (mPendingNotifyOutput)
@@ -3052,7 +3063,7 @@ void HTMLMediaElement::MetadataLoaded(const MediaInfo* aInfo,
                                       nsAutoPtr<const MetadataTags> aTags)
 {
   mMediaInfo = *aInfo;
-  mIsEncrypted = aInfo->mIsEncrypted;
+  mIsEncrypted = aInfo->IsEncrypted();
   mTags = aTags.forget();
   mLoadedDataFired = false;
   ChangeReadyState(nsIDOMHTMLMediaElement::HAVE_METADATA);
@@ -3071,6 +3082,16 @@ void HTMLMediaElement::MetadataLoaded(const MediaInfo* aInfo,
   if (mDecoder && mDecoder->IsTransportSeekable() && mDecoder->IsMediaSeekable()) {
     ProcessMediaFragmentURI();
     mDecoder->SetFragmentEndTime(mFragmentEnd);
+  }
+  if (mIsEncrypted) {
+    if (!mMediaSource && Preferences::GetBool("media.eme.mse-only", true)) {
+      DecodeError();
+      return;
+    }
+
+#ifdef MOZ_EME
+    DispatchEncrypted(aInfo->mCrypto.mInitData, aInfo->mCrypto.mType);
+#endif
   }
 
   // Expose the tracks to JS directly.
@@ -3212,13 +3233,13 @@ void HTMLMediaElement::SeekStarted()
   if(mPlayingThroughTheAudioChannel) {
     mPlayingThroughTheAudioChannelBeforeSeek = true;
   }
-  FireTimeUpdate(false);
 }
 
 void HTMLMediaElement::SeekCompleted()
 {
   mPlayingBeforeSeek = false;
   SetPlayedOrSeeked(true);
+  FireTimeUpdate(false);
   DispatchAsyncEvent(NS_LITERAL_STRING("seeked"));
   // We changed whether we're seeking so we need to AddRemoveSelfReference
   AddRemoveSelfReference();
@@ -3664,6 +3685,22 @@ nsresult HTMLMediaElement::DispatchAsyncEvent(const nsAString& aName)
 
   nsCOMPtr<nsIRunnable> event = new nsAsyncEventRunner(aName, this);
   NS_DispatchToMainThread(event);
+
+  // Only collect rebuffer and stall rate stats for MSE video.
+  if (!mMediaSource) {
+    return NS_OK;
+  }
+
+  if ((aName.EqualsLiteral("play") || aName.EqualsLiteral("playing"))) {
+    mPlayTime.Start();
+    mJoinLatency.Pause();
+  } else if (aName.EqualsLiteral("waiting")) {
+    mPlayTime.Pause();
+    Telemetry::Accumulate(Telemetry::VIDEO_MSE_BUFFERING_COUNT, 1);
+  } else if (aName.EqualsLiteral("pause")) {
+    mPlayTime.Pause();
+  }
+
   return NS_OK;
 }
 

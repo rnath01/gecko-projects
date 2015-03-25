@@ -136,7 +136,7 @@ JS_NewObjectWithUniqueType(JSContext *cx, const JSClass *clasp, HandleObject pro
      * we're not going to be using that ObjectGroup anyway.
      */
     RootedObject obj(cx, NewObjectWithGivenProto(cx, (const js::Class *)clasp, NullPtr(),
-                                                 NullPtr(), SingletonObject));
+                                                 SingletonObject));
     if (!obj)
         return nullptr;
     if (!JS_SplicePrototype(cx, obj, proto))
@@ -549,9 +549,9 @@ JS_GetCustomIteratorCount(JSContext *cx)
 }
 
 JS_FRIEND_API(unsigned)
-JS_PCToLineNumber(JSScript *script, jsbytecode *pc)
+JS_PCToLineNumber(JSScript *script, jsbytecode *pc, unsigned *columnp)
 {
-    return PCToLineNumber(script, pc);
+    return PCToLineNumber(script, pc, columnp);
 }
 
 JS_FRIEND_API(bool)
@@ -878,13 +878,13 @@ JS::FormatStackDump(JSContext *cx, char *buf, bool showArgs, bool showLocals, bo
     return buf;
 }
 
-struct DumpHeapTracer : public JSTracer
+struct DumpHeapTracer : public JS::CallbackTracer
 {
     FILE   *output;
 
     DumpHeapTracer(FILE *fp, JSRuntime *rt, JSTraceCallback callback,
                    WeakMapTraceKind weakTraceKind)
-      : JSTracer(rt, callback, weakTraceKind), output(fp)
+      : JS::CallbackTracer(rt, callback, weakTraceKind), output(fp)
     {}
 };
 
@@ -939,7 +939,7 @@ DumpHeapVisitCell(JSRuntime *rt, void *data, void *thing,
 }
 
 static void
-DumpHeapVisitChild(JSTracer *trc, void **thingp, JSGCTraceKind kind)
+DumpHeapVisitChild(JS::CallbackTracer *trc, void **thingp, JSGCTraceKind kind)
 {
     if (gc::IsInsideNursery((js::gc::Cell *)*thingp))
         return;
@@ -951,7 +951,7 @@ DumpHeapVisitChild(JSTracer *trc, void **thingp, JSGCTraceKind kind)
 }
 
 static void
-DumpHeapVisitRoot(JSTracer *trc, void **thingp, JSGCTraceKind kind)
+DumpHeapVisitRoot(JS::CallbackTracer *trc, void **thingp, JSGCTraceKind kind)
 {
     if (gc::IsInsideNursery((js::gc::Cell *)*thingp))
         return;

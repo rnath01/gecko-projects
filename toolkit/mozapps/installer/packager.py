@@ -179,6 +179,8 @@ class RemovedFiles(GeneratedFile):
 
     def handle_line(self, str):
         f = str.strip()
+        if not f:
+            return
         if self.copier.contains(f):
             errors.error('Removal of packaged file(s): %s' % f)
         self.content += f + '\n'
@@ -214,8 +216,8 @@ class NoPkgFilesRemover(object):
             self._error = errors.warn
             self._msg = 'Skipping %s'
 
-    def add_base(self, base):
-        self._formatter.add_base(base)
+    def add_base(self, base, *args):
+        self._formatter.add_base(base, *args)
 
     def add(self, path, content):
         if not any(mozpack.path.match(path, spec) for spec in self._files):
@@ -344,8 +346,7 @@ def main():
         sink.close(args.manifest is not None)
 
         if args.removals:
-            lines = [l.lstrip() for l in open(args.removals).readlines()]
-            removals_in = StringIO(''.join(lines))
+            removals_in = StringIO(open(args.removals).read())
             removals_in.name = args.removals
             removals = RemovedFiles(copier)
             preprocess(removals_in, removals, defines)
@@ -382,9 +383,13 @@ def main():
                                          'bin')
         else:
             gre_path = None
-        for base in sorted([[p for p in [mozpack.path.join('bin', b), b]
-                            if os.path.exists(os.path.join(args.source, p))][0]
-                           for b in sink.packager.get_bases()]):
+        def get_bases():
+            for b in sink.packager.get_bases(addons=False):
+                for p in (mozpack.path.join('bin', b), b):
+                    if os.path.exists(os.path.join(args.source, p)):
+                        yield p
+                        break
+        for base in sorted(get_bases()):
             if not gre_path:
                 gre_path = base
             base_path = sink.normalize_path(base)

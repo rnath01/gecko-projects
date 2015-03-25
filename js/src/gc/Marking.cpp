@@ -143,7 +143,7 @@ IsThingPoisoned(T *thing)
 static GCMarker *
 AsGCMarker(JSTracer *trc)
 {
-    MOZ_ASSERT(IS_GC_MARKING_TRACER(trc));
+    MOZ_ASSERT(trc->isMarkingTracer());
     return static_cast<GCMarker *>(trc);
 }
 
@@ -191,13 +191,16 @@ CheckMarkedThing(JSTracer *trc, T **thingp)
     MOZ_ASSERT(zone->runtimeFromAnyThread() == trc->runtime());
     MOZ_ASSERT(trc->hasTracingDetails());
 
-    bool isGcMarkingTracer = IS_GC_MARKING_TRACER(trc);
-
-    MOZ_ASSERT_IF(zone->requireGCTracer(), isGcMarkingTracer);
-
     MOZ_ASSERT(thing->isAligned());
-
     MOZ_ASSERT(MapTypeToTraceKind<T>::kind == GetGCThingTraceKind(thing));
+
+    /*
+     * Do not check IsMarkingTracer directly -- it should only be used in paths
+     * where we cannot be the gray buffering tracer.
+     */
+    bool isGcMarkingTracer = trc->isMarkingTracer();
+
+    MOZ_ASSERT_IF(zone->requireGCTracer(), isGcMarkingTracer || IsBufferingGrayRoots(trc));
 
     if (isGcMarkingTracer) {
         GCMarker *gcMarker = static_cast<GCMarker *>(trc);
@@ -264,7 +267,7 @@ MarkInternal(JSTracer *trc, T **thingp)
     CheckMarkedThing(trc, thingp);
     T *thing = *thingp;
 
-    if (!trc->callback) {
+    if (trc->isMarkingTracer()) {
         /*
          * We may mark a Nursery thing outside the context of the
          * MinorCollectionTracer because of a pre-barrier. The pre-barrier is
@@ -292,16 +295,16 @@ MarkInternal(JSTracer *trc, T **thingp)
         PushMarkStack(AsGCMarker(trc), thing);
         SetMaybeAliveFlag(thing);
     } else {
-        trc->callback(trc, (void **)thingp, MapTypeToTraceKind<T>::kind);
+        trc->asCallbackTracer()->invoke((void **)thingp, MapTypeToTraceKind<T>::kind);
         trc->unsetTracingLocation();
     }
 
     trc->clearTracingDetails();
 }
 
-#define JS_ROOT_MARKING_ASSERT(trc)                                     \
-    MOZ_ASSERT_IF(IS_GC_MARKING_TRACER(trc),                            \
-                  trc->runtime()->gc.state() == NO_INCREMENTAL ||       \
+#define JS_ROOT_MARKING_ASSERT(trc) \
+    MOZ_ASSERT_IF(trc->isMarkingTracer(), \
+                  trc->runtime()->gc.state() == NO_INCREMENTAL || \
                   trc->runtime()->gc.state() == MARK_ROOTS);
 
 namespace js {
@@ -332,13 +335,13 @@ MarkPermanentAtom(JSTracer *trc, JSAtom *atom, const char *name)
 
     CheckMarkedThing(trc, &atom);
 
-    if (!trc->callback) {
+    if (trc->isMarkingTracer()) {
         // Atoms do not refer to other GC things so don't need to go on the mark stack.
         // Additionally, PushMarkStack will ignore permanent atoms.
         atom->markIfUnmarked();
     } else {
         void *thing = atom;
-        trc->callback(trc, &thing, JSTRACE_STRING);
+        trc->asCallbackTracer()->invoke(&thing, JSTRACE_STRING);
         MOZ_ASSERT(thing == atom);
         trc->unsetTracingLocation();
     }
@@ -356,13 +359,13 @@ MarkWellKnownSymbol(JSTracer *trc, JS::Symbol *sym)
 
     MOZ_ASSERT(sym->isWellKnownSymbol());
     CheckMarkedThing(trc, &sym);
-    if (!trc->callback) {
+    if (trc->isMarkingTracer()) {
         // Permanent atoms are marked before well-known symbols.
         MOZ_ASSERT(sym->description()->isMarked());
         sym->markIfUnmarked();
     } else {
         void *thing = sym;
-        trc->callback(trc, &thing, JSTRACE_SYMBOL);
+        trc->asCallbackTracer()->invoke(&thing, JSTRACE_SYMBOL);
         MOZ_ASSERT(thing == sym);
         trc->unsetTracingLocation();
     }
@@ -954,7 +957,7 @@ gc::MarkObjectSlots(JSTracer *trc, NativeObject *obj, uint32_t start, uint32_t n
 static bool
 ShouldMarkCrossCompartment(JSTracer *trc, JSObject *src, Cell *cell)
 {
-    if (!IS_GC_MARKING_TRACER(trc))
+    if (!trc->isMarkingTracer())
         return true;
 
     uint32_t color = AsGCMarker(trc)->markColor();
@@ -1061,6 +1064,20 @@ PushMarkStack(GCMarker *gcmarker, Shape *thing)
 static inline void
 ScanBaseShape(GCMarker *gcmarker, BaseShape *base);
 
+void
+BaseShape::markChildren(JSTracer *trc)
+{
+    if (isOwned())
+        gc::MarkBaseShape(trc, &unowned_, "base");
+
+    JSObject* global = compartment()->unsafeUnbarrieredMaybeGlobal();
+    if (global)
+        MarkObjectUnbarriered(trc, &global, "global");
+
+    if (metadata)
+        gc::MarkObject(trc, &metadata, "metadata");
+}
+
 static void
 PushMarkStack(GCMarker *gcmarker, BaseShape *thing)
 {
@@ -1102,11 +1119,8 @@ ScanBaseShape(GCMarker *gcmarker, BaseShape *base)
 
     base->compartment()->mark();
 
-    if (JSObject *parent = base->getObjectParent()) {
-        MaybePushMarkStackBetweenSlices(gcmarker, parent);
-    } else if (GlobalObject *global = base->compartment()->unsafeUnbarrieredMaybeGlobal()) {
+    if (GlobalObject *global = base->compartment()->unsafeUnbarrieredMaybeGlobal())
         gcmarker->traverse(global);
-    }
 
     if (JSObject *metadata = base->getObjectMetadata())
         MaybePushMarkStackBetweenSlices(gcmarker, metadata);
@@ -1249,45 +1263,30 @@ PushMarkStack(GCMarker *gcmarker, JS::Symbol *sym)
 }
 
 /*
- * This function is used by the cycle collector to trace through the
- * children of a BaseShape (and its baseUnowned(), if any). The cycle
- * collector does not directly care about BaseShapes, so only the
- * parent is marked. Furthermore, the parent is marked only if it isn't the
- * same as prevParent, which will be updated to the current shape's parent.
- */
-static inline void
-MarkCycleCollectorChildren(JSTracer *trc, BaseShape *base, JSObject **prevParent)
-{
-    MOZ_ASSERT(base);
-
-    /*
-     * The cycle collector does not need to trace unowned base shapes,
-     * as they have the same parent as the original base shape.
-     */
-    base->assertConsistency();
-
-    JSObject *parent = base->getObjectParent();
-    if (parent && parent != *prevParent) {
-        MarkObjectUnbarriered(trc, &parent, "parent");
-        MOZ_ASSERT(parent == base->getObjectParent());
-        *prevParent = parent;
-    }
-}
-
-/*
  * This function is used by the cycle collector to trace through a
  * shape. The cycle collector does not care about shapes or base
  * shapes, so those are not marked. Instead, any shapes or base shapes
  * that are encountered have their children marked. Stack space is
- * bounded. If two shapes in a row have the same parent pointer, the
- * parent pointer will only be marked once.
+ * bounded.
  */
 void
 gc::MarkCycleCollectorChildren(JSTracer *trc, Shape *shape)
 {
-    JSObject *prevParent = nullptr;
+    /*
+     * We need to mark the global, but it's OK to only do this once instead of
+     * doing it for every Shape in our lineage, since it's always the same
+     * global.
+     */
+    JSObject *global = shape->compartment()->unsafeUnbarrieredMaybeGlobal();
+    MOZ_ASSERT(global);
+    MarkObjectUnbarriered(trc, &global, "global");
+
     do {
-        MarkCycleCollectorChildren(trc, shape->base(), &prevParent);
+        MOZ_ASSERT(global == shape->compartment()->unsafeUnbarrieredMaybeGlobal());
+
+        MOZ_ASSERT(shape->base());
+        shape->base()->assertConsistency();
+
         MarkId(trc, &shape->propidRef(), "propid");
 
         if (shape->hasGetterObject()) {
@@ -1712,6 +1711,9 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
                 goto scan_unboxed;
             }
             if (clasp == &UnboxedPlainObject::class_) {
+                JSObject *expando = obj->as<UnboxedPlainObject>().maybeExpando();
+                if (expando && mark(expando))
+                    repush(expando);
                 const UnboxedLayout &layout = obj->as<UnboxedPlainObject>().layout();
                 unboxedTraceList = layout.traceList();
                 if (!unboxedTraceList)
@@ -1864,7 +1866,7 @@ js::TraceChildren(JSTracer *trc, void *thing, JSGCTraceKind kind)
 
 #ifdef DEBUG
 static void
-AssertNonGrayGCThing(JSTracer *trc, void **thingp, JSGCTraceKind kind)
+AssertNonGrayGCThing(JS::CallbackTracer *trc, void **thingp, JSGCTraceKind kind)
 {
     DebugOnly<Cell *> thing(static_cast<Cell *>(*thingp));
     MOZ_ASSERT_IF(thing->isTenured(), !thing->asTenured().isMarked(js::gc::GRAY));
@@ -1889,23 +1891,23 @@ js::gc::ZoneIsAtomsZoneForString(JSRuntime *rt, T *thing)
 #endif
 
 static void
-UnmarkGrayChildren(JSTracer *trc, void **thingp, JSGCTraceKind kind);
+UnmarkGrayChildren(JS::CallbackTracer *trc, void **thingp, JSGCTraceKind kind);
 
-struct UnmarkGrayTracer : public JSTracer
+struct UnmarkGrayTracer : public JS::CallbackTracer
 {
     /*
      * We set eagerlyTraceWeakMaps to false because the cycle collector will fix
      * up any color mismatches involving weakmaps when it runs.
      */
     explicit UnmarkGrayTracer(JSRuntime *rt)
-      : JSTracer(rt, UnmarkGrayChildren, DoNotTraceWeakMaps),
+      : JS::CallbackTracer(rt, UnmarkGrayChildren, DoNotTraceWeakMaps),
         tracingShape(false),
         previousShape(nullptr),
         unmarkedAny(false)
     {}
 
     UnmarkGrayTracer(JSTracer *trc, bool tracingShape)
-      : JSTracer(trc->runtime(), UnmarkGrayChildren, DoNotTraceWeakMaps),
+      : JS::CallbackTracer(trc->runtime(), UnmarkGrayChildren, DoNotTraceWeakMaps),
         tracingShape(tracingShape),
         previousShape(nullptr),
         unmarkedAny(false)
@@ -1952,7 +1954,7 @@ struct UnmarkGrayTracer : public JSTracer
  *   containers.
  */
 static void
-UnmarkGrayChildren(JSTracer *trc, void **thingp, JSGCTraceKind kind)
+UnmarkGrayChildren(JS::CallbackTracer *trc, void **thingp, JSGCTraceKind kind)
 {
     int stackDummy;
     if (!JS_CHECK_STACK_SIZE(trc->runtime()->mainThread.nativeStackLimit[StackForSystemCode],
@@ -1972,7 +1974,7 @@ UnmarkGrayChildren(JSTracer *trc, void **thingp, JSGCTraceKind kind)
     // to only black edges.
     if (!cell->isTenured()) {
 #ifdef DEBUG
-        JSTracer nongray(trc->runtime(), AssertNonGrayGCThing);
+        JS::CallbackTracer nongray(trc->runtime(), AssertNonGrayGCThing);
         TraceChildren(&nongray, cell, kind);
 #endif
         return;

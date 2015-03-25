@@ -70,6 +70,10 @@ Icc::Icc(nsPIDOMWindow* aWindow, long aClientId, nsIIccInfo* aIccInfo)
   }
 }
 
+Icc::~Icc()
+{
+}
+
 void
 Icc::Shutdown()
 {
@@ -148,9 +152,9 @@ Icc::UpdateIccInfo(nsIIccInfo* aIccInfo)
 // WrapperCache
 
 JSObject*
-Icc::WrapObject(JSContext* aCx)
+Icc::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return MozIccBinding::Wrap(aCx, this);
+  return MozIccBinding::Wrap(aCx, this, aGivenProto);
 }
 
 // MozIcc WebIDL

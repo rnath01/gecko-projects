@@ -79,10 +79,16 @@ class UnboxedLayout : public mozilla::LinkedListElement<UnboxedLayout>
     // kind from this group.
     HeapPtrObjectGroup replacementNewGroup_;
 
+    // If this layout has been used to construct script or JSON constant
+    // objects, this code might be filled in to more quickly fill in objects
+    // from an array of values.
+    HeapPtrJitCode constructorCode_;
+
   public:
     UnboxedLayout(const PropertyVector &properties, size_t size)
       : size_(size), newScript_(nullptr), traceList_(nullptr),
-        nativeGroup_(nullptr), nativeShape_(nullptr), replacementNewGroup_(nullptr)
+        nativeGroup_(nullptr), nativeShape_(nullptr), replacementNewGroup_(nullptr),
+        constructorCode_(nullptr)
     {
         properties_.appendAll(properties);
     }
@@ -138,6 +144,14 @@ class UnboxedLayout : public mozilla::LinkedListElement<UnboxedLayout>
         return nativeShape_;
     }
 
+    jit::JitCode *constructorCode() const {
+        return constructorCode_;
+    }
+
+    void setConstructorCode(jit::JitCode *code) {
+        constructorCode_ = code;
+    }
+
     inline gc::AllocKind getAllocKind() const;
 
     void trace(JSTracer *trc);
@@ -145,6 +159,16 @@ class UnboxedLayout : public mozilla::LinkedListElement<UnboxedLayout>
     size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf);
 
     static bool makeNativeGroup(JSContext *cx, ObjectGroup *group);
+    static bool makeConstructorCode(JSContext *cx, HandleObjectGroup group);
+};
+
+// Class for expando objects holding extra properties given to an unboxed plain
+// object. These objects behave identically to normal native plain objects, and
+// have a separate Class to distinguish them for memory usage reporting.
+class UnboxedExpandoObject : public NativeObject
+{
+  public:
+    static const Class class_;
 };
 
 // Class for a plain object using an unboxed representation. The physical
@@ -153,8 +177,10 @@ class UnboxedLayout : public mozilla::LinkedListElement<UnboxedLayout>
 // how their properties are stored.
 class UnboxedPlainObject : public JSObject
 {
-    // Placeholder for extra properties. See bug 1137180.
-    void *dummy_;
+    // Optional object which stores extra properties on this object. This is
+    // not automatically barriered to avoid problems if the object is converted
+    // to a native. See ensureExpando().
+    UnboxedExpandoObject *expando_;
 
     // Start of the inline data, which immediately follows the group and extra properties.
     uint8_t data_[1];
@@ -199,13 +225,32 @@ class UnboxedPlainObject : public JSObject
         return &data_[0];
     }
 
-    bool setValue(JSContext *cx, const UnboxedLayout::Property &property, const Value &v);
+    UnboxedExpandoObject *maybeExpando() const {
+        return expando_;
+    }
+
+    void initExpando() {
+        expando_ = nullptr;
+    }
+
+    bool containsUnboxedOrExpandoProperty(ExclusiveContext *cx, jsid id) const;
+
+    static UnboxedExpandoObject *ensureExpando(JSContext *cx, Handle<UnboxedPlainObject *> obj);
+
+    bool setValue(ExclusiveContext *cx, const UnboxedLayout::Property &property, const Value &v);
     Value getValue(const UnboxedLayout::Property &property);
 
     static bool convertToNative(JSContext *cx, JSObject *obj);
-    static UnboxedPlainObject *create(JSContext *cx, HandleObjectGroup group, NewObjectKind newKind);
+    static UnboxedPlainObject *create(ExclusiveContext *cx, HandleObjectGroup group,
+                                      NewObjectKind newKind);
+    static JSObject *createWithProperties(ExclusiveContext *cx, HandleObjectGroup group,
+                                          NewObjectKind newKind, IdValuePair *properties);
 
     static void trace(JSTracer *trc, JSObject *object);
+
+    static size_t offsetOfExpando() {
+        return offsetof(UnboxedPlainObject, expando_);
+    }
 
     static size_t offsetOfData() {
         return offsetof(UnboxedPlainObject, data_[0]);
@@ -216,7 +261,7 @@ class UnboxedPlainObject : public JSObject
 // provided they all match the template shape. If successful, converts the
 // preliminary objects and their group to the new unboxed representation.
 bool
-TryConvertToUnboxedLayout(JSContext *cx, Shape *templateShape,
+TryConvertToUnboxedLayout(ExclusiveContext *cx, Shape *templateShape,
                           ObjectGroup *group, PreliminaryObjectArray *objects);
 
 inline gc::AllocKind

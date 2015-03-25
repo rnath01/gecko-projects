@@ -444,15 +444,12 @@ jit::LazyLinkTopActivation(JSContext *cx)
 
     // First frame should be an exit frame.
     JitFrameIterator it(iter);
-    MOZ_ASSERT(it.type() == JitFrame_Exit);
-
-    // Second frame is the Ion frame.
-    ++it;
-    MOZ_ASSERT(it.type() == JitFrame_IonJS);
+    LazyLinkExitFrameLayout *ll = it.exitFrame()->as<LazyLinkExitFrameLayout>();
+    JSScript *calleeScript = ScriptFromCalleeToken(ll->jsFrame()->calleeToken());
 
     // Get the pending builder from the Ion frame.
-    IonBuilder *builder = it.script()->ionScript()->pendingBuilder();
-    it.script()->setPendingIonBuilder(cx, nullptr);
+    IonBuilder *builder = calleeScript->ionScript()->pendingBuilder();
+    calleeScript->setPendingIonBuilder(cx, nullptr);
 
     AutoEnterAnalysis enterTypes(cx);
     RootedScript script(cx, builder->script());
@@ -494,7 +491,7 @@ JitRuntime::Mark(JSTracer *trc)
 {
     MOZ_ASSERT(!trc->runtime()->isHeapMinorCollecting());
     Zone *zone = trc->runtime()->atomsCompartment()->zone();
-    for (gc::ZoneCellIterUnderGC i(zone, gc::FINALIZE_JITCODE); !i.done(); i.next()) {
+    for (gc::ZoneCellIterUnderGC i(zone, gc::AllocKind::JITCODE); !i.done(); i.next()) {
         JitCode *code = i.get<JitCode>();
         MarkJitCodeRoot(trc, &code, "wrapper");
     }
@@ -1136,7 +1133,7 @@ jit::ToggleBarriers(JS::Zone *zone, bool needs)
     if (!rt->hasJitRuntime())
         return;
 
-    for (gc::ZoneCellIterUnderGC i(zone, gc::FINALIZE_SCRIPT); !i.done(); i.next()) {
+    for (gc::ZoneCellIterUnderGC i(zone, gc::AllocKind::SCRIPT); !i.done(); i.next()) {
         JSScript *script = i.get<JSScript>();
         if (script->hasIonScript())
             script->ionScript()->toggleBarriers(needs);
@@ -1776,19 +1773,6 @@ MarkOffThreadNurseryObjects::mark(JSTracer *trc)
     }
 }
 
-static inline bool
-OffThreadCompilationAvailable(JSContext *cx)
-{
-    // Even if off thread compilation is enabled, compilation must still occur
-    // on the main thread in some cases.
-    //
-    // Require cpuCount > 1 so that Ion compilation jobs and main-thread
-    // execution are not competing for the same resources.
-    return cx->runtime()->canUseOffthreadIonCompilation()
-        && HelperThreadState().cpuCount > 1
-        && CanUseExtraThreads();
-}
-
 static void
 TrackAllProperties(JSContext *cx, JSObject *obj)
 {
@@ -1970,7 +1954,7 @@ IonCompile(JSContext *cx, JSScript *script,
     }
 
     // If possible, compile the script off thread.
-    if (OffThreadCompilationAvailable(cx)) {
+    if (options.offThreadCompilationAvailable()) {
         if (!recompile)
             builderScript->setIonScript(cx, ION_COMPILING_SCRIPT);
 
@@ -2051,11 +2035,12 @@ CheckScript(JSContext *cx, JSScript *script, bool osr)
         return false;
     }
 
-    if (!script->compileAndGo() && !script->functionNonDelazifying()) {
-        // Support non-CNG functions but not other scripts. For global scripts,
-        // IonBuilder currently uses the global object as scope chain, this is
-        // not valid for non-CNG code.
-        TrackAndSpewIonAbort(cx, script, "not compile-and-go");
+    if (script->hasPollutedGlobalScope() && !script->functionNonDelazifying()) {
+        // Support functions with a polluted global scope but not other
+        // scripts. For global scripts, IonBuilder currently uses the global
+        // object as scope chain, this is not valid when the script has a
+        // polluted global scope.
+        TrackAndSpewIonAbort(cx, script, "has polluted global scope");
         return false;
     }
 
@@ -2172,6 +2157,19 @@ Compile(JSContext *cx, HandleScript script, BaselineFrame *osrFrame, jsbytecode 
 
 } // namespace jit
 } // namespace js
+
+bool
+jit::OffThreadCompilationAvailable(JSContext *cx)
+{
+    // Even if off thread compilation is enabled, compilation must still occur
+    // on the main thread in some cases.
+    //
+    // Require cpuCount > 1 so that Ion compilation jobs and main-thread
+    // execution are not competing for the same resources.
+    return cx->runtime()->canUseOffthreadIonCompilation()
+        && HelperThreadState().cpuCount > 1
+        && CanUseExtraThreads();
+}
 
 // Decide if a transition from interpreter execution to Ion code should occur.
 // May compile or recompile the target JSScript.

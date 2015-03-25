@@ -154,7 +154,7 @@ public:
         }
     }
 
-    void Run() MOZ_OVERRIDE
+    void Run() override
     {
         mParent->DoInjection(mSnapshot);
         // We don't need to hold this lock during DoInjection, but we do need
@@ -163,7 +163,7 @@ public:
         mozilla::MutexAutoLock lock(mMutex);
     }
 
-    void Cancel() MOZ_OVERRIDE
+    void Cancel() override
     {
         mozilla::MutexAutoLock lock(mMutex);
         mMainThreadMsgLoop = nullptr;
@@ -1544,6 +1544,8 @@ PluginModuleParent::DeallocPPluginInstanceParent(PPluginInstanceParent* aActor)
 void
 PluginModuleParent::SetPluginFuncs(NPPluginFuncs* aFuncs)
 {
+    MOZ_ASSERT(aFuncs);
+
     aFuncs->version = (NP_VERSION_MAJOR << 8) | NP_VERSION_MINOR;
     aFuncs->javaClass = nullptr;
 
@@ -1868,7 +1870,7 @@ PluginModuleParent::OnInitFailure()
     }
 }
 
-class OfflineObserver MOZ_FINAL : public nsIObserver
+class OfflineObserver final : public nsIObserver
 {
 public:
     NS_DECL_ISUPPORTS
@@ -2179,7 +2181,7 @@ PluginModuleParent::RecvNP_InitializeResult(const NPError& aError)
         return true;
     }
 
-    if (mIsStartingAsync) {
+    if (mIsStartingAsync && mNPPIface) {
         SetPluginFuncs(mNPPIface);
         InitAsyncSurrogates();
     }
@@ -2301,8 +2303,17 @@ PluginModuleParent::NP_GetEntryPoints(NPPluginFuncs* pFuncs, NPError* error)
 
     *error = NPERR_NO_ERROR;
     if (mIsStartingAsync && !IsChrome()) {
-        PluginAsyncSurrogate::NP_GetEntryPoints(pFuncs);
         mNPPIface = pFuncs;
+#if defined(XP_MACOSX)
+        if (mNPInitialized) {
+            SetPluginFuncs(pFuncs);
+            InitAsyncSurrogates();
+        } else {
+            PluginAsyncSurrogate::NP_GetEntryPoints(pFuncs);
+        }
+#else
+        PluginAsyncSurrogate::NP_GetEntryPoints(pFuncs);
+#endif
     } else {
         SetPluginFuncs(pFuncs);
     }
@@ -2876,7 +2887,7 @@ PluginModuleChromeParent::OnCrash(DWORD processID)
 #endif // MOZ_CRASHREPORTER_INJECTOR
 
 #ifdef MOZ_ENABLE_PROFILER_SPS
-class PluginProfilerObserver MOZ_FINAL : public nsIObserver,
+class PluginProfilerObserver final : public nsIObserver,
                                          public nsSupportsWeakReference
 {
 public:
