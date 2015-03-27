@@ -1692,6 +1692,31 @@ this.PDU_NL_IDENTIFIER_TAMIL      = 11;
 this.PDU_NL_IDENTIFIER_TELUGU     = 12;
 this.PDU_NL_IDENTIFIER_URDU       = 13;
 
+// The mapping of mcc and their extra GSM national language locking / single
+// shift table tuples to enable. The default GSM alphabet and extension table
+// are always enabled and need not to be list here.
+//
+// The content should be updated when a relevant national regulatory body
+// requests. See 'NOTE 2' of 6.2.1.2.5 in 3GPP TS 23.038:
+// "
+// Encoding of a message using the national locking shift mechanism is not
+// intended to be implemented until a formal request is issued by the
+// relevant national regulatory body. This is because a receiving entity
+// not supporting the relevant locking-shift decoding will present different
+// characters from the ones intended by the sending entity.
+// "
+this.PDU_MCC_NL_TABLE_TUPLES_MAPPING = {
+  // Configuration for Turkey.
+  //
+  // The Turkish single shift table contains 7 extra characters
+  // (Ğ, İ, Ş, ç, ğ, ı, ş) than the GSM default alphabet extension table. Since
+  // all the 7 characters are also included in Turkish locking shift table, it's
+  // not necessary to enable Turkish single shift table. Using GSM default
+  // alphabet extension table instead saves 3 octets when these extension table
+  // characters present in a message.
+  286: [[PDU_NL_IDENTIFIER_TURKISH, PDU_NL_IDENTIFIER_DEFAULT]]
+};
+
 /*
  * 3GPP TS 23.038 - 6.2.1 GSM 7 bit Default Alphabet
  */
@@ -2693,6 +2718,7 @@ NETWORK_CREG_TO_GECKO_MOBILE_CONNECTION_STATE[NETWORK_CREG_STATE_DENIED_EMERGENC
 NETWORK_CREG_TO_GECKO_MOBILE_CONNECTION_STATE[NETWORK_CREG_STATE_UNKNOWN_EMERGENCY_CALLS] = GECKO_MOBILE_CONNECTION_STATE_UNKNOWN;
 
 
+// Should match enum TelephonyCallDisconnectedReason defined in TelephonyCall.webidl
 this.GECKO_CALL_ERROR_BAD_NUMBER = "BadNumberError";
 this.GECKO_CALL_ERROR_NO_ROUTE_TO_DESTINATION = "NoRouteToDestinationError";
 this.GECKO_CALL_ERROR_CHANNEL_UNACCEPTABLE = "ChannelUnacceptableError";
@@ -2703,7 +2729,7 @@ this.GECKO_CALL_ERROR_NO_USER_RESPONDING = "NoUserRespondingError";
 this.GECKO_CALL_ERROR_USER_ALERTING = "UserAlertingNoAnswerError";
 this.GECKO_CALL_ERROR_REJECTED = "CallRejectedError";
 this.GECKO_CALL_ERROR_NUMBER_CHANGED = "NumberChangedError";
-this.GECKO_CALL_ERROR_REJECTED_DETINATION_FEATURE = "CallRejectedDestinationFeature";
+this.GECKO_CALL_ERROR_REJECTED_DETINATION_FEATURE = "CallRejectedDestinationFeatureError";
 this.GECKO_CALL_ERROR_PRE_EMPTION = "PreEmptionError";
 this.GECKO_CALL_ERROR_DEST_OUT_OF_ORDER = "DestinationOutOfOrderError";
 this.GECKO_CALL_ERROR_INVALID_NUMBER_FORMAT = "InvalidNumberFormatError";

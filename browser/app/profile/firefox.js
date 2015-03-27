@@ -1333,11 +1333,8 @@ pref("services.sync.prefs.sync.xpinstall.whitelist.required", true);
 
 // Developer edition preferences
 #ifdef MOZ_DEV_EDITION
+pref("lightweightThemes.selectedThemeID", "firefox-devedition@mozilla.org");
 pref("browser.devedition.theme.enabled", true);
-pref("browser.devedition.theme.showCustomizeButton", true);
-#else
-pref("browser.devedition.theme.enabled", false);
-pref("browser.devedition.theme.showCustomizeButton", false);
 #endif
 
 // Developer edition promo preferences
@@ -1874,11 +1871,6 @@ pref("dom.ipc.processHangMonitor", true);
 pref("dom.ipc.reportProcessHangs", false);
 #else
 pref("dom.ipc.reportProcessHangs", true);
-#endif
-
-#ifndef NIGHTLY_BUILD
-// Disable reader mode by default.
-pref("reader.parse-on-load.enabled", false);
 #endif
 
 // Enable ReadingList browser UI by default.

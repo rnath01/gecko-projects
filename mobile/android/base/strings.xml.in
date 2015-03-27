@@ -120,6 +120,7 @@
   <string name="overlay_share_retry">&overlay_share_retry;</string>
   <string name="overlay_share_select_device">&overlay_share_select_device;</string>
   <string name="overlay_no_synced_devices">&overlay_no_synced_devices;</string>
+  <string name="overlay_share_tab_not_sent">&overlay_share_tab_not_sent;</string>
 
   <string name="settings">&settings;</string>
   <string name="settings_title">&settings_title;</string>
@@ -473,8 +474,9 @@
   <string name="updater_apply_title">&updater_apply_title2;</string>
   <string name="updater_apply_select">&updater_apply_select2;</string>
 
-  <!-- Search suggestions opt-in -->
+  <!-- Awesomescreen screen -->
   <string name="suggestions_prompt">&suggestions_prompt3;</string>
+  <string name="search_bar_item_desc">&search_bar_item_desc;</string>
 
   <string name="suggestion_for_engine">&suggestion_for_engine;</string>
 
