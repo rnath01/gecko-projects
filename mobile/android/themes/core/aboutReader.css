@@ -197,18 +197,17 @@ body {
 .content p > a:only-child > img:only-child,
 .content .wp-caption img,
 .content figure img {
-  max-width: none !important;
-  height: auto !important;
-  display: block !important;
-  margin-top: 0px !important;
-  margin-bottom: 32px !important;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
 }
 
-/* If image is place inside one of these blocks
-   there's no need to add margin at the bottom */
-.content .wp-caption img,
-.content figure img {
-  margin-bottom: 0px !important;
+/* Account for body padding to make image full width */
+.content img[moz-reader-full-width] {
+  width: calc(100% + 40px);
+  margin-left: -20px;
+  margin-right: -20px;
+  max-width: none !important;
 }
 
 /* Image caption text */
@@ -280,15 +279,12 @@ body {
 /*======= Controls toolbar =======*/
 
 .toolbar {
-  font-family: "Clear Sans",sans-serif;
-  transition-property: visibility, opacity;
-  transition-duration: 0.7s;
-  visibility: visible;
-  opacity: 1.0;
+  font-family: sans-serif;
+  transition-property: bottom;
+  transition-duration: 0.3s;
   position: fixed;
   width: 100%;
-  bottom: 0px;
-  left: 0px;
+  left: 0;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -296,11 +292,8 @@ body {
   border-top: 1px solid #D7D9DB;
 }
 
-.toolbar-hidden {
-  transition-property: visibility, opacity;
-  transition-duration: 0.7s;
-  visibility: hidden;
-  opacity: 0.0;
+.toolbar[visible] {
+  bottom: 0;
 }
 
 .toolbar > * {
@@ -590,11 +583,19 @@ body {
   .button {
     height: 56px;
   }
+
+  .toolbar {
+    bottom: -57px;
+  }
 }
 
 @media screen and (orientation: landscape) {
   .button {
     height: 40px;
+  }
+
+  .toolbar {
+    bottom: -41px;
   }
 }
 

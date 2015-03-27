@@ -52,6 +52,7 @@ using mozilla::CeilingLog2;
 using mozilla::CheckedInt;
 using mozilla::DebugOnly;
 using mozilla::IsNaN;
+using mozilla::UniquePtr;
 
 using JS::AutoCheckCannotGC;
 using JS::ToUint32;
@@ -3215,18 +3216,12 @@ CreateArrayPrototype(JSContext *cx, JSProtoKey key)
     if (!group)
         return nullptr;
 
-    JSObject *metadata = nullptr;
-    if (!NewObjectMetadata(cx, &metadata))
-        return nullptr;
-
-    proto->assertParentIs(cx->global());
     RootedShape shape(cx, EmptyShape::getInitialShape(cx, &ArrayObject::class_, TaggedProto(proto),
-                                                      cx->global(), metadata,
-                                                      gc::FINALIZE_OBJECT0));
+                                                      gc::AllocKind::OBJECT0));
     if (!shape)
         return nullptr;
 
-    RootedArrayObject arrayProto(cx, ArrayObject::createArray(cx, gc::FINALIZE_OBJECT4,
+    RootedArrayObject arrayProto(cx, ArrayObject::createArray(cx, gc::AllocKind::OBJECT4,
                                                               gc::TenuredHeap, shape, group, 0));
     if (!arrayProto ||
         !JSObject::setSingleton(cx, arrayProto) ||
@@ -3266,6 +3261,7 @@ const Class ArrayObject::class_ = {
         GenericCreateConstructor<ArrayConstructor, 1, JSFunction::FinalizeKind>,
         CreateArrayPrototype,
         array_static_methods,
+        nullptr,
         array_methods
     }
 };
@@ -3294,9 +3290,7 @@ EnsureNewArrayElements(ExclusiveContext *cx, ArrayObject *obj, uint32_t length)
 static bool
 NewArrayIsCachable(ExclusiveContext *cxArg, NewObjectKind newKind)
 {
-    return cxArg->isJSContext() &&
-           newKind == GenericObject &&
-           !cxArg->asJSContext()->compartment()->hasObjectMetadataCallback();
+    return cxArg->isJSContext() && newKind == GenericObject;
 }
 
 template <uint32_t maxLength>
@@ -3341,17 +3335,13 @@ NewArray(ExclusiveContext *cxArg, uint32_t length,
     if (!group)
         return nullptr;
 
-    JSObject *metadata = nullptr;
-    if (!NewObjectMetadata(cxArg, &metadata))
-        return nullptr;
-
     /*
      * Get a shape with zero fixed slots, regardless of the size class.
      * See JSObject::createArray.
      */
     RootedShape shape(cxArg, EmptyShape::getInitialShape(cxArg, &ArrayObject::class_,
-                                                         TaggedProto(proto), cxArg->global(),
-                                                         metadata, gc::FINALIZE_OBJECT0));
+                                                         TaggedProto(proto),
+                                                         gc::AllocKind::OBJECT0));
     if (!shape)
         return nullptr;
 
@@ -3418,7 +3408,7 @@ js::NewDenseUnallocatedArray(ExclusiveContext *cx, uint32_t length,
 
 ArrayObject *
 js::NewDenseArray(ExclusiveContext *cx, uint32_t length, HandleObjectGroup group,
-                  AllocatingBehaviour allocating)
+                  AllocatingBehaviour allocating, bool convertDoubleElements)
 {
     NewObjectKind newKind = !group ? SingletonObject : GenericObject;
     if (group && group->shouldPreTenure())
@@ -3438,6 +3428,9 @@ js::NewDenseArray(ExclusiveContext *cx, uint32_t length, HandleObjectGroup group
 
     if (group)
         arr->setGroup(group);
+
+    if (convertDoubleElements)
+        arr->setShouldConvertDoubleElements();
 
     // If the length calculation overflowed, make sure that is marked for the
     // new group.
@@ -3515,20 +3508,9 @@ js::NewDenseFullyAllocatedArrayWithTemplate(JSContext *cx, uint32_t length, JSOb
 JSObject *
 js::NewDenseCopyOnWriteArray(JSContext *cx, HandleArrayObject templateObject, gc::InitialHeap heap)
 {
-    RootedShape shape(cx, templateObject->lastProperty());
-
     MOZ_ASSERT(!gc::IsInsideNursery(templateObject));
 
-    JSObject *metadata = nullptr;
-    if (!NewObjectMetadata(cx, &metadata))
-        return nullptr;
-    if (metadata) {
-        shape = Shape::setObjectMetadata(cx, metadata, templateObject->getTaggedProto(), shape);
-        if (!shape)
-            return nullptr;
-    }
-
-    ArrayObject *arr = ArrayObject::createCopyOnWriteArray(cx, heap, shape, templateObject);
+    ArrayObject *arr = ArrayObject::createCopyOnWriteArray(cx, heap, templateObject);
     if (!arr)
         return nullptr;
 
@@ -3546,19 +3528,18 @@ js::ArrayInfo(JSContext *cx, unsigned argc, Value *vp)
     for (unsigned i = 0; i < args.length(); i++) {
         RootedValue arg(cx, args[i]);
 
-        char *bytes = DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, arg, NullPtr());
+        UniquePtr<char[], JS::FreePolicy> bytes =
+            DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, arg, NullPtr());
         if (!bytes)
             return false;
         if (arg.isPrimitive() ||
             !(obj = arg.toObjectOrNull())->is<ArrayObject>()) {
-            fprintf(stderr, "%s: not array\n", bytes);
-            js_free(bytes);
+            fprintf(stderr, "%s: not array\n", bytes.get());
             continue;
         }
-        fprintf(stderr, "%s: (len %u", bytes, obj->as<ArrayObject>().length());
+        fprintf(stderr, "%s: (len %u", bytes.get(), obj->as<ArrayObject>().length());
         fprintf(stderr, ", capacity %u", obj->as<ArrayObject>().getDenseCapacity());
         fputs(")\n", stderr);
-        js_free(bytes);
     }
 
     args.rval().setUndefined();

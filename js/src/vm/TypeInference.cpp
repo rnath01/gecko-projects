@@ -419,6 +419,23 @@ TypeSet::isSubset(const TypeSet *other) const
     return true;
 }
 
+bool
+TypeSet::objectsIntersect(const TypeSet *other) const
+{
+    if (unknownObject() || other->unknownObject())
+        return true;
+
+    for (unsigned i = 0; i < getObjectCount(); i++) {
+        ObjectKey *key = getObject(i);
+        if (!key)
+            continue;
+        if (other->hasType(ObjectType(key)))
+            return true;
+    }
+
+    return false;
+}
+
 template <class TypeListT>
 bool
 TypeSet::enumerateTypes(TypeListT *list) const
@@ -624,53 +641,53 @@ ConstraintTypeSet::addType(ExclusiveContext *cxArg, Type type)
 }
 
 void
-TypeSet::print()
+TypeSet::print(FILE *fp)
 {
     if (flags & TYPE_FLAG_NON_DATA_PROPERTY)
-        fprintf(stderr, " [non-data]");
+        fprintf(fp, " [non-data]");
 
     if (flags & TYPE_FLAG_NON_WRITABLE_PROPERTY)
-        fprintf(stderr, " [non-writable]");
+        fprintf(fp, " [non-writable]");
 
     if (definiteProperty())
-        fprintf(stderr, " [definite:%d]", definiteSlot());
+        fprintf(fp, " [definite:%d]", definiteSlot());
 
     if (baseFlags() == 0 && !baseObjectCount()) {
-        fprintf(stderr, " missing");
+        fprintf(fp, " missing");
         return;
     }
 
     if (flags & TYPE_FLAG_UNKNOWN)
-        fprintf(stderr, " unknown");
+        fprintf(fp, " unknown");
     if (flags & TYPE_FLAG_ANYOBJECT)
-        fprintf(stderr, " object");
+        fprintf(fp, " object");
 
     if (flags & TYPE_FLAG_UNDEFINED)
-        fprintf(stderr, " void");
+        fprintf(fp, " void");
     if (flags & TYPE_FLAG_NULL)
-        fprintf(stderr, " null");
+        fprintf(fp, " null");
     if (flags & TYPE_FLAG_BOOLEAN)
-        fprintf(stderr, " bool");
+        fprintf(fp, " bool");
     if (flags & TYPE_FLAG_INT32)
-        fprintf(stderr, " int");
+        fprintf(fp, " int");
     if (flags & TYPE_FLAG_DOUBLE)
-        fprintf(stderr, " float");
+        fprintf(fp, " float");
     if (flags & TYPE_FLAG_STRING)
-        fprintf(stderr, " string");
+        fprintf(fp, " string");
     if (flags & TYPE_FLAG_SYMBOL)
-        fprintf(stderr, " symbol");
+        fprintf(fp, " symbol");
     if (flags & TYPE_FLAG_LAZYARGS)
-        fprintf(stderr, " lazyargs");
+        fprintf(fp, " lazyargs");
 
     uint32_t objectCount = baseObjectCount();
     if (objectCount) {
-        fprintf(stderr, " object[%u]", objectCount);
+        fprintf(fp, " object[%u]", objectCount);
 
         unsigned count = getObjectCount();
         for (unsigned i = 0; i < count; i++) {
             ObjectKey *key = getObject(i);
             if (key)
-                fprintf(stderr, " %s", TypeString(ObjectType(key)));
+                fprintf(fp, " %s", TypeString(ObjectType(key)));
         }
     }
 }
@@ -691,7 +708,7 @@ TypeSet::readBarrier(const TypeSet *types)
     }
 }
 
-bool
+/* static */ bool
 TypeSet::IsTypeMarkedFromAnyThread(TypeSet::Type *v)
 {
     bool rv;
@@ -705,6 +722,22 @@ TypeSet::IsTypeMarkedFromAnyThread(TypeSet::Type *v)
         *v = TypeSet::ObjectType(group);
     } else {
         rv = true;
+    }
+    return rv;
+}
+
+/* static */ bool
+TypeSet::IsTypeAllocatedDuringIncremental(TypeSet::Type v)
+{
+    bool rv;
+    if (v.isSingletonUnchecked()) {
+        JSObject *obj = v.singletonNoBarrier();
+        rv = obj->isTenured() && obj->asTenured().arenaHeader()->allocatedDuringIncremental;
+    } else if (v.isGroupUnchecked()) {
+        ObjectGroup *group = v.groupNoBarrier();
+        rv = group->arenaHeader()->allocatedDuringIncremental;
+    } else {
+        rv = false;
     }
     return rv;
 }
@@ -2476,13 +2509,13 @@ js::PrintTypes(JSContext *cx, JSCompartment *comp, bool force)
     if (!force && !InferSpewActive(ISpewResult))
         return;
 
-    for (gc::ZoneCellIter i(zone, gc::FINALIZE_SCRIPT); !i.done(); i.next()) {
+    for (gc::ZoneCellIter i(zone, gc::AllocKind::SCRIPT); !i.done(); i.next()) {
         RootedScript script(cx, i.get<JSScript>());
         if (script->types())
             script->types()->printTypes(cx, script);
     }
 
-    for (gc::ZoneCellIter i(zone, gc::FINALIZE_OBJECT_GROUP); !i.done(); i.next()) {
+    for (gc::ZoneCellIter i(zone, gc::AllocKind::OBJECT_GROUP); !i.done(); i.next()) {
         ObjectGroup *group = i.get<ObjectGroup>();
         group->print();
     }
@@ -3361,7 +3394,7 @@ CommonPrefix(Shape *first, Shape *second)
 }
 
 void
-PreliminaryObjectArrayWithTemplate::maybeAnalyze(JSContext *cx, ObjectGroup *group, bool force)
+PreliminaryObjectArrayWithTemplate::maybeAnalyze(ExclusiveContext *cx, ObjectGroup *group, bool force)
 {
     // Don't perform the analyses until sufficient preliminary objects have
     // been allocated.
@@ -3487,11 +3520,9 @@ ChangeObjectFixedSlotCount(JSContext *cx, PlainObject *obj, gc::AllocKind allocK
 {
     MOZ_ASSERT(OnlyHasDataProperties(obj->lastProperty()));
 
-    obj->assertParentIs(cx->global());
-    Shape *newShape = ReshapeForParentAndAllocKind(cx, obj->lastProperty(),
-                                                   obj->getTaggedProto(),
-                                                   cx->global(),
-                                                   allocKind);
+    Shape *newShape = ReshapeForAllocKind(cx, obj->lastProperty(),
+                                          obj->getTaggedProto(),
+                                          allocKind);
     if (!newShape)
         return false;
 
@@ -3564,8 +3595,7 @@ TypeNewScript::maybeAnalyze(JSContext *cx, ObjectGroup *group, bool *regenerate,
         Shape *shape = obj->lastProperty();
         if (shape->inDictionary() ||
             !OnlyHasDataProperties(shape) ||
-            shape->getObjectFlags() != 0 ||
-            shape->getObjectMetadata() != nullptr)
+            shape->getObjectFlags() != 0)
         {
             return true;
         }
@@ -3617,7 +3647,7 @@ TypeNewScript::maybeAnalyze(JSContext *cx, ObjectGroup *group, bool *regenerate,
     }
 
     RootedObjectGroup groupRoot(cx, group);
-    templateObject_ = NewObjectWithGroup<PlainObject>(cx, groupRoot, cx->global(), kind,
+    templateObject_ = NewObjectWithGroup<PlainObject>(cx, groupRoot, kind,
                                                       MaybeSingletonObject);
     if (!templateObject_)
         return false;
@@ -4028,8 +4058,16 @@ ObjectGroup::maybeSweep(AutoClearTypeInferenceStateOnOOM *oom)
     Maybe<AutoClearTypeInferenceStateOnOOM> fallbackOOM;
     EnsureHasAutoClearTypeInferenceStateOnOOM(oom, zone(), fallbackOOM);
 
-    if (maybeUnboxedLayout() && unboxedLayout().newScript())
-        unboxedLayout().newScript()->sweep();
+    if (maybeUnboxedLayout()) {
+        // Remove unboxed layouts that are about to be finalized from the
+        // compartment wide list while we are still on the main thread.
+        ObjectGroup *group = this;
+        if (IsObjectGroupAboutToBeFinalized(&group))
+            unboxedLayout().detachFromCompartment();
+
+        if (unboxedLayout().newScript())
+            unboxedLayout().newScript()->sweep();
+    }
 
     if (maybePreliminaryObjects())
         maybePreliminaryObjects()->sweep();
@@ -4245,7 +4283,7 @@ TypeZone::endSweep(JSRuntime *rt)
 void
 TypeZone::clearAllNewScriptsOnOOM()
 {
-    for (gc::ZoneCellIterUnderGC iter(zone(), gc::FINALIZE_OBJECT_GROUP);
+    for (gc::ZoneCellIterUnderGC iter(zone(), gc::AllocKind::OBJECT_GROUP);
          !iter.done(); iter.next())
     {
         ObjectGroup *group = iter.get<ObjectGroup>();

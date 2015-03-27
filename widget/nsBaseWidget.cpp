@@ -181,22 +181,39 @@ nsBaseWidget::Shutdown()
   mShutdownObserver = nullptr;
 }
 
+static void DeferredDestroyCompositor(nsRefPtr<CompositorParent> aCompositorParent,
+                                      nsRefPtr<CompositorChild> aCompositorChild)
+{
+    // Bug 848949 needs to be fixed before
+    // we can close the channel properly
+    //aCompositorChild->Close();
+}
+
 void nsBaseWidget::DestroyCompositor()
 {
   if (mCompositorChild) {
-    mCompositorChild->Destroy();
-    mCompositorChild = nullptr;
-    mCompositorParent = nullptr;
-  }
-}
+    nsRefPtr<CompositorChild> compositorChild = mCompositorChild.forget();
+    nsRefPtr<CompositorParent> compositorParent = mCompositorParent.forget();
 
-void nsBaseWidget::DestroyLayerManager()
-{
-  if (mLayerManager) {
-    mLayerManager->Destroy();
-    mLayerManager = nullptr;
+    compositorChild->SendWillStop();
+    // New LayerManager, CompositorParent and CompositorChild might be created
+    // as a result of internal GetLayerManager() call.
+    compositorChild->Destroy();
+
+    // The call just made to SendWillStop can result in IPC from the
+    // CompositorParent to the CompositorChild (e.g. caused by the destruction
+    // of shared memory). We need to ensure this gets processed by the
+    // CompositorChild before it gets destroyed. It suffices to ensure that
+    // events already in the MessageLoop get processed before the
+    // CompositorChild is destroyed, so we add a task to the MessageLoop to
+    // handle compositor desctruction.
+
+    // The DefferedDestroyCompositor task takes ownership of compositorParent and
+    // will release them when it runs.
+    MessageLoop::current()->PostTask(FROM_HERE,
+               NewRunnableFunction(DeferredDestroyCompositor, compositorParent,
+                                   compositorChild));
   }
-  DestroyCompositor();
 }
 
 //-------------------------------------------------------------------------
@@ -211,6 +228,11 @@ nsBaseWidget::~nsBaseWidget()
     static_cast<BasicLayerManager*>(mLayerManager.get())->ClearRetainerWidget();
   }
 
+  if (mLayerManager) {
+    mLayerManager->Destroy();
+    mLayerManager = nullptr;
+  }
+
   if (mShutdownObserver) {
     // If the shutdown observer is currently processing observers,
     // then UnregisterShutdownObserver won't stop our Observer
@@ -220,7 +242,7 @@ nsBaseWidget::~nsBaseWidget()
     nsContentUtils::UnregisterShutdownObserver(mShutdownObserver);
   }
 
-  DestroyLayerManager();
+  DestroyCompositor();
 
 #ifdef NOISY_WIDGET_LEAKS
   gNumWidgets--;
@@ -902,7 +924,7 @@ public:
     : mTreeManager(aTreeManager)
   {}
 
-  void Run(uint64_t aInputBlockId, const nsTArray<ScrollableLayerGuid>& aTargets) const MOZ_OVERRIDE {
+  void Run(uint64_t aInputBlockId, const nsTArray<ScrollableLayerGuid>& aTargets) const override {
     MOZ_ASSERT(NS_IsMainThread());
     // need a local var to disambiguate between the SetTargetAPZC overloads.
     void (APZCTreeManager::*setTargetApzcFunc)(uint64_t, const nsTArray<ScrollableLayerGuid>&)
@@ -915,13 +937,30 @@ private:
   nsRefPtr<APZCTreeManager> mTreeManager;
 };
 
+class ChromeProcessSetAllowedTouchBehaviorCallback : public SetAllowedTouchBehaviorCallback {
+public:
+  explicit ChromeProcessSetAllowedTouchBehaviorCallback(APZCTreeManager* aTreeManager)
+    : mTreeManager(aTreeManager)
+  {}
+
+  void Run(uint64_t aInputBlockId, const nsTArray<TouchBehaviorFlags>& aFlags) const override {
+    MOZ_ASSERT(NS_IsMainThread());
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
+        mTreeManager.get(), &APZCTreeManager::SetAllowedTouchBehavior,
+        aInputBlockId, aFlags));
+  }
+
+private:
+  nsRefPtr<APZCTreeManager> mTreeManager;
+};
+
 class ChromeProcessContentReceivedInputBlockCallback : public ContentReceivedInputBlockCallback {
 public:
   explicit ChromeProcessContentReceivedInputBlockCallback(APZCTreeManager* aTreeManager)
     : mTreeManager(aTreeManager)
   {}
 
-  void Run(const ScrollableLayerGuid& aGuid, uint64_t aInputBlockId, bool aPreventDefault) const MOZ_OVERRIDE {
+  void Run(const ScrollableLayerGuid& aGuid, uint64_t aInputBlockId, bool aPreventDefault) const override {
     MOZ_ASSERT(NS_IsMainThread());
     APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
         mTreeManager.get(), &APZCTreeManager::ContentReceivedInputBlock,
@@ -939,10 +978,13 @@ void nsBaseWidget::ConfigureAPZCTreeManager()
   mAPZC = CompositorParent::GetAPZCTreeManager(rootLayerTreeId);
   MOZ_ASSERT(mAPZC);
 
+  ConfigureAPZControllerThread();
+
   mAPZC->SetDPI(GetDPI());
   mAPZEventState = new APZEventState(this,
       new ChromeProcessContentReceivedInputBlockCallback(mAPZC));
   mSetTargetAPZCCallback = new ChromeProcessSetTargetAPZCCallback(mAPZC);
+  mSetAllowedTouchBehaviorCallback = new ChromeProcessSetAllowedTouchBehaviorCallback(mAPZC);
 
   nsRefPtr<GeckoContentController> controller = CreateRootContentController();
   if (controller) {
@@ -950,10 +992,17 @@ void nsBaseWidget::ConfigureAPZCTreeManager()
   }
 }
 
+void nsBaseWidget::ConfigureAPZControllerThread()
+{
+  // By default the controller thread is the main thread.
+  APZThreadUtils::SetControllerThread(MessageLoop::current());
+}
+
 nsEventStatus
 nsBaseWidget::ProcessUntransformedAPZEvent(WidgetInputEvent* aEvent,
                                            const ScrollableLayerGuid& aGuid,
-                                           uint64_t aInputBlockId)
+                                           uint64_t aInputBlockId,
+                                           nsEventStatus aApzResponse)
 {
   MOZ_ASSERT(NS_IsMainThread());
   InputAPZContext context(aGuid, aInputBlockId);
@@ -979,10 +1028,14 @@ nsBaseWidget::ProcessUntransformedAPZEvent(WidgetInputEvent* aEvent,
     // call into APZEventState::Process*Event() as well.
     if (WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent()) {
       if (touchEvent->message == NS_TOUCH_START) {
+        if (gfxPrefs::TouchActionEnabled()) {
+          APZCCallbackHelper::SendSetAllowedTouchBehaviorNotification(this, *touchEvent,
+              aInputBlockId, mSetAllowedTouchBehaviorCallback);
+        }
         APZCCallbackHelper::SendSetTargetAPZCNotification(this, GetDocument(), *aEvent,
             aGuid, aInputBlockId, mSetTargetAPZCCallback);
       }
-      mAPZEventState->ProcessTouchEvent(*touchEvent, aGuid, aInputBlockId);
+      mAPZEventState->ProcessTouchEvent(*touchEvent, aGuid, aInputBlockId, aApzResponse);
     } else if (WidgetWheelEvent* wheelEvent = aEvent->AsWheelEvent()) {
       APZCCallbackHelper::SendSetTargetAPZCNotification(this, GetDocument(), *aEvent,
                 aGuid, aInputBlockId, mSetTargetAPZCCallback);
@@ -990,6 +1043,21 @@ nsBaseWidget::ProcessUntransformedAPZEvent(WidgetInputEvent* aEvent,
     }
   }
 
+  return status;
+}
+
+nsEventStatus
+nsBaseWidget::DispatchInputEvent(WidgetInputEvent* aEvent)
+{
+  if (mAPZC) {
+    nsEventStatus result = mAPZC->ReceiveInputEvent(*aEvent, nullptr, nullptr);
+    if (result == nsEventStatus_eConsumeNoDefault) {
+      return result;
+    }
+  }
+
+  nsEventStatus status;
+  DispatchEvent(aEvent, status);
   return status;
 }
 
@@ -1004,7 +1072,7 @@ nsBaseWidget::DispatchAPZAwareEvent(WidgetInputEvent* aEvent)
     if (result == nsEventStatus_eConsumeNoDefault) {
         return result;
     }
-    return ProcessUntransformedAPZEvent(aEvent, guid, inputBlockId);
+    return ProcessUntransformedAPZEvent(aEvent, guid, inputBlockId, result);
   }
 
   nsEventStatus status;
@@ -1059,12 +1127,8 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
   MOZ_ASSERT(gfxPlatform::UsesOffMainThreadCompositing(),
              "This function assumes OMTC");
 
-  MOZ_ASSERT(!mCompositorParent && !mCompositorChild,
-    "Should have properly cleaned up the previous PCompositor pair beforehand");
-
-  if (mCompositorChild) {
-    mCompositorChild->Destroy();
-  }
+  MOZ_ASSERT(!mCompositorParent,
+    "Should have properly cleaned up the previous CompositorParent beforehand");
 
   // Recreating this is tricky, as we may still have an old and we need
   // to make sure it's properly destroyed by calling DestroyCompositor!
@@ -1077,9 +1141,11 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 
   CreateCompositorVsyncDispatcher();
   mCompositorParent = NewCompositorParent(aWidth, aHeight);
+  MessageChannel *parentChannel = mCompositorParent->GetIPCChannel();
   nsRefPtr<ClientLayerManager> lm = new ClientLayerManager(this);
+  MessageLoop *childMessageLoop = CompositorParent::CompositorLoop();
   mCompositorChild = new CompositorChild(lm);
-  mCompositorChild->OpenSameProcess(mCompositorParent);
+  mCompositorChild->Open(parentChannel, childMessageLoop, ipc::ChildSide);
 
   if (gfxPrefs::AsyncPanZoomEnabled() &&
       (WindowType() == eWindowType_toplevel || WindowType() == eWindowType_child)) {
@@ -1108,20 +1174,26 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
       backendHints, 0, &textureFactoryIdentifier, &success);
   }
 
-  ShadowLayerForwarder* lf = lm->AsShadowForwarder();
+  if (success) {
+    ShadowLayerForwarder* lf = lm->AsShadowForwarder();
+    if (!lf) {
+      lm = nullptr;
+      mCompositorChild = nullptr;
+      return;
+    }
+    lf->SetShadowManager(shadowManager);
+    lf->IdentifyTextureHost(textureFactoryIdentifier);
+    ImageBridgeChild::IdentifyCompositorTextureHost(textureFactoryIdentifier);
+    WindowUsesOMTC();
 
-  if (!success || !lf) {
-    NS_WARNING("Failed to create an OMT compositor.");
-    DestroyCompositor();
+    mLayerManager = lm.forget();
     return;
   }
 
-  lf->SetShadowManager(shadowManager);
-  lf->IdentifyTextureHost(textureFactoryIdentifier);
-  ImageBridgeChild::IdentifyCompositorTextureHost(textureFactoryIdentifier);
-  WindowUsesOMTC();
-
-  mLayerManager = lm.forget();
+  NS_WARNING("Failed to create an OMT compositor.");
+  DestroyCompositor();
+  // Compositor child had the only reference to LayerManager and will have
+  // deallocated it when being freed.
 }
 
 bool nsBaseWidget::ShouldUseOffMainThreadCompositing()
@@ -1357,16 +1429,6 @@ bool
 nsBaseWidget::ShowsResizeIndicator(nsIntRect* aResizerRect)
 {
   return false;
-}
-
-NS_METHOD nsBaseWidget::RegisterTouchWindow()
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_METHOD nsBaseWidget::UnregisterTouchWindow()
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 NS_IMETHODIMP
@@ -1970,7 +2032,7 @@ static void debug_SetCachedBoolPref(const char * aPrefName,bool aValue)
 }
 
 //////////////////////////////////////////////////////////////
-class Debug_PrefObserver MOZ_FINAL : public nsIObserver {
+class Debug_PrefObserver final : public nsIObserver {
     ~Debug_PrefObserver() {}
 
   public:

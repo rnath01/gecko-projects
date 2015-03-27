@@ -173,7 +173,7 @@ js::intrinsic_ThrowError(JSContext *cx, unsigned argc, Value *vp)
         } else if (val.isString()) {
             errorArgs[i - 1].encodeLatin1(cx, val.toString());
         } else {
-            errorArgs[i - 1].initBytes(DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, val, NullPtr()));
+            errorArgs[i - 1].initBytes(DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, val, NullPtr()).release());
         }
         if (!errorArgs[i - 1])
             return false;
@@ -367,26 +367,26 @@ js::intrinsic_DefineDataProperty(JSContext *cx, unsigned argc, Value *vp)
     RootedValue value(cx, args[2]);
     unsigned attributes = args[3].toInt32();
 
-    Rooted<PropDesc> desc(cx);
+    Rooted<PropertyDescriptor> desc(cx);
+    unsigned attrs = 0;
 
     MOZ_ASSERT(bool(attributes & ATTR_ENUMERABLE) != bool(attributes & ATTR_NONENUMERABLE),
                "_DefineDataProperty must receive either ATTR_ENUMERABLE xor ATTR_NONENUMERABLE");
-    PropDesc::Enumerability enumerable =
-        PropDesc::Enumerability(bool(attributes & ATTR_ENUMERABLE));
+    if (attributes & ATTR_ENUMERABLE)
+        attrs |= JSPROP_ENUMERATE;
 
     MOZ_ASSERT(bool(attributes & ATTR_CONFIGURABLE) != bool(attributes & ATTR_NONCONFIGURABLE),
                "_DefineDataProperty must receive either ATTR_CONFIGURABLE xor "
                "ATTR_NONCONFIGURABLE");
-    PropDesc::Configurability configurable =
-        PropDesc::Configurability(bool(attributes & ATTR_CONFIGURABLE));
+    if (attributes & ATTR_NONCONFIGURABLE)
+        attrs |= JSPROP_PERMANENT;
 
     MOZ_ASSERT(bool(attributes & ATTR_WRITABLE) != bool(attributes & ATTR_NONWRITABLE),
                "_DefineDataProperty must receive either ATTR_WRITABLE xor ATTR_NONWRITABLE");
-    PropDesc::Writability writable =
-        PropDesc::Writability(bool(attributes & ATTR_WRITABLE));
+    if (attributes & ATTR_NONWRITABLE)
+        attrs |= JSPROP_READONLY;
 
-    desc = PropDesc(value, writable, enumerable, configurable);
-
+    desc.setDataDescriptor(value, attrs);
     return StandardDefineProperty(cx, obj, id, desc);
 }
 
@@ -492,7 +492,7 @@ intrinsic_NewArrayIterator(JSContext *cx, unsigned argc, Value *vp)
     if (!proto)
         return false;
 
-    JSObject *obj = NewObjectWithGivenProto(cx, &ArrayIteratorObject::class_, proto, cx->global());
+    JSObject *obj = NewObjectWithGivenProto(cx, &ArrayIteratorObject::class_, proto);
     if (!obj)
         return false;
 
@@ -521,7 +521,7 @@ intrinsic_NewStringIterator(JSContext *cx, unsigned argc, Value *vp)
     if (!proto)
         return false;
 
-    JSObject *obj = NewObjectWithGivenProto(cx, &StringIteratorObject::class_, proto, cx->global());
+    JSObject *obj = NewObjectWithGivenProto(cx, &StringIteratorObject::class_, proto);
     if (!obj)
         return false;
 
@@ -914,6 +914,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("std_Number_valueOf",                  num_valueOf,                  0,0),
 
     JS_FN("std_Object_create",                   obj_create,                   2,0),
+    JS_FN("std_Object_propertyIsEnumerable",     obj_propertyIsEnumerable,     1,0),
     JS_FN("std_Object_defineProperty",           obj_defineProperty,           3,0),
     JS_FN("std_Object_getPrototypeOf",           obj_getPrototypeOf,           1,0),
     JS_FN("std_Object_getOwnPropertyNames",      obj_getOwnPropertyNames,      1,0),
@@ -1179,7 +1180,7 @@ JSRuntime::initSelfHosting(JSContext *cx)
     char *filename = getenv("MOZ_SELFHOSTEDJS");
     if (filename) {
         RootedScript script(cx);
-        if (Compile(cx, shg, options, filename, &script))
+        if (Compile(cx, options, filename, &script))
             ok = Execute(cx, script, *shg.get(), rv.address());
     } else {
         uint32_t srcLen = GetRawScriptsSize();
@@ -1193,7 +1194,7 @@ JSRuntime::initSelfHosting(JSContext *cx)
             ok = false;
         }
 
-        ok = ok && Evaluate(cx, shg, options, src, srcLen, &rv);
+        ok = ok && Evaluate(cx, options, src, srcLen, &rv);
     }
     JS_SetErrorReporter(cx->runtime(), oldReporter);
     return ok;
@@ -1270,17 +1271,34 @@ static bool
 CloneProperties(JSContext *cx, HandleNativeObject selfHostedObject, HandleObject clone)
 {
     AutoIdVector ids(cx);
+    Vector<uint8_t, 16> attrs(cx);
 
     for (size_t i = 0; i < selfHostedObject->getDenseInitializedLength(); i++) {
         if (!selfHostedObject->getDenseElement(i).isMagic(JS_ELEMENTS_HOLE)) {
             if (!ids.append(INT_TO_JSID(i)))
                 return false;
+            if (!attrs.append(JSPROP_ENUMERATE))
+                return false;
         }
     }
 
+    AutoShapeVector shapes(cx);
     for (Shape::Range<NoGC> range(selfHostedObject->lastProperty()); !range.empty(); range.popFront()) {
         Shape &shape = range.front();
-        if (shape.enumerable() && !ids.append(shape.propid()))
+        if (shape.enumerable() && !shapes.append(&shape))
+            return false;
+    }
+
+    // Now our shapes are in last-to-first order, so....
+    Reverse(shapes.begin(), shapes.end());
+    for (size_t i = 0; i < shapes.length(); ++i) {
+        MOZ_ASSERT(!shapes[i]->isAccessorShape(),
+                   "Can't handle cloning accessors here yet.");
+        if (!ids.append(shapes[i]->propid()))
+            return false;
+        uint8_t shapeAttrs =
+            shapes[i]->attributes() & (JSPROP_ENUMERATE | JSPROP_PERMANENT | JSPROP_READONLY);
+        if (!attrs.append(shapeAttrs))
             return false;
     }
 
@@ -1292,7 +1310,7 @@ CloneProperties(JSContext *cx, HandleNativeObject selfHostedObject, HandleObject
         if (!GetUnclonedValue(cx, selfHostedObject, id, &selfHostedValue))
             return false;
         if (!CloneValue(cx, selfHostedValue, &val) ||
-            !JS_DefinePropertyById(cx, clone, id, val, 0))
+            !JS_DefinePropertyById(cx, clone, id, val, attrs[i]))
         {
             return false;
         }
@@ -1373,7 +1391,7 @@ CloneObject(JSContext *cx, HandleNativeObject selfHostedObject)
         clone = NewDenseEmptyArray(cx, NullPtr(), TenuredObject);
     } else {
         MOZ_ASSERT(selfHostedObject->isNative());
-        clone = NewObjectWithGivenProto(cx, selfHostedObject->getClass(), NullPtr(), cx->global(),
+        clone = NewObjectWithGivenProto(cx, selfHostedObject->getClass(), NullPtr(),
                                         selfHostedObject->asTenured().getAllocKind(),
                                         SingletonObject);
     }

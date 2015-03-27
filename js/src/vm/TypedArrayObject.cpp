@@ -232,13 +232,11 @@ class TypedArrayObjectTemplate : public TypedArrayObject
         if (!ctorProto)
             return nullptr;
 
-        RootedObject ctorObj(cx, NewObjectWithGivenProto(cx, &JSFunction::class_,
-                                                         ctorProto, global, SingletonObject));
-        if (!ctorObj)
-            return nullptr;
-
-        return NewFunction(cx, ctorObj, class_constructor, 3, JSFunction::NATIVE_CTOR, global,
-                           ClassName(key, cx), JSFunction::FinalizeKind);
+        return NewFunctionWithProto(cx, class_constructor, 3,
+                                    JSFunction::NATIVE_CTOR, NullPtr(),
+                                    ClassName(key, cx),
+                                    ctorProto, JSFunction::FinalizeKind,
+                                    SingletonObject);
     }
 
     static bool
@@ -254,8 +252,8 @@ class TypedArrayObjectTemplate : public TypedArrayObject
         }
 
         RootedFunction fun(cx);
-        fun = NewFunction(cx, NullPtr(), ArrayBufferObject::createTypedArrayFromBuffer<NativeType>,
-                          0, JSFunction::NATIVE_FUN, cx->global(), NullPtr());
+        fun = NewNativeFunction(cx, ArrayBufferObject::createTypedArrayFromBuffer<NativeType>,
+                                0, NullPtr());
         if (!fun)
             return false;
 
@@ -847,6 +845,7 @@ TypedArrayObject::sharedTypedArrayPrototypeClass = {
         GenericCreateConstructor<TypedArrayConstructor, 3, JSFunction::FinalizeKind>,
         GenericCreatePrototype,
         TypedArrayObject::staticFunctions,
+        nullptr,
         TypedArrayObject::protoFunctions,
         TypedArrayObject::protoAccessors,
         FinishTypedArrayInit,
@@ -1781,6 +1780,7 @@ IMPL_TYPED_ARRAY_COMBINED_UNWRAPPERS(Float64, double, double)
     nullptr,                                                                   \
     nullptr,                                                                   \
     nullptr,                                                                   \
+    nullptr,                                                                   \
     _typedArray::finishClassInit,                                              \
     JSProto_TypedArray                                                         \
 }
@@ -1851,6 +1851,7 @@ const Class TypedArrayObject::classes[Scalar::MaxTypedArrayViewType] = {
     { \
         typedArray::createConstructor, \
         typedArray::createPrototype, \
+        nullptr, \
         nullptr, \
         nullptr, \
         nullptr, \
@@ -1948,8 +1949,8 @@ DataViewObject::defineGetter(JSContext *cx, PropertyName *name, HandleNativeObje
     unsigned attrs = JSPROP_SHARED | JSPROP_GETTER;
 
     Rooted<GlobalObject*> global(cx, cx->compartment()->maybeGlobal());
-    JSObject *getter = NewFunction(cx, NullPtr(), DataViewObject::getter<ValueGetter>, 0,
-                                   JSFunction::NATIVE_FUN, global, NullPtr());
+    JSObject *getter =
+        NewNativeFunction(cx, DataViewObject::getter<ValueGetter>, 0, NullPtr());
     if (!getter)
         return false;
 
@@ -1993,8 +1994,8 @@ DataViewObject::initClass(JSContext *cx)
      * |new DataView(new otherWindow.ArrayBuffer())|, and install it in the
      * global for use by the DataViewObject constructor.
      */
-    RootedFunction fun(cx, NewFunction(cx, NullPtr(), ArrayBufferObject::createDataViewForThis,
-                                       0, JSFunction::NATIVE_FUN, global, NullPtr()));
+    RootedFunction fun(cx, NewNativeFunction(cx, ArrayBufferObject::createDataViewForThis,
+                                             0, NullPtr()));
     if (!fun)
         return false;
 

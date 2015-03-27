@@ -281,7 +281,7 @@ js::DumpPCCounts(JSContext *cx, HandleScript script, Sprinter *sp)
 void
 js::DumpCompartmentPCCounts(JSContext *cx)
 {
-    for (ZoneCellIter i(cx->zone(), gc::FINALIZE_SCRIPT); !i.done(); i.next()) {
+    for (ZoneCellIter i(cx->zone(), gc::AllocKind::SCRIPT); !i.done(); i.next()) {
         RootedScript script(cx, i.get<JSScript>());
         if (script->compartment() != cx->compartment())
             continue;
@@ -298,8 +298,8 @@ js::DumpCompartmentPCCounts(JSContext *cx)
         }
     }
 
-    for (unsigned thingKind = FINALIZE_OBJECT0; thingKind < FINALIZE_OBJECT_LIMIT; thingKind++) {
-        for (ZoneCellIter i(cx->zone(), (AllocKind) thingKind); !i.done(); i.next()) {
+    for (auto thingKind : ObjectAllocKinds()) {
+        for (ZoneCellIter i(cx->zone(), thingKind); !i.done(); i.next()) {
             JSObject *obj = i.get<JSObject>();
             if (obj->compartment() != cx->compartment())
                 continue;
@@ -647,7 +647,7 @@ BytecodeParser::parse()
                 uint32_t startOffset = script_->mainOffset() + tn->start;
                 if (startOffset == offset + 1) {
                     uint32_t catchOffset = startOffset + tn->length;
-                    if (tn->kind != JSTRY_ITER && tn->kind != JSTRY_LOOP) {
+                    if (tn->kind == JSTRY_CATCH || tn->kind == JSTRY_FINALLY) {
                         if (!addJump(catchOffset, &nextOffset, stackDepth, offsetStack))
                             return false;
                     }
@@ -1819,7 +1819,9 @@ DecompileExpressionFromStack(JSContext *cx, int spindex, int skipStackHits, Hand
     return ed.getOutput(res);
 }
 
-char *
+typedef mozilla::UniquePtr<char[], JS::FreePolicy> UniquePtrChars;
+
+UniquePtrChars
 js::DecompileValueGenerator(JSContext *cx, int spindex, HandleValue v,
                             HandleString fallbackArg, int skipStackHits)
 {
@@ -1830,19 +1832,19 @@ js::DecompileValueGenerator(JSContext *cx, int spindex, HandleValue v,
             return nullptr;
         if (result) {
             if (strcmp(result, "(intermediate value)"))
-                return result;
+                return UniquePtrChars(result);
             js_free(result);
         }
     }
     if (!fallback) {
         if (v.isUndefined())
-            return JS_strdup(cx, js_undefined_str); // Prevent users from seeing "(void 0)"
+            return UniquePtrChars(JS_strdup(cx, js_undefined_str)); // Prevent users from seeing "(void 0)"
         fallback = ValueToSource(cx, v);
         if (!fallback)
-            return nullptr;
+            return UniquePtrChars(nullptr);
     }
 
-    return JS_EncodeString(cx, fallback);
+    return UniquePtrChars(JS_EncodeString(cx, fallback));
 }
 
 static bool
@@ -2040,7 +2042,7 @@ js::StopPCCountProfiling(JSContext *cx)
         return;
 
     for (ZonesIter zone(rt, SkipAtoms); !zone.done(); zone.next()) {
-        for (ZoneCellIter i(zone, FINALIZE_SCRIPT); !i.done(); i.next()) {
+        for (ZoneCellIter i(zone, AllocKind::SCRIPT); !i.done(); i.next()) {
             JSScript *script = i.get<JSScript>();
             if (script->hasScriptCounts() && script->types()) {
                 ScriptAndCounts sac;

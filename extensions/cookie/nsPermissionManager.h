@@ -28,7 +28,7 @@ class mozIStorageAsyncStatement;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-class nsPermissionManager MOZ_FINAL : public nsIPermissionManager,
+class nsPermissionManager final : public nsIPermissionManager,
                                       public nsIObserver,
                                       public nsSupportsWeakReference
 {
@@ -311,6 +311,12 @@ private:
    */
   nsresult
   RemoveAllModifiedSince(int64_t aModificationTime);
+
+  /**
+   * Retrieve permissions from chrome process.
+   */
+  nsresult
+  FetchPermissions();
 
   nsCOMPtr<nsIObserverService> mObserverService;
   nsCOMPtr<nsIIDNService>      mIDNService;

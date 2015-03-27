@@ -42,7 +42,9 @@ MIRGenerator::MIRGenerator(CompileCompartment *compartment, const JitCompileOpti
     instrumentedProfilingIsCached_(false),
     nurseryObjects_(*alloc),
     outOfBoundsLabel_(outOfBoundsLabel),
+#if defined(ASMJS_MAY_USE_SIGNAL_HANDLERS_FOR_OOB)
     usesSignalHandlersForAsmJSOOB_(usesSignalHandlersForAsmJSOOB),
+#endif
     options(options)
 { }
 
@@ -535,7 +537,7 @@ MBasicBlock::shimmySlots(int discardDepth)
     --stackPosition_;
 }
 
-void
+bool
 MBasicBlock::linkOsrValues(MStart *start)
 {
     MOZ_ASSERT(start->startType() == MStart::StartType_Osr);
@@ -572,9 +574,15 @@ MBasicBlock::linkOsrValues(MStart *start)
                 cloneRp = def->toParameter();
         }
 
-        if (cloneRp)
-            cloneRp->setResumePoint(MResumePoint::Copy(graph().alloc(), res));
+        if (cloneRp) {
+            MResumePoint *clone = MResumePoint::Copy(graph().alloc(), res);
+            if (!clone)
+                return false;
+            cloneRp->setResumePoint(clone);
+        }
     }
+
+    return true;
 }
 
 void

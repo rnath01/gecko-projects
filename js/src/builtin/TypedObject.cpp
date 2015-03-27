@@ -19,6 +19,7 @@
 #include "vm/String.h"
 #include "vm/StringBuffer.h"
 #include "vm/TypedArrayObject.h"
+#include "vm/WeakMapObject.h"
 
 #include "jsatominlines.h"
 #include "jsobjinlines.h"
@@ -487,10 +488,7 @@ CreatePrototypeObjectForComplexTypeInstance(JSContext *cx, HandleObject ctorProt
     if (!ctorPrototypePrototype)
         return nullptr;
 
-    return NewObjectWithProto<TypedProto>(cx,
-                                          ctorPrototypePrototype,
-                                          NullPtr(),
-                                          TenuredObject);
+    return NewObjectWithProto<TypedProto>(cx, ctorPrototypePrototype, TenuredObject);
 }
 
 const Class ArrayTypeDescr::class_ = {
@@ -586,7 +584,7 @@ ArrayMetaTypeDescr::create(JSContext *cx,
                            int32_t length)
 {
     Rooted<ArrayTypeDescr*> obj(cx);
-    obj = NewObjectWithProto<ArrayTypeDescr>(cx, arrayTypePrototype, NullPtr(), SingletonObject);
+    obj = NewObjectWithProto<ArrayTypeDescr>(cx, arrayTypePrototype, SingletonObject);
     if (!obj)
         return nullptr;
 
@@ -778,11 +776,11 @@ StructMetaTypeDescr::create(JSContext *cx,
     int32_t alignment = 1;             // Alignment of struct.
     bool opaque = false;               // Opacity of struct.
 
-    userFieldOffsets = NewObjectWithProto<PlainObject>(cx, NullPtr(), NullPtr(), TenuredObject);
+    userFieldOffsets = NewObjectWithProto<PlainObject>(cx, NullPtr(), TenuredObject);
     if (!userFieldOffsets)
         return nullptr;
 
-    userFieldTypes = NewObjectWithProto<PlainObject>(cx, NullPtr(), NullPtr(), TenuredObject);
+    userFieldTypes = NewObjectWithProto<PlainObject>(cx, NullPtr(), TenuredObject);
     if (!userFieldTypes)
         return nullptr;
 
@@ -912,7 +910,7 @@ StructMetaTypeDescr::create(JSContext *cx,
         return nullptr;
 
     Rooted<StructTypeDescr*> descr(cx);
-    descr = NewObjectWithProto<StructTypeDescr>(cx, structTypePrototype, NullPtr(),
+    descr = NewObjectWithProto<StructTypeDescr>(cx, structTypePrototype,
                                                 SingletonObject);
     if (!descr)
         return nullptr;
@@ -1154,7 +1152,7 @@ DefineSimpleTypeDescr(JSContext *cx,
         return false;
 
     Rooted<T*> descr(cx);
-    descr = NewObjectWithProto<T>(cx, funcProto, GlobalObject::upcast(global), SingletonObject);
+    descr = NewObjectWithProto<T>(cx, funcProto, SingletonObject);
     if (!descr)
         return false;
 
@@ -1174,7 +1172,7 @@ DefineSimpleTypeDescr(JSContext *cx,
     // Create the typed prototype for the scalar type. This winds up
     // not being user accessible, but we still create one for consistency.
     Rooted<TypedProto*> proto(cx);
-    proto = NewObjectWithProto<TypedProto>(cx, objProto, NullPtr(), TenuredObject);
+    proto = NewObjectWithProto<TypedProto>(cx, objProto, TenuredObject);
     if (!proto)
         return false;
     descr->initReservedSlot(JS_DESCR_SLOT_TYPROTO, ObjectValue(*proto));
@@ -1210,7 +1208,6 @@ DefineMetaTypeDescr(JSContext *cx,
     // Create ctor.prototype, which inherits from Function.__proto__
 
     RootedObject proto(cx, NewObjectWithProto<PlainObject>(cx, funcProto,
-                                                           GlobalObject::upcast(global),
                                                            SingletonObject));
     if (!proto)
         return nullptr;
@@ -1221,8 +1218,7 @@ DefineMetaTypeDescr(JSContext *cx,
     if (!objProto)
         return nullptr;
     RootedObject protoProto(cx);
-    protoProto = NewObjectWithProto<PlainObject>(cx, objProto,
-                                                 GlobalObject::upcast(global), SingletonObject);
+    protoProto = NewObjectWithProto<PlainObject>(cx, objProto, SingletonObject);
     if (!protoProto)
         return nullptr;
 
@@ -1269,8 +1265,7 @@ GlobalObject::initTypedObjectModule(JSContext *cx, Handle<GlobalObject*> global)
         return false;
 
     Rooted<TypedObjectModuleObject*> module(cx);
-    module = NewObjectWithProto<TypedObjectModuleObject>(cx, objProto,
-                                                         GlobalObject::upcast(global));
+    module = NewObjectWithProto<TypedObjectModuleObject>(cx, objProto);
     if (!module)
         return false;
 
@@ -1384,12 +1379,11 @@ bool
 TypedObject::isAttached() const
 {
     if (is<InlineTransparentTypedObject>()) {
-        LazyArrayBufferTable *table = compartment()->lazyArrayBuffers;
+        ObjectWeakMap *table = compartment()->lazyArrayBuffers;
         if (table) {
-            ArrayBufferObject *buffer =
-                table->maybeBuffer(&const_cast<TypedObject *>(this)->as<InlineTransparentTypedObject>());
+            JSObject *buffer = table->lookup(this);
             if (buffer)
-                return !buffer->isNeutered();
+                return !buffer->as<ArrayBufferObject>().isNeutered();
         }
         return true;
     }
@@ -1492,8 +1486,9 @@ OutlineTypedObject::createUnattachedWithClass(JSContext *cx,
         return nullptr;
 
     NewObjectKind newKind = (heap == gc::TenuredHeap) ? MaybeSingletonObject : GenericObject;
-    OutlineTypedObject *obj = NewObjectWithGroup<OutlineTypedObject>(cx, group, cx->global(),
-                                                                     gc::FINALIZE_OBJECT0, newKind);
+    OutlineTypedObject *obj = NewObjectWithGroup<OutlineTypedObject>(cx, group,
+                                                                     gc::AllocKind::OBJECT0,
+                                                                     newKind);
     if (!obj)
         return nullptr;
 
@@ -1756,8 +1751,8 @@ ReportPropertyError(JSContext *cx,
 }
 
 bool
-TypedObject::obj_defineProperty(JSContext *cx, HandleObject obj, HandleId id, HandleValue v,
-                                GetterOp getter, SetterOp setter, unsigned attrs,
+TypedObject::obj_defineProperty(JSContext *cx, HandleObject obj, HandleId id,
+                                Handle<JSPropertyDescriptor> desc,
                                 ObjectOpResult &result)
 {
     Rooted<TypedObject *> typedObj(cx, &obj->as<TypedObject>());
@@ -2140,7 +2135,7 @@ InlineTypedObject::create(JSContext *cx, HandleTypeDescr descr, gc::InitialHeap 
         return nullptr;
 
     NewObjectKind newKind = (heap == gc::TenuredHeap) ? MaybeSingletonObject : GenericObject;
-    return NewObjectWithGroup<InlineTypedObject>(cx, group, cx->global(), allocKind, newKind);
+    return NewObjectWithGroup<InlineTypedObject>(cx, group, allocKind, newKind);
 }
 
 /* static */ InlineTypedObject *
@@ -2198,16 +2193,16 @@ InlineTypedObject::objectMovedDuringMinorGC(JSTracer *trc, JSObject *dst, JSObje
 ArrayBufferObject *
 InlineTransparentTypedObject::getOrCreateBuffer(JSContext *cx)
 {
-    LazyArrayBufferTable *&table = cx->compartment()->lazyArrayBuffers;
+    ObjectWeakMap *&table = cx->compartment()->lazyArrayBuffers;
     if (!table) {
-        table = cx->new_<LazyArrayBufferTable>(cx);
+        table = cx->new_<ObjectWeakMap>(cx);
         if (!table)
             return nullptr;
     }
 
-    ArrayBufferObject *buffer = table->maybeBuffer(this);
-    if (buffer)
-        return buffer;
+    JSObject *obj = table->lookup(this);
+    if (obj)
+        return &obj->as<ArrayBufferObject>();
 
     ArrayBufferObject::BufferContents contents =
         ArrayBufferObject::BufferContents::createPlain(inlineTypedMem());
@@ -2217,7 +2212,8 @@ InlineTransparentTypedObject::getOrCreateBuffer(JSContext *cx)
     // and its contents.
     gc::AutoSuppressGC suppress(cx);
 
-    buffer = ArrayBufferObject::create(cx, nbytes, contents, ArrayBufferObject::DoesntOwnData);
+    ArrayBufferObject *buffer =
+        ArrayBufferObject::create(cx, nbytes, contents, ArrayBufferObject::DoesntOwnData);
     if (!buffer)
         return nullptr;
 
@@ -2231,8 +2227,14 @@ InlineTransparentTypedObject::getOrCreateBuffer(JSContext *cx)
     buffer->setForInlineTypedObject();
     buffer->setHasTypedObjectViews();
 
-    if (!table->addBuffer(cx, this, buffer))
+    if (!table->add(cx, this, buffer))
         return nullptr;
+
+    if (IsInsideNursery(this)) {
+        // Make sure the buffer is traced by the next generational collection,
+        // so that its data pointer is updated after this typed object moves.
+        cx->runtime()->gc.storeBuffer.putWholeCellFromMainThread(buffer);
+    }
 
     return buffer;
 }
@@ -2243,67 +2245,6 @@ OutlineTransparentTypedObject::getOrCreateBuffer(JSContext *cx)
     if (owner().is<ArrayBufferObject>())
         return &owner().as<ArrayBufferObject>();
     return owner().as<InlineTransparentTypedObject>().getOrCreateBuffer(cx);
-}
-
-LazyArrayBufferTable::LazyArrayBufferTable(JSContext *cx)
- : map(cx)
-{
-    if (!map.init())
-        CrashAtUnhandlableOOM("LazyArrayBufferTable");
-}
-
-LazyArrayBufferTable::~LazyArrayBufferTable()
-{
-    WeakMapBase::removeWeakMapFromList(&map);
-}
-
-ArrayBufferObject *
-LazyArrayBufferTable::maybeBuffer(InlineTransparentTypedObject *obj)
-{
-    if (Map::Ptr p = map.lookup(obj))
-        return &p->value()->as<ArrayBufferObject>();
-    return nullptr;
-}
-
-bool
-LazyArrayBufferTable::addBuffer(JSContext *cx, InlineTransparentTypedObject *obj, ArrayBufferObject *buffer)
-{
-    MOZ_ASSERT(!map.has(obj));
-    if (!map.put(obj, buffer)) {
-        ReportOutOfMemory(cx);
-        return false;
-    }
-
-    MOZ_ASSERT(!IsInsideNursery(buffer));
-    if (IsInsideNursery(obj)) {
-        // Strip the barriers from the type before inserting into the store
-        // buffer, as is done for DebugScopes::proxiedScopes.
-        Map::Base *baseHashMap = static_cast<Map::Base *>(&map);
-
-        typedef HashMap<JSObject *, JSObject *> UnbarrieredMap;
-        UnbarrieredMap *unbarrieredMap = reinterpret_cast<UnbarrieredMap *>(baseHashMap);
-
-        typedef gc::HashKeyRef<UnbarrieredMap, JSObject *> Ref;
-        cx->runtime()->gc.storeBuffer.putGeneric(Ref(unbarrieredMap, obj));
-
-        // Also make sure the buffer is traced, so that its data pointer is
-        // updated after the typed object moves.
-        cx->runtime()->gc.storeBuffer.putWholeCellFromMainThread(buffer);
-    }
-
-    return true;
-}
-
-void
-LazyArrayBufferTable::trace(JSTracer *trc)
-{
-    map.trace(trc);
-}
-
-size_t
-LazyArrayBufferTable::sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf)
-{
-    return mallocSizeOf(this) + map.sizeOfExcludingThis(mallocSizeOf);
 }
 
 /******************************************************************************

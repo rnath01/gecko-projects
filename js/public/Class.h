@@ -80,14 +80,26 @@ class AutoIdVector;
 class ObjectOpResult
 {
   private:
-    uint32_t code_;
+    /*
+     * code_ is either one of the special codes OkCode or Uninitialized, or
+     * an error code. For now the error codes are private to the JS engine;
+     * they're defined in js/src/js.msg.
+     *
+     * code_ is uintptr_t (rather than uint32_t) for the convenience of the
+     * JITs, which would otherwise have to deal with either padding or stack
+     * alignment on 64-bit platforms.
+     */
+    uintptr_t code_;
 
   public:
-    enum { OkCode = 0, Uninitialized = 0xffffffff };
+    enum SpecialCodes : uintptr_t {
+        OkCode = 0,
+        Uninitialized = uintptr_t(-1)
+    };
 
     ObjectOpResult() : code_(Uninitialized) {}
 
-    /* Return true if fail() was not called. */
+    /* Return true if succeed() was called. */
     bool ok() const {
         MOZ_ASSERT(code_ != Uninitialized);
         return code_ == OkCode;
@@ -121,15 +133,17 @@ class ObjectOpResult
     JS_PUBLIC_API(bool) failCantRedefineProp();
     JS_PUBLIC_API(bool) failReadOnly();
     JS_PUBLIC_API(bool) failGetterOnly();
-    JS_PUBLIC_API(bool) failCantSetInterposed();
     JS_PUBLIC_API(bool) failCantDelete();
+
+    JS_PUBLIC_API(bool) failCantSetInterposed();
+    JS_PUBLIC_API(bool) failCantDefineWindowElement();
     JS_PUBLIC_API(bool) failCantDeleteWindowElement();
     JS_PUBLIC_API(bool) failCantDeleteWindowNamedProperty();
     JS_PUBLIC_API(bool) failCantPreventExtensions();
 
     uint32_t failureCode() const {
         MOZ_ASSERT(!ok());
-        return code_;
+        return uint32_t(code_);
     }
 
     /*
@@ -319,8 +333,8 @@ typedef bool
 (* LookupPropertyOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
                      JS::MutableHandleObject objp, JS::MutableHandle<Shape*> propp);
 typedef bool
-(* DefinePropertyOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::HandleValue value,
-                     JSGetterOp getter, JSSetterOp setter, unsigned attrs,
+(* DefinePropertyOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
+                     JS::Handle<JSPropertyDescriptor> desc,
                      JS::ObjectOpResult &result);
 typedef bool
 (* HasPropertyOp)(JSContext *cx, JS::HandleObject obj, JS::HandleId id, bool *foundp);
@@ -426,6 +440,7 @@ struct ClassSpec
     ClassObjectCreationOp createConstructor;
     ClassObjectCreationOp createPrototype;
     const JSFunctionSpec *constructorFunctions;
+    const JSPropertySpec *constructorProperties;
     const JSFunctionSpec *prototypeFunctions;
     const JSPropertySpec *prototypeProperties;
     FinishClassInitOp finishInit;
@@ -492,7 +507,7 @@ struct ClassExtension
     JSObjectMovedOp objectMovedOp;
 };
 
-#define JS_NULL_CLASS_SPEC  {nullptr,nullptr,nullptr,nullptr,nullptr,nullptr}
+#define JS_NULL_CLASS_SPEC  {nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr}
 #define JS_NULL_CLASS_EXT   {nullptr,nullptr,false,nullptr,nullptr}
 
 struct ObjectOps
@@ -524,7 +539,7 @@ typedef void (*JSClassInternal)();
 struct JSClass {
     JS_CLASS_MEMBERS(JSFinalizeOp);
 
-    void                *reserved[24];
+    void                *reserved[25];
 };
 
 #define JSCLASS_HAS_PRIVATE             (1<<0)  // objects have private slot

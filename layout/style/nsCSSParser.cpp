@@ -6639,11 +6639,12 @@ bool
 CSSParserImpl::ShouldUseUnprefixingService()
 {
   if (!sUnprefixingServiceEnabled) {
+    // Unprefixing is globally disabled.
     return false;
   }
 
-  // XXXdholbert Bug 1132743: Check if stylesheet URI is on fixlist here.
-  return true;
+  // Unprefixing enabled; see if our principal is whitelisted for unprefixing.
+  return mSheetPrincipal && mSheetPrincipal->IsOnCSSUnprefixingWhitelist();
 }
 
 bool
@@ -13050,7 +13051,7 @@ CSSParserImpl::ParseListStyle()
 bool
 CSSParserImpl::ParseListStyleType(nsCSSValue& aValue)
 {
-  if (ParseVariant(aValue, VARIANT_INHERIT, nullptr)) {
+  if (ParseVariant(aValue, VARIANT_INHERIT | VARIANT_STRING, nullptr)) {
     return true;
   }
 
@@ -15110,6 +15111,7 @@ CSSParserImpl::ParseScrollSnapPoints(nsCSSValue& aValue, nsCSSProperty aPropID)
     functionArray->Item(1) = lengthValue;
     return true;
   }
+  UngetToken();
   return false;
 }
 

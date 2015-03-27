@@ -313,7 +313,7 @@ js::math_ceil_handle(JSContext *cx, HandleValue v, MutableHandleValue res)
         return false;
 
     double result = math_ceil_impl(d);
-    res.setDouble(result);
+    res.setNumber(result);
     return true;
 }
 
@@ -1618,7 +1618,7 @@ js::InitMathClass(JSContext *cx, HandleObject obj)
     RootedObject proto(cx, obj->as<GlobalObject>().getOrCreateObjectPrototype(cx));
     if (!proto)
         return nullptr;
-    RootedObject Math(cx, NewObjectWithGivenProto(cx, &MathClass, proto, obj, SingletonObject));
+    RootedObject Math(cx, NewObjectWithGivenProto(cx, &MathClass, proto, SingletonObject));
     if (!Math)
         return nullptr;
 

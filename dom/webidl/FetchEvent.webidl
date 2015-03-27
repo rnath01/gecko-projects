@@ -18,8 +18,7 @@ interface FetchEvent : Event {
   readonly attribute boolean isReload;
 
   [Throws] void respondWith(Promise<Response> r);
-  Promise<Response> forwardTo(USVString url);
-  Promise<Response> default();
+  [Throws] void respondWith(Response r);
 };
 
 dictionary FetchEventInit : EventInit {

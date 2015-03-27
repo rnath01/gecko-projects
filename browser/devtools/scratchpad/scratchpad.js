@@ -743,7 +743,7 @@ var Scratchpad = {
             continue;
           }
           if ((decl.init.type == "FunctionExpression"
-               || decl.init.type == "ArrowExpression")
+               || decl.init.type == "ArrowFunctionExpression")
               && this._containsCursor(decl.loc, aCursorPos)) {
             return decl;
           }
@@ -2156,7 +2156,7 @@ ScratchpadWindow.prototype = Heritage.extend(ScratchpadTab.prototype, {
 
     let client = new DebuggerClient(DebuggerServer.connectPipe());
     client.connect(() => {
-      client.attachProcess().then(aResponse => {
+      client.getProcess().then(aResponse => {
         if (aResponse.error) {
           reportError("listTabs", aResponse);
           deferred.reject(aResponse);

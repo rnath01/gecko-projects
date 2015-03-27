@@ -15,6 +15,7 @@ const XMLHttpRequest =
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
+Cu.import("resource://gre/modules/Timer.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
   "resource://gre/modules/NetUtil.jsm");
@@ -56,6 +57,12 @@ const ALLOWED_IMAGE_SCHEMES = new Set(["https", "data"]);
 // The frecency of a directory link
 const DIRECTORY_FRECENCY = 1000;
 
+// The frecency of a suggested link
+const SUGGESTED_FRECENCY = Infinity;
+
+// Default number of times to show a link
+const DEFAULT_FREQUENCY_CAP = 5;
+
 // Divide frecency by this amount for pings
 const PING_SCORE_DIVISOR = 10000;
 
@@ -85,9 +92,19 @@ let DirectoryLinksProvider = {
   _enhancedLinks: new Map(),
 
   /**
-   * A mapping from site to a list of related link objects
+   * A mapping from site to remaining number of views
    */
-  _relatedLinks: new Map(),
+  _frequencyCaps: new Map(),
+
+  /**
+   * A mapping from site to a list of suggested link objects
+   */
+  _suggestedLinks: new Map(),
+
+  /**
+   * A set of top sites that we can provide suggested links for
+   */
+  _topSitesWithSuggestedLinks: new Set(),
 
   get _observedPrefs() Object.freeze({
     enhanced: PREF_NEWTAB_ENHANCED,
@@ -192,11 +209,11 @@ let DirectoryLinksProvider = {
     }
   },
 
-  _cacheRelatedLinks: function(link) {
-    for (let relatedSite of link.related) {
-      let relatedMap = this._relatedLinks.get(relatedSite) || new Map();
-      relatedMap.set(link.url, link);
-      this._relatedLinks.set(relatedSite, relatedMap);
+  _cacheSuggestedLinks: function(link) {
+    for (let suggestedSite of link.frecent_sites) {
+      let suggestedMap = this._suggestedLinks.get(suggestedSite) || new Map();
+      suggestedMap.set(link.url, link);
+      this._suggestedLinks.set(suggestedSite, suggestedMap);
     }
   },
 
@@ -284,25 +301,27 @@ let DirectoryLinksProvider = {
 
   /**
    * Reads directory links file and parses its content
-   * @return a promise resolved to valid list of links or [] if read or parse fails
+   * @return a promise resolved to an object with keys 'directory' and 'suggested',
+   *         each containing a valid list of links,
+   *         or {'directory': [], 'suggested': []} if read or parse fails.
    */
   _readDirectoryLinksFile: function DirectoryLinksProvider_readDirectoryLinksFile() {
+    let emptyOutput = {directory: [], suggested: []};
     return OS.File.read(this._directoryFilePath).then(binaryData => {
       let output;
       try {
-        let locale = this.locale;
         let json = gTextDecoder.decode(binaryData);
-        let list = JSON.parse(json);
-        output = list[locale];
+        let linksObj = JSON.parse(json);
+        output = {directory: linksObj.directory || [], suggested: linksObj.suggested || []};
       }
       catch (e) {
         Cu.reportError(e);
       }
-      return output || [];
+      return output || emptyOutput;
     },
     error => {
       Cu.reportError(error);
-      return [];
+      return emptyOutput;
     });
   },
 
@@ -314,6 +333,23 @@ let DirectoryLinksProvider = {
    * @return download promise
    */
   reportSitesAction: function DirectoryLinksProvider_reportSitesAction(sites, action, triggeringSiteIndex) {
+    // Check if the suggested tile was shown
+    if (action == "view") {
+      sites.slice(0, triggeringSiteIndex + 1).forEach(site => {
+        let {targetedSite, url} = site.link;
+        if (targetedSite) {
+          this._decreaseFrequencyCap(url, 1);
+        }
+      });
+    }
+    // Use up all views if the user clicked on a frequency capped tile
+    else if (action == "click") {
+      let {targetedSite, url} = sites[triggeringSiteIndex].link;
+      if (targetedSite) {
+        this._decreaseFrequencyCap(url, DEFAULT_FREQUENCY_CAP);
+      }
+    }
+
     let newtabEnhanced = false;
     let pingEndPoint = "";
     try {
@@ -402,37 +438,52 @@ let DirectoryLinksProvider = {
    */
   getLinks: function DirectoryLinksProvider_getLinks(aCallback) {
     this._readDirectoryLinksFile().then(rawLinks => {
-      // Reset the cache of related tiles and enhanced images for this new set of links
+      // Reset the cache of suggested tiles and enhanced images for this new set of links
       this._enhancedLinks.clear();
-      this._relatedLinks.clear();
+      this._frequencyCaps.clear();
+      this._suggestedLinks.clear();
 
-      let links = [];
-      rawLinks.filter(link => {
+      let validityFilter = function(link) {
         // Make sure the link url is allowed and images too if they exist
         return this.isURLAllowed(link.url, ALLOWED_LINK_SCHEMES) &&
                this.isURLAllowed(link.imageURI, ALLOWED_IMAGE_SCHEMES) &&
                this.isURLAllowed(link.enhancedImageURI, ALLOWED_IMAGE_SCHEMES);
-      }).forEach((link, position) => {
+      }.bind(this);
+
+      let setCommonProperties = function(link, length, position) {
         // Stash the enhanced image for the site
         if (link.enhancedImageURI) {
           this._enhancedLinks.set(NewTabUtils.extractSite(link.url), link);
         }
-        link.lastVisitDate = rawLinks.length - position;
+        link.lastVisitDate = length - position;
+      }.bind(this);
 
-        // We cache related tiles here but do not push any of them in the links list yet.
-        // The decision for which related tile to include will be made separately.
-        if ("related" == link.type) {
-          this._cacheRelatedLinks(link);
-          return;
-        }
-        link.frecency = DIRECTORY_FRECENCY;
-        links.push(link);
+      rawLinks.suggested.filter(validityFilter).forEach((link, position) => {
+        setCommonProperties(link, rawLinks.suggested.length, position);
+
+        // We cache suggested tiles here but do not push any of them in the links list yet.
+        // The decision for which suggested tile to include will be made separately.
+        this._cacheSuggestedLinks(link);
+        this._frequencyCaps.set(link.url, DEFAULT_FREQUENCY_CAP);
       });
+
+      let links = rawLinks.directory.filter(validityFilter).map((link, position) => {
+        setCommonProperties(link, rawLinks.directory.length, position);
+        link.frecency = DIRECTORY_FRECENCY;
+        return link;
+      });
+
+      // Allow for one link suggestion on top of the default directory links
+      this.maxNumLinks = links.length + 1;
+
       return links;
     }).catch(ex => {
       Cu.reportError(ex);
       return [];
-    }).then(aCallback);
+    }).then(links => {
+      aCallback(links);
+      this._populatePlacesLinks();
+    });
   },
 
   init: function DirectoryLinksProvider_init() {
@@ -441,6 +492,9 @@ let DirectoryLinksProvider = {
     // setup directory file path and last download timestamp
     this._directoryFilePath = OS.Path.join(OS.Constants.Path.localProfileDir, DIRECTORY_LINKS_FILE);
     this._lastDownloadMS = 0;
+
+    NewTabUtils.placesProvider.addObserver(this);
+
     return Task.spawn(function() {
       // get the last modified time of the links file if it exists
       let doesFileExists = yield OS.File.exists(this._directoryFilePath);
@@ -452,6 +506,164 @@ let DirectoryLinksProvider = {
       yield this._fetchAndCacheLinksIfNecessary();
     }.bind(this));
   },
+
+  _handleManyLinksChanged: function() {
+    this._topSitesWithSuggestedLinks.clear();
+    this._suggestedLinks.forEach((suggestedLinks, site) => {
+      if (NewTabUtils.isTopPlacesSite(site)) {
+        this._topSitesWithSuggestedLinks.add(site);
+      }
+    });
+    this._updateSuggestedTile();
+  },
+
+  /**
+   * Updates _topSitesWithSuggestedLinks based on the link that was changed.
+   *
+   * @return true if _topSitesWithSuggestedLinks was modified, false otherwise.
+   */
+  _handleLinkChanged: function(aLink) {
+    let changedLinkSite = NewTabUtils.extractSite(aLink.url);
+    let linkStored = this._topSitesWithSuggestedLinks.has(changedLinkSite);
+
+    if (!NewTabUtils.isTopPlacesSite(changedLinkSite) && linkStored) {
+      this._topSitesWithSuggestedLinks.delete(changedLinkSite);
+      return true;
+    }
+
+    if (this._suggestedLinks.has(changedLinkSite) &&
+        NewTabUtils.isTopPlacesSite(changedLinkSite) && !linkStored) {
+      this._topSitesWithSuggestedLinks.add(changedLinkSite);
+      return true;
+    }
+    return false;
+  },
+
+  _populatePlacesLinks: function () {
+    NewTabUtils.links.populateProviderCache(NewTabUtils.placesProvider, () => {
+      this._handleManyLinksChanged();
+    });
+  },
+
+  onLinkChanged: function (aProvider, aLink) {
+    // Make sure NewTabUtils.links handles the notification first.
+    setTimeout(() => {
+      if (this._handleLinkChanged(aLink)) {
+        this._updateSuggestedTile();
+      }
+    }, 0);
+  },
+
+  onManyLinksChanged: function () {
+    // Make sure NewTabUtils.links handles the notification first.
+    setTimeout(() => {
+      this._handleManyLinksChanged();
+    }, 0);
+  },
+
+  /**
+   * Record for a url that some number of views have been used
+   * @param url String url of the suggested link
+   * @param amount Number of equivalent views to decrease
+   */
+  _decreaseFrequencyCap(url, amount) {
+    let remainingViews = this._frequencyCaps.get(url) - amount;
+    this._frequencyCaps.set(url, remainingViews);
+
+    // Reached the number of views, so pick a new one.
+    if (remainingViews <= 0) {
+      this._updateSuggestedTile();
+    }
+  },
+
+  /**
+   * Chooses and returns a suggested tile based on a user's top sites
+   * that we have an available suggested tile for.
+   *
+   * @return the chosen suggested tile, or undefined if there isn't one
+   */
+  _updateSuggestedTile: function() {
+    let sortedLinks = NewTabUtils.getProviderLinks(this);
+
+    if (!sortedLinks) {
+      // If NewTabUtils.links.resetCache() is called before getting here,
+      // sortedLinks may be undefined.
+      return;
+    }
+
+    // Delete the current suggested tile, if one exists.
+    let initialLength = sortedLinks.length;
+    if (initialLength) {
+      let mostFrecentLink = sortedLinks[0];
+      if (mostFrecentLink.targetedSite) {
+        this._callObservers("onLinkChanged", {
+          url: mostFrecentLink.url,
+          frecency: SUGGESTED_FRECENCY,
+          lastVisitDate: mostFrecentLink.lastVisitDate,
+          type: mostFrecentLink.type,
+        }, 0, true);
+      }
+    }
+
+    if (this._topSitesWithSuggestedLinks.size == 0) {
+      // There are no potential suggested links we can show.
+      return;
+    }
+
+    // Create a flat list of all possible links we can show as suggested.
+    // Note that many top sites may map to the same suggested links, but we only
+    // want to count each suggested link once (based on url), thus possibleLinks is a map
+    // from url to suggestedLink. Thus, each link has an equal chance of being chosen at
+    // random from flattenedLinks if it appears only once.
+    let possibleLinks = new Map();
+    let targetedSites = new Map();
+    this._topSitesWithSuggestedLinks.forEach(topSiteWithSuggestedLink => {
+      let suggestedLinksMap = this._suggestedLinks.get(topSiteWithSuggestedLink);
+      suggestedLinksMap.forEach((suggestedLink, url) => {
+        // Skip this link if we've shown it too many times already
+        if (this._frequencyCaps.get(url) <= 0) {
+          return;
+        }
+
+        possibleLinks.set(url, suggestedLink);
+
+        // Keep a map of URL to targeted sites. We later use this to show the user
+        // what site they visited to trigger this suggestion.
+        if (!targetedSites.get(url)) {
+          targetedSites.set(url, []);
+        }
+        targetedSites.get(url).push(topSiteWithSuggestedLink);
+      })
+    });
+
+    // We might have run out of possible links to show
+    let numLinks = possibleLinks.size;
+    if (numLinks == 0) {
+      return;
+    }
+
+    let flattenedLinks = [...possibleLinks.values()];
+
+    // Choose our suggested link at random
+    let suggestedIndex = Math.floor(Math.random() * numLinks);
+    let chosenSuggestedLink = flattenedLinks[suggestedIndex];
+
+    // Show the new directory tile.
+    this._callObservers("onLinkChanged", {
+      url: chosenSuggestedLink.url,
+      title: chosenSuggestedLink.title,
+      frecency: SUGGESTED_FRECENCY,
+      lastVisitDate: chosenSuggestedLink.lastVisitDate,
+      type: chosenSuggestedLink.type,
+
+      // Choose the first site a user has visited as the target. In the future,
+      // this should be the site with the highest frecency. However, we currently
+      // store frecency by URL not by site.
+      targetedSite: targetedSites.get(chosenSuggestedLink.url).length ?
+        targetedSites.get(chosenSuggestedLink.url)[0] : null
+    });
+    return chosenSuggestedLink;
+   },
 
   /**
    * Return the object to its pre-init state
@@ -470,11 +682,11 @@ let DirectoryLinksProvider = {
     this._observers.delete(aObserver);
   },
 
-  _callObservers: function DirectoryLinksProvider__callObservers(aMethodName, aArg) {
+  _callObservers(methodName, ...args) {
     for (let obs of this._observers) {
-      if (typeof(obs[aMethodName]) == "function") {
+      if (typeof(obs[methodName]) == "function") {
         try {
-          obs[aMethodName](this, aArg);
+          obs[methodName](this, ...args);
         } catch (err) {
           Cu.reportError(err);
         }

@@ -51,6 +51,8 @@ ArrayObject::createArrayInternal(ExclusiveContext *cx, gc::AllocKind kind, gc::I
     static_cast<ArrayObject *>(obj)->shape_.init(shape);
     static_cast<ArrayObject *>(obj)->group_.init(group);
 
+    SetNewObjectMetadata(cx, obj);
+
     return &obj->as<ArrayObject>();
 }
 
@@ -91,7 +93,7 @@ ArrayObject::createArray(ExclusiveContext *cx, gc::InitialHeap heap,
     // Use the smallest allocation kind for the array, as it can't have any
     // fixed slots (see the assert in createArrayInternal) and will not be using
     // its fixed elements.
-    gc::AllocKind kind = gc::FINALIZE_OBJECT0_BACKGROUND;
+    gc::AllocKind kind = gc::AllocKind::OBJECT0_BACKGROUND;
 
     ArrayObject *obj = createArrayInternal(cx, kind, heap, shape, group);
     if (!obj)
@@ -104,7 +106,6 @@ ArrayObject::createArray(ExclusiveContext *cx, gc::InitialHeap heap,
 
 /* static */ inline ArrayObject *
 ArrayObject::createCopyOnWriteArray(ExclusiveContext *cx, gc::InitialHeap heap,
-                                    HandleShape shape,
                                     HandleArrayObject sharedElementsOwner)
 {
     MOZ_ASSERT(sharedElementsOwner->getElementsHeader()->isCopyOnWrite());
@@ -113,8 +114,9 @@ ArrayObject::createCopyOnWriteArray(ExclusiveContext *cx, gc::InitialHeap heap,
     // Use the smallest allocation kind for the array, as it can't have any
     // fixed slots (see the assert in createArrayInternal) and will not be using
     // its fixed elements.
-    gc::AllocKind kind = gc::FINALIZE_OBJECT0_BACKGROUND;
+    gc::AllocKind kind = gc::AllocKind::OBJECT0_BACKGROUND;
 
+    RootedShape shape(cx, sharedElementsOwner->lastProperty());
     RootedObjectGroup group(cx, sharedElementsOwner->group());
     ArrayObject *obj = createArrayInternal(cx, kind, heap, shape, group);
     if (!obj)

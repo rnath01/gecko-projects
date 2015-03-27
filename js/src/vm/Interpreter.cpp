@@ -166,8 +166,7 @@ js::OnUnknownMethod(JSContext *cx, HandleObject obj, Value idval_, MutableHandle
         return false;
 
     if (value.isObject()) {
-        NativeObject *obj = NewNativeObjectWithClassProto(cx, &js_NoSuchMethodClass, NullPtr(),
-                                                          NullPtr());
+        NativeObject *obj = NewNativeObjectWithClassProto(cx, &js_NoSuchMethodClass, NullPtr());
         if (!obj)
             return false;
 
@@ -181,6 +180,17 @@ js::OnUnknownMethod(JSContext *cx, HandleObject obj, Value idval_, MutableHandle
 static bool
 NoSuchMethod(JSContext *cx, unsigned argc, Value *vp)
 {
+    if (JSScript *script = cx->currentScript()) {
+        const char *filename = script->filename();
+        cx->compartment()->addTelemetry(filename, JSCompartment::DeprecatedNoSuchMethod);
+    }
+
+    if (!cx->compartment()->warnedAboutNoSuchMethod) {
+        if (!JS_ReportWarning(cx, "__noSuchMethod__ is deprecated"))
+            return false;
+        cx->compartment()->warnedAboutNoSuchMethod = true;
+    }
+
     InvokeArgs args(cx);
     if (!args.init(2))
         return false;
@@ -199,12 +209,6 @@ NoSuchMethod(JSContext *cx, unsigned argc, Value *vp)
     args[1].setObject(*argsobj);
     bool ok = Invoke(cx, args);
     vp[0] = args.rval();
-
-    if (JSScript *script = cx->currentScript()) {
-        const char *filename = script->filename();
-        cx->compartment()->addTelemetry(filename, JSCompartment::DeprecatedNoSuchMethod);
-    }
-
     return ok;
 }
 
@@ -270,7 +274,7 @@ GetPropertyOperation(JSContext *cx, InterpreterFrame *fp, HandleScript script, j
 }
 
 static inline bool
-NameOperation(JSContext *cx, InterpreterFrame *fp, jsbytecode *pc, MutableHandleValue vp)
+GetNameOperation(JSContext *cx, InterpreterFrame *fp, jsbytecode *pc, MutableHandleValue vp)
 {
     JSObject *obj = fp->scopeChain();
     PropertyName *name = fp->script()->getName(pc);
@@ -284,7 +288,7 @@ NameOperation(JSContext *cx, InterpreterFrame *fp, jsbytecode *pc, MutableHandle
      * the actual behavior even if the id could be found on the scope chain
      * before the global object.
      */
-    if (IsGlobalOp(JSOp(*pc)))
+    if (IsGlobalOp(JSOp(*pc)) && !fp->script()->hasPollutedGlobalScope())
         obj = &obj->global();
 
     Shape *shape = nullptr;
@@ -629,16 +633,18 @@ js::ExecuteKernel(JSContext *cx, HandleScript script, JSObject &scopeChainArg, c
                   ExecuteType type, AbstractFramePtr evalInFrame, Value *result)
 {
     MOZ_ASSERT_IF(evalInFrame, type == EXECUTE_DEBUG);
-    MOZ_ASSERT_IF(type == EXECUTE_GLOBAL,
-                  !scopeChainArg.is<ScopeObject>() ||
-                  (scopeChainArg.is<DynamicWithObject>() &&
-                   !scopeChainArg.as<DynamicWithObject>().isSyntactic()));
+    MOZ_ASSERT_IF(type == EXECUTE_GLOBAL, !IsSyntacticScope(&scopeChainArg));
 #ifdef DEBUG
     if (thisv.isObject()) {
         RootedObject thisObj(cx, &thisv.toObject());
         AutoSuppressGC nogc(cx);
         MOZ_ASSERT(GetOuterObject(cx, thisObj) == thisObj);
     }
+    RootedObject terminatingScope(cx, &scopeChainArg);
+    while (IsSyntacticScope(terminatingScope))
+        terminatingScope = terminatingScope->enclosingScope();
+    MOZ_ASSERT(terminatingScope->is<GlobalObject>() ||
+               script->hasPollutedGlobalScope());
 #endif
 
     if (script->isEmpty()) {
@@ -660,11 +666,17 @@ js::ExecuteKernel(JSContext *cx, HandleScript script, JSObject &scopeChainArg, c
 bool
 js::Execute(JSContext *cx, HandleScript script, JSObject &scopeChainArg, Value *rval)
 {
-    /* The scope chain could be anything, so innerize just in case. */
+    /* The scope chain is something we control, so we know it can't
+       have any outer objects on it. */
     RootedObject scopeChain(cx, &scopeChainArg);
-    scopeChain = GetInnerObject(scopeChain);
-    if (!scopeChain)
-        return false;
+    MOZ_ASSERT(scopeChain == GetInnerObject(scopeChain));
+
+    MOZ_RELEASE_ASSERT(scopeChain->is<GlobalObject>() || !script->compileAndGo(),
+                       "Only non-compile-and-go scripts can be executed with "
+                       "interesting scopechains");
+    MOZ_RELEASE_ASSERT(scopeChain->is<GlobalObject>() || script->hasPollutedGlobalScope(),
+                       "Only scripts with polluted scopes can be executed with "
+                       "interesting scopechains");
 
     /* Ensure the scope chain is all same-compartment and terminates in a global. */
 #ifdef DEBUG
@@ -1005,7 +1017,7 @@ js::UnwindForUncatchableException(JSContext *cx, const InterpreterRegs &regs)
     /* c.f. the regular (catchable) TryNoteIter loop in HandleError. */
     for (TryNoteIter tni(cx, regs); !tni.done(); ++tni) {
         JSTryNote *tn = *tni;
-        if (tn->kind == JSTRY_ITER) {
+        if (tn->kind == JSTRY_FOR_IN) {
             Value *sp = regs.spForStackDepth(tn->stackDepth);
             UnwindIteratorForUncatchableException(cx, &sp[-1].toObject());
         }
@@ -1139,7 +1151,7 @@ HandleError(JSContext *cx, InterpreterRegs &regs)
               case JSTRY_FINALLY:
                 return FinallyContinuation;
 
-              case JSTRY_ITER: {
+              case JSTRY_FOR_IN: {
                 /* This is similar to JSOP_ENDITER in the interpreter loop. */
                 MOZ_ASSERT(JSOp(*regs.pc) == JSOP_ENDITER);
                 RootedObject obj(cx, &regs.sp[-1].toObject());
@@ -1150,6 +1162,7 @@ HandleError(JSContext *cx, InterpreterRegs &regs)
                 break;
               }
 
+              case JSTRY_FOR_OF:
               case JSTRY_LOOP:
                 break;
             }
@@ -1660,7 +1673,6 @@ CASE(JSOP_UNUSED126)
 CASE(JSOP_UNUSED148)
 CASE(JSOP_BACKPATCH)
 CASE(JSOP_UNUSED150)
-CASE(JSOP_UNUSED157)
 CASE(JSOP_UNUSED158)
 CASE(JSOP_UNUSED159)
 CASE(JSOP_UNUSED161)
@@ -1757,6 +1769,7 @@ CASE(JSOP_FORCEINTERPRETER)
 END_CASE(JSOP_FORCEINTERPRETER)
 
 CASE(JSOP_UNDEFINED)
+    // If this ever changes, change what JSOP_GIMPLICITTHIS does too.
     PUSH_UNDEFINED();
 END_CASE(JSOP_UNDEFINED)
 
@@ -2026,28 +2039,33 @@ CASE(JSOP_SETCONST)
 }
 END_CASE(JSOP_SETCONST)
 
-CASE(JSOP_BINDGNAME)
-    PUSH_OBJECT(REGS.fp()->global());
-END_CASE(JSOP_BINDGNAME)
-
 CASE(JSOP_BINDINTRINSIC)
     PUSH_OBJECT(*cx->global()->intrinsicsHolder());
 END_CASE(JSOP_BINDINTRINSIC)
 
+CASE(JSOP_BINDGNAME)
 CASE(JSOP_BINDNAME)
 {
-    RootedObject &scopeChain = rootObject0;
-    scopeChain = REGS.fp()->scopeChain();
+    JSOp op = JSOp(*REGS.pc);
+    if (op == JSOP_BINDNAME || script->hasPollutedGlobalScope()) {
+        RootedObject &scopeChain = rootObject0;
+        scopeChain = REGS.fp()->scopeChain();
 
-    RootedPropertyName &name = rootName0;
-    name = script->getName(REGS.pc);
+        RootedPropertyName &name = rootName0;
+        name = script->getName(REGS.pc);
 
-    /* Assigning to an undeclared name adds a property to the global object. */
-    RootedObject &scope = rootObject1;
-    if (!LookupNameUnqualified(cx, name, scopeChain, &scope))
-        goto error;
+        /* Assigning to an undeclared name adds a property to the global object. */
+        RootedObject &scope = rootObject1;
+        if (!LookupNameUnqualified(cx, name, scopeChain, &scope))
+            goto error;
 
-    PUSH_OBJECT(*scope);
+        PUSH_OBJECT(*scope);
+    } else {
+        PUSH_OBJECT(REGS.fp()->global());
+    }
+
+    static_assert(JSOP_BINDNAME_LENGTH == JSOP_BINDGNAME_LENGTH,
+                  "We're sharing the END_CASE so the lengths better match");
 }
 END_CASE(JSOP_BINDNAME)
 
@@ -2454,6 +2472,9 @@ CASE(JSOP_STRICTSETNAME)
                   "setname and strictsetname must be the same size");
     static_assert(JSOP_SETGNAME_LENGTH == JSOP_STRICTSETGNAME_LENGTH,
                   "setganem adn strictsetgname must be the same size");
+    static_assert(JSOP_SETNAME_LENGTH == JSOP_SETGNAME_LENGTH,
+                  "We're sharing the END_CASE so the lengths better match");
+
     RootedObject &scope = rootObject0;
     scope = &REGS.sp[-2].toObject();
     HandleValue value = REGS.stackHandleAt(-1);
@@ -2687,21 +2708,30 @@ CASE(JSOP_SETCALL)
 END_CASE(JSOP_SETCALL)
 
 CASE(JSOP_IMPLICITTHIS)
+CASE(JSOP_GIMPLICITTHIS)
 {
-    RootedPropertyName &name = rootName0;
-    name = script->getName(REGS.pc);
+    JSOp op = JSOp(*REGS.pc);
+    if (op == JSOP_IMPLICITTHIS || script->hasPollutedGlobalScope()) {
+        RootedPropertyName &name = rootName0;
+        name = script->getName(REGS.pc);
 
-    RootedObject &scopeObj = rootObject0;
-    scopeObj = REGS.fp()->scopeChain();
+        RootedObject &scopeObj = rootObject0;
+        scopeObj = REGS.fp()->scopeChain();
 
-    RootedObject &scope = rootObject1;
-    if (!LookupNameWithGlobalDefault(cx, name, scopeObj, &scope))
-        goto error;
+        RootedObject &scope = rootObject1;
+        if (!LookupNameWithGlobalDefault(cx, name, scopeObj, &scope))
+            goto error;
 
-    RootedValue &v = rootValue0;
-    if (!ComputeImplicitThis(cx, scope, &v))
-        goto error;
-    PUSH_COPY(v);
+        RootedValue &v = rootValue0;
+        if (!ComputeImplicitThis(cx, scope, &v))
+            goto error;
+        PUSH_COPY(v);
+    } else {
+        // Treat it like JSOP_UNDEFINED.
+        PUSH_UNDEFINED();
+    }
+    static_assert(JSOP_IMPLICITTHIS_LENGTH == JSOP_GIMPLICITTHIS_LENGTH,
+                  "We're sharing the END_CASE so the lengths better match");
 }
 END_CASE(JSOP_IMPLICITTHIS)
 
@@ -2710,11 +2740,13 @@ CASE(JSOP_GETNAME)
 {
     RootedValue &rval = rootValue0;
 
-    if (!NameOperation(cx, REGS.fp(), REGS.pc, &rval))
+    if (!GetNameOperation(cx, REGS.fp(), REGS.pc, &rval))
         goto error;
 
     PUSH_COPY(rval);
     TypeScript::Monitor(cx, script, REGS.pc, rval);
+    static_assert(JSOP_GETNAME_LENGTH == JSOP_GETGNAME_LENGTH,
+                  "We're sharing the END_CASE so the lengths better match");
 }
 END_CASE(JSOP_GETNAME)
 
@@ -2777,10 +2809,10 @@ END_CASE(JSOP_SYMBOL)
 
 CASE(JSOP_OBJECT)
 {
-    RootedNativeObject &ref = rootNativeObject0;
+    RootedObject &ref = rootObject0;
     ref = script->getObject(REGS.pc);
     if (JS::CompartmentOptionsRef(cx).cloneSingletons()) {
-        JSObject *obj = js::DeepCloneObjectLiteral(cx, ref, js::MaybeSingletonObject);
+        JSObject *obj = DeepCloneObjectLiteral(cx, ref, js::MaybeSingletonObject);
         if (!obj)
             goto error;
         PUSH_OBJECT(*obj);
@@ -3580,7 +3612,7 @@ CASE(JSOP_OBJWITHPROTO)
     RootedObject &proto = rootObject0;
     proto = REGS.sp[-1].toObjectOrNull();
 
-    JSObject *obj = NewObjectWithGivenProto<PlainObject>(cx, proto, cx->global());
+    JSObject *obj = NewObjectWithGivenProto<PlainObject>(cx, proto);
     if (!obj)
         goto error;
 
@@ -3713,12 +3745,8 @@ js::GetScopeName(JSContext *cx, HandleObject scopeChain, HandlePropertyName name
     if (!LookupName(cx, name, scopeChain, &obj, &pobj, &shape))
         return false;
 
-    if (!shape) {
-        JSAutoByteString printable;
-        if (AtomToPrintableString(cx, name, &printable))
-            ReportIsNotDefined(cx, printable.ptr());
-        return false;
-    }
+    if (!shape)
+        return ReportIsNotDefined(cx, name);
 
     if (!GetProperty(cx, obj, obj, name, vp))
         return false;

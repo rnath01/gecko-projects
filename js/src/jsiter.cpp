@@ -52,7 +52,7 @@ using mozilla::PodZero;
 
 typedef Rooted<PropertyIteratorObject*> RootedPropertyIteratorObject;
 
-static const gc::AllocKind ITERATOR_FINALIZE_KIND = gc::FINALIZE_OBJECT2_BACKGROUND;
+static const gc::AllocKind ITERATOR_FINALIZE_KIND = gc::AllocKind::OBJECT2_BACKGROUND;
 
 void
 NativeIterator::mark(JSTracer *trc)
@@ -98,15 +98,6 @@ static inline bool
 Enumerate(JSContext *cx, HandleObject pobj, jsid id,
           bool enumerable, unsigned flags, Maybe<IdSet>& ht, AutoIdVector *props)
 {
-    // We implement __proto__ using a property on |Object.prototype|, but
-    // because __proto__ is highly deserving of removal, we don't want it to
-    // show up in property enumeration, even if only for |Object.prototype|
-    // (think introspection by Prototype-like frameworks that add methods to
-    // the built-in prototypes).  So exclude __proto__ if the object where the
-    // property was found has no [[Prototype]] and might be |Object.prototype|.
-    if (MOZ_UNLIKELY(!pobj->getTaggedProto().isObject() && JSID_IS_ATOM(id, cx->names().proto)))
-        return true;
-
     if (!(flags & JSITER_OWNONLY) || pobj->is<ProxyObject>() || pobj->getOps()->enumerate) {
         if (!ht) {
             ht.emplace(cx);
@@ -327,7 +318,7 @@ Snapshot(JSContext *cx, HandleObject pobj_, unsigned flags, AutoIdVector *props)
                     if (!(flags & JSITER_HIDDEN)) {
                         if (!Proxy::getOwnPropertyDescriptor(cx, pobj, proxyProps[n], &desc))
                             return false;
-                        enumerable = desc.isEnumerable();
+                        enumerable = desc.enumerable();
                     }
 
                     if (!Enumerate(cx, pobj, proxyProps[n], enumerable, flags, ht, props))
@@ -486,12 +477,8 @@ NewPropertyIteratorObject(JSContext *cx, unsigned flags)
         if (!group)
             return nullptr;
 
-        JSObject *metadata = nullptr;
-        if (!NewObjectMetadata(cx, &metadata))
-            return nullptr;
-
         const Class *clasp = &PropertyIteratorObject::class_;
-        RootedShape shape(cx, EmptyShape::getInitialShape(cx, clasp, TaggedProto(nullptr), nullptr, metadata,
+        RootedShape shape(cx, EmptyShape::getInitialShape(cx, clasp, TaggedProto(nullptr),
                                                           ITERATOR_FINALIZE_KIND));
         if (!shape)
             return nullptr;
@@ -824,7 +811,7 @@ js::CreateItrResultObject(JSContext *cx, HandleValue value, bool done)
     if (!proto)
         return nullptr;
 
-    RootedPlainObject obj(cx, NewObjectWithGivenProto<PlainObject>(cx, proto, cx->global()));
+    RootedPlainObject obj(cx, NewObjectWithGivenProto<PlainObject>(cx, proto));
     if (!obj)
         return nullptr;
 
@@ -1175,7 +1162,7 @@ SuppressDeletedPropertyHelper(JSContext *cx, HandleObject obj, StringPredicate p
                             return false;
 
                         if (desc.object()) {
-                            if (desc.isEnumerable())
+                            if (desc.enumerable())
                                 continue;
                         }
                     }

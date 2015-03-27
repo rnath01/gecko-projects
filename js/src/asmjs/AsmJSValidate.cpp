@@ -27,6 +27,7 @@
 
 #include "jsmath.h"
 #include "jsprf.h"
+#include "jsutil.h"
 #include "prmjtime.h"
 
 #include "asmjs/AsmJSLink.h"
@@ -2731,7 +2732,7 @@ class FunctionCompiler
         if (inDeadCode())
             return nullptr;
 
-        MSimdSwizzle *ins = MSimdSwizzle::NewAsmJS(alloc(), vector, type, X, Y, Z, W);
+        MSimdSwizzle *ins = MSimdSwizzle::New(alloc(), vector, type, X, Y, Z, W);
         curBlock_->add(ins);
         return ins;
     }
@@ -2742,7 +2743,7 @@ class FunctionCompiler
         if (inDeadCode())
             return nullptr;
 
-        MInstruction *ins = MSimdShuffle::NewAsmJS(alloc(), lhs, rhs, type, X, Y, Z, W);
+        MInstruction *ins = MSimdShuffle::New(alloc(), lhs, rhs, type, X, Y, Z, W);
         curBlock_->add(ins);
         return ins;
     }
@@ -4444,9 +4445,17 @@ FoldMaskedArrayIndex(FunctionCompiler &f, ParseNode **indexExpr, int32_t *mask,
     if (IsLiteralOrConstInt(f, maskNode, &mask2)) {
         // Flag the access to skip the bounds check if the mask ensures that an 'out of
         // bounds' access can not occur based on the current heap length constraint.
-        if (mask2 == 0 ||
-            CountLeadingZeroes32(f.m().minHeapLength() - 1) <= CountLeadingZeroes32(mask2)) {
+        if (mask2 == 0) {
             *needsBoundsCheck = NO_BOUNDS_CHECK;
+        } else {
+            uint32_t minHeap = f.m().minHeapLength();
+            uint32_t minHeapZeroes = CountLeadingZeroes32(minHeap - 1);
+            uint32_t maskZeroes = CountLeadingZeroes32(mask2);
+            if ((minHeapZeroes < maskZeroes) ||
+                (IsPowerOfTwo(minHeap) && minHeapZeroes == maskZeroes))
+            {
+                *needsBoundsCheck = NO_BOUNDS_CHECK;
+            }
         }
         *mask &= mask2;
         *indexExpr = indexNode;
@@ -5143,6 +5152,11 @@ static bool
 CheckInternalCall(FunctionCompiler &f, ParseNode *callNode, PropertyName *calleeName,
                   RetType retType, MDefinition **def, Type *type)
 {
+    if (!f.canCall()) {
+        return f.fail(callNode, "call expressions may not be nested inside heap expressions "
+                                "when the module contains a change-heap function");
+    }
+
     FunctionCompiler::Call call(f, callNode, retType);
 
     if (!CheckCallArgs(f, callNode, CheckIsVarType, &call))
@@ -5188,6 +5202,11 @@ CheckFuncPtrTableAgainstExisting(ModuleCompiler &m, ParseNode *usepn,
 static bool
 CheckFuncPtrCall(FunctionCompiler &f, ParseNode *callNode, RetType retType, MDefinition **def, Type *type)
 {
+    if (!f.canCall()) {
+        return f.fail(callNode, "function-pointer call expressions may not be nested inside heap "
+                                "expressions when the module contains a change-heap function");
+    }
+
     ParseNode *callee = CallCallee(callNode);
     ParseNode *tableNode = ElemBase(callee);
     ParseNode *indexExpr = ElemIndex(callee);
@@ -5247,6 +5266,11 @@ static bool
 CheckFFICall(FunctionCompiler &f, ParseNode *callNode, unsigned ffiIndex, RetType retType,
              MDefinition **def, Type *type)
 {
+    if (!f.canCall()) {
+        return f.fail(callNode, "FFI call expressions may not be nested inside heap "
+                                "expressions when the module contains a change-heap function");
+    }
+
     PropertyName *calleeName = CallCallee(callNode)->name();
 
     if (retType == RetType::Float)
@@ -5919,10 +5943,10 @@ CheckSimdOperationCall(FunctionCompiler &f, ParseNode *call, const ModuleCompile
         return CheckSimdUnary(f, call, opType, MSimdUnaryArith::not_, def, type);
       case AsmJSSimdOperation_sqrt:
         return CheckSimdUnary(f, call, opType, MSimdUnaryArith::sqrt, def, type);
-      case AsmJSSimdOperation_reciprocal:
-        return CheckSimdUnary(f, call, opType, MSimdUnaryArith::reciprocal, def, type);
-      case AsmJSSimdOperation_reciprocalSqrt:
-        return CheckSimdUnary(f, call, opType, MSimdUnaryArith::reciprocalSqrt, def, type);
+      case AsmJSSimdOperation_reciprocalApproximation:
+        return CheckSimdUnary(f, call, opType, MSimdUnaryArith::reciprocalApproximation, def, type);
+      case AsmJSSimdOperation_reciprocalSqrtApproximation:
+        return CheckSimdUnary(f, call, opType, MSimdUnaryArith::reciprocalSqrtApproximation, def, type);
 
       case AsmJSSimdOperation_swizzle:
         return CheckSimdSwizzle(f, call, opType, def, type);
@@ -6112,11 +6136,6 @@ static bool
 CheckCoercedCall(FunctionCompiler &f, ParseNode *call, RetType retType, MDefinition **def, Type *type)
 {
     JS_CHECK_RECURSION_DONT_REPORT(f.cx(), return f.m().failOverRecursed());
-
-    if (!f.canCall()) {
-        return f.fail(call, "call expressions may not be nested inside heap expressions when "
-                            "the module contains a change-heap function");
-    }
 
     if (IsNumericLiteral(f.m(), call)) {
         AsmJSNumLit literal = ExtractNumericLiteral(f.m(), call);
@@ -7527,8 +7546,9 @@ ParseFunction(ModuleCompiler &m, ParseNode **fnOut)
         return false;
 
     // This flows into FunctionBox, so must be tenured.
-    RootedFunction fun(m.cx(), NewFunction(m.cx(), NullPtr(), nullptr, 0, JSFunction::INTERPRETED,
-                                           m.cx()->global(), name, JSFunction::FinalizeKind,
+    RootedFunction fun(m.cx(),
+                       NewScriptedFunction(m.cx(), 0, JSFunction::INTERPRETED,
+                                           name, JSFunction::FinalizeKind,
                                            TenuredObject));
     if (!fun)
         return false;
@@ -9339,9 +9359,6 @@ EstablishPreconditions(ExclusiveContext *cx, AsmJSParser &parser)
 
     if (!parser.options().asmJSOption)
         return Warn(parser, JSMSG_USE_ASM_TYPE_FAIL, "Disabled by javascript.options.asmjs in about:config");
-
-    if (!parser.options().compileAndGo)
-        return Warn(parser, JSMSG_USE_ASM_TYPE_FAIL, "Temporarily disabled for event-handler and other cloneable scripts");
 
     if (cx->compartment()->debuggerObservesAsmJS())
         return Warn(parser, JSMSG_USE_ASM_TYPE_FAIL, "Disabled by debugger");

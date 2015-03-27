@@ -350,8 +350,7 @@ class SharedTypedArrayObjectTemplate : public SharedTypedArrayObject
         unsigned attrs = JSPROP_SHARED | JSPROP_GETTER;
 
         Rooted<GlobalObject*> global(cx, cx->compartment()->maybeGlobal());
-        JSObject *getter = NewFunction(cx, NullPtr(), native, 0,
-                                       JSFunction::NATIVE_FUN, global, NullPtr());
+        JSObject *getter = NewNativeFunction(cx, native, 0, NullPtr());
         if (!getter)
             return false;
 
@@ -693,6 +692,7 @@ IMPL_SHARED_TYPED_ARRAY_COMBINED_UNWRAPPERS(Float64, double, double)
     GenericCreateConstructor<Shared##_typedArray##Object::class_constructor, 3, \
                              JSFunction::FinalizeKind>,                        \
     Shared##_typedArray##Object::CreatePrototype,                              \
+    nullptr,                                                                   \
     nullptr,                                                                   \
     Shared##_typedArray##Object::jsfuncs,                                      \
     Shared##_typedArray##Object::jsprops,                                      \

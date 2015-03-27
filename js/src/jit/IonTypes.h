@@ -57,7 +57,7 @@ enum BailoutKind
     Bailout_StringArgumentsEval,
 
     // Bailout on overflow, but don't immediately invalidate.
-    // Used for abs, sub and LoadTypedArrayElement (when loading a uint32 that
+    // Used for abs, sub and LoadUnboxedScalar (when loading a uint32 that
     // doesn't fit in an int32).
     Bailout_Overflow,
 
@@ -147,6 +147,9 @@ enum BailoutKind
     // by the baseline IC.)
     Bailout_ShapeGuard,
 
+    // When we're trying to use an uninitialized lexical.
+    Bailout_UninitializedLexical,
+
     // A bailout to baseline from Ion on exception to handle Debugger hooks.
     Bailout_IonExceptionDebugMode,
 };
@@ -224,6 +227,8 @@ BailoutKindString(BailoutKind kind)
         return "Bailout_Neutered";
       case Bailout_ShapeGuard:
         return "Bailout_ShapeGuard";
+      case Bailout_UninitializedLexical:
+        return "Bailout_UninitializedLexical";
       case Bailout_IonExceptionDebugMode:
         return "Bailout_IonExceptionDebugMode";
       default:
