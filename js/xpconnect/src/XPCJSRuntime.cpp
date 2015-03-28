@@ -597,6 +597,13 @@ AddonWindowOrNull(JSObject *aObj)
     return WindowOrNull(mainGlobal);
 }
 
+nsGlobalWindow*
+CurrentWindowOrNull(JSContext *cx)
+{
+    JSObject *glob = JS::CurrentGlobalOrNull(cx);
+    return glob ? WindowOrNull(glob) : nullptr;
+}
+
 }
 
 static void
@@ -2335,6 +2342,10 @@ ReportCompartmentStats(const JS::CompartmentStats &cStats,
     ZCREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("lazy-array-buffers"),
         cStats.lazyArrayBuffersTable,
         "The table for typed object lazy array buffers.");
+
+    ZCREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("object-metadata"),
+        cStats.objectMetadataTable,
+        "The table used by debugging tools for tracking object metadata");
 
     ZCREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("cross-compartment-wrapper-table"),
         cStats.crossCompartmentWrappersTable,

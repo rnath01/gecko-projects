@@ -364,8 +364,7 @@ SetArrayElement(JSContext *cx, HandleObject obj, double index, HandleValue v)
     if (!ToId(cx, index, &id))
         return false;
 
-    RootedValue tmp(cx, v);
-    return SetProperty(cx, obj, obj, id, &tmp);
+    return SetProperty(cx, obj, id, v);
 }
 
 /*
@@ -434,7 +433,7 @@ bool
 js::SetLengthProperty(JSContext *cx, HandleObject obj, double length)
 {
     RootedValue v(cx, NumberValue(length));
-    return SetProperty(cx, obj, obj, cx->names().length, &v);
+    return SetProperty(cx, obj, cx->names().length, v);
 }
 
 /*
@@ -1270,11 +1269,10 @@ InitArrayElements(JSContext *cx, HandleObject obj, uint32_t start, uint32_t coun
     do {
         value = *vector++;
         indexv = DoubleValue(index);
-        if (!ValueToId<CanGC>(cx, indexv, &id) ||
-            !SetProperty(cx, obj, obj, id, &value))
-        {
+        if (!ValueToId<CanGC>(cx, indexv, &id))
             return false;
-        }
+        if (!SetProperty(cx, obj, id, value))
+            return false;
         index += 1;
     } while (vector != end);
 
@@ -3216,12 +3214,8 @@ CreateArrayPrototype(JSContext *cx, JSProtoKey key)
     if (!group)
         return nullptr;
 
-    JSObject *metadata = nullptr;
-    if (!NewObjectMetadata(cx, &metadata))
-        return nullptr;
-
     RootedShape shape(cx, EmptyShape::getInitialShape(cx, &ArrayObject::class_, TaggedProto(proto),
-                                                      metadata, gc::AllocKind::OBJECT0));
+                                                      gc::AllocKind::OBJECT0));
     if (!shape)
         return nullptr;
 
@@ -3294,9 +3288,7 @@ EnsureNewArrayElements(ExclusiveContext *cx, ArrayObject *obj, uint32_t length)
 static bool
 NewArrayIsCachable(ExclusiveContext *cxArg, NewObjectKind newKind)
 {
-    return cxArg->isJSContext() &&
-           newKind == GenericObject &&
-           !cxArg->asJSContext()->compartment()->hasObjectMetadataCallback();
+    return cxArg->isJSContext() && newKind == GenericObject;
 }
 
 template <uint32_t maxLength>
@@ -3341,17 +3333,13 @@ NewArray(ExclusiveContext *cxArg, uint32_t length,
     if (!group)
         return nullptr;
 
-    JSObject *metadata = nullptr;
-    if (!NewObjectMetadata(cxArg, &metadata))
-        return nullptr;
-
     /*
      * Get a shape with zero fixed slots, regardless of the size class.
      * See JSObject::createArray.
      */
     RootedShape shape(cxArg, EmptyShape::getInitialShape(cxArg, &ArrayObject::class_,
                                                          TaggedProto(proto),
-                                                         metadata, gc::AllocKind::OBJECT0));
+                                                         gc::AllocKind::OBJECT0));
     if (!shape)
         return nullptr;
 
@@ -3518,20 +3506,9 @@ js::NewDenseFullyAllocatedArrayWithTemplate(JSContext *cx, uint32_t length, JSOb
 JSObject *
 js::NewDenseCopyOnWriteArray(JSContext *cx, HandleArrayObject templateObject, gc::InitialHeap heap)
 {
-    RootedShape shape(cx, templateObject->lastProperty());
-
     MOZ_ASSERT(!gc::IsInsideNursery(templateObject));
 
-    JSObject *metadata = nullptr;
-    if (!NewObjectMetadata(cx, &metadata))
-        return nullptr;
-    if (metadata) {
-        shape = Shape::setObjectMetadata(cx, metadata, templateObject->getTaggedProto(), shape);
-        if (!shape)
-            return nullptr;
-    }
-
-    ArrayObject *arr = ArrayObject::createCopyOnWriteArray(cx, heap, shape, templateObject);
+    ArrayObject *arr = ArrayObject::createCopyOnWriteArray(cx, heap, templateObject);
     if (!arr)
         return nullptr;
 

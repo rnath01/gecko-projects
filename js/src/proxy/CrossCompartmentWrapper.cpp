@@ -49,13 +49,13 @@ CrossCompartmentWrapper::getOwnPropertyDescriptor(JSContext *cx, HandleObject wr
 
 bool
 CrossCompartmentWrapper::defineProperty(JSContext *cx, HandleObject wrapper, HandleId id,
-                                        MutableHandle<PropertyDescriptor> desc,
+                                        Handle<PropertyDescriptor> desc,
                                         ObjectOpResult &result) const
 {
     Rooted<PropertyDescriptor> desc2(cx, desc);
     PIERCE(cx, wrapper,
            cx->compartment()->wrap(cx, &desc2),
-           Wrapper::defineProperty(cx, wrapper, id, &desc2, result),
+           Wrapper::defineProperty(cx, wrapper, id, desc2, result),
            NOTHING);
 }
 
@@ -169,14 +169,15 @@ CrossCompartmentWrapper::get(JSContext *cx, HandleObject wrapper, HandleObject r
 }
 
 bool
-CrossCompartmentWrapper::set(JSContext *cx, HandleObject wrapper, HandleObject receiver,
-                             HandleId id, MutableHandleValue vp, ObjectOpResult &result) const
+CrossCompartmentWrapper::set(JSContext *cx, HandleObject wrapper, HandleId id, HandleValue v,
+                             HandleValue receiver, ObjectOpResult &result) const
 {
-    RootedObject receiverCopy(cx, receiver);
+    RootedValue valCopy(cx, v);
+    RootedValue receiverCopy(cx, receiver);
     PIERCE(cx, wrapper,
-           cx->compartment()->wrap(cx, &receiverCopy) &&
-           cx->compartment()->wrap(cx, vp),
-           Wrapper::set(cx, wrapper, receiverCopy, id, vp, result),
+           cx->compartment()->wrap(cx, &valCopy) &&
+           cx->compartment()->wrap(cx, &receiverCopy),
+           Wrapper::set(cx, wrapper, id, valCopy, receiverCopy, result),
            NOTHING);
 }
 

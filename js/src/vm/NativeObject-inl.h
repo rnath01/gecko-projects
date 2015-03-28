@@ -54,8 +54,7 @@ NativeObject::canRemoveLastProperty()
      */
     MOZ_ASSERT(!inDictionaryMode());
     Shape *previous = lastProperty()->previous().get();
-    return previous->getObjectMetadata() == lastProperty()->getObjectMetadata()
-        && previous->getObjectFlags() == lastProperty()->getObjectFlags();
+    return previous->getObjectFlags() == lastProperty()->getObjectFlags();
 }
 
 inline void
@@ -73,8 +72,7 @@ NativeObject::clearShouldConvertDoubleElements()
 }
 
 inline void
-NativeObject::setDenseElementWithType(ExclusiveContext *cx, uint32_t index,
-                                      const Value &val)
+NativeObject::setDenseElementWithType(ExclusiveContext *cx, uint32_t index, const Value &val)
 {
     // Avoid a slow AddTypePropertyId call if the type is the same as the type
     // of the previous element.
@@ -85,8 +83,7 @@ NativeObject::setDenseElementWithType(ExclusiveContext *cx, uint32_t index,
 }
 
 inline void
-NativeObject::initDenseElementWithType(ExclusiveContext *cx, uint32_t index,
-                                       const Value &val)
+NativeObject::initDenseElementWithType(ExclusiveContext *cx, uint32_t index, const Value &val)
 {
     MOZ_ASSERT(!shouldConvertDoubleElements());
     AddTypePropertyId(cx, this, JSID_VOID, val);
@@ -331,10 +328,7 @@ CopyInitializerObject(JSContext *cx, HandlePlainObject baseobj, NewObjectKind ne
     if (!obj)
         return nullptr;
 
-    RootedObject metadata(cx, obj->getMetadata());
     if (!obj->setLastProperty(cx, baseobj->lastProperty()))
-        return nullptr;
-    if (metadata && !JSObject::setMetadata(cx, obj, metadata))
         return nullptr;
 
     return obj;

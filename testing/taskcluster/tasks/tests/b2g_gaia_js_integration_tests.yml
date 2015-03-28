@@ -1,9 +1,10 @@
 ---
 $inherits:
   from: 'tasks/test.yml'
+reruns: 2
 task:
   metadata:
-    name: '[TC] Gaia JS Integration Test'
+    name: '[TC] - Gaia JS Integration Test'
     description: Gaia JS Integration Test run {{chunk}}
 
   payload:
@@ -31,9 +32,12 @@ task:
 
   extra:
     chunks:
-      total: 20
+      total: 30
+    treeherderEnv:
+      - production
+      - staging
     treeherder:
       groupName: Gaia JS Integration Test
-      groupSymbol: tc-Gij
+      groupSymbol: Gij
       symbol: '{{chunk}}'
       productName: b2g

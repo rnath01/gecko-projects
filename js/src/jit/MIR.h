@@ -1153,7 +1153,8 @@ class MQuaternaryInstruction : public MAryInstruction<4>
     }
 };
 
-class MVariadicInstruction : public MInstruction
+template <class T>
+class MVariadicT : public T
 {
     FixedList<MUse> operands_;
 
@@ -1189,6 +1190,8 @@ class MVariadicInstruction : public MInstruction
         operands_[index].replaceProducer(operand);
     }
 };
+
+typedef MVariadicT<MInstruction> MVariadicInstruction;
 
 // Generates an LSnapshot without further effect.
 class MStart : public MNullaryInstruction
@@ -1491,8 +1494,8 @@ class MSimdConstant
   protected:
     MSimdConstant(const SimdConstant &v, MIRType type) : value_(v) {
         MOZ_ASSERT(IsSimdType(type));
-        setResultType(type);
         setMovable();
+        setResultType(type);
     }
 
   public:
@@ -1527,6 +1530,7 @@ class MSimdConvert
       : MUnaryInstruction(obj)
     {
         MOZ_ASSERT(IsSimdType(toType));
+        setMovable();
         setResultType(toType);
         specialization_ = fromType; // expects fromType as input
     }
@@ -1564,6 +1568,7 @@ class MSimdReinterpretCast
       : MUnaryInstruction(obj)
     {
         MOZ_ASSERT(IsSimdType(toType));
+        setMovable();
         setResultType(toType);
         specialization_ = fromType; // expects fromType as input
     }
@@ -1608,6 +1613,7 @@ class MSimdExtractElement
         MOZ_ASSERT(!IsSimdType(scalarType));
         MOZ_ASSERT(SimdTypeToScalarType(vecType) == scalarType);
 
+        setMovable();
         specialization_ = vecType;
         setResultType(scalarType);
     }
@@ -3878,6 +3884,60 @@ class MUnreachable
 
     AliasSet getAliasSet() const override {
         return AliasSet::None();
+    }
+};
+
+// This class serve as a way to force the encoding of a snapshot, even if there
+// is no resume point using it.  This is useful to run MAssertRecoveredOnBailout
+// assertions.
+class MEncodeSnapshot : public MNullaryInstruction
+{
+  protected:
+    MEncodeSnapshot()
+      : MNullaryInstruction()
+    {
+        setGuard();
+    }
+
+  public:
+    INSTRUCTION_HEADER(EncodeSnapshot)
+
+    static MEncodeSnapshot *
+    New(TempAllocator &alloc) {
+        return new(alloc) MEncodeSnapshot();
+    }
+};
+
+class MAssertRecoveredOnBailout
+  : public MUnaryInstruction,
+    public NoTypePolicy::Data
+{
+  protected:
+    bool mustBeRecovered_;
+
+    MAssertRecoveredOnBailout(MDefinition *ins, bool mustBeRecovered)
+      : MUnaryInstruction(ins), mustBeRecovered_(mustBeRecovered)
+    {
+        setResultType(MIRType_Value);
+        setRecoveredOnBailout();
+        setGuard();
+    }
+
+  public:
+    INSTRUCTION_HEADER(AssertRecoveredOnBailout)
+
+    static MAssertRecoveredOnBailout *New(TempAllocator &alloc, MDefinition *ins,
+                                          bool mustBeRecovered)
+    {
+        return new(alloc) MAssertRecoveredOnBailout(ins, mustBeRecovered);
+    }
+
+    // Needed to assert that float32 instructions are correctly recovered.
+    bool canConsumeFloat32(MUse *use) const override { return true; }
+
+    bool writeRecoverData(CompactBufferWriter &writer) const override;
+    bool canRecoverOnBailout() const override {
+        return true;
     }
 };
 
@@ -6999,6 +7059,7 @@ class MLexicalCheck
         setResultType(MIRType_Value);
         setResultTypeSet(input->resultTypeSet());
         setMovable();
+        setGuard();
     }
 
   public:
@@ -12581,6 +12642,10 @@ class MAsmJSLoadHeap
 
     bool congruentTo(const MDefinition *ins) const override;
     AliasSet getAliasSet() const override {
+        // When a barrier is needed make the instruction effectful by
+        // giving it a "store" effect.
+        if (barrierBefore_|barrierAfter_)
+            return AliasSet::Store(AliasSet::AsmJSHeap);
         return AliasSet::Load(AliasSet::AsmJSHeap);
     }
     bool mightAlias(const MDefinition *def) const override;

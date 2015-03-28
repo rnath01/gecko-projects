@@ -3227,6 +3227,9 @@ Debugger::removeDebuggeeGlobal(FreeOp *fop, GlobalObject *global,
     if (trackingAllocationSites)
         global->compartment()->forgetObjectMetadataCallback();
 
+    // Clear out all object metadata in the compartment.
+    global->compartment()->clearObjectMetadata();
+
     if (global->getDebuggers()->empty()) {
         global->compartment()->unsetIsDebuggee();
     } else {
@@ -6744,7 +6747,7 @@ DebuggerObject_getAllocationSite(JSContext *cx, unsigned argc, Value *vp)
 {
     THIS_DEBUGOBJECT_REFERENT(cx, argc, vp, "get allocationSite", args, obj);
 
-    RootedObject metadata(cx, obj->getMetadata());
+    RootedObject metadata(cx, GetObjectMetadata(obj));
     if (!cx->compartment()->wrap(cx, &metadata))
         return false;
     args.rval().setObjectOrNull(metadata);
@@ -7634,7 +7637,7 @@ DebuggerEnv_setVariable(JSContext *cx, unsigned argc, Value *vp)
         }
 
         /* Just set the property. */
-        if (!SetProperty(cx, env, env, id, &v))
+        if (!SetProperty(cx, env, id, v))
             return false;
     }
 

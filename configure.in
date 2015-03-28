@@ -2727,6 +2727,7 @@ MOZ_CHECK_HEADERS([linux/quota.h],,,[#include <sys/socket.h>])
 
 dnl SCTP support - needs various network include headers
 MOZ_CHECK_HEADERS([linux/if_addr.h linux/rtnetlink.h],,,[#include <sys/socket.h>])
+MOZ_CHECK_HEADERS(sys/queue.h)
 
 MOZ_CHECK_HEADERS(sys/types.h netinet/in.h byteswap.h)
 
@@ -7661,6 +7662,19 @@ if test "$MOZ_CHROME_FILE_FORMAT" != "jar" &&
     test "$MOZ_CHROME_FILE_FORMAT" != "omni"; then
     AC_MSG_ERROR([--enable-chrome-format must be set to either jar, flat, or omni])
 fi
+
+dnl =========================================================
+dnl Enable support for revamped devtools Performance Tools
+dnl =========================================================
+
+MOZ_ARG_ENABLE_BOOL(devtools-perf,
+[  --enable-devtools-perf Set compile flags necessary for compiling devtools perftools],
+MOZ_DEVTOOLS_PERFTOOLS=1,
+MOZ_DEVTOOLS_PERFTOOLS= )
+if test -n "$MOZ_DEVTOOLS_PERFTOOLS"; then
+  AC_DEFINE(MOZ_DEVTOOLS_PERFTOOLS)
+fi
+AC_SUBST(MOZ_DEVTOOLS_PERFTOOLS)
 
 dnl =========================================================
 dnl Omnijar packaging (bug 552121)

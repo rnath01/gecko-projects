@@ -885,6 +885,10 @@ ServiceWorkerManager::Register(nsIDOMWindow* aWindow,
 
   nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aWindow);
 
+  nsCOMPtr<nsPIDOMWindow> outerWindow = window->GetOuterWindow();
+  bool serviceWorkersTestingEnabled =
+    outerWindow->GetServiceWorkersTestingEnabled();
+
   nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
   if (!doc) {
     return NS_ERROR_FAILURE;
@@ -893,8 +897,8 @@ ServiceWorkerManager::Register(nsIDOMWindow* aWindow,
   nsCOMPtr<nsIURI> documentURI = doc->GetBaseURI();
 
   bool authenticatedOrigin = false;
-  // FIXME(nsm): Bug 1003991. Disable check when devtools are open.
-  if (Preferences::GetBool("dom.serviceWorkers.testing.enabled")) {
+  if (Preferences::GetBool("dom.serviceWorkers.testing.enabled") ||
+      serviceWorkersTestingEnabled) {
     authenticatedOrigin = true;
   }
 
@@ -2298,6 +2302,10 @@ private:
     if (NS_WARN_IF(rv.Failed())) {
       return false;
     }
+    // For Telemetry, note that this Request object was created by a Fetch event.
+    nsRefPtr<InternalRequest> internalReq = request->GetInternalRequest();
+    MOZ_ASSERT(internalReq);
+    internalReq->SetCreatedByFetchEvent();
 
     RootedDictionary<FetchEventInit> init(aCx);
     init.mRequest.Construct();
