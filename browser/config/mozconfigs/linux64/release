@@ -11,5 +11,3 @@ mk_add_options MOZ_PGO=1
 export BUILDING_RELEASE=1
 
 . "$topsrcdir/build/mozconfig.common.override"
-
-ac_add_options --disable-compile-environment
