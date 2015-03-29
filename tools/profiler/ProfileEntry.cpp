@@ -112,8 +112,9 @@ ProfileBuffer::ProfileBuffer(int aEntrySize)
 
 ProfileBuffer::~ProfileBuffer()
 {
-  mGeneration = INT_MAX;
-  deleteExpiredStoredMarkers();
+  while (mStoredMarkers.peek()) {
+    delete mStoredMarkers.popHead();
+  }
 }
 
 // Called from signal, call only reentrant functions
@@ -121,6 +122,9 @@ void ProfileBuffer::addTag(const ProfileEntry& aTag)
 {
   mEntries[mWritePos++] = aTag;
   if (mWritePos == mEntrySize) {
+    // Wrapping around may result in things referenced in the buffer (e.g.,
+    // JIT code addresses and markers) being incorrectly collected.
+    MOZ_ASSERT(mGeneration != UINT32_MAX);
     mGeneration++;
     mWritePos = 0;
   }
@@ -139,7 +143,7 @@ void ProfileBuffer::addStoredMarker(ProfilerMarker *aStoredMarker) {
 void ProfileBuffer::deleteExpiredStoredMarkers() {
   // Delete markers of samples that have been overwritten due to circular
   // buffer wraparound.
-  int generation = mGeneration;
+  uint32_t generation = mGeneration;
   while (mStoredMarkers.peek() &&
          mStoredMarkers.peek()->HasExpired(generation)) {
     delete mStoredMarkers.popHead();
@@ -343,7 +347,7 @@ void UniqueJITOptimizations::stream(JSStreamWriter& b, JSRuntime* rt)
 }
 
 void ProfileBuffer::StreamSamplesToJSObject(JSStreamWriter& b, int aThreadId, JSRuntime* rt,
-                                            UniqueJITOptimizations &aUniqueOpts)
+                                            UniqueJITOptimizations& aUniqueOpts)
 {
   b.BeginArray();
 
@@ -468,7 +472,8 @@ void ProfileBuffer::StreamSamplesToJSObject(JSStreamWriter& b, int aThreadId, JS
                       }
                       readAheadPos = (framePos + incBy) % mEntrySize;
                       if (readAheadPos != mWritePos &&
-                          mEntries[readAheadPos].mTagName == 'J') {
+                          (mEntries[readAheadPos].mTagName == 'J' ||
+                           mEntries[readAheadPos].mTagName == 'O')) {
                         void* pc = mEntries[readAheadPos].mTagPtr;
 
                         // TODOshu: cannot stream tracked optimization info if
@@ -486,11 +491,16 @@ void ProfileBuffer::StreamSamplesToJSObject(JSStreamWriter& b, int aThreadId, JS
                           // Sampled JIT optimizations are deduplicated by
                           // aUniqueOpts to save space. Stream an index that
                           // references into the optimizations array.
-                          Maybe<unsigned> optsIndex = aUniqueOpts.getIndex(pc, rt);
-                          if (optsIndex.isSome()) {
-                            b.NameValue("optsIndex", optsIndex.value());
+                          bool mightHaveTrackedOpts = mEntries[readAheadPos].mTagName == 'O';
+                          if (mightHaveTrackedOpts) {
+                            Maybe<unsigned> optsIndex = aUniqueOpts.getIndex(pc, rt);
+                            if (optsIndex.isSome()) {
+                              b.NameValue("optsIndex", optsIndex.value());
+                            }
                           }
                         }
+
+                        incBy++;
                       }
                     b.EndObject();
                   }

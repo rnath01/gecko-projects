@@ -131,7 +131,7 @@ class Transaction;
  * from the content thread. (See CompositableForwarder.h and ImageBridgeChild.h)
  */
 
-class ShadowLayerForwarder : public CompositableForwarder
+class ShadowLayerForwarder final : public CompositableForwarder
 {
   friend class ClientLayerManager;
 
@@ -259,13 +259,6 @@ public:
    */
   void UpdatePictureRect(CompositableClient* aCompositable,
                          const nsIntRect& aRect) override;
-
-  /**
-   * See CompositableForwarder::UpdatedTexture
-   */
-  virtual void UpdatedTexture(CompositableClient* aCompositable,
-                              TextureClient* aTexture,
-                              nsIntRegion* aRegion) override;
 
   /**
    * See CompositableForwarder::UseTexture

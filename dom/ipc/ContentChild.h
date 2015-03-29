@@ -52,8 +52,8 @@ class PStorageChild;
 class ClonedMessageData;
 class TabChild;
 
-class ContentChild : public PContentChild
-                   , public nsIContentChild
+class ContentChild final : public PContentChild
+                         , public nsIContentChild
 {
     typedef mozilla::dom::ClonedMessageData ClonedMessageData;
     typedef mozilla::ipc::OptionalURIParams OptionalURIParams;
@@ -172,6 +172,13 @@ public:
 
     virtual PHalChild* AllocPHalChild() override;
     virtual bool DeallocPHalChild(PHalChild*) override;
+
+    PIccChild*
+    SendPIccConstructor(PIccChild* aActor, const uint32_t& aServiceId);
+    virtual PIccChild*
+    AllocPIccChild(const uint32_t& aClientId) override;
+    virtual bool
+    DeallocPIccChild(PIccChild* aActor) override;
 
     virtual PMemoryReportRequestChild*
     AllocPMemoryReportRequestChild(const uint32_t& aGeneration,

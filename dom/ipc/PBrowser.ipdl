@@ -55,7 +55,7 @@ using mozilla::CSSToScreenScale from "Units.h";
 using mozilla::CommandInt from "mozilla/EventForwards.h";
 using mozilla::Modifiers from "mozilla/EventForwards.h";
 using mozilla::layers::GeckoContentController::APZStateChange from "mozilla/layers/GeckoContentController.h";
-using mozilla::WritingMode from "WritingModes.h";
+using mozilla::WritingMode from "mozilla/WritingModes.h";
 using mozilla::layers::TouchBehaviorFlags from "mozilla/layers/APZUtils.h";
 
 namespace mozilla {
@@ -492,7 +492,9 @@ parent:
      */
     async SetDimensions(uint32_t aFlags, int32_t aX, int32_t aY, int32_t aCx, int32_t aCy);
 
-    prio(high) sync SynthesizedMouseWheelEvent(WidgetWheelEvent event);
+    prio(high) sync DispatchWheelEvent(WidgetWheelEvent event);
+    prio(high) sync DispatchMouseEvent(WidgetMouseEvent event);
+    prio(high) sync DispatchKeyboardEvent(WidgetKeyboardEvent event);
 
 child:
     /**

@@ -64,10 +64,10 @@ struct MarkupMapInfo {
 } // namespace mozilla
 
 class nsAccessibilityService final : public mozilla::a11y::DocManager,
-                                         public mozilla::a11y::FocusManager,
-                                         public mozilla::a11y::SelectionManager,
-                                         public nsIAccessibilityService,
-                                         public nsIObserver
+                                     public mozilla::a11y::FocusManager,
+                                     public mozilla::a11y::SelectionManager,
+                                     public nsIAccessibilityService,
+                                     public nsIObserver
 {
 public:
   typedef mozilla::a11y::Accessible Accessible;
@@ -279,8 +279,6 @@ GetAccService()
 inline bool
 IPCAccessibilityActive()
 {
-	// XXX reenable when crashes are fixed
-	return false;
 #ifdef MOZ_B2G
   return false;
 #else

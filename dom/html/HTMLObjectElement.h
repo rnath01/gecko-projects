@@ -17,9 +17,9 @@ namespace mozilla {
 namespace dom {
 
 class HTMLObjectElement final : public nsGenericHTMLFormElement
-                                  , public nsObjectLoadingContent
-                                  , public nsIDOMHTMLObjectElement
-                                  , public nsIConstraintValidation
+                              , public nsObjectLoadingContent
+                              , public nsIDOMHTMLObjectElement
+                              , public nsIConstraintValidation
 {
 public:
   explicit HTMLObjectElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
@@ -33,7 +33,13 @@ public:
 #ifdef XP_MACOSX
   // nsIDOMEventTarget
   NS_IMETHOD PostHandleEvent(EventChainPostVisitor& aVisitor) override;
+  // Helper methods
+  static void OnFocusBlurPlugin(Element* aElement, bool aFocus);
   static void HandleFocusBlurPlugin(Element* aElement, WidgetEvent* aEvent);
+  static void HandlePluginCrashed(Element* aElement);
+  static void HandlePluginInstantiated(Element* aElement);
+  // Weak pointer. Null if last action was blur.
+  static Element* sLastFocused;
 #endif
 
   // Element

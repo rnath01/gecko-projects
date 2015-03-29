@@ -216,6 +216,11 @@
     "n_values": 10,
     "description": "GPU Device Reset Reason (ok, hung, removed, reset, internal error, invalid call, out of memory)"
   },
+  "FETCH_IS_MAINTHREAD": {
+    "expires_in_version": "50",
+    "kind": "boolean",
+    "description": "Was Fetch request initiated from the main thread?"
+  },
   "FORGET_SKIPPABLE_MAX": {
     "expires_in_version": "never",
     "kind": "exponential",
@@ -1514,10 +1519,16 @@
     "description": "HTTP Disk Cache Hit, Reval, Failed-Reval, Miss"
   },
   "HTTP_CACHE_MISS_HALFLIFE_EXPERIMENT": {
-    "expires_in_version": "never",
+    "expires_in_version": "40",
     "kind": "enumerated",
     "n_values": 4,
     "description": "HTTP Cache v2 Miss by half-life value (6h, 1d, 7d, 50d)"
+  },
+  "HTTP_CACHE_MISS_HALFLIFE_EXPERIMENT_2": {
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": 4,
+    "description": "HTTP Cache v2 Miss by half-life value (5 min, 15 min, 1 hour, 6 hours)"
   },
   "HTTP_CACHE_ENTRY_RELOAD_TIME": {
     "expires_in_version": "never",
@@ -7270,6 +7281,11 @@
     "n_buckets": 20,
     "description": "Tracking how ServiceWorkerRegistrar loads data before the first content is shown"
   },
+  "SERVICE_WORKER_REQUEST_PASSTHROUGH": {
+    "expires_in_version": "50",
+    "kind": "boolean",
+    "description": "Intercepted fetch sending back same Request object."
+  },
   "LOOP_CLIENT_CALL_URL_REQUESTS_SUCCESS": {
     "expires_in_version": "never",
     "kind": "boolean",
@@ -7452,6 +7468,11 @@
     "high": "1024",
     "n_buckets": 16,
     "description": "The number of entries in persistent DataStorage (HSTS and HPKP data, basically)"
+  },
+  "VIDEO_EME_PLAY_SUCCESS": {
+    "expires_in_version": "45",
+    "kind": "boolean",
+    "description": "EME video playback success or failure"
   },
   "VIDEO_MSE_JOIN_LATENCY_MS" : {
     "expires_in_version": "45",
@@ -7691,5 +7712,34 @@
     "expires_in_version": "never",
     "kind": "count",
     "description": "Count plugin hang notices in e10s"
+  },
+  "UDP_SOCKET_PARALLEL_CLOSE_COUNT": {
+    "expires_in_version": "41",
+    "kind": "linear",
+    "high": "20",
+    "n_buckets": 19,
+    "description": "Number of concurrent UDP socket closing threads"
+  },
+  "UDP_SOCKET_CLOSE_TIME": {
+    "expires_in_version": "45",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 30,
+    "description": "Time PR_Close of a UDP socket taken (ms)"
+  },
+  "SERVICE_WORKER_SPAWN_ATTEMPTS": {
+    "expires_in_version": "50",
+    "kind": "count",
+    "description": "Count attempts to spawn a ServiceWorker for a domain"
+  },
+  "SERVICE_WORKER_WAS_SPAWNED": {
+    "expires_in_version": "50",
+    "kind": "count",
+    "description": "Count ServiceWorkers that really did get a thread created for them"
+  },
+  "SERVICE_WORKER_SPAWN_GETS_QUEUED": {
+    "expires_in_version": "50",
+    "kind": "count",
+    "description": "Tracking whether a ServiceWorker spawn gets queued due to hitting max workers per domain limit"
   }
 }
