@@ -6,9 +6,11 @@ ac_add_options --enable-update-channel=${MOZ_UPDATE_CHANNEL}
 ac_add_options --enable-update-packaging
 ac_add_options --enable-jemalloc
 
-MOZ_AUTOMATION_UPLOAD_SYMBOLS=1
-MOZ_AUTOMATION_UPDATE_PACKAGING=1
-MOZ_AUTOMATION_SDK=1
+if [ -n "$ENABLE_RELEASE_PROMOTION" ]; then
+  MOZ_AUTOMATION_UPLOAD_SYMBOLS=1
+  MOZ_AUTOMATION_UPDATE_PACKAGING=1
+  MOZ_AUTOMATION_SDK=1
+fi
 
 if [ -f /c/builds/gapi.data ]; then
   _gapi_keyfile=/c/builds/gapi.data
