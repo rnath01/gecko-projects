@@ -11,12 +11,6 @@ ac_add_options --with-google-api-keyfile=/builds/gapi.data
 ac_add_options --with-google-oauth-api-keyfile=/builds/google-oauth-api.key
 ac_add_options --with-mozilla-api-keyfile=/builds/mozilla-desktop-geoloc-api.key
 
-if [ -n "$ENABLE_RELEASE_PROMOTION" ]; then
-  export MOZ_AUTOMATION_UPLOAD_SYMBOLS=1
-  export MOZ_AUTOMATION_UPDATE_PACKAGING=1
-  export MOZ_AUTOMATION_SDK=1
-fi
-
 # Needed to enable breakpad in application.ini
 export MOZILLA_OFFICIAL=1
 
