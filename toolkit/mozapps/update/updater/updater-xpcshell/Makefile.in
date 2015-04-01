@@ -35,7 +35,7 @@ ifeq (cocoa,$(MOZ_WIDGET_TOOLKIT))
 	# Copy for mochitest chrome tests
 	rsync -a -C $(XPCSHELLTESTROOT)/data/updater.app $(MOCHITESTROOT)/data/updater.app
 else
-	mv $(XPCSHELLTESTROOT)/data/updater-xpcshell$(BIN_SUFFIX) $(XPCSHELLTESTROOT)/data/updater$(BIN_SUFFIX)
+	mv $(PROGRAM) $(XPCSHELLTESTROOT)/data/updater$(BIN_SUFFIX)
 	cp $(XPCSHELLTESTROOT)/data/updater$(BIN_SUFFIX) $(MOCHITESTROOT)/data/updater$(BIN_SUFFIX)
 endif
 
