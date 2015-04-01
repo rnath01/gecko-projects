@@ -47,8 +47,8 @@ if CONFIG['OS_ARCH'] == 'WINNT':
     ]
 elif CONFIG['OS_ARCH'] == 'Linux' and CONFIG['MOZ_VERIFY_MAR_SIGNATURE']:
     USE_LIBS += [
-        'signmar',
         'nss',
+        'signmar',
         'updatecommon',
     ]
     OS_LIBS += CONFIG['nspr']
@@ -80,7 +80,10 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
         'launchchild_osx.mm',
         'progressui_osx.mm',
     ]
-    OS_LIBS += ['-framework Cocoa -framework Security']
+    OS_LIBS += [
+        '-framework Cocoa',
+        '-framework Security',
+    ]
 elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
     have_progressui = 1
     srcs += [
