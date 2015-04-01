@@ -126,7 +126,7 @@ nsThreadClassInfo::GetInterfaces(uint32_t* aCount, nsIID*** aArray)
 }
 
 NS_IMETHODIMP
-nsThreadClassInfo::GetHelperForLanguage(uint32_t aLang, nsISupports** aResult)
+nsThreadClassInfo::GetScriptableHelper(nsIXPCScriptable** aResult)
 {
   *aResult = nullptr;
   return NS_OK;
@@ -150,13 +150,6 @@ NS_IMETHODIMP
 nsThreadClassInfo::GetClassID(nsCID** aResult)
 {
   *aResult = nullptr;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsThreadClassInfo::GetImplementationLanguage(uint32_t* aResult)
-{
-  *aResult = nsIProgrammingLanguage::CPLUSPLUS;
   return NS_OK;
 }
 
@@ -550,7 +543,7 @@ nsThread::DispatchInternal(nsIRunnable* aEvent, uint32_t aFlags,
   }
 
 #ifdef MOZ_TASK_TRACER
-  nsRefPtr<nsIRunnable> tracedRunnable = CreateTracedRunnable(aEvent);
+  nsCOMPtr<nsIRunnable> tracedRunnable = CreateTracedRunnable(aEvent);
   aEvent = tracedRunnable;
 #endif
 

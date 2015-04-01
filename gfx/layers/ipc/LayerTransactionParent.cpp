@@ -682,6 +682,12 @@ LayerTransactionParent::RecvGetAnimationTransform(PLayerParent* aParent,
     return false;
   }
 
+  // Make sure we apply the latest animation style or else we can end up with
+  // a race between when we temporarily clear the animation transform (in
+  // CompositorParent::SetShadowProperties) and when animation recalculates
+  // the value.
+  mShadowLayersManager->ApplyAsyncProperties(this);
+
   // This method is specific to transforms applied by animation.
   // This is because this method uses the information stored with an animation
   // such as the origin of the reference frame corresponding to the layer, to
@@ -843,9 +849,8 @@ LayerTransactionParent::RecvClearCachedResources()
     // context, it's just a subtree root.  We need to scope the clear
     // of resources to exactly that subtree, so we specify it here.
     mLayerManager->ClearCachedResources(mRoot);
-
-    mShadowLayersManager->NotifyClearCachedResources(this);
   }
+  mShadowLayersManager->NotifyClearCachedResources(this);
   return true;
 }
 
@@ -937,6 +942,7 @@ LayerTransactionParent::RecvChildAsyncMessages(InfallibleTArray<AsyncChildMessag
         MOZ_ASSERT(tex.get());
         compositable->RemoveTextureHost(tex);
 
+        MOZ_ASSERT(ImageBridgeParent::GetInstance(GetChildProcessId()));
         if (ImageBridgeParent::GetInstance(GetChildProcessId())) {
           // send FenceHandle if present via ImageBridge.
           ImageBridgeParent::SendFenceHandleToTrackerIfPresent(
@@ -1024,6 +1030,14 @@ void
 LayerTransactionParent::SendAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessage)
 {
   mozilla::unused << SendParentAsyncMessages(aMessage);
+}
+
+void
+LayerTransactionParent::ReplyRemoveTexture(const OpReplyRemoveTexture& aReply)
+{
+  InfallibleTArray<AsyncParentMessageData> messages;
+  messages.AppendElement(aReply);
+  mozilla::unused << SendParentAsyncMessages(messages);
 }
 
 } // namespace layers

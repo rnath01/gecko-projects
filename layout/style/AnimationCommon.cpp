@@ -303,9 +303,9 @@ CommonAnimationManager::ExtractComputedValueForTransition(
 }
 
 AnimationPlayerCollection*
-CommonAnimationManager::GetAnimationPlayers(dom::Element *aElement,
-                                            nsCSSPseudoElements::Type aPseudoType,
-                                            bool aCreateIfNeeded)
+CommonAnimationManager::GetAnimations(dom::Element *aElement,
+                                      nsCSSPseudoElements::Type aPseudoType,
+                                      bool aCreateIfNeeded)
 {
   if (!aCreateIfNeeded && PR_CLIST_IS_EMPTY(&mElementCollections)) {
     // Early return for the most common case.
@@ -366,7 +366,7 @@ CommonAnimationManager::GetAnimationRule(mozilla::dom::Element* aElement,
   }
 
   AnimationPlayerCollection* collection =
-    GetAnimationPlayers(aElement, aPseudoType, false);
+    GetAnimations(aElement, aPseudoType, false);
   if (!collection) {
     return nullptr;
   }
@@ -557,10 +557,13 @@ AnimationPlayerCollection::CanPerformOnCompositorThread(
 
   for (size_t playerIdx = mPlayers.Length(); playerIdx-- != 0; ) {
     const AnimationPlayer* player = mPlayers[playerIdx];
-    if (!player->IsRunning() || !player->GetSource()) {
+    if (!player->IsPlaying()) {
       continue;
     }
+
     const Animation* anim = player->GetSource();
+    MOZ_ASSERT(anim, "A playing player should have a source animation");
+
     for (size_t propIdx = 0, propEnd = anim->Properties().Length();
          propIdx != propEnd; ++propIdx) {
       if (IsGeometricProperty(anim->Properties()[propIdx].mProperty)) {
@@ -573,11 +576,13 @@ AnimationPlayerCollection::CanPerformOnCompositorThread(
   bool existsProperty = false;
   for (size_t playerIdx = mPlayers.Length(); playerIdx-- != 0; ) {
     const AnimationPlayer* player = mPlayers[playerIdx];
-    if (!player->IsRunning() || !player->GetSource()) {
+    if (!player->IsPlaying()) {
       continue;
     }
 
     const Animation* anim = player->GetSource();
+    MOZ_ASSERT(anim, "A playing player should have a source animation");
+
     existsProperty = existsProperty || anim->Properties().Length() > 0;
 
     for (size_t propIdx = 0, propEnd = anim->Properties().Length();
@@ -741,6 +746,14 @@ AnimationPlayerCollection::EnsureStyleRuleFor(TimeStamp aRefreshTime,
   }
 
   mManager->CheckNeedsRefresh();
+
+  // If one of our animations just started or stopped filling, we need
+  // to notify the transition manager.  This does the notification a bit
+  // more than necessary, but it's easier than doing it exactly.
+  if (mManager->IsAnimationManager()) {
+    mManager->mPresContext->TransitionManager()->
+      UpdateCascadeResultsWithAnimations(this);
+  }
 }
 
 bool
@@ -846,8 +859,11 @@ AnimationPlayerCollection::HasCurrentAnimationsForProperty(nsCSSProperty
                                                              aProperty) const
 {
   for (size_t playerIdx = mPlayers.Length(); playerIdx-- != 0; ) {
-    const Animation* anim = mPlayers[playerIdx]->GetSource();
-    if (anim && anim->IsCurrent() && anim->HasAnimationOfProperty(aProperty)) {
+    const AnimationPlayer& player = *mPlayers[playerIdx];
+    const Animation* anim = player.GetSource();
+    if (anim &&
+        anim->IsCurrent(player) &&
+        anim->HasAnimationOfProperty(aProperty)) {
       return true;
     }
   }

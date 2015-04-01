@@ -51,6 +51,7 @@
 #include "mozilla/dom/bluetooth/PBluetoothParent.h"
 #include "mozilla/dom/cellbroadcast/CellBroadcastParent.h"
 #include "mozilla/dom/devicestorage/DeviceStorageRequestParent.h"
+#include "mozilla/dom/icc/IccParent.h"
 #include "mozilla/dom/mobileconnection/MobileConnectionParent.h"
 #include "mozilla/dom/mobilemessage/SmsParent.h"
 #include "mozilla/dom/power/PowerManagerService.h"
@@ -224,6 +225,7 @@ using namespace CrashReporter;
 using namespace mozilla::dom::bluetooth;
 using namespace mozilla::dom::cellbroadcast;
 using namespace mozilla::dom::devicestorage;
+using namespace mozilla::dom::icc;
 using namespace mozilla::dom::indexedDB;
 using namespace mozilla::dom::power;
 using namespace mozilla::dom::mobileconnection;
@@ -240,8 +242,8 @@ using namespace mozilla::widget;
 
 #ifdef ENABLE_TESTS
 
-class BackgroundTester MOZ_FINAL : public nsIIPCBackgroundChildCreateCallback,
-                                   public nsIObserver
+class BackgroundTester final : public nsIIPCBackgroundChildCreateCallback,
+                               public nsIObserver
 {
     static uint32_t sCallbackCount;
 
@@ -250,7 +252,7 @@ private:
     { }
 
     virtual void
-    ActorCreated(PBackgroundChild* aActor) MOZ_OVERRIDE
+    ActorCreated(PBackgroundChild* aActor) override
     {
         MOZ_RELEASE_ASSERT(aActor,
                            "Failed to create a PBackgroundChild actor!");
@@ -282,14 +284,14 @@ private:
     }
 
     virtual void
-    ActorFailed() MOZ_OVERRIDE
+    ActorFailed() override
     {
         MOZ_CRASH("Failed to create a PBackgroundChild actor!");
     }
 
     NS_IMETHOD
     Observe(nsISupports* aSubject, const char* aTopic, const char16_t* aData)
-            MOZ_OVERRIDE
+            override
     {
         nsCOMPtr<nsIObserverService> observerService =
             mozilla::services::GetObserverService();
@@ -386,9 +388,9 @@ public:
     MemoryReportRequestParent();
     virtual ~MemoryReportRequestParent();
 
-    virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
+    virtual void ActorDestroy(ActorDestroyReason aWhy) override;
 
-    virtual bool Recv__delete__(const uint32_t& aGeneration, InfallibleTArray<MemoryReport>&& aReport) MOZ_OVERRIDE;
+    virtual bool Recv__delete__(const uint32_t& aGeneration, InfallibleTArray<MemoryReport>&& aReport) override;
 
 private:
     ContentParent* Owner()
@@ -426,7 +428,7 @@ MemoryReportRequestParent::~MemoryReportRequestParent()
 }
 
 // IPC receiver for remote GC/CC logging.
-class CycleCollectWithLogsParent MOZ_FINAL : public PCycleCollectWithLogsParent
+class CycleCollectWithLogsParent final : public PCycleCollectWithLogsParent
 {
 public:
     ~CycleCollectWithLogsParent()
@@ -459,19 +461,19 @@ public:
     }
 
 private:
-    virtual bool RecvCloseGCLog() MOZ_OVERRIDE
+    virtual bool RecvCloseGCLog() override
     {
         unused << mSink->CloseGCLog();
         return true;
     }
 
-    virtual bool RecvCloseCCLog() MOZ_OVERRIDE
+    virtual bool RecvCloseCCLog() override
     {
         unused << mSink->CloseCCLog();
         return true;
     }
 
-    virtual bool Recv__delete__() MOZ_OVERRIDE
+    virtual bool Recv__delete__() override
     {
         // Report completion to mCallback only on successful
         // completion of the protocol.
@@ -482,7 +484,7 @@ private:
         return true;
     }
 
-    virtual void ActorDestroy(ActorDestroyReason aReason) MOZ_OVERRIDE
+    virtual void ActorDestroy(ActorDestroyReason aReason) override
     {
         // If the actor is unexpectedly destroyed, we deliberately
         // don't call Close[GC]CLog on the sink, because the logs may
@@ -502,7 +504,7 @@ private:
 };
 
 // A memory reporter for ContentParent objects themselves.
-class ContentParentsMemoryReporter MOZ_FINAL : public nsIMemoryReporter
+class ContentParentsMemoryReporter final : public nsIMemoryReporter
 {
     ~ContentParentsMemoryReporter() {}
 public:
@@ -1344,7 +1346,7 @@ ContentParent::ForwardKnownInfo()
 
 namespace {
 
-class SystemMessageHandledListener MOZ_FINAL
+class SystemMessageHandledListener final
     : public nsITimerCallback
     , public LinkedListElement<SystemMessageHandledListener>
 {
@@ -1392,7 +1394,7 @@ public:
                                  nsITimer::TYPE_ONE_SHOT);
     }
 
-    NS_IMETHOD Notify(nsITimer* aTimer) MOZ_OVERRIDE
+    NS_IMETHOD Notify(nsITimer* aTimer) override
     {
         // Careful: ShutDown() may delete |this|.
         ShutDown();
@@ -2286,6 +2288,10 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
                             bool aSetupOffMainThreadCompositing,
                             bool aSendRegisteredChrome)
 {
+    // Initialize the message manager (and load delayed scripts) now that we
+    // have established communications with the child.
+    mMessageManager->InitWithCallback(this);
+
     // Set the subprocess's priority.  We do this early on because we're likely
     // /lowering/ the process's CPU and memory priority, which it has inherited
     // from this process.
@@ -2778,8 +2784,9 @@ ContentParent::RecvAddNewProcess(const uint32_t& aPid,
     bool isOffline;
     InfallibleTArray<nsString> unusedDictionaries;
     ClipboardCapabilities clipboardCaps;
+    DomainPolicyClone domainPolicy;
     RecvGetXPCOMProcessAttributes(&isOffline, &unusedDictionaries,
-                                  &clipboardCaps);
+                                  &clipboardCaps, &domainPolicy);
     mozilla::unused << content->SendSetOffline(isOffline);
     MOZ_ASSERT(!clipboardCaps.supportsSelectionClipboard() &&
                !clipboardCaps.supportsFindClipboard(),
@@ -3115,7 +3122,8 @@ ContentParent::RecvGetProcessAttributes(ContentParentId* aCpId,
 bool
 ContentParent::RecvGetXPCOMProcessAttributes(bool* aIsOffline,
                                              InfallibleTArray<nsString>* dictionaries,
-                                             ClipboardCapabilities* clipboardCaps)
+                                             ClipboardCapabilities* clipboardCaps,
+                                             DomainPolicyClone* domainPolicy)
 {
     nsCOMPtr<nsIIOService> io(do_GetIOService());
     MOZ_ASSERT(io, "No IO service?");
@@ -3135,6 +3143,11 @@ ContentParent::RecvGetXPCOMProcessAttributes(bool* aIsOffline,
 
     rv = clipboard->SupportsFindClipboard(&clipboardCaps->supportsFindClipboard());
     MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+    // Let's copy the domain policy from the parent to the child (if it's active).
+    nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
+    NS_ENSURE_TRUE(ssm, false);
+    ssm->CloneDomainPolicy(domainPolicy);
 
     return true;
 }
@@ -3373,6 +3386,27 @@ bool
 ContentParent::DeallocPHalParent(hal_sandbox::PHalParent* aHal)
 {
     delete aHal;
+    return true;
+}
+
+PIccParent*
+ContentParent::AllocPIccParent(const uint32_t& aServiceId)
+{
+    if (!AssertAppProcessPermission(this, "mobileconnection")) {
+        return nullptr;
+    }
+    IccParent* parent = new IccParent(aServiceId);
+    // We release this ref in DeallocPIccParent().
+    parent->AddRef();
+
+    return parent;
+}
+
+bool
+ContentParent::DeallocPIccParent(PIccParent* aActor)
+{
+    // IccParent is refcounted, must not be freed manually.
+    static_cast<IccParent*>(aActor)->Release();
     return true;
 }
 
@@ -4455,12 +4489,15 @@ ContentParent::RecvBackUpXResources(const FileDescriptor& aXSocketFd)
 }
 
 bool
-ContentParent::RecvOpenAnonymousTemporaryFile(FileDescriptor *aFD)
+ContentParent::RecvOpenAnonymousTemporaryFile(FileDescOrError *aFD)
 {
     PRFileDesc *prfd;
     nsresult rv = NS_OpenAnonymousTemporaryFile(&prfd);
     if (NS_WARN_IF(NS_FAILED(rv))) {
-        return false;
+        // Returning false will kill the child process; instead
+        // propagate the error and let the child handle it.
+        *aFD = rv;
+        return true;
     }
     *aFD = FileDescriptor(FileDescriptor::PlatformHandleType(PR_FileDesc2NativeHandle(prfd)));
     // The FileDescriptor object owns a duplicate of the file handle; we

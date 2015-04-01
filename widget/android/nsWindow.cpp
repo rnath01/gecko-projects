@@ -76,6 +76,7 @@ static gfxIntSize gAndroidScreenBounds;
 #include "mozilla/layers/CompositorParent.h"
 #include "mozilla/layers/LayerTransactionParent.h"
 #include "mozilla/Mutex.h"
+#include "mozilla/Services.h"
 #include "nsThreadUtils.h"
 
 class ContentCreationNotifier;
@@ -83,7 +84,7 @@ static StaticRefPtr<ContentCreationNotifier> gContentCreationNotifier;
 
 // A helper class to send updates when content processes
 // are created. Currently an update for the screen size is sent.
-class ContentCreationNotifier MOZ_FINAL : public nsIObserver
+class ContentCreationNotifier final : public nsIObserver
 {
 private:
     ~ContentCreationNotifier() {}
@@ -100,8 +101,8 @@ public:
             ContentParent* cp = static_cast<ContentParent*>(cpo.get());
             unused << cp->SendScreenSizeChanged(gAndroidScreenBounds);
         } else if (!strcmp(aTopic, "xpcom-shutdown")) {
-            nsCOMPtr<nsIObserverService>
-                obs(do_GetService("@mozilla.org/observer-service;1"));
+            nsCOMPtr<nsIObserverService> obs =
+                mozilla::services::GetObserverService();
             if (obs) {
                 obs->RemoveObserver(static_cast<nsIObserver*>(this),
                                     "xpcom-shutdown");
@@ -823,7 +824,8 @@ nsWindow::OnGlobalAndroidEvent(AndroidGeckoEvent *ae)
 
             // If the content process is not created yet, wait until it's
             // created and then tell it the screen size.
-            nsCOMPtr<nsIObserverService> obs = do_GetService("@mozilla.org/observer-service;1");
+            nsCOMPtr<nsIObserverService> obs =
+                mozilla::services::GetObserverService();
             if (!obs)
                 break;
 
@@ -2484,6 +2486,8 @@ nsWindow::ConfigureAPZCTreeManager()
 already_AddRefed<GeckoContentController>
 nsWindow::CreateRootContentController()
 {
+    widget::android::APZCCallbackHandler::Initialize(this, mAPZEventState);
+
     nsRefPtr<widget::android::APZCCallbackHandler> controller =
         widget::android::APZCCallbackHandler::GetInstance();
     return controller.forget();

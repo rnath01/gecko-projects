@@ -68,8 +68,8 @@ struct OriginParams
   bool mIsApp;
 };
 
-class QuotaManager MOZ_FINAL : public nsIQuotaManager,
-                               public nsIObserver
+class QuotaManager final : public nsIQuotaManager,
+                           public nsIObserver
 {
   friend class AsyncUsageRunnable;
   friend class CollectOriginsHelper;

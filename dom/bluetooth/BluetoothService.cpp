@@ -151,7 +151,7 @@ BluetoothService::ToggleBtAck::Run()
   return NS_OK;
 }
 
-class BluetoothService::StartupTask MOZ_FINAL : public nsISettingsServiceCallback
+class BluetoothService::StartupTask final : public nsISettingsServiceCallback
 {
 public:
   NS_DECL_ISUPPORTS
@@ -179,6 +179,9 @@ public:
     BT_WARNING("Unable to get value for '" BLUETOOTH_ENABLED_SETTING "'");
     return NS_OK;
   }
+
+protected:
+  ~StartupTask() { }
 };
 
 NS_IMPL_ISUPPORTS(BluetoothService::StartupTask, nsISettingsServiceCallback);

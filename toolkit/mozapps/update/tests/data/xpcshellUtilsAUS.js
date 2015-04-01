@@ -9,7 +9,8 @@ const { classes: Cc, interfaces: Ci, manager: Cm, results: Cr,
 
 load("../data/xpcshellConstantsPP.js");
 
-Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/Services.jsm", this);
+Cu.import("resource://gre/modules/ctypes.jsm", this);
 
 const DIR_MACOS = IS_MACOSX ? "Contents/MacOS/" : "";
 const DIR_RESOURCES = IS_MACOSX ? "Contents/Resources/" : "";
@@ -83,12 +84,6 @@ var gTestID;
 var gTestserver;
 
 var gRegisteredServiceCleanup;
-
-var gXHR;
-var gXHRCallback;
-
-var gUpdatePrompt;
-var gUpdatePromptCallback;
 
 var gCheckFunc;
 var gResponseBody;
@@ -830,18 +825,6 @@ function cleanupTestCommon() {
   // tests to fail.
   gAUS.observe(null, "xpcom-shutdown", "");
 
-  if (gXHR) {
-    gXHRCallback     = null;
-
-    gXHR.responseXML = null;
-    // null out the event handlers to prevent a mFreeCount leak of 1
-    gXHR.onerror     = null;
-    gXHR.onload      = null;
-    gXHR.onprogress  = null;
-
-    gXHR             = null;
-  }
-
   gTestserver = null;
 
   if (IS_UNIX) {
@@ -1199,7 +1182,6 @@ function getSpecialFolderDir(aCSIDL) {
     do_throw("Windows only function called by a different platform!");
   }
 
-  Cu.import("resource://gre/modules/ctypes.jsm");
   let lib = ctypes.open("shell32");
   let SHGetSpecialFolderPath = lib.declare("SHGetSpecialFolderPathW",
                                            ctypes.winapi_abi,
@@ -1532,8 +1514,13 @@ function runUpdate(aExpectedExitValue, aExpectedStatus, aCallback) {
     }
     let updateLog = getUpdatesPatchDir();
     updateLog.append(FILE_UPDATE_LOG);
-    logTestInfo("contents of " + updateLog.path + ":\n" +
-                readFileBytes(updateLog).replace(/\r\n/g, "\n"));
+    // xpcshell tests won't display the entire contents so log each line.
+    let contents = readFileBytes(updateLog).replace(/\r\n/g, "\n");
+    let aryLogContents = contents.split("\n");
+    logTestInfo("contents of " + updateLog.path + ":");
+    aryLogContents.forEach(function RU_LC_FE(aLine) {
+      logTestInfo(aLine);
+    });
   }
   debugDump("testing updater binary process exitValue against expected " +
             "exit value");
@@ -2088,7 +2075,7 @@ function runUpdateUsingService(aInitialStatus, aExpectedStatus, aCheckSvcLog) {
 
   function timerCallback(aTimer) {
     // Wait for the expected status
-    let status = readStatusState();
+    let status = readStatusFile();
     // status will probably always be equal to STATE_APPLYING but there is a
     // race condition where it would be possible on slower machines where status
     // could be equal to STATE_PENDING_SVC.
@@ -2111,8 +2098,13 @@ function runUpdateUsingService(aInitialStatus, aExpectedStatus, aCheckSvcLog) {
       logTestInfo("update.status contents: " + readStatusFile());
       let updateLog = getUpdatesPatchDir();
       updateLog.append(FILE_UPDATE_LOG);
-      logTestInfo("contents of " + updateLog.path + ":\n" +
-                  readFileBytes(updateLog).replace(/\r\n/g, "\n"));
+      // xpcshell tests won't display the entire contents so log each line.
+      let contents = readFileBytes(updateLog).replace(/\r\n/g, "\n");
+      let aryLogContents = contents.split("\n");
+      logTestInfo("contents of " + updateLog.path + ":");
+      aryLogContents.forEach(function RUUS_TC_LC_FE(aLine) {
+        logTestInfo(aLine);
+      });
     }
     debugDump("testing update status against expected status");
     do_check_eq(status, aExpectedStatus);
@@ -2483,7 +2475,22 @@ function checkUpdateLogContents(aCompareLogFile, aExcludeDistributionDir) {
     do_check_true(true);
   } else {
     logTestInfo("log contents are not correct");
-    do_check_eq(compareLogContents, updateLogContents);
+    let aryLog = updateLogContents.split("\n");
+    let aryCompare = compareLogContents.split("\n");
+    // Pushing an empty string to both arrays makes it so either array's length
+    // can be used in the for loop below without going out of bounds.
+    aryLog.push("");
+    aryCompare.push("");
+    // xpcshell tests won't display the entire contents so log the incorrect
+    // line.
+    for (let i = 0; i < aryLog.length; ++i) {
+      if (aryCompare[i] != aryLog[i]) {
+        logTestInfo("the first incorrect line in the log is: " + aryLog[i]);
+        do_check_eq(aryCompare[i], aryLog[i]);
+      }
+    }
+    // This should never happen!
+    do_throw("Unable to find incorrect log contents!");
   }
 }
 
@@ -2502,7 +2509,6 @@ function checkUpdateLogContains(aCheckString) {
     do_check_true(true);
   } else {
     logTestInfo("log file does not contain: " + aCheckString);
-    logTestInfo("log file contents:\n" + updateLogContents);
     do_check_true(false);
   }
 }
@@ -2976,18 +2982,15 @@ function checkFilesInDirRecursive(aDir, aCallback) {
  *
  *          Example of the callback function
  *
- *            function callHandleEvent() {
- *              gXHR.status = gExpectedStatus;
- *              let e = { target: gXHR };
- *              gXHR.onload.handleEvent(e);
+ *            function callHandleEvent(aXHR) {
+ *              aXHR.status = gExpectedStatus;
+ *              let e = { target: aXHR };
+ *              aXHR.onload.handleEvent(e);
  *            }
  */
 function overrideXHR(aCallback) {
-  gXHRCallback = aCallback;
-  gXHR = new xhr();
-  let registrar = Cm.QueryInterface(Ci.nsIComponentRegistrar);
-  registrar.registerFactory(gXHR.classID, gXHR.classDescription,
-                            gXHR.contractID, gXHR);
+  Cu.import("resource://testing-common/MockRegistrar.jsm");
+  MockRegistrar.register("@mozilla.org/xmlextras/xmlhttprequest;1", xhr, [aCallback]);
 }
 
 
@@ -3001,52 +3004,48 @@ function makeHandler(aVal) {
   }
   return aVal;
 }
-function xhr() {
+function xhr(aCallback) {
+  this._callback = aCallback;
 }
 xhr.prototype = {
   overrideMimeType: function(aMimetype) { },
   setRequestHeader: function(aHeader, aValue) { },
   status: null,
-  channel: { set notificationCallbacks(aVal) { } },
+  channel: {
+    set notificationCallbacks(aVal) { },
+    QueryInterface: XPCOMUtils.generateQI([Ci.nsIChannel])
+  },
   _url: null,
   _method: null,
   open: function(aMethod, aUrl) {
-    gXHR.channel.originalURI = Services.io.newURI(aUrl, null, null);
-    gXHR._method = aMethod; gXHR._url = aUrl;
+    this.channel.originalURI = Services.io.newURI(aUrl, null, null);
+    this._method = aMethod; this._url = aUrl;
   },
   responseXML: null,
   responseText: null,
   send: function(aBody) {
-    do_execute_soon(gXHRCallback); // Use a timeout so the XHR completes
+    do_execute_soon(function() {
+      this._callback(this);
+    }.bind(this)); // Use a timeout so the XHR completes
   },
   _onprogress: null,
-  set onprogress(aValue) { gXHR._onprogress = makeHandler(aValue); },
-  get onprogress() { return gXHR._onprogress; },
+  set onprogress(aValue) { this._onprogress = makeHandler(aValue); },
+  get onprogress() { return this._onprogress; },
   _onerror: null,
-  set onerror(aValue) { gXHR._onerror = makeHandler(aValue); },
-  get onerror() { return gXHR._onerror; },
+  set onerror(aValue) { this._onerror = makeHandler(aValue); },
+  get onerror() { return this._onerror; },
   _onload: null,
-  set onload(aValue) { gXHR._onload = makeHandler(aValue); },
-  get onload() { return gXHR._onload; },
+  set onload(aValue) { this._onload = makeHandler(aValue); },
+  get onload() { return this._onload; },
   addEventListener: function(aEvent, aValue, aCapturing) {
-    eval("gXHR._on" + aEvent + " = aValue");
+    eval("this._on" + aEvent + " = aValue");
   },
   flags: Ci.nsIClassInfo.SINGLETON,
-  implementationLanguage: Ci.nsIProgrammingLanguage.JAVASCRIPT,
-  getHelperForLanguage: function(aLanguage) null,
+  getScriptableHelper: function() null,
   getInterfaces: function(aCount) {
     let interfaces = [Ci.nsISupports];
     aCount.value = interfaces.length;
     return interfaces;
-  },
-  classDescription: "XMLHttpRequest",
-  contractID: "@mozilla.org/xmlextras/xmlhttprequest;1",
-  classID: Components.ID("{c9b37f43-4278-4304-a5e0-600991ab08cb}"),
-  createInstance: function(aOuter, aIID) {
-    if (aOuter == null) {
-      return gXHR.QueryInterface(aIID);
-    }
-    throw Cr.NS_ERROR_NO_AGGREGATION;
   },
   get wrappedJSObject() { return this; },
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIClassInfo])
@@ -3060,29 +3059,28 @@ xhr.prototype = {
  *          The callback to call if the update prompt component is called.
  */
 function overrideUpdatePrompt(aCallback) {
-  let registrar = Cm.QueryInterface(Ci.nsIComponentRegistrar);
-  gUpdatePrompt = new UpdatePrompt();
-  gUpdatePromptCallback = aCallback;
-  registrar.registerFactory(gUpdatePrompt.classID, gUpdatePrompt.classDescription,
-                            gUpdatePrompt.contractID, gUpdatePrompt);
+  Cu.import("resource://testing-common/MockRegistrar.jsm");
+  MockRegistrar.register("@mozilla.org/updates/update-prompt;1", UpdatePrompt, [aCallback]);
 }
 
-function UpdatePrompt() {
+function UpdatePrompt(aCallback) {
+  this._callback = aCallback;
+
   let fns = ["checkForUpdates", "showUpdateAvailable", "showUpdateDownloaded",
              "showUpdateError", "showUpdateHistory", "showUpdateInstalled"];
 
   fns.forEach(function(aPromptFn) {
     UpdatePrompt.prototype[aPromptFn] = function() {
-      if (!gUpdatePromptCallback) {
+      if (!this._callback) {
         return;
       }
 
-      let callback = gUpdatePromptCallback[aPromptFn];
+      let callback = this._callback[aPromptFn];
       if (!callback) {
         return;
       }
 
-      callback.apply(gUpdatePromptCallback,
+      callback.apply(this._callback,
                      Array.prototype.slice.call(arguments));
     }
   });
@@ -3090,21 +3088,11 @@ function UpdatePrompt() {
 
 UpdatePrompt.prototype = {
   flags: Ci.nsIClassInfo.SINGLETON,
-  implementationLanguage: Ci.nsIProgrammingLanguage.JAVASCRIPT,
-  getHelperForLanguage: function(aLanguage) null,
+  getScriptableHelper: function() null,
   getInterfaces: function(aCount) {
     let interfaces = [Ci.nsISupports, Ci.nsIUpdatePrompt];
     aCount.value = interfaces.length;
     return interfaces;
-  },
-  classDescription: "UpdatePrompt",
-  contractID: "@mozilla.org/updates/update-prompt;1",
-  classID: Components.ID("{8c350a15-9b90-4622-93a1-4d320308664b}"),
-  createInstance: function(aOuter, aIID) {
-    if (aOuter == null) {
-      return gUpdatePrompt.QueryInterface(aIID);
-    }
-    throw Cr.NS_ERROR_NO_AGGREGATION;
   },
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIClassInfo, Ci.nsIUpdatePrompt])
 };
@@ -3115,10 +3103,7 @@ const updateCheckListener = {
   },
 
   onCheckComplete: function UCL_onCheckComplete(aRequest, aUpdates, aUpdateCount) {
-    // The mock xmlhttprequest used by tests doesn't have a real nsIRequest so
-    // use _url to get the url to prevent the following error:
-    // ReferenceError: reference to undefined property "QueryInterface"
-    gRequestURL = gXHR._url;
+    gRequestURL = aRequest.channel.originalURI.spec;
     gUpdateCount = aUpdateCount;
     gUpdates = aUpdates;
     debugDump("url = " + gRequestURL + ", " +
@@ -3129,10 +3114,7 @@ const updateCheckListener = {
   },
 
   onError: function UCL_onError(aRequest, aUpdate) {
-    // The mock xmlhttprequest used by tests doesn't have a real nsIRequest so
-    // use _url to get the url to prevent the following error:
-    // ReferenceError: reference to undefined property "QueryInterface"
-    gRequestURL = gXHR._url;
+    gRequestURL = aRequest.channel.originalURI.spec;
     gStatusCode = aRequest.status;
     gStatusText = aUpdate.statusText ? aUpdate.statusText : null;
     debugDump("url = " + gRequestURL + ", " +

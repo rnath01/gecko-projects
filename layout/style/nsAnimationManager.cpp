@@ -18,6 +18,7 @@
 #include "nsLayoutUtils.h"
 #include "nsIFrame.h"
 #include "nsIDocument.h"
+#include "nsDOMMutationObserver.h"
 #include <math.h>
 
 using namespace mozilla;
@@ -34,10 +35,10 @@ CSSAnimationPlayer::GetReady(ErrorResult& aRv)
 }
 
 void
-CSSAnimationPlayer::Play()
+CSSAnimationPlayer::Play(LimitBehavior aLimitBehavior)
 {
   mPauseShouldStick = false;
-  AnimationPlayer::Play();
+  AnimationPlayer::Play(aLimitBehavior);
 }
 
 void
@@ -70,7 +71,7 @@ CSSAnimationPlayer::PlayFromStyle()
 {
   mIsStylePaused = false;
   if (!mPauseShouldStick) {
-    DoPlay();
+    DoPlay(AnimationPlayer::LimitBehavior::Continue);
   }
 }
 
@@ -253,20 +254,29 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
 
   const nsStyleDisplay* disp = aStyleContext->StyleDisplay();
   AnimationPlayerCollection* collection =
-    GetAnimationPlayers(aElement, aStyleContext->GetPseudoType(), false);
+    GetAnimations(aElement, aStyleContext->GetPseudoType(), false);
   if (!collection &&
       disp->mAnimationNameCount == 1 &&
       disp->mAnimations[0].GetName().IsEmpty()) {
     return nullptr;
   }
 
+  nsAutoAnimationMutationBatch mb(aElement);
+
   // build the animations list
   dom::AnimationTimeline* timeline = aElement->OwnerDoc()->Timeline();
   AnimationPlayerPtrArray newPlayers;
-  BuildAnimations(aStyleContext, aElement, timeline, newPlayers);
+  if (!aStyleContext->IsInDisplayNoneSubtree()) {
+    BuildAnimations(aStyleContext, aElement, timeline, newPlayers);
+  }
 
   if (newPlayers.IsEmpty()) {
     if (collection) {
+      // There might be transitions that run now that animations don't
+      // override them.
+      mPresContext->TransitionManager()->
+        UpdateCascadeResultsWithAnimationsToBeDestroyed(collection);
+
       collection->Destroy();
     }
     return nullptr;
@@ -314,11 +324,16 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
           continue;
         }
 
+        bool animationChanged = false;
+
         // Update the old from the new so we can keep the original object
         // identity (and any expando properties attached to it).
         if (oldPlayer->GetSource() && newPlayer->GetSource()) {
           Animation* oldAnim = oldPlayer->GetSource();
           Animation* newAnim = newPlayer->GetSource();
+          animationChanged =
+            oldAnim->Timing() != newAnim->Timing() ||
+            oldAnim->Properties() != newAnim->Properties();
           oldAnim->Timing() = newAnim->Timing();
           oldAnim->Properties() = newAnim->Properties();
         }
@@ -333,11 +348,18 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
         // (We should check newPlayer->IsStylePaused() but that requires
         //  downcasting to CSSAnimationPlayer and we happen to know that
         //  newPlayer will only ever be paused by calling PauseFromStyle
-        //  making IsPaused synonymous in this case.)
-        if (!oldPlayer->IsStylePaused() && newPlayer->IsPaused()) {
+        //  making IsPausedOrPausing synonymous in this case.)
+        if (!oldPlayer->IsStylePaused() && newPlayer->IsPausedOrPausing()) {
           oldPlayer->PauseFromStyle();
-        } else if (oldPlayer->IsStylePaused() && !newPlayer->IsPaused()) {
+          animationChanged = true;
+        } else if (oldPlayer->IsStylePaused() &&
+                   !newPlayer->IsPausedOrPausing()) {
           oldPlayer->PlayFromStyle();
+          animationChanged = true;
+        }
+
+        if (animationChanged) {
+          nsNodeUtils::AnimationChanged(oldPlayer);
         }
 
         // Replace new animation with the (updated) old one and remove the
@@ -350,11 +372,15 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
         newPlayer = nullptr;
         newPlayers.ReplaceElementAt(newIdx, oldPlayer);
         collection->mPlayers.RemoveElementAt(oldIdx);
+
+        // We've touched the old animation's timing properties, so this
+        // could update the old player's relevance.
+        oldPlayer->UpdateRelevance();
       }
     }
   } else {
     collection =
-      GetAnimationPlayers(aElement, aStyleContext->GetPseudoType(), true);
+      GetAnimations(aElement, aStyleContext->GetPseudoType(), true);
   }
   collection->mPlayers.SwapElements(newPlayers);
   collection->mNeedsRefreshes = true;
@@ -574,6 +600,7 @@ nsAnimationManager::BuildAnimations(nsStyleContext* aStyleContext,
 
       AnimationProperty &propData = *destAnim->Properties().AppendElement();
       propData.mProperty = prop;
+      propData.mWinsInCascade = true;
 
       KeyframeData *fromKeyframe = nullptr;
       nsRefPtr<nsStyleContext> fromContext;
@@ -710,6 +737,9 @@ nsAnimationManager::FlushAnimations(FlushFlags aFlags)
        l = PR_NEXT_LINK(l)) {
     AnimationPlayerCollection* collection =
       static_cast<AnimationPlayerCollection*>(l);
+
+    nsAutoAnimationMutationBatch mb(collection->mElement);
+
     collection->Tick();
     bool canThrottleTick = aFlags == Can_Throttle &&
       collection->CanPerformOnCompositorThread(

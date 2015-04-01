@@ -55,6 +55,7 @@ nsPageFrame::Reflow(nsPresContext*           aPresContext,
                                   const nsHTMLReflowState& aReflowState,
                                   nsReflowStatus&          aStatus)
 {
+  MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsPageFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aDesiredSize, aStatus);
   aStatus = NS_FRAME_COMPLETE;  // initialize out parameter
@@ -491,17 +492,17 @@ public:
 #endif
 
   virtual void Paint(nsDisplayListBuilder* aBuilder,
-                     nsRenderingContext* aCtx) MOZ_OVERRIDE {
+                     nsRenderingContext* aCtx) override {
     mFrame->PaintHeaderFooter(*aCtx, ToReferenceFrame(), mDisableSubpixelAA);
   }
   NS_DISPLAY_DECL_NAME("HeaderFooter", nsDisplayItem::TYPE_HEADER_FOOTER)
 
-  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE {
+  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder) override {
     bool snap;
     return GetBounds(aBuilder, &snap);
   }
 
-  virtual void DisableComponentAlpha() MOZ_OVERRIDE {
+  virtual void DisableComponentAlpha() override {
     mDisableSubpixelAA = true;
   }
 protected:

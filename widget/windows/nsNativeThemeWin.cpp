@@ -65,6 +65,12 @@ nsNativeThemeWin::~nsNativeThemeWin()
 static int32_t
 GetTopLevelWindowActiveState(nsIFrame *aFrame)
 {
+  // Used by window frame and button box rendering. We can end up in here in
+  // the content process when rendering one of these moz styles freely in a
+  // page. Bail in this case, there is no applicable window focus state.
+  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+    return mozilla::widget::themeconst::FS_INACTIVE;
+  }
   // Get the widget. nsIFrame's GetNearestWidget walks up the view chain
   // until it finds a real window.
   nsIWidget* widget = aFrame->GetNearestWidget();
@@ -347,7 +353,7 @@ static CaptionButtonPadding buttonData[3] = {
 
 // Adds "hot" caption button padding to minimum widget size.
 static void
-AddPaddingRect(nsIntSize* aSize, CaptionButton button) {
+AddPaddingRect(LayoutDeviceIntSize* aSize, CaptionButton button) {
   if (!aSize)
     return;
   RECT offset;
@@ -2248,7 +2254,7 @@ nsNativeThemeWin::GetWidgetOverflow(nsDeviceContext* aContext,
 NS_IMETHODIMP
 nsNativeThemeWin::GetMinimumWidgetSize(nsPresContext* aPresContext, nsIFrame* aFrame,
                                        uint8_t aWidgetType,
-                                       nsIntSize* aResult, bool* aIsOverridable)
+                                       LayoutDeviceIntSize* aResult, bool* aIsOverridable)
 {
   (*aResult).width = (*aResult).height = 0;
   *aIsOverridable = true;
@@ -2567,6 +2573,7 @@ nsNativeThemeWin::WidgetStateChanged(nsIFrame* aFrame, uint8_t aWidgetType,
     if (aAttribute == nsGkAtoms::disabled ||
         aAttribute == nsGkAtoms::checked ||
         aAttribute == nsGkAtoms::selected ||
+        aAttribute == nsGkAtoms::visuallyselected ||
         aAttribute == nsGkAtoms::readonly ||
         aAttribute == nsGkAtoms::open ||
         aAttribute == nsGkAtoms::menuactive ||
@@ -2911,7 +2918,7 @@ nsNativeThemeWin::ClassicGetWidgetPadding(nsDeviceContext* aContext,
 nsresult
 nsNativeThemeWin::ClassicGetMinimumWidgetSize(nsPresContext* aPresContext, nsIFrame* aFrame,
                                        uint8_t aWidgetType,
-                                       nsIntSize* aResult, bool* aIsOverridable)
+                                       LayoutDeviceIntSize* aResult, bool* aIsOverridable)
 {
   (*aResult).width = (*aResult).height = 0;
   *aIsOverridable = true;

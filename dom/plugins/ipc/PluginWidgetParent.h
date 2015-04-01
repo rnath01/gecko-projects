@@ -35,11 +35,11 @@ public:
   PluginWidgetParent();
   virtual ~PluginWidgetParent();
 
-  virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
-  virtual bool RecvCreate(nsresult* aResult) MOZ_OVERRIDE;
-  virtual bool RecvDestroy() MOZ_OVERRIDE;
-  virtual bool RecvSetFocus(const bool& aRaise) MOZ_OVERRIDE;
-  virtual bool RecvGetNativePluginPort(uintptr_t* value) MOZ_OVERRIDE;
+  virtual void ActorDestroy(ActorDestroyReason aWhy) override;
+  virtual bool RecvCreate(nsresult* aResult) override;
+  virtual bool RecvDestroy() override;
+  virtual bool RecvSetFocus(const bool& aRaise) override;
+  virtual bool RecvGetNativePluginPort(uintptr_t* value) override;
 
   // Helper for compositor checks on the channel
   bool ActorDestroyed() { return !mWidget; }
@@ -63,6 +63,7 @@ public:
 
 private:
   void Shutdown(ShutdownType aType);
+  void KillWidget();
 
   // The chrome side native widget.
   nsCOMPtr<nsIWidget> mWidget;

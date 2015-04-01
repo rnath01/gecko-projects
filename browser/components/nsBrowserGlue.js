@@ -987,6 +987,9 @@ BrowserGlue.prototype = {
   },
 
   _initServiceDiscovery: function () {
+    if (!Services.prefs.getBoolPref("browser.casting.enabled")) {
+      return;
+    }
     var rokuDevice = {
       id: "roku:ecp",
       target: "roku:ecp",
@@ -1426,7 +1429,7 @@ BrowserGlue.prototype = {
         () => BookmarkHTMLUtils.exportToFile(BookmarkHTMLUtils.defaultPath));
     }
 
-    Task.spawn(function() {
+    Task.spawn(function* () {
       // Check if Safe Mode or the user has required to restore bookmarks from
       // default profile's bookmarks.html
       let restoreDefaultBookmarks = false;
@@ -1502,23 +1505,21 @@ BrowserGlue.prototype = {
         if (bookmarksUrl) {
           // Import from bookmarks.html file.
           try {
-            BookmarkHTMLUtils.importFromURL(bookmarksUrl, true).then(null,
-              function onFailure() {
-                Cu.reportError("Bookmarks.html file could be corrupt.");
-              }
-            ).then(
-              function onComplete() {
-                // Now apply distribution customized bookmarks.
-                // This should always run after Places initialization.
-                this._distributionCustomizer.applyBookmarks();
-                // Ensure that smart bookmarks are created once the operation is
-                // complete.
-                this.ensurePlacesDefaultQueriesInitialized();
-              }.bind(this)
-            );
-          } catch (err) {
-            Cu.reportError("Bookmarks.html file could be corrupt. " + err);
+            yield BookmarkHTMLUtils.importFromURL(bookmarksUrl, true);
+          } catch (e) {
+            Cu.reportError("Bookmarks.html file could be corrupt. " + e);
           }
+          try {
+            // Now apply distribution customized bookmarks.
+            // This should always run after Places initialization.
+            this._distributionCustomizer.applyBookmarks();
+            // Ensure that smart bookmarks are created once the operation is
+            // complete.
+            this.ensurePlacesDefaultQueriesInitialized();
+          } catch (e) {
+            Cu.reportError(e);
+          }
+
         }
         else {
           Cu.reportError("Unable to find bookmarks.html file.");
@@ -1642,7 +1643,7 @@ BrowserGlue.prototype = {
   },
 
   _migrateUI: function BG__migrateUI() {
-    const UI_VERSION = 27;
+    const UI_VERSION = 29;
     const BROWSER_DOCURL = "chrome://browser/content/browser.xul";
     let currentUIVersion = 0;
     try {
@@ -1958,6 +1959,21 @@ BrowserGlue.prototype = {
       if (Services.prefs.prefHasUserValue(kOldColorPref) &&
           !Services.prefs.getBoolPref(kOldColorPref)) {
         Services.prefs.setIntPref("browser.display.document_color_use", 2);
+      }
+    }
+
+    if (currentUIVersion < 29) {
+      let group = null;
+      try {
+        group = Services.prefs.getComplexValue("font.language.group",
+                                               Ci.nsIPrefLocalizedString);
+      } catch (ex) {}
+      if (group &&
+          ["tr", "x-baltic", "x-central-euro"].some(g => g == group.data)) {
+        // Latin groups were consolidated.
+        group.data = "x-western";
+        Services.prefs.setComplexValue("font.language.group",
+                                       Ci.nsIPrefLocalizedString, group);
       }
     }
 
@@ -2778,7 +2794,6 @@ let E10SUINotification = {
 
       if (!Services.appinfo.inSafeMode &&
           !Services.appinfo.accessibilityEnabled &&
-          !Services.appinfo.keyboardMayHaveIME &&
           isHardwareAccelerated &&
           e10sPromptShownCount < 5) {
         Services.tm.mainThread.dispatch(() => {

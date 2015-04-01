@@ -59,6 +59,9 @@
 #include "mozilla/dom/ErrorEvent.h"
 #include "mozilla/dom/ImageDataBinding.h"
 #include "mozilla/dom/ImageData.h"
+#ifdef MOZ_NFC
+#include "mozilla/dom/MozNDEFRecord.h"
+#endif // MOZ_NFC
 #include "mozilla/dom/StructuredClone.h"
 #include "mozilla/dom/SubtleCryptoBinding.h"
 #include "mozilla/ipc/BackgroundUtils.h"
@@ -142,8 +145,6 @@ static const uint32_t kMaxICCDuration = 2000; // ms
 
 // Trigger a CC if the purple buffer exceeds this size when we check it.
 #define NS_CC_PURPLE_LIMIT          200
-
-#define JAVASCRIPT nsIProgrammingLanguage::JAVASCRIPT
 
 // Large value used to specify that a script should run essentially forever
 #define NS_UNLIMITED_SCRIPT_RUNTIME (0x40000000LL << 32)
@@ -259,7 +260,7 @@ NeedsGCAfterCC()
     sNeedsGCAfterCC;
 }
 
-class nsJSEnvironmentObserver MOZ_FINAL : public nsIObserver
+class nsJSEnvironmentObserver final : public nsIObserver
 {
   ~nsJSEnvironmentObserver() {}
 public:
@@ -2470,7 +2471,7 @@ NS_DOMReadStructuredClone(JSContext* cx,
       if (!key->ReadStructuredClone(reader)) {
         result = nullptr;
       } else {
-        result = key->WrapObject(cx);
+        result = key->WrapObject(cx, JS::NullPtr());
       }
     }
     return result;
@@ -2514,6 +2515,24 @@ NS_DOMReadStructuredClone(JSContext* cx,
     }
 
     return result.toObjectOrNull();
+  } else if (tag == SCTAG_DOM_NFC_NDEF) {
+#ifdef MOZ_NFC
+    nsIGlobalObject *global = xpc::NativeGlobal(JS::CurrentGlobalOrNull(cx));
+    if (!global) {
+      return nullptr;
+    }
+
+    // Prevent the return value from being trashed by a GC during ~nsRefPtr.
+    JS::Rooted<JSObject*> result(cx);
+    {
+      nsRefPtr<MozNDEFRecord> ndefRecord = new MozNDEFRecord(global);
+      result = ndefRecord->ReadStructuredClone(cx, reader) ?
+               ndefRecord->WrapObject(cx, JS::NullPtr()) : nullptr;
+    }
+    return result;
+#else
+    return nullptr;
+#endif
   }
 
   // Don't know what this is. Bail.
@@ -2564,6 +2583,14 @@ NS_DOMWriteStructuredClone(JSContext* cx,
              JS_WriteBytes(writer, cInfo.spec().get(), cInfo.spec().Length());
     }
   }
+
+#ifdef MOZ_NFC
+  MozNDEFRecord* ndefRecord;
+  if (NS_SUCCEEDED(UNWRAP_OBJECT(MozNDEFRecord, obj, ndefRecord))) {
+    return JS_WriteUint32Pair(writer, SCTAG_DOM_NFC_NDEF, 0) &&
+           ndefRecord->WriteStructuredClone(cx, writer);
+  }
+#endif // MOZ_NFC
 
   // Don't know what this is
   xpc::Throw(cx, NS_ERROR_DOM_DATA_CLONE_ERR);
@@ -2812,7 +2839,7 @@ mozilla::dom::ShutdownJSEnvironment()
 // to/from nsISupports.
 // When consumed by non-JS (eg, another script language), conversion is done
 // on-the-fly.
-class nsJSArgArray MOZ_FINAL : public nsIJSArgArray {
+class nsJSArgArray final : public nsIJSArgArray {
 public:
   nsJSArgArray(JSContext *aContext, uint32_t argc, JS::Value *argv,
                nsresult *prv);
@@ -2826,7 +2853,7 @@ public:
   NS_DECL_NSIARRAY
 
   // nsIJSArgArray
-  nsresult GetArgs(uint32_t* argc, void** argv) MOZ_OVERRIDE;
+  nsresult GetArgs(uint32_t* argc, void** argv) override;
 
   void ReleaseJSObjects();
 

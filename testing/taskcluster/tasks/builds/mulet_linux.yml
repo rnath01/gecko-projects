@@ -1,11 +1,14 @@
 $inherits:
   from: 'tasks/build.yml'
+  variables:
+    build_name: 'mulet'
+    build_type: 'opt'
 task:
   metadata:
-    name: '[TC] Mulet Linux x64 Opt'
-    description: Mulet Linux x64 Opt
+    name: '[TC] Mulet Linux'
+    description: Mulet Linux
 
-  workerType: b2gbuild-desktop
+  workerType: mulet-opt
   scopes:
     - 'docker-worker:cache:build-mulet-linux-workspace'
     - 'docker-worker:cache:tooltool-cache'
@@ -29,7 +32,12 @@ task:
         buildbot_step 'Build' ./build-mulet-linux.sh $HOME/workspace
 
   extra:
+    treeherderEnv:
+      - production
+      - staging
     treeherder:
+      # Disable "TC" prefix...
+      groupSymbol: "?"
       machine:
         platform: mulet-linux64
     # Rather then enforcing particular conventions we require that all build

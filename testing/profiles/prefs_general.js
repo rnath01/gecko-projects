@@ -161,7 +161,7 @@ user_pref("layout.spammy_warnings.enabled", false);
 
 // Enable Media Source Extensions for testing
 user_pref("media.mediasource.enabled", true);
-user_pref("media.mediasource.youtubeonly", false);
+user_pref("media.mediasource.whitelist", false);
 user_pref("media.mediasource.mp4.enabled", true);
 user_pref("media.mediasource.webm.enabled", true);
 
@@ -303,3 +303,10 @@ user_pref("browser.displayedE10SPrompt.1", 5);
 user_pref("browser.tabs.remote.autostart.1", false);
 // Don't forceably kill content processes after a timeout
 user_pref("dom.ipc.tabs.shutdownTimeoutSecs", 0);
+
+// Avoid performing Readinglist Intro during tests.
+user_pref("browser.readinglist.introShown", true);
+
+// Don't let PAC generator to set PAC, as mochitest framework has its own PAC
+// rules during testing.
+user_pref("network.proxy.pac_generator", false);

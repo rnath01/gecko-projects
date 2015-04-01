@@ -829,16 +829,10 @@ nsDOMClassInfo::GetInterfaces(uint32_t *aCount, nsIID ***aArray)
 }
 
 NS_IMETHODIMP
-nsDOMClassInfo::GetHelperForLanguage(uint32_t language, nsISupports **_retval)
+nsDOMClassInfo::GetScriptableHelper(nsIXPCScriptable **_retval)
 {
-  if (language == nsIProgrammingLanguage::JAVASCRIPT) {
-    *_retval = static_cast<nsIXPCScriptable *>(this);
-
-    NS_ADDREF(*_retval);
-  } else {
-    *_retval = nullptr;
-  }
-
+  nsCOMPtr<nsIXPCScriptable> rval = this;
+  rval.forget(_retval);
   return NS_OK;
 }
 
@@ -867,14 +861,6 @@ NS_IMETHODIMP
 nsDOMClassInfo::GetClassIDNoAlloc(nsCID *aClassID)
 {
   return NS_ERROR_NOT_AVAILABLE;
-}
-
-NS_IMETHODIMP
-nsDOMClassInfo::GetImplementationLanguage(uint32_t *aImplLanguage)
-{
-  *aImplLanguage = nsIProgrammingLanguage::CPLUSPLUS;
-
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -1325,7 +1311,7 @@ DefineInterfaceConstants(JSContext *cx, JS::Handle<JSObject*> obj, const nsIID *
   return NS_OK;
 }
 
-class nsDOMConstructor MOZ_FINAL : public nsIDOMDOMConstructor
+class nsDOMConstructor final : public nsIDOMDOMConstructor
 {
 protected:
   nsDOMConstructor(const char16_t* aName,
@@ -1898,8 +1884,7 @@ ResolvePrototype(nsIXPConnect *aXPConnect, nsGlobalWindow *aWin, JSContext *cx,
       }
       dot_prototype = ::JS_NewObjectWithUniqueType(cx,
                                                    &sDOMConstructorProtoClass,
-                                                   proto,
-                                                   winobj);
+                                                   proto);
       NS_ENSURE_TRUE(dot_prototype, NS_ERROR_OUT_OF_MEMORY);
     }
   }

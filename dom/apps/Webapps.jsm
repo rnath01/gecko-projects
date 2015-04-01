@@ -394,8 +394,11 @@ this.DOMApplicationRegistry = {
 
   _saveWidgetsFullPath: function(aManifest, aDestApp) {
     if (aManifest.widgetPages) {
-      aDestApp.widgetPages = aManifest.widgetPages.map(aManifest.resolveURL,
-                                                       aManifest/* thisArg */);
+      let resolve = (aPage)=>{
+        let filepath = AppsUtils.getFilePath(aPage);
+        return Services.io.newURI(aManifest.resolveURL(filepath), null, null);
+      };
+      aDestApp.widgetPages = aManifest.widgetPages.map(resolve);
     } else {
       aDestApp.widgetPages = [];
     }
@@ -776,7 +779,7 @@ this.DOMApplicationRegistry = {
           }
         }
 
-#ifdef MOZ_WIDGET_GONK
+#ifdef MOZ_B2G
         yield this.installSystemApps();
 #endif
 
@@ -4671,7 +4674,7 @@ this.DOMApplicationRegistry = {
   },
 
   // Returns a promise that resolves to the app object with the manifest.
-  getFullAppByManifestURL: function(aManifestURL, aEntryPoint) {
+  getFullAppByManifestURL: function(aManifestURL, aEntryPoint, aLang) {
     let app = this.getAppByManifestURL(aManifestURL);
     if (!app) {
       return Promise.reject("NoSuchApp");
@@ -4689,7 +4692,8 @@ this.DOMApplicationRegistry = {
         manifest.version = aManifest.version;
       }
 
-      app.manifest = new ManifestHelper(manifest, app.origin, app.manifestURL);
+      app.manifest =
+        new ManifestHelper(manifest, app.origin, app.manifestURL, aLang);
       return app;
     });
   },

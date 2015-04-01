@@ -425,8 +425,7 @@ CreateConstructor(JSContext* cx, JS::Handle<JSObject*> global, const char* name,
                   const JSNativeHolder* nativeHolder, unsigned ctorNargs)
 {
   JSFunction* fun = js::NewFunctionWithReserved(cx, Constructor, ctorNargs,
-                                                JSFUN_CONSTRUCTOR, global,
-                                                name);
+                                                JSFUN_CONSTRUCTOR, name);
   if (!fun) {
     return nullptr;
   }
@@ -614,7 +613,7 @@ CreateInterfacePrototypeObject(JSContext* cx, JS::Handle<JSObject*> global,
                                const NativeProperties* chromeOnlyProperties)
 {
   JS::Rooted<JSObject*> ourProto(cx,
-    JS_NewObjectWithUniqueType(cx, Jsvalify(protoClass), parentProto, global));
+    JS_NewObjectWithUniqueType(cx, Jsvalify(protoClass), parentProto));
   if (!ourProto ||
       !DefineProperties(cx, ourProto, properties, chromeOnlyProperties)) {
     return nullptr;
@@ -753,7 +752,7 @@ NativeInterface2JSObjectAndThrowIfFailed(JSContext* aCx,
   if (cache && cache->IsDOMBinding()) {
       JS::Rooted<JSObject*> obj(aCx, cache->GetWrapper());
       if (!obj) {
-          obj = cache->WrapObject(aCx);
+        obj = cache->WrapObject(aCx, JS::NullPtr());
       }
 
       if (obj && aAllowNativeWrapper && !JS_WrapObject(aCx, &obj)) {
@@ -985,8 +984,7 @@ static JSObject*
 XrayCreateFunction(JSContext* cx, JS::Handle<JSObject*> wrapper,
                    JSNativeWrapper native, unsigned nargs, JS::Handle<jsid> id)
 {
-  JSFunction* fun = js::NewFunctionByIdWithReserved(cx, native.op, nargs, 0,
-                                                    /* parent = */nullptr, id);
+  JSFunction* fun = js::NewFunctionByIdWithReserved(cx, native.op, nargs, 0, id);
   if (!fun) {
     return nullptr;
   }
@@ -1166,7 +1164,16 @@ XrayResolveProperty(JSContext* cx, JS::Handle<JSObject*> wrapper,
     methodSpecs = nativeProperties->methodSpecs;
   }
   if (methods) {
-    if (!XrayResolveMethod(cx, wrapper, obj, id, methods, methodIds,
+    JS::Rooted<jsid> methodId(cx);
+    if (nativeProperties->iteratorAliasMethodIndex != -1 &&
+        id == SYMBOL_TO_JSID(
+                JS::GetWellKnownSymbol(cx, JS::SymbolCode::iterator))) {
+      methodId =
+        nativeProperties->methodIds[nativeProperties->iteratorAliasMethodIndex];
+    } else {
+      methodId = id;
+    }
+    if (!XrayResolveMethod(cx, wrapper, obj, methodId, methods, methodIds,
                            methodSpecs, desc, cacheOnHolder)) {
       return false;
     }
@@ -1392,7 +1399,7 @@ XrayResolveOwnProperty(JSContext* cx, JS::Handle<JSObject*> wrapper,
     if (IdEquals(id, "toString") && !JS_ObjectIsFunction(cx, obj)) {
       MOZ_ASSERT(IsDOMIfaceAndProtoClass(js::GetObjectClass(obj)));
 
-      JS::Rooted<JSFunction*> toString(cx, JS_NewFunction(cx, InterfaceObjectToString, 0, 0, wrapper, "toString"));
+      JS::Rooted<JSFunction*> toString(cx, JS_NewFunction(cx, InterfaceObjectToString, 0, 0, "toString"));
       if (!toString) {
         return false;
       }
@@ -1441,7 +1448,7 @@ XrayResolveOwnProperty(JSContext* cx, JS::Handle<JSObject*> wrapper,
 bool
 XrayDefineProperty(JSContext* cx, JS::Handle<JSObject*> wrapper,
                    JS::Handle<JSObject*> obj, JS::Handle<jsid> id,
-                   JS::MutableHandle<JSPropertyDescriptor> desc,
+                   JS::Handle<JSPropertyDescriptor> desc,
                    JS::ObjectOpResult &result, bool *defined)
 {
   if (!js::IsProxy(obj))
@@ -2301,7 +2308,7 @@ IsInCertifiedApp(JSContext* aCx, JSObject* aObj)
 
 #ifdef DEBUG
 void
-VerifyTraceProtoAndIfaceCacheCalled(JSTracer *trc, void **thingp,
+VerifyTraceProtoAndIfaceCacheCalled(JS::CallbackTracer *trc, void **thingp,
                                     JSGCTraceKind kind)
 {
     // We don't do anything here, we only want to verify that

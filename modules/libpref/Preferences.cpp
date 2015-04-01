@@ -125,8 +125,8 @@ public:
   PrefChangedFunc mCallback;
 };
 
-class ValueObserver MOZ_FINAL : public nsIObserver,
-                                public ValueObserverHashKey
+class ValueObserver final : public nsIObserver,
+                            public ValueObserverHashKey
 {
   ~ValueObserver() {
     Preferences::RemoveObserver(this, mPrefName.get());
@@ -257,7 +257,7 @@ Preferences::SizeOfIncludingThisAndOtherStuff(mozilla::MallocSizeOf aMallocSizeO
   return n;
 }
 
-class PreferenceServiceReporter MOZ_FINAL : public nsIMemoryReporter
+class PreferenceServiceReporter final : public nsIMemoryReporter
 {
   ~PreferenceServiceReporter() {}
 

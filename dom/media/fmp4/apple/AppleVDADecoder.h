@@ -70,11 +70,15 @@ public:
                   MediaDataDecoderCallback* aCallback,
                   layers::ImageContainer* aImageContainer);
   virtual ~AppleVDADecoder();
-  virtual nsresult Init() MOZ_OVERRIDE;
-  virtual nsresult Input(mp4_demuxer::MP4Sample* aSample) MOZ_OVERRIDE;
-  virtual nsresult Flush() MOZ_OVERRIDE;
-  virtual nsresult Drain() MOZ_OVERRIDE;
-  virtual nsresult Shutdown() MOZ_OVERRIDE;
+  virtual nsresult Init() override;
+  virtual nsresult Input(mp4_demuxer::MP4Sample* aSample) override;
+  virtual nsresult Flush() override;
+  virtual nsresult Drain() override;
+  virtual nsresult Shutdown() override;
+  virtual bool IsHardwareAccelerated() const override
+  {
+    return true;
+  }
 
   nsresult OutputFrame(CVPixelBufferRef aImage,
                        nsAutoPtr<AppleFrameRef> aFrameRef);
@@ -85,13 +89,15 @@ public:
   void ClearReorderedFrames();
   CFDictionaryRef CreateOutputConfiguration();
 
-  const mp4_demuxer::VideoDecoderConfig& mConfig;
+  nsRefPtr<mp4_demuxer::ByteBuffer> mExtraData;
   nsRefPtr<FlushableMediaTaskQueue> mTaskQueue;
   MediaDataDecoderCallback* mCallback;
   nsRefPtr<layers::ImageContainer> mImageContainer;
   ReorderQueue mReorderQueue;
   uint32_t mPictureWidth;
   uint32_t mPictureHeight;
+  uint32_t mDisplayWidth;
+  uint32_t mDisplayHeight;
   uint32_t mMaxRefFrames;
 
 private:

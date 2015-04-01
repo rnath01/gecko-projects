@@ -21,6 +21,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "LoopStorage",
                                         "resource:///modules/loop/LoopStorage.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "hookWindowCloseForPanelClose",
                                         "resource://gre/modules/MozSocialAPI.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PageMetadata",
+                                        "resource://gre/modules/PageMetadata.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
                                         "resource://gre/modules/PluralForm.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "UITour",
@@ -283,7 +285,7 @@ function injectLoopAPI(targetWindow) {
       writable: true,
       value: function(listener) {
         let win = Services.wm.getMostRecentWindow("navigator:browser");
-        let browser = win && win.gBrowser.selectedTab.linkedBrowser;
+        let browser = win && win.gBrowser.selectedBrowser;
         if (!win || !browser) {
           // This may happen when an undocked conversation window is the only
           // window left.
@@ -292,6 +294,15 @@ function injectLoopAPI(targetWindow) {
           listener(cloneValueInto(err, targetWindow));
           return;
         }
+        if (browser.getAttribute("remote") == "true") {
+          // Tab sharing is not supported yet for e10s-enabled browsers. This will
+          // be fixed in bug 1137634.
+          let err = new Error("Tab sharing is not supported for e10s-enabled browsers");
+          MozLoopService.log.error(err);
+          listener(cloneValueInto(err, targetWindow));
+          return;
+        }
+
         win.LoopUI.addBrowserSharingListener(listener);
 
         savedWindowListeners.set(listener, Cu.getWeakReference(win));
@@ -623,6 +634,20 @@ function injectLoopAPI(targetWindow) {
       }
     },
 
+    TWO_WAY_MEDIA_CONN_LENGTH: {
+      enumerable: true,
+      get: function() {
+        return Cu.cloneInto(TWO_WAY_MEDIA_CONN_LENGTH, targetWindow);
+      }
+    },
+
+    SHARING_STATE_CHANGE: {
+      enumerable: true,
+      get: function() {
+        return Cu.cloneInto(SHARING_STATE_CHANGE, targetWindow);
+      }
+    },
+
     fxAEnabled: {
       enumerable: true,
       get: function() {
@@ -737,14 +762,14 @@ function injectLoopAPI(targetWindow) {
     /**
      * Adds a value to a telemetry histogram.
      *
-     * @param  {string}  histogramId Name of the telemetry histogram to update.
-     * @param  {integer} value       Value to add to the histogram.
+     * @param  {string} histogramId Name of the telemetry histogram to update.
+     * @param  {string} value       Label of bucket to increment in the histogram.
      */
-    telemetryAdd: {
+    telemetryAddKeyedValue: {
       enumerable: true,
       writable: true,
       value: function(histogramId, value) {
-        Services.telemetry.getHistogramById(histogramId).add(value);
+        Services.telemetry.getKeyedHistogramById(histogramId).add(value);
       }
     },
 
@@ -818,6 +843,24 @@ function injectLoopAPI(targetWindow) {
 
         // Compose the Gravatar URL.
         return "https://www.gravatar.com/avatar/" + md5Email + ".jpg?default=blank&s=" + size;
+      }
+    },
+
+    /**
+     * Gets the metadata related to the currently selected tab in
+     * the most recent window.
+     *
+     * @param {Function} A callback that is passed the metadata.
+     */
+    getSelectedTabMetadata: {
+      value: function(callback) {
+        let win = Services.wm.getMostRecentWindow("navigator:browser");
+        win.messageManager.addMessageListener("PageMetadata:PageDataResult", function onPageDataResult(msg) {
+          win.messageManager.removeMessageListener("PageMetadata:PageDataResult", onPageDataResult);
+          let pageData = msg.json;
+          callback(cloneValueInto(pageData, targetWindow));
+        });
+        win.gBrowser.selectedBrowser.messageManager.sendAsyncMessage("PageMetadata:GetPageData");
       }
     },
 

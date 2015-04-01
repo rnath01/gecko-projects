@@ -136,7 +136,7 @@ static void mount_operation_ask_password (GMountOperation   *mount_op,
                                           gpointer          user_data);
 //-----------------------------------------------------------------------------
 
-class nsGIOInputStream MOZ_FINAL : public nsIInputStream
+class nsGIOInputStream final : public nsIInputStream
 {
    ~nsGIOInputStream() { Close(); }
 
@@ -882,8 +882,8 @@ mount_operation_ask_password (GMountOperation   *mount_op,
 
 //-----------------------------------------------------------------------------
 
-class nsGIOProtocolHandler MOZ_FINAL : public nsIProtocolHandler
-                                     , public nsIObserver
+class nsGIOProtocolHandler final : public nsIProtocolHandler
+                                 , public nsIObserver
 {
   public:
     NS_DECL_ISUPPORTS

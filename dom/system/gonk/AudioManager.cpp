@@ -142,7 +142,7 @@ public:
   }
 };
 
-class AudioChannelVolInitCallback MOZ_FINAL : public nsISettingsServiceCallback
+class AudioChannelVolInitCallback final : public nsISettingsServiceCallback
 {
 public:
   NS_DECL_ISUPPORTS
@@ -185,6 +185,9 @@ public:
       NS_ConvertUTF16toUTF8(aName).get());
     return NS_OK;
   }
+
+protected:
+  ~AudioChannelVolInitCallback() {}
 };
 
 NS_IMPL_ISUPPORTS(AudioChannelVolInitCallback, nsISettingsServiceCallback)

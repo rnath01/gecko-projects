@@ -2,7 +2,7 @@
 metadata:
   name: 'Taskcluster decision task for {{project}}'
   description: |
-    Try push for {{owner}} with {{comment}}.
+    Try push for {{owner}}.
   owner: mozilla-taskcluster-maintenance@mozilla.com
   source: "{{{source}}}"
 
@@ -22,7 +22,7 @@ tasks:
       metadata:
         owner: mozilla-taskcluster-maintenance@mozilla.com
         source: {{{source}}}
-        name: "[tc] Initial decision task for try ({{comment}})"
+        name: "[tc] Initial decision task for try"
         description: |
           This is the single most important task as it decides how all other tasks
           get built.
@@ -73,6 +73,7 @@ tasks:
             checkout-gecko workspace &&
             cd workspace/gecko &&
             ./mach taskcluster-graph
+            --pushlog-id='{{pushlog_id}}'
             --project='{{project}}'
             --message='{{comment}}'
             --owner='{{owner}}'
@@ -84,4 +85,3 @@ tasks:
       extra:
         treeherder:
           symbol: D
-

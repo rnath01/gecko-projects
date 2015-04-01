@@ -458,6 +458,8 @@ CheckArg(const char* aArg, bool aCheckOSInt = false, const char **aParam = nullp
       if (strimatch(aArg, arg)) {
         if (aRemArg)
           RemoveArg(curarg);
+        else
+          ++curarg;
         if (!aParam) {
           ar = ARG_FOUND;
           break;
@@ -580,29 +582,6 @@ CanShowProfileManager()
 #else
   return true;
 #endif
-}
-
-static bool
-KeyboardMayHaveIME()
-{
-#ifdef XP_WIN
-  // http://msdn.microsoft.com/en-us/library/windows/desktop/dd318693%28v=vs.85%29.aspx
-  HKL locales[10];
-  int result = GetKeyboardLayoutList(10, locales);
-  for (int i = 0; i < result; i++) {
-    int kb = (uintptr_t)locales[i] & 0xFFFF;
-    if (kb == 0x0411 ||  // japanese
-        kb == 0x0412 ||  // korean
-        kb == 0x0C04 ||  // HK Chinese
-        kb == 0x0804 || kb == 0x0004 || // Hans Chinese
-        kb == 0x7C04 || kb ==  0x0404)  { //Hant Chinese
-
-      return true;
-    }
-  }
-#endif
-
-  return false;
 }
 
 bool gSafeMode = false;
@@ -886,13 +865,6 @@ nsXULAppInfo::GetAccessibilityEnabled(bool* aResult)
 }
 
 NS_IMETHODIMP
-nsXULAppInfo::GetKeyboardMayHaveIME(bool* aResult)
-{
-  *aResult = KeyboardMayHaveIME();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsXULAppInfo::GetAccessibilityIsUIA(bool* aResult)
 {
   *aResult = false;
@@ -903,6 +875,17 @@ nsXULAppInfo::GetAccessibilityIsUIA(bool* aResult)
        ::GetModuleHandleW(L"uiautomationcore"))) {
     *aResult = true;
   }
+#endif
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetIs64Bit(bool* aResult)
+{
+#ifdef HAVE_64BIT_BUILD
+  *aResult = true;
+#else
+  *aResult = false;
 #endif
   return NS_OK;
 }
@@ -1422,7 +1405,7 @@ ScopedXPCOMStartup::Initialize()
  * This is a little factory class that serves as a singleton-service-factory
  * for the nativeappsupport object.
  */
-class nsSingletonFactory MOZ_FINAL : public nsIFactory
+class nsSingletonFactory final : public nsIFactory
 {
 public:
   NS_DECL_ISUPPORTS
@@ -1632,9 +1615,16 @@ RemoteCommandLine(const char* aDesktopStartupID)
   nsresult rv;
   ArgResult ar;
 
+  const char *profile = 0;
   nsAutoCString program(gAppData->remotingName);
   ToLowerCase(program);
   const char *username = getenv("LOGNAME");
+
+  ar = CheckArg("p", false, &profile, false);
+  if (ar == ARG_BAD) {
+    PR_fprintf(PR_STDERR, "Error: argument -p requires a profile name\n");
+    return REMOTE_ARG_BAD;
+  }
 
   const char *temp = nullptr;
   ar = CheckArg("a", true, &temp);
@@ -1658,11 +1648,19 @@ RemoteCommandLine(const char* aDesktopStartupID)
  
   nsXPIDLCString response;
   bool success = false;
-  rv = client.SendCommandLine(program.get(), username, nullptr,
+  rv = client.SendCommandLine(program.get(), username, profile,
                               gArgc, gArgv, aDesktopStartupID,
                               getter_Copies(response), &success);
   // did the command fail?
-  if (NS_FAILED(rv) || !success)
+  if (!success)
+    return REMOTE_NOT_FOUND;
+
+  // The "command not parseable" error is returned when the
+  // nsICommandLineHandler throws a NS_ERROR_ABORT.
+  if (response.EqualsLiteral("500 command not parseable"))
+    return REMOTE_ARG_BAD;
+
+  if (NS_FAILED(rv))
     return REMOTE_NOT_FOUND;
 
   return REMOTE_FOUND;
@@ -4629,16 +4627,11 @@ mozilla::BrowserTabsRemoteAutostart()
   // Nightly builds, update gBrowserTabsRemoteAutostart based on all the
   // e10s remote relayed prefs we watch.
   bool disabledForA11y = Preferences::GetBool("browser.tabs.remote.autostart.disabled-because-using-a11y", false);
-  // Only disable for IME for the automatic pref, not the opt-in one.
-  bool disabledForIME = trialPref && KeyboardMayHaveIME();
-
   if (prefEnabled) {
     if (gSafeMode) {
       LogE10sBlockedReason("Safe mode");
     } else if (disabledForA11y) {
       LogE10sBlockedReason("An accessibility tool is or was active. See bug 1115956.");
-    } else if (disabledForIME) {
-      LogE10sBlockedReason("The keyboard being used has activated IME");
     } else {
       gBrowserTabsRemoteAutostart = true;
     }

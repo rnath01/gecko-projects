@@ -4,7 +4,7 @@
 const PRELOAD_PREF = "browser.newtab.preload";
 
 gDirectorySource = "data:application/json," + JSON.stringify({
-  "en-US": [{
+  "directory": [{
     url: "http://example.com/",
     enhancedImageURI: "data:image/png;base64,helloWORLD",
     title: "title",
@@ -40,29 +40,29 @@ function runTests() {
   yield addNewTabPageTab();
   yield customizeNewTabPage("classic");
   let {type, enhanced, title} = getData(0);
+  isnot(type, "enhanced", "history link is not enhanced");
+  is(enhanced, "", "history link has no enhanced image");
+  is(title, "site#-1");
+
+  is(getData(1), null, "there is only one link and it's a history link");
+
+  // Test with enhanced = true
+  yield addNewTabPageTab();
+  yield customizeNewTabPage("enhanced");
+  ({type, enhanced, title} = getData(0));
   is(type, "organic", "directory link is organic");
   isnot(enhanced, "", "directory link has enhanced image");
   is(title, "title");
 
   is(getData(1), null, "history link pushed out by directory link");
 
-  // Test with enhanced = true
-  yield addNewTabPageTab();
-  yield customizeNewTabPage("enhanced");
-  ({type, enhanced, title} = getData(0));
-  is(type, "organic", "directory link is still organic");
-  isnot(enhanced, "", "directory link still has enhanced image");
-  is(title, "title");
-
-  is(getData(1), null, "history link still pushed out by directory link");
-
   // Test with a pinned link
   setPinnedLinks("-1");
   yield addNewTabPageTab();
   ({type, enhanced, title} = getData(0));
-  is(type, "enhanced", "pinned history link is enhanced");
-  isnot(enhanced, "", "pinned history link has enhanced image");
-  is(title, "title");
+  is(type, "history", "pinned history link is not enhanced");
+  is(enhanced, "", "pinned history link doesn't have enhanced image");
+  is(title, "site#-1");
 
   is(getData(1), null, "directory link pushed out by pinned history link");
 

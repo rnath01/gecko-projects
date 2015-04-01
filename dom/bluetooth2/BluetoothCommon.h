@@ -192,11 +192,12 @@ extern bool gBluetoothDebugFlag;
 #define BLUETOOTH_APP_ORIGIN                  "app://bluetooth.gaiamobile.org"
 
 /**
- * When a remote device gets paired / unpaired with local bluetooth adapter,
- * we'll dispatch an event.
+ * When a remote device gets paired / unpaired with local bluetooth adapter or
+ * pairing process is aborted, we'll dispatch an event.
  */
 #define DEVICE_PAIRED_ID                     "devicepaired"
 #define DEVICE_UNPAIRED_ID                   "deviceunpaired"
+#define PAIRING_ABORTED_ID                   "pairingaborted"
 
 /**
  * When receiving a query about current play status from remote device, we'll
@@ -284,6 +285,16 @@ enum BluetoothSspVariant {
 
 struct BluetoothUuid {
   uint8_t mUuid[16];
+
+  bool operator==(const BluetoothUuid& aOther) const
+  {
+    for (uint8_t i = 0; i < sizeof(mUuid); i++) {
+      if (mUuid[i] != aOther.mUuid[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
 };
 
 struct BluetoothServiceRecord {
@@ -546,11 +557,21 @@ struct BluetoothGattAdvData {
 struct BluetoothGattId {
   BluetoothUuid mUuid;
   uint8_t mInstanceId;
+
+  bool operator==(const BluetoothGattId& aOther) const
+  {
+    return mUuid == aOther.mUuid && mInstanceId == aOther.mInstanceId;
+  }
 };
 
 struct BluetoothGattServiceId {
   BluetoothGattId mId;
   uint8_t mIsPrimary;
+
+  bool operator==(const BluetoothGattServiceId& aOther) const
+  {
+    return mId == aOther.mId && mIsPrimary == aOther.mIsPrimary;
+  }
 };
 
 struct BluetoothGattReadParam {

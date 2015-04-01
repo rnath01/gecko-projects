@@ -411,7 +411,7 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     // get the dirty rect relative to the root frame of the subdoc
     dirty = aDirtyRect + GetOffsetToCrossDoc(subdocRootFrame);
     // and convert into the appunits of the subdoc
-    dirty = dirty.ConvertAppUnitsRoundOut(parentAPD, subdocAPD);
+    dirty = dirty.ScaleToOtherAppUnitsRoundOut(parentAPD, subdocAPD);
 
     if (nsIFrame* rootScrollFrame = presShell->GetRootScrollFrame()) {
       if (gfxPrefs::LayoutUseContainersForRootFrames()) {
@@ -455,7 +455,7 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
   nsIScrollableFrame *sf = presShell->GetRootScrollFrameAsScrollable();
   bool constructResolutionItem = subdocRootFrame &&
-    (presShell->GetXResolution() != 1.0 || presShell->GetYResolution() != 1.0);
+    (presShell->GetResolution() != 1.0);
   bool constructZoomItem = subdocRootFrame && parentAPD != subdocAPD;
   bool needsOwnLayer = false;
   if (constructResolutionItem ||
@@ -500,7 +500,7 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       nsRect bounds = GetContentRectRelativeToSelf() +
         aBuilder->ToReferenceFrame(this);
       if (subdocRootFrame) {
-        bounds = bounds.ConvertAppUnitsRoundOut(parentAPD, subdocAPD);
+        bounds = bounds.ScaleToOtherAppUnitsRoundOut(parentAPD, subdocAPD);
       }
 
       // If we are in print preview/page layout we want to paint the grey
@@ -758,6 +758,7 @@ nsSubDocumentFrame::Reflow(nsPresContext*           aPresContext,
                            const nsHTMLReflowState& aReflowState,
                            nsReflowStatus&          aStatus)
 {
+  MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsSubDocumentFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aDesiredSize, aStatus);
   NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS,

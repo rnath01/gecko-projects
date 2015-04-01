@@ -67,7 +67,7 @@ public class testSettingsMenuItems extends PixelTest {
         { StringHelper.REMEMBER_PASSWORDS_LABEL },
         MANAGE_LOGINS_ARR,
         { StringHelper.MASTER_PASSWORD_LABEL },
-        { StringHelper.CLEAR_PRIVATE_DATA_LABEL, "", "Browsing history", "Downloads", "Form & search history", "Cookies & active logins", "Saved passwords", "Cache", "Offline website data", "Site settings", "Clear data" },
+        { StringHelper.CLEAR_PRIVATE_DATA_LABEL, "", "Browsing history", "Search history", "Downloads", "Form history", "Cookies & active logins", "Saved passwords", "Cache", "Offline website data", "Site settings", "Clear data" },
     };
 
     // Mozilla/vendor menu items.
@@ -164,7 +164,7 @@ public class testSettingsMenuItems extends PixelTest {
 
             if (AppConstants.MOZ_STUMBLER_BUILD_TIME_ENABLED) {
                 // Anonymous cell tower/wifi collection
-                String[] networkReportingUi = { "Mozilla Location Service", "Help Mozilla map the world! Share approximate Wi-Fi and cellular location of your device to improve our geolocation service" };
+                String[] networkReportingUi = { "Mozilla Location Service", "Help Mozilla map the world! Share the approximate Wi-Fi and cellular location of your device to improve our geolocation service." };
                 settingsMap.get(PATH_MOZILLA).add(networkReportingUi);
 
                 String[] learnMoreUi = { "Learn more" };
