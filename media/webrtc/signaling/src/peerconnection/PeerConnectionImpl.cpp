@@ -187,7 +187,7 @@ public:
   , mPcHandle(pcHandle)
   {}
 
-  virtual void NotifyTracksAvailable(DOMMediaStream* aStream) MOZ_OVERRIDE
+  virtual void NotifyTracksAvailable(DOMMediaStream* aStream) override
   {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -337,9 +337,10 @@ NS_IMPL_ISUPPORTS0(PeerConnectionImpl)
 #ifdef MOZILLA_INTERNAL_API
 bool
 PeerConnectionImpl::WrapObject(JSContext* aCx,
+                               JS::Handle<JSObject*> aGivenProto,
                                JS::MutableHandle<JSObject*> aReflector)
 {
-  return PeerConnectionImplBinding::Wrap(aCx, this, aReflector);
+  return PeerConnectionImplBinding::Wrap(aCx, this, aGivenProto, aReflector);
 }
 #endif
 
@@ -817,10 +818,6 @@ class CompareCodecPriority {
       mPreferredCodec = os.str();
     }
 
-    void AddHardwareCodec(const std::string& codec) {
-      mHardwareCodecs.insert(codec);
-    }
-
     bool operator()(JsepCodecDescription* lhs,
                     JsepCodecDescription* rhs) const {
       if (!mPreferredCodec.empty() &&
@@ -829,8 +826,7 @@ class CompareCodecPriority {
         return true;
       }
 
-      if (mHardwareCodecs.count(lhs->mDefaultPt) &&
-          !mHardwareCodecs.count(rhs->mDefaultPt)) {
+      if (lhs->mStronglyPreferred && !rhs->mStronglyPreferred) {
         return true;
       }
 
@@ -839,7 +835,6 @@ class CompareCodecPriority {
 
   private:
     std::string mPreferredCodec;
-    std::set<std::string> mHardwareCodecs;
 };
 
 nsresult
@@ -906,7 +901,7 @@ PeerConnectionImpl::ConfigureJsepSessionCodecs() {
   bool vp9Enabled = false;
   branch->GetBoolPref("media.peerconnection.video.vp9_enabled",
                       &vp9Enabled);
-  
+
   auto& codecs = mJsepSession->Codecs();
 
   // We use this to sort the list of codecs once everything is configured
@@ -954,7 +949,7 @@ PeerConnectionImpl::ConfigureJsepSessionCodecs() {
             }
 
             if (hardwareH264Supported) {
-              comparator.AddHardwareCodec(videoCodec.mDefaultPt);
+              videoCodec.mStronglyPreferred = true;
             }
           } else if (codec.mName == "VP8" || codec.mName == "VP9") {
             if (videoCodec.mName == "VP9" && !vp9Enabled) {
@@ -2424,11 +2419,16 @@ PeerConnectionImpl::SetSignalingState_m(PCImplSignalingState aSignalingState)
     return;
   }
 
+  bool restartGathering =
+    aSignalingState == PCImplSignalingState::SignalingHaveLocalOffer ||
+    (aSignalingState == PCImplSignalingState::SignalingStable &&
+     mSignalingState == PCImplSignalingState::SignalingHaveRemoteOffer);
+
   mSignalingState = aSignalingState;
 
   if (mSignalingState == PCImplSignalingState::SignalingHaveLocalOffer ||
       mSignalingState == PCImplSignalingState::SignalingStable) {
-    mMedia->UpdateTransports(*mJsepSession);
+    mMedia->UpdateTransports(*mJsepSession, restartGathering);
   }
 
   bool fireNegotiationNeeded = false;
@@ -2806,20 +2806,28 @@ PeerConnectionImpl::BuildStatsQuery_m(
     RTCStatsQuery *query) {
 
   if (!HasMedia()) {
-    return NS_OK;
+    return NS_ERROR_UNEXPECTED;
   }
 
-  if (!mMedia->ice_ctx() || !mThread) {
-    CSFLogError(logTag, "Could not build stats query, critical components of "
-                        "PeerConnectionImpl not set.");
+  if (!mThread) {
+    CSFLogError(logTag, "Could not build stats query, no MainThread");
     return NS_ERROR_UNEXPECTED;
   }
 
   nsresult rv = GetTimeSinceEpoch(&(query->now));
-
   if (NS_FAILED(rv)) {
     CSFLogError(logTag, "Could not build stats query, could not get timestamp");
     return rv;
+  }
+
+  // Note: mMedia->ice_ctx() is deleted on STS thread; so make sure we grab and hold
+  // a ref instead of making multiple calls.  NrIceCtx uses threadsafe refcounting.
+  // NOTE: Do this after all other failure tests, to ensure we don't
+  // accidentally release the Ctx on Mainthread.
+  query->iceCtx = mMedia->ice_ctx();
+  if (!query->iceCtx) {
+    CSFLogError(logTag, "Could not build stats query, no ice_ctx");
+    return NS_ERROR_UNEXPECTED;
   }
 
   // We do not use the pcHandle here, since that's risky to expose to content.
@@ -2882,8 +2890,6 @@ PeerConnectionImpl::BuildStatsQuery_m(
       }
     }
   }
-
-  query->iceCtx = mMedia->ice_ctx();
 
   // From the list of MediaPipelines, determine the set of NrIceMediaStreams
   // we are interested in.

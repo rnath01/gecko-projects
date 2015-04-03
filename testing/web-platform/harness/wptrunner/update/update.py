@@ -9,12 +9,13 @@ from metadata import MetadataUpdateRunner
 from sync import SyncFromUpstreamRunner
 from tree import GitTree, HgTree, NoVCSTree
 
-from .. import wptrunner
+from .. import environment as env
 from base import Step, StepRunner, exit_clean, exit_unclean
 from state import State
 
-def setup_paths(serve_root):
-    wptrunner.do_delayed_imports(serve_root)
+def setup_paths(sync_path):
+    sys.path.insert(0, sync_path)
+    from tools import localpaths
 
 class LoadConfig(Step):
     """Step for loading configuration from the ini file and kwargs."""
@@ -68,9 +69,11 @@ class SyncFromUpstream(Step):
             state.sync_tree = GitTree(root=state.sync["path"])
 
         kwargs = state.kwargs
-        with state.push(["sync", "paths", "metadata_path", "tests_path", "local_tree", "sync_tree"]):
+        with state.push(["sync", "paths", "metadata_path", "tests_path", "local_tree",
+                         "sync_tree"]):
             state.target_rev = kwargs["rev"]
             state.no_patch = kwargs["no_patch"]
+            state.suite_name = kwargs["suite_name"]
             runner = SyncFromUpstreamRunner(self.logger, state)
             runner.run()
 
@@ -87,6 +90,7 @@ class UpdateMetadata(Step):
             state.run_log = kwargs["run_log"]
             state.ignore_existing = kwargs["ignore_existing"]
             state.no_patch = kwargs["no_patch"]
+            state.suite_name = kwargs["suite_name"]
             runner = MetadataUpdateRunner(self.logger, state)
             runner.run()
 
@@ -109,8 +113,11 @@ class WPTUpdate(object):
         """
         self.runner_cls = runner_cls
         self.serve_root = kwargs["test_paths"]["/"]["tests_path"]
-        #This must be before we try to reload state
-        setup_paths(self.serve_root)
+
+        if not kwargs["sync"]:
+            setup_paths(self.serve_root)
+        else:
+            setup_paths(kwargs["sync_path"])
 
         self.state = State(logger)
         self.kwargs = kwargs

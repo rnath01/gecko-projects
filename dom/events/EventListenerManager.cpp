@@ -1023,7 +1023,7 @@ public:
   {
   }
 
-  virtual void AddDetails(mozilla::dom::ProfileTimelineMarker& aMarker) MOZ_OVERRIDE
+  virtual void AddDetails(mozilla::dom::ProfileTimelineMarker& aMarker) override
   {
     if (GetMetaData() == TRACING_INTERVAL_START) {
       aMarker.mType.Construct(GetCause());
@@ -1106,7 +1106,7 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
               mozilla::UniquePtr<TimelineMarker> marker =
                 MakeUnique<EventTimelineMarker>(ds, TRACING_INTERVAL_START,
                                                 phase, typeStr);
-              ds->AddProfileTimelineMarker(marker);
+              ds->AddProfileTimelineMarker(Move(marker));
             }
           }
 

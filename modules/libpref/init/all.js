@@ -271,6 +271,8 @@ pref("media.wakelock_timeout", 2000);
 // opened as top-level documents, as opposed to inside a media element.
 pref("media.play-stand-alone", true);
 
+pref("media.hardware-video-decoding.enabled", true);
+
 #if defined(XP_WIN)
 pref("media.decoder.heuristic.dormant.enabled", true);
 pref("media.decoder.heuristic.dormant.timeout", 60000);
@@ -278,7 +280,6 @@ pref("media.decoder.heuristic.dormant.timeout", 60000);
 
 #ifdef MOZ_WMF
 pref("media.windows-media-foundation.enabled", true);
-pref("media.windows-media-foundation.use-dxva", true);
 #endif
 #ifdef MOZ_DIRECTSHOW
 pref("media.directshow.enabled", true);
@@ -427,10 +428,10 @@ pref("media.getusermedia.screensharing.enabled", true);
 #endif
 
 #ifdef RELEASE_BUILD
-pref("media.getusermedia.screensharing.allowed_domains", "webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,free.gotomeeting.com,g2m.me,*.g2m.me,example.com");
+pref("media.getusermedia.screensharing.allowed_domains", "webex.com,*.webex.com,ciscospark.com,*.ciscospark.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,free.gotomeeting.com,g2m.me,*.g2m.me,example.com");
 #else
  // temporary value, not intended for release - bug 1049087
-pref("media.getusermedia.screensharing.allowed_domains", "mozilla.github.io,webex.com,*.webex.com,collaborate.com,*.collaborate.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,free.gotomeeting.com,g2m.me,*.g2m.me,example.com");
+pref("media.getusermedia.screensharing.allowed_domains", "mozilla.github.io,webex.com,*.webex.com,ciscospark.com,*.ciscospark.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,free.gotomeeting.com,g2m.me,*.g2m.me,example.com");
 #endif
 // OS/X 10.6 and XP have screen/window sharing off by default due to various issues - Caveat emptor
 pref("media.getusermedia.screensharing.allow_on_old_platforms", false);
@@ -599,11 +600,7 @@ pref("gfx.downloadable_fonts.fallback_delay", 3000);
 // the uncached load behavior across pages (useful for testing reflow problems)
 pref("gfx.downloadable_fonts.disable_cache", false);
 
-#ifdef RELEASE_BUILD
-pref("gfx.downloadable_fonts.woff2.enabled", false);
-#else
 pref("gfx.downloadable_fonts.woff2.enabled", true);
-#endif
 
 #ifdef ANDROID
 pref("gfx.bundled_fonts.enabled", true);
@@ -828,14 +825,17 @@ pref("devtools.dump.emit", false);
 
 // Disable device discovery logging
 pref("devtools.discovery.log", false);
-// Disable scanning for DevTools devices via WiFi
-pref("devtools.remote.wifi.scan", false);
-// Hide UI options for controlling device visibility over WiFi
+// Whether to scan for DevTools devices via WiFi
+pref("devtools.remote.wifi.scan", true);
+// Whether UI options for controlling device visibility over WiFi are shown
 // N.B.: This does not set whether the device can be discovered via WiFi, only
 // whether the UI control to make such a choice is shown to the user
-pref("devtools.remote.wifi.visible", false);
+pref("devtools.remote.wifi.visible", true);
 // Client must complete TLS handshake within this window (ms)
 pref("devtools.remote.tls-handshake-timeout", 10000);
+
+// URL of the remote JSON catalog used for device simulation
+pref("devtools.devices.url", "https://code.cdn.mozilla.net/devices/devices.json");
 
 // view source
 pref("view_source.syntax_highlight", true);
@@ -1026,8 +1026,10 @@ pref("privacy.popups.disable_from_plugins", 2);
 
 // send "do not track" HTTP header, disabled by default
 pref("privacy.donottrackheader.enabled",    false);
-// Enforce tracking protection
+// Enforce tracking protection in all modes
 pref("privacy.trackingprotection.enabled",  false);
+// Enforce tracking protection in Private Browsing mode
+pref("privacy.trackingprotection.pbmode.enabled",  false);
 
 pref("dom.event.contextmenu.enabled",       true);
 pref("dom.event.clipboardevents.enabled",   true);
@@ -1330,8 +1332,10 @@ pref("network.http.spdy.default-concurrent", 100);
 
 // alt-svc allows separation of transport routing from
 // the origin host without using a proxy.
-pref("network.http.altsvc.enabled", true);
-pref("network.http.altsvc.oe", true);
+pref("network.http.atsvc.enabled", false);
+pref("network.http.atsvc.oe", false);
+pref("network.http.altsvc.enabled", false);
+pref("network.http.altsvc.oe", false);
 
 pref("network.http.diagnostics", false);
 
@@ -1679,6 +1683,14 @@ pref("network.auth.force-generic-ntlm", false);
 pref("network.automatic-ntlm-auth.allow-proxies", true);
 pref("network.automatic-ntlm-auth.allow-non-fqdn", false);
 pref("network.automatic-ntlm-auth.trusted-uris", "");
+
+// Sub-resources HTTP-authentication:
+//   0 - don't allow sub-resources to open HTTP authentication credentials
+//       dialogs
+//   1 - allow sub-resources to open HTTP authentication credentials dialogs,
+//       but don't allow it for cross-origin sub-resources
+//   2 - allow the cross-origin authentication as well.
+pref("network.auth.allow-subresource-auth", 1);
 
 pref("permissions.default.image",           1); // 1-Accept, 2-Deny, 3-dontAcceptForeign
 
@@ -2102,9 +2114,6 @@ pref("layout.css.isolation.enabled", true);
 // Is support for CSS Filters enabled?
 pref("layout.css.filters.enabled", true);
 
-// Is support for scroll-snap enabled?
-pref("layout.css.scroll-snap.enabled", false);
-
 // Set the threshold distance in CSS pixels below which scrolling will snap to
 // an edge, when scroll snapping is set to "proximity".
 pref("layout.css.scroll-snap.proximity-threshold", 200);
@@ -2174,7 +2183,7 @@ pref("layout.css.prefixes.font-features", true);
 
 // Is the CSS Unprefixing Service enabled? (This service emulates support
 // for certain vendor-prefixed properties & values, for sites on a "fixlist".)
-pref("layout.css.unprefixing-service.enabled", false);
+pref("layout.css.unprefixing-service.enabled", true);
 
 // Is support for the :scope selector enabled?
 pref("layout.css.scope-pseudo.enabled", true);
@@ -2183,7 +2192,11 @@ pref("layout.css.scope-pseudo.enabled", true);
 pref("layout.css.background-blend-mode.enabled", true);
 
 // Is support for CSS vertical text enabled?
+#ifdef RELEASE_BUILD
 pref("layout.css.vertical-text.enabled", false);
+#else
+pref("layout.css.vertical-text.enabled", true);
+#endif
 
 // Is support for object-fit and object-position enabled?
 pref("layout.css.object-fit-and-position.enabled", true);
@@ -2250,11 +2263,15 @@ pref("layout.css.scroll-behavior.spring-constant", "250.0");
 // at the greatest speed without overshooting.
 pref("layout.css.scroll-behavior.damping-ratio", "1.0");
 
+// Is support for scroll-snap enabled?
+pref("layout.css.scroll-snap.enabled", true);
+
 // Is support for document.fonts enabled?
-//
-// Don't enable the pref for the CSS Font Loading API until bug 1072101 is
-// fixed, as we don't want to expose more indexed properties on the Web.
+#ifdef RELEASE_BUILD
 pref("layout.css.font-loading-api.enabled", false);
+#else
+pref("layout.css.font-loading-api.enabled", true);
+#endif
 
 // pref for which side vertical scrollbars should be on
 // 0 = end-side in UI direction
@@ -2295,11 +2312,7 @@ pref("layout.frame_rate.precise", false);
 pref("layout.spammy_warnings.enabled", true);
 
 // Should we fragment floats inside CSS column layout?
-#ifdef RELEASE_BUILD
-pref("layout.float-fragments-inside-column.enabled", false);
-#else
 pref("layout.float-fragments-inside-column.enabled", true);
-#endif
 
 // Is support for the Web Animations API enabled?
 #ifdef RELEASE_BUILD
@@ -2422,7 +2435,13 @@ pref("dom.ipc.plugins.reportCrashURL", true);
 // Defaults to 30 seconds.
 pref("dom.ipc.plugins.unloadTimeoutSecs", 30);
 
+// Asynchronous plugin initialization should only be enabled on non-e10s
+// channels until some remaining bugs are resolved.
+#ifdef NIGHTLY_BUILD
 pref("dom.ipc.plugins.asyncInit", false);
+#else
+pref("dom.ipc.plugins.asyncInit", true);
+#endif
 
 pref("dom.ipc.processCount", 1);
 
@@ -3001,7 +3020,7 @@ pref("intl.keyboard.per_window_layout", false);
 
 #ifdef NS_ENABLE_TSF
 // Enable/Disable TSF support on Vista or later.
-#ifdef NIGHTLY_BUILD
+#ifndef RELEASE_BUILD
 pref("intl.tsf.enable", true);
 #else
 pref("intl.tsf.enable", false);
@@ -3419,6 +3438,9 @@ pref("print.print_extra_margin", 0); // twips
 pref("layout.css.scroll-behavior.enabled", false);
 pref("layout.css.scroll-behavior.property-enabled", false);
 
+// CSS Scroll Snapping requires the C++ APZC
+pref("layout.css.scroll-snap.enabled", false);
+
 /* PostScript print module prefs */
 // pref("print.postscript.enabled",      true);
 pref("print.postscript.paper_size",    "letter");
@@ -3818,6 +3840,10 @@ pref("image.cache.size", 5242880);
 // Size is given a weight of 1000 - timeweight.
 pref("image.cache.timeweight", 500);
 
+// Prevents images from automatically being decoded on load, instead allowing
+// them to be decoded on demand when they are drawn.
+pref("image.decode-only-on-draw.enabled", true);
+
 // Whether we attempt to downscale images during decoding.
 pref("image.downscale-during-decode.enabled", false);
 
@@ -3844,10 +3870,6 @@ pref("image.single-color-optimization.enabled", true);
 // Discards inactive image frames and re-decodes them on demand from
 // compressed data.
 pref("image.mem.discardable", true);
-
-// Prevents images from automatically being decoded on load, instead allowing
-// them to be decoded on demand when they are drawn.
-pref("image.mem.decodeondraw", true);
 
 // Allows image locking of decoded image data in content processes.
 pref("image.mem.allow_locking_in_content_processes", true);
@@ -4474,7 +4496,11 @@ pref("camera.control.face_detection.enabled", true);
 
 
 // SW Cache API
+#ifdef RELEASE_BUILD
 pref("dom.caches.enabled", false);
+#else
+pref("dom.caches.enabled", true);
+#endif // RELEASE_BUILD
 
 #ifdef MOZ_WIDGET_GONK
 // Empirically, this is the value returned by hal::GetTotalSystemMemory()
@@ -4525,7 +4551,7 @@ pref("browser.addon-watch.interval", 15000);
 #else
 pref("browser.addon-watch.interval", -1);
 #endif
-pref("browser.addon-watch.ignore", "[\"mochikit@mozilla.org\",\"special-powers@mozilla.org\"]");
+pref("browser.addon-watch.ignore", "[\"mochikit@mozilla.org\",\"special-powers@mozilla.org\",\"fxdevtools-adapters@mozilla.org\",\"fx-devtools\"]");
 // the percentage of time addons are allowed to use without being labeled slow
 pref("browser.addon-watch.percentage-limit", 5);
 
@@ -4585,9 +4611,6 @@ pref("media.gmp-manager.certs.1.issuerName", "CN=DigiCert Secure Server CA,O=Dig
 pref("media.gmp-manager.certs.1.commonName", "aus4.mozilla.org");
 pref("media.gmp-manager.certs.2.issuerName", "CN=Thawte SSL CA,O=\"Thawte, Inc.\",C=US");
 pref("media.gmp-manager.certs.2.commonName", "aus4.mozilla.org");
-
-// Adobe EME is currently pref'd off by default and hidden in the addon manager.
-pref("media.gmp-eme-adobe.hidden", true);
 #endif
 
 // Whether or not to perform reader mode article parsing on page load.
@@ -4628,14 +4651,15 @@ pref("media.gmp.insecure.allow", false);
 
 // Use vsync aligned rendering. b2g prefs are in b2g.js
 // Only supported on windows, os x, and b2g
-#if defined(XP_MACOSX)
+#if defined(XP_MACOSX) || defined(XP_WIN)
 pref("gfx.vsync.hw-vsync.enabled", true);
 pref("gfx.vsync.compositor", true);
-pref("gfx.vsync.refreshdriver", false);
-#elif defined(XP_WIN)
-pref("gfx.vsync.hw-vsync.enabled", false);
-pref("gfx.vsync.compositor", false);
-pref("gfx.vsync.refreshdriver", false);
+pref("gfx.vsync.refreshdriver", true);
+#endif
+
+#if defined(XP_LINUX)
+pref("gfx.vsync.hw-vsync.enabled", true);
+pref("gfx.vsync.compositor", true);
 #endif
 
 // Secure Element API

@@ -11,7 +11,6 @@
 #include "nsIPipe.h"
 #include "nsIEventTarget.h"
 #include "nsISeekableStream.h"
-#include "nsIProgrammingLanguage.h"
 #include "nsRefPtr.h"
 #include "nsSegmentedBuffer.h"
 #include "nsStreamUtils.h"
@@ -139,7 +138,7 @@ struct nsPipeReadState
 //-----------------------------------------------------------------------------
 
 // an input end of a pipe (maintained as a list of refs within the pipe)
-class nsPipeInputStream
+class nsPipeInputStream final
   : public nsIAsyncInputStream
   , public nsISeekableStream
   , public nsISearchableInputStream
@@ -281,7 +280,7 @@ private:
 
 //-----------------------------------------------------------------------------
 
-class nsPipe MOZ_FINAL : public nsIPipe
+class nsPipe final : public nsIPipe
 {
 public:
   friend class nsPipeInputStream;
@@ -366,7 +365,7 @@ private:
 
 // RAII class representing an active read segment.  When it goes out of scope
 // it automatically updates the read cursor and releases the read segment.
-class MOZ_STACK_CLASS AutoReadSegment MOZ_FINAL
+class MOZ_STACK_CLASS AutoReadSegment final
 {
 public:
   AutoReadSegment(nsPipe* aPipe, nsPipeReadState& aReadState,

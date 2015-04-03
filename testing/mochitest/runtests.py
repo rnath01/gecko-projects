@@ -48,8 +48,10 @@ from datetime import datetime
 from manifestparser import TestManifest
 from manifestparser.filters import (
     chunk_by_dir,
+    chunk_by_runtime,
     chunk_by_slice,
     subsuite,
+    tags,
 )
 from mochitest_options import MochitestOptions
 from mozprofile import Profile, Preferences
@@ -417,7 +419,7 @@ class MochitestServer(object):
             time.sleep(1)
             i += 1
         else:
-            self._log.error(
+            self._log.info(
                 "TEST-UNEXPECTED-FAIL | runtests.py | Timed out while waiting for server startup.")
             self.stop()
             sys.exit(1)
@@ -580,9 +582,7 @@ class MochitestUtilsMixin(object):
         if options.logFile:
             options.logFile = self.getLogFilePath(options.logFile)
 
-        # Note that all tests under options.subsuite need to be browser chrome
-        # tests.
-        if options.browserChrome or options.chrome or options.subsuite or \
+        if options.browserChrome or options.chrome or \
            options.a11y or options.webapprtChrome or options.jetpackPackage or \
            options.jetpackAddon:
             self.makeTestConfig(options)
@@ -928,7 +928,7 @@ toolbar#nav-bar {
 
         # Call installChromeJar().
         if not os.path.isdir(os.path.join(SCRIPT_DIR, self.jarDir)):
-            self.log.error(
+            self.log.info(
                 "TEST-UNEXPECTED-FAIL | invalid setup: missing mochikit extension")
             return None
 
@@ -1220,6 +1220,7 @@ def parseKeyValue(strings, separator='=', context='key, value: '):
 
 
 class Mochitest(MochitestUtilsMixin):
+    _active_tests = None
     certdbNew = False
     sslTunnel = None
     vmwareHelper = None
@@ -1418,7 +1419,7 @@ class Mochitest(MochitestUtilsMixin):
         # TODO: this should really be upstreamed somewhere, maybe mozprofile
         certificateStatus = self.fillCertificateDB(options)
         if certificateStatus:
-            self.log.error(
+            self.log.info(
                 "TEST-UNEXPECTED-FAIL | runtests.py | Certificate integration failed")
             return None
 
@@ -1610,7 +1611,7 @@ class Mochitest(MochitestUtilsMixin):
                 processPID)
             if isPidAlive(processPID):
                 foundZombie = True
-                self.log.error(
+                self.log.info(
                     "TEST-UNEXPECTED-FAIL | zombiecheck | child process %d still alive after shutdown" %
                     processPID)
                 self.killAndGetStack(
@@ -1697,9 +1698,9 @@ class Mochitest(MochitestUtilsMixin):
             os.close(tmpfd)
             env["MOZ_PROCESS_LOG"] = processLog
 
-            if interactive:
-                # If an interactive debugger is attached,
-                # don't use timeouts, and don't capture ctrl-c.
+            if debuggerInfo:
+                # If a debugger is attached, don't use timeouts, and don't
+                # capture ctrl-c.
                 timeout = None
                 signal.signal(signal.SIGINT, lambda sigid, frame: None)
 
@@ -1799,7 +1800,7 @@ class Mochitest(MochitestUtilsMixin):
             # record post-test information
             if status:
                 self.message_logger.dump_buffered()
-                self.log.error(
+                self.log.info(
                     "TEST-UNEXPECTED-FAIL | %s | application terminated with exit code %s" %
                     (self.lastTestSeen, status))
             else:
@@ -1844,10 +1845,33 @@ class Mochitest(MochitestUtilsMixin):
         options.profilePath = None
         self.urlOpts = []
 
+    def resolve_runtime_file(self, options, info):
+        platform = info['platform_guess']
+        buildtype = info['buildtype_guess']
+
+        data_dir = os.path.join(SCRIPT_DIR, 'runtimes', '{}-{}'.format(
+            platform, buildtype))
+
+        flavor = self.getTestFlavor(options)
+        if flavor == 'browser-chrome' and options.subsuite == 'devtools':
+            flavor = 'devtools-chrome'
+        elif flavor == 'mochitest':
+            flavor = 'plain'
+
+        base = 'mochitest'
+        if options.e10s:
+            base = '{}-e10s'.format(base)
+        return os.path.join(data_dir, '{}-{}.runtimes.json'.format(
+            base, flavor))
+
+
     def getActiveTests(self, options, disabled=True):
         """
           This method is used to parse the manifest and return active filtered tests.
         """
+        if self._active_tests:
+            return self._active_tests
+
         self.setTestRoot(options)
         manifest = self.getTestManifest(options)
         if manifest:
@@ -1878,52 +1902,42 @@ class Mochitest(MochitestUtilsMixin):
                     return (t for t in tests
                             if 'imptests/failures' not in t['path'])
 
-                # filter that implements old-style JSON manifests, remove
-                # once everything is using .ini
-                def apply_json_manifest(tests, values):
-                    m = os.path.join(SCRIPT_DIR, options.testManifest)
-                    with open(m, 'r') as f:
-                        m = json.loads(f.read())
-
-                    runtests = m.get('runtests')
-                    exctests = m.get('excludetests')
-                    if runtests is None and exctests is None:
-                        if options.runOnly:
-                            runtests = m
-                        else:
-                            exctests = m
-
-                    disabled = 'disabled by {}'.format(options.testManifest)
-                    for t in tests:
-                        if runtests and not any(t['relpath'].startswith(r)
-                                                for r in runtests):
-                            t['disabled'] = disabled
-                        if exctests and any(t['relpath'].startswith(r)
-                                            for r in exctests):
-                            t['disabled'] = disabled
-                        yield t
-
                 filters = [
                     remove_imptest_failure_expectations,
                     subsuite(options.subsuite),
                 ]
 
-                if options.testManifest:
-                    filters.append(apply_json_manifest)
-
                 # Add chunking filters if specified
-                if options.chunkByDir:
-                    filters.append(chunk_by_dir(options.thisChunk,
-                                                options.totalChunks,
-                                                options.chunkByDir))
-                elif options.totalChunks:
-                    filters.append(chunk_by_slice(options.thisChunk,
-                                                  options.totalChunks))
+                if options.totalChunks:
+                    if options.chunkByDir:
+                        filters.append(chunk_by_dir(options.thisChunk,
+                                                    options.totalChunks,
+                                                    options.chunkByDir))
+                    elif options.chunkByRuntime:
+                        runtime_file = self.resolve_runtime_file(options, info)
+                        with open(runtime_file, 'r') as f:
+                            runtime_data = json.loads(f.read())
+                        runtimes = runtime_data['runtimes']
+                        default = runtime_data['excluded_test_average']
+                        filters.append(
+                            chunk_by_runtime(options.thisChunk,
+                                             options.totalChunks,
+                                             runtimes,
+                                             default_runtime=default))
+                    else:
+                        filters.append(chunk_by_slice(options.thisChunk,
+                                                      options.totalChunks))
+
+                if options.test_tags:
+                    filters.append(tags(options.test_tags))
+
                 tests = manifest.active_tests(
                     exists=False, disabled=disabled, filters=filters, **info)
+
                 if len(tests) == 0:
-                    tests = manifest.active_tests(
-                        exists=False, disabled=True, **info)
+                    self.log.error("no tests to run using specified "
+                                   "combination of filters: {}".format(
+                                        manifest.fmt_filters()))
 
         paths = []
 
@@ -1958,8 +1972,8 @@ class Mochitest(MochitestUtilsMixin):
             return cmp(path1, path2)
 
         paths.sort(path_sort)
-
-        return paths
+        self._active_tests = paths
+        return self._active_tests
 
     def logPreamble(self, tests):
         """Logs a suite_start message and test_start/test_end at the beginning of a run.
@@ -1988,10 +2002,8 @@ class Mochitest(MochitestUtilsMixin):
 
         return testsToRun
 
-    def runMochitests(self, options, onLaunch=None):
+    def runMochitests(self, options, testsToRun, onLaunch=None):
         "This is a base method for calling other methods in this class for --bisect-chunk."
-        testsToRun = self.getTestsToRun(options)
-
         # Making an instance of bisect class for --bisect-chunk option.
         bisect = bisection.Bisect(self)
         finished = False
@@ -2027,38 +2039,73 @@ class Mochitest(MochitestUtilsMixin):
 
         return result
 
+    def killNamedOrphans(self, pname):
+        """ Kill orphan processes matching the given command name """
+        self.log.info("Checking for orphan %s processes..." % pname)
+        def _psInfo(line):
+            if pname in line:
+                self.log.info(line)
+        process = mozprocess.ProcessHandler(['ps', '-f'],
+                                            processOutputLine=_psInfo)
+        process.run()
+        process.wait()
+
+        def _psKill(line):
+            parts = line.split()
+            if len(parts) == 3 and parts[0].isdigit():
+                pid = int(parts[0])
+                if parts[2] == pname and parts[1] == '1':
+                    self.log.info("killing %s orphan with pid %d" % (pname, pid))
+                    killPid(pid, self.log)
+        process = mozprocess.ProcessHandler(['ps', '-o', 'pid,ppid,comm'],
+                                            processOutputLine=_psKill)
+        process.run()
+        process.wait()
+
     def runTests(self, options, onLaunch=None):
         """ Prepare, configure, run tests and cleanup """
 
         self.setTestRoot(options)
+
+        # Despite our efforts to clean up servers started by this script, in practice
+        # we still see infrequent cases where a process is orphaned and interferes
+        # with future tests, typically because the old server is keeping the port in use.
+        # Try to avoid those failures by checking for and killing orphan servers before
+        # trying to start new ones.
+        self.killNamedOrphans('ssltunnel')
+        self.killNamedOrphans('xpcshell')
 
         # Until we have all green, this only runs on bc*/dt*/mochitest-chrome
         # jobs, not webapprt*, jetpack*, or plain
         if options.browserChrome:
             options.runByDir = True
 
+        testsToRun = self.getTestsToRun(options)
         if not options.runByDir:
-            return self.runMochitests(options, onLaunch)
+            return self.runMochitests(options, testsToRun, onLaunch)
 
         # code for --run-by-dir
         dirs = self.getDirectories(options)
 
         result = 1  # default value, if no tests are run.
         inputTestPath = self.getTestPath(options)
-        for dir in dirs:
-            if inputTestPath and not inputTestPath.startswith(dir):
+        for d in dirs:
+            if inputTestPath and not inputTestPath.startswith(d):
                 continue
 
-            options.testPath = dir
-            print "testpath: %s" % options.testPath
+            print "dir: %s" % d
+            tests_in_dir = [t for t in testsToRun if t.startswith(d)]
 
             # If we are using --run-by-dir, we should not use the profile path (if) provided
             # by the user, since we need to create a new directory for each run. We would face problems
             # if we use the directory provided by the user.
-            result = self.runMochitests(options, onLaunch)
+            result = self.runMochitests(options, tests_in_dir, onLaunch)
 
             # Dump the logging buffer
             self.message_logger.dump_buffered()
+
+            if result == -1:
+                break
 
         # printing total number of tests
         if options.browserChrome:
@@ -2255,7 +2302,7 @@ class Mochitest(MochitestUtilsMixin):
 
         self.message_logger.dump_buffered()
         self.message_logger.buffering = False
-        self.log.error(error_message)
+        self.log.info(error_message)
 
         browserProcessId = browserProcessId or proc.pid
         self.killAndGetStack(
@@ -2512,10 +2559,12 @@ class Mochitest(MochitestUtilsMixin):
         """
             Make the list of directories by parsing manifests
         """
-        tests = self.getActiveTests(options, False)
+        tests = self.getActiveTests(options)
         dirlist = []
-
         for test in tests:
+            if 'disabled' in test:
+                continue
+
             rootdir = '/'.join(test['path'].split('/')[:-1])
             if rootdir not in dirlist:
                 dirlist.append(rootdir)

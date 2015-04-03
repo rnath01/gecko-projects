@@ -46,6 +46,12 @@ searchbar {
   -moz-binding: url("chrome://browser/content/search/search.xml#searchbar");
 }
 
+/* Prevent shrinking the page content to 0 height and width */
+.browserStack > browser {
+  min-height: 25px;
+  min-width: 25px;
+}
+
 .browserStack > browser {
   -moz-binding: url("chrome://browser/content/tabbrowser.xml#tabbrowser-browser");
 }
@@ -915,7 +921,6 @@ chatbox {
 
 chatbox[large="true"] {
   width: 300px;
-  heigth: 272px;
 }
 
 chatbox[minimized="true"] {

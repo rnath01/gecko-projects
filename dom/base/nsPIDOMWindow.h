@@ -63,8 +63,8 @@ enum UIStateChangeType
 };
 
 #define NS_PIDOMWINDOW_IID \
-{ 0x19fb3019, 0x7b5d, 0x4235, \
-  { 0xa9, 0x59, 0xa2, 0x31, 0xa2, 0xe7, 0x94, 0x79 } }
+{ 0x2485d4d7, 0xf7cb, 0x481e, \
+  { 0x9c, 0x89, 0xb2, 0xa8, 0x12, 0x67, 0x7f, 0x97 } }
 
 class nsPIDOMWindow : public nsIDOMWindowInternal
 {
@@ -161,7 +161,6 @@ public:
   }
 
   virtual void MaybeUpdateTouchState() {}
-  virtual void UpdateTouchState() {}
 
   nsIDocument* GetExtantDoc() const
   {
@@ -188,6 +187,18 @@ public:
   nsresult SetAudioVolume(float aVolume);
 
   float GetAudioGlobalVolume();
+
+  virtual void SetServiceWorkersTestingEnabled(bool aEnabled)
+  {
+    MOZ_ASSERT(IsOuterWindow());
+    mServiceWorkersTestingEnabled = aEnabled;
+  }
+
+  bool GetServiceWorkersTestingEnabled()
+  {
+    MOZ_ASSERT(IsOuterWindow());
+    return mServiceWorkersTestingEnabled;
+  }
 
 protected:
   // Lazily instantiate an about:blank document if necessary, and if
@@ -445,13 +456,10 @@ public:
    */
   void SetHasTouchEventListeners()
   {
-    mMayHaveTouchEventListener = true;
-    MaybeUpdateTouchState();
-  }
-
-  bool HasTouchEventListeners()
-  {
-    return mMayHaveTouchEventListener;
+    if (!mMayHaveTouchEventListener) {
+      mMayHaveTouchEventListener = true;
+      MaybeUpdateTouchState();
+    }
   }
 
   /**
@@ -817,6 +825,10 @@ protected:
   bool mHasNotifiedGlobalCreated;
 
   uint32_t mMarkedCCGeneration;
+
+  // Let the service workers plumbing know that some feature are enabled while
+  // testing.
+  bool mServiceWorkersTestingEnabled;
 };
 
 

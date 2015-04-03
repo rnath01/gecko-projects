@@ -132,8 +132,9 @@ let WebProgressListener = {
     json.flags = aFlags;
 
     // These properties can change even for a sub-frame navigation.
-    json.canGoBack = docShell.canGoBack;
-    json.canGoForward = docShell.canGoForward;
+    let webNav = docShell.QueryInterface(Ci.nsIWebNavigation);
+    json.canGoBack = webNav.canGoBack;
+    json.canGoForward = webNav.canGoForward;
 
     if (aWebProgress && aWebProgress.isTopLevel) {
       json.documentURI = content.document.documentURIObject.spec;
@@ -200,7 +201,14 @@ let WebNavigation =  {
     // it stays alive as long as the content script since CPOWs are
     // weakly held.
     let history = this.webNavigation.sessionHistory;
+    this._sessionHistory = history;
     sendAsyncMessage("WebNavigation:setHistory", {}, {history: history});
+
+    addEventListener("unload", this.uninit);
+  },
+
+  uninit: function() {
+    this._sessionHistory = null;
   },
 
   get webNavigation() {
@@ -219,7 +227,9 @@ let WebNavigation =  {
         this.gotoIndex(message.data.index);
         break;
       case "WebNavigation:LoadURI":
-        this.loadURI(message.data.uri, message.data.flags, message.data.referrer);
+        this.loadURI(message.data.uri, message.data.flags,
+                     message.data.referrer, message.data.referrerPolicy,
+                     message.data.baseURI);
         break;
       case "WebNavigation:Reload":
         this.reload(message.data.flags);
@@ -245,14 +255,17 @@ let WebNavigation =  {
     this.webNavigation.gotoIndex(index);
   },
 
-  loadURI: function(uri, flags, referrer) {
+  loadURI: function(uri, flags, referrer, referrerPolicy, baseURI) {
 #ifdef MOZ_CRASHREPORTER
     if (CrashReporter.enabled)
       CrashReporter.annotateCrashReport("URL", uri);
 #endif
     if (referrer)
       referrer = Services.io.newURI(referrer, null, null);
-    this.webNavigation.loadURI(uri, flags, referrer, null, null);
+    if (baseURI)
+      baseURI = Services.io.newURI(baseURI, null, null);
+    this.webNavigation.loadURIWithOptions(uri, flags, referrer, referrerPolicy,
+                                          null, null, baseURI);
   },
 
   reload: function(flags) {

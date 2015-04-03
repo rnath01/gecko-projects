@@ -9,6 +9,7 @@ var gSmallTests = [
   { name:"small-shot.m4a", type:"audio/mp4", duration:0.29 },
   { name:"small-shot.mp3", type:"audio/mpeg", duration:0.27 },
   { name:"small-shot-mp3.mp4", type:"audio/mp4; codecs=mp3", duration:0.34 },
+  { name:"small-shot.flac", type:"audio/flac", duration:0.197 },
   { name:"r11025_s16_c1.wav", type:"audio/x-wav", duration:1.0 },
   { name:"320x240.ogv", type:"video/ogg", width:320, height:240, duration:0.266 },
   { name:"seek.webm", type:"video/webm", width:320, height:240, duration:3.966 },
@@ -647,38 +648,49 @@ var gMetadataTests = [
 var gEMETests = [
   {
     name:"bipbop-cenc-videoinit.mp4",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
-    fragments:[ "bipbop-cenc-videoinit.mp4",
-                "bipbop-cenc-video1.m4s",
-                "bipbop-cenc-video2.m4s",
-              ],
+    tracks: [
+      {
+        name:"video",
+        type:"video/mp4; codecs=\"avc1.64000d\"",
+        fragments:[ "bipbop-cenc-videoinit.mp4",
+                    "bipbop-cenc-video1.m4s",
+                    "bipbop-cenc-video2.m4s",
+                  ]
+      }
+    ],
     keys: {
       // "keyid" : "key"
       "7e571d037e571d037e571d037e571d03" : "7e5733337e5733337e5733337e573333",
       "7e571d047e571d047e571d047e571d04" : "7e5744447e5744447e5744447e574444",
     },
     sessionType:"temporary",
+    sessionCount:1,
     duration:1.60,
   },
   {
     name:"bipbop-cenc-videoinit.mp4",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
-    fragments:[ "bipbop-cenc-videoinit.mp4",
-                "bipbop-cenc-video1.m4s",
-                "bipbop-cenc-video2.m4s",
-              ],
+    tracks: [
+      {
+        name:"video",
+        type:"video/mp4; codecs=\"avc1.64000d\"",
+        fragments:[ "bipbop-cenc-videoinit.mp4",
+                    "bipbop-cenc-video1.m4s",
+                    "bipbop-cenc-video2.m4s",
+                  ]
+      }
+    ],
     keys: {
       // "keyid" : "key"
       "7e571d037e571d037e571d037e571d03" : "7e5733337e5733337e5733337e573333",
       "7e571d047e571d047e571d047e571d04" : "7e5744447e5744447e5744447e574444",
     },
     sessionType:"temporary",
+    sessionCount:1,
     crossOrigin:true,
     duration:1.60,
   },
   {
     name:"bipbop-cenc-videoinit.mp4",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -704,11 +716,11 @@ var gEMETests = [
       "7e571d047e571d047e571d047e571d04" : "7e5744447e5744447e5744447e574444",
     },
     sessionType:"temporary",
+    sessionCount:2,
     duration:1.60,
   },
   {
     name:"bipbop-cenc-videoinit.mp4",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -734,6 +746,7 @@ var gEMETests = [
       "7e571d047e571d047e571d047e571d04" : "7e5744447e5744447e5744447e574444",
     },
     sessionType:"temporary",
+    sessionCount:2,
     crossOrigin:true,
     duration:1.60,
   },
@@ -824,6 +837,12 @@ function once(target, name, cb) {
 // Number of tests to run in parallel.
 var PARALLEL_TESTS = 2;
 
+// Prefs to set before running tests.  Use this to improve coverage of
+// conditions that might not otherwise be encountered on the test data.
+var gTestPrefs = [
+  ['media.recorder.max_memory', 1024],
+];
+
 // When true, we'll loop forever on whatever test we run. Use this to debug
 // intermittent test failures.
 const DEBUG_TEST_LOOP_FOREVER = false;
@@ -864,7 +883,9 @@ function MediaTestManager() {
     this.numTestsRunning = 0;
     // Always wait for explicit finish.
     SimpleTest.waitForExplicitFinish();
-    this.nextTest();
+    SpecialPowers.pushPrefEnv({'set': gTestPrefs}, (function() {
+      this.nextTest();
+    }).bind(this));
   }
 
   // Registers that the test corresponding to 'token' has been started.

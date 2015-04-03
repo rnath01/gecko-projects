@@ -59,11 +59,11 @@ static const int32_t kDefaultTCPKeepCount =
 
 //-----------------------------------------------------------------------------
 
-class nsSocketTransportService MOZ_FINAL : public nsPISocketTransportService
-                                         , public nsIEventTarget
-                                         , public nsIThreadObserver
-                                         , public nsIRunnable
-                                         , public nsIObserver
+class nsSocketTransportService final : public nsPISocketTransportService
+                                     , public nsIEventTarget
+                                     , public nsIThreadObserver
+                                     , public nsIRunnable
+                                     , public nsIObserver
 {
     typedef mozilla::Mutex Mutex;
 

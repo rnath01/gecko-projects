@@ -1059,7 +1059,7 @@ nsFrameConstructorState::PushAbsoluteContainingBlock(nsContainerFrame* aNewAbsol
    * we're a transformed element.
    */
   mFixedPosIsAbsPos = aPositionedFrame &&
-      aPositionedFrame->StylePosition()->IsFixedPosContainingBlock(aPositionedFrame);
+      aPositionedFrame->StyleDisplay()->IsFixedPosContainingBlock(aPositionedFrame);
 
   if (aNewAbsoluteContainingBlock) {
     aNewAbsoluteContainingBlock->MarkAsAbsoluteContainingBlock();
@@ -3784,9 +3784,7 @@ nsCSSFrameConstructor::ConstructFrameFromItemInternal(FrameConstructionItem& aIt
 
     // If we need to create a block formatting context to wrap our
     // kids, do it now.
-    const nsStylePosition* position = styleContext->StylePosition();
     const nsStyleDisplay* maybeAbsoluteContainingBlockDisplay = display;
-    const nsStylePosition* maybeAbsoluteContainingBlockPosition = position;
     nsIFrame* maybeAbsoluteContainingBlockStyleFrame = primaryFrame;
     nsIFrame* maybeAbsoluteContainingBlock = newFrame;
     nsIFrame* possiblyLeafFrame = newFrame;
@@ -3813,7 +3811,6 @@ nsCSSFrameConstructor::ConstructFrameFromItemInternal(FrameConstructionItem& aIt
       const nsStyleDisplay* blockDisplay = blockContext->StyleDisplay();
       if (blockDisplay->IsAbsPosContainingBlock(blockFrame)) {
         maybeAbsoluteContainingBlockDisplay = blockDisplay;
-        maybeAbsoluteContainingBlockPosition = blockContext->StylePosition();
         maybeAbsoluteContainingBlock = blockFrame;
         maybeAbsoluteContainingBlockStyleFrame = blockFrame;
       }
@@ -3854,7 +3851,7 @@ nsCSSFrameConstructor::ConstructFrameFromItemInternal(FrameConstructionItem& aIt
         // display for the outer, but make the inner the containing block.
         if ((maybeAbsoluteContainingBlockDisplay->IsAbsolutelyPositionedStyle() ||
              maybeAbsoluteContainingBlockDisplay->IsRelativelyPositionedStyle() ||
-             maybeAbsoluteContainingBlockPosition->IsFixedPosContainingBlock(
+             maybeAbsoluteContainingBlockDisplay->IsFixedPosContainingBlock(
                  maybeAbsoluteContainingBlockStyleFrame)) &&
             !maybeAbsoluteContainingBlockStyleFrame->IsSVGText()) {
           nsContainerFrame* cf = static_cast<nsContainerFrame*>(
@@ -5983,7 +5980,7 @@ nsCSSFrameConstructor::GetAbsoluteContainingBlock(nsIFrame* aFrame,
     // not transformed, skip it.
     if (!frame->IsAbsPosContaininingBlock() ||
         (aType == FIXED_POS &&
-         !frame->StylePosition()->IsFixedPosContainingBlock(frame))) {
+         !frame->StyleDisplay()->IsFixedPosContainingBlock(frame))) {
       continue;
     }
     nsIFrame* absPosCBCandidate = frame;
@@ -9896,9 +9893,8 @@ nsCSSFrameConstructor::CreateNeededPseudoInternalRubyBoxes(
     return;
   }
 
-  nsStyleContext* parentStyle = aParentFrame->StyleContext();
-  if (!parentStyle->GetPseudo()) {
-    // Normally, pseudo frames start from and end at some elements,
+  if (!IsRubyPseudo(aParentFrame)) {
+    // Normally, ruby pseudo frames start from and end at some elements,
     // which means they don't have leading and trailing whitespaces at
     // all.  But there are two cases where they do actually have leading
     // or trailing whitespaces:
@@ -9913,6 +9909,7 @@ nsCSSFrameConstructor::CreateNeededPseudoInternalRubyBoxes(
 
   FCItemIterator iter(aItems);
   nsIContent* parentContent = aParentFrame->GetContent();
+  nsStyleContext* parentStyle = aParentFrame->StyleContext();
   while (!iter.IsDone()) {
     if (!iter.SkipItemsWantingParentType(ourParentType)) {
       if (ourParentType == eTypeRuby) {
@@ -10157,18 +10154,26 @@ nsCSSFrameConstructor::WrapItemsInPseudoParent(nsIContent* aParentContent,
                               wrapperStyle,
                               true, nullptr);
 
+  const nsStyleDisplay* disp = newItem->mStyleContext->StyleDisplay();
   // Here we're cheating a tad... technically, table-internal items should be
   // inline if aParentFrame is inline, but they'll get wrapped in an
   // inline-table in the end, so it'll all work out.  In any case, arguably
   // we don't need to maintain this state at this point... but it's better
   // to, I guess.
   newItem->mIsAllInline = newItem->mHasInlineEnds =
-    newItem->mStyleContext->StyleDisplay()->IsInlineOutsideStyle();
+    disp->IsInlineOutsideStyle();
 
-  // Table pseudo frames always induce line boundaries around their
-  // contents.
-  newItem->mChildItems.SetLineBoundaryAtStart(true);
-  newItem->mChildItems.SetLineBoundaryAtEnd(true);
+  bool isRuby = disp->IsRubyDisplayType();
+  // All types of ruby frames need a block frame to provide line layout,
+  // hence they are always line participant.
+  newItem->mIsLineParticipant = isRuby;
+
+  if (!isRuby) {
+    // Table pseudo frames always induce line boundaries around their
+    // contents.
+    newItem->mChildItems.SetLineBoundaryAtStart(true);
+    newItem->mChildItems.SetLineBoundaryAtEnd(true);
+  }
   // The parent of the items in aItems is also the parent of the items
   // in mChildItems
   newItem->mChildItems.SetParentHasNoXBLChildren(
