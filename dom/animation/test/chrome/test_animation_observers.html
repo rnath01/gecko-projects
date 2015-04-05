@@ -315,9 +315,9 @@ function assert_records(expected, desc) {
     assert_records([{ added: [firstAnimation], changed: [], removed: [] }],
                    "records after transition start");
 
-    // Wait for the Animation to get going, then seek well into
+    // Wait for the Animation to be playing, then seek well into
     // the transition.
-    yield await_frame();
+    yield firstAnimation.ready;
     firstAnimation.currentTime = 50000;
 
     // Reverse the transition by setting the background-color back to its
@@ -372,7 +372,8 @@ function assert_records(expected, desc) {
 
     // Wait for the Animations to get going, then seek well into
     // the transitions.
-    yield await_frame();
+    yield animations[0].ready;
+
     animations.forEach(p => p.currentTime = 50000);
 
     is(animations.filter(p => p.playState == "running").length, 3, "number of running Animations");

@@ -128,13 +128,11 @@ public:
    */
   bool PassPointerEventsToChildren();
 
-  nsIntPoint GetChromeDisplacement();
-
 protected:
   friend class AsyncFrameInit;
 
-  // Helper method to look up the HTML marginwidth & marginheight attributes
-  nsIntSize GetMarginAttributes();
+  // Helper method to look up the HTML marginwidth & marginheight attributes.
+  mozilla::CSSIntSize GetMarginAttributes();
 
   nsFrameLoader* FrameLoader();
 

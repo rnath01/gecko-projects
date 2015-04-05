@@ -186,7 +186,8 @@ CodeGenerator::visitValueToInt32(LValueToInt32* lir)
 
         // We can only handle strings in truncation contexts, like bitwise
         // operations.
-        Label* stringEntry, *stringRejoin;
+        Label* stringEntry;
+        Label* stringRejoin;
         Register stringReg;
         if (input->mightBeType(MIRType_String)) {
             stringReg = ToRegister(lir->temp());
@@ -1756,7 +1757,7 @@ void
 CodeGenerator::emitLambdaInit(Register output, Register scopeChain,
                               const LambdaFunctionInfo& info)
 {
-    MOZ_ASSERT(!!(info.flags & JSFunction::ARROW) == !!(info.flags & JSFunction::EXTENDED));
+    MOZ_ASSERT(info.fun->isArrow() == !!(info.flags & JSFunction::EXTENDED));
 
     // Initialize nargs and flags. We do this with a single uint32 to avoid
     // 16-bit writes.
@@ -8958,7 +8959,8 @@ CodeGenerator::visitClampVToUint8(LClampVToUint8* lir)
     Register output = ToRegister(lir->output());
     MDefinition* input = lir->mir()->input();
 
-    Label* stringEntry, *stringRejoin;
+    Label* stringEntry;
+    Label* stringRejoin;
     if (input->mightBeType(MIRType_String)) {
         OutOfLineCode* oolString = oolCallVM(StringToNumberInfo, lir, (ArgList(), output),
                                              StoreFloatRegisterTo(tempFloat));

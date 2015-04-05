@@ -57,6 +57,7 @@ public:
     , mPendingState(PendingState::NotPending)
     , mIsRunningOnCompositor(false)
     , mIsPreviousStateFinished(false)
+    , mFinishedAtLastComposeStyle(false)
     , mIsRelevant(false)
   {
   }
@@ -233,8 +234,11 @@ public:
    */
   bool IsPlaying() const
   {
-    return HasInPlaySource() && // Check we are in the active interval
-           PlayState() == AnimationPlayState::Running; // And not paused
+    // We need to have a source animation in its active interval, and
+    // be either running or waiting to run.
+    return HasInPlaySource() &&
+           (PlayState() == AnimationPlayState::Running ||
+            mPendingState == PendingState::PlayPending);
   }
 
   bool IsRelevant() const { return mIsRelevant; }
@@ -262,7 +266,18 @@ public:
 protected:
   void DoPlay(LimitBehavior aLimitBehavior);
   void DoPause();
-  void ResumeAt(const TimeDuration& aResumeTime);
+  void ResumeAt(const TimeDuration& aReadyTime);
+  void PauseAt(const TimeDuration& aReadyTime);
+  void FinishPendingAt(const TimeDuration& aReadyTime)
+  {
+    if (mPendingState == PendingState::PlayPending) {
+      ResumeAt(aReadyTime);
+    } else if (mPendingState == PendingState::PausePending) {
+      PauseAt(aReadyTime);
+    } else {
+      NS_NOTREACHED("Can't finish pending if we're not in a pending state");
+    }
+  }
 
   void UpdateTiming();
   void UpdateFinishedState(bool aSeekFlag = false);
@@ -321,6 +336,7 @@ protected:
   // Indicates whether we were in the finished state during our
   // most recent unthrottled sample (our last ComposeStyle call).
   bool mIsPreviousStateFinished; // Spec calls this "previous finished state"
+  bool mFinishedAtLastComposeStyle;
   // Indicates that the animation should be exposed in an element's
   // getAnimations() list.
   bool mIsRelevant;
