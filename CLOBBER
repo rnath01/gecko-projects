@@ -22,4 +22,7 @@
 # changes to stick? As of bug 928195, this shouldn't be necessary! Please
 # don't change CLOBBER for WebIDL changes any more.
 
+<<<<<<< local
 Bug 1107678: Trigger automated tests on emulator-kk
+=======
+Merge day clobber>>>>>>> other
