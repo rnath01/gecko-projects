@@ -67,11 +67,11 @@ class TabContext;
 class ContentBridgeParent;
 
 class ContentParent final : public PContentParent
-                              , public nsIContentParent
-                              , public nsIObserver
-                              , public nsIDOMGeoPositionCallback
-                              , public nsIDOMGeoPositionErrorCallback
-                              , public mozilla::LinkedListElement<ContentParent>
+                          , public nsIContentParent
+                          , public nsIObserver
+                          , public nsIDOMGeoPositionCallback
+                          , public nsIDOMGeoPositionErrorCallback
+                          , public mozilla::LinkedListElement<ContentParent>
 {
     typedef mozilla::ipc::GeckoChildProcessHost GeckoChildProcessHost;
     typedef mozilla::ipc::OptionalURIParams OptionalURIParams;
@@ -152,6 +152,12 @@ public:
                                         bool* aIsForBrowser,
                                         TabId* aTabId) override;
     virtual bool RecvBridgeToChildProcess(const ContentParentId& aCpId) override;
+
+    virtual bool RecvCreateGMPService() override;
+    virtual bool RecvGetGMPPluginVersionForAPI(const nsCString& aAPI,
+                                               nsTArray<nsCString>&& aTags,
+                                               bool* aHasPlugin,
+                                               nsCString* aVersion) override;
 
     virtual bool RecvLoadPlugin(const uint32_t& aPluginId, nsresult* aRv) override;
     virtual bool RecvConnectPluginBridge(const uint32_t& aPluginId, nsresult* aRv) override;
@@ -488,6 +494,9 @@ private:
 
     static void ForceKillTimerCallback(nsITimer* aTimer, void* aClosure);
 
+    PGMPServiceParent*
+    AllocPGMPServiceParent(mozilla::ipc::Transport* aTransport,
+                           base::ProcessId aOtherProcess) override;
     PCompositorParent*
     AllocPCompositorParent(mozilla::ipc::Transport* aTransport,
                            base::ProcessId aOtherProcess) override;
