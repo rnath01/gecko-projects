@@ -3749,7 +3749,7 @@ PresShell::ScrollFrameRectIntoView(nsIFrame*                aFrame,
       if (parent) {
         int32_t APD = container->PresContext()->AppUnitsPerDevPixel();
         int32_t parentAPD = parent->PresContext()->AppUnitsPerDevPixel();
-        rect = rect.ConvertAppUnitsRoundOut(APD, parentAPD);
+        rect = rect.ScaleToOtherAppUnitsRoundOut(APD, parentAPD);
         rect += extraOffset;
       }
     }
@@ -5168,6 +5168,8 @@ PresShell::PaintRangePaintInfo(nsTArray<nsAutoPtr<RangePaintInfo> >* aItems,
 
     pixelArea.width = NSToIntFloor(float(pixelArea.width) * scale);
     pixelArea.height = NSToIntFloor(float(pixelArea.height) * scale);
+    if (!pixelArea.width || !pixelArea.height)
+      return nullptr;
 
     // adjust the screen position based on the rescaled size
     nscoord left = rootScreenRect.x + pixelArea.x;
@@ -5735,7 +5737,7 @@ PresShell::ProcessSynthMouseMoveEvent(bool aFromScroll)
     nsIFrame* frame = view->GetFrame();
     NS_ASSERTION(frame, "floating views can't be anonymous");
     viewAPD = frame->PresContext()->AppUnitsPerDevPixel();
-    refpoint = mMouseLocation.ConvertAppUnits(APD, viewAPD);
+    refpoint = mMouseLocation.ScaleToOtherAppUnits(APD, viewAPD);
     refpoint -= view->GetOffsetTo(rootView);
     refpoint += view->ViewToWidgetOffset();
   }
@@ -5869,7 +5871,7 @@ PresShell::MarkImagesInSubtreeVisible(nsIFrame* aFrame, const nsRect& aRect)
       } else {
         rect.MoveBy(-aFrame->GetContentRectRelativeToSelf().TopLeft());
       }
-      rect = rect.ConvertAppUnitsRoundOut(
+      rect = rect.ScaleToOtherAppUnitsRoundOut(
         aFrame->PresContext()->AppUnitsPerDevPixel(),
         presShell->GetPresContext()->AppUnitsPerDevPixel());
 
@@ -8639,7 +8641,7 @@ PresShell::GetCurrentItemAndPositionForElement(nsIDOMElement *aCurrentEl,
           nsIFrame* f = do_QueryFrame(scrollFrame);
           int32_t APD = presContext->AppUnitsPerDevPixel();
           int32_t scrollAPD = f->PresContext()->AppUnitsPerDevPixel();
-          scrollAmount = scrollAmount.ConvertAppUnits(scrollAPD, APD);
+          scrollAmount = scrollAmount.ScaleToOtherAppUnits(scrollAPD, APD);
           if (extra > scrollAmount.height) {
             extra = scrollAmount.height;
           }
@@ -9087,8 +9089,6 @@ PresShell::DoReflow(nsIFrame* target, bool aInterruptible)
 #ifdef DEBUG
   mCurrentReflowRoot = target;
 #endif
-
-  target->WillReflow(mPresContext);
 
   // If the target frame is the root of the frame hierarchy, then
   // use all the available space. If it's simply a `reflow root',
@@ -10439,7 +10439,7 @@ static void RecurseIndiTotals(nsPresContext* aPresContext,
     printf("%s - %p   [%d][", name, (void*)aParentFrame, counter->mCount);
     printf("%d", counter->mCounter.GetTotal());
     printf("]\n");
-    nsMemory::Free(name);
+    free(name);
   }
 
   nsIFrame* child = aParentFrame->GetFirstPrincipalChild();
@@ -10459,7 +10459,7 @@ int ReflowCountMgr::DoSingleIndi(PLHashEntry *he, int i, void *arg)
     printf("%s - %p   [%d][", name, (void*)counter->mFrame, counter->mCount);
     printf("%d", counter->mCounter.GetTotal());
     printf("]\n");
-    nsMemory::Free(name);
+    free(name);
   }
   return HT_ENUMERATE_NEXT;
 }

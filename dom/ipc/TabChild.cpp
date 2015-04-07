@@ -1693,6 +1693,10 @@ bool
 TabChild::RecvLoadURL(const nsCString& aURI,
                       const BrowserConfiguration& aConfiguration)
 {
+    if (!InitTabChildGlobal()) {
+      return false;
+    }
+
     SetProcessNameToAppName();
 
     nsresult rv = WebNavigation()->LoadURI(NS_ConvertUTF8toUTF16(aURI).get(),
@@ -2026,8 +2030,8 @@ TabChild::RecvUpdateDimensions(const nsIntRect& rect, const ScreenIntSize& size,
     mOrientation = orientation;
     ScreenIntSize oldScreenSize = mInnerSize;
     mInnerSize = size;
-    mWidget->Resize(0, 0, size.width, size.height,
-                    true);
+    mWidget->Resize(rect.x + chromeDisp.x, rect.y + chromeDisp.y, size.width, size.height,
+                     true);
 
     nsCOMPtr<nsIBaseWindow> baseWin = do_QueryInterface(WebNavigation());
     baseWin->SetPositionAndSize(0, 0, size.width, size.height,

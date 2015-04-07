@@ -2760,6 +2760,7 @@ var gCSSProperties = {
     subproperties: [ "list-style-type", "list-style-position", "list-style-image" ],
     initial_values: [ "outside", "disc", "disc outside", "outside disc", "disc none", "none disc", "none disc outside", "none outside disc", "disc none outside", "disc outside none", "outside none disc", "outside disc none" ],
     other_values: [ "inside none", "none inside", "none none inside", "square", "none", "none none", "outside none none", "none outside none", "none none outside", "none outside", "outside none", "outside outside", "outside inside", "\\32 style", "\\32 style inside",
+      '"-"', "'-'", "inside '-'", "'-' outside", "none '-'", "inside none '-'",
       "symbols(\"*\" \"\\2020\" \"\\2021\" \"\\A7\")",
       "symbols(cyclic \"*\" \"\\2020\" \"\\2021\" \"\\A7\")",
       "inside symbols(\"*\" \"\\2020\" \"\\2021\" \"\\A7\")",
@@ -2837,6 +2838,7 @@ var gCSSProperties = {
       "-moz-ethiopic-halehame-am",
       "-moz-ethiopic-halehame-ti-er", "-moz-ethiopic-halehame-ti-et",
       "other-style", "inside", "outside", "\\32 style",
+      '"-"', "'-'",
       "symbols(\"*\" \"\\2020\" \"\\2021\" \"\\A7\")",
       "symbols(cyclic '*' '\\2020' '\\2021' '\\A7')"
     ],
@@ -3324,16 +3326,6 @@ var gCSSProperties = {
     other_values: [ "green", "rgba(255,128,0,0.5)", "transparent" ],
     invalid_values: [ "#0", "#00", "#0000", "#00000", "#0000000", "#00000000", "#000000000", "000000", "ff00ff" ]
   },
-  "-moz-text-decoration-color": {
-    domProp: "MozTextDecorationColor",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "text-decoration-color",
-    prerequisites: { "color": "black" },
-    initial_values: [ "currentColor", "-moz-use-text-color" ],
-    other_values: [ "green", "rgba(255,128,0,0.5)", "transparent" ],
-    invalid_values: [ "#0", "#00", "#0000", "#00000", "#0000000", "#00000000", "#000000000", "000000", "ff00ff" ]
-  },
   "text-decoration-line": {
     domProp: "textDecorationLine",
     inherited: false,
@@ -3342,28 +3334,10 @@ var gCSSProperties = {
     other_values: [ "underline", "overline", "line-through", "blink", "blink line-through underline", "underline overline line-through blink", "-moz-anchor-decoration", "blink -moz-anchor-decoration" ],
     invalid_values: [ "none none", "underline none", "none underline", "line-through blink line-through", "underline overline line-through blink none", "underline overline line-throuh blink blink" ]
   },
-  "-moz-text-decoration-line": {
-    domProp: "MozTextDecorationLine",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "text-decoration-line",
-    initial_values: [ "none" ],
-    other_values: [ "underline", "overline", "line-through", "blink", "blink line-through underline", "underline overline line-through blink", "-moz-anchor-decoration", "blink -moz-anchor-decoration" ],
-    invalid_values: [ "none none", "underline none", "none underline", "line-through blink line-through", "underline overline line-through blink none", "underline overline line-throuh blink blink" ]
-  },
   "text-decoration-style": {
     domProp: "textDecorationStyle",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    initial_values: [ "solid" ],
-    other_values: [ "double", "dotted", "dashed", "wavy", "-moz-none" ],
-    invalid_values: [ "none", "groove", "ridge", "inset", "outset", "solid dashed", "wave" ]
-  },
-  "-moz-text-decoration-style": {
-    domProp: "MozTextDecorationStyle",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "text-decoration-style",
     initial_values: [ "solid" ],
     other_values: [ "double", "dotted", "dashed", "wavy", "-moz-none" ],
     invalid_values: [ "none", "groove", "ridge", "inset", "outset", "solid dashed", "wave" ]

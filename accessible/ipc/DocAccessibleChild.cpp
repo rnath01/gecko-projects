@@ -15,6 +15,7 @@
 #include "TableCellAccessible.h"
 #include "nsIPersistentProperties2.h"
 #include "nsISimpleEnumerator.h"
+#include "nsAccUtils.h"
 
 namespace mozilla {
 namespace a11y {
@@ -1425,6 +1426,271 @@ DocAccessibleChild::RecvUnselectAll(const uint64_t& aID,
   Accessible* acc = IdToAccessibleSelect(aID);
   if (acc) {
     *aSuccess = acc->UnselectAll();
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvDoAction(const uint64_t& aID,
+                                 const uint8_t& aIndex,
+                                 bool* aSuccess)
+{
+  *aSuccess = false;
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    *aSuccess = acc->DoAction(aIndex);
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvActionCount(const uint64_t& aID,
+                                    uint8_t* aCount)
+{
+  *aCount = 0;
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    *aCount = acc->ActionCount();
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvActionDescriptionAt(const uint64_t& aID,
+                                            const uint8_t& aIndex,
+                                            nsString* aDescription)
+{
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    acc->ActionDescriptionAt(aIndex, *aDescription);
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvActionNameAt(const uint64_t& aID,
+                                     const uint8_t& aIndex,
+                                     nsString* aName)
+{
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    acc->ActionNameAt(aIndex, *aName);
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvAccessKey(const uint64_t& aID,
+                                  uint32_t* aKey,
+                                  uint32_t* aModifierMask)
+{
+  *aKey = 0;
+  *aModifierMask = 0;
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    KeyBinding kb = acc->AccessKey();
+    *aKey = kb.Key();
+    *aModifierMask = kb.ModifierMask();
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvKeyboardShortcut(const uint64_t& aID,
+                                         uint32_t* aKey,
+                                         uint32_t* aModifierMask)
+{
+  *aKey = 0;
+  *aModifierMask = 0;
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    KeyBinding kb = acc->KeyboardShortcut();
+    *aKey = kb.Key();
+    *aModifierMask = kb.ModifierMask();
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvCurValue(const uint64_t& aID,
+                                 double* aValue)
+{
+  *aValue = UnspecifiedNaN<double>();
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    *aValue = acc->CurValue();
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvSetCurValue(const uint64_t& aID,
+                                    const double& aValue,
+                                    bool* aRetVal)
+{
+  *aRetVal = false;
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    *aRetVal = acc->SetCurValue(aValue);
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvMinValue(const uint64_t& aID,
+                                 double* aValue)
+{
+  *aValue = UnspecifiedNaN<double>();
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    *aValue = acc->MinValue();
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvMaxValue(const uint64_t& aID,
+                                 double* aValue)
+{
+  *aValue = UnspecifiedNaN<double>();
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    *aValue = acc->MaxValue();
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvStep(const uint64_t& aID,
+                             double* aStep)
+{
+  *aStep = UnspecifiedNaN<double>();
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    *aStep = acc->Step();
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvTakeFocus(const uint64_t& aID)
+{
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    acc->TakeFocus();
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvChildAtPoint(const uint64_t& aID,
+                                     const int32_t& aX,
+                                     const int32_t& aY,
+                                     const uint32_t& aWhich,
+                                     uint64_t* aChild,
+                                     bool* aOk)
+{
+  *aChild = 0;
+  *aOk = false;
+  Accessible* acc = IdToAccessible(aID);
+  if (acc && !acc->IsDefunct() && !nsAccUtils::MustPrune(acc)) {
+    Accessible* child =
+      acc->ChildAtPoint(aX, aY,
+                        static_cast<Accessible::EWhichChildAtPoint>(aWhich));
+    if (child) {
+      *aChild = reinterpret_cast<uint64_t>(child->UniqueID());
+      *aOk = true;
+    }
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvBounds(const uint64_t& aID,
+                               nsIntRect* aRect)
+{
+  Accessible* acc = IdToAccessible(aID);
+  if (acc && !acc->IsDefunct()) {
+    *aRect = acc->Bounds();
+  }
+
+  return false;
+}
+
+bool
+DocAccessibleChild::RecvLanguage(const uint64_t& aID,
+                                 nsString* aLocale)
+{
+  Accessible* acc = IdToAccessible(aID);
+  if (acc) {
+    acc->Language(*aLocale);
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvDocType(const uint64_t& aID,
+                                nsString* aType)
+{
+  Accessible* acc = IdToAccessible(aID);
+  if (acc && acc->IsDoc()) {
+    acc->AsDoc()->DocType(*aType);
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvURL(const uint64_t& aID,
+                            nsString* aURL)
+{
+  Accessible* acc = IdToAccessible(aID);
+  if (acc && acc->IsDoc()) {
+    acc->AsDoc()->URL(*aURL);
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvMimeType(const uint64_t& aID,
+                                 nsString* aMime)
+{
+  Accessible* acc = IdToAccessible(aID);
+  if (acc && acc->IsDoc()) {
+    acc->AsDoc()->MimeType(*aMime);
+  }
+
+  return true;
+}
+
+bool
+DocAccessibleChild::RecvURLDocTypeMimeType(const uint64_t& aID,
+                                           nsString* aURL,
+                                           nsString* aDocType,
+                                           nsString* aMimeType)
+{
+  Accessible* acc = IdToAccessible(aID);
+  if (acc && acc->IsDoc()) {
+    DocAccessible* doc = acc->AsDoc();
+    doc->URL(*aURL);
+    doc->DocType(*aDocType);
+    doc->MimeType(*aMimeType);
   }
 
   return true;

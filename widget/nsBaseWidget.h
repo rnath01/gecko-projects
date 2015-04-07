@@ -262,7 +262,8 @@ public:
 
   nsPopupLevel PopupLevel() { return mPopupLevel; }
 
-  virtual nsIntSize       ClientToWindowSize(const nsIntSize& aClientSize) override
+  virtual mozilla::LayoutDeviceIntSize
+  ClientToWindowSize(const mozilla::LayoutDeviceIntSize& aClientSize) override
   {
     return aClientSize;
   }
@@ -331,6 +332,7 @@ protected:
                              nsWidgetInitData *aInitData);
 
   virtual void ConfigureAPZCTreeManager();
+  virtual void ConfigureAPZControllerThread();
   virtual already_AddRefed<GeckoContentController> CreateRootContentController();
 
   // Dispatch an event that has already been routed through APZ.
@@ -446,6 +448,7 @@ protected:
    * reached (This is the case with gtk2 for instance).
    */
   void DestroyCompositor();
+  void DestroyLayerManager();
 
   nsIWidgetListener* mWidgetListener;
   nsIWidgetListener* mAttachedWidgetListener;

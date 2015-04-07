@@ -409,32 +409,35 @@ AddAnimationsForProperty(nsIFrame* aFrame, nsCSSProperty aProperty,
                          Layer* aLayer, AnimationData& aData,
                          bool aPending)
 {
+  MOZ_ASSERT(nsCSSProps::PropHasFlags(aProperty,
+                                      CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR),
+             "inconsistent property flags");
+
+  // Add from first to last (since last overrides)
   for (size_t playerIdx = 0; playerIdx < aPlayers.Length(); playerIdx++) {
     AnimationPlayer* player = aPlayers[playerIdx];
-    if (!player->IsRunning()) {
+    if (!player->IsPlaying()) {
       continue;
     }
     dom::Animation* anim = player->GetSource();
-    if (!anim) {
-      continue;
-    }
+    MOZ_ASSERT(anim, "A playing player should have a source animation");
     const AnimationProperty* property =
       anim->GetAnimationOfProperty(aProperty);
     if (!property) {
       continue;
     }
 
-    if (!property->mWinsInCascade) {
-      // We have an animation or transition, but it isn't actually
-      // winning in the CSS cascade, so we don't want to send it to the
-      // compositor.
-      // I believe that anything that changes mWinsInCascade should
-      // trigger this code again, either because of a restyle that
-      // changes the properties in question, or because of the
-      // main-thread style update that results when an animation stops
-      // filling.
-      continue;
-    }
+    // Note that if mWinsInCascade on property was  false,
+    // GetAnimationOfProperty returns null instead.
+    // This is what we want, since if we have an animation or transition
+    // that isn't actually winning in the CSS cascade, we don't want to
+    // send it to the compositor.
+    // I believe that anything that changes mWinsInCascade should
+    // trigger this code again, either because of a restyle that changes
+    // the properties in question, or because of the main-thread style
+    // update that results when an animation stops being in effect.
+    MOZ_ASSERT(property->mWinsInCascade,
+               "GetAnimationOfProperty already tested mWinsInCascade");
 
     // Don't add animations that are pending when their corresponding
     // refresh driver is under test control. This is because any pending
@@ -464,6 +467,10 @@ nsDisplayListBuilder::AddAnimationsAndTransitionsToLayer(Layer* aLayer,
                                                          nsIFrame* aFrame,
                                                          nsCSSProperty aProperty)
 {
+  MOZ_ASSERT(nsCSSProps::PropHasFlags(aProperty,
+                                      CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR),
+             "inconsistent property flags");
+
   // This function can be called in two ways:  from
   // nsDisplay*::BuildLayer while constructing a layer (with all
   // pointers non-null), or from RestyleManager's handling of
@@ -554,6 +561,8 @@ nsDisplayListBuilder::AddAnimationsAndTransitionsToLayer(Layer* aLayer,
     data = null_t();
   }
 
+  // When both are running, animations override transitions.  We want
+  // to add the ones that override last.
   if (transitions) {
     AddAnimationsForProperty(aFrame, aProperty, transitions->mPlayers,
                              aLayer, data, pending);
@@ -891,6 +900,7 @@ nsDisplayScrollLayer::ComputeFrameMetrics(nsIFrame* aForFrame,
       if (widget) {
         nsIntRect widgetBounds;
         widget->GetBounds(widgetBounds);
+        widgetBounds.MoveTo(0,0);
         metrics.mCompositionBounds = ParentLayerRect(ViewAs<ParentLayerPixel>(widgetBounds));
 #ifdef MOZ_WIDGET_ANDROID
         if (frameBounds.height < metrics.mCompositionBounds.height) {
@@ -1547,7 +1557,7 @@ nsDisplayList::ComputeVisibilityForSublist(nsDisplayListBuilder* aBuilder,
 }
 
 static bool
-StartPendingAnimationsOnSubDocuments(nsIDocument* aDocument, void* aReadyTime)
+TriggerPendingAnimationsOnSubDocuments(nsIDocument* aDocument, void* aReadyTime)
 {
   PendingPlayerTracker* tracker = aDocument->GetPendingPlayerTracker();
   if (tracker) {
@@ -1556,22 +1566,22 @@ StartPendingAnimationsOnSubDocuments(nsIDocument* aDocument, void* aReadyTime)
     // this document yet so we shouldn't start animations
     if (!shell || !shell->IsPaintingSuppressed()) {
       const TimeStamp& readyTime = *static_cast<TimeStamp*>(aReadyTime);
-      tracker->StartPendingPlayersOnNextTick(readyTime);
+      tracker->TriggerPendingPlayersOnNextTick(readyTime);
     }
   }
-  aDocument->EnumerateSubDocuments(StartPendingAnimationsOnSubDocuments,
+  aDocument->EnumerateSubDocuments(TriggerPendingAnimationsOnSubDocuments,
                                    aReadyTime);
   return true;
 }
 
 static void
-StartPendingAnimations(nsIDocument* aDocument,
+TriggerPendingAnimations(nsIDocument* aDocument,
                        const TimeStamp& aReadyTime) {
   MOZ_ASSERT(!aReadyTime.IsNull(),
              "Animation ready time is not set. Perhaps we're using a layer"
              " manager that doesn't update it");
-  StartPendingAnimationsOnSubDocuments(aDocument,
-                                       const_cast<TimeStamp*>(&aReadyTime));
+  TriggerPendingAnimationsOnSubDocuments(aDocument,
+                                         const_cast<TimeStamp*>(&aReadyTime));
 }
 
 /**
@@ -1770,7 +1780,7 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
   layerBuilder->DidEndTransaction();
 
   if (document && widgetTransaction) {
-    StartPendingAnimations(document, layerManager->GetAnimationReadyTime());
+    TriggerPendingAnimations(document, layerManager->GetAnimationReadyTime());
   }
 
   nsIntRegion invalid;
@@ -2027,6 +2037,14 @@ static bool IsContentLEQ(nsDisplayItem* aItem1, nsDisplayItem* aItem2,
   return nsLayoutUtils::CompareTreePosition(content1, content2, commonAncestor) <= 0;
 }
 
+static bool IsCSSOrderLEQ(nsDisplayItem* aItem1, nsDisplayItem* aItem2, void*) {
+  nsIFrame* frame1 = aItem1->Frame();
+  nsIFrame* frame2 = aItem2->Frame();
+  int32_t order1 = frame1 ? frame1->StylePosition()->mOrder : 0;
+  int32_t order2 = frame2 ? frame2->StylePosition()->mOrder : 0;
+  return order1 <= order2;
+}
+
 static bool IsZOrderLEQ(nsDisplayItem* aItem1, nsDisplayItem* aItem2,
                         void* aClosure) {
   // Note that we can't just take the difference of the two
@@ -2034,14 +2052,17 @@ static bool IsZOrderLEQ(nsDisplayItem* aItem1, nsDisplayItem* aItem2,
   return aItem1->ZIndex() <= aItem2->ZIndex();
 }
 
-void nsDisplayList::SortByZOrder(nsDisplayListBuilder* aBuilder,
-                                 nsIContent* aCommonAncestor) {
-  Sort(aBuilder, IsZOrderLEQ, aCommonAncestor);
+void nsDisplayList::SortByZOrder(nsDisplayListBuilder* aBuilder) {
+  Sort(aBuilder, IsZOrderLEQ, nullptr);
 }
 
 void nsDisplayList::SortByContentOrder(nsDisplayListBuilder* aBuilder,
                                        nsIContent* aCommonAncestor) {
   Sort(aBuilder, IsContentLEQ, aCommonAncestor);
+}
+
+void nsDisplayList::SortByCSSOrder(nsDisplayListBuilder* aBuilder) {
+  Sort(aBuilder, IsCSSOrderLEQ, nullptr);
 }
 
 void nsDisplayList::Sort(nsDisplayListBuilder* aBuilder,
@@ -3007,11 +3028,6 @@ nsDisplayThemedBackground::GetBoundsInternal() {
   presContext->GetTheme()->
       GetWidgetOverflow(presContext->DeviceContext(), mFrame,
                         mFrame->StyleDisplay()->mAppearance, &r);
-#ifdef XP_MACOSX
-  // Bug 748219
-  r.Inflate(mFrame->PresContext()->AppUnitsPerDevPixel());
-#endif
-
   return r + ToReferenceFrame();
 }
 
@@ -4874,7 +4890,7 @@ nsRect nsDisplayZoom::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
 {
   nsRect bounds = nsDisplaySubDocument::GetBounds(aBuilder, aSnap);
   *aSnap = false;
-  return bounds.ConvertAppUnitsRoundOut(mAPD, mParentAPD);
+  return bounds.ScaleToOtherAppUnitsRoundOut(mAPD, mParentAPD);
 }
 
 void nsDisplayZoom::HitTest(nsDisplayListBuilder *aBuilder,
@@ -4886,10 +4902,10 @@ void nsDisplayZoom::HitTest(nsDisplayListBuilder *aBuilder,
   // A 1x1 rect indicates we are just hit testing a point, so pass down a 1x1
   // rect as well instead of possibly rounding the width or height to zero.
   if (aRect.width == 1 && aRect.height == 1) {
-    rect.MoveTo(aRect.TopLeft().ConvertAppUnits(mParentAPD, mAPD));
+    rect.MoveTo(aRect.TopLeft().ScaleToOtherAppUnits(mParentAPD, mAPD));
     rect.width = rect.height = 1;
   } else {
-    rect = aRect.ConvertAppUnitsRoundOut(mParentAPD, mAPD);
+    rect = aRect.ScaleToOtherAppUnitsRoundOut(mParentAPD, mAPD);
   }
   mList.HitTest(aBuilder, rect, aState, aOutFrames);
 }
@@ -4901,11 +4917,11 @@ bool nsDisplayZoom::ComputeVisibility(nsDisplayListBuilder *aBuilder,
   nsRegion visibleRegion;
   // mVisibleRect has been clipped to GetClippedBounds
   visibleRegion.And(*aVisibleRegion, mVisibleRect);
-  visibleRegion = visibleRegion.ConvertAppUnitsRoundOut(mParentAPD, mAPD);
+  visibleRegion = visibleRegion.ScaleToOtherAppUnitsRoundOut(mParentAPD, mAPD);
   nsRegion originalVisibleRegion = visibleRegion;
 
   nsRect transformedVisibleRect =
-    mVisibleRect.ConvertAppUnitsRoundOut(mParentAPD, mAPD);
+    mVisibleRect.ScaleToOtherAppUnitsRoundOut(mParentAPD, mAPD);
   bool retval;
   // If we are to generate a scrollable layer we call
   // nsDisplaySubDocument::ComputeVisibility to make the necessary adjustments
@@ -4924,7 +4940,7 @@ bool nsDisplayZoom::ComputeVisibility(nsDisplayListBuilder *aBuilder,
   // removed = originalVisibleRegion - visibleRegion
   removed.Sub(originalVisibleRegion, visibleRegion);
   // Convert removed region to parent appunits.
-  removed = removed.ConvertAppUnitsRoundIn(mAPD, mParentAPD);
+  removed = removed.ScaleToOtherAppUnitsRoundIn(mAPD, mParentAPD);
   // aVisibleRegion = aVisibleRegion - removed (modulo any simplifications
   // SubtractFromVisibleRegion does)
   aBuilder->SubtractFromVisibleRegion(aVisibleRegion, removed);

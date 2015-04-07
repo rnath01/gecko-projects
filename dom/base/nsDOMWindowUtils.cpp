@@ -2527,7 +2527,7 @@ nsDOMWindowUtils::StopFrameTimeRecording(uint32_t   startIndex,
   mgr->StopFrameTimeRecording(startIndex, tmpFrameIntervals);
   *frameCount = tmpFrameIntervals.Length();
 
-  *frameIntervals = (float*)nsMemory::Alloc(*frameCount * sizeof(float));
+  *frameIntervals = (float*)moz_xmalloc(*frameCount * sizeof(float));
 
   /* copy over the frame intervals and paint times into the arrays we just allocated */
   for (uint32_t i = 0; i < *frameCount; i++) {
@@ -2595,7 +2595,7 @@ nsDOMWindowUtils::AdvanceTimeAndRefresh(int64_t aMilliseconds)
   if (doc) {
     PendingPlayerTracker* tracker = doc->GetPendingPlayerTracker();
     if (tracker) {
-      tracker->StartPendingPlayersNow();
+      tracker->TriggerPendingPlayersNow();
     }
   }
 
@@ -3982,6 +3982,32 @@ nsDOMWindowUtils::GetFramesReflowed(uint64_t* aResult)
   }
 
   *aResult = presContext->FramesReflowedCount();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::SetServiceWorkersTestingEnabled(bool aEnabled)
+{
+  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
+
+  nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
+  NS_ENSURE_STATE(window);
+
+  window->SetServiceWorkersTestingEnabled(aEnabled);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::GetServiceWorkersTestingEnabled(bool *aEnabled)
+{
+  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
+
+  nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
+  NS_ENSURE_STATE(window);
+
+  *aEnabled = window->GetServiceWorkersTestingEnabled();
+
   return NS_OK;
 }
 

@@ -80,6 +80,7 @@
 #include "nsICancelable.h"
 #include "gfxPrefs.h"
 #include "nsILoginManagerPrompter.h"
+#include "nsPIWindowRoot.h"
 #include <algorithm>
 
 using namespace mozilla::dom;
@@ -265,8 +266,8 @@ TabParent::TabParent(nsIContentParent* aManager,
   , mOrientation(0)
   , mDPI(0)
   , mDefaultScale(0)
-  , mShown(false)
   , mUpdatedDimensions(false)
+  , mChromeOffset(0, 0)
   , mManager(aManager)
   , mMarkedDestroying(false)
   , mIsDestroyed(false)
@@ -276,6 +277,7 @@ TabParent::TabParent(nsIContentParent* aManager,
   , mInitedByParent(false)
   , mTabId(aTabId)
   , mCreatingWindow(false)
+  , mNeedLayerTreeReadyNotification(false)
 {
   MOZ_ASSERT(aManager);
 }
@@ -324,8 +326,34 @@ TabParent::CacheFrameLoader(nsFrameLoader* aFrameLoader)
 void
 TabParent::SetOwnerElement(Element* aElement)
 {
+  // If we held previous content then unregister for its events.
+  RemoveWindowListeners();
+
+  // Update to the new content, and register to listen for events from it.
   mFrameElement = aElement;
+  if (mFrameElement && mFrameElement->OwnerDoc()->GetWindow()) {
+    nsCOMPtr<nsPIDOMWindow> window = mFrameElement->OwnerDoc()->GetWindow();
+    nsCOMPtr<EventTarget> eventTarget = window->GetTopWindowRoot();
+    if (eventTarget) {
+      eventTarget->AddEventListener(NS_LITERAL_STRING("MozUpdateWindowPos"),
+                                    this, false, false);
+    }
+  }
+
   TryCacheDPIAndScale();
+}
+
+void
+TabParent::RemoveWindowListeners()
+{
+  if (mFrameElement && mFrameElement->OwnerDoc()->GetWindow()) {
+    nsCOMPtr<nsPIDOMWindow> window = mFrameElement->OwnerDoc()->GetWindow();
+    nsCOMPtr<EventTarget> eventTarget = window->GetTopWindowRoot();
+    if (eventTarget) {
+      eventTarget->RemoveEventListener(NS_LITERAL_STRING("MozUpdateWindowPos"),
+                                       this, false);
+    }
+  }
 }
 
 void
@@ -725,13 +753,6 @@ TabParent::LoadURL(nsIURI* aURI)
         return;
     }
 
-    if (!mShown) {
-        NS_WARNING(nsPrintfCString("TabParent::LoadURL(%s) called before "
-                                   "Show(). Ignoring LoadURL.\n",
-                                   spec.get()).get());
-        return;
-    }
-
     uint32_t appId = OwnOrContainingAppId();
     if (mSendOfflineStatus && NS_IsAppOffline(appId)) {
       // If the app is offline in the parent process
@@ -795,8 +816,6 @@ TabParent::LoadURL(nsIURI* aURI)
 void
 TabParent::Show(const ScreenIntSize& size, bool aParentIsActive)
 {
-    // sigh
-    mShown = true;
     mDimensions = size;
     if (mIsDestroyed) {
         return;
@@ -879,8 +898,7 @@ TabParent::RecvSetDimensions(const uint32_t& aFlags,
 }
 
 void
-TabParent::UpdateDimensions(const nsIntRect& rect, const ScreenIntSize& size,
-                            const nsIntPoint& aChromeDisp)
+TabParent::UpdateDimensions(const nsIntRect& rect, const ScreenIntSize& size)
 {
   if (mIsDestroyed) {
     return;
@@ -888,15 +906,25 @@ TabParent::UpdateDimensions(const nsIntRect& rect, const ScreenIntSize& size,
   hal::ScreenConfiguration config;
   hal::GetCurrentScreenConfiguration(&config);
   ScreenOrientation orientation = config.orientation();
+  nsIntPoint chromeOffset = -LayoutDevicePixel::ToUntyped(GetChildProcessOffset());
 
   if (!mUpdatedDimensions || mOrientation != orientation ||
-      mDimensions != size || !mRect.IsEqualEdges(rect)) {
+      mDimensions != size || !mRect.IsEqualEdges(rect) ||
+      chromeOffset != mChromeOffset) {
+    nsCOMPtr<nsIWidget> widget = GetWidget();
+    nsIntRect contentRect = rect;
+    if (widget) {
+      contentRect.x += widget->GetClientOffset().x;
+      contentRect.y += widget->GetClientOffset().y;
+    }
+
     mUpdatedDimensions = true;
-    mRect = rect;
+    mRect = contentRect;
     mDimensions = size;
     mOrientation = orientation;
+    mChromeOffset = chromeOffset;
 
-    unused << SendUpdateDimensions(mRect, mDimensions, mOrientation, aChromeDisp);
+    unused << SendUpdateDimensions(mRect, mDimensions, mOrientation, mChromeOffset);
   }
 }
 
@@ -1541,13 +1569,14 @@ TabParent::RecvNotifyIMEFocus(const bool& aFocus,
                               nsIMEUpdatePreference* aPreference,
                               uint32_t* aSeqno)
 {
+  *aSeqno = mIMESeqno;
+
   nsCOMPtr<nsIWidget> widget = GetWidget();
   if (!widget) {
     *aPreference = nsIMEUpdatePreference();
     return true;
   }
 
-  *aSeqno = mIMESeqno;
   mIMETabParent = aFocus ? this : nullptr;
   mIMESelectionAnchor = 0;
   mIMESelectionFocus = 0;
@@ -2355,6 +2384,12 @@ TabParent::RecvGetRenderFrameInfo(PRenderFrameParent* aRenderFrame,
   RenderFrameParent* renderFrame = static_cast<RenderFrameParent*>(aRenderFrame);
   renderFrame->GetTextureFactoryIdentifier(aTextureFactoryIdentifier);
   *aLayersId = renderFrame->GetLayersId();
+
+  if (mNeedLayerTreeReadyNotification) {
+    RequestNotifyLayerTreeReady();
+    mNeedLayerTreeReadyNotification = false;
+  }
+
   return true;
 }
 
@@ -2461,7 +2496,7 @@ TabParent::RecvBrowserFrameOpenWindow(PBrowserParent* aOpener,
   BrowserElementParent::OpenWindowResult opened =
     BrowserElementParent::OpenWindowOOP(TabParent::GetFrom(aOpener),
                                         this, aURL, aName, aFeatures);
-  *aOutWindowOpened = (opened != BrowserElementParent::OPEN_WINDOW_CANCELLED);
+  *aOutWindowOpened = (opened == BrowserElementParent::OPEN_WINDOW_ADDED);
   return true;
 }
 
@@ -2657,11 +2692,11 @@ TabParent::RequestNotifyLayerTreeReady()
 {
   RenderFrameParent* frame = GetRenderFrame();
   if (!frame) {
-    return false;
+    mNeedLayerTreeReadyNotification = true;
+  } else {
+    CompositorParent::RequestNotifyLayerTreeReady(frame->GetLayersId(),
+                                                  new LayerTreeUpdateObserver());
   }
-
-  CompositorParent::RequestNotifyLayerTreeReady(frame->GetLayersId(),
-                                                new LayerTreeUpdateObserver());
   return true;
 }
 
@@ -2733,10 +2768,31 @@ TabParent::DeallocPPluginWidgetParent(mozilla::plugins::PPluginWidgetParent* aAc
   return true;
 }
 
+nsresult
+TabParent::HandleEvent(nsIDOMEvent* aEvent)
+{
+  nsAutoString eventType;
+  aEvent->GetType(eventType);
+
+  if (eventType.EqualsLiteral("MozUpdateWindowPos") && !mIsDestroyed) {
+    // This event is sent when the widget moved.  Therefore we only update
+    // the position.
+    nsRefPtr<nsFrameLoader> frameLoader = GetFrameLoader();
+    if (!frameLoader) {
+      return NS_OK;
+    }
+    nsIntRect windowDims;
+    NS_ENSURE_SUCCESS(frameLoader->GetWindowDimensions(windowDims), NS_ERROR_FAILURE);
+    UpdateDimensions(windowDims, mDimensions);
+    return NS_OK;
+  }
+  return NS_OK;
+}
+
 class FakeChannel final : public nsIChannel,
-                              public nsIAuthPromptCallback,
-                              public nsIInterfaceRequestor,
-                              public nsILoadContext
+                          public nsIAuthPromptCallback,
+                          public nsIInterfaceRequestor,
+                          public nsILoadContext
 {
 public:
   FakeChannel(const nsCString& aUri, uint64_t aCallbackId, Element* aElement)
