@@ -422,11 +422,6 @@ pref("security.apps.certified.CSP.default", "default-src * data: blob:; script-s
 // Default Content Security Policy to apply to trusted apps.
 pref("security.apps.trusted.CSP.default", "default-src * data: blob:; object-src 'none'; frame-src 'none'");
 
-// Temporarily force-enable GL compositing.  This is default-disabled
-// deep within the bowels of the widgetry system.  Remove me when GL
-// compositing isn't default disabled in widget/android.
-pref("layers.acceleration.force-enabled", true);
-
 // handle links targeting new windows
 // 1=current window/tab, 2=new window, 3=new tab in most recent window
 pref("browser.link.open_newwindow", 3);
@@ -1108,6 +1103,9 @@ pref("dom.udpsocket.enabled", true);
 // Enable TV Manager API
 pref("dom.tv.enabled", true);
 
+// Enable Inputport Manager API
+pref("dom.inputport.enabled", true);
+
 pref("dom.mozSettings.SettingsDB.debug.enabled", true);
 pref("dom.mozSettings.SettingsManager.debug.enabled", true);
 pref("dom.mozSettings.SettingsRequestManager.debug.enabled", true);
@@ -1126,23 +1124,8 @@ pref("dom.mozSettings.allowForceReadOnly", false);
 // RequestSync API is enabled by default on B2G.
 pref("dom.requestSync.enabled", true);
 
-// Only enable for kit kat and above devices
-// kit kat == 19, L = 21, 20 is kit-kat for wearables
-// 15 is for the ICS emulators which will fallback to software vsync
-#if ANDROID_VERSION == 19 || ANDROID_VERSION == 21 || ANDROID_VERSION == 15
+// Use vsync aligned rendering
 pref("gfx.vsync.hw-vsync.enabled", true);
 pref("gfx.vsync.compositor", true);
 pref("gfx.touch.resample", true);
-#else
-pref("gfx.vsync.hw-vsync.enabled", false);
-pref("gfx.vsync.compositor", false);
-pref("gfx.touch.resample", false);
-#endif
-
-// Bug 1147753 - Weird issues with vsync refresh driver on L devices
-// so disable them on L, but enable on KK and ICS
-#if ANDROID_VERSION == 19 || ANDROID_VERSION == 15
 pref("gfx.vsync.refreshdriver", true);
-#else
-pref("gfx.vsync.refreshdriver", false);
-#endif
