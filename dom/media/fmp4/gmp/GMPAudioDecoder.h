@@ -47,7 +47,7 @@ private:
 
 class GMPAudioDecoder : public MediaDataDecoder {
 protected:
-  GMPAudioDecoder(const mp4_demuxer::AudioDecoderConfig& aConfig,
+  GMPAudioDecoder(const AudioInfo& aConfig,
                   MediaTaskQueue* aTaskQueue,
                   MediaDataDecoderCallbackProxy* aCallback,
                   AudioCallbackAdapter* aAdapter)
@@ -59,7 +59,7 @@ protected:
   }
 
 public:
-  GMPAudioDecoder(const mp4_demuxer::AudioDecoderConfig& aConfig,
+  GMPAudioDecoder(const AudioInfo& aConfig,
                   MediaTaskQueue* aTaskQueue,
                   MediaDataDecoderCallbackProxy* aCallback)
    : mConfig(aConfig)
@@ -70,7 +70,7 @@ public:
   }
 
   virtual nsresult Init() override;
-  virtual nsresult Input(mp4_demuxer::MP4Sample* aSample) override;
+  virtual nsresult Input(MediaRawData* aSample) override;
   virtual nsresult Flush() override;
   virtual nsresult Drain() override;
   virtual nsresult Shutdown() override;
@@ -137,7 +137,7 @@ private:
   };
   void GMPInitDone(GMPAudioDecoderProxy* aGMP);
 
-  const mp4_demuxer::AudioDecoderConfig& mConfig;
+  const AudioInfo& mConfig;
   MediaDataDecoderCallbackProxy* mCallback;
   nsCOMPtr<mozIGeckoMediaPluginService> mMPS;
   GMPAudioDecoderProxy* mGMP;

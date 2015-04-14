@@ -736,6 +736,7 @@ this.DOMApplicationRegistry = {
   loadAndUpdateApps: function() {
     return Task.spawn(function*() {
       let runUpdate = AppsUtils.isFirstRun(Services.prefs);
+      let loadAppPermission = Services.prefs.getBoolPref("dom.apps.reset-permissions");
 
       yield this.loadCurrentRegistry();
 
@@ -764,7 +765,7 @@ this.DOMApplicationRegistry = {
         }
       } catch(e) {} // getCharPref will throw on non-b2g platforms. That's ok.
 
-      if (runUpdate) {
+      if (runUpdate || !loadAppPermission) {
 
         // Run migration before uninstall of core apps happens.
         let appMigrator = Components.classes["@mozilla.org/app-migrator;1"];
@@ -796,6 +797,8 @@ this.DOMApplicationRegistry = {
         // Need to update the persisted list of apps since
         // installPreinstalledApp() removes the ones failing to install.
         this._saveApps();
+
+	Services.prefs.setBoolPref("dom.apps.reset-permissions", true);
       }
 
       // DataStores must be initialized at startup.
@@ -2556,6 +2559,13 @@ this.DOMApplicationRegistry = {
     // Hosted apps can't be trusted or certified, so just check that the
     // manifest doesn't ask for those.
     function checkAppStatus(aManifest) {
+      try {
+        // Everything is authorized in developer mode.
+        if (Services.prefs.getBoolPref("dom.apps.developer_mode")) {
+          return true;
+        }
+      } catch(e) {}
+
       let manifestStatus = aManifest.type || "web";
       return manifestStatus === "web" ||
              manifestStatus === "trusted";
@@ -3901,8 +3911,24 @@ this.DOMApplicationRegistry = {
                     ? Ci.nsIPrincipal.APP_STATUS_PRIVILEGED
                     : Ci.nsIPrincipal.APP_STATUS_INSTALLED;
 
+    try {
+      // Anything is possible in developer mode.
+      if (Services.prefs.getBoolPref("dom.apps.developer_mode")) {
+        maxStatus = Ci.nsIPrincipal.APP_STATUS_CERTIFIED;
+      }
+    } catch(e) {};
+
+    let allowUnsignedLangpack = false;
+    try  {
+      allowUnsignedLangpack =
+        Services.prefs.getBoolPref("dom.apps.allow_unsigned_langpacks") ||
+        Services.prefs.getBoolPref("dom.apps.developer_mode");
+    } catch(e) {}
+    let isLangPack = newManifest.role === "langpack" &&
+                     (aIsSigned || allowUnsignedLangpack);
+
     let status = AppsUtils.getAppManifestStatus(newManifest);
-    if (status > maxStatus) {
+    if (status > maxStatus && !isLangPack) {
       throw "INVALID_SECURITY_LEVEL";
     }
 

@@ -541,12 +541,7 @@ nsDOMWindowUtils::GetResolution(float* aResolution)
     return NS_ERROR_FAILURE;
   }
 
-  nsIScrollableFrame* sf = presShell->GetRootScrollFrameAsScrollable();
-  if (sf) {
-    *aResolution = sf->GetResolution();
-  } else {
-    *aResolution = presShell->GetResolution();
-  }
+  *aResolution = nsLayoutUtils::GetResolution(presShell);
 
   return NS_OK;
 }
@@ -1032,6 +1027,12 @@ nsDOMWindowUtils::SendWheelEvent(float aX,
   wheelEvent.refPoint = ToWidgetPoint(CSSPoint(aX, aY), offset, presContext);
 
   widget->DispatchAPZAwareEvent(&wheelEvent);
+
+  if (gfxPrefs::AsyncPanZoomEnabled()) {
+    // Computing overflow deltas is not compatible with APZ, so if APZ is
+    // enabled, we skip testing it.
+    return NS_OK;
+  }
 
   bool failedX = false;
   if ((aOptions & WHEEL_EVENT_EXPECTED_OVERFLOW_DELTA_X_ZERO) &&

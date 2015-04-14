@@ -1041,6 +1041,10 @@ js::Disassemble1(JSContext* cx, HandleScript script, jsbytecode* pc,
         Sprint(sp, " %u", GET_LOCALNO(pc));
         break;
 
+      case JOF_UINT32:
+        Sprint(sp, " %u", GET_UINT32(pc));
+        break;
+
       {
         int i;
 
@@ -1548,11 +1552,21 @@ ExpressionDecompiler::decompilePC(jsbytecode* pc)
                quote(prop, '\'') &&
                write("]");
       }
+      case JSOP_GETPROP_SUPER:
+      {
+        RootedAtom prop(cx, loadAtom(pc));
+        return write("super.") &&
+               quote(prop, '\0');
+      }
       case JSOP_GETELEM:
       case JSOP_CALLELEM:
         return decompilePCForStackOperand(pc, -2) &&
                write("[") &&
                decompilePCForStackOperand(pc, -1) &&
+               write("]");
+      case JSOP_GETELEM_SUPER:
+        return write("super[") &&
+               decompilePCForStackOperand(pc, -3) &&
                write("]");
       case JSOP_NULL:
         return write(js_null_str);

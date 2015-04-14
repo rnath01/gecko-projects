@@ -837,7 +837,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     surf.mFormat = format;
     surf.mType = NativeSurfaceType::CAIRO_SURFACE;
     surf.mSurface = aSurface->CairoSurface();
-    surf.mSize = ToIntSize(aSurface->GetSize());
+    surf.mSize = aSurface->GetSize();
     // We return here regardless of whether CreateSourceSurfaceFromNativeSurface
     // succeeds or not since we don't expect to be able to do any better below
     // if it fails.
@@ -862,7 +862,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     surf.mFormat = format;
     surf.mType = NativeSurfaceType::D3D10_TEXTURE;
     surf.mSurface = static_cast<gfxD2DSurface*>(aSurface)->GetTexture();
-    surf.mSize = ToIntSize(aSurface->GetSize());
+    surf.mSize = aSurface->GetSize();
     mozilla::gfx::DrawTarget *dt = static_cast<mozilla::gfx::DrawTarget*>(aSurface->GetData(&kDrawTarget));
     if (dt) {
       dt->Flush();
@@ -910,7 +910,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     surf.mFormat = format;
     surf.mType = NativeSurfaceType::CAIRO_SURFACE;
     surf.mSurface = aSurface->CairoSurface();
-    surf.mSize = ToIntSize(aSurface->GetSize());
+    surf.mSize = aSurface->GetSize();
     RefPtr<DrawTarget> drawTarget =
       Factory::CreateDrawTarget(BackendType::CAIRO, IntSize(1, 1), format);
     if (!drawTarget) {
@@ -956,7 +956,7 @@ gfxPlatform::GetWrappedDataSourceSurface(gfxASurface* aSurface)
   RefPtr<DataSourceSurface> result =
     Factory::CreateWrappingDataSourceSurface(image->Data(),
                                              image->Stride(),
-                                             ToIntSize(image->GetSize()),
+                                             image->GetSize(),
                                              ImageFormatToSurfaceFormat(image->Format()));
 
   if (!result) {
@@ -2169,6 +2169,7 @@ gfxPlatform::OptimalFormatForContent(gfxContentType aContent)
  */
 static bool sLayersSupportsD3D9 = false;
 static bool sLayersSupportsD3D11 = false;
+static bool sANGLESupportsD3D11 = false;
 static bool sLayersSupportsHardwareVideoDecoding = false;
 static bool sBufferRotationCheckPref = true;
 static bool sPrefBrowserTabsRemoteAutostart = false;
@@ -2209,6 +2210,11 @@ InitLayersAccelerationPrefs()
       if (!gfxPrefs::LayersD3D11DisableWARP()) {
         // Always support D3D11 when WARP is allowed.
         sLayersSupportsD3D11 = true;
+      }
+      if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_11_ANGLE, &status))) {
+        if (status == nsIGfxInfo::FEATURE_STATUS_OK) {
+          sANGLESupportsD3D11 = true;
+        }
       }
     }
 #endif
@@ -2254,6 +2260,14 @@ gfxPlatform::CanUseHardwareVideoDecoding()
   MOZ_ASSERT(sLayersAccelerationPrefsInitialized);
   return sLayersSupportsHardwareVideoDecoding;
 }
+
+bool
+gfxPlatform::CanUseDirect3D11ANGLE()
+{
+  MOZ_ASSERT(sLayersAccelerationPrefsInitialized);
+  return sANGLESupportsD3D11;
+}
+
 
 bool
 gfxPlatform::BufferRotationEnabled()

@@ -180,7 +180,7 @@ AnimationPlayer::PlayState() const
 }
 
 static inline already_AddRefed<Promise>
-CreatePromise(AnimationTimeline* aTimeline, ErrorResult& aRv)
+CreatePromise(DocumentTimeline* aTimeline, ErrorResult& aRv)
 {
   nsIGlobalObject* global = aTimeline->GetParentObject();
   if (global) {
@@ -558,7 +558,7 @@ AnimationPlayer::DoPlay(LimitBehavior aLimitBehavior)
 void
 AnimationPlayer::DoPause()
 {
-  if (mPendingState == PendingState::PausePending) {
+  if (IsPausedOrPausing()) {
     return;
   }
 

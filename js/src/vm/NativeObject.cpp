@@ -1009,38 +1009,6 @@ template bool
 js::NativeLookupOwnProperty<NoGC>(ExclusiveContext* cx, NativeObject* obj, jsid id,
                                   FakeMutableHandle<Shape*> propp);
 
-template <AllowGC allowGC>
-bool
-js::NativeLookupProperty(ExclusiveContext* cx,
-                         typename MaybeRooted<NativeObject*, allowGC>::HandleType obj,
-                         typename MaybeRooted<jsid, allowGC>::HandleType id,
-                         typename MaybeRooted<JSObject*, allowGC>::MutableHandleType objp,
-                         typename MaybeRooted<Shape*, allowGC>::MutableHandleType propp)
-{
-    return LookupPropertyInline<allowGC>(cx, obj, id, objp, propp);
-}
-
-template bool
-js::NativeLookupProperty<CanGC>(ExclusiveContext* cx, HandleNativeObject obj, HandleId id,
-                                MutableHandleObject objp, MutableHandleShape propp);
-
-template bool
-js::NativeLookupProperty<NoGC>(ExclusiveContext* cx, NativeObject* obj, jsid id,
-                               FakeMutableHandle<JSObject*> objp,
-                               FakeMutableHandle<Shape*> propp);
-
-bool
-js::NativeLookupElement(JSContext* cx, HandleNativeObject obj, uint32_t index,
-                        MutableHandleObject objp, MutableHandleShape propp)
-{
-    RootedId id(cx);
-    if (!IndexToId(cx, index, &id))
-        return false;
-
-    return LookupPropertyInline<CanGC>(cx, obj, id, objp, propp);
-}
-
-
 /*** [[DefineOwnProperty]] ***********************************************************************/
 
 static inline bool
@@ -1597,7 +1565,8 @@ js::NativeHasProperty(JSContext* cx, HandleNativeObject obj, HandleId id, bool* 
 /*** [[Get]] *************************************************************************************/
 
 static inline bool
-CallGetter(JSContext* cx, HandleObject receiver, HandleShape shape, MutableHandleValue vp)
+CallGetter(JSContext* cx, HandleObject obj, HandleObject receiver, HandleShape shape,
+           MutableHandleValue vp)
 {
     MOZ_ASSERT(!shape->hasDefaultGetter());
 
@@ -1606,8 +1575,9 @@ CallGetter(JSContext* cx, HandleObject receiver, HandleShape shape, MutableHandl
         return InvokeGetter(cx, receiver, fval, vp);
     }
 
+    // In contrast to normal getters JSGetterOps always want the holder.
     RootedId id(cx, shape->propid());
-    return CallJSGetterOp(cx, shape->getterOp(), receiver, id, vp);
+    return CallJSGetterOp(cx, shape->getterOp(), obj, id, vp);
 }
 
 template <AllowGC allowGC>
@@ -1651,6 +1621,7 @@ GetExistingProperty(JSContext* cx,
         return false;
 
     if (!CallGetter(cx,
+                    MaybeRooted<JSObject*, allowGC>::toHandle(obj),
                     MaybeRooted<JSObject*, allowGC>::toHandle(receiver),
                     MaybeRooted<Shape*, allowGC>::toHandle(shape),
                     MaybeRooted<Value, allowGC>::toMutableHandle(vp)))

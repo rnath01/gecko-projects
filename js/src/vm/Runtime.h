@@ -520,6 +520,9 @@ class PerThreadData : public PerThreadDataFriendFields
 #ifdef DEBUG
     // Whether this thread is actively Ion compiling.
     bool ionCompiling;
+
+    // Whether this thread is currently sweeping GC things.
+    bool gcSweeping;
 #endif
 
     // Number of active bytecode compilation on this thread.
@@ -1531,6 +1534,28 @@ struct JSRuntime : public JS::shadow::Runtime,
         bool isActive() const {
             return isActive_;
         }
+
+        // Some systems have non-monotonic clocks. While we cannot
+        // improve the precision, we can make sure that our measures
+        // are monotonic nevertheless. We do this by storing the
+        // result of the latest call to the clock and making sure
+        // that the next timestamp is greater or equal.
+        struct MonotonicTimeStamp {
+            MonotonicTimeStamp()
+              : latestGood_(0)
+            {}
+            inline uint64_t monotonize(uint64_t stamp)
+            {
+                if (stamp <= latestGood_)
+                    return latestGood_;
+                latestGood_ = stamp;
+                return stamp;
+            }
+          private:
+            uint64_t latestGood_;
+        };
+        MonotonicTimeStamp systemTimeFix;
+        MonotonicTimeStamp userTimeFix;
 
     private:
         /**

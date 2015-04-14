@@ -197,6 +197,12 @@ TranslateShadowLayer2D(Layer* aLayer,
   if (aAdjustClipRect) {
     TransformClipRect(aLayer, Matrix4x4::Translation(aTranslation.x, aTranslation.y, 0));
   }
+
+  // If a fixed- or sticky-position layer has a mask layer, that mask should
+  // move along with the layer, so apply the translation to the mask layer too.
+  if (Layer* maskLayer = aLayer->GetMaskLayer()) {
+    TranslateShadowLayer2D(maskLayer, aTranslation, false);
+  }
 }
 
 static bool
@@ -730,13 +736,8 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
     const CSSCoord compositedHeight = (metrics.mCompositionBounds / effectiveZoom).height;
     const CSSCoord scrollableHeight = metrics.GetScrollableRect().height;
 
-    // The scroll thumb needs to be translated in opposite direction of the
-    // async scroll. This is because scrolling down, which translates the layer
-    // content up, should result in moving the scroll thumb down.
-    // The amount of the translation should be such that the ratio of the
-    // translation to the size of the scroll port is the same as the ratio of
-    // the scroll amount of the size of the scrollable rect.
-    const float ratio = compositedHeight / scrollableHeight;
+    // The scrollbar thumb ratio is in AppUnits.
+    const float ratio = aScrollbar->GetScrollbarThumbRatio();
     ParentLayerCoord yTranslation = -asyncScrollY * ratio;
 
     // The scroll thumb additionally needs to be translated to compensate for
@@ -782,7 +783,8 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
     const CSSCoord compositedWidth = (metrics.mCompositionBounds / effectiveZoom).width;
     const CSSCoord scrollableWidth = metrics.GetScrollableRect().width;
 
-    const float ratio = compositedWidth / scrollableWidth;
+    // The scrollbar thumb ratio is in AppUnits.
+    const float ratio = aScrollbar->GetScrollbarThumbRatio();
     ParentLayerCoord xTranslation = -asyncScrollX * ratio;
 
     const CSSCoord thumbOrigin = (metrics.GetScrollOffset().x / scrollableWidth) * compositedWidth;
@@ -799,7 +801,7 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
     scrollbarTransform.PostTranslate(xTranslation, 0, 0);
   }
 
-  Matrix4x4 transform = scrollbarTransform * aScrollbar->GetTransform();
+  Matrix4x4 transform = aScrollbar->GetLocalTransform() * scrollbarTransform;
 
   if (aScrollbarIsDescendant) {
     // If the scrollbar layer is a child of the content it is a scrollbar for,
@@ -853,8 +855,17 @@ FindScrolledLayerRecursive(Layer* aScrollbar, const LayerMetricsWrapper& aSubtre
   if (LayerIsScrollbarTarget(aSubtreeRoot, aScrollbar)) {
     return aSubtreeRoot;
   }
-  for (LayerMetricsWrapper child = aSubtreeRoot.GetFirstChild(); child;
-         child = child.GetNextSibling()) {
+
+  for (LayerMetricsWrapper child = aSubtreeRoot.GetFirstChild();
+       child;
+       child = child.GetNextSibling())
+  {
+    // Do not recurse into RefLayers, since our initial aSubtreeRoot is the
+    // root (or RefLayer root) of a single layer space to search.
+    if (child.AsRefLayer()) {
+      continue;
+    }
+
     LayerMetricsWrapper target = FindScrolledLayerRecursive(aScrollbar, child);
     if (target) {
       return target;
@@ -866,22 +877,24 @@ FindScrolledLayerRecursive(Layer* aScrollbar, const LayerMetricsWrapper& aSubtre
 static LayerMetricsWrapper
 FindScrolledLayerForScrollbar(Layer* aScrollbar, bool* aOutIsAncestor)
 {
-  // Search ancestors first.
+  // First check if the scrolled layer is an ancestor of the scrollbar layer.
+  LayerMetricsWrapper root(aScrollbar->Manager()->GetRoot());
   LayerMetricsWrapper scrollbar(aScrollbar);
-  for (LayerMetricsWrapper ancestor = scrollbar; ancestor; ancestor = ancestor.GetParent()) {
+  for (LayerMetricsWrapper ancestor(aScrollbar); ancestor; ancestor = ancestor.GetParent()) {
+    // Don't walk into remote layer trees; the scrollbar will always be in
+    // the same layer space.
+    if (ancestor.AsRefLayer()) {
+      root = ancestor;
+      break;
+    }
+
     if (LayerIsScrollbarTarget(ancestor, aScrollbar)) {
       *aOutIsAncestor = true;
       return ancestor;
     }
   }
 
-  // If the scrolled target is not an ancestor, search the whole layer tree.
-  // XXX It would be much better to search the APZC tree instead of the layer
-  // tree. That way we would ignore non-scrollable layers, and we'd only visit
-  // each scroll ID once. In the end we only need the APZC and the FrameMetrics
-  // of the scrolled target.
-  *aOutIsAncestor = false;
-  LayerMetricsWrapper root(aScrollbar->Manager()->GetRoot());
+  // Search the entire layer space of the scrollbar.
   return FindScrolledLayerRecursive(aScrollbar, root);
 }
 

@@ -242,10 +242,12 @@ private:
   DECL_GFX_PREF(Once, "gfx.work-around-driver-bugs",           WorkAroundDriverBugs, bool, true);
 
   DECL_GFX_PREF(Live, "gl.msaa-level",                         MSAALevel, uint32_t, 2);
+  DECL_GFX_PREF(Live, "gl.require-hardware",                   RequireHardwareGL, bool, false);
 
   DECL_GFX_PREF(Once, "image.cache.size",                      ImageCacheSize, int32_t, 5*1024*1024);
   DECL_GFX_PREF(Once, "image.cache.timeweight",                ImageCacheTimeWeight, int32_t, 500);
   DECL_GFX_PREF(Live, "image.decode-only-on-draw.enabled",     ImageDecodeOnlyOnDrawEnabled, bool, true);
+  DECL_GFX_PREF(Live, "image.decode-immediately.enabled",      ImageDecodeImmediatelyEnabled, bool, false);
   DECL_GFX_PREF(Live, "image.downscale-during-decode.enabled", ImageDownscaleDuringDecodeEnabled, bool, false);
   DECL_GFX_PREF(Live, "image.high_quality_downscaling.enabled", ImageHQDownscalingEnabled, bool, false);
   DECL_GFX_PREF(Live, "image.high_quality_downscaling.min_factor", ImageHQDownscalingMinFactor, uint32_t, 1000);
@@ -266,6 +268,7 @@ private:
   DECL_GFX_PREF(Live, "layers.acceleration.draw-fps.write-to-file", WriteFPSToFile, bool, false);
   DECL_GFX_PREF(Once, "layers.acceleration.force-enabled",     LayersAccelerationForceEnabled, bool, false);
   DECL_GFX_PREF(Once, "layers.async-pan-zoom.enabled",         AsyncPanZoomEnabled, bool, false);
+  DECL_GFX_PREF(Once, "layers.async-pan-zoom.separate-event-thread", AsyncPanZoomSeparateEventThread, bool, false);
   DECL_GFX_PREF(Once, "layers.async-video.enabled",            AsyncVideoEnabled, bool, true);
   DECL_GFX_PREF(Once, "layers.async-video-oop.enabled",        AsyncVideoOOPEnabled, bool, true);
   DECL_GFX_PREF(Live, "layers.bench.enabled",                  LayersBenchEnabled, bool, false);

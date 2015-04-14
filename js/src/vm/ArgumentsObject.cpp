@@ -288,9 +288,6 @@ args_delProperty(JSContext* cx, HandleObject obj, HandleId id, ObjectOpResult& r
 static bool
 ArgGetter(JSContext* cx, HandleObject obj, HandleId id, MutableHandleValue vp)
 {
-    if (!obj->is<NormalArgumentsObject>())
-        return true;
-
     NormalArgumentsObject& argsobj = obj->as<NormalArgumentsObject>();
     if (JSID_IS_INT(id)) {
         /*
@@ -412,9 +409,6 @@ args_enumerate(JSContext* cx, HandleObject obj)
 static bool
 StrictArgGetter(JSContext* cx, HandleObject obj, HandleId id, MutableHandleValue vp)
 {
-    if (!obj->is<StrictArgumentsObject>())
-        return true;
-
     StrictArgumentsObject& argsobj = obj->as<StrictArgumentsObject>();
 
     if (JSID_IS_INT(id)) {
@@ -546,7 +540,7 @@ ArgumentsObject::trace(JSTracer* trc, JSObject* obj)
     ArgumentsData* data = argsobj.data();
     TraceEdge(trc, &data->callee, js_callee_str);
     TraceRange(trc, data->numArgs, data->begin(), js_arguments_str);
-    MarkScriptUnbarriered(trc, &data->script, "script");
+    TraceManuallyBarrieredEdge(trc, &data->script, "script");
 }
 
 /*

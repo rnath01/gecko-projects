@@ -247,7 +247,7 @@ JSCompartment::checkWrapperMapAfterMovingGC()
         CheckGCThingAfterMovingGC(static_cast<Cell*>(e.front().value().get().toGCThing()));
 
         WrapperMap::Ptr ptr = crossCompartmentWrappers.lookup(key);
-        MOZ_ASSERT(ptr.found() && &*ptr == &e.front());
+        MOZ_RELEASE_ASSERT(ptr.found() && &*ptr == &e.front());
     }
 }
 #endif
@@ -516,7 +516,7 @@ JSCompartment::markRoots(JSTracer* trc)
      * JSContext::global() remains valid.
      */
     if (enterCompartmentDepth && global_.unbarrieredGet())
-        MarkObjectRoot(trc, global_.unsafeGet(), "on-stack compartment global");
+        TraceRoot(trc, global_.unsafeGet(), "on-stack compartment global");
 }
 
 void
@@ -534,7 +534,7 @@ JSCompartment::sweepSavedStacks()
 void
 JSCompartment::sweepGlobalObject(FreeOp* fop)
 {
-    if (global_.unbarrieredGet() && IsObjectAboutToBeFinalized(global_.unsafeGet())) {
+    if (global_.unbarrieredGet() && IsAboutToBeFinalized(&global_)) {
         if (isDebuggee())
             Debugger::detachAllDebuggersFromGlobal(fop, global_);
         global_.set(nullptr);
@@ -545,7 +545,7 @@ void
 JSCompartment::sweepSelfHostingScriptSource()
 {
     if (selfHostingScriptSource.unbarrieredGet() &&
-        IsObjectAboutToBeFinalized((JSObject**) selfHostingScriptSource.unsafeGet()))
+        IsAboutToBeFinalized(&selfHostingScriptSource))
     {
         selfHostingScriptSource.set(nullptr);
     }
@@ -592,7 +592,7 @@ JSCompartment::sweepNativeIterators()
     while (ni != enumerators) {
         JSObject* iterObj = ni->iterObj();
         NativeIterator* next = ni->next();
-        if (gc::IsObjectAboutToBeFinalized(&iterObj))
+        if (gc::IsAboutToBeFinalizedUnbarriered(&iterObj))
             ni->unlink();
         ni = next;
     }
@@ -617,24 +617,24 @@ JSCompartment::sweepCrossCompartmentWrappers()
           case CrossCompartmentKey::DebuggerSource:
               MOZ_ASSERT(IsInsideNursery(key.wrapped) ||
                          key.wrapped->asTenured().getTraceKind() == JSTRACE_OBJECT);
-              keyDying = IsObjectAboutToBeFinalized(
+              keyDying = IsAboutToBeFinalizedUnbarriered(
                   reinterpret_cast<JSObject**>(&key.wrapped));
               break;
           case CrossCompartmentKey::StringWrapper:
               MOZ_ASSERT(key.wrapped->asTenured().getTraceKind() == JSTRACE_STRING);
-              keyDying = IsStringAboutToBeFinalized(
+              keyDying = IsAboutToBeFinalizedUnbarriered(
                   reinterpret_cast<JSString**>(&key.wrapped));
               break;
           case CrossCompartmentKey::DebuggerScript:
               MOZ_ASSERT(key.wrapped->asTenured().getTraceKind() == JSTRACE_SCRIPT);
-              keyDying = IsScriptAboutToBeFinalized(
+              keyDying = IsAboutToBeFinalizedUnbarriered(
                   reinterpret_cast<JSScript**>(&key.wrapped));
               break;
           default:
               MOZ_CRASH("Unknown key kind");
         }
-        bool valDying = IsValueAboutToBeFinalized(e.front().value().unsafeGet());
-        bool dbgDying = key.debugger && IsObjectAboutToBeFinalized(&key.debugger);
+        bool valDying = IsAboutToBeFinalized(&e.front().value());
+        bool dbgDying = key.debugger && IsAboutToBeFinalizedUnbarriered(&key.debugger);
         if (keyDying || valDying || dbgDying) {
             MOZ_ASSERT(key.kind != CrossCompartmentKey::StringWrapper);
             e.removeFront();
@@ -745,23 +745,30 @@ CreateLazyScriptsForCompartment(JSContext* cx)
 {
     AutoObjectVector lazyFunctions(cx);
 
-    // Find all live lazy scripts in the compartment, and via them all root
-    // lazy functions in the compartment: those which have not been compiled,
-    // which have a source object, indicating that they have a parent, and
-    // which do not have an uncompiled enclosing script. The last condition is
-    // so that we don't compile lazy scripts whose enclosing scripts failed to
-    // compile, indicating that the lazy script did not escape the script.
-    for (gc::ZoneCellIter i(cx->zone(), gc::AllocKind::LAZY_SCRIPT); !i.done(); i.next()) {
-        LazyScript* lazy = i.get<LazyScript>();
-        JSFunction* fun = lazy->functionNonDelazifying();
-        if (fun->compartment() == cx->compartment() &&
-            lazy->sourceObject() && !lazy->maybeScript() &&
-            !lazy->hasUncompiledEnclosingScript())
-        {
-            MOZ_ASSERT(fun->isInterpretedLazy());
-            MOZ_ASSERT(lazy == fun->lazyScriptOrNull());
-            if (!lazyFunctions.append(fun))
-                return false;
+    // Find all live root lazy functions in the compartment: those which
+    // have not been compiled, which have a source object, indicating that
+    // they have a parent, and which do not have an uncompiled enclosing
+    // script. The last condition is so that we don't compile lazy scripts
+    // whose enclosing scripts failed to compile, indicating that the lazy
+    // script did not escape the script.
+    //
+    // Note that while we ideally iterate over LazyScripts, LazyScripts do not
+    // currently stand in 1-1 relation with JSScripts; JSFunctions with the
+    // same LazyScript may create different JSScripts due to relazification of
+    // clones. See bug 1105306.
+    for (gc::ZoneCellIter i(cx->zone(), JSFunction::FinalizeKind); !i.done(); i.next()) {
+        JSObject* obj = i.get<JSObject>();
+        if (obj->compartment() == cx->compartment() && obj->is<JSFunction>()) {
+            JSFunction* fun = &obj->as<JSFunction>();
+            if (fun->isInterpretedLazy()) {
+                LazyScript* lazy = fun->lazyScriptOrNull();
+                if (lazy && lazy->sourceObject() && !lazy->maybeScript() &&
+                    !lazy->hasUncompiledEnclosingScript())
+                {
+                    if (!lazyFunctions.append(fun))
+                        return false;
+                }
+            }
         }
     }
 
@@ -776,10 +783,13 @@ CreateLazyScriptsForCompartment(JSContext* cx)
         if (!fun->isInterpretedLazy())
             continue;
 
+        LazyScript* lazy = fun->lazyScript();
+        bool lazyScriptHadNoScript = !lazy->maybeScript();
+
         JSScript* script = fun->getOrCreateScript(cx);
         if (!script)
             return false;
-        if (!AddInnerLazyFunctionsFromScript(script, lazyFunctions))
+        if (lazyScriptHadNoScript && !AddInnerLazyFunctionsFromScript(script, lazyFunctions))
             return false;
     }
 

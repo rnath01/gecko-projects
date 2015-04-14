@@ -28,6 +28,13 @@
     "extended_statistics_ok": true,
     "description": "time spent updating accessibility (ms)"
   },
+  "ADDON_SHIM_USAGE": {
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": 15,
+    "keyed": "true",
+    "description": "Reasons why add-on shims were used, keyed by add-on ID."
+  },
   "APPLICATION_REPUTATION_SHOULD_BLOCK": {
     "expires_in_version": "never",
     "kind": "boolean",
@@ -3496,6 +3503,16 @@
     "high": "180",
     "description": "Update: interval in days since the last background update check (timer initiated)"
   },
+  "UPDATE_PING_COUNT_EXTERNAL": {
+    "expires_in_version": "never",
+    "kind": "count",
+    "description": "Update: count of systems for this ping for comparison with other pings (externally initiated)"
+  },
+  "UPDATE_PING_COUNT_NOTIFY": {
+    "expires_in_version": "never",
+    "kind": "count",
+    "description": "Update: count of systems for this ping for comparison with other pings (timer initiated)"
+  },
   "UPDATE_SERVICE_INSTALLED_EXTERNAL": {
     "expires_in_version": "never",
     "kind": "boolean",
@@ -3516,15 +3533,15 @@
     "kind": "count",
     "description": "Update: count of systems that manually uninstalled the service (timer initiated)"
   },
-  "UPDATE_CANNOT_APPLY_EXTERNAL": {
+  "UPDATE_UNABLE_TO_APPLY_EXTERNAL": {
     "expires_in_version": "never",
-    "kind": "boolean",
-    "description": "Update: systems that cannot apply updates (externally initiated)"
+    "kind": "count",
+    "description": "Update: count of systems that cannot apply updates (externally initiated)"
   },
-  "UPDATE_CANNOT_APPLY_NOTIFY": {
+  "UPDATE_UNABLE_TO_APPLY_NOTIFY": {
     "expires_in_version": "never",
-    "kind": "boolean",
-    "description": "Update: systems that cannot apply updates (timer initiated)"
+    "kind": "count",
+    "description": "Update: count of systems that cannot apply updates (timer initiated)"
   },
   "UPDATE_CANNOT_STAGE_EXTERNAL": {
     "expires_in_version": "never",
@@ -7493,6 +7510,12 @@
     "expires_in_version": "never",
     "kind": "boolean",
     "description": "Whether a session is set to autostart e10s windows"
+  },
+  "E10S_AUTOSTART_STATUS": {
+    "expires_in_version": "40",
+    "kind": "enumerated",
+    "n_values": 6,
+    "description": "Why e10s is enabled or disabled (0=ENABLED_BY_USER, 1=ENABLED_BY_DEFAULT, 2=DISABLED_BY_USER, 3=DISABLED_IN_SAFE_MODE, 4=DISABLED_FOR_ACCESSIBILITY, 5=DISABLED_FOR_MAC_GFX)"
   },
   "E10S_WINDOW": {
     "expires_in_version": "never",

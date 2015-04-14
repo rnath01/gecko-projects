@@ -35,6 +35,10 @@ browser.jar:
   skin/classic/browser/Geolocation-16@2x.png
   skin/classic/browser/Geolocation-64.png
   skin/classic/browser/Geolocation-64@2x.png
+  skin/classic/browser/Push-16.png
+  skin/classic/browser/Push-16@2x.png
+  skin/classic/browser/Push-64.png
+  skin/classic/browser/Push-64@2x.png
   skin/classic/browser/heartbeat-icon.svg                   (../shared/heartbeat-icon.svg)
   skin/classic/browser/heartbeat-star-lit.svg               (../shared/heartbeat-star-lit.svg)
   skin/classic/browser/heartbeat-star-off.svg               (../shared/heartbeat-star-off.svg)
@@ -122,8 +126,8 @@ browser.jar:
   skin/classic/browser/Secure-Glyph.png
   skin/classic/browser/Secure-Glyph@2x.png
   skin/classic/browser/slowStartup-16.png
-  skin/classic/browser/theme-switcher-icon.png
-  skin/classic/browser/theme-switcher-icon@2x.png
+  skin/classic/browser/theme-switcher-icon.png                 (../shared/theme-switcher-icon.png)
+  skin/classic/browser/theme-switcher-icon@2x.png              (../shared/theme-switcher-icon@2x.png)
   skin/classic/browser/Toolbar.png
   skin/classic/browser/Toolbar@2x.png
   skin/classic/browser/Toolbar-inverted.png
@@ -131,6 +135,7 @@ browser.jar:
   skin/classic/browser/toolbarbutton-dropmarker.png
   skin/classic/browser/undoCloseTab.png                        (../shared/undoCloseTab.png)
   skin/classic/browser/undoCloseTab@2x.png                     (../shared/undoCloseTab@2x.png)
+  skin/classic/browser/update-badge.svg                        (../shared/update-badge.svg)
   skin/classic/browser/urlbar-history-dropmarker.png
   skin/classic/browser/urlbar-history-dropmarker@2x.png
   skin/classic/browser/urlbar-arrow.png
@@ -355,7 +360,9 @@ browser.jar:
 * skin/classic/browser/devtools/common.css                  (../shared/devtools/common.css)
 * skin/classic/browser/devtools/dark-theme.css              (../shared/devtools/dark-theme.css)
 * skin/classic/browser/devtools/light-theme.css             (../shared/devtools/light-theme.css)
+  skin/classic/browser/devtools/add.svg                     (../shared/devtools/images/add.svg)
   skin/classic/browser/devtools/filters.svg                 (../shared/devtools/filters.svg)
+  skin/classic/browser/devtools/filter-swatch.svg           (../shared/devtools/images/filter-swatch.svg)
   skin/classic/browser/devtools/controls.png                (../shared/devtools/images/controls.png)
   skin/classic/browser/devtools/controls@2x.png             (../shared/devtools/images/controls@2x.png)
   skin/classic/browser/devtools/performance-icons.svg       (../shared/devtools/images/performance-icons.svg)
@@ -394,7 +401,7 @@ browser.jar:
   skin/classic/browser/devtools/alerticon-warning.png         (../shared/devtools/images/alerticon-warning.png)
   skin/classic/browser/devtools/alerticon-warning@2x.png      (../shared/devtools/images/alerticon-warning@2x.png)
 * skin/classic/browser/devtools/ruleview.css                (../shared/devtools/ruleview.css)
-  skin/classic/browser/devtools/commandline.css             (devtools/commandline.css)
+  skin/classic/browser/devtools/commandline.css             (../shared/devtools/commandline.css)
   skin/classic/browser/devtools/markup-view.css             (../shared/devtools/markup-view.css)
   skin/classic/browser/devtools/editor-error.png             (../shared/devtools/images/editor-error.png)
   skin/classic/browser/devtools/editor-breakpoint.png        (../shared/devtools/images/editor-breakpoint.png)

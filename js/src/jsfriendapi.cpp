@@ -1044,7 +1044,7 @@ js::GetAnyCompartmentInZone(JS::Zone* zone)
 void
 JS::ObjectPtr::updateWeakPointerAfterGC()
 {
-    if (js::gc::IsObjectAboutToBeFinalized(value.unsafeGet()))
+    if (js::gc::IsAboutToBeFinalizedUnbarriered(value.unsafeGet()))
         value = nullptr;
 }
 
@@ -1252,4 +1252,12 @@ JS_FRIEND_API(bool)
 js::ForwardToNative(JSContext* cx, JSNative native, const CallArgs& args)
 {
     return native(cx, args.length(), args.base());
+}
+
+JS_FRIEND_API(JSAtom*)
+js::GetPropertyNameFromPC(JSScript* script, jsbytecode* pc)
+{
+    if (!IsGetPropPC(pc) && !IsSetPropPC(pc))
+        return nullptr;
+    return script->getName(pc);
 }

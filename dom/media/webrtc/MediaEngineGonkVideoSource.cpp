@@ -221,8 +221,11 @@ MediaEngineGonkVideoSource::Start(SourceMediaStream* aStream, TrackID aID)
 
   ReentrantMonitorAutoEnter sync(mCallbackMonitor);
 
+  MOZ_ASSERT(mCameraControl, "mCameraControl is nullptr");
   if (mState == kStarted) {
     return NS_OK;
+  } else if (!mCameraControl) {
+    return NS_ERROR_FAILURE;
   }
   mTrackID = aID;
   mImageContainer = layers::LayerManager::CreateImageContainer();
@@ -470,8 +473,9 @@ MediaEngineGonkVideoSource::StartImpl(webrtc::CaptureCapability aCapability) {
   config.mMode = ICameraControl::kPictureMode;
   config.mPreviewSize.width = aCapability.width;
   config.mPreviewSize.height = aCapability.height;
+  config.mPictureSize.width = aCapability.width;
+  config.mPictureSize.height = aCapability.height;
   mCameraControl->Start(&config);
-  mCameraControl->Set(CAMERA_PARAM_PICTURE_SIZE, config.mPreviewSize);
 
   hal::RegisterScreenConfigurationObserver(this);
 }
