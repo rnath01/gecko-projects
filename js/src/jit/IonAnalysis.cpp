@@ -202,6 +202,23 @@ BlockIsSingleTest(MBasicBlock* phiBlock, MBasicBlock* testBlock, MPhi** pphi, MT
     return true;
 }
 
+// Change block so that it ends in a goto to the specific target block.
+// existingPred is an existing predecessor of the block.
+static void
+UpdateGotoSuccessor(TempAllocator& alloc, MBasicBlock* block, MBasicBlock* target,
+                     MBasicBlock* existingPred)
+{
+    MInstruction* ins = block->lastIns();
+    MOZ_ASSERT(ins->isGoto());
+    ins->toGoto()->target()->removePredecessor(block);
+    block->discardLastIns();
+
+    MGoto* newGoto = MGoto::New(alloc, target);
+    block->end(newGoto);
+
+    target->addPredecessorSameInputsAs(block, existingPred);
+}
+
 // Change block so that it ends in a test of the specified value, going to
 // either ifTrue or ifFalse. existingPred is an existing predecessor of ifTrue
 // or ifFalse with the same values incoming to ifTrue/ifFalse as block.
@@ -347,6 +364,8 @@ MaybeFoldConditionBlock(MIRGraph& graph, MBasicBlock* initialBlock)
                      : finalTest->ifFalse();
         phiBlock->removePredecessor(trueBranch);
         graph.removeBlock(trueBranch);
+    } else if (initialTest->input() == trueResult) {
+        UpdateGotoSuccessor(graph.alloc(), trueBranch, finalTest->ifTrue(), testBlock);
     } else {
         UpdateTestSuccessors(graph.alloc(), trueBranch, trueResult,
                              finalTest->ifTrue(), finalTest->ifFalse(), testBlock);
@@ -359,6 +378,8 @@ MaybeFoldConditionBlock(MIRGraph& graph, MBasicBlock* initialBlock)
                       : finalTest->ifFalse();
         phiBlock->removePredecessor(falseBranch);
         graph.removeBlock(falseBranch);
+    } else if (initialTest->input() == falseResult) {
+        UpdateGotoSuccessor(graph.alloc(), falseBranch, finalTest->ifFalse(), testBlock);
     } else {
         UpdateTestSuccessors(graph.alloc(), falseBranch, falseResult,
                              finalTest->ifTrue(), finalTest->ifFalse(), testBlock);
@@ -2553,7 +2574,8 @@ TryOptimizeLoadObjectOrNull(MDefinition* def, MDefinitionVector* peliminateList)
                 return false;
             break;
           case MDefinition::Op_Unbox:
-            MOZ_ASSERT(ndef->type() == MIRType_Object);
+            if (ndef->type() != MIRType_Object)
+                return true;
             break;
           case MDefinition::Op_TypeBarrier:
             // For now, only handle type barriers which are not consumed

@@ -456,6 +456,12 @@ child:
 
     async SpeakerManagerNotify();
 
+    /**
+     * Communication between the PuppetBidiKeyboard and the actual
+     * BidiKeyboard hosted by the parent
+     */
+    async BidiKeyboardNotify(bool isLangRTL);
+
     async DataStoreNotify(uint32_t aAppId, nsString aName,
                           nsString aManifestURL);
 
@@ -570,6 +576,9 @@ child:
     prio(high) sync GetProfile()
       returns (nsCString aProfile);
 
+    InvokeDragSession(IPCDataTransfer[] transfers, uint32_t action);
+
+    EndDragSession(bool aDoneDrag, bool aUserCancelled);
     NuwaFreeze();
 
     async DomainSetChanged(uint32_t aSetType, uint32_t aChangeType, OptionalURIParams aDomain);
@@ -581,6 +590,12 @@ child:
     async Shutdown();
 
     async LoadProcessScript(nsString url);
+
+    /**
+     * Requests a full native update of a native plugin child window. This is
+     * a Windows specific call.
+     */
+    async UpdateWindow(uintptr_t aChildId);
 
 parent:
     /**
@@ -607,7 +622,7 @@ parent:
     sync GetProcessAttributes()
         returns (ContentParentId cpId, bool isForApp, bool isForBrowser);
     sync GetXPCOMProcessAttributes()
-        returns (bool isOffline, nsString[] dictionaries,
+        returns (bool isOffline, bool isLangRTL, nsString[] dictionaries,
                  ClipboardCapabilities clipboardCaps,
                  DomainPolicyClone domainPolicy);
 
@@ -627,7 +642,7 @@ parent:
      * via bridging. The corresponding PluginModuleChild will live in the plugin
      * process.
      */
-    sync LoadPlugin(uint32_t pluginId) returns (nsresult rv);
+    sync LoadPlugin(uint32_t aPluginId) returns (nsresult aResult, uint32_t aRunID);
 
     /**
      * This call is used by asynchronous plugin instantiation to notify the
@@ -935,6 +950,7 @@ parent:
      */
     async FinishShutdown();
 
+    UpdateDropEffect(uint32_t aDragAction, uint32_t aDropEffect);
 both:
      AsyncMessage(nsString aMessage, ClonedMessageData aData,
                   CpowEntry[] aCpows, Principal aPrincipal);

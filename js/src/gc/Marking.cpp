@@ -690,22 +690,6 @@ MarkInternal(JSTracer* trc, T** thingp)
 namespace js {
 namespace gc {
 
-template <typename T>
-void
-MarkUnbarriered(JSTracer* trc, T** thingp, const char* name)
-{
-    trc->setTracingName(name);
-    MarkInternal(trc, thingp);
-}
-
-template <typename T>
-static void
-Mark(JSTracer* trc, BarrieredBase<T*>* thing, const char* name)
-{
-    trc->setTracingName(name);
-    MarkInternal(trc, thing->unsafeGet());
-}
-
 void
 MarkPermanentAtom(JSTracer* trc, JSAtom* atom, const char* name)
 {
@@ -752,46 +736,6 @@ MarkWellKnownSymbol(JSTracer* trc, JS::Symbol* sym)
 
     trc->clearTracingDetails();
 }
-
-} /* namespace gc */
-} /* namespace js */
-
-template <typename T>
-static void
-MarkRoot(JSTracer* trc, T** thingp, const char* name)
-{
-    JS_ROOT_MARKING_ASSERT(trc);
-    trc->setTracingName(name);
-    MarkInternal(trc, thingp);
-}
-
-template <typename T>
-static void
-MarkRange(JSTracer* trc, size_t len, HeapPtr<T*>* vec, const char* name)
-{
-    for (size_t i = 0; i < len; ++i) {
-        if (vec[i].get()) {
-            trc->setTracingIndex(name, i);
-            MarkInternal(trc, vec[i].unsafeGet());
-        }
-    }
-}
-
-template <typename T>
-static void
-MarkRootRange(JSTracer* trc, size_t len, T** vec, const char* name)
-{
-    JS_ROOT_MARKING_ASSERT(trc);
-    for (size_t i = 0; i < len; ++i) {
-        if (vec[i]) {
-            trc->setTracingIndex(name, i);
-            MarkInternal(trc, &vec[i]);
-        }
-    }
-}
-
-namespace js {
-namespace gc {
 
 template <typename T>
 static inline void
@@ -1016,145 +960,45 @@ UpdateIfRelocated(JSRuntime* rt, T** thingp)
     return *thingp;
 }
 
-#define DeclMarkerImpl(base, type)                                                                \
-void                                                                                              \
-Mark##base(JSTracer* trc, BarrieredBase<type*>* thing, const char* name)                          \
-{                                                                                                 \
-    Mark<type>(trc, thing, name);                                                                 \
-}                                                                                                 \
-                                                                                                  \
-void                                                                                              \
-Mark##base##Root(JSTracer* trc, type** thingp, const char* name)                                  \
-{                                                                                                 \
-    MarkRoot<type>(trc, thingp, name);                                                            \
-}                                                                                                 \
-                                                                                                  \
-void                                                                                              \
-Mark##base##Unbarriered(JSTracer* trc, type** thingp, const char* name)                           \
-{                                                                                                 \
-    MarkUnbarriered<type>(trc, thingp, name);                                                     \
-}                                                                                                 \
-                                                                                                  \
-/* Explicitly instantiate MarkUnbarriered<type*>. It is referenced from */                        \
-/* other translation units and the instantiation might otherwise get */                           \
-/* inlined away. */                                                                               \
-template void MarkUnbarriered<type>(JSTracer*, type**, const char*);                           \
-                                                                                                  \
-void                                                                                              \
-Mark##base##Range(JSTracer* trc, size_t len, HeapPtr<type*>* vec, const char* name)               \
-{                                                                                                 \
-    MarkRange<type>(trc, len, vec, name);                                                         \
-}                                                                                                 \
-                                                                                                  \
-void                                                                                              \
-Mark##base##RootRange(JSTracer* trc, size_t len, type** vec, const char* name)                    \
-{                                                                                                 \
-    MarkRootRange<type>(trc, len, vec, name);                                                     \
-}                                                                                                 \
-                                                                                                  \
-bool                                                                                              \
-Is##base##Marked(type** thingp)                                                                   \
-{                                                                                                 \
-    return IsMarkedUnbarriered<type*>(thingp);                                                    \
-}                                                                                                 \
-                                                                                                  \
-bool                                                                                              \
-Is##base##Marked(BarrieredBase<type*>* thingp)                                                    \
-{                                                                                                 \
-    return IsMarked<type*>(thingp);                                                               \
-}                                                                                                 \
-                                                                                                  \
-bool                                                                                              \
-Is##base##AboutToBeFinalized(type** thingp)                                                       \
-{                                                                                                 \
-    return IsAboutToBeFinalizedUnbarriered<type*>(thingp);                                        \
-}                                                                                                 \
-                                                                                                  \
-bool                                                                                              \
-Is##base##AboutToBeFinalized(BarrieredBase<type*>* thingp)                                        \
-{                                                                                                 \
-    return IsAboutToBeFinalized<type*>(thingp);                                                   \
-}                                                                                                 \
-                                                                                                  \
-type *                                                                                            \
-Update##base##IfRelocated(JSRuntime* rt, BarrieredBase<type*>* thingp)                            \
-{                                                                                                 \
-    return UpdateIfRelocated<type>(rt, thingp->unsafeGet());                                      \
-}                                                                                                 \
-                                                                                                  \
-type *                                                                                            \
-Update##base##IfRelocated(JSRuntime* rt, type** thingp)                                           \
-{                                                                                                 \
-    return UpdateIfRelocated<type>(rt, thingp);                                                   \
-}
-
 } /* namespace gc */
 } /* namespace js */
 
 /*** Externally Typed Marking ***/
 
-void
-gc::MarkKind(JSTracer* trc, void** thingp, JSGCTraceKind kind)
-{
-    MOZ_ASSERT(thingp);
-    MOZ_ASSERT(*thingp);
-    DebugOnly<Cell*> cell = static_cast<Cell*>(*thingp);
-    MOZ_ASSERT_IF(cell->isTenured(),
-                  kind == MapAllocToTraceKind(cell->asTenured().getAllocKind()));
-    switch (kind) {
-      case JSTRACE_OBJECT:
-        MarkInternal(trc, reinterpret_cast<JSObject**>(thingp));
-        break;
-      case JSTRACE_SCRIPT:
-        MarkInternal(trc, reinterpret_cast<JSScript**>(thingp));
-        break;
-      case JSTRACE_STRING:
-        MarkInternal(trc, reinterpret_cast<JSString**>(thingp));
-        break;
-      case JSTRACE_SYMBOL:
-        MarkInternal(trc, reinterpret_cast<JS::Symbol**>(thingp));
-        break;
-      case JSTRACE_BASE_SHAPE:
-        MarkInternal(trc, reinterpret_cast<BaseShape**>(thingp));
-        break;
-      case JSTRACE_JITCODE:
-        MarkInternal(trc, reinterpret_cast<jit::JitCode**>(thingp));
-        break;
-      case JSTRACE_LAZY_SCRIPT:
-        MarkInternal(trc, reinterpret_cast<LazyScript**>(thingp));
-        break;
-      case JSTRACE_SHAPE:
-        MarkInternal(trc, reinterpret_cast<Shape**>(thingp));
-        break;
-      case JSTRACE_OBJECT_GROUP:
-        MarkInternal(trc, reinterpret_cast<ObjectGroup**>(thingp));
-        break;
-      default:
-        MOZ_CRASH("Invalid trace kind in MarkKind.");
+// A typed functor adaptor for TraceRoot.
+struct TraceRootFunctor {
+    template <typename T>
+    void operator()(JSTracer* trc, Cell** thingp, const char* name) {
+        TraceRoot(trc, reinterpret_cast<T**>(thingp), name);
     }
-}
+};
 
-static void
-MarkGCThingInternal(JSTracer* trc, void** thingp, const char* name)
+// A typed functor adaptor for TraceManuallyBarrieredEdge.
+struct TraceManuallyBarrieredEdgeFunctor {
+    template <typename T>
+    void operator()(JSTracer* trc, Cell** thingp, const char* name) {
+        TraceManuallyBarrieredEdge(trc, reinterpret_cast<T**>(thingp), name);
+    }
+};
+
+void
+js::gc::TraceGenericPointerRoot(JSTracer* trc, Cell** thingp, const char* name)
 {
-    trc->setTracingName(name);
     MOZ_ASSERT(thingp);
     if (!*thingp)
         return;
-    MarkKind(trc, thingp, GetGCThingTraceKind(*thingp));
+    TraceRootFunctor f;
+    CallTyped(f, (*thingp)->getTraceKind(), trc, thingp, name);
 }
 
 void
-gc::MarkGCThingRoot(JSTracer* trc, void** thingp, const char* name)
+js::gc::TraceManuallyBarrieredGenericPointerEdge(JSTracer* trc, Cell** thingp, const char* name)
 {
-    JS_ROOT_MARKING_ASSERT(trc);
-    MarkGCThingInternal(trc, thingp, name);
-}
-
-void
-gc::MarkGCThingUnbarriered(JSTracer* trc, void** thingp, const char* name)
-{
-    MarkGCThingInternal(trc, thingp, name);
+    MOZ_ASSERT(thingp);
+    if (!*thingp)
+        return;
+    TraceManuallyBarrieredEdgeFunctor f;
+    CallTyped(f, (*thingp)->getTraceKind(), trc, thingp, name);
 }
 
 /*** Value Marking ***/
@@ -1280,7 +1124,7 @@ ShouldMarkCrossCompartment(JSTracer* trc, JSObject* src, Value val)
 void
 gc::MarkValueForBarrier(JSTracer* trc, Value* valuep, const char* name)
 {
-    MOZ_ASSERT(!trc->runtime()->isHeapBusy());
+    MOZ_ASSERT(!trc->runtime()->isHeapCollecting());
     TraceManuallyBarrieredEdge(trc, valuep, name);
 }
 

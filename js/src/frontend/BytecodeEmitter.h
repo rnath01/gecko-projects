@@ -397,7 +397,10 @@ struct BytecodeEmitter
 
     // Emit a bytecode followed by an uint16 immediate operand stored in
     // big-endian order.
-    bool emitUint16Operand(JSOp op, uint32_t i);
+    bool emitUint16Operand(JSOp op, uint32_t operand);
+
+    // Emit a bytecode followed by an uint32 immediate operand.
+    bool emitUint32Operand(JSOp op, uint32_t operand);
 
     // Emit (1 + extra) bytecodes, for N bytes of op and its immediate operand.
     bool emitN(JSOp op, size_t extra, ptrdiff_t* offset = nullptr);
@@ -590,6 +593,13 @@ struct BytecodeEmitter
     bool emitForOf(StmtType type, ParseNode* pn, ptrdiff_t top);
 
     bool emitClass(ParseNode* pn);
+    bool emitSuperPropLHS(bool isCall = false);
+    bool emitSuperPropOp(ParseNode* pn, JSOp op, bool isCall = false);
+    bool emitSuperPropIncDec(ParseNode* pn);
+    enum SuperElemOptions { SuperElem_Get, SuperElem_Set, SuperElem_Call, SuperElem_IncDec };
+    bool emitSuperElemOperands(ParseNode* pn, SuperElemOptions opts = SuperElem_Get);
+    bool emitSuperElemOp(ParseNode* pn, JSOp op, bool isCall = false);
+    bool emitSuperElemIncDec(ParseNode* pn);
 };
 
 } /* namespace frontend */

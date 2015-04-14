@@ -86,16 +86,18 @@ nsContainerFrame::AppendFrames(ChildListID  aListID,
 {
   MOZ_ASSERT(aListID == kPrincipalList || aListID == kNoReflowPrincipalList,
              "unexpected child list");
-  if (aFrameList.NotEmpty()) {
-    mFrames.AppendFrames(this, aFrameList);
 
-    // Ask the parent frame to reflow me.
-    if (aListID == kPrincipalList)
-    {
-      PresContext()->PresShell()->
-        FrameNeedsReflow(this, nsIPresShell::eTreeChange,
-                         NS_FRAME_HAS_DIRTY_CHILDREN);
-    }
+  if (MOZ_UNLIKELY(aFrameList.IsEmpty())) {
+    return;
+  }
+
+  DrainSelfOverflowList(); // ensure the last frame is in mFrames
+  mFrames.AppendFrames(this, aFrameList);
+
+  if (aListID != kNoReflowPrincipalList) {
+    PresContext()->PresShell()->
+      FrameNeedsReflow(this, nsIPresShell::eTreeChange,
+                       NS_FRAME_HAS_DIRTY_CHILDREN);
   }
 }
 
@@ -109,16 +111,17 @@ nsContainerFrame::InsertFrames(ChildListID aListID,
   NS_ASSERTION(!aPrevFrame || aPrevFrame->GetParent() == this,
                "inserting after sibling frame with different parent");
 
-  if (aFrameList.NotEmpty()) {
-    // Insert frames after aPrevFrame
-    mFrames.InsertFrames(this, aPrevFrame, aFrameList);
+  if (MOZ_UNLIKELY(aFrameList.IsEmpty())) {
+    return;
+  }
 
-    if (aListID == kPrincipalList)
-    {
-      PresContext()->PresShell()->
-        FrameNeedsReflow(this, nsIPresShell::eTreeChange,
-                         NS_FRAME_HAS_DIRTY_CHILDREN);
-    }
+  DrainSelfOverflowList(); // ensure aPrevFrame is in mFrames
+  mFrames.InsertFrames(this, aPrevFrame, aFrameList);
+
+  if (aListID != kNoReflowPrincipalList) {
+    PresContext()->PresShell()->
+      FrameNeedsReflow(this, nsIPresShell::eTreeChange,
+                       NS_FRAME_HAS_DIRTY_CHILDREN);
   }
 }
 
@@ -791,14 +794,11 @@ nsContainerFrame::DoInlineIntrinsicISize(nsRenderingContext *aRenderingContext,
   NS_PRECONDITION(aType == nsLayoutUtils::MIN_ISIZE ||
                   aType == nsLayoutUtils::PREF_ISIZE, "bad type");
 
-  mozilla::css::Side startSide, endSide;
-  if (StyleVisibility()->mDirection == NS_STYLE_DIRECTION_LTR) {
-    startSide = NS_SIDE_LEFT;
-    endSide = NS_SIDE_RIGHT;
-  } else {
-    startSide = NS_SIDE_RIGHT;
-    endSide = NS_SIDE_LEFT;
-  }
+  WritingMode wm = GetWritingMode();
+  mozilla::css::Side startSide =
+    wm.PhysicalSideForInlineAxis(eLogicalEdgeStart);
+  mozilla::css::Side endSide =
+    wm.PhysicalSideForInlineAxis(eLogicalEdgeEnd);
 
   const nsStylePadding *stylePadding = StylePadding();
   const nsStyleBorder *styleBorder = StyleBorder();
@@ -950,7 +950,7 @@ nsContainerFrame::ReflowChild(nsIFrame*                aKidFrame,
   NS_PRECONDITION(aReflowState.frame == aKidFrame, "bad reflow state");
   if (aWM.IsVerticalRL() || (!aWM.IsVertical() && !aWM.IsBidiLTR())) {
     NS_ASSERTION(aContainerWidth != NS_UNCONSTRAINEDSIZE,
-                 "FinishReflowChild with unconstrained container width!");
+                 "ReflowChild with unconstrained container width!");
   }
 
   // Position the child frame and its view if requested.

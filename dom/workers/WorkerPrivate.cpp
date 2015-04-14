@@ -2662,6 +2662,28 @@ struct WorkerPrivate::PreemptingRunnableInfo final
   }
 };
 
+template <class Derived>
+nsIDocument*
+WorkerPrivateParent<Derived>::GetDocument() const
+{
+  AssertIsOnMainThread();
+  if (mLoadInfo.mWindow) {
+    return mLoadInfo.mWindow->GetExtantDoc();
+  }
+  // if we don't have a document, we should query the document
+  // from the parent in case of a nested worker
+  WorkerPrivate* parent = mParent;
+  while (parent) {
+    if (parent->mLoadInfo.mWindow) {
+      return parent->mLoadInfo.mWindow->GetExtantDoc();
+    }
+    parent = parent->GetParent();
+  }
+  // couldn't query a document, give up and return nullptr
+  return nullptr;
+}
+
+
 // Can't use NS_IMPL_CYCLE_COLLECTION_CLASS(WorkerPrivateParent) because of the
 // templates.
 template <class Derived>
@@ -5898,11 +5920,10 @@ WorkerPrivate::NotifyFeatures(JSContext* aCx, Status aStatus)
     CancelAllTimeouts(aCx);
   }
 
-  nsAutoTArray<WorkerFeature*, 30> features;
-  features.AppendElements(mFeatures);
-
-  for (uint32_t index = 0; index < features.Length(); index++) {
-    if (!features[index]->Notify(aCx, aStatus)) {
+  nsTObserverArray<WorkerFeature*>::ForwardIterator iter(mFeatures);
+  while (iter.HasMore()) {
+    WorkerFeature* feature = iter.GetNext();
+    if (!feature->Notify(aCx, aStatus)) {
       NS_WARNING("Failed to notify feature!");
     }
   }

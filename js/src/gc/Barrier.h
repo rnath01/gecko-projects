@@ -192,6 +192,9 @@ class JitCode;
 // a helper thread.
 bool
 CurrentThreadIsIonCompiling();
+
+bool
+CurrentThreadIsGCSweeping();
 #endif
 
 bool
@@ -296,7 +299,6 @@ struct InternalGCMethods<T*>
     static bool isMarkable(T* v) { return v != nullptr; }
 
     static void preBarrier(T* v) { T::writeBarrierPre(v); }
-    static void preBarrier(Zone* zone, T* v) { T::writeBarrierPre(zone, v); }
 
     static void postBarrier(T** vp) { T::writeBarrierPost(*vp, vp); }
     static void postBarrierRelocate(T** vp) { T::writeBarrierPostRelocate(*vp, vp); }
@@ -388,18 +390,31 @@ struct InternalGCMethods<jsid>
     static bool isMarkable(jsid id) { return JSID_IS_STRING(id) || JSID_IS_SYMBOL(id); }
 
     static void preBarrier(jsid id) {
-        if (JSID_IS_GCTHING(id)) {
-            JS::Zone* zone = ZoneOfIdFromAnyThread(id);
-            JS::shadow::Zone* shadowZone = JS::shadow::Zone::asShadowZone(zone);
-            if (shadowZone->needsIncrementalBarrier()) {
-                jsid tmp(id);
-                js::gc::MarkIdForBarrier(shadowZone->barrierTracer(), &tmp, "id write barrier");
-                MOZ_ASSERT(tmp == id);
-            }
+        MOZ_ASSERT(!CurrentThreadIsIonCompiling());
+        if (JSID_IS_STRING(id) && StringIsPermanentAtom(JSID_TO_STRING(id)))
+            return;
+        if (JSID_IS_GCTHING(id) && shadowRuntimeFromAnyThread(id)->needsIncrementalBarrier())
+            preBarrierImpl(ZoneOfIdFromAnyThread(id), id);
+    }
+
+  private:
+    static JSRuntime* runtimeFromAnyThread(jsid id) {
+        MOZ_ASSERT(JSID_IS_GCTHING(id));
+        return JSID_TO_GCTHING(id).asCell()->runtimeFromAnyThread();
+    }
+    static JS::shadow::Runtime* shadowRuntimeFromAnyThread(jsid id) {
+        return reinterpret_cast<JS::shadow::Runtime*>(runtimeFromAnyThread(id));
+    }
+    static void preBarrierImpl(Zone *zone, jsid id) {
+        JS::shadow::Zone* shadowZone = JS::shadow::Zone::asShadowZone(zone);
+        if (shadowZone->needsIncrementalBarrier()) {
+            jsid tmp(id);
+            js::gc::MarkIdForBarrier(shadowZone->barrierTracer(), &tmp, "id write barrier");
+            MOZ_ASSERT(tmp == id);
         }
     }
-    static void preBarrier(Zone* zone, jsid id) { preBarrier(id); }
 
+  public:
     static void postBarrier(jsid* idp) {}
     static void postBarrierRelocate(jsid* idp) {}
     static void postBarrierRemove(jsid* idp) {}
@@ -493,14 +508,16 @@ class PreBarriered : public BarrieredBase<T>
 /*
  * A pre- and post-barriered heap pointer, for use inside the JS engine.
  *
+ * It must only be stored in memory that has GC lifetime. HeapPtr must not be
+ * used in contexts where it may be implicitly moved or deleted, e.g. most
+ * containers.
+ *
  * Not to be confused with JS::Heap<T>. This is a different class from the
  * external interface and implements substantially different semantics.
  *
  * The post-barriers implemented by this class are faster than those
  * implemented by RelocatablePtr<T> or JS::Heap<T> at the cost of not
- * automatically handling deletion or movement. It should generally only be
- * stored in memory that has GC lifetime. HeapPtr must not be used in contexts
- * where it may be implicitly moved or deleted, e.g. most containers.
+ * automatically handling deletion or movement.
  */
 template <class T>
 class HeapPtr : public BarrieredBase<T>
@@ -509,6 +526,11 @@ class HeapPtr : public BarrieredBase<T>
     HeapPtr() : BarrieredBase<T>(GCMethods<T>::initial()) {}
     explicit HeapPtr(T v) : BarrieredBase<T>(v) { post(); }
     explicit HeapPtr(const HeapPtr<T>& v) : BarrieredBase<T>(v) { post(); }
+#ifdef DEBUG
+    ~HeapPtr() {
+        MOZ_ASSERT(CurrentThreadIsGCSweeping());
+    }
+#endif
 
     void init(T v) {
         this->value = v;
@@ -519,13 +541,6 @@ class HeapPtr : public BarrieredBase<T>
 
   protected:
     void post() { InternalGCMethods<T>::postBarrier(&this->value); }
-
-    /* Make this friend so it can access pre() and post(). */
-    template <class T1, class T2>
-    friend inline void
-    BarrieredSetPair(Zone* zone,
-                     HeapPtr<T1*>& v1, T1* val1,
-                     HeapPtr<T2*>& v2, T2* val2);
 
   private:
     void set(const T& v) {
@@ -613,9 +628,20 @@ class RelocatablePtr : public BarrieredBase<T>
 
     DECLARE_POINTER_ASSIGN_OPS(RelocatablePtr, T);
 
+    /* Make this friend so it can access pre() and post(). */
+    template <class T1, class T2>
+    friend inline void
+    BarrieredSetPair(Zone* zone,
+                     RelocatablePtr<T1*>& v1, T1* val1,
+                     RelocatablePtr<T2*>& v2, T2* val2);
+
   protected:
     void set(const T& v) {
         this->pre();
+        postBarrieredSet(v);
+    }
+
+    void postBarrieredSet(const T& v) {
         if (GCMethods<T>::needsPostBarrier(v)) {
             this->value = v;
             post();
@@ -645,17 +671,15 @@ class RelocatablePtr : public BarrieredBase<T>
 template <class T1, class T2>
 static inline void
 BarrieredSetPair(Zone* zone,
-                 HeapPtr<T1*>& v1, T1* val1,
-                 HeapPtr<T2*>& v2, T2* val2)
+                 RelocatablePtr<T1*>& v1, T1* val1,
+                 RelocatablePtr<T2*>& v2, T2* val2)
 {
     if (T1::needWriteBarrierPre(zone)) {
         v1.pre();
         v2.pre();
     }
-    v1.unsafeSet(val1);
-    v2.unsafeSet(val2);
-    v1.post();
-    v2.post();
+    v1.postBarrieredSet(val1);
+    v2.postBarrieredSet(val2);
 }
 
 /* Useful for hashtables with a HeapPtr as key. */
@@ -766,9 +790,18 @@ typedef PreBarriered<JSString*> PreBarrieredString;
 typedef PreBarriered<JSAtom*> PreBarrieredAtom;
 
 typedef RelocatablePtr<JSObject*> RelocatablePtrObject;
+typedef RelocatablePtr<JSFunction*> RelocatablePtrFunction;
+typedef RelocatablePtr<PlainObject*> RelocatablePtrPlainObject;
 typedef RelocatablePtr<JSScript*> RelocatablePtrScript;
 typedef RelocatablePtr<NativeObject*> RelocatablePtrNativeObject;
 typedef RelocatablePtr<NestedScopeObject*> RelocatablePtrNestedScopeObject;
+typedef RelocatablePtr<Shape*> RelocatablePtrShape;
+typedef RelocatablePtr<ObjectGroup*> RelocatablePtrObjectGroup;
+typedef RelocatablePtr<jit::JitCode*> RelocatablePtrJitCode;
+typedef RelocatablePtr<JSLinearString*> RelocatablePtrLinearString;
+typedef RelocatablePtr<JSString*> RelocatablePtrString;
+typedef RelocatablePtr<JSAtom*> RelocatablePtrAtom;
+typedef RelocatablePtr<ArrayBufferObjectMaybeShared*> RelocatablePtrArrayBufferObjectMaybeShared;
 
 typedef HeapPtr<NativeObject*> HeapPtrNativeObject;
 typedef HeapPtr<ArrayObject*> HeapPtrArrayObject;

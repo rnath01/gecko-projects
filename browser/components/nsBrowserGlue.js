@@ -122,6 +122,13 @@ XPCOMUtils.defineLazyModuleGetter(this, "UpdateChannel",
                                   "resource://gre/modules/UpdateChannel.jsm");
 #endif
 
+#ifdef MOZ_CRASHREPORTER
+XPCOMUtils.defineLazyModuleGetter(this, "TabCrashReporter",
+                                  "resource:///modules/ContentCrashReporters.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PluginCrashReporter",
+                                  "resource:///modules/ContentCrashReporters.jsm");
+#endif
+
 XPCOMUtils.defineLazyGetter(this, "ShellService", function() {
   try {
     return Cc["@mozilla.org/browser/shell-service;1"].
@@ -731,6 +738,11 @@ BrowserGlue.prototype = {
       iconURL: "resource:///chrome/browser/content/browser/defaultthemes/devedition.icon.png",
       author: vendorShortName,
     });
+#endif
+
+#ifdef MOZ_CRASHREPORTER
+    TabCrashReporter.init();
+    PluginCrashReporter.init();
 #endif
 
     Services.obs.notifyObservers(null, "browser-ui-startup-complete", "");
@@ -2381,6 +2393,42 @@ ContentPermissionPrompt.prototype = {
     }
   },
 
+  _promptPush : function(aRequest) {
+    var browserBundle = Services.strings.createBundle("chrome://browser/locale/browser.properties");
+    var requestingURI = aRequest.principal.URI;
+
+    var message = browserBundle.formatStringFromName("push.enablePush",
+                                                 [requestingURI.host], 1);
+
+    var actions = [
+    {
+      stringId: "push.alwaysAllow",
+      action: Ci.nsIPermissionManager.ALLOW_ACTION,
+      expireType: null,
+      callback: function() {}
+    },
+    {
+      stringId: "push.allowForSession",
+      action: Ci.nsIPermissionManager.ALLOW_ACTION,
+      expireType: Ci.nsIPermissionManager.EXPIRE_SESSION,
+      callback: function() {}
+    },
+    {
+      stringId: "push.alwaysBlock",
+      action: Ci.nsIPermissionManager.DENY_ACTION,
+      expireType: null,
+      callback: function() {}
+    }]
+
+    var options = {
+                    learnMoreURL: Services.urlFormatter.formatURLPref("browser.push.warning.infoURL"),
+                  };
+
+    this._showPrompt(aRequest, message, "push", actions, "push",
+                     "push-notification-icon", options);
+
+  },
+
   _promptGeo : function(aRequest) {
     var secHistogram = Services.telemetry.getHistogramById("SECURITY_UI");
     var requestingURI = aRequest.principal.URI;
@@ -2505,7 +2553,6 @@ ContentPermissionPrompt.prototype = {
   },
 
   prompt: function CPP_prompt(request) {
-
     // Only allow exactly one permission rquest here.
     let types = request.types.QueryInterface(Ci.nsIArray);
     if (types.length != 1) {
@@ -2517,6 +2564,7 @@ ContentPermissionPrompt.prototype = {
     const kFeatureKeys = { "geolocation" : "geo",
                            "desktop-notification" : "desktop-notification",
                            "pointerLock" : "pointerLock",
+                           "push" : "push"
                          };
 
     // Make sure that we support the request.
@@ -2566,6 +2614,9 @@ ContentPermissionPrompt.prototype = {
       break;
     case "pointerLock":
       this._promptPointerLock(request, autoAllow);
+      break;
+    case "push":
+      this._promptPush(request);
       break;
     }
   },

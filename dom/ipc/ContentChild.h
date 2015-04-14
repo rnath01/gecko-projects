@@ -135,11 +135,6 @@ public:
     AllocPProcessHangMonitorChild(Transport* aTransport,
                                   ProcessId aOtherProcess) override;
 
-#if defined(XP_WIN) && defined(MOZ_CONTENT_SANDBOX)
-    // Cleans up any resources used by the process when sandboxed.
-    void CleanUpSandboxEnvironment();
-#endif
-
     virtual bool RecvSetProcessSandbox() override;
 
     PBackgroundChild*
@@ -304,6 +299,8 @@ public:
 
     virtual bool RecvSpeakerManagerNotify() override;
 
+    virtual bool RecvBidiKeyboardNotify(const bool& isLangRTL) override;
+
     virtual bool RecvNotifyVisited(const URIParams& aURI) override;
     // auto remove when alertfinished is received.
     nsresult AddRemoteAlertObserver(const nsString& aData, nsIObserver* aObserver);
@@ -389,6 +386,7 @@ public:
                                        const base::ProcessId& aProcessId) override;
     virtual bool RecvLoadPluginResult(const uint32_t& aPluginId,
                                       const bool& aResult) override;
+    virtual bool RecvUpdateWindow(const uintptr_t& aChildId) override;
 
     virtual bool RecvStartProfiler(const uint32_t& aEntries,
                                    const double& aInterval,
@@ -400,6 +398,11 @@ public:
                                       const OptionalURIParams& aDomain) override;
     virtual bool RecvShutdown() override;
 
+    virtual bool
+    RecvInvokeDragSession(nsTArray<IPCDataTransfer>&& aTransfers,
+                          const uint32_t& aAction) override;
+    virtual bool RecvEndDragSession(const bool& aDoneDrag,
+                                    const bool& aUserCancelled) override;
 #ifdef ANDROID
     gfxIntSize GetScreenSize() { return mScreenSize; }
 #endif

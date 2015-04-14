@@ -507,6 +507,13 @@ this.AppsUtils = {
    * @param aStatus : the APP_STATUS_* for this app.
    */
   checkAppRole: function(aRole, aStatus) {
+    try {
+      // Anything is possible in developer mode.
+      if (Services.prefs.getBoolPref("dom.apps.developer_mode")) {
+        return true;
+      }
+    } catch(e) {}
+
     if (aRole == "theme" && aStatus !== Ci.nsIPrincipal.APP_STATUS_CERTIFIED) {
       return false;
     }
@@ -614,7 +621,12 @@ this.AppsUtils = {
     aPrefBranch.setCharPref("gecko.mstone", mstone);
     aPrefBranch.setCharPref("gecko.buildID", buildID);
 
-    return ((mstone != savedmstone) || (buildID != savedBuildID));
+    if ((mstone != savedmstone) || (buildID != savedBuildID)) {
+      aPrefBranch.setBoolPref("dom.apps.reset-permissions", false);
+      return true;
+    } else {
+      return false;
+    }
   },
 
   /**

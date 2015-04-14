@@ -812,11 +812,8 @@ NativeObject::putProperty(ExclusiveContext* cx, HandleNativeObject obj, HandleId
         if (shape->isAccessorShape()) {
             AccessorShape& accShape = shape->asAccessorShape();
             accShape.rawGetter = getter;
-            if (accShape.hasGetterObject())
-                GetterSetterWriteBarrierPost(&accShape, &accShape.getterObj);
             accShape.rawSetter = setter;
-            if (accShape.hasSetterObject())
-                GetterSetterWriteBarrierPost(&accShape, &accShape.setterObj);
+            GetterSetterWriteBarrierPost(&accShape);
         } else {
             MOZ_ASSERT(!getter);
             MOZ_ASSERT(!setter);
@@ -1274,7 +1271,7 @@ JSCompartment::checkBaseShapeTableAfterMovingGC()
         CheckGCThingAfterMovingGC(base);
 
         BaseShapeSet::Ptr ptr = baseShapes.lookup(base);
-        MOZ_ASSERT(ptr.found() && &*ptr == &e.front());
+        MOZ_RELEASE_ASSERT(ptr.found() && &*ptr == &e.front());
     }
 }
 
@@ -1402,7 +1399,7 @@ JSCompartment::checkInitialShapesTableAfterMovingGC()
                                          shape->numFixedSlots(),
                                          shape->getObjectFlags());
         InitialShapeSet::Ptr ptr = initialShapes.lookup(lookup);
-        MOZ_ASSERT(ptr.found() && &*ptr == &e.front());
+        MOZ_RELEASE_ASSERT(ptr.found() && &*ptr == &e.front());
     }
 }
 
