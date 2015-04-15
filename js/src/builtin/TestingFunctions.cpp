@@ -119,6 +119,14 @@ GetBuildConfiguration(JSContext* cx, unsigned argc, jsval* vp)
     if (!JS_SetProperty(cx, info, "asan", value))
         return false;
 
+#ifdef MOZ_TSAN
+    value = BooleanValue(true);
+#else
+    value = BooleanValue(false);
+#endif
+    if (!JS_SetProperty(cx, info, "tsan", value))
+        return false;
+
 #ifdef JS_GC_ZEAL
     value = BooleanValue(true);
 #else
@@ -708,6 +716,22 @@ GCSlice(JSContext* cx, unsigned argc, Value* vp)
     else
         rt->gc.debugGCSlice(budget);
 
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+AbortGC(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (args.length() != 0) {
+        RootedObject callee(cx, &args.callee());
+        ReportUsageError(cx, callee, "Wrong number of arguments");
+        return false;
+    }
+
+    cx->runtime()->gc.abortGC();
     args.rval().setUndefined();
     return true;
 }
@@ -2661,6 +2685,10 @@ gc::ZealModeHelpText),
     JS_FN_HELP("gcslice", GCSlice, 1, 0,
 "gcslice([n])",
 "  Start or continue an an incremental GC, running a slice that processes about n objects."),
+
+    JS_FN_HELP("abortgc", AbortGC, 1, 0,
+"abortgc()",
+"  Abort the current incremental GC."),
 
     JS_FN_HELP("validategc", ValidateGC, 1, 0,
 "validategc(true|false)",

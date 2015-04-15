@@ -104,7 +104,7 @@ this.ImportExport = {
     // We *have* to do this check in the parent process.
     let devMode = false;
     try {
-      devMode = Services.prefs.getBoolPref("developer.mode");
+      devMode = Services.prefs.getBoolPref("dom.apps.developer_mode");
     } catch(e) {};
 
     if (aApp.appStatus == Ci.nsIPrincipal.APP_STATUS_CERTIFIED && !devMode) {
@@ -399,7 +399,7 @@ this.ImportExport = {
         let isDevMode = false;
         try {
           // Anything is possible in developer mode.
-          if (Services.prefs.getBoolPref("developer.mode")) {
+          if (Services.prefs.getBoolPref("dom.apps.developer_mode")) {
             maxStatus = Ci.nsIPrincipal.APP_STATUS_CERTIFIED;
             isDevMode = true;
           }

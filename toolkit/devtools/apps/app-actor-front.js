@@ -349,6 +349,9 @@ function reloadApp(client, webappsActor, manifestURL) {
       let request = {
         to: target.form.actor,
         type: "reload",
+        options: {
+          force: true
+        },
         manifestURL: manifestURL
       };
       return client.request(request);
@@ -855,4 +858,3 @@ AppActorFront.prototype = {
 }
 
 exports.AppActorFront = AppActorFront;
-

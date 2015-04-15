@@ -157,6 +157,7 @@ RootActor.prototype = {
     // Whether the webapps actor implements `fetch` request
     // that allows retrieving app sources locally
     fetchPackagedApp: true,
+    noNeedToFakeResumptionOnNavigation: true,
     // Whether root actor exposes tab actors
     // if allowChromeProcess is true, you can fetch a ChromeActor instance
     // to debug chrome and any non-content ressource via getProcess request

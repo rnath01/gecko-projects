@@ -510,7 +510,7 @@ this.AppsUtils = {
   checkAppRole: function(aRole, aStatus) {
     try {
       // Anything is possible in developer mode.
-      if (Services.prefs.getBoolPref("developer.mode")) {
+      if (Services.prefs.getBoolPref("dom.apps.developer_mode")) {
         return true;
       }
     } catch(e) {}

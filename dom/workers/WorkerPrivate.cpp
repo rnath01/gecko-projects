@@ -54,6 +54,7 @@
 #include "mozilla/dom/MessageEventBinding.h"
 #include "mozilla/dom/MessagePortList.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/dom/PromiseDebugging.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/StructuredClone.h"
 #include "mozilla/dom/WebCryptoCommon.h"
@@ -1396,7 +1397,7 @@ private:
   {
     // This busy count will be matched by the CloseEventRunnable.
     return aWorkerPrivate->ModifyBusyCount(aCx, true) &&
-           aWorkerPrivate->Close(aCx);
+           aWorkerPrivate->Close();
   }
 };
 
@@ -3245,7 +3246,7 @@ WorkerPrivateParent<Derived>::Thaw(JSContext* aCx, nsPIDOMWindow* aWindow)
 
 template <class Derived>
 bool
-WorkerPrivateParent<Derived>::Close(JSContext* aCx)
+WorkerPrivateParent<Derived>::Close()
 {
   AssertIsOnParentThread();
 
@@ -5159,6 +5160,10 @@ WorkerPrivate::DoRunLoop(JSContext* aCx)
 
       // If we're supposed to die then we should exit the loop.
       if (currentStatus == Killing) {
+        // Flush uncaught rejections immediately, without
+        // waiting for a next tick.
+        PromiseDebugging::FlushUncaughtRejections();
+
         ShutdownGCTimers();
 
         DisableMemoryReporter();

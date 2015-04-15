@@ -2561,7 +2561,7 @@ this.DOMApplicationRegistry = {
     function checkAppStatus(aManifest) {
       try {
         // Everything is authorized in developer mode.
-        if (Services.prefs.getBoolPref("developer.mode")) {
+        if (Services.prefs.getBoolPref("dom.apps.developer_mode")) {
           return true;
         }
       } catch(e) {}
@@ -3913,7 +3913,7 @@ this.DOMApplicationRegistry = {
 
     try {
       // Anything is possible in developer mode.
-      if (Services.prefs.getBoolPref("developer.mode")) {
+      if (Services.prefs.getBoolPref("dom.apps.developer_mode")) {
         maxStatus = Ci.nsIPrincipal.APP_STATUS_CERTIFIED;
       }
     } catch(e) {};
@@ -3921,7 +3921,8 @@ this.DOMApplicationRegistry = {
     let allowUnsignedLangpack = false;
     try {
       allowUnsignedLangpack =
-        Services.prefs.getBoolPref("dom.apps.allow_unsigned_langpacks");
+        Services.prefs.getBoolPref("dom.apps.allow_unsigned_langpacks") ||
+        Services.prefs.getBoolPref("dom.apps.developer_mode");
     } catch(e) {}
     let isLangPack = newManifest.role === "langpack" &&
                      (aIsSigned || allowUnsignedLangpack);
