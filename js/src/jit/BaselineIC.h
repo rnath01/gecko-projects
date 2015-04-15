@@ -3291,7 +3291,7 @@ class ICSetElem_DenseAddImpl : public ICSetElem_DenseAdd
   public:
     void traceShapes(JSTracer* trc) {
         for (size_t i = 0; i < NumShapes; i++)
-            MarkShape(trc, &shapes_[i], "baseline-setelem-denseadd-stub-shape");
+            TraceEdge(trc, &shapes_[i], "baseline-setelem-denseadd-stub-shape");
     }
     Shape* shape(size_t i) const {
         MOZ_ASSERT(i < NumShapes);
@@ -3521,7 +3521,7 @@ class ICGetName_Scope : public ICMonitoredStub
   public:
     void traceScopes(JSTracer* trc) {
         for (size_t i = 0; i < NumHops + 1; i++)
-            MarkShape(trc, &shapes_[i], "baseline-scope-stub-shape");
+            TraceEdge(trc, &shapes_[i], "baseline-scope-stub-shape");
     }
 
     static size_t offsetOfShape(size_t index) {
@@ -3842,17 +3842,17 @@ class ICGetProp_StringLength : public ICStub
 };
 
 // Structure encapsulating the guarding that needs to be done on an object
-// before it can be accessed or modified.
+// before it can be accessed or modified by an inline cache.
 class ReceiverGuard
 {
-    // Group to guard on, or null. If the object is not unboxed and the IC does
-    // not require the object to have a specific group, this is null.
-    // Otherwise, this is the object's group.
+    // Group to guard on, or null. If the object is not unboxed or typed and
+    // the IC does  not require the object to have a specific group, this is
+    // null. Otherwise, this is the object's group.
     HeapPtrObjectGroup group_;
 
-    // Shape to guard on, or null. If the object is not unboxed then this is
-    // the object's shape. If the object is unboxed, then this is the shape of
-    // the object's expando, null if the object has no expando.
+    // Shape to guard on, or null. If the object is not unboxed or typed then
+    // this is the object's shape. If the object is unboxed, then this is the
+    // shape of the object's expando, null if the object has no expando.
     HeapPtrShape shape_;
 
   public:
@@ -3873,6 +3873,10 @@ class ReceiverGuard
         ObjectGroup* group;
         Shape* shape;
 
+        StackGuard()
+          : group(nullptr), shape(nullptr)
+        {}
+
         MOZ_IMPLICIT StackGuard(const ReceiverGuard& guard)
           : group(guard.group_), shape(guard.shape_)
         {}
@@ -3881,28 +3885,15 @@ class ReceiverGuard
           : group(guard.group), shape(guard.shape)
         {}
 
-        explicit StackGuard(JSObject* obj)
-          : group(nullptr), shape(nullptr)
-        {
-            if (obj) {
-                shape = obj->maybeShape();
-                if (!shape) {
-                    group = obj->group();
-                    if (UnboxedExpandoObject* expando = obj->as<UnboxedPlainObject>().maybeExpando())
-                        shape = expando->lastProperty();
-                }
-            }
+        explicit StackGuard(JSObject* obj);
+        StackGuard(ObjectGroup* group, Shape* shape);
+
+        bool operator ==(const StackGuard& other) const {
+            return group == other.group && shape == other.shape;
         }
 
-        explicit StackGuard(Shape* shape)
-          : group(nullptr), shape(shape)
-        {}
-
-        Shape* ownShape() const {
-            // Get a shape belonging to the object itself, rather than an unboxed expando.
-            if (!group || !group->maybeUnboxedLayout())
-                return shape;
-            return nullptr;
+        bool operator !=(const StackGuard& other) const {
+            return !(*this == other);
         }
     };
 
@@ -3928,10 +3919,6 @@ class ReceiverGuard
         return group_;
     }
 
-    Shape* ownShape() const {
-        return StackGuard(*this).ownShape();
-    }
-
     static size_t offsetOfShape() {
         return offsetof(ReceiverGuard, shape_);
     }
@@ -3940,12 +3927,8 @@ class ReceiverGuard
     }
 
     // Bits to munge into IC compiler keys when that IC has a ReceiverGuard.
-    // This uses at two bits for data.
-    static int32_t keyBits(JSObject* obj) {
-        if (obj->maybeShape())
-            return 0;
-        return obj->as<UnboxedPlainObject>().maybeExpando() ? 1 : 2;
-    }
+    // This uses at most two bits for data.
+    static int32_t keyBits(JSObject* obj);
 };
 
 // Base class for native GetProp stubs.
@@ -4134,7 +4117,7 @@ class ICGetProp_NativeDoesNotExistImpl : public ICGetProp_NativeDoesNotExist
     void traceShapes(JSTracer* trc) {
         // Note: using int32_t here to avoid gcc warning.
         for (int32_t i = 0; i < int32_t(NumShapes); i++)
-            MarkShape(trc, &shapes_[i], "baseline-getpropnativedoesnotexist-stub-shape");
+            TraceEdge(trc, &shapes_[i], "baseline-getpropnativedoesnotexist-stub-shape");
     }
 
     static size_t offsetOfShape(size_t idx) {
@@ -4796,7 +4779,9 @@ class ICSetProp_Native : public ICUpdatedStub
 
       protected:
         virtual int32_t getKey() const {
-            return static_cast<int32_t>(kind) | (static_cast<int32_t>(isFixedSlot_) << 16);
+            return static_cast<int32_t>(kind) |
+                   (static_cast<int32_t>(isFixedSlot_) << 16) |
+                   (static_cast<int32_t>(obj_->is<UnboxedPlainObject>()) << 17);
         }
 
         bool generateStubCode(MacroAssembler& masm);
@@ -4879,7 +4864,7 @@ class ICSetProp_NativeAddImpl : public ICSetProp_NativeAdd
   public:
     void traceShapes(JSTracer* trc) {
         for (size_t i = 0; i < NumShapes; i++)
-            MarkShape(trc, &shapes_[i], "baseline-setpropnativeadd-stub-shape");
+            TraceEdge(trc, &shapes_[i], "baseline-setpropnativeadd-stub-shape");
     }
 
     static size_t offsetOfShape(size_t idx) {
@@ -4898,8 +4883,10 @@ class ICSetPropNativeAddCompiler : public ICStubCompiler
 
   protected:
     virtual int32_t getKey() const {
-        return static_cast<int32_t>(kind) | (static_cast<int32_t>(isFixedSlot_) << 16) |
-               (static_cast<int32_t>(protoChainDepth_) << 20);
+        return static_cast<int32_t>(kind) |
+               (static_cast<int32_t>(isFixedSlot_) << 16) |
+               (static_cast<int32_t>(obj_->is<UnboxedPlainObject>()) << 17) |
+               (static_cast<int32_t>(protoChainDepth_) << 18);
     }
 
     bool generateStubCode(MacroAssembler& masm);
@@ -4922,7 +4909,11 @@ class ICSetPropNativeAddCompiler : public ICStubCompiler
         if (newGroup == oldGroup_)
             newGroup = nullptr;
 
-        RootedShape newShape(cx, obj_->as<NativeObject>().lastProperty());
+        RootedShape newShape(cx);
+        if (obj_->isNative())
+            newShape = obj_->as<NativeObject>().lastProperty();
+        else
+            newShape = obj_->as<UnboxedPlainObject>().maybeExpando()->lastProperty();
 
         return ICStub::New<ICSetProp_NativeAddImpl<ProtoChainDepth>>(
                     space, getStubCode(), oldGroup_, shapes, newShape, newGroup, offset_);

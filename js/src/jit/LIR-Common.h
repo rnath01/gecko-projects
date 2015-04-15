@@ -1552,14 +1552,6 @@ class LJSCallInstructionHelper : public LCallInstructionHelper<Defs, Operands, T
         return mir()->getSingleTarget();
     }
 
-    // The number of stack arguments is the max between the number of formal
-    // arguments and the number of actual arguments. The number of stack
-    // argument includes the |undefined| padding added in case of underflow.
-    // Does not include |this|.
-    uint32_t numStackArgs() const {
-        MOZ_ASSERT(mir()->numStackArgs() >= 1);
-        return mir()->numStackArgs() - 1; // |this| is not a formal argument.
-    }
     // Does not include |this|.
     uint32_t numActualArgs() const {
         return mir()->numActualArgs();
@@ -6133,6 +6125,38 @@ class LGuardReceiverPolymorphic : public LInstructionHelper<0, 1, 1>
     }
     const MGuardReceiverPolymorphic* mir() const {
         return mir_->toGuardReceiverPolymorphic();
+    }
+};
+
+class LGuardUnboxedExpando : public LInstructionHelper<0, 1, 0>
+{
+  public:
+    LIR_HEADER(GuardUnboxedExpando)
+
+    explicit LGuardUnboxedExpando(const LAllocation& in) {
+        setOperand(0, in);
+    }
+    const LAllocation* object() {
+        return getOperand(0);
+    }
+    const MGuardUnboxedExpando* mir() const {
+        return mir_->toGuardUnboxedExpando();
+    }
+};
+
+class LLoadUnboxedExpando : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(LoadUnboxedExpando)
+
+    explicit LLoadUnboxedExpando(const LAllocation& in) {
+        setOperand(0, in);
+    }
+    const LAllocation* object() {
+        return getOperand(0);
+    }
+    const MLoadUnboxedExpando* mir() const {
+        return mir_->toLoadUnboxedExpando();
     }
 };
 

@@ -348,13 +348,6 @@ xpc::TraceXPCGlobal(JSTracer* trc, JSObject* obj)
 
 namespace xpc {
 
-uint64_t
-GetCompartmentCPOWMicroseconds(JSCompartment* compartment)
-{
-    xpc::CompartmentPrivate* compartmentPrivate = xpc::CompartmentPrivate::Get(compartment);
-    return compartmentPrivate ? PR_IntervalToMicroseconds(compartmentPrivate->CPOWTime) : 0;
-}
-
 JSObject*
 CreateGlobalObject(JSContext* cx, const JSClass* clasp, nsIPrincipal* principal,
                    JS::CompartmentOptions& aOptions)
@@ -690,27 +683,6 @@ nsXPConnect::GetWrappedNativeOfNativeObject(JSContext * aJSContext,
     return NS_OK;
 }
 
-/* nsIStackFrame createStackFrameLocation (in uint32_t aLanguage, in string aFilename, in string aFunctionName, in int32_t aLineNumber, in nsIStackFrame aCaller); */
-NS_IMETHODIMP
-nsXPConnect::CreateStackFrameLocation(uint32_t aLanguage,
-                                      const char* aFilename,
-                                      const char* aFunctionName,
-                                      int32_t aLineNumber,
-                                      nsIStackFrame* aCaller,
-                                      nsIStackFrame** _retval)
-{
-    MOZ_ASSERT(_retval, "bad param");
-
-    nsCOMPtr<nsIStackFrame> stackFrame =
-        exceptions::CreateStackFrameLocation(aLanguage,
-                                             aFilename,
-                                             aFunctionName,
-                                             aLineNumber,
-                                             aCaller);
-    stackFrame.forget(_retval);
-    return NS_OK;
-}
-
 /* readonly attribute nsIStackFrame CurrentJSStack; */
 NS_IMETHODIMP
 nsXPConnect::GetCurrentJSStack(nsIStackFrame * *aCurrentJSStack)
@@ -781,7 +753,7 @@ nsXPConnect::EvalInSandboxObject(const nsAString& source, const char* filename,
         filenameStr = NS_LITERAL_CSTRING("x-bogus://XPConnect/Sandbox");
     }
     return EvalInSandbox(cx, sandbox, source, filenameStr, 1,
-                         JSVERSION_DEFAULT, rval);
+                         JSVERSION_LATEST, rval);
 }
 
 /* nsIXPConnectJSObjectHolder getWrappedNativePrototype (in JSContextPtr aJSContext, in JSObjectPtr aScope, in nsIClassInfo aClassInfo); */
@@ -1285,7 +1257,7 @@ ReadScriptOrFunction(nsIObjectInputStream* stream, JSContext* cx,
         }
     }
 
-    nsMemory::Free(data);
+    free(data);
     return rv;
 }
 

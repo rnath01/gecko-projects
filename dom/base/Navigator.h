@@ -19,7 +19,7 @@
 #include "nsString.h"
 #include "nsTArray.h"
 #ifdef MOZ_EME
-#include "mozilla/dom/MediaKeySystemAccess.h"
+#include "mozilla/dom/MediaKeySystemAccessManager.h"
 #endif
 
 class nsPluginArray;
@@ -93,6 +93,7 @@ class IccManager;
 class Telephony;
 class Voicemail;
 class TVManager;
+class InputPortManager;
 
 namespace time {
 class TimeManager;
@@ -225,6 +226,7 @@ public:
   Telephony* GetMozTelephony(ErrorResult& aRv);
   Voicemail* GetMozVoicemail(ErrorResult& aRv);
   TVManager* GetTv();
+  InputPortManager* GetInputPortManager(ErrorResult& aRv);
   network::Connection* GetConnection(ErrorResult& aRv);
   nsDOMCameraManager* GetMozCameras(ErrorResult& aRv);
   MediaDevices* GetMediaDevices(ErrorResult& aRv);
@@ -331,6 +333,8 @@ public:
   RequestMediaKeySystemAccess(const nsAString& aKeySystem,
                               const Optional<Sequence<MediaKeySystemOptions>>& aOptions,
                               ErrorResult& aRv);
+private:
+  nsRefPtr<MediaKeySystemAccessManager> mMediaKeySystemAccessManager;
 #endif
 
 private:
@@ -354,6 +358,7 @@ private:
   nsRefPtr<Telephony> mTelephony;
   nsRefPtr<Voicemail> mVoicemail;
   nsRefPtr<TVManager> mTVManager;
+  nsRefPtr<InputPortManager> mInputPortManager;
   nsRefPtr<network::Connection> mConnection;
 #ifdef MOZ_B2G_RIL
   nsRefPtr<MobileConnectionArray> mMobileConnections;

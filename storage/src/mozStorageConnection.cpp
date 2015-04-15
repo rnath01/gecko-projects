@@ -365,6 +365,10 @@ public:
     MOZ_ASSERT(onAsyncThread);
 #endif // DEBUG
 
+    nsCOMPtr<nsIRunnable> event = NS_NewRunnableMethodWithArg<nsCOMPtr<nsIThread>>
+      (mConnection, &Connection::shutdownAsyncThread, mAsyncExecutionThread);
+    (void)NS_DispatchToMainThread(event);
+
     // Internal close.
     (void)mConnection->internalClose(mNativeConnection);
 
@@ -486,6 +490,7 @@ Connection::Connection(Service *aService,
 , threadOpenedOn(do_GetCurrentThread())
 , mDBConn(nullptr)
 , mAsyncExecutionThreadShuttingDown(false)
+, mAsyncExecutionThreadIsAlive(false)
 , mConnectionClosed(false)
 , mTransactionInProgress(false)
 , mProgressHandler(nullptr)
@@ -502,6 +507,8 @@ Connection::~Connection()
 
   MOZ_ASSERT(!mAsyncExecutionThread,
              "AsyncClose has not been invoked on this connection!");
+  MOZ_ASSERT(!mAsyncExecutionThreadIsAlive,
+             "The async execution thread should have been shutdown!");
 }
 
 NS_IMPL_ADDREF(Connection)
@@ -569,6 +576,7 @@ Connection::getAsyncExecutionTarget()
                              mAsyncExecutionThread);
   }
 
+  mAsyncExecutionThreadIsAlive = true;
   return mAsyncExecutionThread;
 }
 
@@ -868,11 +876,23 @@ Connection::isClosed()
   return mConnectionClosed;
 }
 
+void
+Connection::shutdownAsyncThread(nsIThread *aThread) {
+  MOZ_ASSERT(!mAsyncExecutionThread);
+  MOZ_ASSERT(mAsyncExecutionThreadIsAlive);
+  MOZ_ASSERT(mAsyncExecutionThreadShuttingDown);
+
+  DebugOnly<nsresult> rv = aThread->Shutdown();
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+  mAsyncExecutionThreadIsAlive = false;
+}
+
 nsresult
 Connection::internalClose(sqlite3 *aNativeConnection)
 {
   // Sanity checks to make sure we are in the proper state before calling this.
-  MOZ_ASSERT(aNativeConnection, "Database connection is invalid!");
+  // aNativeConnection can be null if OpenAsyncDatabase failed and is now just
+  // cleaning up the async thread.
   MOZ_ASSERT(!isClosed());
 
 #ifdef DEBUG
@@ -901,6 +921,11 @@ Connection::internalClose(sqlite3 *aNativeConnection)
     MutexAutoLock lockedScope(sharedAsyncExecutionMutex);
     mConnectionClosed = true;
   }
+
+  // Nothing else needs to be done if we don't have a connection here.
+  if (!aNativeConnection)
+    return NS_OK;
+
   int srv = sqlite3_close(aNativeConnection);
 
   if (srv == SQLITE_BUSY) {
@@ -1148,11 +1173,14 @@ Connection::AsyncClose(mozIStorageCompletionCallback *aCallback)
   if (!NS_IsMainThread()) {
     return NS_ERROR_NOT_SAME_THREAD;
   }
-  if (!mDBConn)
-    return NS_ERROR_NOT_INITIALIZED;
 
+  // It's possible to get here with a null mDBConn but a non-null async
+  // execution target if OpenAsyncDatabase failed somehow, so don't exit early
+  // in that case.
   nsIEventTarget *asyncThread = getAsyncExecutionTarget();
-  NS_ENSURE_TRUE(asyncThread, NS_ERROR_NOT_INITIALIZED);
+
+  if (!mDBConn && !asyncThread)
+    return NS_ERROR_NOT_INITIALIZED;
 
   // setClosedState nullifies our connection pointer, so we take a raw pointer
   // off it, to pass it through the close procedure.

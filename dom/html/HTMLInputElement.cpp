@@ -109,6 +109,7 @@
 #include "HTMLSplitOnSpacesTokenizer.h"
 #include "nsIController.h"
 #include "nsIMIMEInfo.h"
+#include "nsFrameSelection.h"
 
 // input type=date
 #include "js/Date.h"
@@ -1179,7 +1180,7 @@ void
 HTMLInputElement::FreeData()
 {
   if (!IsSingleLineTextControl(false)) {
-    nsMemory::Free(mInputData.mValue);
+    free(mInputData.mValue);
     mInputData.mValue = nullptr;
   } else {
     UnbindFromFrame(nullptr);
@@ -1831,7 +1832,7 @@ HTMLInputElement::SetValue(const nsAString& aValue, ErrorResult& aRv)
       }
       Sequence<nsString> list;
       list.AppendElement(aValue);
-      MozSetFileNameArray(list);
+      MozSetFileNameArray(list, aRv);
       return;
     }
     else {
@@ -1910,7 +1911,7 @@ HTMLInputElement::GetList(nsIDOMHTMLElement** aValue)
     return NS_OK;
   }
 
-  CallQueryInterface(element, aValue);
+  element.forget(aValue);
   return NS_OK;
 }
 
@@ -2352,8 +2353,13 @@ HTMLInputElement::MozSetFileArray(const Sequence<OwningNonNull<File>>& aFiles)
 }
 
 void
-HTMLInputElement::MozSetFileNameArray(const Sequence< nsString >& aFileNames)
+HTMLInputElement::MozSetFileNameArray(const Sequence< nsString >& aFileNames, ErrorResult& aRv)
 {
+  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+    aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+    return;
+  }
+
   nsTArray<nsRefPtr<File>> files;
   for (uint32_t i = 0; i < aFileNames.Length(); ++i) {
     nsCOMPtr<nsIFile> file;
@@ -2397,8 +2403,9 @@ HTMLInputElement::MozSetFileNameArray(const char16_t** aFileNames, uint32_t aLen
     list.AppendElement(nsDependentString(aFileNames[i]));
   }
 
-  MozSetFileNameArray(list);
-  return NS_OK;
+  ErrorResult rv;
+  MozSetFileNameArray(list, rv);
+  return rv.ErrorCode();
 }
 
 bool
@@ -2445,8 +2452,9 @@ HTMLInputElement::SetUserInput(const nsAString& aValue)
   {
     Sequence<nsString> list;
     list.AppendElement(aValue);
-    MozSetFileNameArray(list);
-    return NS_OK;
+    ErrorResult rv;
+    MozSetFileNameArray(list, rv);
+    return rv.ErrorCode();
   } else {
     nsresult rv = SetValueInternal(aValue, true, true);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -2895,7 +2903,7 @@ HTMLInputElement::SetValueInternal(const nsAString& aValue,
           UpdateAllValidityStates(mParserCreating);
         }
       } else {
-        nsMemory::Free(mInputData.mValue);
+        free(mInputData.mValue);
         mInputData.mValue = ToNewUnicode(value);
         if (aSetValueChanged) {
           SetValueChanged(true);
@@ -3276,6 +3284,19 @@ HTMLInputElement::Select()
   FocusTristate state = FocusState();
   if (state == eUnfocusable) {
     return NS_OK;
+  }
+
+  nsTextEditorState* tes = GetEditorState();
+  if (tes) {
+    nsFrameSelection* fs = tes->GetConstFrameSelection();
+    if (fs && fs->MouseDownRecorded()) {
+      // This means that we're being called while the frame selection has a mouse
+      // down event recorded to adjust the caret during the mouse up event.
+      // We are probably called from the focus event handler.  We should override
+      // the delayed caret data in this case to ensure that this select() call
+      // takes effect.
+      fs->SetDelayedCaretData(nullptr);
+    }
   }
 
   nsIFocusManager* fm = nsFocusManager::GetFocusManager();

@@ -30,16 +30,20 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/AutoTimelineMarker.h"
 #include "mozilla/Base64.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/LoadInfo.h"
 #include "mozilla/dom/DocumentFragment.h"
+#include "mozilla/dom/DOMTypes.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLMediaElement.h"
 #include "mozilla/dom/HTMLTemplateElement.h"
 #include "mozilla/dom/HTMLContentElement.h"
 #include "mozilla/dom/HTMLShadowElement.h"
+#include "mozilla/dom/ipc/BlobChild.h"
+#include "mozilla/dom/ipc/BlobParent.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/TabParent.h"
@@ -459,7 +463,12 @@ nsContentUtils::Init()
 
   sSecurityManager->GetSystemPrincipal(&sSystemPrincipal);
   MOZ_ASSERT(sSystemPrincipal);
-  NS_ADDREF(sNullSubjectPrincipal = new nsNullPrincipal());
+
+  // We use the constructor here because we want infallible initialization; we
+  // apparently don't care whether sNullSubjectPrincipal has a sane URI or not.
+  nsRefPtr<nsNullPrincipal> nullPrincipal = new nsNullPrincipal();
+  nullPrincipal->Init();
+  nullPrincipal.forget(&sNullSubjectPrincipal);
 
   nsresult rv = CallGetService(NS_IOSERVICE_CONTRACTID, &sIOService);
   if (NS_FAILED(rv)) {
@@ -4241,6 +4250,8 @@ nsContentUtils::ParseFragmentHTML(const nsAString& aSourceBuffer,
                                   bool aQuirks,
                                   bool aPreventScriptExecution)
 {
+  AutoTimelineMarker m(aTargetNode->OwnerDoc()->GetDocShell(), "Parse HTML");
+
   if (nsContentUtils::sFragmentParsingActive) {
     NS_NOTREACHED("Re-entrant fragment parsing attempted.");
     return NS_ERROR_DOM_INVALID_STATE_ERR;
@@ -4267,6 +4278,8 @@ nsContentUtils::ParseDocumentHTML(const nsAString& aSourceBuffer,
                                   nsIDocument* aTargetDocument,
                                   bool aScriptingEnabledForNoscriptParsing)
 {
+  AutoTimelineMarker m(aTargetDocument->GetDocShell(), "Parse HTML");
+
   if (nsContentUtils::sFragmentParsingActive) {
     NS_NOTREACHED("Re-entrant fragment parsing attempted.");
     return NS_ERROR_DOM_INVALID_STATE_ERR;
@@ -4292,6 +4305,8 @@ nsContentUtils::ParseFragmentXML(const nsAString& aSourceBuffer,
                                  bool aPreventScriptExecution,
                                  nsIDOMDocumentFragment** aReturn)
 {
+  AutoTimelineMarker m(aDocument->GetDocShell(), "Parse XML");
+
   if (nsContentUtils::sFragmentParsingActive) {
     NS_NOTREACHED("Re-entrant fragment parsing attempted.");
     return NS_ERROR_DOM_INVALID_STATE_ERR;
@@ -6052,7 +6067,7 @@ nsContentUtils::CreateBlobBuffer(JSContext* aCx,
                                  JS::MutableHandle<JS::Value> aBlob)
 {
   uint32_t blobLen = aData.Length();
-  void* blobData = moz_malloc(blobLen);
+  void* blobData = malloc(blobLen);
   nsRefPtr<File> blob;
   if (blobData) {
     memcpy(blobData, aData.BeginReading(), blobLen);
@@ -7192,3 +7207,94 @@ nsContentUtils::CallOnAllRemoteChildren(nsIDOMWindow* aWindow,
   }
 }
 
+void
+nsContentUtils::TransferablesToIPCTransferables(nsISupportsArray* aTransferables,
+                                                nsTArray<IPCDataTransfer>& aIPC,
+                                                mozilla::dom::nsIContentChild* aChild,
+                                                mozilla::dom::nsIContentParent* aParent)
+{
+  aIPC.Clear();
+  MOZ_ASSERT((aChild && !aParent) || (!aChild && aParent));
+  if (aTransferables) {
+    uint32_t transferableCount = 0;
+    aTransferables->Count(&transferableCount);
+    for (uint32_t i = 0; i < transferableCount; ++i) {
+      IPCDataTransfer* dt = aIPC.AppendElement();
+      nsCOMPtr<nsISupports> genericItem;
+      aTransferables->GetElementAt(i, getter_AddRefs(genericItem));
+      nsCOMPtr<nsITransferable> item(do_QueryInterface(genericItem));
+      if (item) {
+        nsCOMPtr<nsISupportsArray> flavorList;
+        item->FlavorsTransferableCanExport(getter_AddRefs(flavorList));
+        if (flavorList) {
+          uint32_t flavorCount = 0;
+          flavorList->Count(&flavorCount);
+          for (uint32_t j = 0; j < flavorCount; ++j) {
+            nsCOMPtr<nsISupportsCString> flavor = do_QueryElementAt(flavorList, j);
+            if (!flavor) {
+              continue;
+            }
+
+            nsAutoCString flavorStr;
+            flavor->GetData(flavorStr);
+            if (!flavorStr.Length()) {
+              continue;
+            }
+
+            nsCOMPtr<nsISupports> data;
+            uint32_t dataLen = 0;
+            item->GetTransferData(flavorStr.get(), getter_AddRefs(data), &dataLen);
+
+            nsCOMPtr<nsISupportsString> text = do_QueryInterface(data);
+            if (text) {
+              nsAutoString dataAsString;
+              text->GetData(dataAsString);
+              IPCDataTransferItem* item = dt->items().AppendElement();
+              item->flavor() = nsCString(flavorStr);
+              item->data() = nsString(dataAsString);
+            } else {
+              nsCOMPtr<nsISupportsInterfacePointer> sip =
+                do_QueryInterface(data);
+              if (sip) {
+                sip->GetData(getter_AddRefs(data));
+              }
+              nsCOMPtr<FileImpl> fileImpl;
+              nsCOMPtr<nsIFile> file = do_QueryInterface(data);
+              if (file) {
+                fileImpl = new FileImplFile(file, false);
+                ErrorResult rv;
+                fileImpl->GetSize(rv);
+                fileImpl->GetLastModified(rv);
+              } else {
+                fileImpl = do_QueryInterface(data);
+              }
+              if (fileImpl) {
+                IPCDataTransferItem* item = dt->items().AppendElement();
+                item->flavor() = nsCString(flavorStr);
+                if (aChild) {
+                  item->data() =
+                    mozilla::dom::BlobChild::GetOrCreate(aChild,
+                      static_cast<FileImpl*>(fileImpl.get()));
+                } else if (aParent) {
+                  item->data() =
+                    mozilla::dom::BlobParent::GetOrCreate(aParent,
+                      static_cast<FileImpl*>(fileImpl.get()));
+                }
+              } else {
+                // This is a hack to support kFilePromiseMime.
+                // On Windows there just needs to be an entry for it, 
+                // and for OSX we need to create
+                // nsContentAreaDragDropDataProvider as nsIFlavorDataProvider.
+                if (flavorStr.EqualsLiteral(kFilePromiseMime)) {
+                  IPCDataTransferItem* item = dt->items().AppendElement();
+                  item->flavor() = nsCString(flavorStr);
+                  item->data() = NS_ConvertUTF8toUTF16(flavorStr);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

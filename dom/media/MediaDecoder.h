@@ -298,6 +298,9 @@ public:
     PLAY_STATE_SHUTDOWN
   };
 
+  // Must be called exactly once, on the main thread, during startup.
+  static void InitStatics();
+
   MediaDecoder();
 
   // Reset the decoder and notify the media element that
@@ -519,7 +522,8 @@ public:
    * aStartTimeUSecs is relative to the state machine's mStartTime.
    * Decoder monitor must be held.
    */
-  void RecreateDecodedStream(int64_t aStartTimeUSecs);
+  void RecreateDecodedStream(int64_t aStartTimeUSecs,
+                             MediaStreamGraph* aGraph = nullptr);
   /**
    * Call this when mDecoderStateMachine or mDecoderStateMachine->IsPlaying() changes.
    * Decoder monitor must be held.

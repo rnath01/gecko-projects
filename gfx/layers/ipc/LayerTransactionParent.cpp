@@ -147,13 +147,11 @@ ShadowChild(const OpRaiseToTopChild& op)
 // LayerTransactionParent
 LayerTransactionParent::LayerTransactionParent(LayerManagerComposite* aManager,
                                                ShadowLayersManager* aLayersManager,
-                                               uint64_t aId,
-                                               ProcessId aOtherProcess)
+                                               uint64_t aId)
   : mLayerManager(aManager)
   , mShadowLayersManager(aLayersManager)
   , mId(aId)
   , mPendingTransaction(0)
-  , mChildProcessId(aOtherProcess)
   , mDestroyed(false)
   , mIPCOpen(false)
 {
@@ -329,7 +327,7 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
       layer->SetEventRegions(common.eventRegions());
       layer->SetContentFlags(common.contentFlags());
       layer->SetOpacity(common.opacity());
-      layer->SetClipRect(common.useClipRect() ? &common.clipRect() : nullptr);
+      layer->SetClipRect(common.useClipRect() ? Some(common.clipRect()) : Nothing());
       layer->SetBaseTransform(common.transform().value());
       layer->SetPostScale(common.postXScale(), common.postYScale());
       layer->SetIsFixedPosition(common.isFixedPosition());
@@ -341,7 +339,8 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
                                      common.stickyScrollRangeInner());
       }
       layer->SetScrollbarData(common.scrollbarTargetContainerId(),
-        static_cast<Layer::ScrollDirection>(common.scrollbarDirection()));
+        static_cast<Layer::ScrollDirection>(common.scrollbarDirection()),
+        common.scrollbarThumbRatio());
       layer->SetMixBlendMode((gfx::CompositionOp)common.mixBlendMode());
       layer->SetForceIsolatedGroup(common.forceIsolatedGroup());
       if (PLayerParent* maskLayer = common.maskLayerParent()) {
@@ -629,7 +628,7 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
       mLayerManager->VisualFrameWarning(severity);
 #ifdef PR_LOGGING
       PR_LogPrint("LayerTransactionParent::RecvUpdate transaction from process %d took %f ms",
-                  mChildProcessId,
+                  OtherPid(),
                   latency.ToMilliseconds());
 #endif
     }
@@ -806,6 +805,13 @@ LayerTransactionParent::RecvRequestProperty(const nsString& aProperty, float* aV
   return true;
 }
 
+bool
+LayerTransactionParent::RecvSetConfirmedTargetAPZC(const uint64_t& aBlockId,
+                                                   nsTArray<ScrollableLayerGuid>&& aTargets)
+{
+  mShadowLayersManager->SetConfirmedTargetAPZC(this, aBlockId, aTargets);
+  return true;
+}
 
 bool
 LayerTransactionParent::Attach(ShadowLayerParent* aLayerParent,
@@ -978,7 +984,7 @@ LayerTransactionParent::ActorDestroy(ActorDestroyReason why)
 
 bool LayerTransactionParent::IsSameProcess() const
 {
-  return OtherProcess() == ipc::kInvalidProcessHandle;
+  return OtherPid() == base::GetCurrentProcId();
 }
 
 void

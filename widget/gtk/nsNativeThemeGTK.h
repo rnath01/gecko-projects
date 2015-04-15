@@ -45,7 +45,7 @@ public:
 
   NS_IMETHOD GetMinimumWidgetSize(nsPresContext* aPresContext,
                                   nsIFrame* aFrame, uint8_t aWidgetType,
-                                  nsIntSize* aResult,
+                                  mozilla::LayoutDeviceIntSize* aResult,
                                   bool* aIsOverridable) override;
 
   NS_IMETHOD WidgetStateChanged(nsIFrame* aFrame, uint8_t aWidgetType, 
@@ -81,6 +81,7 @@ private:
                                nsIntMargin* aExtra);
 
   void RefreshWidgetWindow(nsIFrame* aFrame);
+  gint GdkScaleFactor();
 
   uint8_t mDisabledWidgetTypes[32];
   uint8_t mSafeWidgetStates[1024];    // 256 widgets * 32 bits per widget

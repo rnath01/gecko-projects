@@ -8,7 +8,6 @@
 
 #include "nsContentUtils.h"
 #include "BackstagePass.h"
-#include "nsIProgrammingLanguage.h"
 #include "nsDOMClassInfo.h"
 #include "nsIPrincipal.h"
 #include "mozilla/dom/BindingUtils.h"
@@ -88,7 +87,7 @@ BackstagePass::GetInterfaces(uint32_t* aCount, nsIID * **aArray)
     const uint32_t count = 2;
     *aCount = count;
     nsIID** array;
-    *aArray = array = static_cast<nsIID**>(nsMemory::Alloc(count * sizeof(nsIID*)));
+    *aArray = array = static_cast<nsIID**>(moz_xmalloc(count * sizeof(nsIID*)));
     if (!array)
         return NS_ERROR_OUT_OF_MEMORY;
 
@@ -108,20 +107,18 @@ BackstagePass::GetInterfaces(uint32_t* aCount, nsIID * **aArray)
     return NS_OK;
 oom:
     while (index)
-        nsMemory::Free(array[--index]);
-    nsMemory::Free(array);
+        free(array[--index]);
+    free(array);
     *aArray = nullptr;
     return NS_ERROR_OUT_OF_MEMORY;
 }
 
-/* nsISupports getHelperForLanguage (in uint32_t language); */
+/* nsIXPCScriptable getScriptableHelper (); */
 NS_IMETHODIMP
-BackstagePass::GetHelperForLanguage(uint32_t language,
-                                    nsISupports** retval)
+BackstagePass::GetScriptableHelper(nsIXPCScriptable** retval)
 {
-    nsCOMPtr<nsISupports> supports =
-        do_QueryInterface(static_cast<nsIGlobalObject*>(this));
-    supports.forget(retval);
+    nsCOMPtr<nsIXPCScriptable> scriptable = this;
+    scriptable.forget(retval);
     return NS_OK;
 }
 
@@ -147,14 +144,6 @@ NS_IMETHODIMP
 BackstagePass::GetClassID(nsCID * *aClassID)
 {
     *aClassID = nullptr;
-    return NS_OK;
-}
-
-/* readonly attribute uint32_t implementationLanguage; */
-NS_IMETHODIMP
-BackstagePass::GetImplementationLanguage(uint32_t* aImplementationLanguage)
-{
-    *aImplementationLanguage = nsIProgrammingLanguage::CPLUSPLUS;
     return NS_OK;
 }
 

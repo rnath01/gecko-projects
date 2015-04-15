@@ -246,7 +246,7 @@ RespondWithHandler::ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValu
       return;
     }
 
-    nsCOMPtr<nsIEventTarget> stsThread = do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID, &rv);
+    nsCOMPtr<nsIEventTarget> stsThread = do_GetService(NS_STREAMTRANSPORTSERVICE_CONTRACTID, &rv);
     if (NS_WARN_IF(!stsThread)) {
       return;
     }
@@ -369,5 +369,60 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(InstallEvent)
 NS_INTERFACE_MAP_END_INHERITING(ExtendableEvent)
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(InstallEvent, ExtendableEvent, mActiveWorker)
+
+#ifndef MOZ_SIMPLEPUSH
+
+PushMessageData::PushMessageData(const nsAString& aData)
+  : mData(aData)
+{
+}
+
+PushMessageData::~PushMessageData()
+{
+}
+
+NS_IMPL_ISUPPORTS0(PushMessageData);
+
+
+void
+PushMessageData::Json(JSContext* cx, JS::MutableHandle<JSObject*> aRetval)
+{
+  //todo bug 1149195.  Don't be lazy.
+   NS_ABORT();
+}
+
+void
+PushMessageData::Text(nsAString& aData)
+{
+  aData = mData;
+}
+
+void
+PushMessageData::ArrayBuffer(JSContext* cx, JS::MutableHandle<JSObject*> aRetval)
+{
+  //todo bug 1149195.  Don't be lazy.
+   NS_ABORT();
+}
+
+mozilla::dom::File*
+PushMessageData::Blob()
+{
+  //todo bug 1149195.  Don't be lazy.
+  NS_ABORT();
+  return nullptr;
+}
+
+PushEvent::PushEvent(EventTarget* aOwner)
+  : ExtendableEvent(aOwner)
+{
+}
+
+NS_INTERFACE_MAP_BEGIN(PushEvent)
+NS_INTERFACE_MAP_END_INHERITING(ExtendableEvent)
+
+NS_IMPL_ADDREF_INHERITED(PushEvent, ExtendableEvent)
+NS_IMPL_RELEASE_INHERITED(PushEvent, ExtendableEvent)
+
+#endif /* ! MOZ_SIMPLEPUSH */
 
 END_WORKERS_NAMESPACE

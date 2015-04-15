@@ -137,7 +137,6 @@ JS_GetScriptPrincipals(JSScript* script);
 extern JS_FRIEND_API(bool)
 JS_ScriptHasMutedErrors(JSScript* script);
 
-
 /* Safe to call with input obj == nullptr. Returns non-nullptr iff obj != nullptr. */
 extern JS_FRIEND_API(JSObject*)
 JS_ObjectToInnerObject(JSContext* cx, JS::HandleObject obj);
@@ -186,6 +185,9 @@ AddRawValueRoot(JSContext* cx, JS::Value* vp, const char* name);
 
 JS_FRIEND_API(void)
 RemoveRawValueRoot(JSContext* cx, JS::Value* vp);
+
+JS_FRIEND_API(JSAtom*)
+GetPropertyNameFromPC(JSScript* script, jsbytecode* pc);
 
 #ifdef JS_DEBUG
 
@@ -872,6 +874,12 @@ AtomToLinearString(JSAtom* atom)
     return reinterpret_cast<JSLinearString*>(atom);
 }
 
+MOZ_ALWAYS_INLINE JSFlatString*
+AtomToFlatString(JSAtom* atom)
+{
+    return reinterpret_cast<JSFlatString*>(atom);
+}
+
 MOZ_ALWAYS_INLINE JSLinearString*
 FlatStringToLinearString(JSFlatString* s)
 {
@@ -1374,9 +1382,9 @@ struct MOZ_STACK_CLASS JS_FRIEND_API(ErrorReport)
     }
 
   private:
-    // More or less an equivalent of JS_ReportErrorNumber/js_ReportErrorNumberVA
+    // More or less an equivalent of JS_ReportErrorNumber/js::ReportErrorNumberVA
     // but fills in an ErrorReport instead of reporting it.  Uses varargs to
-    // make it simpler to call js_ExpandErrorArguments.
+    // make it simpler to call js::ExpandErrorArgumentsVA.
     //
     // Returns false if we fail to actually populate the ErrorReport
     // for some reason (probably out of memory).
@@ -1472,6 +1480,27 @@ byteSize(Type atype)
       case Int32x4:
       case Float32x4:
         return 16;
+      default:
+        MOZ_CRASH("invalid scalar type");
+    }
+}
+
+static inline bool
+isSignedIntType(Type atype) {
+    switch (atype) {
+      case Int8:
+      case Int16:
+      case Int32:
+      case Int32x4:
+        return true;
+      case Uint8:
+      case Uint8Clamped:
+      case Uint16:
+      case Uint32:
+      case Float32:
+      case Float64:
+      case Float32x4:
+        return false;
       default:
         MOZ_CRASH("invalid scalar type");
     }
@@ -2397,7 +2426,7 @@ FunctionObjectToShadowFunction(JSObject* fun)
 }
 
 /* Statically asserted in jsfun.h. */
-static const unsigned JS_FUNCTION_INTERPRETED_BITS = 0x1001;
+static const unsigned JS_FUNCTION_INTERPRETED_BITS = 0x401;
 
 // Return whether the given function object is native.
 static MOZ_ALWAYS_INLINE bool
@@ -2542,7 +2571,6 @@ Debug_SetActiveJSContext(JSRuntime* rt, JSContext* cx);
 inline void
 Debug_SetActiveJSContext(JSRuntime* rt, JSContext* cx) {}
 #endif
-
 
 enum CTypesActivityType {
     CTYPES_CALL_BEGIN,

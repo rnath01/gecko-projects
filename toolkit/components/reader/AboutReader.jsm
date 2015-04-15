@@ -20,6 +20,13 @@ const READINGLIST_COMMAND_ID = "readingListSidebar";
 let gStrings = Services.strings.createBundle("chrome://global/locale/aboutReader.properties");
 
 let AboutReader = function(mm, win, articlePromise) {
+  let url = this._getOriginalUrl(win);
+  if (!(url.startsWith("http://") || url.startsWith("https://"))) {
+    Cu.reportError("Only http:// and https:// URLs can be loaded in about:reader");
+    win.location.href = "about:blank";
+    return;
+  }
+
   let doc = win.document;
 
   this._mm = mm;
@@ -41,13 +48,13 @@ let AboutReader = function(mm, win, articlePromise) {
   this._domainElementRef = Cu.getWeakReference(doc.getElementById("reader-domain"));
   this._titleElementRef = Cu.getWeakReference(doc.getElementById("reader-title"));
   this._creditsElementRef = Cu.getWeakReference(doc.getElementById("reader-credits"));
-  this._contentElementRef = Cu.getWeakReference(doc.getElementById("reader-content"));
+  this._contentElementRef = Cu.getWeakReference(doc.getElementById("moz-reader-content"));
   this._toolbarElementRef = Cu.getWeakReference(doc.getElementById("reader-toolbar"));
   this._messageElementRef = Cu.getWeakReference(doc.getElementById("reader-message"));
 
   this._scrollOffset = win.pageYOffset;
 
-  doc.getElementById("container").addEventListener("click", this, false);
+  doc.addEventListener("click", this, false);
 
   win.addEventListener("unload", this, false);
   win.addEventListener("scroll", this, false);
@@ -61,8 +68,11 @@ let AboutReader = function(mm, win, articlePromise) {
 
   try {
     if (Services.prefs.getBoolPref("browser.readinglist.enabled")) {
-      this._setupButton("toggle-button", this._onReaderToggle.bind(this), "aboutReader.toolbar.addToReadingList");
+      this._setupButton("toggle-button", this._onReaderToggle.bind(this, "button"), "aboutReader.toolbar.addToReadingList");
       this._setupButton("list-button", this._onList.bind(this), "aboutReader.toolbar.openReadingList");
+      this._setupButton("remove-button", this._onReaderToggle.bind(this, "footer"),
+        "aboutReader.footer.deleteThisArticle", "aboutReader.footer.deleteThisArticle");
+      this._doc.getElementById("reader-footer").setAttribute('readinglist-enabled', "true");
     }
   } catch (e) {
     // Pref doesn't exist.
@@ -201,7 +211,11 @@ AboutReader.prototype = {
 
     switch (aEvent.type) {
       case "click":
-        this._toggleToolbarVisibility();
+        let target = aEvent.target;
+        while (target && target.id != "reader-popup")
+          target = target.parentNode;
+        if (!target)
+          this._toggleToolbarVisibility();
         break;
       case "scroll":
         let isScrollingUp = this._scrollOffset > aEvent.pageY;
@@ -240,6 +254,7 @@ AboutReader.prototype = {
       button.classList.remove("on");
       button.setAttribute("title", gStrings.GetStringFromName("aboutReader.toolbar.addToReadingList"));
     }
+    this._updateFooter();
   },
 
   _requestReadingListStatus: function Reader_requestReadingListStatus() {
@@ -255,8 +270,12 @@ AboutReader.prototype = {
 
           // Display the toolbar when all its initial component states are known
           if (isInitialStateChange) {
-            // Hacks! Delay showing the toolbar to avoid position: fixed; jankiness. See bug 975533.
-            this._win.setTimeout(() => this._setToolbarVisibility(true), 500);
+            // Toolbar display is updated here to avoid it appearing in the middle of the screen on page load. See bug 1145567.
+            this._win.setTimeout(() => {
+              this._toolbarElement.style.display = "block";
+              // Delay showing the toolbar to have a nice slide from bottom animation.
+              this._win.setTimeout(() => this._setToolbarVisibility(true), 200);
+            }, 500);
           }
         }
       }
@@ -270,16 +289,16 @@ AboutReader.prototype = {
     this._win.location.href = this._getOriginalUrl();
   },
 
-  _onReaderToggle: function Reader_onToggle() {
+  _onReaderToggle: function Reader_onToggle(aMethod) {
     if (!this._article)
       return;
 
     if (this._isReadingListItem == 0) {
       this._mm.sendAsyncMessage("Reader:AddToList", { article: this._article });
-      UITelemetry.addEvent("save.1", "button", null, "reader");
+      UITelemetry.addEvent("save.1", aMethod, null, "reader");
     } else {
       this._mm.sendAsyncMessage("Reader:RemoveFromList", { url: this._article.url });
-      UITelemetry.addEvent("unsave.1", "button", null, "reader");
+      UITelemetry.addEvent("unsave.1", aMethod, null, "reader");
     }
   },
 
@@ -292,6 +311,14 @@ AboutReader.prototype = {
       title: this._article.title
     });
     UITelemetry.addEvent("share.1", "list", null);
+  },
+
+  /**
+   * To help introduce ReadingList, we want to automatically
+   * open the Desktop sidebar the first time ReaderMode is used.
+   */
+  _showListIntro: function() {
+    this._mm.sendAsyncMessage("ReadingList:ShowIntro");
   },
 
   /**
@@ -331,13 +358,13 @@ AboutReader.prototype = {
   },
 
   _setFontSize: function Reader_setFontSize(newFontSize) {
-    let htmlClasses = this._doc.documentElement.classList;
+    let containerClasses = this._doc.getElementById("container").classList;
 
     if (this._fontSize > 0)
-      htmlClasses.remove("font-size" + this._fontSize);
+      containerClasses.remove("font-size" + this._fontSize);
 
     this._fontSize = newFontSize;
-    htmlClasses.add("font-size" + this._fontSize);
+    containerClasses.add("font-size" + this._fontSize);
 
     this._mm.sendAsyncMessage("Reader:SetIntPref", {
       name: "reader.font_size",
@@ -404,6 +431,16 @@ AboutReader.prototype = {
       updateControls();
       this._setFontSize(currentSize);
     }, true);
+  },
+
+  _updateFooter: function RupdateFooter() {
+    let footer = this._doc.getElementById("reader-footer");
+    if (!this._article || this._isReadingListItem == 0 ||
+        footer.getAttribute("readinglist-enabled") != "true") {
+      footer.style.display = "none";
+      return;
+    }
+    footer.style.display = null;
   },
 
   _handleDeviceLight: function Reader_handleDeviceLight(newLux) {
@@ -545,6 +582,7 @@ AboutReader.prototype = {
     if (!visible) {
       this._mm.sendAsyncMessage("Reader:ToolbarHidden");
     }
+    this._updateFooter();
   },
 
   _toggleToolbarVisibility: function Reader_toggleToolbarVisibility() {
@@ -570,7 +608,7 @@ AboutReader.prototype = {
       return;
     }
 
-    if (article && article.url == url) {
+    if (article) {
       this._showContent(article);
     } else if (this._articlePromise) {
       // If we were promised an article, show an error message if there's a failure.
@@ -717,7 +755,9 @@ AboutReader.prototype = {
     this._updateImageMargins();
     this._requestReadingListStatus();
 
+    this._showListIntro();
     this._requestFavicon();
+    this._doc.body.classList.add("loaded");
   },
 
   _hideContent: function Reader_hideContent() {
@@ -745,8 +785,8 @@ AboutReader.prototype = {
   /**
    * Returns the original article URL for this about:reader view.
    */
-  _getOriginalUrl: function() {
-    let url = this._win.location.href;
+  _getOriginalUrl: function(win) {
+    let url = win ? win.location.href : this._win.location.href;
     let searchParams = new URLSearchParams(url.split("?")[1]);
     if (!searchParams.has("url")) {
       Cu.reportError("Error finding original URL for about:reader URL: " + url);
@@ -804,10 +844,12 @@ AboutReader.prototype = {
     }
   },
 
-  _setupButton: function(id, callback, titleEntity) {
+  _setupButton: function(id, callback, titleEntity, textEntity) {
     this._setButtonTip(id, titleEntity);
 
     let button = this._doc.getElementById(id);
+    if (textEntity)
+      button.textContent = gStrings.GetStringFromName(textEntity);
     button.removeAttribute("hidden");
     button.addEventListener("click", function(aEvent) {
       if (!aEvent.isTrusted)

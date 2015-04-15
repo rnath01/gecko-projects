@@ -137,7 +137,8 @@ struct CopyScriptFrameIterArgs
         MOZ_ASSERT(Max(numActuals, numFormals) == totalArgs);
 
         if (numActuals < numFormals) {
-            HeapValue* dst = dstBase + numActuals, *dstEnd = dstBase + totalArgs;
+            HeapValue* dst = dstBase + numActuals;
+            HeapValue* dstEnd = dstBase + totalArgs;
             while (dst != dstEnd)
                 (dst++)->init(UndefinedValue());
         }
@@ -287,9 +288,6 @@ args_delProperty(JSContext* cx, HandleObject obj, HandleId id, ObjectOpResult& r
 static bool
 ArgGetter(JSContext* cx, HandleObject obj, HandleId id, MutableHandleValue vp)
 {
-    if (!obj->is<NormalArgumentsObject>())
-        return true;
-
     NormalArgumentsObject& argsobj = obj->as<NormalArgumentsObject>();
     if (JSID_IS_INT(id)) {
         /*
@@ -411,9 +409,6 @@ args_enumerate(JSContext* cx, HandleObject obj)
 static bool
 StrictArgGetter(JSContext* cx, HandleObject obj, HandleId id, MutableHandleValue vp)
 {
-    if (!obj->is<StrictArgumentsObject>())
-        return true;
-
     StrictArgumentsObject& argsobj = obj->as<StrictArgumentsObject>();
 
     if (JSID_IS_INT(id)) {
@@ -543,9 +538,9 @@ ArgumentsObject::trace(JSTracer* trc, JSObject* obj)
 {
     ArgumentsObject& argsobj = obj->as<ArgumentsObject>();
     ArgumentsData* data = argsobj.data();
-    MarkValue(trc, &data->callee, js_callee_str);
-    MarkValueRange(trc, data->numArgs, data->args, js_arguments_str);
-    MarkScriptUnbarriered(trc, &data->script, "script");
+    TraceEdge(trc, &data->callee, js_callee_str);
+    TraceRange(trc, data->numArgs, data->begin(), js_arguments_str);
+    TraceManuallyBarrieredEdge(trc, &data->script, "script");
 }
 
 /*

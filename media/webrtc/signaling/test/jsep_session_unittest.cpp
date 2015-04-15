@@ -28,7 +28,7 @@
 #include "signaling/src/jsep/JsepSessionImpl.h"
 #include "signaling/src/jsep/JsepTrack.h"
 
-#include "TestHarness.h"
+#include "mtransport_test_utils.h"
 
 namespace mozilla {
 static const char* kCandidates[] = {
@@ -3097,6 +3097,29 @@ TEST(H264ProfileLevelIdTest, TestLevelSetting)
       JsepVideoCodecDescription::GetSaneH264Level(0x64000B),
       &profileLevelId);
   ASSERT_EQ((uint32_t)0x6E100B, profileLevelId);
+}
+
+TEST_F(JsepSessionTest, StronglyPreferredCodec)
+{
+  for (JsepCodecDescription* codec : mSessionAns.Codecs()) {
+    if (codec->mName == "H264") {
+      codec->mStronglyPreferred = true;
+    }
+  }
+
+  types.push_back(SdpMediaSection::kVideo);
+  AddTracks(mSessionOff, "video");
+  AddTracks(mSessionAns, "video");
+
+  OfferAnswer();
+
+  const JsepCodecDescription* codec;
+  GetCodec(mSessionAns, 0, true, 0, &codec); // sending
+  ASSERT_TRUE(codec);
+  ASSERT_EQ("H264", codec->mName);
+  GetCodec(mSessionAns, 0, false, 0, &codec); // receiving
+  ASSERT_TRUE(codec);
+  ASSERT_EQ("H264", codec->mName);
 }
 
 } // namespace mozilla

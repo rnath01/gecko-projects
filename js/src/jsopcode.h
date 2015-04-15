@@ -48,8 +48,8 @@ enum {
     JOF_UINT8           = 13,       /* uint8_t immediate, e.g. top 8 bits of 24-bit
                                        atom index */
     JOF_INT32           = 14,       /* int32_t immediate operand */
-    JOF_OBJECT          = 15,       /* unsigned 16-bit object index */
-    /* 16 is unused */
+    JOF_UINT32          = 15,       /* uint32_t immediate operand */
+    JOF_OBJECT          = 16,       /* unsigned 16-bit object index */
     JOF_REGEXP          = 17,       /* unsigned 32-bit regexp index */
     JOF_INT8            = 18,       /* int8_t immediate operand */
     JOF_ATOMOBJECT      = 19,       /* uint16_t constant index + object index */
@@ -76,16 +76,8 @@ enum {
     JOF_CHECKSTRICT     = 1 << 20,  /* Op can only be generated in strict mode */
     JOF_INVOKE          = 1 << 21,  /* JSOP_CALL, JSOP_FUNCALL, JSOP_FUNAPPLY,
                                        JSOP_NEW, JSOP_EVAL */
-    JOF_TMPSLOT         = 1 << 22,  /* interpreter uses extra temporary slot
-                                       to root intermediate objects besides
-                                       the slots opcode uses */
-    JOF_TMPSLOT2        = 2 << 22,  /* interpreter uses extra 2 temporary slot
-                                       besides the slots opcode uses */
-    JOF_TMPSLOT3        = 3 << 22,  /* interpreter uses extra 3 temporary slot
-                                       besides the slots opcode uses */
-    JOF_TMPSLOT_SHIFT   = 22,
-    JOF_TMPSLOT_MASK    = JS_BITMASK(2) << JOF_TMPSLOT_SHIFT,
-
+    /* 1 << 22 is unused */
+    /* 1 << 23 is unused */
     /* 1 << 24 is unused */
     JOF_GNAME           = 1 << 25,  /* predicted global name */
     JOF_TYPESET         = 1 << 26,  /* has an entry in a script's type sets */
@@ -230,8 +222,8 @@ GET_INT8(const jsbytecode* pc)
     return int8_t(pc[1]);
 }
 
-static MOZ_ALWAYS_INLINE int32_t
-GET_INT32(const jsbytecode* pc)
+static MOZ_ALWAYS_INLINE uint32_t
+GET_UINT32(const jsbytecode* pc)
 {
     return  (uint32_t(pc[1]) << 24) |
             (uint32_t(pc[2]) << 16) |
@@ -240,12 +232,24 @@ GET_INT32(const jsbytecode* pc)
 }
 
 static MOZ_ALWAYS_INLINE void
-SET_INT32(jsbytecode* pc, uint32_t i)
+SET_UINT32(jsbytecode* pc, uint32_t u)
 {
-    pc[1] = jsbytecode(uint32_t(i) >> 24);
-    pc[2] = jsbytecode(uint32_t(i) >> 16);
-    pc[3] = jsbytecode(uint32_t(i) >> 8);
-    pc[4] = jsbytecode(uint32_t(i));
+    pc[1] = jsbytecode(u >> 24);
+    pc[2] = jsbytecode(u >> 16);
+    pc[3] = jsbytecode(u >> 8);
+    pc[4] = jsbytecode(u);
+}
+
+static MOZ_ALWAYS_INLINE int32_t
+GET_INT32(const jsbytecode* pc)
+{
+    return static_cast<int32_t>(GET_UINT32(pc));
+}
+
+static MOZ_ALWAYS_INLINE void
+SET_INT32(jsbytecode* pc, int32_t i)
+{
+    SET_UINT32(pc, static_cast<uint32_t>(i));
 }
 
 /* Index limit is determined by SN_4BYTE_OFFSET_FLAG, see frontend/BytecodeEmitter.h. */

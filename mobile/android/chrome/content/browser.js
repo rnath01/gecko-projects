@@ -1413,7 +1413,7 @@ var BrowserApp = {
     });
   },
 
-  setPreferences: function setPreferences(aPref) {
+  setPreferences: function (aPref) {
     let json = JSON.parse(aPref);
 
     switch (json.name) {
@@ -1469,6 +1469,13 @@ var BrowserApp = {
         Services.prefs.setComplexValue(json.name, Ci.nsISupportsString, pref);
         break;
       }
+    }
+
+    // Finally, if we were asked to flush, flush prefs to disk right now.
+    // This allows us to be confident that prefs set in Settings are persisted,
+    // even if we crash very soon after.
+    if (json.flush) {
+      Services.prefs.savePrefFile(null);
     }
   },
 
@@ -2225,7 +2232,11 @@ var NativeWindow = {
    *                     { text: <title>,
    *                       resource: <resource_url> }
    *
-   *        subtext:     A string to appear below the doorhanger message.
+   *        actionText:  An object that specifies a clickable string, a type of action,
+   *                     and a bundle blob for the consumer to create a click action.
+   *                     { text: <text>,
+   *                       type: <type>,
+   *                       bundle: <blob-object> }
    *
    * @param aCategory
    *        Doorhanger type to display (e.g., LOGIN)
@@ -6659,13 +6670,12 @@ var IndexedDB = {
 
     let requestor = subject.QueryInterface(Ci.nsIInterfaceRequestor);
 
-    let contentWindow = requestor.getInterface(Ci.nsIDOMWindow);
-    let contentDocument = contentWindow.document;
-    let tab = BrowserApp.getTabForWindow(contentWindow);
+    let browser = requestor.getInterface(Ci.nsIDOMNode);
+    let tab = BrowserApp.getTabForBrowser(browser);
     if (!tab)
       return;
 
-    let host = contentDocument.documentURIObject.asciiHost;
+    let host = browser.currentURI.asciiHost;
 
     let strings = Strings.browser;
 
