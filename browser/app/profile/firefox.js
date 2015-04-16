@@ -251,6 +251,8 @@ pref("browser.uitour.loglevel", "Error");
 pref("browser.uitour.requireSecure", true);
 pref("browser.uitour.themeOrigin", "https://addons.mozilla.org/%LOCALE%/firefox/themes/");
 pref("browser.uitour.url", "https://www.mozilla.org/%LOCALE%/firefox/%VERSION%/tour/");
+// This is used as a regexp match against the page's URL.
+pref("browser.uitour.readerViewTrigger", "^https:\/\/www\.mozilla\.org\/[^\/]+\/firefox\/reading\/start");
 
 pref("browser.customizemode.tip0.shown", false);
 pref("browser.customizemode.tip0.learnMoreUrl", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/customize");
@@ -1703,9 +1705,9 @@ pref("loop.debug.websocket", false);
 pref("loop.debug.sdk", false);
 pref("loop.debug.twoWayMediaTelemetry", false);
 #ifdef DEBUG
-pref("loop.CSP", "default-src 'self' about: file: chrome: http://localhost:*; img-src *; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net http://localhost:* ws://localhost:*; media-src blob:");
+pref("loop.CSP", "default-src 'self' about: file: chrome: http://localhost:*; img-src * data:; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net http://localhost:* ws://localhost:*; media-src blob:");
 #else
-pref("loop.CSP", "default-src 'self' about: file: chrome:; img-src *; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net; media-src blob:");
+pref("loop.CSP", "default-src 'self' about: file: chrome:; img-src * data:; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net; media-src blob:");
 #endif
 pref("loop.oauth.google.redirect_uri", "urn:ietf:wg:oauth:2.0:oob:auto");
 pref("loop.oauth.google.scope", "https://www.google.com/m8/feeds");
