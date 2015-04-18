@@ -777,6 +777,8 @@ pref("toolkit.telemetry.infoURL", "https://www.mozilla.org/legal/privacy/firefox
 // Determines whether full SQL strings are returned when they might contain sensitive info
 // i.e. dynamically constructed SQL strings or SQL executed by addons against addon DBs
 pref("toolkit.telemetry.debugSlowSql", false);
+// Determines if Telemetry pings can be archived locally.
+pref("toolkit.telemetry.archive.enabled", true);
 
 // Identity module
 pref("toolkit.identity.enabled", false);
@@ -4041,11 +4043,7 @@ pref("layers.offmainthreadcomposition.force-basic", false);
 #ifdef RELEASE_BUILD
 pref("layers.offmainthreadcomposition.async-animations", false);
 #else
-#if defined(MOZ_X11)
-pref("layers.offmainthreadcomposition.async-animations", false);
-#else
 pref("layers.offmainthreadcomposition.async-animations", true);
-#endif
 #endif
 
 // Whether to log information about off main thread animations to stderr
@@ -4654,6 +4652,10 @@ pref("media.gmp-manager.certs.2.commonName", "aus4.mozilla.org");
 // Whether or not to perform reader mode article parsing on page load.
 // If this pref is disabled, we will never show a reader mode icon in the toolbar.
 pref("reader.parse-on-load.enabled", true);
+
+// After what size document we don't bother running Readability on it
+// because it'd slow things down too much
+pref("reader.parse-node-limit", 3000);
 
 // Force-enables reader mode parsing, even on low-memory platforms, where it
 // is disabled by default.
