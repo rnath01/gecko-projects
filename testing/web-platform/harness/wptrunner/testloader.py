@@ -3,7 +3,7 @@ import os
 import urlparse
 from abc import ABCMeta, abstractmethod
 from Queue import Empty
-from collections import defaultdict, OrderedDict
+from collections import defaultdict, OrderedDict, deque
 from multiprocessing import Queue
 
 import manifestinclude
@@ -25,6 +25,7 @@ class TestChunker(object):
         self.total_chunks = total_chunks
         self.chunk_number = chunk_number
         assert self.chunk_number <= self.total_chunks
+        self.logger = structured.get_default_logger()
 
     def __call__(self, manifest):
         raise NotImplementedError
@@ -47,6 +48,124 @@ class HashChunker(TestChunker):
             if hash(test_path) % self.total_chunks == chunk_index:
                 yield test_path, tests
 
+class EqualTimeChunker2(TestChunker):
+    def _get_chunk(self, manifest_items):
+        class PathData(object):
+            def __init__(self, path):
+                self.path = path
+                self.time = 0
+                self.tests = []
+
+        class Chunk(object):
+            def __init__(self, expected_time, paths):
+                self.expected_time = expected_time
+                self.paths = deque(paths)
+                self.time = sum(item.time for item in paths)
+
+            def appendleft(self, path):
+                self.paths.appendleft(path)
+                self.time += path.time
+
+            def append(self, path):
+                self.paths.append(path)
+                self.time += path.time
+
+            def pop(self):
+                assert len(self.paths) > 1
+                self.time -= self.paths[-1].time
+                return self.paths.pop()
+
+            def popleft(self):
+                assert len(self.paths) > 1
+                self.time -= self.paths[0].time
+                return self.paths.popleft()
+
+            @property
+            def badness(self):
+                return (self.time - self.expected_time)**2
+
+        by_dir = OrderedDict()
+        total_time = 0
+
+        for i, (test_path, tests) in enumerate(manifest_items):
+            test_dir = tuple(os.path.split(test_path)[0].split(os.path.sep)[:3])
+
+            if not test_dir in by_dir:
+                by_dir[test_dir] = PathData(test_dir)
+
+            data = by_dir[test_dir]
+            time = sum(wpttest.DEFAULT_TIMEOUT if test.timeout !=
+                       "long" else wpttest.LONG_TIMEOUT for test in tests)
+            data.time += time
+            total_time += time
+            data.tests.append((test_path, tests))
+
+        if len(by_dir) < self.total_chunks:
+            raise ValueError("Tried to split into %i chunks, but only %i subdirectories included" % (
+                self.total_chunks, len(by_dir)))
+
+        initial_size = len(by_dir) / self.total_chunks
+        chunk_boundaries = [initial_size * i
+                            for i in xrange(self.total_chunks)] + [self.total_chunks]
+
+        expected_time = float(total_time) / self.total_chunks
+
+        chunks = []
+        for i, lower in enumerate(chunk_boundaries[:-1]):
+            upper = chunk_boundaries[i + 1]
+            paths = []
+            for item in by_dir.values()[lower:upper]:
+                paths.append(item)
+            chunks.append(Chunk(expected_time, paths))
+
+        while True:
+            for i, chunk in enumerate(sorted(chunks, key=lambda x:x.badness)):
+                if len(chunk.paths) > 1:
+                    if i < self.total_chunks - 1:
+                        next_chunk = chunks[i+1]
+                        move_time = chunk.paths[-1].time
+                        new_badness = (expected_time - (chunk.time - move_time))**2
+                        next_new_badness = (expected_time - (next_chunk.time + move_time))**2
+                        delta_badness = ((new_badness + next_new_badness) -
+                                         (chunk.badness + next_chunk.badness))
+
+                        old_badness = sum(item.badness for item in chunks)
+                        if delta_badness < 0:
+                            made_move = True
+                            next_chunk.appendleft(chunk.pop())
+                            new_badness = sum(item.badness for item in chunks)
+                            break
+
+                if len(chunk.paths) > 1:
+                    if i > 0:
+                        prev_chunk = chunks[i-1]
+                        new_badness = (expected_time - (chunk.time - chunk.paths[0].time))**2
+                        prev_new_badness = (expected_time -
+                                            (prev_chunk.time + chunk.paths[0].time))**2
+
+                        delta_badness = ((new_badness + prev_new_badness) -
+                                         (chunk.badness + prev_chunk.badness))
+                        if delta_badness < 0:
+                            made_move = True
+                            prev_chunk.append(chunk.popleft())
+                            break
+            else:
+                break
+
+        for i, chunk in enumerate(chunks):
+            self.logger.debug("%i: %i, %i" % (i + 1, chunk.time, chunk.badness))
+
+        tests = []
+        for path in chunks[self.chunk_number - 1].paths:
+            tests.extend(path.tests)
+
+        return tests
+
+    def __call__(self, manifest_iter):
+        manifest = list(manifest_iter)
+        tests = self._get_chunk(manifest)
+        for item in tests:
+            yield item
 
 class EqualTimeChunker(TestChunker):
     """Chunker that uses the test timeout as a proxy for the running time of the test"""
@@ -176,6 +295,7 @@ class EqualTimeChunker(TestChunker):
 
         assert len(chunk_list.chunks) == self.total_chunks, len(chunk_list.chunks)
         assert sum(item.time for item in chunk_list) == chunk_list.total_time
+        assert all(item.paths for item in chunk_list)
 
         chunk_list.sort_chunks()
 
@@ -190,8 +310,6 @@ class EqualTimeChunker(TestChunker):
 
 class TestFilter(object):
     def __init__(self, test_manifests, include=None, exclude=None, manifest_path=None):
-        test_manifests = test_manifests
-
         if manifest_path is not None and include is None:
             self.manifest = manifestinclude.get_manifest(manifest_path)
         else:
@@ -303,8 +421,8 @@ class TestLoader(object):
 
         self.chunker = {"none": Unchunked,
                         "hash": HashChunker,
-                        "equal_time": EqualTimeChunker}[chunk_type](total_chunks,
-                                                                    chunk_number)
+                        "equal_time": EqualTimeChunker2}[chunk_type](total_chunks,
+                                                                     chunk_number)
 
         self._test_ids = None
         self._load_tests()
@@ -355,7 +473,7 @@ class TestLoader(object):
 
         for test_path, test_type, test in self.iter_tests():
             enabled = not test.disabled()
-            if not self.include_https and test.protocol == "https":
+            if not self.include_https and test.environment["protocol"] == "https":
                 enabled = False
             key = "enabled" if enabled else "disabled"
             tests[key][test_type].append(test)
