@@ -9,7 +9,6 @@
 let gDebuggingEnabled = true;
 
 function debug(s) {
-  if (gDebuggingEnabled)
     dump("-*- PushService.jsm: " + s + "\n");
 }
 
