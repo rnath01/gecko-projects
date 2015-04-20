@@ -31,7 +31,7 @@ UpdateUninstallerVersionString(LPWSTR versionString)
   HKEY uninstallKey;
   if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
                     MAINT_UNINSTALL_KEY, 0,
-                    KEY_WRITE,
+                    KEY_WRITE | KEY_WOW64_32KEY,
                     &uninstallKey) != ERROR_SUCCESS) {
     return FALSE;
   }
