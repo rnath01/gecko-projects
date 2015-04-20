@@ -49,16 +49,81 @@ class HashChunker(TestChunker):
                 yield test_path, tests
 
 class EqualTimeChunker2(TestChunker):
-    def _get_chunk(self, manifest_items):
+    def _group_by_directory(self, manifest_items):
         class PathData(object):
             def __init__(self, path):
                 self.path = path
                 self.time = 0
                 self.tests = []
 
+        by_dir = OrderedDict()
+        total_time = 0
+
+        for i, (test_path, tests) in enumerate(manifest_items):
+            test_dir = tuple(os.path.split(test_path)[0].split(os.path.sep)[:3])
+
+            if not test_dir in by_dir:
+                by_dir[test_dir] = PathData(test_dir)
+
+            data = by_dir[test_dir]
+            time = sum(wpttest.DEFAULT_TIMEOUT if test.timeout !=
+                       "long" else wpttest.LONG_TIMEOUT for test in tests)
+            data.time += time
+            total_time += time
+            data.tests.append((test_path, tests))
+
+        return by_dir, total_time
+
+    def _maybe_remove(self, chunks, i, direction):
+        chunk = chunks[i]
+        if direction == "next":
+            target_chunk = chunks[i+1]
+            path_index = -1
+            move_func = lambda: target_chunk.appendleft(chunk.pop())
+        elif direction == "prev":
+            target_chunk = chunks[i-1]
+            path_index = 0
+            move_func = lambda: target_chunk.append(chunk.popleft())
+
+        return self._maybe_move(chunk, target_chunk, path_index, move_func)
+
+    def _maybe_add(self, chunks, i, direction):
+        target_chunk = chunks[i]
+        if direction == "next":
+            chunk = chunks[i+1]
+            path_index = 0
+            move_func = lambda: target_chunk.append(chunk.popleft())
+        elif direction == "prev":
+            chunk = chunks[i-1]
+            path_index = -1
+            move_func = lambda: target_chunk.appendleft(chunk.pop())
+
+        return self._maybe_move(chunk, target_chunk, path_index, move_func)
+
+    def _maybe_move(self, chunk, target_chunk, path_index, move_func):
+        if len(chunk.paths) <= 1:
+            return
+
+        move_time = chunk.paths[path_index].time
+
+        new_badness = self._badness(chunk.time - move_time)
+        next_new_badness = self._badness(target_chunk.time + move_time)
+
+        delta_badness = ((new_badness + next_new_badness) -
+                         (chunk.badness + target_chunk.badness))
+
+        if delta_badness < 0:
+            move_func()
+            return True
+
+        return False
+
+    def _badness(self, time):
+        return (time - self.expected_time)**2
+
+    def _get_chunk(self, manifest_items):
         class Chunk(object):
-            def __init__(self, expected_time, paths):
-                self.expected_time = expected_time
+            def __init__(self, paths):
                 self.paths = deque(paths)
                 self.time = sum(item.time for item in paths)
 
@@ -81,79 +146,93 @@ class EqualTimeChunker2(TestChunker):
                 return self.paths.popleft()
 
             @property
-            def badness(self):
-                return (self.time - self.expected_time)**2
+            def badness(self_):
+                return self._badness(self_.time)
 
-        by_dir = OrderedDict()
-        total_time = 0
-
-        for i, (test_path, tests) in enumerate(manifest_items):
-            test_dir = tuple(os.path.split(test_path)[0].split(os.path.sep)[:3])
-
-            if not test_dir in by_dir:
-                by_dir[test_dir] = PathData(test_dir)
-
-            data = by_dir[test_dir]
-            time = sum(wpttest.DEFAULT_TIMEOUT if test.timeout !=
-                       "long" else wpttest.LONG_TIMEOUT for test in tests)
-            data.time += time
-            total_time += time
-            data.tests.append((test_path, tests))
+        by_dir, total_time = self._group_by_directory(manifest_items)
 
         if len(by_dir) < self.total_chunks:
             raise ValueError("Tried to split into %i chunks, but only %i subdirectories included" % (
                 self.total_chunks, len(by_dir)))
 
+        all_tests = set()
+        for item in by_dir.itervalues():
+            all_tests |= set(x[0] for x in item.tests)
+
+        self.expected_time = float(total_time) / self.total_chunks
+
         initial_size = len(by_dir) / self.total_chunks
         chunk_boundaries = [initial_size * i
-                            for i in xrange(self.total_chunks)] + [self.total_chunks]
+                            for i in xrange(self.total_chunks)] + [len(by_dir)]
 
-        expected_time = float(total_time) / self.total_chunks
-
-        chunks = []
+        chunks = OrderedDict()
         for i, lower in enumerate(chunk_boundaries[:-1]):
             upper = chunk_boundaries[i + 1]
             paths = []
             for item in by_dir.values()[lower:upper]:
                 paths.append(item)
-            chunks.append(Chunk(expected_time, paths))
+            chunks[i] = Chunk(paths)
+
+        final_tests = set()
+        for chunk in chunks.itervalues():
+            for path in chunk.paths:
+                final_tests |= set(x[0] for x in path.tests)
+        assert all_tests == final_tests, (all_tests - final_tests)
+
+        index_by_chunk = {value: key for key, value in chunks.iteritems()}
+
+        #TODO: consider replacing this with a heap
+        sorted_chunks = sorted(chunks.values(), key=lambda x:x.badness)
 
         while True:
-            for i, chunk in enumerate(sorted(chunks, key=lambda x:x.badness)):
-                if len(chunk.paths) > 1:
-                    if i < self.total_chunks - 1:
-                        next_chunk = chunks[i+1]
-                        move_time = chunk.paths[-1].time
-                        new_badness = (expected_time - (chunk.time - move_time))**2
-                        next_new_badness = (expected_time - (next_chunk.time + move_time))**2
-                        delta_badness = ((new_badness + next_new_badness) -
-                                         (chunk.badness + next_chunk.badness))
+            got_improvement = False
+            for chunk in sorted_chunks:
+                i = index_by_chunk[chunk]
 
-                        old_badness = sum(item.badness for item in chunks)
-                        if delta_badness < 0:
-                            made_move = True
-                            next_chunk.appendleft(chunk.pop())
-                            new_badness = sum(item.badness for item in chunks)
-                            break
+                if chunk.time < self.expected_time:
+                    f = self._maybe_add
+                else:
+                    f = self._maybe_remove
 
-                if len(chunk.paths) > 1:
-                    if i > 0:
-                        prev_chunk = chunks[i-1]
-                        new_badness = (expected_time - (chunk.time - chunk.paths[0].time))**2
-                        prev_new_badness = (expected_time -
-                                            (prev_chunk.time + chunk.paths[0].time))**2
+                if i == 0:
+                    order = ["next"]
+                elif i == self.total_chunks - 1:
+                    order = ["prev"]
+                else:
+                    if chunk.time < self.expected_time:
+                        # First try to add a test from the neighboring chunk with the
+                        # greatest total time
+                        if chunks[i+1].time > chunks[i-1].time:
+                            order = ["next", "prev"]
+                        else:
+                            order = ["prev", "next"]
+                    else:
+                        # First try to remove a test and add to the neighboring chunk with the
+                        # lowest total time
+                        if chunks[i+1].time > chunks[i-1].time:
+                            order = ["prev", "next"]
+                        else:
+                            order = ["next", "prev"]
 
-                        delta_badness = ((new_badness + prev_new_badness) -
-                                         (chunk.badness + prev_chunk.badness))
-                        if delta_badness < 0:
-                            made_move = True
-                            prev_chunk.append(chunk.popleft())
-                            break
-            else:
+                for direction in order:
+                    if f(chunks, i, direction):
+                        got_improvement = True
+                        break
+
+            if not got_improvement:
                 break
 
-        for i, chunk in enumerate(chunks):
+            sorted_chunks = sorted(sorted_chunks, key=lambda x:x.badness)
+
+        self.logger.debug(self.expected_time)
+        for i, chunk in chunks.iteritems():
             self.logger.debug("%i: %i, %i" % (i + 1, chunk.time, chunk.badness))
+
+        final_tests = set()
+        for chunk in chunks.itervalues():
+            for path in chunk.paths:
+                final_tests |= set(x[0] for x in path.tests)
+        assert all_tests == final_tests, (all_tests - final_tests)
 
         tests = []
         for path in chunks[self.chunk_number - 1].paths:
