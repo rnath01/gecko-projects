@@ -434,17 +434,17 @@ public:
     MOZ_ASSERT(mOverscrollHandoffChain);
     TimeStamp now = AsyncPanZoomController::GetFrameTime();
 
-    // Drop any velocity on axes where we don't have room to scroll anyways.
+    // Drop any velocity on axes where we don't have room to scroll anyways
+    // (in this APZC, or an APZC further in the handoff chain).
     // This ensures that we don't take the 'overscroll' path in Sample()
     // on account of one axis which can't scroll having a velocity.
-    {
+    if (!mOverscrollHandoffChain->CanScrollInDirection(&mApzc, Layer::HORIZONTAL)) {
       ReentrantMonitorAutoEnter lock(mApzc.mMonitor);
-      if (!mApzc.mX.CanScroll()) {
-        mApzc.mX.SetVelocity(0);
-      }
-      if (!mApzc.mY.CanScroll()) {
-        mApzc.mY.SetVelocity(0);
-      }
+      mApzc.mX.SetVelocity(0);
+    }
+    if (!mOverscrollHandoffChain->CanScrollInDirection(&mApzc, Layer::VERTICAL)) {
+      ReentrantMonitorAutoEnter lock(mApzc.mMonitor);
+      mApzc.mY.SetVelocity(0);
     }
 
     ParentLayerPoint velocity = mApzc.GetVelocityVector();
@@ -1432,7 +1432,7 @@ AsyncPanZoomController::GetScrollWheelDelta(const ScrollWheelInput& aEvent) cons
       MOZ_ASSERT_UNREACHABLE("unexpected scroll delta type");
   }
 
-  if (gfxPrefs::MouseWheelHasRootScrollDeltaOverride()) {
+  if (mFrameMetrics.GetIsRoot() && gfxPrefs::MouseWheelHasRootScrollDeltaOverride()) {
     // Only apply delta multipliers if we're increasing the delta.
     double hfactor = double(gfxPrefs::MouseWheelRootHScrollDeltaFactor()) / 100;
     double vfactor = double(gfxPrefs::MouseWheelRootVScrollDeltaFactor()) / 100;
@@ -1482,6 +1482,17 @@ AsyncPanZoomController::CanScrollWithWheel(const LayoutDevicePoint& aDelta) cons
     return true;
   }
   return false;
+}
+
+bool
+AsyncPanZoomController::CanScroll(Layer::ScrollDirection aDirection) const
+{
+  ReentrantMonitorAutoEnter lock(mMonitor);
+  switch (aDirection) {
+  case Layer::HORIZONTAL: return mX.CanScroll();
+  case Layer::VERTICAL:   return mY.CanScroll();
+  default:                MOZ_ASSERT(false); return false;
+  }
 }
 
 bool

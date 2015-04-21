@@ -13,6 +13,7 @@
 #include "nsITextControlFrame.h"
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/Attributes.h"
 #include "mozilla/WeakPtr.h"
 
 class nsTextInputListener;
@@ -239,7 +240,7 @@ private:
 
   nsresult InitializeRootNode();
 
-  void FinishedRestoringSelection() { mRestoringSelection = nullptr; }
+  void FinishedRestoringSelection();
 
   mozilla::dom::HTMLInputElement* GetParentNumberControl(nsFrame* aFrame) const;
 
@@ -269,9 +270,11 @@ private:
   friend class InitializationGuard;
   friend class PrepareEditorEvent;
 
-  nsITextControlElement* const mTextCtrlElement;
+  // The text control element owns this object, and ensures that this object
+  // has a smaller lifetime.
+  nsITextControlElement* const MOZ_NON_OWNING_REF mTextCtrlElement;
   nsRefPtr<nsTextInputSelectionImpl> mSelCon;
-  RestoreSelectionState* mRestoringSelection;
+  nsRefPtr<RestoreSelectionState> mRestoringSelection;
   nsCOMPtr<nsIEditor> mEditor;
   nsCOMPtr<mozilla::dom::Element> mRootNode;
   nsCOMPtr<mozilla::dom::Element> mPlaceholderDiv;

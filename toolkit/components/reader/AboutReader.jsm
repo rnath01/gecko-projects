@@ -8,6 +8,7 @@ let Ci = Components.interfaces, Cc = Components.classes, Cu = Components.utils;
 
 this.EXPORTED_SYMBOLS = [ "AboutReader" ];
 
+Cu.import("resource://gre/modules/ReaderMode.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
@@ -734,9 +735,8 @@ AboutReader.prototype = {
 
     this._domainElement.href = article.url;
     let articleUri = Services.io.newURI(article.url, null, null);
-    this._domainElement.innerHTML = this._stripHost(articleUri.host);
-
-    this._creditsElement.innerHTML = article.byline;
+    this._domainElement.textContent = this._stripHost(articleUri.host);
+    this._creditsElement.textContent = article.byline;
 
     this._titleElement.textContent = article.title;
     this._doc.title = article.title;
@@ -787,12 +787,7 @@ AboutReader.prototype = {
    */
   _getOriginalUrl: function(win) {
     let url = win ? win.location.href : this._win.location.href;
-    let searchParams = new URLSearchParams(url.split("?")[1]);
-    if (!searchParams.has("url")) {
-      Cu.reportError("Error finding original URL for about:reader URL: " + url);
-      return url;
-    }
-    return decodeURIComponent(searchParams.get("url"));
+    return ReaderMode.getOriginalUrl(url) || url;
   },
 
   _setupSegmentedButton: function Reader_setupSegmentedButton(id, options, initialValue, callback) {
@@ -804,10 +799,11 @@ AboutReader.prototype = {
 
       let item = doc.createElement("button");
 
-      // We make this extra span so that we can hide it if necessary.
-      let span = doc.createElement("span");
-      span.textContent = option.name;
-      item.appendChild(span);
+      // Put the name in a div so that Android can hide it.
+      let div = doc.createElement("div");
+      div.textContent = option.name;
+      div.classList.add("name");
+      item.appendChild(div);
 
       if (option.itemClass !== undefined)
         item.classList.add(option.itemClass);
@@ -815,6 +811,7 @@ AboutReader.prototype = {
       if (option.description !== undefined) {
         let description = doc.createElement("div");
         description.textContent = option.description;
+        description.classList.add("description");
         item.appendChild(description);
       }
 

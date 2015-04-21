@@ -35,6 +35,7 @@
 #include "nsDocShell.h"
 #include "nsIDocShellTreeItem.h"
 #include "nsCOMArray.h"
+#include "nsQueryObject.h"
 #include "nsDOMClassInfo.h"
 #include "mozilla/Services.h"
 
@@ -10831,8 +10832,8 @@ nsIDocument::Children()
 {
   if (!mChildrenCollection) {
     mChildrenCollection = new nsContentList(this, kNameSpaceID_Wildcard,
-                                            nsGkAtoms::_asterix,
-                                            nsGkAtoms::_asterix,
+                                            nsGkAtoms::_asterisk,
+                                            nsGkAtoms::_asterisk,
                                             false);
   }
 

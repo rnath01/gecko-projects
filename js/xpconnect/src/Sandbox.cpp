@@ -1507,7 +1507,7 @@ xpc::EvalInSandbox(JSContext* cx, HandleObject sandboxArg, const nsAString& sour
     NS_ENSURE_TRUE(prin, NS_ERROR_FAILURE);
 
     nsAutoCString filenameBuf;
-    if (!filename.IsVoid()) {
+    if (!filename.IsVoid() && filename.Length() != 0) {
         filenameBuf.Assign(filename);
     } else {
         // Default to the spec of the principal.
@@ -1522,7 +1522,7 @@ xpc::EvalInSandbox(JSContext* cx, HandleObject sandboxArg, const nsAString& sour
     {
         // We're about to evaluate script, so make an AutoEntryScript.
         // This is clearly Gecko-specific and not in any spec.
-        mozilla::dom::AutoEntryScript aes(priv);
+        mozilla::dom::AutoEntryScript aes(priv, "XPConnect sandbox evaluation");
         JSContext* sandcx = aes.cx();
         AutoSaveContextOptions savedOptions(sandcx);
         JS::ContextOptionsRef(sandcx).setDontReportUncaught(true);

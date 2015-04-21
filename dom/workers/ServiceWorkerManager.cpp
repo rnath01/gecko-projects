@@ -34,11 +34,13 @@
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/ipc/PBackgroundSharedTypes.h"
+#include "mozilla/unused.h"
 
 #include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
 #include "nsNetUtil.h"
 #include "nsProxyRelease.h"
+#include "nsQueryObject.h"
 #include "nsTArray.h"
 
 #include "RuntimeService.h"
@@ -1778,7 +1780,7 @@ private:
     nsRefPtr<ServiceWorkerRegistrationInfo> registration;
     if (!swm->mServiceWorkerRegistrationInfos.Get(mScope, getter_AddRefs(registration))) {
       // "If registration is null, then, resolve promise with false."
-      return mCallback->UnregisterSucceeded(false);
+      return mCallback ? mCallback->UnregisterSucceeded(false) : NS_OK;
     }
 
     MOZ_ASSERT(registration);
@@ -1786,7 +1788,7 @@ private:
     // "Set registration's uninstalling flag."
     registration->mPendingUninstall = true;
     // "Resolve promise with true"
-    nsresult rv = mCallback->UnregisterSucceeded(true);
+    nsresult rv = mCallback ? mCallback->UnregisterSucceeded(true) : NS_OK;
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
@@ -1824,8 +1826,10 @@ ServiceWorkerManager::Unregister(nsIPrincipal* aPrincipal,
                                  const nsAString& aScope)
 {
   AssertIsOnMainThread();
-  MOZ_ASSERT(aPrincipal);
-  MOZ_ASSERT(aCallback);
+
+  if (!aPrincipal) {
+    return NS_ERROR_FAILURE;
+  }
 
 // This is not accessible by content, and callers should always ensure scope is
 // a correct URI, so this is wrapped in DEBUG
@@ -3105,6 +3109,28 @@ ServiceWorkerManager::GetAllRegistrations(nsIArray** aResult)
   }
 
   array.forget(aResult);
+  return NS_OK;
+}
+
+static PLDHashOperator
+UpdateEachRegistration(const nsACString& aKey,
+                       ServiceWorkerRegistrationInfo* aInfo,
+                       void* aUserArg) {
+  auto This = static_cast<ServiceWorkerManager*>(aUserArg);
+  MOZ_ASSERT(!aInfo->mScope.IsEmpty());
+  nsresult res = This->Update(NS_ConvertUTF8toUTF16(aInfo->mScope));
+  unused << NS_WARN_IF(NS_FAILED(res));
+
+  return PL_DHASH_NEXT;
+}
+
+NS_IMETHODIMP
+ServiceWorkerManager::UpdateAllRegistrations()
+{
+  AssertIsOnMainThread();
+
+  mServiceWorkerRegistrationInfos.EnumerateRead(UpdateEachRegistration, this);
+
   return NS_OK;
 }
 

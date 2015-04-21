@@ -25,9 +25,11 @@
  #define snprintf _snprintf
 #endif
 
+using mozilla::MakeUnique;
 using mozilla::Maybe;
 using mozilla::Some;
 using mozilla::Nothing;
+
 
 ////////////////////////////////////////////////////////////////////////
 // BEGIN ProfileEntry
@@ -233,7 +235,7 @@ public:
   { }
 
   void readType(const char* keyedBy, const char* name,
-                const char* location, unsigned lineno) override {
+                const char* location, Maybe<unsigned> lineno) override {
     if (!mStartedTypeList) {
       mStartedTypeList = true;
       mWriter.BeginObject();
@@ -249,8 +251,8 @@ public:
       if (location) {
         mWriter.NameValue("location", location);
       }
-      if (lineno != UINT32_MAX) {
-        mWriter.NameValue("line", lineno);
+      if (lineno.isSome()) {
+        mWriter.NameValue("line", *lineno);
       }
     mWriter.EndObject();
   }

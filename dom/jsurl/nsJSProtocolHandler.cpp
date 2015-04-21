@@ -249,7 +249,7 @@ nsresult nsJSThunk::EvaluateScript(nsIChannel *aChannel,
 
     // New script entry point required, due to the "Create a script" step of
     // http://www.whatwg.org/specs/web-apps/current-work/#javascript-protocol
-    AutoEntryScript entryScript(innerGlobal, true,
+    AutoEntryScript entryScript(innerGlobal, "javascript: URI", true,
                                 scriptContext->GetNativeContext());
     JSContext* cx = entryScript.cx();
     JS::Rooted<JSObject*> globalJSObject(cx, innerGlobal->GetGlobalJSObject());
@@ -430,9 +430,8 @@ nsresult nsJSChannel::Init(nsIURI *aURI)
     // and the underlying Input Stream will not be created...
     nsCOMPtr<nsIChannel> channel;
 
-    nsCOMPtr<nsIPrincipal> nullPrincipal =
-      do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
+    nsCOMPtr<nsIPrincipal> nullPrincipal = nsNullPrincipal::Create();
+    NS_ENSURE_TRUE(nullPrincipal, NS_ERROR_FAILURE);
 
     // If the resultant script evaluation actually does return a value, we
     // treat it as html.

@@ -59,7 +59,7 @@ let AnimationPlayerActor = ActorClass({
     Actor.prototype.initialize.call(this, animationsActor.conn);
 
     this.player = player;
-    this.node = player.source.target;
+    this.node = player.effect.target;
     this.playerIndex = playerIndex;
     this.styles = this.node.ownerDocument.defaultView.getComputedStyle(this.node);
   },
@@ -115,7 +115,7 @@ let AnimationPlayerActor = ActorClass({
     // the list.
     names = names.split(",").map(n => n.trim());
     for (let i = 0; i < names.length; i ++) {
-      if (names[i] === this.player.source.effect.name) {
+      if (names[i] === this.player.effect.name) {
         return i;
       }
     }
@@ -207,7 +207,7 @@ let AnimationPlayerActor = ActorClass({
       currentTime: this.player.currentTime,
       playState: this.player.playState,
       playbackRate: this.player.playbackRate,
-      name: this.player.source.effect.name,
+      name: this.player.effect.name,
       duration: this.getDuration(),
       delay: this.getDelay(),
       iterationCount: this.getIterationCount(),
@@ -551,8 +551,23 @@ let AnimationsActor = exports.AnimationsActor = ActorClass({
         if (this.actors.find(a => a.player === player)) {
           continue;
         }
+        // If the added player has the same name and target node as a player we
+        // already have, it means it's a transition that's re-starting. So send
+        // a "removed" event for the one we already have.
+        let index = this.actors.findIndex(a => {
+          return a.player.effect.name === player.effect.name &&
+                 a.player.effect.target === player.effect.target;
+        });
+        if (index !== -1) {
+          eventData.push({
+            type: "removed",
+            player: this.actors[index]
+          });
+          this.actors.splice(index, 1);
+        }
+
         let actor = AnimationPlayerActor(
-          this, player, player.source.target.getAnimations().indexOf(player));
+          this, player, player.effect.target.getAnimations().indexOf(player));
         this.actors.push(actor);
         eventData.push({
           type: "added",

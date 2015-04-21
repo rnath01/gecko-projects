@@ -113,6 +113,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "Notifications",
 XPCOMUtils.defineLazyModuleGetter(this, "GMPInstallManager",
                                   "resource://gre/modules/GMPInstallManager.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode", "resource://gre/modules/ReaderMode.jsm");
+
 let lazilyLoadedBrowserScripts = [
   ["SelectHelper", "chrome://browser/content/SelectHelper.js"],
   ["InputWidgetHelper", "chrome://browser/content/InputWidgetHelper.js"],
@@ -4562,16 +4564,7 @@ Tab.prototype = {
   },
 
   _stripAboutReaderURL: function (url) {
-    if (!url.startsWith("about:reader")) {
-      return url;
-    }
-
-    // From ReaderParent._getOriginalUrl (browser/modules/ReaderParent.jsm).
-    let searchParams = new URLSearchParams(url.substring("about:reader?".length));
-    if (!searchParams.has("url")) {
-        return url;
-    }
-    return decodeURIComponent(searchParams.get("url"));
+    return ReaderMode.getOriginalUrl(url) || url;
   },
 
   // Properties used to cache security state used to update the UI
@@ -6379,7 +6372,12 @@ var ViewportHandler = {
    */
   getViewportMetadata: function getViewportMetadata(aWindow) {
     let tab = BrowserApp.getTabForWindow(aWindow);
-    if (tab.desktopMode) {
+    let readerMode = false;
+    try {
+      readerMode = tab.browser.contentDocument.documentURI.startsWith("about:reader");
+    } catch (e) {
+    }
+    if (tab.desktopMode && !readerMode) {
       return new ViewportMetadata({
         minZoom: kViewportMinScale,
         maxZoom: kViewportMaxScale,

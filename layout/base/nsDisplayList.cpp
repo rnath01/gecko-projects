@@ -17,6 +17,7 @@
 
 #include "gfxUtils.h"
 #include "mozilla/dom/TabChild.h"
+#include "mozilla/dom/KeyframeEffect.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/layers/PLayerTransaction.h"
 #include "nsCSSRendering.h"
@@ -351,9 +352,9 @@ AddAnimationForProperty(nsIFrame* aFrame, const AnimationProperty& aProperty,
                         AnimationData& aData, bool aPending)
 {
   MOZ_ASSERT(aLayer->AsContainerLayer(), "Should only animate ContainerLayer");
-  MOZ_ASSERT(aPlayer->GetSource(),
+  MOZ_ASSERT(aPlayer->GetEffect(),
              "Should not be adding an animation for a player without"
-             " an animation");
+             " an effect");
   nsStyleContext* styleContext = aFrame->StyleContext();
   nsPresContext* presContext = aFrame->PresContext();
   nsRect bounds = nsDisplayTransform::GetFrameBoundsForTransform(aFrame);
@@ -363,7 +364,7 @@ AddAnimationForProperty(nsIFrame* aFrame, const AnimationProperty& aProperty,
     aLayer->AddAnimationForNextTransaction() :
     aLayer->AddAnimation();
 
-  const AnimationTiming& timing = aPlayer->GetSource()->Timing();
+  const AnimationTiming& timing = aPlayer->GetEffect()->Timing();
   Nullable<TimeDuration> startTime = aPlayer->GetCurrentOrPendingStartTime();
   animation->startTime() = startTime.IsNull()
                            ? TimeStamp()
@@ -420,10 +421,10 @@ AddAnimationsForProperty(nsIFrame* aFrame, nsCSSProperty aProperty,
     if (!player->IsPlaying()) {
       continue;
     }
-    dom::Animation* anim = player->GetSource();
-    MOZ_ASSERT(anim, "A playing player should have a source animation");
+    dom::KeyframeEffectReadonly* effect = player->GetEffect();
+    MOZ_ASSERT(effect, "A playing player should have an effect");
     const AnimationProperty* property =
-      anim->GetAnimationOfProperty(aProperty);
+      effect->GetAnimationOfProperty(aProperty);
     if (!property) {
       continue;
     }
@@ -1708,7 +1709,11 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
     } else if (!gfxPrefs::LayoutUseContainersForRootFrames()) {
       // If there is no root scroll frame, and we're using containerless
       // scrolling, pick the document element instead.
+      // On Android we want the root xul document to get a null scroll id
+      // so that the root content document gets the first non-null scroll id.
+#ifndef MOZ_WIDGET_ANDROID
       content = document->GetDocumentElement();
+#endif
     }
 
     root->SetFrameMetrics(
@@ -3406,6 +3411,26 @@ nsDisplayBorder::CalculateBounds(const nsStyleBorder& aStyleBorder)
     }
     if (border.left > 0) {
       result.UnionRect(result, nsRect(borderBounds.X(), borderBounds.Y(), border.left, borderBounds.Height()));
+    }
+
+    nscoord radii[8];
+    if (mFrame->GetBorderRadii(radii)) {
+      if (border.left > 0 || border.top > 0) {
+        nsSize cornerSize(radii[NS_CORNER_TOP_LEFT_X], radii[NS_CORNER_TOP_LEFT_Y]);
+        result.UnionRect(result, nsRect(borderBounds.TopLeft(), cornerSize));
+      }
+      if (border.top > 0 || border.right > 0) {
+        nsSize cornerSize(radii[NS_CORNER_TOP_RIGHT_X], radii[NS_CORNER_TOP_RIGHT_Y]);
+        result.UnionRect(result, nsRect(borderBounds.TopRight() - nsPoint(cornerSize.width, 0), cornerSize));
+      }
+      if (border.right > 0 || border.bottom > 0) {
+        nsSize cornerSize(radii[NS_CORNER_BOTTOM_RIGHT_X], radii[NS_CORNER_BOTTOM_RIGHT_Y]);
+        result.UnionRect(result, nsRect(borderBounds.BottomRight() - nsPoint(cornerSize.width, cornerSize.height), cornerSize));
+      }
+      if (border.bottom > 0 || border.left > 0) {
+        nsSize cornerSize(radii[NS_CORNER_BOTTOM_LEFT_X], radii[NS_CORNER_BOTTOM_LEFT_Y]);
+        result.UnionRect(result, nsRect(borderBounds.BottomLeft() - nsPoint(0, cornerSize.height), cornerSize));
+      }
     }
 
     return result;

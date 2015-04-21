@@ -801,6 +801,22 @@ CompositorParent::SchedulePauseOnCompositorThread()
 }
 
 bool
+CompositorParent::ScheduleResumeOnCompositorThread()
+{
+  MonitorAutoLock lock(mResumeCompositionMonitor);
+
+  CancelableTask *resumeTask =
+    NewRunnableMethod(this, &CompositorParent::ResumeComposition);
+  MOZ_ASSERT(CompositorLoop());
+  CompositorLoop()->PostTask(FROM_HERE, resumeTask);
+
+  // Wait until the resume has actually been processed by the compositor thread
+  lock.Wait();
+
+  return !mPaused;
+}
+
+bool
 CompositorParent::ScheduleResumeOnCompositorThread(int width, int height)
 {
   MonitorAutoLock lock(mResumeCompositionMonitor);
@@ -1443,6 +1459,19 @@ CompositorParent::DeallocateLayerTreeId(uint64_t aId)
                              NewRunnableFunction(&EraseLayerState, aId));
 }
 
+/* static */ void
+CompositorParent::SwapLayerTreeObservers(uint64_t aLayerId, uint64_t aOtherLayerId)
+{
+  EnsureLayerTreeMapReady();
+  MonitorAutoLock lock(*sIndirectLayerTreesLock);
+  NS_ASSERTION(sIndirectLayerTrees.find(aLayerId) != sIndirectLayerTrees.end(),
+    "SwapLayerTrees missing layer 1");
+  NS_ASSERTION(sIndirectLayerTrees.find(aOtherLayerId) != sIndirectLayerTrees.end(),
+    "SwapLayerTrees missing layer 2");
+  std::swap(sIndirectLayerTrees[aLayerId].mLayerTreeReadyObserver,
+    sIndirectLayerTrees[aOtherLayerId].mLayerTreeReadyObserver);
+}
+
 static void
 UpdateControllerForLayersId(uint64_t aLayersId,
                             GeckoContentController* aController)
@@ -2013,16 +2042,13 @@ CrossProcessCompositorParent::SetConfirmedTargetAPZC(const LayerTransactionParen
 {
   uint64_t id = aLayerTree->GetId();
   MOZ_ASSERT(id != 0);
-  CompositorParent* parent = nullptr;
-  {
-    MonitorAutoLock lock(*sIndirectLayerTreesLock);
-    const CompositorParent::LayerTreeState* state = CompositorParent::GetIndirectShadowTree(id);
-    if (!state || !state->mParent) {
-      return;
-    }
-    parent = state->mParent;
+  const CompositorParent::LayerTreeState* state = CompositorParent::GetIndirectShadowTree(id);
+  if (!state) {
+    return;
   }
-  parent->SetConfirmedTargetAPZC(aLayerTree, aInputBlockId, aTargets);
+
+  MOZ_ASSERT(state->mParent);
+  state->mParent->SetConfirmedTargetAPZC(aLayerTree, aInputBlockId, aTargets);
 }
 
 AsyncCompositionManager*

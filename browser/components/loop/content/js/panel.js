@@ -163,7 +163,7 @@ loop.panel = (function(_, mozL10n) {
 
       return (
         React.createElement("div", {className: "dropdown"}, 
-          React.createElement("p", {className: "dnd-status", onClick: this.showDropdownMenu}, 
+          React.createElement("p", {className: "dnd-status", onClick: this.toggleDropdownMenu, ref: "menu-button"}, 
             React.createElement("span", null, availabilityText), 
             React.createElement("i", {className: availabilityStatus})
           ), 
@@ -344,8 +344,10 @@ loop.panel = (function(_, mozL10n) {
 
       return (
         React.createElement("div", {className: "settings-menu dropdown"}, 
-          React.createElement("a", {className: "button-settings", onClick: this.showDropdownMenu, 
-             title: mozL10n.get("settings_menu_button_tooltip")}), 
+          React.createElement("a", {className: "button-settings", 
+             onClick: this.toggleDropdownMenu, 
+             title: mozL10n.get("settings_menu_button_tooltip"), 
+             ref: "menu-button"}), 
           React.createElement("ul", {className: cx({"dropdown-menu": true, hide: !this.state.showMenu})}, 
             React.createElement(SettingsDropdownEntry, {label: mozL10n.get("settings_menu_item_settings"), 
                                    onClick: this.handleClickSettingsEntry, 
@@ -411,78 +413,6 @@ loop.panel = (function(_, mozL10n) {
     }
   });
 
-  var EditInPlace = React.createClass({displayName: "EditInPlace",
-    mixins: [React.addons.LinkedStateMixin],
-
-    propTypes: {
-      onChange: React.PropTypes.func.isRequired,
-      text: React.PropTypes.string,
-    },
-
-    getDefaultProps: function() {
-      return {text: ""};
-    },
-
-    getInitialState: function() {
-      return {edit: false, text: this.props.text};
-    },
-
-    componentWillReceiveProps: function(nextProps) {
-      if (nextProps.text !== this.props.text) {
-        this.setState({text: nextProps.text});
-      }
-    },
-
-    handleTextClick: function(event) {
-      event.stopPropagation();
-      event.preventDefault();
-      this.setState({edit: true}, function() {
-        this.getDOMNode().querySelector("input").select();
-      }.bind(this));
-    },
-
-    handleInputClick: function(event) {
-      event.stopPropagation();
-    },
-
-    handleFormSubmit: function(event) {
-      event.preventDefault();
-      // While we already validate for a non-empty string in the store, we need
-      // to check it at the component level to avoid desynchronized rendering
-      // issues.
-      if (this.state.text.trim()) {
-        this.props.onChange(this.state.text);
-      } else {
-        this.setState({text: this.props.text});
-      }
-      this.setState({edit: false});
-    },
-
-    cancelEdit: function(event) {
-      event.stopPropagation();
-      event.preventDefault();
-      this.setState({edit: false, text: this.props.text});
-    },
-
-    render: function() {
-      if (!this.state.edit) {
-        return (
-          React.createElement("span", {className: "edit-in-place", onClick: this.handleTextClick, 
-                title: mozL10n.get("rooms_name_this_room_tooltip2")}, 
-            this.state.text
-          )
-        );
-      }
-      return (
-        React.createElement("form", {onSubmit: this.handleFormSubmit}, 
-          React.createElement("input", {type: "text", valueLink: this.linkState("text"), 
-                 onClick: this.handleInputClick, 
-                 onBlur: this.cancelEdit})
-        )
-      );
-    }
-  });
-
   /**
    * Room list entry.
    */
@@ -542,13 +472,6 @@ loop.panel = (function(_, mozL10n) {
       }.bind(this));
     },
 
-    renameRoom: function(newRoomName) {
-      this.props.dispatcher.dispatch(new sharedActions.RenameRoom({
-        roomToken: this.props.room.roomToken,
-        newRoomName: newRoomName
-      }));
-    },
-
     handleMouseLeave: function(event) {
       this.setState({urlCopied: false});
     },
@@ -572,8 +495,7 @@ loop.panel = (function(_, mozL10n) {
              onClick: this.handleClickEntry}, 
           React.createElement("h2", null, 
             React.createElement("span", {className: "room-notification"}), 
-            React.createElement(EditInPlace, {text: this.props.room.decryptedContext.roomName, 
-                         onChange: this.renameRoom}), 
+            this.props.room.decryptedContext.roomName, 
             React.createElement("button", {className: copyButtonClasses, 
               title: mozL10n.get("rooms_list_copy_url_tooltip"), 
               onClick: this.handleCopyButtonClick}), 

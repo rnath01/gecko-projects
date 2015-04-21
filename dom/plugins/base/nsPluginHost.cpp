@@ -72,6 +72,7 @@
 #include "prprf.h"
 #include "nsThreadUtils.h"
 #include "nsIInputStreamTee.h"
+#include "nsQueryObject.h"
 
 #include "nsDirectoryServiceDefs.h"
 #include "nsAppDirectoryServiceDefs.h"
@@ -91,6 +92,7 @@
 #include "nsIImageLoadingContent.h"
 #include "mozilla/Preferences.h"
 #include "nsVersionComparator.h"
+#include "nsNullPrincipal.h"
 
 #if defined(XP_WIN)
 #include "nsIWindowMediator.h"
@@ -3117,8 +3119,8 @@ nsresult nsPluginHost::NewPluginURLStream(const nsString& aURL,
     // in this else branch we really don't know where the load is coming
     // from and in fact should use something better than just using
     // a nullPrincipal as the loadingPrincipal.
-    principal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
+    principal = nsNullPrincipal::Create();
+    NS_ENSURE_TRUE(principal, NS_ERROR_FAILURE);
     rv = NS_NewChannel(getter_AddRefs(channel),
                        url,
                        principal,

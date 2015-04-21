@@ -1634,6 +1634,9 @@ class JSScript : public js::gc::TenuredCell
         return arr->vector[index];
     }
 
+    // The following 3 functions find the static scope just before the
+    // execution of the instruction pointed to by pc.
+
     js::NestedScopeObject* getStaticBlockScope(jsbytecode* pc);
 
     // Returns the innermost static scope at pc if it falls within the extent
@@ -1714,7 +1717,7 @@ class JSScript : public js::gc::TenuredCell
 
     static inline js::ThingRootKind rootKind() { return js::THING_ROOT_SCRIPT; }
 
-    void markChildren(JSTracer* trc);
+    void traceChildren(JSTracer* trc);
 
     // A helper class to prevent relazification of the given function's script
     // while it's holding on to it.  This class automatically roots the script.
@@ -2130,7 +2133,7 @@ class LazyScript : public gc::TenuredCell
     bool hasUncompiledEnclosingScript() const;
     uint32_t staticLevel(JSContext* cx) const;
 
-    void markChildren(JSTracer* trc);
+    void traceChildren(JSTracer* trc);
     void finalize(js::FreeOp* fop);
     void fixupAfterMovingGC() {}
 

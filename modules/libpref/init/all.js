@@ -171,7 +171,7 @@ pref("dom.undo_manager.enabled", false);
 
 // Whether URL,nsLocation,Link::GetHash should be percent encoded
 // in setter and percent decoded in getter (old behaviour = true)
-pref("dom.url.encode_decode_hash", false);
+pref("dom.url.encode_decode_hash", true);
 
 // Whether to run add-on code in different compartments from browser code. This
 // causes a separate compartment for each (addon, global) combination, which may
@@ -373,11 +373,7 @@ pref("media.navigator.permission.disabled", false);
 pref("media.peerconnection.default_iceservers", "[{\"urls\": [\"stun:stun.services.mozilla.com\"]}]");
 pref("media.peerconnection.ice.loopback", false); // Set only for testing in offline environments.
 pref("media.peerconnection.use_document_iceservers", true);
-// Do not enable identity before ensuring that the UX cannot be spoofed
-// see Bug 884573 for details
-// Do not enable identity before fixing domain comparison: see Bug 958741
-// Do not enable identity before fixing origin spoofing: see Bug 968335
-pref("media.peerconnection.identity.enabled", false);
+pref("media.peerconnection.identity.enabled", true);
 pref("media.peerconnection.identity.timeout", 10000);
 pref("media.peerconnection.ice.loopback", false); // Set only for testing in offline environments.
 // These values (aec, agc, and noice) are from media/webrtc/trunk/webrtc/common_types.h
@@ -777,6 +773,8 @@ pref("toolkit.telemetry.infoURL", "https://www.mozilla.org/legal/privacy/firefox
 // Determines whether full SQL strings are returned when they might contain sensitive info
 // i.e. dynamically constructed SQL strings or SQL executed by addons against addon DBs
 pref("toolkit.telemetry.debugSlowSql", false);
+// Determines if Telemetry pings can be archived locally.
+pref("toolkit.telemetry.archive.enabled", true);
 
 // Identity module
 pref("toolkit.identity.enabled", false);
@@ -3015,11 +3013,8 @@ pref("intl.keyboard.per_window_layout", false);
 
 #ifdef NS_ENABLE_TSF
 // Enable/Disable TSF support on Vista or later.
-#ifndef RELEASE_BUILD
 pref("intl.tsf.enable", true);
-#else
-pref("intl.tsf.enable", false);
-#endif
+
 // Force enable TSF even on WinXP or WinServer 2003.
 // Be aware, TSF framework on prior to Vista is not enough stable.
 pref("intl.tsf.force_enable", false);
@@ -4016,7 +4011,7 @@ pref("layers.max-active", -1);
 pref("layers.tiles.adjust", true);
 
 // Set the default values, and then override per-platform as needed
-pref("layers.offmainthreadcomposition.enabled", false);
+pref("layers.offmainthreadcomposition.enabled", true);
 // Compositor target frame rate. NOTE: If vsync is enabled the compositor
 // frame rate will still be capped.
 // -1 -> default (match layout.frame_rate or 60 FPS)
@@ -4028,23 +4023,9 @@ pref("layers.offmainthreadcomposition.frame-rate", -1);
 pref("layers.async-video.enabled", true);
 pref("layers.async-video-oop.enabled",true);
 
-#ifdef XP_WIN
-pref("layers.offmainthreadcomposition.enabled", true);
-#endif
-
-#ifdef MOZ_WIDGET_QT
-pref("layers.offmainthreadcomposition.enabled", true);
-#endif
-
 #ifdef XP_MACOSX
-pref("layers.offmainthreadcomposition.enabled", true);
 pref("layers.enable-tiles", true);
 pref("layers.tiled-drawtarget.enabled", true);
-#endif
-
-// ANDROID covers android and b2g
-#ifdef ANDROID
-pref("layers.offmainthreadcomposition.enabled", true);
 #endif
 
 // same effect as layers.offmainthreadcomposition.enabled, but specifically for
@@ -4058,11 +4039,7 @@ pref("layers.offmainthreadcomposition.force-basic", false);
 #ifdef RELEASE_BUILD
 pref("layers.offmainthreadcomposition.async-animations", false);
 #else
-#if defined(MOZ_X11)
-pref("layers.offmainthreadcomposition.async-animations", false);
-#else
 pref("layers.offmainthreadcomposition.async-animations", true);
-#endif
 #endif
 
 // Whether to log information about off main thread animations to stderr
@@ -4573,6 +4550,7 @@ pref("dom.beforeAfterKeyboardEvent.enabled", false);
 
 // Presentation API
 pref("dom.presentation.enabled", false);
+pref("dom.presentation.tcp_server.debug", false);
 
 // Use raw ICU instead of CoreServices API in Unicode collation
 #ifdef XP_MACOSX
@@ -4670,6 +4648,10 @@ pref("media.gmp-manager.certs.2.commonName", "aus4.mozilla.org");
 // Whether or not to perform reader mode article parsing on page load.
 // If this pref is disabled, we will never show a reader mode icon in the toolbar.
 pref("reader.parse-on-load.enabled", true);
+
+// After what size document we don't bother running Readability on it
+// because it'd slow things down too much
+pref("reader.parse-node-limit", 3000);
 
 // Force-enables reader mode parsing, even on low-memory platforms, where it
 // is disabled by default.

@@ -22,8 +22,7 @@ WEBIDL_FILES = [
     'AlarmsManager.webidl',
     'AnalyserNode.webidl',
     'Animatable.webidl',
-    'Animation.webidl',
-    'AnimationEffect.webidl',
+    'AnimationEffectReadonly.webidl',
     'AnimationEvent.webidl',
     'AnimationPlayer.webidl',
     'AnimationTimeline.webidl',
@@ -264,6 +263,7 @@ WEBIDL_FILES = [
     'KeyAlgorithm.webidl',
     'KeyboardEvent.webidl',
     'KeyEvent.webidl',
+    'KeyframeEffect.webidl',
     'LegacyQueryInterface.webidl',
     'LinkStyle.webidl',
     'ListBoxObject.webidl',
@@ -792,6 +792,7 @@ if CONFIG['MOZ_B2G_BT']:
         GENERATED_EVENTS_WEBIDL_FILES += [
             'BluetoothAdapterEvent.webidl',
             'BluetoothAttributeEvent.webidl',
+            'BluetoothGattCharacteristicEvent.webidl',
             'BluetoothPairingEvent.webidl',
         ]
     else:

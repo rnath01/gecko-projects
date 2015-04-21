@@ -2043,6 +2043,9 @@ class MOZ_STACK_CLASS ModuleCompiler
           case JS::AsmJSCache_QuotaExceeded:
             cacheString = "not enough temporary storage quota to store in cache";
             break;
+          case JS::AsmJSCache_StorageInitFailure:
+            cacheString = "storage initialization failed (consider filing a bug)";
+            break;
           case JS::AsmJSCache_Disabled_Internal:
             cacheString = "caching disabled by internal configuration (consider filing a bug)";
             break;
@@ -7396,8 +7399,8 @@ CheckHeapLengthCondition(ModuleCompiler& m, ParseNode* cond, PropertyName* newBu
     uint32_t minLengthExclusive;
     if (!IsLiteralInt(m, minLengthNode, &minLengthExclusive))
         return m.fail(minLengthNode, "expecting integer literal");
-    if (minLengthExclusive < 0xffffff)
-        return m.fail(minLengthNode, "literal must be >= 0xffffff");
+    if (minLengthExclusive < 0xffffff || minLengthExclusive == UINT32_MAX)
+        return m.fail(minLengthNode, "literal must be >= 0xffffff and < 0xffffffff");
 
     // Add one to convert from exclusive (the branch rejects if ==) to inclusive.
     *minLength = minLengthExclusive + 1;
