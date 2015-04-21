@@ -58,8 +58,11 @@ class RunInfo(dict):
         self._update_mozinfo(metadata_root)
         self.update(mozinfo.info)
         self["product"] = product
-        if not "debug" in self:
+        if debug is not None:
             self["debug"] = debug
+        elif "debug" not in self:
+            # Default to release
+            self["debug"] = False
 
     def _update_mozinfo(self, metadata_root):
         """Add extra build information from a mozinfo.json file in a parent
@@ -90,7 +93,11 @@ class Test(object):
         self._expected_metadata = expected_metadata
         self.timeout = timeout
         self.path = path
-        self.protocol = protocol
+        if expected_metadata:
+            prefs = expected_metadata.prefs()
+        else:
+            prefs = []
+        self.environment = {"protocol": protocol, "prefs": prefs}
 
     def __eq__(self, other):
         return self.id == other.id
@@ -102,7 +109,7 @@ class Test(object):
                    expected_metadata,
                    timeout=timeout,
                    path=manifest_item.path,
-                   protocol="https" if manifest_item.https else "http")
+                   protocol="https" if hasattr(manifest_item, "https") and manifest_item.https else "http")
 
 
     @property
@@ -165,14 +172,12 @@ class ReftestTest(Test):
     result_cls = ReftestResult
 
     def __init__(self, url, expected, references, timeout=DEFAULT_TIMEOUT, path=None, protocol="http"):
-        self.url = url
+        Test.__init__(self, url, expected, timeout, path, protocol)
+
         for _, ref_type in references:
             if ref_type not in ("==", "!="):
                 raise ValueError
-        self._expected_metadata = expected
-        self.timeout = timeout
-        self.path = path
-        self.protocol = protocol
+
         self.references = references
 
     @classmethod
@@ -196,7 +201,7 @@ class ReftestTest(Test):
                    [],
                    timeout=timeout,
                    path=manifest_test.path,
-                   protocol="https" if manifest_test.https else "http")
+                   protocol="https" if hasattr(manifest_test, "https") and manifest_test.https else "http")
 
         nodes[url] = node
 

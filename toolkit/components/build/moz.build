@@ -21,6 +21,7 @@ LOCAL_INCLUDES += [
     '../feeds',
     '../find',
     '../jsdownloads/src',
+    '../perfmonitoring',
     '../protobuf',
     '../startup',
     '../statusfilter',

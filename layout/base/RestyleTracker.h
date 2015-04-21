@@ -16,8 +16,11 @@
 #include "nsContainerFrame.h"
 #include "mozilla/SplayTree.h"
 #include "mozilla/RestyleLogging.h"
-#include "ProfilerBacktrace.h"
 #include "GeckoProfiler.h"
+
+#if defined(MOZ_ENABLE_PROFILER_SPS) && !defined(MOZILLA_XPCOMRT_API)
+#include "ProfilerBacktrace.h"
+#endif
 
 namespace mozilla {
 
@@ -293,7 +296,9 @@ public:
     // that we called AddPendingRestyle for and found the element this is
     // the RestyleData for as its nearest restyle root.
     nsTArray<nsRefPtr<Element>> mDescendants;
+#if defined(MOZ_ENABLE_PROFILER_SPS) && !defined(MOZILLA_XPCOMRT_API)
     UniquePtr<ProfilerBacktrace> mBacktrace;
+#endif
   };
 
   /**
@@ -392,9 +397,11 @@ RestyleTracker::AddPendingRestyleToTable(Element* aElement,
 
   if (!existingData) {
     RestyleData* rd = new RestyleData(aRestyleHint, aMinChangeHint);
+#if defined(MOZ_ENABLE_PROFILER_SPS) && !defined(MOZILLA_XPCOMRT_API)
     if (profiler_feature_active("restyle")) {
       rd->mBacktrace.reset(profiler_get_backtrace());
     }
+#endif
     mPendingRestyles.Put(aElement, rd);
     return false;
   }

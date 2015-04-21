@@ -37,6 +37,7 @@
 #include "prlog.h"
 #include "mozilla/dom/CSPReportBinding.h"
 #include "mozilla/net/ReferrerPolicy.h"
+#include "nsINetworkInterceptController.h"
 
 using namespace mozilla;
 
@@ -767,8 +768,14 @@ nsCSPContext::SendReports(nsISupports* aBlockedContentSource,
       continue; // don't return yet, there may be more URIs
     }
 
+    nsIDocShell* docShell = nullptr;
+
     // try to create a new channel for every report-uri
     if (loadingNode) {
+      nsIDocument* doc = loadingNode->OwnerDoc();
+      if (doc) {
+        docShell = doc->GetDocShell();
+      }
       rv = NS_NewChannel(getter_AddRefs(reportChannel),
                          reportURI,
                          loadingNode,
@@ -776,9 +783,8 @@ nsCSPContext::SendReports(nsISupports* aBlockedContentSource,
                          nsIContentPolicy::TYPE_CSP_REPORT);
     }
     else {
-      nsCOMPtr<nsIPrincipal> nullPrincipal =
-        do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-      NS_ENSURE_SUCCESS(rv, rv);
+      nsCOMPtr<nsIPrincipal> nullPrincipal = nsNullPrincipal::Create();
+      NS_ENSURE_TRUE(nullPrincipal, NS_ERROR_FAILURE);
       rv = NS_NewChannel(getter_AddRefs(reportChannel),
                          reportURI,
                          nullPrincipal,
@@ -817,6 +823,10 @@ nsCSPContext::SendReports(nsISupports* aBlockedContentSource,
     // we need to set an nsIChannelEventSink on the channel object
     // so we can tell it to not follow redirects when posting the reports
     nsRefPtr<CSPReportRedirectSink> reportSink = new CSPReportRedirectSink();
+    if (docShell) {
+      nsCOMPtr<nsINetworkInterceptController> interceptController = do_QueryInterface(docShell);
+      reportSink->SetInterceptController(interceptController);
+    }
     reportChannel->SetNotificationCallbacks(reportSink);
 
     // apply the loadgroup from the channel taken by setRequestContext.  If
@@ -1282,7 +1292,21 @@ CSPReportRedirectSink::AsyncOnChannelRedirect(nsIChannel* aOldChannel,
 NS_IMETHODIMP
 CSPReportRedirectSink::GetInterface(const nsIID& aIID, void** aResult)
 {
+  if (aIID.Equals(NS_GET_IID(nsINetworkInterceptController)) &&
+      mInterceptController) {
+    nsCOMPtr<nsINetworkInterceptController> copy(mInterceptController);
+    *aResult = copy.forget().take();
+
+    return NS_OK;
+  }
+
   return QueryInterface(aIID, aResult);
+}
+
+void
+CSPReportRedirectSink::SetInterceptController(nsINetworkInterceptController* aInterceptController)
+{
+  mInterceptController = aInterceptController;
 }
 
 /* ===== nsISerializable implementation ====== */

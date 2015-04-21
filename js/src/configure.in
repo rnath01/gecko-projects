@@ -1842,22 +1842,6 @@ ia64*-hpux*)
     no_x=yes
     AC_DEFINE(NO_X11)
 
-    case "$host" in
-    *-mingw*)
-        if test -z "$MOZ_TOOLS"; then
-            AC_MSG_ERROR([MOZ_TOOLS is not set])
-        fi
-        MOZ_TOOLS_DIR=`cd $MOZ_TOOLS && pwd -W`
-        if test "$?" != "0" -o -z "$MOZ_TOOLS_DIR"; then
-            AC_MSG_ERROR([cd \$MOZ_TOOLS failed. MOZ_TOOLS ==? $MOZ_TOOLS])
-        fi
-        MOZ_TOOLS_BIN_DIR="$(cd "$MOZ_TOOLS_DIR/bin" && pwd)"
-        if test `echo ${PATH}: | grep -ic "$MOZ_TOOLS_BINDIR:"` = 0; then
-            AC_MSG_ERROR([\$MOZ_TOOLS\\bin must be in your path.])
-        fi
-        ;;
-    esac
-
     case "$host_os" in
     cygwin*|msvc*|mks*)
         AC_MSG_ERROR([Using a Cygwin build environment is unsupported. Configure cannot check for presence of necessary headers. Please upgrade to MozillaBuild; see https://developer.mozilla.org/en/Windows_Build_Prerequisites.])
@@ -2675,20 +2659,6 @@ AC_CACHE_CHECK(for __attribute__((always_inline)),
                                ac_cv_attribute_always_inline=yes,
                                ac_cv_attribute_always_inline=no)])
 
-AC_CACHE_CHECK(for __attribute__((malloc)),
-               ac_cv_attribute_malloc,
-               [AC_TRY_COMPILE([void* f(int) __attribute__((malloc));],
-                               [],
-                               ac_cv_attribute_malloc=yes,
-                               ac_cv_attribute_malloc=no)])
-
-AC_CACHE_CHECK(for __attribute__((warn_unused_result)),
-               ac_cv_attribute_warn_unused,
-               [AC_TRY_COMPILE([int f(void) __attribute__((warn_unused_result));],
-                               [],
-                               ac_cv_attribute_warn_unused=yes,
-                               ac_cv_attribute_warn_unused=no)])
-
 dnl End of C++ language/feature checks
 AC_LANG_C
 
@@ -2719,25 +2689,6 @@ if test -n "${CPU_ARCH}" -a -n "${TARGET_COMPILER_ABI}"; then
     TARGET_XPCOM_ABI="${CPU_ARCH}-${TARGET_COMPILER_ABI}"
 fi
 
-dnl Mozilla specific options
-dnl ========================================================
-dnl The macros used for command line options
-dnl are defined in build/autoconf/altoptions.m4.
-
-dnl If the compiler supports these attributes, define them as
-dnl convenience macros.
-if test "$ac_cv_attribute_malloc" = yes ; then
-  AC_DEFINE(NS_ATTR_MALLOC, [__attribute__((malloc))])
-else
-  AC_DEFINE(NS_ATTR_MALLOC,)
-fi
-
-if test "$ac_cv_attribute_warn_unused" = yes ; then
-  AC_DEFINE(NS_WARN_UNUSED_RESULT, [__attribute__((warn_unused_result))])
-else
-  AC_DEFINE(NS_WARN_UNUSED_RESULT,)
-fi
-
 dnl We can't run TRY_COMPILE tests on Windows, so hard-code some
 dnl features that Windows actually does support.
 
@@ -2747,6 +2698,11 @@ if test -n "$SKIP_COMPILER_CHECKS"; then
    AC_DEFINE(HAVE_FORCEINLINE)
    AC_DEFINE(HAVE_LOCALECONV)
 fi # SKIP_COMPILER_CHECKS
+
+dnl Mozilla specific options
+dnl ========================================================
+dnl The macros used for command line options
+dnl are defined in build/autoconf/altoptions.m4.
 
 dnl ========================================================
 dnl = Mozilla update channel, used for disabling features
@@ -2961,16 +2917,22 @@ elif test "$GNU_CC"; then
     # -Wmaybe-uninitialized - too many false positives
     # -Wdeprecated-declarations - we don't want our builds held hostage when a
     #   platform-specific API becomes deprecated.
+    # -Wfree-nonheap-object - false positives during PGO
+    # -Warray-bounds - false positives depending on optimization
     MOZ_C_SUPPORTS_WARNING(-W, no-error=uninitialized, ac_c_has_noerror_uninitialized)
     MOZ_CXX_SUPPORTS_WARNING(-W, no-error=uninitialized, ac_cxx_has_noerror_uninitialized)
     MOZ_C_SUPPORTS_WARNING(-W, no-error=maybe-uninitialized, ac_c_has_noerror_maybe_uninitialized)
     MOZ_CXX_SUPPORTS_WARNING(-W, no-error=maybe-uninitialized, ac_cxx_has_noerror_maybe_uninitialized)
     MOZ_C_SUPPORTS_WARNING(-W, no-error=deprecated-declarations, ac_c_has_noerror_deprecated_declarations)
     MOZ_CXX_SUPPORTS_WARNING(-W, no-error=deprecated-declarations, ac_cxx_has_noerror_deprecated_declarations)
+    MOZ_C_SUPPORTS_WARNING(-W, no-error=array-bounds, ac_c_has_noerror_array_bounds)
+    MOZ_CXX_SUPPORTS_WARNING(-W, no-error=array-bounds, ac_cxx_has_noerror_array_bounds)
 
     if test -n "$MOZ_PGO"; then
         MOZ_C_SUPPORTS_WARNING(-W, no-error=coverage-mismatch, ac_c_has_noerror_coverage_mismatch)
         MOZ_CXX_SUPPORTS_WARNING(-W, no-error=coverage-mismatch, ac_cxx_has_noerror_coverage_mismatch)
+        MOZ_C_SUPPORTS_WARNING(-W, no-error=free-nonheap-object, ac_c_has_noerror_free_nonheap_object)
+        MOZ_CXX_SUPPORTS_WARNING(-W, no-error=free-nonheap-object, ac_cxx_has_noerror_free_nonheap_object)
     fi
 fi
 
@@ -3720,7 +3682,6 @@ AC_SUBST(MOZILLA_OFFICIAL)
 
 dnl win32 options
 AC_SUBST(MOZ_BROWSE_INFO)
-AC_SUBST(MOZ_TOOLS_DIR)
 
 dnl Echo the CFLAGS to remove extra whitespace.
 CFLAGS=`echo \

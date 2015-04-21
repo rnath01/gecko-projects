@@ -336,23 +336,23 @@ void nsRegion::SimplifyOutwardByArea(uint32_t aThreshold)
       // merge the rects into tmpRect
       rect = MergeRects(topRects, topRectsEnd, bottomRects, bottomRectsEnd, tmpRect);
 
+      // set topRects to where the newly merged rects will be so that we use them
+      // as our next set of topRects
+      topRects = destRect;
       // copy the merged rects back into the destination
       topRectsEnd = CopyRow(destRect, tmpRect, rect);
-      topRects = destRect;
-      bottomRects = bottomRectsEnd;
-      destRect = topRects;
     } else {
       // copy the unmerged rects
       destRect = CopyRow(destRect, topRects, topRectsEnd);
 
       topRects = bottomRects;
       topRectsEnd = bottomRectsEnd;
-      bottomRects = bottomRectsEnd;
       if (bottomRectsEnd == end) {
         // copy the last row when we are done
         topRectsEnd = CopyRow(destRect, topRects, topRectsEnd);
       }
     }
+    bottomRects = bottomRectsEnd;
   } while (bottomRectsEnd != end);
 
 
@@ -565,6 +565,11 @@ uint64_t nsRegion::Area () const
 
 nsRegion& nsRegion::ScaleRoundOut (float aXScale, float aYScale)
 {
+  if (mozilla::gfx::FuzzyEqual(aXScale, 1.0f) &&
+      mozilla::gfx::FuzzyEqual(aYScale, 1.0f)) {
+    return *this;
+  }
+
   int n;
   pixman_box32_t *boxes = pixman_region32_rectangles(&mImpl, &n);
   for (int i=0; i<n; i++) {

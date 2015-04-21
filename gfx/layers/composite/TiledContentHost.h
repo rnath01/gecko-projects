@@ -34,7 +34,6 @@
 class gfxReusableSurfaceWrapper;
 struct nsIntPoint;
 struct nsIntRect;
-struct nsIntSize;
 
 namespace mozilla {
 namespace gfx {
@@ -159,10 +158,6 @@ public:
 
   bool IsValid() const { return mIsValid; }
 
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
-  virtual void SetReleaseFence(const android::sp<android::Fence>& aReleaseFence);
-#endif
-
   // Recycle callback for TextureHost.
   // Used when TiledContentClient is present in client side.
   static void RecycleCallback(TextureHost* textureHost, void* aClosure);
@@ -276,18 +271,6 @@ public:
 
   virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix) override;
 
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
-  /**
-   * Store a fence that will signal when the current buffer is no longer being read.
-   * Similar to android's GLConsumer::setReleaseFence()
-   */
-  virtual void SetReleaseFence(const android::sp<android::Fence>& aReleaseFence)
-  {
-    mTiledBuffer.SetReleaseFence(aReleaseFence);
-    mLowPrecisionTiledBuffer.SetReleaseFence(aReleaseFence);
-  }
-#endif
-
 private:
 
   void RenderLayerBuffer(TiledLayerBufferComposite& aLayerBuffer,
@@ -309,7 +292,7 @@ private:
                   const gfx::Rect& aClipRect,
                   const nsIntRegion& aScreenRegion,
                   const nsIntPoint& aTextureOffset,
-                  const nsIntSize& aTextureBounds);
+                  const gfx::IntSize& aTextureBounds);
 
   void EnsureTileStore() {}
 

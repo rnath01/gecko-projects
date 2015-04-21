@@ -31,8 +31,6 @@
 #include "mozilla/Services.h"
 #include "nsIPrefService.h"
 #include "nsIPrefBranch.h"
-#include "nsNetUtil.h"
-#include "nsIIOService.h"
 #include "nsIDNSService.h"
 #include "nsWeakReference.h"
 #include "nricectx.h"
@@ -908,6 +906,7 @@ class SignalingAgent {
     mBundleEnabled(true),
     mExpectedFrameRequestType(VideoSessionConduit::FrameRequestPli),
     mExpectNack(true),
+    mExpectTmmbr(true),
     mExpectRtcpMuxAudio(true),
     mExpectRtcpMuxVideo(true),
     mRemoteDescriptionSet(false) {
@@ -1202,6 +1201,7 @@ class SignalingAgent {
       mozilla::VideoSessionConduit *video_conduit =
         static_cast<mozilla::VideoSessionConduit*>(conduit);
       ASSERT_EQ(mExpectNack, video_conduit->UsingNackBasic());
+      ASSERT_EQ(mExpectTmmbr, video_conduit->UsingTmmbr());
       ASSERT_EQ(mExpectedFrameRequestType,
                 video_conduit->FrameRequestMethod());
       ASSERT_EQ(mExpectRtcpMuxVideo, pipeline->IsDoingRtcpMux())
@@ -1550,6 +1550,7 @@ public:
   bool mBundleEnabled;
   VideoSessionConduit::FrameRequestType mExpectedFrameRequestType;
   bool mExpectNack;
+  bool mExpectTmmbr;
   bool mExpectRtcpMuxAudio;
   bool mExpectRtcpMuxVideo;
   bool mRemoteDescriptionSet;
@@ -1991,6 +1992,7 @@ public:
 
   void TestRtcpFbAnswer(const std::set<std::string>& feedback,
       bool expectNack,
+      bool expectTmmbr,
       VideoSessionConduit::FrameRequestType frameRequestType) {
     EnsureInit();
     OfferOptions options;
@@ -2009,6 +2011,7 @@ public:
 
     a1_->SetExpectedFrameRequestType(frameRequestType);
     a1_->mExpectNack = expectNack;
+    a1_->mExpectTmmbr = expectTmmbr;
 
     WaitForCompleted();
     CheckPipelines();
@@ -2019,6 +2022,7 @@ public:
   void TestRtcpFbOffer(
       const std::set<std::string>& feedback,
       bool expectNack,
+      bool expectTmmbr,
       VideoSessionConduit::FrameRequestType frameRequestType) {
     EnsureInit();
     OfferOptions options;
@@ -2031,6 +2035,7 @@ public:
     a2_->SetRemote(TestObserver::OFFER, modifiedOffer);
     a2_->SetExpectedFrameRequestType(frameRequestType);
     a2_->mExpectNack = expectNack;
+    a2_->mExpectTmmbr = expectTmmbr;
 
     a2_->CreateAnswer(OFFER_AV | ANSWER_AV);
 
@@ -2112,6 +2117,9 @@ public:
   uint16_t stun_port_;
 };
 
+#if !defined(MOZILLA_XPCOMRT_API)
+// FIXME XPCOMRT doesn't support nsPrefService
+// See Bug 1129188 - Create standalone libpref for use in standalone WebRTC
 static void SetIntPrefOnMainThread(nsCOMPtr<nsIPrefBranch> prefs,
   const char *pref_name,
   int new_value) {
@@ -2161,6 +2169,7 @@ class FsFrPrefClearer {
   private:
     nsCOMPtr<nsIPrefBranch> mPrefs;
 };
+#endif // !defined(MOZILLA_XPCOMRT_API)
 
 TEST_P(SignalingTest, JustInit)
 {
@@ -2368,6 +2377,22 @@ TEST_P(SignalingTest, RenegotiationOffererRemovesTrack)
   a1_->RemoveTrack(0, false);
 
   OfferAnswer(options, OFFER_NONE);
+
+  CloseStreams();
+}
+
+TEST_P(SignalingTest, RenegotiationBothRemoveThenAddTrack)
+{
+  OfferOptions options;
+  OfferAnswer(options, OFFER_AV | ANSWER_AV);
+
+  a1_->RemoveTrack(0, false);
+  a2_->RemoveTrack(0, false);
+
+  OfferAnswer(options, OFFER_NONE);
+
+  // OFFER_AUDIO causes a new audio track to be added on both sides
+  OfferAnswer(options, OFFER_AUDIO);
 
   CloseStreams();
 }
@@ -3368,23 +3393,25 @@ TEST_P(SignalingTest, RtcpFbInOffer)
   EnsureInit();
   OfferOptions options;
   a1_->CreateOffer(options, OFFER_AV);
-  const char *expected[] = { "nack", "nack pli", "ccm fir" };
+  const char *expected[] = { "nack", "nack pli", "ccm fir", "ccm tmmbr" };
   CheckRtcpFbSdp(a1_->offer(), ARRAY_TO_SET(std::string, expected));
 }
 
 TEST_P(SignalingTest, RtcpFbOfferAll)
 {
-  const char *feedbackTypes[] = { "nack", "nack pli", "ccm fir" };
+  const char *feedbackTypes[] = { "nack", "nack pli", "ccm fir", "ccm tmmbr" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
+                  true,
                   true,
                   VideoSessionConduit::FrameRequestPli);
 }
 
 TEST_P(SignalingTest, RtcpFbOfferNoNackBasic)
 {
-  const char *feedbackTypes[] = { "nack pli", "ccm fir" };
+  const char *feedbackTypes[] = { "nack pli", "ccm fir", "ccm tmmbr" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
                   false,
+                  true,
                   VideoSessionConduit::FrameRequestPli);
 }
 
@@ -3393,6 +3420,7 @@ TEST_P(SignalingTest, RtcpFbOfferNoNackPli)
   const char *feedbackTypes[] = { "nack", "ccm fir" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
+                  false,
                   VideoSessionConduit::FrameRequestFir);
 }
 
@@ -3401,6 +3429,7 @@ TEST_P(SignalingTest, RtcpFbOfferNoCcmFir)
   const char *feedbackTypes[] = { "nack", "nack pli" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
+                  false,
                   VideoSessionConduit::FrameRequestPli);
 }
 
@@ -3408,6 +3437,7 @@ TEST_P(SignalingTest, RtcpFbOfferNoNack)
 {
   const char *feedbackTypes[] = { "ccm fir" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
+                  false,
                   false,
                   VideoSessionConduit::FrameRequestFir);
 }
@@ -3417,6 +3447,7 @@ TEST_P(SignalingTest, RtcpFbOfferNoFrameRequest)
   const char *feedbackTypes[] = { "nack" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
+                  false,
                   VideoSessionConduit::FrameRequestNone);
 }
 
@@ -3424,6 +3455,7 @@ TEST_P(SignalingTest, RtcpFbOfferPliOnly)
 {
   const char *feedbackTypes[] = { "nack pli" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
+                  false,
                   false,
                   VideoSessionConduit::FrameRequestPli);
 }
@@ -3433,6 +3465,7 @@ TEST_P(SignalingTest, RtcpFbOfferNoFeedback)
   const char *feedbackTypes[] = { };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
                   false,
+                  false,
                   VideoSessionConduit::FrameRequestNone);
 }
 
@@ -3441,6 +3474,7 @@ TEST_P(SignalingTest, RtcpFbAnswerAll)
   const char *feedbackTypes[] = { "nack", "nack pli", "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
+                  false,
                   VideoSessionConduit::FrameRequestPli);
 }
 
@@ -3448,6 +3482,7 @@ TEST_P(SignalingTest, RtcpFbAnswerNoNackBasic)
 {
   const char *feedbackTypes[] = { "nack pli", "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
+                  false,
                   false,
                   VideoSessionConduit::FrameRequestPli);
 }
@@ -3457,6 +3492,7 @@ TEST_P(SignalingTest, RtcpFbAnswerNoNackPli)
   const char *feedbackTypes[] = { "nack", "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
+                  false,
                   VideoSessionConduit::FrameRequestFir);
 }
 
@@ -3465,6 +3501,7 @@ TEST_P(SignalingTest, RtcpFbAnswerNoCcmFir)
   const char *feedbackTypes[] = { "nack", "nack pli" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
+                  false,
                   VideoSessionConduit::FrameRequestPli);
 }
 
@@ -3472,6 +3509,7 @@ TEST_P(SignalingTest, RtcpFbAnswerNoNack)
 {
   const char *feedbackTypes[] = { "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
+                  false,
                   false,
                   VideoSessionConduit::FrameRequestFir);
 }
@@ -3481,6 +3519,7 @@ TEST_P(SignalingTest, RtcpFbAnswerNoFrameRequest)
   const char *feedbackTypes[] = { "nack" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
+                  false,
                   VideoSessionConduit::FrameRequestNone);
 }
 
@@ -3488,7 +3527,8 @@ TEST_P(SignalingTest, RtcpFbAnswerPliOnly)
 {
   const char *feedbackTypes[] = { "nack pli" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
-                  0,
+                  false,
+                  false,
                   VideoSessionConduit::FrameRequestPli);
 }
 
@@ -3496,7 +3536,8 @@ TEST_P(SignalingTest, RtcpFbAnswerNoFeedback)
 {
   const char *feedbackTypes[] = { };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
-                  0,
+                  false,
+                  false,
                   VideoSessionConduit::FrameRequestNone);
 }
 
@@ -3892,6 +3933,10 @@ TEST_P(SignalingTest, hugeSdp)
   a2_->CreateAnswer(OFFER_AV);
 }
 
+#if !defined(MOZILLA_XPCOMRT_API)
+// FIXME XPCOMRT doesn't support nsPrefService
+// See Bug 1129188 - Create standalone libpref for use in standalone WebRTC
+
 // Test max_fs and max_fr prefs have proper impact on SDP offer
 TEST_P(SignalingTest, MaxFsFrInOffer)
 {
@@ -4026,6 +4071,7 @@ TEST_P(SignalingTest, MaxFsFrCallerCodec)
   ASSERT_EQ(video_conduit->SendingMaxFs(), (unsigned short) 600);
   ASSERT_EQ(video_conduit->SendingMaxFr(), (unsigned short) 60);
 }
+#endif // !defined(MOZILLA_XPCOMRT_API)
 
 // Validate offer with multiple video codecs
 TEST_P(SignalingTest, ValidateMultipleVideoCodecsInOffer)
@@ -4343,6 +4389,12 @@ TEST_P(SignalingTest, UseNonPrefferedPayloadTypeOnAnswer)
   answer.replace(match,
                  strlen("\r\na=rtcp-fb:121 ccm fir"),
                  "\r\na=rtcp-fb:121 ccm fir");
+
+  match = answer.find("\r\na=rtcp-fb:120 ccm tmmbr");
+  ASSERT_NE(std::string::npos, match);
+  answer.replace(match,
+                 strlen("\r\na=rtcp-fb:121 ccm tmmbr"),
+                 "\r\na=rtcp-fb:121 ccm tmmbr");
 
   std::cout << "Modified SDP " << std::endl
             << indent(answer) << std::endl;

@@ -196,6 +196,8 @@ public:
 
   explicit nsDOMDeviceStorage(nsPIDOMWindow* aWindow);
 
+  static int InstanceCount() { return sInstanceCount; }
+
   nsresult Init(nsPIDOMWindow* aWindow, const nsAString& aType,
                 const nsAString& aVolName);
 
@@ -319,6 +321,8 @@ private:
                     const EnumerationParameters& aOptions, bool aEditable,
                     ErrorResult& aRv);
 
+  static int sInstanceCount;
+
   nsString mStorageType;
   nsCOMPtr<nsIFile> mRootDirectory;
   nsString mStorageName;
@@ -334,6 +338,8 @@ private:
 
   bool mIsWatchingFile;
   bool mAllowedToWatchFile;
+  bool mIsDefaultLocation;
+  void DispatchDefaultChangeEvent();
 
   nsresult Notify(const char* aReason, class DeviceStorageFile* aFile);
 

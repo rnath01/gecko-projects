@@ -9,6 +9,7 @@
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StyleAnimationValue.h"
+#include "mozilla/dom/KeyframeEffect.h"
 
 #include "nsPresContext.h"
 #include "nsStyleSet.h"
@@ -23,8 +24,8 @@
 
 using namespace mozilla;
 using namespace mozilla::css;
-using mozilla::dom::Animation;
 using mozilla::dom::AnimationPlayer;
+using mozilla::dom::KeyframeEffectReadonly;
 using mozilla::CSSAnimationPlayer;
 
 mozilla::dom::Promise*
@@ -35,10 +36,10 @@ CSSAnimationPlayer::GetReady(ErrorResult& aRv)
 }
 
 void
-CSSAnimationPlayer::Play()
+CSSAnimationPlayer::Play(LimitBehavior aLimitBehavior)
 {
   mPauseShouldStick = false;
-  AnimationPlayer::Play();
+  AnimationPlayer::Play(aLimitBehavior);
 }
 
 void
@@ -71,7 +72,7 @@ CSSAnimationPlayer::PlayFromStyle()
 {
   mIsStylePaused = false;
   if (!mPauseShouldStick) {
-    DoPlay();
+    DoPlay(AnimationPlayer::LimitBehavior::Continue);
   }
 }
 
@@ -90,11 +91,11 @@ CSSAnimationPlayer::PauseFromStyle()
 void
 CSSAnimationPlayer::QueueEvents(EventArray& aEventsToDispatch)
 {
-  if (!mSource) {
+  if (!mEffect) {
     return;
   }
 
-  ComputedTiming computedTiming = mSource->GetComputedTiming();
+  ComputedTiming computedTiming = mEffect->GetComputedTiming();
 
   if (computedTiming.mPhase == ComputedTiming::AnimationPhase_Null) {
     return; // do nothing
@@ -132,7 +133,7 @@ CSSAnimationPlayer::QueueEvents(EventArray& aEventsToDispatch)
 
   dom::Element* target;
   nsCSSPseudoElements::Type targetPseudoType;
-  mSource->GetTarget(target, targetPseudoType);
+  mEffect->GetTarget(target, targetPseudoType);
 
   uint32_t message;
 
@@ -146,7 +147,7 @@ CSSAnimationPlayer::QueueEvents(EventArray& aEventsToDispatch)
     // First notifying for start of 0th iteration by appending an
     // 'animationstart':
     StickyTimeDuration elapsedTime =
-      std::min(StickyTimeDuration(mSource->InitialAdvance()),
+      std::min(StickyTimeDuration(mEffect->InitialAdvance()),
                computedTiming.mActiveDuration);
     AnimationEventInfo ei(target, Name(), NS_ANIMATION_START,
                           elapsedTime,
@@ -162,10 +163,10 @@ CSSAnimationPlayer::QueueEvents(EventArray& aEventsToDispatch)
 
   if (message == NS_ANIMATION_START ||
       message == NS_ANIMATION_ITERATION) {
-    TimeDuration iterationStart = mSource->Timing().mIterationDuration *
+    TimeDuration iterationStart = mEffect->Timing().mIterationDuration *
                                     computedTiming.mCurrentIteration;
     elapsedTime = StickyTimeDuration(std::max(iterationStart,
-                                              mSource->InitialAdvance()));
+                                              mEffect->InitialAdvance()));
   } else {
     MOZ_ASSERT(message == NS_ANIMATION_END);
     elapsedTime = computedTiming.mActiveDuration;
@@ -222,6 +223,32 @@ nsAnimationManager::QueueEvents(AnimationPlayerCollection* aCollection,
   }
 }
 
+void
+nsAnimationManager::MaybeUpdateCascadeResults(AnimationPlayerCollection* aCollection)
+{
+  for (size_t playerIdx = aCollection->mPlayers.Length(); playerIdx-- != 0; ) {
+    CSSAnimationPlayer* player =
+      aCollection->mPlayers[playerIdx]->AsCSSAnimationPlayer();
+
+    if (player->IsInEffect() != player->mInEffectForCascadeResults) {
+      // Update our own cascade results.
+      mozilla::dom::Element* element = aCollection->GetElementToRestyle();
+      if (element) {
+        nsIFrame* frame = element->GetPrimaryFrame();
+        if (frame) {
+          UpdateCascadeResults(frame->StyleContext(), aCollection);
+        }
+      }
+
+      // Notify the transition manager, whose results might depend on ours.
+      mPresContext->TransitionManager()->
+        UpdateCascadeResultsWithAnimations(aCollection);
+
+      return;
+    }
+  }
+}
+
 /* virtual */ size_t
 nsAnimationManager::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
 {
@@ -254,7 +281,7 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
 
   const nsStyleDisplay* disp = aStyleContext->StyleDisplay();
   AnimationPlayerCollection* collection =
-    GetAnimationPlayers(aElement, aStyleContext->GetPseudoType(), false);
+    GetAnimations(aElement, aStyleContext->GetPseudoType(), false);
   if (!collection &&
       disp->mAnimationNameCount == 1 &&
       disp->mAnimations[0].GetName().IsEmpty()) {
@@ -264,7 +291,7 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
   nsAutoAnimationMutationBatch mb(aElement);
 
   // build the animations list
-  dom::AnimationTimeline* timeline = aElement->OwnerDoc()->Timeline();
+  dom::DocumentTimeline* timeline = aElement->OwnerDoc()->Timeline();
   AnimationPlayerPtrArray newPlayers;
   if (!aStyleContext->IsInDisplayNoneSubtree()) {
     BuildAnimations(aStyleContext, aElement, timeline, newPlayers);
@@ -328,14 +355,14 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
 
         // Update the old from the new so we can keep the original object
         // identity (and any expando properties attached to it).
-        if (oldPlayer->GetSource() && newPlayer->GetSource()) {
-          Animation* oldAnim = oldPlayer->GetSource();
-          Animation* newAnim = newPlayer->GetSource();
+        if (oldPlayer->GetEffect() && newPlayer->GetEffect()) {
+          KeyframeEffectReadonly* oldEffect = oldPlayer->GetEffect();
+          KeyframeEffectReadonly* newEffect = newPlayer->GetEffect();
           animationChanged =
-            oldAnim->Timing() != newAnim->Timing() ||
-            oldAnim->Properties() != newAnim->Properties();
-          oldAnim->Timing() = newAnim->Timing();
-          oldAnim->Properties() = newAnim->Properties();
+            oldEffect->Timing() != newEffect->Timing() ||
+            oldEffect->Properties() != newEffect->Properties();
+          oldEffect->Timing() = newEffect->Timing();
+          oldEffect->Properties() = newEffect->Properties();
         }
 
         // Reset compositor state so animation will be re-synchronized.
@@ -380,7 +407,7 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
     }
   } else {
     collection =
-      GetAnimationPlayers(aElement, aStyleContext->GetPseudoType(), true);
+      GetAnimations(aElement, aStyleContext->GetPseudoType(), true);
   }
   collection->mPlayers.SwapElements(newPlayers);
   collection->mNeedsRefreshes = true;
@@ -390,6 +417,8 @@ nsAnimationManager::CheckAnimationRule(nsStyleContext* aStyleContext,
   for (size_t newPlayerIdx = newPlayers.Length(); newPlayerIdx-- != 0; ) {
     newPlayers[newPlayerIdx]->Cancel();
   }
+
+  UpdateCascadeResults(aStyleContext, collection);
 
   TimeStamp refreshTime = mPresContext->RefreshDriver()->MostRecentRefresh();
   UpdateStyleAndEvents(collection, refreshTime,
@@ -459,7 +488,7 @@ ResolvedStyleCache::Get(nsPresContext *aPresContext,
 void
 nsAnimationManager::BuildAnimations(nsStyleContext* aStyleContext,
                                     dom::Element* aTarget,
-                                    dom::AnimationTimeline* aTimeline,
+                                    dom::DocumentTimeline* aTimeline,
                                     AnimationPlayerPtrArray& aPlayers)
 {
   MOZ_ASSERT(aPlayers.IsEmpty(), "expect empty array");
@@ -482,8 +511,7 @@ nsAnimationManager::BuildAnimations(nsStyleContext* aStyleContext,
     nsCSSKeyframesRule* rule =
       src.GetName().IsEmpty()
       ? nullptr
-      : mPresContext->StyleSet()->KeyframesRuleForName(mPresContext,
-                                                       src.GetName());
+      : mPresContext->StyleSet()->KeyframesRuleForName(src.GetName());
     if (!rule) {
       continue;
     }
@@ -499,10 +527,11 @@ nsAnimationManager::BuildAnimations(nsStyleContext* aStyleContext,
     timing.mDirection = src.GetDirection();
     timing.mFillMode = src.GetFillMode();
 
-    nsRefPtr<Animation> destAnim =
-      new Animation(mPresContext->Document(), aTarget,
-                    aStyleContext->GetPseudoType(), timing, src.GetName());
-    dest->SetSource(destAnim);
+    nsRefPtr<KeyframeEffectReadonly> destEffect =
+      new KeyframeEffectReadonly(mPresContext->Document(), aTarget,
+                                 aStyleContext->GetPseudoType(), timing,
+                                 src.GetName());
+    dest->SetEffect(destEffect);
 
     // Even in the case where we call PauseFromStyle below, we still need to
     // call PlayFromStyle first. This is because a newly-created player is idle
@@ -598,7 +627,7 @@ nsAnimationManager::BuildAnimations(nsStyleContext* aStyleContext,
         lastKey = kf.mKey;
       }
 
-      AnimationProperty &propData = *destAnim->Properties().AppendElement();
+      AnimationProperty &propData = *destEffect->Properties().AppendElement();
       propData.mProperty = prop;
       propData.mWinsInCascade = true;
 
@@ -661,8 +690,8 @@ nsAnimationManager::BuildAnimations(nsStyleContext* aStyleContext,
       // values (which?) or skip segments, so best to skip the whole
       // thing for now.)
       if (!interpolated) {
-        destAnim->Properties().RemoveElementAt(
-          destAnim->Properties().Length() - 1);
+        destEffect->Properties().RemoveElementAt(
+          destEffect->Properties().Length() - 1);
       }
     }
   }
@@ -706,6 +735,119 @@ nsAnimationManager::BuildSegment(InfallibleTArray<AnimationPropertySegment>&
   return true;
 }
 
+/* static */ void
+nsAnimationManager::UpdateCascadeResults(
+                      nsStyleContext* aStyleContext,
+                      AnimationPlayerCollection* aElementAnimations)
+{
+  /*
+   * Figure out which properties we need to examine.
+   */
+
+  // size of 2 since we only currently have 2 properties we animate on
+  // the compositor
+  nsAutoTArray<nsCSSProperty, 2> propertiesToTrack;
+
+  {
+    nsCSSPropertySet propertiesToTrackAsSet;
+
+    for (size_t playerIdx = aElementAnimations->mPlayers.Length();
+         playerIdx-- != 0; ) {
+      const AnimationPlayer* player = aElementAnimations->mPlayers[playerIdx];
+      const KeyframeEffectReadonly* effect = player->GetEffect();
+      if (!effect) {
+        continue;
+      }
+
+      for (size_t propIdx = 0, propEnd = effect->Properties().Length();
+           propIdx != propEnd; ++propIdx) {
+        const AnimationProperty& prop = effect->Properties()[propIdx];
+        // We only bother setting mWinsInCascade for properties that we
+        // can animate on the compositor.
+        if (nsCSSProps::PropHasFlags(prop.mProperty,
+                                     CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR)) {
+          if (!propertiesToTrackAsSet.HasProperty(prop.mProperty)) {
+            propertiesToTrack.AppendElement(prop.mProperty);
+            propertiesToTrackAsSet.AddProperty(prop.mProperty);
+          }
+        }
+      }
+    }
+  }
+
+  /*
+   * Determine whether those properties are set in things that
+   * override animations.
+   */
+
+  nsCSSPropertySet propertiesOverridden;
+  nsRuleNode::ComputePropertiesOverridingAnimation(propertiesToTrack,
+                                                   aStyleContext,
+                                                   propertiesOverridden);
+
+  /*
+   * Set mWinsInCascade based both on what is overridden at levels
+   * higher than animations and based on one animation overriding
+   * another.
+   *
+   * We iterate from the last animation to the first, just like we do
+   * when calling ComposeStyle from
+   * AnimationPlayerCollection::EnsureStyleRuleFor.  Later animations
+   * override earlier ones, so we add properties to the set of
+   * overridden properties as we encounter them, if the animation is
+   * currently in effect.
+   */
+
+  bool changed = false;
+  for (size_t playerIdx = aElementAnimations->mPlayers.Length();
+       playerIdx-- != 0; ) {
+    CSSAnimationPlayer* player =
+      aElementAnimations->mPlayers[playerIdx]->AsCSSAnimationPlayer();
+    KeyframeEffectReadonly* effect = player->GetEffect();
+
+    player->mInEffectForCascadeResults = player->IsInEffect();
+
+    if (!effect) {
+      continue;
+    }
+
+    for (size_t propIdx = 0, propEnd = effect->Properties().Length();
+         propIdx != propEnd; ++propIdx) {
+      AnimationProperty& prop = effect->Properties()[propIdx];
+      // We only bother setting mWinsInCascade for properties that we
+      // can animate on the compositor.
+      if (nsCSSProps::PropHasFlags(prop.mProperty,
+                                   CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR)) {
+        bool newWinsInCascade =
+          !propertiesOverridden.HasProperty(prop.mProperty);
+        if (newWinsInCascade != prop.mWinsInCascade) {
+          changed = true;
+        }
+        prop.mWinsInCascade = newWinsInCascade;
+
+        if (prop.mWinsInCascade && player->mInEffectForCascadeResults) {
+          // This animation is in effect right now, so it overrides
+          // earlier animations.  (For animations that aren't in effect,
+          // we set mWinsInCascade as though they were, but they don't
+          // suppress animations lower in the cascade.)
+          propertiesOverridden.AddProperty(prop.mProperty);
+        }
+      }
+    }
+  }
+
+  if (changed) {
+    nsPresContext* presContext = aElementAnimations->mManager->PresContext();
+    presContext->RestyleManager()->IncrementAnimationGeneration();
+    aElementAnimations->UpdateAnimationGeneration(presContext);
+    aElementAnimations->PostUpdateLayerAnimations();
+
+    // Invalidate our style rule.
+    aElementAnimations->mNeedsRefreshes = true;
+    aElementAnimations->mStyleRuleRefreshTime = TimeStamp();
+  }
+}
+
 /* virtual */ void
 nsAnimationManager::WillRefresh(mozilla::TimeStamp aTime)
 {
@@ -727,9 +869,6 @@ nsAnimationManager::WillRefresh(mozilla::TimeStamp aTime)
 void
 nsAnimationManager::FlushAnimations(FlushFlags aFlags)
 {
-  // FIXME: check that there's at least one style rule that's not
-  // in its "done" state, and if there isn't, remove ourselves from
-  // the refresh driver (but leave the animations!).
   TimeStamp now = mPresContext->RefreshDriver()->MostRecentRefresh();
   bool didThrottle = false;
   for (PRCList *l = PR_LIST_HEAD(&mElementCollections);
@@ -760,6 +899,8 @@ nsAnimationManager::FlushAnimations(FlushFlags aFlags)
   if (didThrottle) {
     mPresContext->Document()->SetNeedStyleFlush();
   }
+
+  MaybeStartOrStopObservingRefreshDriver();
 
   DispatchEvents(); // may destroy us
 }

@@ -344,6 +344,7 @@ pref("privacy.item.cache", true);
 pref("privacy.item.cookies", true);
 pref("privacy.item.offlineApps", true);
 pref("privacy.item.history", true);
+pref("privacy.item.searchHistory", true);
 pref("privacy.item.formdata", true);
 pref("privacy.item.downloads", true);
 pref("privacy.item.passwords", true);
@@ -861,3 +862,11 @@ pref("reader.toolbar.vertical", false);
 
 // Whether or not to display buttons related to reading list in reader view.
 pref("browser.readinglist.enabled", true);
+
+// Use software vsync to schedule rendering
+pref("gfx.vsync.hw-vsync.enabled", true);
+pref("gfx.vsync.compositor", true);
+pref("gfx.vsync.refreshdriver", true);
+
+// Selection carets never fall-back to internal LongTap detector.
+pref("selectioncaret.detects.longtap", false);

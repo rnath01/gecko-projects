@@ -26,8 +26,6 @@ function runAddAttributesTests(tests, nodeOrSelector, inspector) {
     for (let test of tests) {
       yield runAddAttributesTest(test, "div", inspector);
     }
-
-    yield inspector.once("inspector-updated");
   });
 }
 
@@ -133,7 +131,7 @@ function* runEditAttributesTest(test, inspector) {
 
   info("Listening for the markupmutation event");
   let nodeMutated = inspector.once("markupmutation");
-  let attr = container.editor.attrs[test.name].querySelector(".editable");
+  let attr = container.editor.attrElements.get(test.name).querySelector(".editable");
   setEditableFieldValue(attr, test.value, inspector);
   yield nodeMutated;
 

@@ -96,8 +96,13 @@ bool
 mozilla::plugins::SetupBridge(uint32_t aPluginId,
                               dom::ContentParent* aContentParent,
                               bool aForceBridgeNow,
-                              nsresult* rv)
+                              nsresult* rv,
+                              uint32_t* runID)
 {
+    if (NS_WARN_IF(!rv) || NS_WARN_IF(!runID)) {
+        return false;
+    }
+
     PluginModuleChromeParent::ClearInstantiationFlag();
     nsRefPtr<nsPluginHost> host = nsPluginHost::GetInst();
     nsRefPtr<nsNPAPIPlugin> plugin;
@@ -106,6 +111,10 @@ mozilla::plugins::SetupBridge(uint32_t aPluginId,
         return true;
     }
     PluginModuleChromeParent* chromeParent = static_cast<PluginModuleChromeParent*>(plugin->GetLibrary());
+    *rv = chromeParent->GetRunID(runID);
+    if (NS_FAILED(*rv)) {
+        return true;
+    }
     chromeParent->SetContentParent(aContentParent);
     if (!aForceBridgeNow && chromeParent->IsStartingAsync() &&
         PluginModuleChromeParent::DidInstantiate()) {
@@ -365,7 +374,8 @@ PluginModuleContentParent::LoadModule(uint32_t aPluginId)
      */
     dom::ContentChild* cp = dom::ContentChild::GetSingleton();
     nsresult rv;
-    if (!cp->SendLoadPlugin(aPluginId, &rv) ||
+    uint32_t runID;
+    if (!cp->SendLoadPlugin(aPluginId, &rv, &runID) ||
         NS_FAILED(rv)) {
         return nullptr;
     }
@@ -381,36 +391,32 @@ PluginModuleContentParent::LoadModule(uint32_t aPluginId)
     }
 
     parent->mPluginId = aPluginId;
+    parent->mRunID = runID;
 
     return parent;
 }
 
 /* static */ void
 PluginModuleContentParent::AssociatePluginId(uint32_t aPluginId,
-                                             base::ProcessId aProcessId)
+                                             base::ProcessId aOtherPid)
 {
     DebugOnly<PluginModuleMapping*> mapping =
-        PluginModuleMapping::AssociateWithProcessId(aPluginId, aProcessId);
+        PluginModuleMapping::AssociateWithProcessId(aPluginId, aOtherPid);
     MOZ_ASSERT(mapping);
 }
 
 /* static */ PluginModuleContentParent*
 PluginModuleContentParent::Initialize(mozilla::ipc::Transport* aTransport,
-                                      base::ProcessId aOtherProcess)
+                                      base::ProcessId aOtherPid)
 {
     nsAutoPtr<PluginModuleMapping> moduleMapping(
-        PluginModuleMapping::Resolve(aOtherProcess));
+        PluginModuleMapping::Resolve(aOtherPid));
     MOZ_ASSERT(moduleMapping);
     PluginModuleContentParent* parent = moduleMapping->GetModule();
     MOZ_ASSERT(parent);
 
-    ProcessHandle handle;
-    if (!base::OpenProcessHandle(aOtherProcess, &handle)) {
-        // Bug 1090578 - need to kill |aOtherProcess|, it's boned.
-        return nullptr;
-    }
-
-    DebugOnly<bool> ok = parent->Open(aTransport, handle, XRE_GetIOMessageLoop(),
+    DebugOnly<bool> ok = parent->Open(aTransport, aOtherPid,
+                                      XRE_GetIOMessageLoop(),
                                       mozilla::ipc::ParentSide);
     MOZ_ASSERT(ok);
 
@@ -454,7 +460,7 @@ bool
 PluginModuleChromeParent::SendAssociatePluginId()
 {
     MOZ_ASSERT(mContentParent);
-    return mContentParent->SendAssociatePluginId(mPluginId, OtherSidePID());
+    return mContentParent->SendAssociatePluginId(mPluginId, OtherPid());
 }
 
 // static
@@ -513,7 +519,9 @@ PluginModuleChromeParent::OnProcessLaunched(const bool aSucceeded)
     if (mAsyncInitRv != NS_ERROR_NOT_INITIALIZED || mShutdown) {
         return;
     }
-    Open(mSubprocess->GetChannel(), mSubprocess->GetChildProcessHandle());
+
+    Open(mSubprocess->GetChannel(),
+         base::GetProcId(mSubprocess->GetChildProcessHandle()));
 
     // Request Windows message deferral behavior on our channel. This
     // applies to the top level and all sub plugin protocols since they
@@ -610,6 +618,7 @@ PluginModuleParent::PluginModuleParent(bool aIsChrome)
     , mIsFlashPlugin(false)
     , mIsStartingAsync(false)
     , mNPInitialized(false)
+    , mIsNPShutdownPending(false)
     , mAsyncNewRv(NS_ERROR_NOT_INITIALIZED)
 {
 #if defined(XP_WIN) || defined(XP_MACOSX) || defined(MOZ_WIDGET_GTK)
@@ -647,6 +656,10 @@ PluginModuleContentParent::~PluginModuleContentParent()
     Preferences::UnregisterCallback(TimeoutChanged, kContentTimeoutPref, this);
 }
 
+// We start the Run IDs at 1 so that we can use 0 as a way of detecting
+// errors in retrieving the run ID.
+uint32_t PluginModuleChromeParent::sNextRunID = 1;
+
 bool PluginModuleChromeParent::sInstantiated = false;
 
 PluginModuleChromeParent::PluginModuleChromeParent(const char* aFilePath, uint32_t aPluginId)
@@ -678,6 +691,7 @@ PluginModuleChromeParent::PluginModuleChromeParent(const char* aFilePath, uint32
 {
     NS_ASSERTION(mSubprocess, "Out of memory!");
     sInstantiated = true;
+    mRunID = sNextRunID++;
 
     RegisterSettingsCallbacks();
 
@@ -1221,22 +1235,29 @@ PluginModuleChromeParent::TerminateChildProcess(MessageLoop* aMsgLoop)
     }
 #endif
 
+    mozilla::ipc::ScopedProcessHandle geckoChildProcess;
+    bool childOpened = base::OpenProcessHandle(OtherPid(),
+                                               &geckoChildProcess.rwget());
+
 #ifdef XP_WIN
     // collect cpu usage for plugin processes
 
     InfallibleTArray<base::ProcessHandle> processHandles;
 
-    processHandles.AppendElement(OtherProcess());
+    if (childOpened) {
+        processHandles.AppendElement(geckoChildProcess);
+    }
 
 #ifdef MOZ_CRASHREPORTER_INJECTOR
-    {
-      base::ProcessHandle handle;
-      if (mFlashProcess1 && base::OpenProcessHandle(mFlashProcess1, &handle)) {
-        processHandles.AppendElement(handle);
-      }
-      if (mFlashProcess2 && base::OpenProcessHandle(mFlashProcess2, &handle)) {
-        processHandles.AppendElement(handle);
-      }
+    mozilla::ipc::ScopedProcessHandle flashBrokerProcess;
+    if (mFlashProcess1 &&
+        base::OpenProcessHandle(mFlashProcess1, &flashBrokerProcess.rwget())) {
+        processHandles.AppendElement(flashBrokerProcess);
+    }
+    mozilla::ipc::ScopedProcessHandle flashSandboxProcess;
+    if (mFlashProcess2 &&
+        base::OpenProcessHandle(mFlashProcess2, &flashSandboxProcess.rwget())) {
+        processHandles.AppendElement(flashSandboxProcess);
     }
 #endif
 
@@ -1253,8 +1274,9 @@ PluginModuleChromeParent::TerminateChildProcess(MessageLoop* aMsgLoop)
         mChromeTaskFactory.NewRunnableMethod(
             &PluginModuleChromeParent::CleanupFromTimeout, isFromHangUI));
 
-    if (!KillProcess(OtherProcess(), 1, false))
+    if (!childOpened || !KillProcess(geckoChildProcess, 1, false)) {
         NS_WARNING("failed to kill subprocess!");
+    }
 }
 
 bool
@@ -1492,6 +1514,16 @@ PluginModuleParent::ActorDestroy(ActorDestroyReason why)
     default:
         NS_RUNTIMEABORT("Unexpected shutdown reason for toplevel actor.");
     }
+}
+
+nsresult
+PluginModuleParent::GetRunID(uint32_t* aRunID)
+{
+    if (NS_WARN_IF(!aRunID)) {
+      return NS_ERROR_INVALID_POINTER;
+    }
+    *aRunID = mRunID;
+    return NS_OK;
 }
 
 void
@@ -2244,6 +2276,13 @@ PluginModuleChromeParent::RecvNP_InitializeResult(const NPError& aError)
 void
 PluginModuleParent::InitAsyncSurrogates()
 {
+    if (MaybeRunDeferredShutdown()) {
+        // We've shut down, so the surrogates are no longer valid. Clear
+        // mSurrogateInstances to ensure that these aren't used.
+        mSurrogateInstances.Clear();
+        return;
+    }
+
     uint32_t len = mSurrogateInstances.Length();
     for (uint32_t i = 0; i < len; ++i) {
         NPError err;
@@ -2263,6 +2302,21 @@ PluginModuleParent::RemovePendingSurrogate(
     return mSurrogateInstances.RemoveElement(aSurrogate);
 }
 
+bool
+PluginModuleParent::MaybeRunDeferredShutdown()
+{
+    if (!mIsStartingAsync || !mIsNPShutdownPending) {
+        return false;
+    }
+    MOZ_ASSERT(!mShutdown);
+    NPError error;
+    if (!DoShutdown(&error)) {
+        return false;
+    }
+    mIsNPShutdownPending = false;
+    return true;
+}
+
 nsresult
 PluginModuleParent::NP_Shutdown(NPError* error)
 {
@@ -2273,6 +2327,24 @@ PluginModuleParent::NP_Shutdown(NPError* error)
         return NS_ERROR_FAILURE;
     }
 
+    /* If we're still running an async NP_Initialize then we need to defer
+       shutdown until we've received the result of the NP_Initialize call. */
+    if (mIsStartingAsync && !mNPInitialized) {
+        mIsNPShutdownPending = true;
+        *error = NPERR_NO_ERROR;
+        return NS_OK;
+    }
+
+    if (!DoShutdown(error)) {
+        return NS_ERROR_FAILURE;
+    }
+
+    return NS_OK;
+}
+
+bool
+PluginModuleParent::DoShutdown(NPError* error)
+{
     bool ok = true;
     if (IsChrome()) {
         ok = CallNP_Shutdown(error);
@@ -2284,7 +2356,11 @@ PluginModuleParent::NP_Shutdown(NPError* error)
     // CallNP_Shutdown() message
     Close();
 
-    return ok ? NS_OK : NS_ERROR_FAILURE;
+    mShutdown = ok;
+    if (!ok) {
+        *error = NPERR_GENERIC_ERROR;
+    }
+    return ok;
 }
 
 nsresult
@@ -2672,7 +2748,7 @@ PluginModuleParent::RecvPluginHideWindow(const uint32_t& aWindowId)
 {
     PLUGIN_LOG_DEBUG(("%s", FULLFUNCTION));
 #if defined(XP_MACOSX)
-    mac_plugin_interposing::parent::OnPluginHideWindow(aWindowId, OtherSidePID());
+    mac_plugin_interposing::parent::OnPluginHideWindow(aWindowId, OtherPid());
     return true;
 #else
     NS_NOTREACHED(
@@ -2893,7 +2969,15 @@ PluginModuleChromeParent::OnCrash(DWORD processID)
 {
     if (!mShutdown) {
         GetIPCChannel()->CloseWithError();
-        KillProcess(OtherProcess(), 1, false);
+        mozilla::ipc::ScopedProcessHandle geckoPluginChild;
+        if (base::OpenProcessHandle(OtherPid(), &geckoPluginChild.rwget())) {
+            if (!base::KillProcess(geckoPluginChild,
+                                   base::PROCESS_END_KILLED_BY_USER, false)) {
+                NS_ERROR("May have failed to kill child process.");
+            }
+        } else {
+            NS_ERROR("Failed to open child process when attempting kill.");
+        }
     }
 }
 
@@ -2901,7 +2985,7 @@ PluginModuleChromeParent::OnCrash(DWORD processID)
 
 #ifdef MOZ_ENABLE_PROFILER_SPS
 class PluginProfilerObserver final : public nsIObserver,
-                                         public nsSupportsWeakReference
+                                     public nsSupportsWeakReference
 {
 public:
     NS_DECL_ISUPPORTS

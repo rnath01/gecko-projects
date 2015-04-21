@@ -11,6 +11,7 @@ describe("loop.standaloneRoomViews", function() {
 
   var ROOM_STATES = loop.store.ROOM_STATES;
   var FEEDBACK_STATES = loop.store.FEEDBACK_STATES;
+  var ROOM_INFO_FAILURES = loop.shared.utils.ROOM_INFO_FAILURES;
   var sharedActions = loop.shared.actions;
 
   var sandbox, dispatcher, activeRoomStore, feedbackStore, dispatch;
@@ -36,6 +37,67 @@ describe("loop.standaloneRoomViews", function() {
 
   afterEach(function() {
     sandbox.restore();
+  });
+
+  describe("StandaloneRoomContextView", function() {
+    beforeEach(function() {
+      sandbox.stub(navigator.mozL10n, "get").returnsArg(0);
+    });
+
+    function mountTestComponent(extraProps) {
+      var props = _.extend({ receivingScreenShare: false }, extraProps);
+      return TestUtils.renderIntoDocument(
+        React.createElement(
+          loop.standaloneRoomViews.StandaloneRoomContextView, props));
+    }
+
+    it("should display the room name if no failures are known", function() {
+      var view = mountTestComponent({
+        roomName: "Mike's room",
+        receivingScreenShare: false
+      });
+
+      expect(view.getDOMNode().textContent).eql("Mike's room");
+    });
+
+    it("should display an unsupported browser message if crypto is unsupported", function() {
+      var view = mountTestComponent({
+        roomName: "Mark's room",
+        roomInfoFailure: ROOM_INFO_FAILURES.WEB_CRYPTO_UNSUPPORTED
+      });
+
+      expect(view.getDOMNode().textContent).match(/unsupported/);
+    });
+
+    it("should display a general error message for any other failure", function() {
+      var view = mountTestComponent({
+        roomName: "Mark's room",
+        roomInfoFailure: ROOM_INFO_FAILURES.NO_DATA
+      });
+
+      expect(view.getDOMNode().textContent).match(/not_available/);
+    });
+
+    it("should display context information if a url is supplied", function() {
+      var view = mountTestComponent({
+        roomName: "Mike's room",
+        roomContextUrls: [{
+          description: "Mark's super page",
+          location: "http://invalid.com",
+          thumbnail: "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+        }]
+      });
+
+      expect(view.getDOMNode().querySelector(".standalone-context-url")).not.eql(null);
+    });
+
+    it("should not display context information if no urls are supplied", function() {
+      var view = mountTestComponent({
+        roomName: "Mike's room"
+      });
+
+      expect(view.getDOMNode().querySelector(".standalone-context-url")).eql(null);
+    });
   });
 
   describe("StandaloneRoomView", function() {

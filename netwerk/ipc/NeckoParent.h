@@ -149,8 +149,11 @@ protected:
                                                const uint16_t& aBacklog,
                                                const nsString& aBinaryType) override;
   virtual bool DeallocPTCPServerSocketParent(PTCPServerSocketParent*) override;
-  virtual PUDPSocketParent* AllocPUDPSocketParent(const nsCString& aFilter) override;
-  virtual bool RecvPUDPSocketConstructor(PUDPSocketParent*, const nsCString& aFilter) override;
+  virtual PUDPSocketParent* AllocPUDPSocketParent(const Principal& aPrincipal,
+                                                  const nsCString& aFilter) override;
+  virtual bool RecvPUDPSocketConstructor(PUDPSocketParent*,
+                                         const Principal& aPrincipal,
+                                         const nsCString& aFilter) override;
   virtual bool DeallocPUDPSocketParent(PUDPSocketParent*) override;
   virtual PDNSRequestParent* AllocPDNSRequestParent(const nsCString& aHost,
                                                     const uint32_t& aFlags,
@@ -170,6 +173,14 @@ protected:
   virtual mozilla::ipc::IProtocol*
   CloneProtocol(Channel* aChannel,
                 mozilla::ipc::ProtocolCloneContext* aCtx) override;
+
+  virtual PDataChannelParent*
+    AllocPDataChannelParent(const uint32_t& channelId) override;
+  virtual bool DeallocPDataChannelParent(PDataChannelParent* parent) override;
+
+  virtual bool RecvPDataChannelConstructor(PDataChannelParent* aActor,
+                                           const uint32_t& channelId) override;
+
   virtual PRtspControllerParent* AllocPRtspControllerParent() override;
   virtual bool DeallocPRtspControllerParent(PRtspControllerParent*) override;
 

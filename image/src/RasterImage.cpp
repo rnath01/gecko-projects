@@ -3,7 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// Must #include ImageLogging.h before any IPDL-generated files or other files that #include prlog.h
+// Must #include ImageLogging.h before any IPDL-generated files or other files
+// that #include prlog.h
 #include "ImageLogging.h"
 
 #include "RasterImage.h"
@@ -161,7 +162,7 @@ public:
     // Insert the new surface into the cache immediately. We need to do this so
     // that we won't start multiple scaling jobs for the same size.
     SurfaceCache::Insert(mDstRef.get(), ImageKey(mImage.get()),
-                         RasterSurfaceKey(mDstSize.ToIntSize(), mImageFlags, 0),
+                         RasterSurfaceKey(mDstSize, mImageFlags, 0),
                          Lifetime::Transient);
 
     return true;
@@ -210,7 +211,7 @@ public:
 
       // Remove the frame from the cache since we know we don't need it.
       SurfaceCache::RemoveSurface(ImageKey(mImage.get()),
-                                  RasterSurfaceKey(mDstSize.ToIntSize(),
+                                  RasterSurfaceKey(mDstSize,
                                                    mImageFlags, 0));
 
       // Release everything we're holding, too.
@@ -295,12 +296,14 @@ RasterImage::Init(const char* aMimeType,
                   uint32_t aFlags)
 {
   // We don't support re-initialization
-  if (mInitialized)
+  if (mInitialized) {
     return NS_ERROR_ILLEGAL_VALUE;
+  }
 
   // Not sure an error can happen before init, but be safe
-  if (mError)
+  if (mError) {
     return NS_ERROR_FAILURE;
+  }
 
   NS_ENSURE_ARG_POINTER(aMimeType);
 
@@ -316,6 +319,7 @@ RasterImage::Init(const char* aMimeType,
   mSourceDataMimeType.Assign(aMimeType);
   mDiscardable = !!(aFlags & INIT_FLAG_DISCARDABLE);
   mDecodeOnlyOnDraw = !!(aFlags & INIT_FLAG_DECODE_ONLY_ON_DRAW);
+  mWantFullDecode = !!(aFlags & INIT_FLAG_DECODE_IMMEDIATELY);
   mTransient = !!(aFlags & INIT_FLAG_TRANSIENT);
   mDownscaleDuringDecode = !!(aFlags & INIT_FLAG_DOWNSCALE_DURING_DECODE);
 
@@ -382,7 +386,7 @@ RasterImage::RequestRefresh(const TimeStamp& aTime)
 //******************************************************************************
 /* readonly attribute int32_t width; */
 NS_IMETHODIMP
-RasterImage::GetWidth(int32_t *aWidth)
+RasterImage::GetWidth(int32_t* aWidth)
 {
   NS_ENSURE_ARG_POINTER(aWidth);
 
@@ -398,7 +402,7 @@ RasterImage::GetWidth(int32_t *aWidth)
 //******************************************************************************
 /* readonly attribute int32_t height; */
 NS_IMETHODIMP
-RasterImage::GetHeight(int32_t *aHeight)
+RasterImage::GetHeight(int32_t* aHeight)
 {
   NS_ENSURE_ARG_POINTER(aHeight);
 
@@ -416,8 +420,9 @@ RasterImage::GetHeight(int32_t *aHeight)
 NS_IMETHODIMP
 RasterImage::GetIntrinsicSize(nsSize* aSize)
 {
-  if (mError)
+  if (mError) {
     return NS_ERROR_FAILURE;
+  }
 
   *aSize = nsSize(nsPresContext::CSSPixelsToAppUnits(mSize.width),
                   nsPresContext::CSSPixelsToAppUnits(mSize.height));
@@ -429,8 +434,9 @@ RasterImage::GetIntrinsicSize(nsSize* aSize)
 NS_IMETHODIMP
 RasterImage::GetIntrinsicRatio(nsSize* aRatio)
 {
-  if (mError)
+  if (mError) {
     return NS_ERROR_FAILURE;
+  }
 
   *aRatio = nsSize(mSize.width, mSize.height);
   return NS_OK;
@@ -445,7 +451,7 @@ RasterImage::GetOrientation()
 //******************************************************************************
 /* unsigned short GetType(); */
 NS_IMETHODIMP
-RasterImage::GetType(uint16_t *aType)
+RasterImage::GetType(uint16_t* aType)
 {
   NS_ENSURE_ARG_POINTER(aType);
 
@@ -504,8 +510,7 @@ RasterImage::LookupFrame(uint32_t aFrameNum,
   MOZ_ASSERT(NS_IsMainThread());
 
   IntSize requestedSize = CanDownscaleDuringDecode(aSize, aFlags)
-                        ? aSize.ToIntSize()
-                        : mSize.ToIntSize();
+                        ? aSize : mSize;
 
   DrawableFrameRef ref = LookupFrameInternal(aFrameNum, requestedSize, aFlags);
 
@@ -518,7 +523,7 @@ RasterImage::LookupFrame(uint32_t aFrameNum,
     // The OS threw this frame away. We need to redecode if we can.
     MOZ_ASSERT(!mAnim, "Animated frames should be locked");
 
-    Decode(Some(ThebesIntSize(requestedSize)), aFlags);
+    Decode(Some(requestedSize), aFlags);
 
     // If we can sync decode, we should already have the frame.
     if (aFlags & FLAG_SYNC_DECODE) {
@@ -605,10 +610,11 @@ RasterImage::OnSurfaceDiscarded()
 //******************************************************************************
 /* readonly attribute boolean animated; */
 NS_IMETHODIMP
-RasterImage::GetAnimated(bool *aAnimated)
+RasterImage::GetAnimated(bool* aAnimated)
 {
-  if (mError)
+  if (mError) {
     return NS_ERROR_FAILURE;
+  }
 
   NS_ENSURE_ARG_POINTER(aAnimated);
 
@@ -620,8 +626,9 @@ RasterImage::GetAnimated(bool *aAnimated)
 
   // Otherwise, we need to have been decoded to know for sure, since if we were
   // decoded at least once mAnim would have been created for animated images
-  if (!mHasBeenDecoded)
+  if (!mHasBeenDecoded) {
     return NS_ERROR_NOT_AVAILABLE;
+  }
 
   // We know for sure
   *aAnimated = false;
@@ -634,12 +641,14 @@ RasterImage::GetAnimated(bool *aAnimated)
 NS_IMETHODIMP_(int32_t)
 RasterImage::GetFirstFrameDelay()
 {
-  if (mError)
+  if (mError) {
     return -1;
+  }
 
   bool animated = false;
-  if (NS_FAILED(GetAnimated(&animated)) || !animated)
+  if (NS_FAILED(GetAnimated(&animated)) || !animated) {
     return -1;
+  }
 
   MOZ_ASSERT(mAnim, "Animated images should have a FrameAnimator");
   return mAnim->GetTimeoutForFrame(0);
@@ -648,11 +657,13 @@ RasterImage::GetFirstFrameDelay()
 TemporaryRef<SourceSurface>
 RasterImage::CopyFrame(uint32_t aWhichFrame, uint32_t aFlags)
 {
-  if (aWhichFrame > FRAME_MAX_VALUE)
+  if (aWhichFrame > FRAME_MAX_VALUE) {
     return nullptr;
+  }
 
-  if (mError)
+  if (mError) {
     return nullptr;
+  }
 
   // Get the frame. If it's not there, it's probably the caller's fault for
   // not waiting for the data to be loaded from the network or not passing
@@ -935,16 +946,17 @@ RasterImage::OnAddedFrame(uint32_t aNewFrameCount,
     if (aNewFrameCount == 2) {
       // We're becoming animated, so initialize animation stuff.
       MOZ_ASSERT(!mAnim, "Already have animation state?");
-      mAnim = MakeUnique<FrameAnimator>(this, mSize.ToIntSize(), mAnimationMode);
+      mAnim = MakeUnique<FrameAnimator>(this, mSize, mAnimationMode);
 
       // We don't support discarding animated images (See bug 414259).
       // Lock the image and throw away the key.
       //
-      // Note that this is inefficient, since we could get rid of the source data
-      // too. However, doing this is actually hard, because we're probably
-      // mid-decode, and thus we're decoding out of the source buffer. Since we're
-      // going to fix this anyway later, and since we didn't kill the source data
-      // in the old world either, locking is acceptable for the moment.
+      // Note that this is inefficient, since we could get rid of the source
+      // data too. However, doing this is actually hard, because we're probably
+      // mid-decode, and thus we're decoding out of the source buffer. Since
+      // we're going to fix this anyway later, and since we didn't kill the
+      // source data in the old world either, locking is acceptable for the
+      // moment.
       LockImage();
 
       if (mPendingAnimation && ShouldAnimate()) {
@@ -962,13 +974,15 @@ RasterImage::SetSize(int32_t aWidth, int32_t aHeight, Orientation aOrientation)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  if (mError)
+  if (mError) {
     return NS_ERROR_FAILURE;
+  }
 
   // Ensure that we have positive values
   // XXX - Why isn't the size unsigned? Should this be changed?
-  if ((aWidth < 0) || (aHeight < 0))
+  if ((aWidth < 0) || (aHeight < 0)) {
     return NS_ERROR_INVALID_ARG;
+  }
 
   // if we already have a size, check the new size against the old one
   if (mHasSize &&
@@ -1020,8 +1034,9 @@ RasterImage::SetAnimationMode(uint16_t aAnimationMode)
 nsresult
 RasterImage::StartAnimation()
 {
-  if (mError)
+  if (mError) {
     return NS_ERROR_FAILURE;
+  }
 
   MOZ_ASSERT(ShouldAnimate(), "Should not animate!");
 
@@ -1069,8 +1084,9 @@ RasterImage::StopAnimation()
 NS_IMETHODIMP
 RasterImage::ResetAnimation()
 {
-  if (mError)
+  if (mError) {
     return NS_ERROR_FAILURE;
+    }
 
   mPendingAnimation = false;
 
@@ -1081,8 +1097,9 @@ RasterImage::ResetAnimation()
 
   mAnimationFinished = false;
 
-  if (mAnimating)
+  if (mAnimating) {
     StopAnimation();
+  }
 
   MOZ_ASSERT(mAnim, "Should have a FrameAnimator");
   mAnim->ResetAnimation();
@@ -1101,8 +1118,9 @@ RasterImage::ResetAnimation()
 NS_IMETHODIMP_(void)
 RasterImage::SetAnimationStartTime(const TimeStamp& aTime)
 {
-  if (mError || mAnimationMode == kDontAnimMode || mAnimating || !mAnim)
+  if (mError || mAnimationMode == kDontAnimMode || mAnimating || !mAnim) {
     return;
+  }
 
   mAnim->SetAnimationFrameTime(aTime);
 }
@@ -1119,8 +1137,9 @@ RasterImage::GetFrameIndex(uint32_t aWhichFrame)
 void
 RasterImage::SetLoopCount(int32_t aLoopCount)
 {
-  if (mError)
+  if (mError) {
     return;
+  }
 
   // No need to set this if we're not an animation.
   if (mAnim) {
@@ -1237,27 +1256,30 @@ RasterImage::SetSourceSizeHint(uint32_t aSizeHint)
   return mSourceBuffer->ExpectLength(aSizeHint);
 }
 
-/********* Methods to implement lazy allocation of nsIProperties object *************/
+/********* Methods to implement lazy allocation of nsIProperties object *******/
 NS_IMETHODIMP
-RasterImage::Get(const char *prop, const nsIID & iid, void * *result)
+RasterImage::Get(const char* prop, const nsIID& iid, void** result)
 {
-  if (!mProperties)
+  if (!mProperties) {
     return NS_ERROR_FAILURE;
+  }
   return mProperties->Get(prop, iid, result);
 }
 
 NS_IMETHODIMP
-RasterImage::Set(const char *prop, nsISupports *value)
+RasterImage::Set(const char* prop, nsISupports* value)
 {
-  if (!mProperties)
+  if (!mProperties) {
     mProperties = do_CreateInstance("@mozilla.org/properties;1");
-  if (!mProperties)
+  }
+  if (!mProperties) {
     return NS_ERROR_OUT_OF_MEMORY;
+  }
   return mProperties->Set(prop, value);
 }
 
 NS_IMETHODIMP
-RasterImage::Has(const char *prop, bool *_retval)
+RasterImage::Has(const char* prop, bool* _retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
   if (!mProperties) {
@@ -1268,15 +1290,16 @@ RasterImage::Has(const char *prop, bool *_retval)
 }
 
 NS_IMETHODIMP
-RasterImage::Undefine(const char *prop)
+RasterImage::Undefine(const char* prop)
 {
-  if (!mProperties)
+  if (!mProperties) {
     return NS_ERROR_FAILURE;
+  }
   return mProperties->Undefine(prop);
 }
 
 NS_IMETHODIMP
-RasterImage::GetKeys(uint32_t *count, char ***keys)
+RasterImage::GetKeys(uint32_t* count, char*** keys)
 {
   if (!mProperties) {
     *count = 0;
@@ -1401,18 +1424,22 @@ RasterImage::CreateDecoder(const Maybe<nsIntSize>& aSize, uint32_t aFlags)
   }
 
   if (!aSize) {
-    Telemetry::GetHistogramById(Telemetry::IMAGE_DECODE_COUNT)->Subtract(mDecodeCount);
+    Telemetry::GetHistogramById(
+      Telemetry::IMAGE_DECODE_COUNT)->Subtract(mDecodeCount);
     mDecodeCount++;
-    Telemetry::GetHistogramById(Telemetry::IMAGE_DECODE_COUNT)->Add(mDecodeCount);
+    Telemetry::GetHistogramById(
+      Telemetry::IMAGE_DECODE_COUNT)->Add(mDecodeCount);
 
     if (mDecodeCount > sMaxDecodeCount) {
       // Don't subtract out 0 from the histogram, because that causes its count
       // to go negative, which is not kosher.
       if (sMaxDecodeCount > 0) {
-        Telemetry::GetHistogramById(Telemetry::IMAGE_MAX_DECODE_COUNT)->Subtract(sMaxDecodeCount);
+        Telemetry::GetHistogramById(
+          Telemetry::IMAGE_MAX_DECODE_COUNT)->Subtract(sMaxDecodeCount);
       }
       sMaxDecodeCount = mDecodeCount;
-      Telemetry::GetHistogramById(Telemetry::IMAGE_MAX_DECODE_COUNT)->Add(sMaxDecodeCount);
+      Telemetry::GetHistogramById(
+        Telemetry::IMAGE_MAX_DECODE_COUNT)->Add(sMaxDecodeCount);
     }
   }
 
@@ -1612,7 +1639,7 @@ RasterImage::CanScale(GraphicsFilter aFilter,
   }
 
   // There's no point in scaling if we can't store the result.
-  if (!SurfaceCache::CanHold(aSize.ToIntSize())) {
+  if (!SurfaceCache::CanHold(aSize)) {
     return false;
   }
 
@@ -1654,7 +1681,7 @@ RasterImage::CanDownscaleDuringDecode(const nsIntSize& aSize, uint32_t aFlags)
   }
 
   // There's no point in scaling if we can't store the result.
-  if (!SurfaceCache::CanHold(aSize.ToIntSize())) {
+  if (!SurfaceCache::CanHold(aSize)) {
     return false;
   }
 
@@ -1715,7 +1742,7 @@ RasterImage::DrawWithPreDownscaleIfNeeded(DrawableFrameRef&& aFrameRef,
   if (CanScale(aFilter, aSize, aFlags)) {
     frameRef =
       SurfaceCache::Lookup(ImageKey(this),
-                           RasterSurfaceKey(aSize.ToIntSize(),
+                           RasterSurfaceKey(aSize,
                                             DecodeFlags(aFlags),
                                             0));
     if (!frameRef) {
@@ -1743,7 +1770,7 @@ RasterImage::DrawWithPreDownscaleIfNeeded(DrawableFrameRef&& aFrameRef,
   // adjust the drawing parameters accordingly.
   IntSize finalSize = frameRef->GetImageSize();
   bool couldRedecodeForBetterFrame = false;
-  if (ThebesIntSize(finalSize) != aSize) {
+  if (finalSize != aSize) {
     gfx::Size scale(double(aSize.width) / finalSize.width,
                     double(aSize.height) / finalSize.height);
     aContext->Multiply(gfxMatrix::Scaling(scale.width, scale.height));
@@ -1785,17 +1812,20 @@ RasterImage::Draw(gfxContext* aContext,
                   const Maybe<SVGImageContext>& /*aSVGContext - ignored*/,
                   uint32_t aFlags)
 {
-  if (aWhichFrame > FRAME_MAX_VALUE)
+  if (aWhichFrame > FRAME_MAX_VALUE) {
     return DrawResult::BAD_ARGS;
+  }
 
-  if (mError)
+  if (mError) {
     return DrawResult::BAD_IMAGE;
+  }
 
   // Illegal -- you can't draw with non-default decode flags.
   // (Disabling colorspace conversion might make sense to allow, but
   // we don't currently.)
-  if (DecodeFlags(aFlags) != DECODE_FLAGS_DEFAULT)
+  if (DecodeFlags(aFlags) != DECODE_FLAGS_DEFAULT) {
     return DrawResult::BAD_ARGS;
+  }
 
   if (!aContext) {
     return DrawResult::BAD_ARGS;
@@ -1844,8 +1874,9 @@ RasterImage::LockImage()
 {
   MOZ_ASSERT(NS_IsMainThread(),
              "Main thread to encourage serialization with UnlockImage");
-  if (mError)
+  if (mError) {
     return NS_ERROR_FAILURE;
+  }
 
   // Increment the lock count
   mLockCount++;
@@ -1865,14 +1896,16 @@ RasterImage::UnlockImage()
 {
   MOZ_ASSERT(NS_IsMainThread(),
              "Main thread to encourage serialization with LockImage");
-  if (mError)
+  if (mError) {
     return NS_ERROR_FAILURE;
+  }
 
   // It's an error to call this function if the lock count is 0
   MOZ_ASSERT(mLockCount > 0,
              "Calling UnlockImage with mLockCount == 0!");
-  if (mLockCount == 0)
+  if (mLockCount == 0) {
     return NS_ERROR_ABORT;
+  }
 
   // Decrement our lock count
   mLockCount--;
@@ -1904,10 +1937,12 @@ void
 RasterImage::DoError()
 {
   // If we've flagged an error before, we have nothing to do
-  if (mError)
+  if (mError) {
     return;
+  }
 
-  // We can't safely handle errors off-main-thread, so dispatch a worker to do it.
+  // We can't safely handle errors off-main-thread, so dispatch a worker to
+  // do it.
   if (!NS_IsMainThread()) {
     HandleErrorWorker::DispatchIfNeeded(this);
     return;
@@ -1981,7 +2016,7 @@ RasterImage::ShouldAnimate()
 /* readonly attribute uint32_t framesNotified; */
 #ifdef DEBUG
 NS_IMETHODIMP
-RasterImage::GetFramesNotified(uint32_t *aFramesNotified)
+RasterImage::GetFramesNotified(uint32_t* aFramesNotified)
 {
   NS_ENSURE_ARG_POINTER(aFramesNotified);
 
@@ -2096,7 +2131,7 @@ RasterImage::OptimalImageSizeForDest(const gfxSize& aDest, uint32_t aWhichFrame,
   } else if (CanScale(aFilter, destSize, aFlags)) {
     DrawableFrameRef frameRef =
       SurfaceCache::Lookup(ImageKey(this),
-                           RasterSurfaceKey(destSize.ToIntSize(),
+                           RasterSurfaceKey(destSize,
                                             DecodeFlags(aFlags),
                                             0));
 

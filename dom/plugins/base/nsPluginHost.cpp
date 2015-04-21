@@ -91,6 +91,7 @@
 #include "nsIImageLoadingContent.h"
 #include "mozilla/Preferences.h"
 #include "nsVersionComparator.h"
+#include "nsNullPrincipal.h"
 
 #if defined(XP_WIN)
 #include "nsIWindowMediator.h"
@@ -1128,7 +1129,7 @@ nsPluginHost::GetPluginTags(uint32_t* aPluginCount, nsIPluginTag*** aResults)
   }
 
   *aResults = static_cast<nsIPluginTag**>
-                         (nsMemory::Alloc(count * sizeof(**aResults)));
+                         (moz_xmalloc(count * sizeof(**aResults)));
   if (!*aResults)
     return NS_ERROR_OUT_OF_MEMORY;
 
@@ -3117,8 +3118,8 @@ nsresult nsPluginHost::NewPluginURLStream(const nsString& aURL,
     // in this else branch we really don't know where the load is coming
     // from and in fact should use something better than just using
     // a nullPrincipal as the loadingPrincipal.
-    principal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
+    principal = nsNullPrincipal::Create();
+    NS_ENSURE_TRUE(principal, NS_ERROR_FAILURE);
     rv = NS_NewChannel(getter_AddRefs(channel),
                        url,
                        principal,
@@ -3509,7 +3510,7 @@ nsPluginHost::ParsePostBufferToFixHeaders(const char *inPostData, uint32_t inPos
     int cntSingleLF = singleLF.Length();
     newBufferLen += cntSingleLF;
 
-    if (!(*outPostData = p = (char*)nsMemory::Alloc(newBufferLen)))
+    if (!(*outPostData = p = (char*)moz_xmalloc(newBufferLen)))
       return NS_ERROR_OUT_OF_MEMORY;
 
     // deal with single LF
@@ -3538,11 +3539,11 @@ nsPluginHost::ParsePostBufferToFixHeaders(const char *inPostData, uint32_t inPos
     // to keep ContentLenHeader+value followed by data
     uint32_t l = sizeof(ContentLenHeader) + sizeof(CRLFCRLF) + 32;
     newBufferLen = dataLen + l;
-    if (!(*outPostData = p = (char*)nsMemory::Alloc(newBufferLen)))
+    if (!(*outPostData = p = (char*)moz_xmalloc(newBufferLen)))
       return NS_ERROR_OUT_OF_MEMORY;
     headersLen = PR_snprintf(p, l,"%s: %ld%s", ContentLenHeader, dataLen, CRLFCRLF);
     if (headersLen == l) { // if PR_snprintf has ate all extra space consider this as an error
-      nsMemory::Free(p);
+      free(p);
       *outPostData = 0;
       return NS_ERROR_FAILURE;
     }
@@ -3642,7 +3643,7 @@ nsPluginHost::CreateTempFileToPost(const char *aPostDataURL, nsIFile **aTmpFile)
         // lets parse it through nsPluginHost::ParsePostBufferToFixHeaders()
         ParsePostBufferToFixHeaders((const char *)buf, br, &parsedBuf, &bw);
         rv = outStream->Write(parsedBuf, bw, &br);
-        nsMemory::Free(parsedBuf);
+        free(parsedBuf);
         if (NS_FAILED(rv) || (bw != br))
           break;
 
@@ -3773,6 +3774,7 @@ nsPluginHost::PluginCrashed(nsNPAPIPlugin* aPlugin,
                             const nsAString& browserDumpID)
 {
   nsPluginTag* crashedPluginTag = TagForPlugin(aPlugin);
+  MOZ_ASSERT(crashedPluginTag);
 
   // Notify the app's observer that a plugin crashed so it can submit
   // a crashreport.
@@ -3782,6 +3784,18 @@ nsPluginHost::PluginCrashed(nsNPAPIPlugin* aPlugin,
   nsCOMPtr<nsIWritablePropertyBag2> propbag =
     do_CreateInstance("@mozilla.org/hash-property-bag;1");
   if (obsService && propbag) {
+    uint32_t runID = 0;
+    PluginLibrary* library = aPlugin->GetLibrary();
+
+    if (!NS_WARN_IF(!library)) {
+      library->GetRunID(&runID);
+    }
+    propbag->SetPropertyAsUint32(NS_LITERAL_STRING("runID"), runID);
+
+    nsCString pluginName;
+    crashedPluginTag->GetName(pluginName);
+    propbag->SetPropertyAsAString(NS_LITERAL_STRING("pluginName"),
+                                   NS_ConvertUTF8toUTF16(pluginName));
     propbag->SetPropertyAsAString(NS_LITERAL_STRING("pluginDumpID"),
                                   pluginDumpID);
     propbag->SetPropertyAsAString(NS_LITERAL_STRING("browserDumpID"),

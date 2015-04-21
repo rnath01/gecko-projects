@@ -17,6 +17,7 @@ let ReadingListUI = {
   MESSAGES: [
     "ReadingList:GetVisibility",
     "ReadingList:ToggleVisibility",
+    "ReadingList:ShowIntro",
   ],
 
   /**
@@ -103,6 +104,7 @@ let ReadingListUI = {
     }
 
     document.getElementById(READINGLIST_COMMAND_ID).setAttribute("hidden", !enabled);
+    document.getElementById(READINGLIST_COMMAND_ID).setAttribute("disabled", !enabled);
   },
 
   /**
@@ -222,6 +224,14 @@ let ReadingListUI = {
         this.toggleSidebar();
         break;
       }
+
+      case "ReadingList:ShowIntro": {
+        if (this.enabled && !Preferences.get("browser.readinglist.introShown", false)) {
+          Preferences.set("browser.readinglist.introShown", true);
+          this.showSidebar();
+        }
+        break;
+      }
     }
   },
 
@@ -242,7 +252,7 @@ let ReadingListUI = {
     if (this.enabled && state == "valid") {
       uri = gBrowser.currentURI;
       if (uri.schemeIs("about"))
-        uri = ReaderParent.parseReaderUrl(uri.spec);
+        uri = ReaderMode.getOriginalUrl(uri.spec);
       else if (!uri.schemeIs("http") && !uri.schemeIs("https"))
         uri = null;
     }
@@ -289,6 +299,13 @@ let ReadingListUI = {
     this.toolbarButton.removeAttribute("hidden");
   },
 
+  buttonClick(event) {
+    if (event.button != 0) {
+      return;
+    }
+    this.togglePageByBrowser(gBrowser.selectedBrowser);
+  },
+
   /**
    * Toggle a page (from a browser) in the ReadingList, adding if it's not already added, or
    * removing otherwise.
@@ -299,7 +316,7 @@ let ReadingListUI = {
   togglePageByBrowser: Task.async(function* (browser) {
     let uri = browser.currentURI;
     if (uri.spec.startsWith("about:reader?"))
-      uri = ReaderParent.parseReaderUrl(uri.spec);
+      uri = ReaderMode.getOriginalUrl(uri.spec);
     if (!uri)
       return;
 
@@ -320,7 +337,7 @@ let ReadingListUI = {
   isItemForCurrentBrowser(item) {
     let currentURL = gBrowser.currentURI.spec;
     if (currentURL.startsWith("about:reader?"))
-      currentURL = ReaderParent.parseReaderUrl(currentURL);
+      currentURL = ReaderMode.getOriginalUrl(currentURL);
 
     if (item.url == currentURL || item.resolvedURL == currentURL) {
       return true;

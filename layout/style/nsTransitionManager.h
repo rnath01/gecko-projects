@@ -10,8 +10,8 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/MemoryReporting.h"
-#include "mozilla/dom/Animation.h"
 #include "mozilla/dom/AnimationPlayer.h"
+#include "mozilla/dom/KeyframeEffect.h"
 #include "AnimationCommon.h"
 #include "nsCSSPseudoElements.h"
 
@@ -30,17 +30,27 @@ struct StyleTransition;
 
 namespace mozilla {
 
-struct ElementPropertyTransition : public dom::Animation
+struct ElementPropertyTransition : public dom::KeyframeEffectReadonly
 {
   ElementPropertyTransition(nsIDocument* aDocument,
                             dom::Element* aTarget,
                             nsCSSPseudoElements::Type aPseudoType,
                             const AnimationTiming &aTiming)
-    : dom::Animation(aDocument, aTarget, aPseudoType, aTiming, EmptyString())
+    : dom::KeyframeEffectReadonly(aDocument, aTarget, aPseudoType,
+                                  aTiming, EmptyString())
   { }
 
-  virtual ElementPropertyTransition* AsTransition() { return this; }
-  virtual const ElementPropertyTransition* AsTransition() const { return this; }
+  virtual ElementPropertyTransition* AsTransition() override { return this; }
+  virtual const ElementPropertyTransition* AsTransition() const override { return this; }
+
+  virtual const nsString& Name() const override;
+
+  nsCSSProperty TransitionProperty() const {
+    MOZ_ASSERT(Properties().Length() == 1,
+               "Transitions should have exactly one animation property. "
+               "Perhaps we are using an un-initialized transition?");
+    return Properties()[0].mProperty;
+  }
 
   // This is the start value to be used for a check for whether a
   // transition is being reversed.  Normally the same as
@@ -68,7 +78,7 @@ struct ElementPropertyTransition : public dom::Animation
 class CSSTransitionPlayer final : public dom::AnimationPlayer
 {
 public:
- explicit CSSTransitionPlayer(dom::AnimationTimeline* aTimeline)
+ explicit CSSTransitionPlayer(dom::DocumentTimeline* aTimeline)
     : dom::AnimationPlayer(aTimeline)
   {
   }
@@ -81,7 +91,7 @@ public:
 
   // A variant of Play() that avoids posting style updates since this method
   // is expected to be called whilst already updating style.
-  void PlayFromStyle() { DoPlay(); }
+  void PlayFromStyle() { DoPlay(AnimationPlayer::LimitBehavior::Continue); }
 
 protected:
   virtual ~CSSTransitionPlayer() { }
@@ -131,11 +141,11 @@ public:
   void UpdateCascadeResultsWithTransitions(
          AnimationPlayerCollection* aTransitions);
   void UpdateCascadeResultsWithAnimations(
-         const AnimationPlayerCollection* aAnimations);
+         AnimationPlayerCollection* aAnimations);
   void UpdateCascadeResultsWithAnimationsToBeDestroyed(
          const AnimationPlayerCollection* aAnimations);
   void UpdateCascadeResults(AnimationPlayerCollection* aTransitions,
-                            const AnimationPlayerCollection* aAnimations);
+                            AnimationPlayerCollection* aAnimations);
 
   void SetInAnimationOnlyStyleUpdate(bool aInAnimationOnlyUpdate) {
     mInAnimationOnlyStyleUpdate = aInAnimationOnlyUpdate;

@@ -57,7 +57,9 @@ let RLSidebar = {
     this.emptyListInfo = document.getElementById("emptyListInfo");
     this.itemTemplate = document.getElementById("item-template");
 
-    this.list.addEventListener("click", event => this.onListClick(event));
+    // click events for middle-clicks are not sent to DOM nodes, only to the document.
+    document.addEventListener("click", event => this.onClick(event));
+
     this.list.addEventListener("mousemove", event => this.onListMouseMove(event));
     this.list.addEventListener("keydown", event => this.onListKeyDown(event), true);
 
@@ -103,6 +105,11 @@ let RLSidebar = {
     this.itemsById.set(item.id, item);
 
     this.emptyListInfo.hidden = true;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        itemNode.classList.add('visible');
+      });
+    });
   },
 
   /**
@@ -113,13 +120,22 @@ let RLSidebar = {
     log.trace(`onItemDeleted: ${item}`);
 
     let itemNode = this.itemNodesById.get(item.id);
-    itemNode.remove();
+
     this.itemNodesById.delete(item.id);
     this.itemsById.delete(item.id);
-    // TODO: ensureListItems doesn't yet cope with needing to add one item.
-    //this.ensureListItems();
 
-    this.emptyListInfo.hidden = (this.numItems > 0);
+    itemNode.addEventListener('transitionend', (event) => {
+      if (event.propertyName == "max-height") {
+        itemNode.remove();
+
+        // TODO: ensureListItems doesn't yet cope with needing to add one item.
+        //this.ensureListItems();
+
+        this.emptyListInfo.hidden = (this.numItems > 0);
+      }
+    }, false);
+
+    itemNode.classList.remove('visible');
   },
 
   /**
@@ -370,10 +386,10 @@ let RLSidebar = {
   },
 
   /**
-   * Handle a click event on the list box.
+   * Handle a click event on the sidebar.
    * @param {Event} event - Triggering event.
    */
-  onListClick(event) {
+  onClick(event) {
     let itemNode = this.findParentItemNode(event.target);
     if (!itemNode)
       return;
@@ -455,7 +471,10 @@ let RLSidebar = {
       this.activeItem = null;
     } else {
       ReadingList.itemForURL(msg.url).then(item => {
-        this.activeItem = this.itemNodesById.get(item.id);
+        let node;
+        if (item && (node = this.itemNodesById.get(item.id))) {
+          this.activeItem = node;
+        }
       });
     }
   }

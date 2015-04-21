@@ -40,7 +40,7 @@ def setup_logging(*args, **kwargs):
     global logger
     logger = wptlogging.setup(*args, **kwargs)
 
-def get_loader(test_paths, product, ssl_env, debug=False, **kwargs):
+def get_loader(test_paths, product, ssl_env, debug=None, **kwargs):
     run_info = wpttest.get_run_info(kwargs["run_info"], product, debug=debug)
 
     test_manifests = testloader.ManifestLoader(test_paths, force_manifest_update=kwargs["manifest_update"]).load()
@@ -111,7 +111,7 @@ def run_tests(config, test_paths, product, **kwargs):
         check_args(**kwargs)
 
         if "test_loader" in kwargs:
-            run_info = wpttest.get_run_info(kwargs["run_info"], product, debug=False)
+            run_info = wpttest.get_run_info(kwargs["run_info"], product, debug=None)
             test_loader = kwargs["test_loader"]
         else:
             run_info, test_loader = get_loader(test_paths, product, ssl_env,
@@ -134,6 +134,7 @@ def run_tests(config, test_paths, product, **kwargs):
         with env.TestEnvironment(test_paths,
                                  ssl_env,
                                  kwargs["pause_after_test"],
+                                 kwargs["debug_info"],
                                  env_options) as test_environment:
             try:
                 test_environment.ensure_started()
@@ -162,6 +163,7 @@ def run_tests(config, test_paths, product, **kwargs):
                     executor_kwargs = get_executor_kwargs(test_type,
                                                           test_environment.external_config,
                                                           test_environment.cache_manager,
+                                                          run_info,
                                                           **kwargs)
 
                     if executor_cls is None:
@@ -180,7 +182,7 @@ def run_tests(config, test_paths, product, **kwargs):
                                       executor_kwargs,
                                       kwargs["pause_after_test"],
                                       kwargs["pause_on_unexpected"],
-                                      kwargs["debug_args"]) as manager_group:
+                                      kwargs["debug_info"]) as manager_group:
                         try:
                             manager_group.run(test_type, test_loader.tests)
                         except KeyboardInterrupt:

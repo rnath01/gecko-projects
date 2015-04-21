@@ -446,6 +446,11 @@ public:
 
   nsresult StartTimeout();
 
+  void SetInterceptController(nsINetworkInterceptController* aInterceptController)
+  {
+    mInterceptController = aInterceptController;
+  }
+
 private:
   ~nsPingListener();
 
@@ -453,6 +458,7 @@ private:
   nsCOMPtr<nsIContent> mContent;
   nsCOMPtr<nsILoadGroup> mLoadGroup;
   nsCOMPtr<nsITimer> mTimer;
+  nsCOMPtr<nsINetworkInterceptController> mInterceptController;
 };
 
 NS_IMPL_ISUPPORTS(nsPingListener, nsIStreamListener, nsIRequestObserver,
@@ -517,8 +523,15 @@ NS_IMETHODIMP
 nsPingListener::GetInterface(const nsIID& aIID, void** aResult)
 {
   if (aIID.Equals(NS_GET_IID(nsIChannelEventSink))) {
-    NS_ADDREF_THIS();
-    *aResult = (nsIChannelEventSink*)this;
+    nsCOMPtr<nsIChannelEventSink> copy(this);
+    *aResult = copy.forget().take();
+    return NS_OK;
+  }
+
+  if (aIID.Equals(NS_GET_IID(nsINetworkInterceptController)) &&
+      mInterceptController) {
+    nsCOMPtr<nsINetworkInterceptController> copy(mInterceptController);
+    *aResult = copy.forget().take();
     return NS_OK;
   }
 
@@ -557,13 +570,14 @@ nsPingListener::AsyncOnChannelRedirect(nsIChannel* aOldChan,
   return NS_OK;
 }
 
-struct SendPingInfo
+struct MOZ_STACK_CLASS SendPingInfo
 {
   int32_t numPings;
   int32_t maxPings;
   bool requireSameHost;
   nsIURI* target;
   nsIURI* referrer;
+  nsIDocShell* docShell;
   uint32_t referrerPolicy;
 };
 
@@ -697,6 +711,8 @@ SendPing(void* aClosure, nsIContent* aContent, nsIURI* aURI,
   nsPingListener* pingListener =
     new nsPingListener(info->requireSameHost, aContent, loadGroup);
 
+  nsCOMPtr<nsINetworkInterceptController> interceptController = do_QueryInterface(info->docShell);
+  pingListener->SetInterceptController(interceptController);
   nsCOMPtr<nsIStreamListener> listener(pingListener);
 
   // Observe redirects as well:
@@ -721,7 +737,8 @@ SendPing(void* aClosure, nsIContent* aContent, nsIURI* aURI,
 
 // Spec: http://whatwg.org/specs/web-apps/current-work/#ping
 static void
-DispatchPings(nsIContent* aContent,
+DispatchPings(nsIDocShell* aDocShell,
+              nsIContent* aContent,
               nsIURI* aTarget,
               nsIURI* aReferrer,
               uint32_t aReferrerPolicy)
@@ -739,6 +756,7 @@ DispatchPings(nsIContent* aContent,
   info.target = aTarget;
   info.referrer = aReferrer;
   info.referrerPolicy = aReferrerPolicy;
+  info.docShell = aDocShell;
 
   ForEachPing(aContent, SendPing, &info);
 }
@@ -1610,7 +1628,7 @@ nsDocShell::LoadURI(nsIURI* aURI,
 
   if (aLoadFlags & LOAD_FLAGS_DISALLOW_INHERIT_OWNER) {
     inheritOwner = false;
-    owner = do_CreateInstance("@mozilla.org/nullprincipal;1");
+    owner = nsNullPrincipal::Create();
   }
 
   uint32_t flags = 0;
@@ -2977,10 +2995,10 @@ nsDocShell::PopProfileTimelineMarkers(
   // If we see an unpaired START, we keep it around for the next call
   // to PopProfileTimelineMarkers.  We store the kept START objects in
   // this array.
-  nsTArray<TimelineMarker*> keptMarkers;
+  nsTArray<UniquePtr<TimelineMarker>> keptMarkers;
 
   for (uint32_t i = 0; i < mProfileTimelineMarkers.Length(); ++i) {
-    TimelineMarker* startPayload = mProfileTimelineMarkers[i];
+    UniquePtr<TimelineMarker>& startPayload = mProfileTimelineMarkers[i];
     const char* startMarkerName = startPayload->GetName();
 
     bool hasSeenPaintedLayer = false;
@@ -3002,7 +3020,7 @@ nsDocShell::PopProfileTimelineMarkers(
       // enough for the amount of markers to always be small enough that the
       // nested for loop isn't going to be a performance problem.
       for (uint32_t j = i + 1; j < mProfileTimelineMarkers.Length(); ++j) {
-        TimelineMarker* endPayload = mProfileTimelineMarkers[j];
+        UniquePtr<TimelineMarker>& endPayload = mProfileTimelineMarkers[j];
         const char* endMarkerName = endPayload->GetName();
 
         // Look for Layer markers to stream out paint markers.
@@ -3011,7 +3029,7 @@ nsDocShell::PopProfileTimelineMarkers(
           endPayload->AddLayerRectangles(layerRectangles);
         }
 
-        if (!startPayload->Equals(endPayload)) {
+        if (!startPayload->Equals(*endPayload)) {
           continue;
         }
 
@@ -3048,14 +3066,13 @@ nsDocShell::PopProfileTimelineMarkers(
 
       // If we did not see the corresponding END, keep the START.
       if (!hasSeenEnd) {
-        keptMarkers.AppendElement(mProfileTimelineMarkers[i]);
+        keptMarkers.AppendElement(Move(mProfileTimelineMarkers[i]));
         mProfileTimelineMarkers.RemoveElementAt(i);
         --i;
       }
     }
   }
 
-  ClearProfileTimelineMarkers();
   mProfileTimelineMarkers.SwapElements(keptMarkers);
 
   if (!ToJSValue(aCx, profileTimelineMarkers, aProfileTimelineMarkers)) {
@@ -3086,10 +3103,10 @@ nsDocShell::AddProfileTimelineMarker(const char* aName,
 }
 
 void
-nsDocShell::AddProfileTimelineMarker(UniquePtr<TimelineMarker>& aMarker)
+nsDocShell::AddProfileTimelineMarker(UniquePtr<TimelineMarker>&& aMarker)
 {
   if (mProfileTimelineRecording) {
-    mProfileTimelineMarkers.AppendElement(aMarker.release());
+    mProfileTimelineMarkers.AppendElement(Move(aMarker));
   }
 }
 
@@ -3125,9 +3142,6 @@ nsDocShell::GetWindowDraggingAllowed(bool* aValue)
 void
 nsDocShell::ClearProfileTimelineMarkers()
 {
-  for (uint32_t i = 0; i < mProfileTimelineMarkers.Length(); ++i) {
-    delete mProfileTimelineMarkers[i];
-  }
   mProfileTimelineMarkers.Clear();
 }
 
@@ -5009,24 +5023,32 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
       if (errorClass == nsINSSErrorsService::ERROR_CLASS_BAD_CERT) {
         error.AssignLiteral("nssBadCert");
 
-        // if this is a Strict-Transport-Security host and the cert
-        // is bad, don't allow overrides (STS Spec section 7.3).
-        uint32_t type = nsISiteSecurityService::HEADER_HSTS;
+        // If this is an HTTP Strict Transport Security host or a pinned host
+        // and the certificate is bad, don't allow overrides (RFC 6797 section
+        // 12.1, HPKP draft spec section 2.6).
         uint32_t flags =
           mInPrivateBrowsing ? nsISocketProvider::NO_PERMANENT_STORAGE : 0;
         bool isStsHost = false;
+        bool isPinnedHost = false;
         if (XRE_GetProcessType() == GeckoProcessType_Default) {
           nsCOMPtr<nsISiteSecurityService> sss =
             do_GetService(NS_SSSERVICE_CONTRACTID, &rv);
           NS_ENSURE_SUCCESS(rv, rv);
-          rv = sss->IsSecureURI(type, aURI, flags, &isStsHost);
+          rv = sss->IsSecureURI(nsISiteSecurityService::HEADER_HSTS, aURI,
+                                flags, &isStsHost);
+          NS_ENSURE_SUCCESS(rv, rv);
+          rv = sss->IsSecureURI(nsISiteSecurityService::HEADER_HPKP, aURI,
+                                flags, &isPinnedHost);
           NS_ENSURE_SUCCESS(rv, rv);
         } else {
           mozilla::dom::ContentChild* cc =
             mozilla::dom::ContentChild::GetSingleton();
           mozilla::ipc::URIParams uri;
           SerializeURI(aURI, uri);
-          cc->SendIsSecureURI(type, uri, flags, &isStsHost);
+          cc->SendIsSecureURI(nsISiteSecurityService::HEADER_HSTS, uri, flags,
+                              &isStsHost);
+          cc->SendIsSecureURI(nsISiteSecurityService::HEADER_HPKP, uri, flags,
+                              &isPinnedHost);
         }
 
         if (Preferences::GetBool(
@@ -5034,11 +5056,16 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
           cssClass.AssignLiteral("expertBadCert");
         }
 
-        // HSTS takes precedence over the expert bad cert pref. We
-        // never want to show the "Add Exception" button for HSTS sites.
+        // HSTS/pinning takes precedence over the expert bad cert pref. We
+        // never want to show the "Add Exception" button for these sites.
+        // In the future we should differentiate between an HSTS host and a
+        // pinned host and display a more informative message to the user.
+        if (isStsHost || isPinnedHost) {
+          cssClass.AssignLiteral("badStsCert");
+        }
+
         uint32_t bucketId;
         if (isStsHost) {
-          cssClass.AssignLiteral("badStsCert");
           // measuring STS separately allows us to measure click through
           // rates easily
           bucketId = nsISecurityUITelemetry::WARNING_BAD_CERT_TOP_STS;
@@ -11033,7 +11060,7 @@ nsDocShell::ScrollToAnchor(nsACString& aCurHash, nsACString& aNewHash,
       rv = shell->GoToAnchor(NS_ConvertUTF8toUTF16(str), scroll,
                              nsIPresShell::SCROLL_SMOOTH_AUTO);
     }
-    nsMemory::Free(str);
+    free(str);
 
     // Above will fail if the anchor name is not UTF-8.  Need to
     // convert from document charset to unicode.
@@ -11447,7 +11474,7 @@ nsDocShell::AddState(JS::Handle<JS::Value> aData, const nsAString& aTitle,
     nsCOMPtr<nsIPrincipal> origPrincipal = origDocument->NodePrincipal();
 
     scContainer = new nsStructuredCloneContainer();
-    rv = scContainer->InitFromJSVal(aData);
+    rv = scContainer->InitFromJSVal(aData, aCx);
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIDocument> newDocument = GetDocument();
@@ -12001,7 +12028,7 @@ nsDocShell::LoadHistoryEntry(nsISHEntry* aEntry, uint32_t aLoadType)
       // Ensure that we have an owner.  Otherwise javascript: URIs will
       // pick it up from the about:blank page we just loaded, and we
       // don't really want even that in this case.
-      owner = do_CreateInstance("@mozilla.org/nullprincipal;1");
+      owner = nsNullPrincipal::Create();
       NS_ENSURE_TRUE(owner, NS_ERROR_OUT_OF_MEMORY);
     }
   }
@@ -13526,7 +13553,7 @@ nsDocShell::OnLinkClickSync(nsIContent* aContent,
                              aDocShell,                 // DocShell out-param
                              aRequest);                 // Request out-param
   if (NS_SUCCEEDED(rv)) {
-    DispatchPings(aContent, aURI, referer, refererPolicy);
+    DispatchPings(this, aContent, aURI, referer, refererPolicy);
   }
   return rv;
 }
@@ -13676,8 +13703,7 @@ nsDocShell::GetPrintPreview(nsIWebBrowserPrint** aPrintPreview)
   nsCOMPtr<nsIDocumentViewerPrint> print = do_QueryInterface(mContentViewer);
   if (!print || !print->IsInitializedForPrintPreview()) {
     Stop(nsIWebNavigation::STOP_ALL);
-    nsCOMPtr<nsIPrincipal> principal =
-      do_CreateInstance("@mozilla.org/nullprincipal;1");
+    nsCOMPtr<nsIPrincipal> principal = nsNullPrincipal::Create();
     NS_ENSURE_STATE(principal);
     nsresult rv = CreateAboutBlankContentViewer(principal, nullptr);
     NS_ENSURE_SUCCESS(rv, rv);

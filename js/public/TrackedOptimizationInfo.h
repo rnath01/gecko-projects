@@ -125,6 +125,7 @@ namespace JS {
     _(CantInlineNativeBadType)                                          \
     _(CantInlineNativeNoTemplateObj)                                    \
     _(CantInlineBound)                                                  \
+    _(CantInlineNativeNoSpecialization)                                 \
                                                                         \
     _(GenericSuccess)                                                   \
     _(Inlined)                                                          \
@@ -165,13 +166,13 @@ enum class TrackedTypeSite : uint32_t {
     Count
 };
 
-JS_PUBLIC_API(const char *)
+JS_PUBLIC_API(const char*)
 TrackedStrategyString(TrackedStrategy strategy);
 
-JS_PUBLIC_API(const char *)
+JS_PUBLIC_API(const char*)
 TrackedOutcomeString(TrackedOutcome outcome);
 
-JS_PUBLIC_API(const char *)
+JS_PUBLIC_API(const char*)
 TrackedTypeSiteString(TrackedTypeSite site);
 
 struct ForEachTrackedOptimizationAttemptOp
@@ -180,9 +181,9 @@ struct ForEachTrackedOptimizationAttemptOp
 };
 
 JS_PUBLIC_API(void)
-ForEachTrackedOptimizationAttempt(JSRuntime *rt, void *addr, uint8_t index,
-                                  ForEachTrackedOptimizationAttemptOp &op,
-                                  JSScript **scriptOut, jsbytecode **pcOut);
+ForEachTrackedOptimizationAttempt(JSRuntime* rt, void* addr, uint8_t index,
+                                  ForEachTrackedOptimizationAttemptOp& op,
+                                  JSScript** scriptOut, jsbytecode** pcOut);
 
 struct ForEachTrackedOptimizationTypeInfoOp
 {
@@ -214,23 +215,23 @@ struct ForEachTrackedOptimizationTypeInfoOp
     //
     // The lineno parameter is the line number if the type is keyed by
     // "constructor", "alloc site", or if the type itself refers to a scripted
-    // function. Otherwise it is UINT32_MAX.
+    // function. Otherwise it is Nothing().
     //
     // The location parameter is the only one that may need escaping if being
     // quoted.
-    virtual void readType(const char *keyedBy, const char *name,
-                          const char *location, unsigned lineno) = 0;
+    virtual void readType(const char* keyedBy, const char* name,
+                          const char* location, mozilla::Maybe<unsigned> lineno) = 0;
 
     // Called once per entry.
-    virtual void operator()(TrackedTypeSite site, const char *mirType) = 0;
+    virtual void operator()(TrackedTypeSite site, const char* mirType) = 0;
 };
 
 JS_PUBLIC_API(void)
-ForEachTrackedOptimizationTypeInfo(JSRuntime *rt, void *addr, uint8_t index,
-                                   ForEachTrackedOptimizationTypeInfoOp &op);
+ForEachTrackedOptimizationTypeInfo(JSRuntime* rt, void* addr, uint8_t index,
+                                   ForEachTrackedOptimizationTypeInfoOp& op);
 
 JS_PUBLIC_API(mozilla::Maybe<uint8_t>)
-TrackedOptimizationIndexAtAddr(JSRuntime *rt, void *addr, void **entryAddr);
+TrackedOptimizationIndexAtAddr(JSRuntime* rt, void* addr, void** entryAddr);
 
 } // namespace JS
 

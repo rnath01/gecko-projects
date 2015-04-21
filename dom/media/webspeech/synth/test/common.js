@@ -16,7 +16,7 @@ SpeechTaskCallback.prototype = {
 
   getInterfaces: function(c) {},
 
-  getHelperForLanguage: function() {},
+  getScriptableHelper: function() {},
 
   onPause: function onPause() {
     if (this.onpause)
@@ -58,7 +58,7 @@ var TestSpeechServiceWithAudio = SpecialPowers.wrapCallbackObject({
 
   getInterfaces: function(c) {},
 
-  getHelperForLanguage: function() {}
+  getScriptableHelper: function() {}
 });
 
 var TestSpeechServiceNoAudio = SpecialPowers.wrapCallbackObject({
@@ -81,14 +81,38 @@ var TestSpeechServiceNoAudio = SpecialPowers.wrapCallbackObject({
       }
     }
 
+    // If the utterance contains the phrase 'callback events', we will dispatch
+    // an appropriate event for each callback method.
+    var no_events = (aText.indexOf('callback events') < 0);
+    // If the utterance contains the phrase 'never end', we don't immediately
+    // end the 'synthesis' of the utterance.
+    var end_utterance = (aText.indexOf('never end') < 0);
+
     var task = SpecialPowers.wrap(aTask);
-    task.setup(SpecialPowers.wrapCallbackObject(new SpeechTaskCallback()));
+    task.setup(SpecialPowers.wrapCallbackObject(new SpeechTaskCallback(
+      function() {
+        if (!no_events) {
+          task.dispatchPause(1, 1.23);
+        }
+      },
+      function() {
+        if (!no_events) {
+          task.dispatchResume(1, 1.23);
+        }
+      },
+      function() {
+        if (!no_events) {
+          task.dispatchEnd(1, 1.23);
+        }
+      })));
     setTimeout(function () {
                  task.dispatchStart();
-                 setTimeout(function () {
-                              task.dispatchEnd(aText.length / 2.0, aText.length);
-                            }, 0);
-
+                 if (end_utterance) {
+                   setTimeout(function () {
+                                task.dispatchEnd(
+                                  aText.length / 2.0, aText.length);
+                              }, 0);
+                 }
                }, 0);
   },
 
@@ -98,7 +122,7 @@ var TestSpeechServiceNoAudio = SpecialPowers.wrapCallbackObject({
 
   getInterfaces: function(c) {},
 
-  getHelperForLanguage: function() {},
+  getScriptableHelper: function() {},
 
   expectedSpeaks: []
 });

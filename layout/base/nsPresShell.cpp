@@ -1204,7 +1204,7 @@ PresShell::Destroy()
     mViewManager = nullptr;
   }
 
-  mStyleSet->BeginShutdown(mPresContext);
+  mStyleSet->BeginShutdown();
   nsRefreshDriver* rd = GetPresContext()->RefreshDriver();
 
   // This shell must be removed from the document before the frame
@@ -1262,7 +1262,7 @@ PresShell::Destroy()
   }
 
   // Let the style set do its cleanup.
-  mStyleSet->Shutdown(mPresContext);
+  mStyleSet->Shutdown();
 
   if (mPresContext) {
     // We hold a reference to the pres context, and it holds a weak link back
@@ -4399,8 +4399,7 @@ PresShell::DocumentStatesChanged(nsIDocument* aDocument,
   NS_PRECONDITION(aDocument == mDocument, "Unexpected aDocument");
 
   if (mDidInitialize &&
-      mStyleSet->HasDocumentStateDependentStyle(mPresContext,
-                                                mDocument->GetRootElement(),
+      mStyleSet->HasDocumentStateDependentStyle(mDocument->GetRootElement(),
                                                 aStateMask)) {
     mPresContext->RestyleManager()->PostRestyleEvent(mDocument->GetRootElement(),
                                                      eRestyle_Subtree,
@@ -4582,6 +4581,13 @@ PresShell::ContentRemoved(nsIDocument *aDocument,
   if (aContainer && aContainer->IsElement()) {
     mPresContext->RestyleManager()->
       RestyleForRemove(aContainer->AsElement(), aChild, oldNextSibling);
+  }
+
+  // After removing aChild from tree we should save information about live ancestor
+  if (mPointerEventTarget) {
+    if (nsContentUtils::ContentIsDescendantOf(mPointerEventTarget, aChild)) {
+      mPointerEventTarget = aContainer;
+    }
   }
 
   // We should check that aChild does not contain pointer capturing elements.
@@ -4986,14 +4992,21 @@ PresShell::ClipListToRange(nsDisplayListBuilder *aBuilder,
           frame->GetPointFromOffset(hilightStart, &startPoint);
           frame->GetPointFromOffset(hilightEnd, &endPoint);
 
-          // the clip rectangle is determined by taking the the start and
+          // The clip rectangle is determined by taking the the start and
           // end points of the range, offset from the reference frame.
-          // Because of rtl, the end point may be to the left of the
-          // start point, so x is set to the lowest value
+          // Because of rtl, the end point may be to the left of (or above,
+          // in vertical mode) the start point, so x (or y) is set to the
+          // lower of the values.
           nsRect textRect(aBuilder->ToReferenceFrame(frame), frame->GetSize());
-          nscoord x = std::min(startPoint.x, endPoint.x);
-          textRect.x += x;
-          textRect.width = std::max(startPoint.x, endPoint.x) - x;
+          if (frame->GetWritingMode().IsVertical()) {
+            nscoord y = std::min(startPoint.y, endPoint.y);
+            textRect.y += y;
+            textRect.height = std::max(startPoint.y, endPoint.y) - y;
+          } else {
+            nscoord x = std::min(startPoint.x, endPoint.x);
+            textRect.x += x;
+            textRect.width = std::max(startPoint.x, endPoint.x) - x;
+          }
           surfaceRect.UnionRect(surfaceRect, textRect);
 
           DisplayItemClip newClip;
@@ -5168,6 +5181,8 @@ PresShell::PaintRangePaintInfo(nsTArray<nsAutoPtr<RangePaintInfo> >* aItems,
 
     pixelArea.width = NSToIntFloor(float(pixelArea.width) * scale);
     pixelArea.height = NSToIntFloor(float(pixelArea.height) * scale);
+    if (!pixelArea.width || !pixelArea.height)
+      return nullptr;
 
     // adjust the screen position based on the rescaled size
     nscoord left = rootScreenRect.x + pixelArea.x;
@@ -6817,7 +6832,8 @@ DispatchPointerFromMouseOrTouch(PresShell* aShell,
                                 nsIFrame* aFrame,
                                 WidgetGUIEvent* aEvent,
                                 bool aDontRetargetEvents,
-                                nsEventStatus* aStatus)
+                                nsEventStatus* aStatus,
+                                nsIContent** aTargetContent)
 {
   uint32_t pointerMessage = 0;
   if (aEvent->mClass == eMouseEventClass) {
@@ -6851,7 +6867,7 @@ DispatchPointerFromMouseOrTouch(PresShell* aShell,
                      mouseEvent->pressure ? mouseEvent->pressure : 0.5f :
                      0.0f;
     event.convertToPointer = mouseEvent->convertToPointer = false;
-    aShell->HandleEvent(aFrame, &event, aDontRetargetEvents, aStatus);
+    aShell->HandleEvent(aFrame, &event, aDontRetargetEvents, aStatus, aTargetContent);
   } else if (aEvent->mClass == eTouchEventClass) {
     WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent();
     // loop over all touches and dispatch pointer events on each touch
@@ -6896,7 +6912,7 @@ DispatchPointerFromMouseOrTouch(PresShell* aShell,
       event.buttons = WidgetMouseEvent::eLeftButtonFlag;
       event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
       event.convertToPointer = touch->convertToPointer = false;
-      aShell->HandleEvent(aFrame, &event, aDontRetargetEvents, aStatus);
+      aShell->HandleEvent(aFrame, &event, aDontRetargetEvents, aStatus, aTargetContent);
     }
   }
   return NS_OK;
@@ -7163,7 +7179,8 @@ nsresult
 PresShell::HandleEvent(nsIFrame* aFrame,
                        WidgetGUIEvent* aEvent,
                        bool aDontRetargetEvents,
-                       nsEventStatus* aEventStatus)
+                       nsEventStatus* aEventStatus,
+                       nsIContent** aTargetContent)
 {
 #ifdef MOZ_TASK_TRACER
   // Make touch events, mouse events and hardware key events to be the source
@@ -7179,11 +7196,27 @@ PresShell::HandleEvent(nsIFrame* aFrame,
   AutoSourceEvent taskTracerEvent(type);
 #endif
 
-  if (sPointerEventEnabled) {
-    DispatchPointerFromMouseOrTouch(this, aFrame, aEvent, aDontRetargetEvents, aEventStatus);
-  }
+  NS_ASSERTION(aFrame, "aFrame should be not null");
 
-  NS_ASSERTION(aFrame, "null frame");
+  if (sPointerEventEnabled) {
+    nsWeakFrame weakFrame(aFrame);
+    nsCOMPtr<nsIContent> targetContent;
+    DispatchPointerFromMouseOrTouch(this, aFrame, aEvent, aDontRetargetEvents,
+                                    aEventStatus, getter_AddRefs(targetContent));
+    if (!weakFrame.IsAlive()) {
+      if (targetContent) {
+        aFrame = targetContent->GetPrimaryFrame();
+        if (!aFrame) {
+          PushCurrentEventInfo(aFrame, targetContent);
+          nsresult rv = HandleEventInternal(aEvent, aEventStatus);
+          PopCurrentEventInfo();
+          return rv;
+        }
+      } else {
+        return NS_OK;
+      }
+    }
+  }
 
   if (mIsDestroying ||
       (sDisableNonTestMouseEvents && !aEvent->mFlags.mIsSynthesizedForTests &&
@@ -7670,6 +7703,15 @@ PresShell::HandleEvent(nsIFrame* aFrame,
       }
     }
 
+    // Before HandlePositionedEvent we should save mPointerEventTarget in some cases
+    nsWeakFrame weakFrame;
+    if (sPointerEventEnabled && aTargetContent && ePointerEventClass == aEvent->mClass) {
+      weakFrame = frame;
+      shell->mPointerEventTarget = frame->GetContent();
+      MOZ_ASSERT(!frame->GetContent() || shell->GetDocument() == frame->GetContent()->OwnerDoc());
+    }
+
+    nsresult rv;
     if (shell != this) {
       // Handle the event in the correct shell.
       // Prevent deletion until we're done with event handling (bug 336582).
@@ -7678,10 +7720,20 @@ PresShell::HandleEvent(nsIFrame* aFrame,
       // the only correct alternative; if the event was captured then it
       // must have been captured by us or some ancestor shell and we
       // now ask the subshell to dispatch it normally.
-      return shell->HandlePositionedEvent(frame, aEvent, aEventStatus);
+      rv = shell->HandlePositionedEvent(frame, aEvent, aEventStatus);
+    } else {
+      rv = HandlePositionedEvent(frame, aEvent, aEventStatus);
     }
 
-    return HandlePositionedEvent(frame, aEvent, aEventStatus);
+    // After HandlePositionedEvent we should reestablish
+    // content (which still live in tree) in some cases
+    if (sPointerEventEnabled && aTargetContent && ePointerEventClass == aEvent->mClass) {
+      if (!weakFrame.IsAlive()) {
+        shell->mPointerEventTarget.swap(*aTargetContent);
+      }
+    }
+
+    return rv;
   }
 
   nsresult rv = NS_OK;
@@ -7918,7 +7970,7 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent, nsEventStatus* aStatus)
   nsRefPtr<EventStateManager> manager = mPresContext->EventStateManager();
   nsresult rv = NS_OK;
 
-  if (!NS_EVENT_NEEDS_FRAME(aEvent) || GetCurrentEventFrame()) {
+  if (!NS_EVENT_NEEDS_FRAME(aEvent) || GetCurrentEventFrame() || GetCurrentEventContent()) {
     bool touchIsNew = false;
     bool isHandlingUserInput = false;
 
@@ -8031,7 +8083,8 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent, nsEventStatus* aStatus)
 
     // 1. Give event to event manager for pre event state changes and
     //    generation of synthetic events.
-    rv = manager->PreHandleEvent(mPresContext, aEvent, mCurrentEventFrame, aStatus);
+    rv = manager->PreHandleEvent(mPresContext, aEvent, mCurrentEventFrame,
+                                 mCurrentEventContent, aStatus);
 
     // 2. Give event to the DOM for third party and JS use.
     if (NS_SUCCEEDED(rv)) {
@@ -8145,9 +8198,9 @@ PresShell::DispatchEventToDOM(WidgetEvent* aEvent,
   }
   if (eventTarget) {
     if (aEvent->mClass == eCompositionEventClass) {
-      IMEStateManager::DispatchCompositionEvent(eventTarget,
-        mPresContext, aEvent->AsCompositionEvent(), aStatus,
-        eventCBPtr);
+      IMEStateManager::DispatchCompositionEvent(eventTarget, mPresContext,
+                                                aEvent->AsCompositionEvent(),
+                                                aStatus, eventCBPtr);
     } else if (aEvent->mClass == eKeyboardEventClass) {
       HandleKeyboardEvent(eventTarget, *(aEvent->AsKeyboardEvent()),
                           false, aStatus, eventCBPtr);
@@ -9087,8 +9140,6 @@ PresShell::DoReflow(nsIFrame* target, bool aInterruptible)
 #ifdef DEBUG
   mCurrentReflowRoot = target;
 #endif
-
-  target->WillReflow(mPresContext);
 
   // If the target frame is the root of the frame hierarchy, then
   // use all the available space. If it's simply a `reflow root',
@@ -10439,7 +10490,7 @@ static void RecurseIndiTotals(nsPresContext* aPresContext,
     printf("%s - %p   [%d][", name, (void*)aParentFrame, counter->mCount);
     printf("%d", counter->mCounter.GetTotal());
     printf("]\n");
-    nsMemory::Free(name);
+    free(name);
   }
 
   nsIFrame* child = aParentFrame->GetFirstPrincipalChild();
@@ -10459,7 +10510,7 @@ int ReflowCountMgr::DoSingleIndi(PLHashEntry *he, int i, void *arg)
     printf("%s - %p   [%d][", name, (void*)counter->mFrame, counter->mCount);
     printf("%d", counter->mCounter.GetTotal());
     printf("]\n");
-    nsMemory::Free(name);
+    free(name);
   }
   return HT_ENUMERATE_NEXT;
 }

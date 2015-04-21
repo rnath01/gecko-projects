@@ -407,7 +407,7 @@ DestroyUserData(void* aUserData)
 {
   TextRunUserData* userData = static_cast<TextRunUserData*>(aUserData);
   if (userData) {
-    nsMemory::Free(userData);
+    free(userData);
   }
 }
 
@@ -1896,7 +1896,7 @@ BuildTextRunsScanner::BuildTextRunForFrames(void* aTextBuffer)
     dummyData.mMappedFlows = &dummyMappedFlow;
   } else {
     userData = static_cast<TextRunUserData*>
-      (nsMemory::Alloc(sizeof(TextRunUserData) + mMappedFlows.Length()*sizeof(TextRunMappedFlow)));
+      (moz_xmalloc(sizeof(TextRunUserData) + mMappedFlows.Length()*sizeof(TextRunMappedFlow)));
     userDataToDestroy = userData;
     userData->mMappedFlows = reinterpret_cast<TextRunMappedFlow*>(userData + 1);
   }
@@ -2290,7 +2290,7 @@ BuildTextRunsScanner::SetupLineBreakerContext(gfxTextRun *aTextRun)
     dummyData.mMappedFlows = &dummyMappedFlow;
   } else {
     userData = static_cast<TextRunUserData*>
-      (nsMemory::Alloc(sizeof(TextRunUserData) + mMappedFlows.Length()*sizeof(TextRunMappedFlow)));
+      (moz_xmalloc(sizeof(TextRunUserData) + mMappedFlows.Length()*sizeof(TextRunMappedFlow)));
     userDataToDestroy = userData;
     userData->mMappedFlows = reinterpret_cast<TextRunMappedFlow*>(userData + 1);
   }
@@ -6122,8 +6122,9 @@ nsTextFrame::PaintText(nsRenderingContext* aRenderingContext, nsPoint aPt,
     return;
 
   PropertyProvider provider(this, iter, nsTextFrame::eInflated);
-  // Trim trailing whitespace
-  provider.InitializeForDisplay(true);
+  // Trim trailing whitespace, unless we're painting a selection highlight,
+  // which should include trailing spaces if present (bug 1146754).
+  provider.InitializeForDisplay(!IsSelected());
 
   gfxContext* ctx = aRenderingContext->ThebesContext();
   const bool rtl = mTextRun->IsRightToLeft();
@@ -7592,8 +7593,9 @@ nsTextFrame::AddInlinePrefISizeForFlow(nsRenderingContext *aRenderingContext,
       // XXXldb Shouldn't we be including the newline as part of the
       // segment that it ends rather than part of the segment that it
       // starts?
-      NS_ASSERTION(preformatNewlines,
-                   "We can't be here unless newlines are hard breaks");
+      NS_ASSERTION(preformatNewlines || preformatTabs,
+                   "We can't be here unless newlines are "
+                   "hard breaks or there are tabs");
       preformattedNewline = preformatNewlines && textRun->CharIsNewline(i);
       preformattedTab = preformatTabs && textRun->CharIsTab(i);
       if (!preformattedNewline && !preformattedTab) {
@@ -8003,6 +8005,7 @@ nsTextFrame::Reflow(nsPresContext*           aPresContext,
                     const nsHTMLReflowState& aReflowState,
                     nsReflowStatus&          aStatus)
 {
+  MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsTextFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aMetrics, aStatus);
 
@@ -8695,7 +8698,8 @@ nsTextFrame::RecomputeOverflow(nsIFrame* aBlockFrame)
     return result;
 
   PropertyProvider provider(this, iter, nsTextFrame::eInflated);
-  provider.InitializeForDisplay(true);
+  // Don't trim trailing space, in case we need to paint it as selected.
+  provider.InitializeForDisplay(false);
 
   gfxTextRun::Metrics textMetrics =
     mTextRun->MeasureText(provider.GetStart().GetSkippedOffset(),

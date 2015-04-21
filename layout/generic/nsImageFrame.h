@@ -324,7 +324,8 @@ private:
                     imgRequestProxy **aRequest);
 
   class IconLoad final : public nsIObserver,
-                             public imgINotificationObserver {
+                         public imgINotificationObserver
+  {
     // private class that wraps the data and logic needed for
     // broken image and loading image icons
   public:
@@ -400,7 +401,10 @@ public:
   virtual already_AddRefed<ImageContainer> GetContainer(LayerManager* aManager,
                                                         nsDisplayListBuilder* aBuilder) override;
 
-  gfxRect GetDestRect();
+  /**
+   * @return the dest rect we'll use when drawing this image, in app units.
+   */
+  nsRect GetDestRect(bool* aSnap = nullptr);
 
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
@@ -430,7 +434,8 @@ public:
    * Configure an ImageLayer for this display item.
    * Set the required filter and scaling transform.
    */
-  virtual void ConfigureLayer(ImageLayer* aLayer, const nsIntPoint& aOffset) override;
+  virtual void ConfigureLayer(ImageLayer* aLayer,
+                              const ContainerLayerParameters& aParameters) override;
 
   NS_DISPLAY_DECL_NAME("Image", TYPE_IMAGE)
 private:

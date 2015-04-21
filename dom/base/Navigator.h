@@ -19,7 +19,7 @@
 #include "nsString.h"
 #include "nsTArray.h"
 #ifdef MOZ_EME
-#include "mozilla/dom/MediaKeySystemAccess.h"
+#include "mozilla/dom/MediaKeySystemAccessManager.h"
 #endif
 
 class nsPluginArray;
@@ -43,10 +43,6 @@ struct MobileIdOptions;
 class ServiceWorkerContainer;
 }
 }
-
-#ifdef MOZ_B2G_RIL
-class nsIDOMMozIccManager;
-#endif // MOZ_B2G_RIL
 
 //*****************************************************************************
 // Navigator: Script "navigator" object
@@ -88,15 +84,16 @@ class BluetoothManager;
 #endif // MOZ_B2G_BT
 
 #ifdef MOZ_B2G_RIL
-class IccManager;
 class MobileConnectionArray;
 #endif
 
 class PowerManager;
 class CellBroadcast;
+class IccManager;
 class Telephony;
 class Voicemail;
 class TVManager;
+class InputPortManager;
 
 namespace time {
 class TimeManager;
@@ -109,8 +106,8 @@ class AudioChannelManager;
 } // namespace system
 
 class Navigator final : public nsIDOMNavigator
-                          , public nsIMozNavigatorNetwork
-                          , public nsWrapperCache
+                      , public nsIMozNavigatorNetwork
+                      , public nsWrapperCache
 {
 public:
   explicit Navigator(nsPIDOMWindow* aInnerWindow);
@@ -224,10 +221,12 @@ public:
                          ErrorResult& aRv);
   DesktopNotificationCenter* GetMozNotification(ErrorResult& aRv);
   CellBroadcast* GetMozCellBroadcast(ErrorResult& aRv);
+  IccManager* GetMozIccManager(ErrorResult& aRv);
   MobileMessageManager* GetMozMobileMessage();
   Telephony* GetMozTelephony(ErrorResult& aRv);
   Voicemail* GetMozVoicemail(ErrorResult& aRv);
   TVManager* GetTv();
+  InputPortManager* GetInputPortManager(ErrorResult& aRv);
   network::Connection* GetConnection(ErrorResult& aRv);
   nsDOMCameraManager* GetMozCameras(ErrorResult& aRv);
   MediaDevices* GetMediaDevices(ErrorResult& aRv);
@@ -243,7 +242,6 @@ public:
 #endif
 #ifdef MOZ_B2G_RIL
   MobileConnectionArray* GetMozMobileConnections(ErrorResult& aRv);
-  IccManager* GetMozIccManager(ErrorResult& aRv);
 #endif // MOZ_B2G_RIL
 #ifdef MOZ_GAMEPAD
   void GetGamepads(nsTArray<nsRefPtr<Gamepad> >& aGamepads, ErrorResult& aRv);
@@ -335,6 +333,8 @@ public:
   RequestMediaKeySystemAccess(const nsAString& aKeySystem,
                               const Optional<Sequence<MediaKeySystemOptions>>& aOptions,
                               ErrorResult& aRv);
+private:
+  nsRefPtr<MediaKeySystemAccessManager> mMediaKeySystemAccessManager;
 #endif
 
 private:
@@ -353,14 +353,15 @@ private:
 #endif
   nsRefPtr<PowerManager> mPowerManager;
   nsRefPtr<CellBroadcast> mCellBroadcast;
+  nsRefPtr<IccManager> mIccManager;
   nsRefPtr<MobileMessageManager> mMobileMessageManager;
   nsRefPtr<Telephony> mTelephony;
   nsRefPtr<Voicemail> mVoicemail;
   nsRefPtr<TVManager> mTVManager;
+  nsRefPtr<InputPortManager> mInputPortManager;
   nsRefPtr<network::Connection> mConnection;
 #ifdef MOZ_B2G_RIL
   nsRefPtr<MobileConnectionArray> mMobileConnections;
-  nsRefPtr<IccManager> mIccManager;
 #endif
 #ifdef MOZ_B2G_BT
   nsRefPtr<bluetooth::BluetoothManager> mBluetooth;

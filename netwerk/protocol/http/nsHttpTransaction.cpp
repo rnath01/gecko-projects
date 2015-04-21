@@ -1498,11 +1498,9 @@ nsHttpTransaction::HandleContentStart()
             LOG(("this response should not contain a body.\n"));
             break;
         case 421:
-            if (!mConnInfo->GetAuthenticationHost().IsEmpty()) {
-                LOG(("Misdirected Request.\n"));
-                gHttpHandler->ConnMgr()->
-                    ClearHostMapping(mConnInfo->GetHost(), mConnInfo->Port());
-            }
+            LOG(("Misdirected Request.\n"));
+            gHttpHandler->ConnMgr()->ClearHostMapping(mConnInfo);
+
             // retry on a new connection - just in case
             mCaps &= ~NS_HTTP_ALLOW_KEEPALIVE;
             mForceRestart = true; // force restart has built in loop protection
@@ -2166,36 +2164,41 @@ nsHttpTransaction::RestartVerifier::Set(int64_t contentLength,
     // forbidden
 
     // Only RestartInProgress with 200 response code
-    if (head->Status() != 200)
+    if (!head || (head->Status() != 200)) {
         return;
+    }
 
     mContentLength = contentLength;
 
-    if (head) {
-        const char *val;
-        val = head->PeekHeader(nsHttp::ETag);
-        if (val)
-            mETag.Assign(val);
-        val = head->PeekHeader(nsHttp::Last_Modified);
-        if (val)
-            mLastModified.Assign(val);
-        val = head->PeekHeader(nsHttp::Content_Range);
-        if (val)
-            mContentRange.Assign(val);
-        val = head->PeekHeader(nsHttp::Content_Encoding);
-        if (val)
-            mContentEncoding.Assign(val);
-        val = head->PeekHeader(nsHttp::Transfer_Encoding);
-        if (val)
-            mTransferEncoding.Assign(val);
-
-        // We can only restart with any confidence if we have a stored etag or
-        // last-modified header
-        if (mETag.IsEmpty() && mLastModified.IsEmpty())
-            return;
-
-        mSetup = true;
+    const char *val;
+    val = head->PeekHeader(nsHttp::ETag);
+    if (val) {
+        mETag.Assign(val);
     }
+    val = head->PeekHeader(nsHttp::Last_Modified);
+    if (val) {
+        mLastModified.Assign(val);
+    }
+    val = head->PeekHeader(nsHttp::Content_Range);
+    if (val) {
+        mContentRange.Assign(val);
+    }
+    val = head->PeekHeader(nsHttp::Content_Encoding);
+    if (val) {
+        mContentEncoding.Assign(val);
+    }
+    val = head->PeekHeader(nsHttp::Transfer_Encoding);
+    if (val) {
+        mTransferEncoding.Assign(val);
+    }
+
+    // We can only restart with any confidence if we have a stored etag or
+    // last-modified header
+    if (mETag.IsEmpty() && mLastModified.IsEmpty()) {
+        return;
+    }
+
+    mSetup = true;
 }
 
 } // namespace mozilla::net

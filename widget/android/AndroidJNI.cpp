@@ -812,6 +812,27 @@ cleanup:
 }
 
 NS_EXPORT void JNICALL
+Java_org_mozilla_gecko_GeckoAppShell_addPresentationSurface(JNIEnv* jenv, jclass, jobject surface)
+{
+    if (surface != NULL) {
+        void* window = AndroidBridge::Bridge()->AcquireNativeWindow(jenv, surface);
+        if (window) {
+            AndroidBridge::Bridge()->SetPresentationWindow(window);
+        }
+    }
+}
+
+NS_EXPORT void JNICALL
+Java_org_mozilla_gecko_GeckoAppShell_removePresentationSurface(JNIEnv* jenv, jclass, jobject surface)
+{
+    void* window = AndroidBridge::Bridge()->GetPresentationWindow();
+    if (window) {
+        AndroidBridge::Bridge()->SetPresentationWindow(nullptr);
+        AndroidBridge::Bridge()->ReleaseNativeWindow(window);
+    }
+}
+
+NS_EXPORT void JNICALL
 Java_org_mozilla_gecko_GeckoAppShell_onFullScreenPluginHidden(JNIEnv* jenv, jclass, jobject view)
 {
   class ExitFullScreenRunnable : public nsRunnable {
@@ -903,7 +924,7 @@ Java_org_mozilla_gecko_gfx_NativePanZoomController_init(JNIEnv* env, jobject ins
 
     const auto& newRef = NativePanZoomController::Ref::From(instance);
     NativePanZoomController::LocalRef oldRef =
-            APZCCallbackHandler::GetInstance()->SetNativePanZoomController(newRef);
+            APZCCallbackHandler::SetNativePanZoomController(newRef);
 
     MOZ_ASSERT(!oldRef, "Registering a new NPZC when we already have one");
 }
@@ -947,7 +968,7 @@ Java_org_mozilla_gecko_gfx_NativePanZoomController_destroy(JNIEnv* env, jobject 
     }
 
     NativePanZoomController::LocalRef oldRef =
-            APZCCallbackHandler::GetInstance()->SetNativePanZoomController(nullptr);
+            APZCCallbackHandler::SetNativePanZoomController(nullptr);
 
     MOZ_ASSERT(oldRef, "Clearing a non-existent NPZC");
 }

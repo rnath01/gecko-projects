@@ -12,6 +12,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
   "use strict";
 
   var FAILURE_DETAILS = loop.shared.utils.FAILURE_DETAILS;
+  var ROOM_INFO_FAILURES = loop.shared.utils.ROOM_INFO_FAILURES;
   var ROOM_STATES = loop.store.ROOM_STATES;
   var sharedActions = loop.shared.actions;
   var sharedMixins = loop.shared.mixins;
@@ -44,7 +45,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
         );
       }
       return (
-        <a href={loop.config.brandWebsiteUrl} className="btn btn-info">
+        <a href={loop.config.downloadFirefoxUrl} className="btn btn-info">
           {mozL10n.get("rooms_room_full_call_to_action_nonFx_label", {
             brandShortname: mozL10n.get("brandShortname")
           })}
@@ -194,6 +195,73 @@ loop.standaloneRoomViews = (function(mozL10n) {
           <p dangerouslySetInnerHTML={{__html: this._getContent()}}></p>
           <div className="footer-logo" />
         </footer>
+      );
+    }
+  });
+
+  var StandaloneRoomContextItem = React.createClass({
+    propTypes: {
+      receivingScreenShare: React.PropTypes.bool,
+      roomContextUrl: React.PropTypes.object
+    },
+
+    render: function() {
+      if (!this.props.roomContextUrl ||
+          !this.props.roomContextUrl.location) {
+        return null;
+      }
+
+      var location = this.props.roomContextUrl.location;
+
+      var cx = React.addons.classSet;
+
+      var classes = cx({
+        "standalone-context-url": true,
+        "screen-share-active": this.props.receivingScreenShare
+      });
+
+      return (
+        <div className={classes}>
+            <img src={this.props.roomContextUrl.thumbnail} />
+          <div className="standalone-context-url-description-wrapper">
+            {this.props.roomContextUrl.description}
+            <br /><a href={location}>{location}</a>
+          </div>
+        </div>
+      );
+    }
+  });
+
+  var StandaloneRoomContextView = React.createClass({
+    propTypes: {
+      receivingScreenShare: React.PropTypes.bool.isRequired,
+      roomContextUrls: React.PropTypes.array,
+      roomName: React.PropTypes.string,
+      roomInfoFailure: React.PropTypes.string
+    },
+
+    render: function() {
+      if (this.props.roomInfoFailure === ROOM_INFO_FAILURES.WEB_CRYPTO_UNSUPPORTED) {
+        return (<h2 className="room-info-failure">
+          {mozL10n.get("room_information_failure_unsupported_browser")}
+        </h2>);
+      } else if (this.props.roomInfoFailure) {
+        return (<h2 className="room-info-failure">
+          {mozL10n.get("room_information_failure_not_available")}
+        </h2>);
+      }
+
+      // We only support one item in the context Urls array for now.
+      var roomContextUrl = (this.props.roomContextUrls &&
+                            this.props.roomContextUrls.length > 0) ?
+                            this.props.roomContextUrls[0] : null;
+      return (
+        <div className="standalone-room-info">
+          <h2 className="room-name">{this.props.roomName}</h2>
+          <StandaloneRoomContextItem
+            receivingScreenShare={this.props.receivingScreenShare}
+            roomContextUrl={roomContextUrl} />
+        </div>
       );
     }
   });
@@ -458,7 +526,11 @@ loop.standaloneRoomViews = (function(mozL10n) {
                                   roomUsed={this.state.used} />
           <div className="video-layout-wrapper">
             <div className="conversation room-conversation">
-              <h2 className="room-name">{this.state.roomName}</h2>
+              <StandaloneRoomContextView
+                receivingScreenShare={this.state.receivingScreenShare}
+                roomContextUrls={this.state.roomContextUrls}
+                roomName={this.state.roomName}
+                roomInfoFailure={this.state.roomInfoFailure} />
               <div className="media nested">
                 <span className="self-view-hidden-message">
                   {mozL10n.get("self_view_hidden_message")}
@@ -491,6 +563,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
   });
 
   return {
+    StandaloneRoomContextView: StandaloneRoomContextView,
     StandaloneRoomView: StandaloneRoomView
   };
 })(navigator.mozL10n);

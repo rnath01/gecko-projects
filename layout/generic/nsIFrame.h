@@ -1279,18 +1279,20 @@ public:
   // Note that the primary offset can be after the secondary offset; for places
   // that need the beginning and end of the object, the StartOffset and 
   // EndOffset helpers can be used.
-  struct MOZ_STACK_CLASS ContentOffsets {
-    ContentOffsets();
-    ContentOffsets(const ContentOffsets&);
-    ~ContentOffsets();
-    nsCOMPtr<nsIContent> content;
+  struct MOZ_STACK_CLASS ContentOffsets
+  {
+    ContentOffsets() : offset(0)
+                     , secondaryOffset(0)
+                     , associate(mozilla::CARET_ASSOCIATE_BEFORE) {}
     bool IsNull() { return !content; }
-    int32_t offset;
-    int32_t secondaryOffset;
     // Helpers for places that need the ends of the offsets and expect them in
     // numerical order, as opposed to wanting the primary and secondary offsets
     int32_t StartOffset() { return std::min(offset, secondaryOffset); }
     int32_t EndOffset() { return std::max(offset, secondaryOffset); }
+
+    nsCOMPtr<nsIContent> content;
+    int32_t offset;
+    int32_t secondaryOffset;
     // This value indicates whether the associated content is before or after
     // the offset; the most visible use is to allow the caret to know which line
     // to display on.
@@ -1765,17 +1767,6 @@ public:
   virtual nsresult GetPrefWidthTightBounds(nsRenderingContext* aContext,
                                            nscoord* aX,
                                            nscoord* aXMost);
-
-  /**
-   * Pre-reflow hook. Before a frame is reflowed this method will be called.
-   * This call will always be invoked at least once before a subsequent Reflow
-   * and DidReflow call. It may be called more than once, In general you will
-   * receive on WillReflow notification before each Reflow request.
-   *
-   * XXX Is this really the semantics we want? Because we have the NS_FRAME_IN_REFLOW
-   * bit we can ensure we don't call it more than once...
-   */
-  virtual void WillReflow(nsPresContext* aPresContext) = 0;
 
   /**
    * The frame is given an available size and asked for its desired
@@ -3021,6 +3012,14 @@ private:
   }
 
 protected:
+  void MarkInReflow() {
+#ifdef DEBUG_dbaron_off
+    // bug 81268
+    NS_ASSERTION(!(mState & NS_FRAME_IN_REFLOW), "frame is already in reflow");
+#endif
+    mState |= NS_FRAME_IN_REFLOW;
+  }
+
   nsFrameState     mState;
 
   // When there is an overflow area only slightly larger than mRect,
@@ -3349,6 +3348,27 @@ nsFrameList::FrameLinkEnumerator::Next()
 {
   mPrev = mFrame;
   Enumerator::Next();
+}
+
+// Operators of nsFrameList::Iterator
+// ---------------------------------------------------
+
+inline nsFrameList::Iterator&
+nsFrameList::Iterator::operator++()
+{
+  mCurrent = mCurrent->GetNextSibling();
+  return *this;
+}
+
+inline nsFrameList::Iterator&
+nsFrameList::Iterator::operator--()
+{
+  if (!mCurrent) {
+    mCurrent = mList.LastChild();
+  } else {
+    mCurrent = mCurrent->GetPrevSibling();
+  }
+  return *this;
 }
 
 // Helper-functions for nsIFrame::SortFrameList()

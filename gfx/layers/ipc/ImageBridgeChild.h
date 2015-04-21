@@ -102,8 +102,8 @@ bool InImageBridgeChildThread();
  * CompositableHost with an AsyncID).
  */
 class ImageBridgeChild final : public PImageBridgeChild
-                                 , public CompositableForwarder
-                                 , public AsyncTransactionTrackersHolder
+                             , public CompositableForwarder
+                             , public AsyncTransactionTrackersHolder
 {
   friend class ImageContainer;
   typedef InfallibleTArray<AsyncParentMessageData> AsyncParentMessageArray;
@@ -221,10 +221,6 @@ public:
   virtual void UseOverlaySource(CompositableClient* aCompositable,
                                 const OverlaySource& aOverlay) override;
 #endif
-
-  virtual void SendFenceHandle(AsyncTransactionTracker* aTracker,
-                               PTextureChild* aTexture,
-                               const FenceHandle& aFence) override;
 
   virtual void RemoveTextureFromCompositable(CompositableClient* aCompositable,
                                              TextureClient* aTexture) override;

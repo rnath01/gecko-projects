@@ -31,7 +31,7 @@ class TelephonyDialCallback;
 class OwningTelephonyCallOrTelephonyCallGroup;
 
 class Telephony final : public DOMEventTargetHelper,
-                            private nsITelephonyListener
+                        private nsITelephonyListener
 {
   /**
    * Class Telephony doesn't actually expose nsITelephonyListener.
@@ -174,7 +174,8 @@ private:
   IsActiveState(uint16_t aCallState);
 
   uint32_t
-  ProvidedOrDefaultServiceId(const Optional<uint32_t>& aServiceId);
+  GetServiceId(const Optional<uint32_t>& aServiceId,
+               bool aGetIfActiveCall = false);
 
   bool
   HasDialingCall();

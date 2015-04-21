@@ -46,6 +46,7 @@ import org.mozilla.gecko.mozglue.GeckoLoader;
 import org.mozilla.gecko.preferences.ClearOnShutdownPref;
 import org.mozilla.gecko.preferences.GeckoPreferences;
 import org.mozilla.gecko.prompts.PromptService;
+import org.mozilla.gecko.tabqueue.TabQueueHelper;
 import org.mozilla.gecko.updater.UpdateServiceHelper;
 import org.mozilla.gecko.util.ActivityResultHandler;
 import org.mozilla.gecko.util.ActivityUtils;
@@ -522,16 +523,6 @@ public abstract class GeckoApp
         outState.putString(SAVED_STATE_PRIVATE_SESSION, mPrivateBrowsingSession);
     }
 
-    void handleClearHistory() {
-        final BrowserDB db = getProfile().getDB();
-        ThreadUtils.postToBackgroundThread(new Runnable() {
-            @Override
-            public void run() {
-                db.clearHistory(getContentResolver());
-            }
-        });
-    }
-
     public void addTab() { }
 
     public void addPrivateTab() { }
@@ -623,10 +614,6 @@ public abstract class GeckoApp
 
         } else if ("PrivateBrowsing:Data".equals(event)) {
             mPrivateBrowsingSession = message.optString("session", null);
-
-        } else if ("Sanitize:ClearHistory".equals(event)) {
-            handleClearHistory();
-            callback.sendSuccess(true);
 
         } else if ("Session:StatePurged".equals(event)) {
             onStatePurged();
@@ -1409,9 +1396,6 @@ public abstract class GeckoApp
             mLayerView = layerView;
             GeckoAppShell.sendEventToGecko(GeckoEvent.createObjectEvent(
                 GeckoEvent.ACTION_OBJECT_LAYER_CLIENT, layerView.getLayerClientObject()));
-
-            // bind the GeckoEditable instance to the new LayerView
-            GeckoAppShell.notifyIMEContext(GeckoEditableListener.IME_STATE_DISABLED, "", "", "");
         }
     }
 
@@ -1546,7 +1530,6 @@ public abstract class GeckoApp
             "Locale:Set",
             "Permissions:Data",
             "PrivateBrowsing:Data",
-            "Sanitize:ClearHistory",
             "Session:StatePurged",
             "Share:Text",
             "SystemUI:Visibility",
@@ -1827,10 +1810,38 @@ public abstract class GeckoApp
             String uri = intent.getDataString();
             Tabs.getInstance().loadUrl(uri);
         } else if (Intent.ACTION_VIEW.equals(action)) {
-            String uri = intent.getDataString();
-            Tabs.getInstance().loadUrl(uri, Tabs.LOADURL_NEW_TAB |
-                                            Tabs.LOADURL_USER_ENTERED |
-                                            Tabs.LOADURL_EXTERNAL);
+            // We need to ensure that if we receive a VIEW action and there are tabs queued then the
+            // site loaded from the intent is op top (last loaded) and selected with all other tabs
+            // being opened behind it. We process the tab queue first and request a callback from the JS - the
+            // listener will open the url from the intent as normal when the tab queue has been processed.
+            ThreadUtils.postToBackgroundThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (AppConstants.NIGHTLY_BUILD && AppConstants.MOZ_ANDROID_TAB_QUEUE
+                                && TabQueueHelper.shouldOpenTabQueueUrls(GeckoApp.this)) {
+
+                        EventDispatcher.getInstance().registerGeckoThreadListener(new NativeEventListener() {
+                            @Override
+                            public void handleMessage(String event, NativeJSObject message, EventCallback callback) {
+                                if ("Tabs:TabsOpened".equals(event)) {
+                                    EventDispatcher.getInstance().unregisterGeckoThreadListener(this, "Tabs:TabsOpened");
+                                    String uri = intent.getDataString();
+                                    Tabs.getInstance().loadUrl(uri, Tabs.LOADURL_NEW_TAB |
+                                                                            Tabs.LOADURL_USER_ENTERED |
+                                                                            Tabs.LOADURL_EXTERNAL);
+                                }
+                            }
+                        }, "Tabs:TabsOpened");
+
+                        TabQueueHelper.openQueuedUrls(GeckoApp.this, mProfile, TabQueueHelper.FILE_NAME, true);
+                    } else {
+                        String uri = intent.getDataString();
+                        Tabs.getInstance().loadUrl(uri, Tabs.LOADURL_NEW_TAB |
+                                                                Tabs.LOADURL_USER_ENTERED |
+                                                                Tabs.LOADURL_EXTERNAL);
+                    }
+                }
+            });
         } else if (ACTION_HOMESCREEN_SHORTCUT.equals(action)) {
             String uri = getURIFromIntent(intent);
             GeckoAppShell.sendEventToGecko(GeckoEvent.createBookmarkLoadEvent(uri));
@@ -2010,7 +2021,6 @@ public abstract class GeckoApp
             "Locale:Set",
             "Permissions:Data",
             "PrivateBrowsing:Data",
-            "Sanitize:ClearHistory",
             "Session:StatePurged",
             "Share:Text",
             "SystemUI:Visibility",

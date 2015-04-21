@@ -87,6 +87,7 @@ class nsIScriptGlobalObject;
 class nsIScriptSecurityManager;
 class nsIStringBundle;
 class nsIStringBundleService;
+class nsISupportsArray;
 class nsISupportsHashKey;
 class nsIURI;
 class nsIWidget;
@@ -102,6 +103,7 @@ class nsTextFragment;
 class nsViewportInfo;
 class nsWrapperCache;
 class nsAttrValue;
+class nsITransferable;
 
 struct JSPropertyDescriptor;
 struct JSRuntime;
@@ -120,10 +122,17 @@ namespace dom {
 class DocumentFragment;
 class Element;
 class EventTarget;
+class IPCDataTransfer;
 class NodeInfo;
+class nsIContentChild;
+class nsIContentParent;
 class Selection;
 class TabParent;
 } // namespace dom
+
+namespace gfx {
+class DataSourceSurface;
+} // namespace gfx
 
 namespace layers {
 class LayerManager;
@@ -1273,8 +1282,9 @@ public:
    * @param aResult the result. Out param.
    * @return false on out of memory errors, true otherwise.
    */
+  MOZ_WARN_UNUSED_RESULT
   static bool GetNodeTextContent(nsINode* aNode, bool aDeep,
-                                 nsAString& aResult) NS_WARN_UNUSED_RESULT;
+                                 nsAString& aResult);
 
   /**
    * Same as GetNodeTextContents but appends the result rather than sets it.
@@ -1749,8 +1759,9 @@ public:
    * @param aString the string to convert the newlines inside [in/out]
    */
   static void PlatformToDOMLineBreaks(nsString &aString);
-  static NS_WARN_UNUSED_RESULT bool PlatformToDOMLineBreaks(nsString &aString,
-                                                            const mozilla::fallible_t&);
+  MOZ_WARN_UNUSED_RESULT
+  static bool PlatformToDOMLineBreaks(nsString &aString,
+                                      const mozilla::fallible_t&);
 
   /**
    * Populates aResultString with the contents of the string-buffer aBuf, up
@@ -2278,6 +2289,7 @@ public:
    * otherwise it just outputs the hostname in aHost.
    */
   static void GetHostOrIPv6WithBrackets(nsIURI* aURI, nsAString& aHost);
+  static void GetHostOrIPv6WithBrackets(nsIURI* aURI, nsCString& aHost);
 
   /*
    * Call the given callback on all remote children of the given top-level
@@ -2286,6 +2298,23 @@ public:
   static void CallOnAllRemoteChildren(nsIDOMWindow* aWindow,
                                       CallOnRemoteChildFunction aCallback,
                                       void* aArg);
+
+  static void TransferablesToIPCTransferables(nsISupportsArray* aTransferables,
+                                              nsTArray<mozilla::dom::IPCDataTransfer>& aIPC,
+                                              mozilla::dom::nsIContentChild* aChild,
+                                              mozilla::dom::nsIContentParent* aParent);
+
+  static void TransferableToIPCTransferable(nsITransferable* aTransferable,
+                                            mozilla::dom::IPCDataTransfer* aIPCDataTransfer,
+                                            mozilla::dom::nsIContentChild* aChild,
+                                            mozilla::dom::nsIContentParent* aParent);
+
+  /*
+   * Get the pixel data from the given source surface and return it as a buffer.
+   * The length and stride will be assigned from the surface.
+   */
+  static mozilla::UniquePtr<char[]> GetSurfaceData(mozilla::gfx::DataSourceSurface* aSurface,
+                                                   size_t* aLength, int32_t* aStride);
 
 private:
   static bool InitializeEventTable();

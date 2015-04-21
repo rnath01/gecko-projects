@@ -6,12 +6,12 @@
 
 #include "nsNSSIOLayer.h"
 
-#include "pkix/ScopedPtr.h"
 #include "pkix/pkixtypes.h"
 #include "nsNSSComponent.h"
 #include "mozilla/BinarySearch.h"
 #include "mozilla/Casting.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/Telemetry.h"
 
 #include "prlog.h"
@@ -20,7 +20,6 @@
 #include "nsIPrefService.h"
 #include "nsIClientAuthDialogs.h"
 #include "nsClientAuthRemember.h"
-#include "nsISSLErrorListener.h"
 
 #include "nsNetUtil.h"
 #include "nsPrintfCString.h"
@@ -619,29 +618,6 @@ nsHandleSSLError(nsNSSSocketInfo* socketInfo,
     // If the socket has been flagged as canceled,
     // the code who did was responsible for setting the error code.
     return;
-  }
-
-  nsresult rv;
-  NS_DEFINE_CID(nssComponentCID, NS_NSSCOMPONENT_CID);
-  nsCOMPtr<nsINSSComponent> nssComponent(do_GetService(nssComponentCID, &rv));
-  if (NS_FAILED(rv))
-    return;
-
-  // Try to get a nsISSLErrorListener implementation from the socket consumer.
-  nsCOMPtr<nsIInterfaceRequestor> cb;
-  socketInfo->GetNotificationCallbacks(getter_AddRefs(cb));
-  if (cb) {
-    nsCOMPtr<nsISSLErrorListener> sel = do_GetInterface(cb);
-    if (sel) {
-      nsIInterfaceRequestor* csi = static_cast<nsIInterfaceRequestor*>(socketInfo);
-
-      nsCString hostWithPortString;
-      getSiteKey(socketInfo->GetHostName(), socketInfo->GetPort(),
-                 hostWithPortString);
-
-      bool suppressMessage = false; // obsolete, ignored
-      rv = sel->NotifySSLError(csi, err, hostWithPortString, &suppressMessage);
-    }
   }
 
   // We must cancel first, which sets the error code.
@@ -1995,7 +1971,7 @@ nsGetUserCertChoice(SSM_UserCertChoice* certChoice)
 
 loser:
   if (mode) {
-    nsMemory::Free(mode);
+    free(mode);
   }
   return ret;
 }
@@ -2337,8 +2313,8 @@ ClientAuthDataRunnable::RunOnTargetThread()
       NS_ASSERTION(nicknames->numnicknames == NumberOfCerts, "nicknames->numnicknames != NumberOfCerts");
 
       // Get CN and O of the subject and O of the issuer
-      mozilla::pkix::ScopedPtr<char, PORT_Free_string> ccn(
-        CERT_GetCommonName(&mServerCert->subject));
+      UniquePtr<char, void(&)(void*)>
+        ccn(CERT_GetCommonName(&mServerCert->subject), PORT_Free);
       NS_ConvertUTF8toUTF16 cn(ccn.get());
 
       int32_t port;
@@ -2366,13 +2342,13 @@ ClientAuthDataRunnable::RunOnTargetThread()
       if (cissuer) PORT_Free(cissuer);
 
       certNicknameList =
-        (char16_t**)nsMemory::Alloc(sizeof(char16_t*)* nicknames->numnicknames);
+        (char16_t**)moz_xmalloc(sizeof(char16_t*)* nicknames->numnicknames);
       if (!certNicknameList)
         goto loser;
       certDetailsList =
-        (char16_t**)nsMemory::Alloc(sizeof(char16_t*)* nicknames->numnicknames);
+        (char16_t**)moz_xmalloc(sizeof(char16_t*)* nicknames->numnicknames);
       if (!certDetailsList) {
-        nsMemory::Free(certNicknameList);
+        free(certNicknameList);
         goto loser;
       }
 
@@ -2397,7 +2373,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
           continue;
         certDetailsList[CertsToUse] = ToNewUnicode(details);
         if (!certDetailsList[CertsToUse]) {
-          nsMemory::Free(certNicknameList[CertsToUse]);
+          free(certNicknameList[CertsToUse]);
           continue;
         }
 
@@ -2555,11 +2531,6 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
       return NS_ERROR_FAILURE;
     }
   }
-
-  // Let's see if we're trying to connect to a site we know is
-  // TLS intolerant.
-  nsAutoCString key;
-  key = nsDependentCString(host) + NS_LITERAL_CSTRING(":") + nsPrintfCString("%d", port);
 
   SSLVersionRange range;
   if (SSL_VersionRangeGet(fd, &range) != SECSuccess) {

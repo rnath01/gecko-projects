@@ -76,6 +76,7 @@
 #define DEFAULT_THREAD_TIMEOUT_MS 30000
 #define PREF_STORAGE_WRITABLE_NAME \
   "device.storage.writable.name"
+#define STORAGE_CHANGE_EVENT "change"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -2175,6 +2176,7 @@ nsDOMDeviceStorageCursor::nsDOMDeviceStorageCursor(nsPIDOMWindow* aWindow,
   , mSince(aSince)
   , mFile(aFile)
   , mPrincipal(aPrincipal)
+  , mRequester(new nsContentPermissionRequester(GetOwner()))
 {
 }
 
@@ -2261,6 +2263,16 @@ nsDOMDeviceStorageCursor::Allow(JS::HandleValue aChoices)
 
   nsCOMPtr<nsIRunnable> event = new InitCursorEvent(this, mFile);
   target->Dispatch(event, NS_DISPATCH_NORMAL);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMDeviceStorageCursor::GetRequester(nsIContentPermissionRequester** aRequester)
+{
+  NS_ENSURE_ARG_POINTER(aRequester);
+
+  nsCOMPtr<nsIContentPermissionRequester> requester = mRequester;
+  requester.forget(aRequester);
   return NS_OK;
 }
 
@@ -2850,6 +2862,7 @@ public:
     , mFile(aFile)
     , mRequest(aRequest)
     , mDeviceStorage(aDeviceStorage)
+    , mRequester(new nsContentPermissionRequester(mWindow))
   {
     MOZ_ASSERT(mWindow);
     MOZ_ASSERT(mPrincipal);
@@ -2870,6 +2883,7 @@ public:
     , mFile(aFile)
     , mRequest(aRequest)
     , mBlob(aBlob)
+    , mRequester(new nsContentPermissionRequester(mWindow))
   {
     MOZ_ASSERT(mWindow);
     MOZ_ASSERT(mPrincipal);
@@ -2889,6 +2903,7 @@ public:
     , mFile(aFile)
     , mRequest(aRequest)
     , mDSFileDescriptor(aDSFileDescriptor)
+    , mRequester(new nsContentPermissionRequester(mWindow))
   {
     MOZ_ASSERT(mRequestType == DEVICE_STORAGE_REQUEST_CREATEFD);
     MOZ_ASSERT(mWindow);
@@ -3298,6 +3313,15 @@ public:
     return NS_OK;
   }
 
+  NS_IMETHOD GetRequester(nsIContentPermissionRequester** aRequester) override
+  {
+    NS_ENSURE_ARG_POINTER(aRequester);
+
+    nsCOMPtr<nsIContentPermissionRequester> requester = mRequester;
+    requester.forget(aRequester);
+    return NS_OK;
+  }
+
 private:
   ~DeviceStorageRequest() {}
 
@@ -3310,6 +3334,7 @@ private:
   nsCOMPtr<nsIDOMBlob> mBlob;
   nsRefPtr<nsDOMDeviceStorage> mDeviceStorage;
   nsRefPtr<DeviceStorageFileDescriptor> mDSFileDescriptor;
+  nsCOMPtr<nsIContentPermissionRequester> mRequester;
 };
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(DeviceStorageRequest)
@@ -3336,6 +3361,8 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 NS_IMPL_ADDREF_INHERITED(nsDOMDeviceStorage, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(nsDOMDeviceStorage, DOMEventTargetHelper)
 
+int nsDOMDeviceStorage::sInstanceCount = 0;
+
 nsDOMDeviceStorage::nsDOMDeviceStorage(nsPIDOMWindow* aWindow)
   : DOMEventTargetHelper(aWindow)
   , mIsShareable(false)
@@ -3343,6 +3370,8 @@ nsDOMDeviceStorage::nsDOMDeviceStorage(nsPIDOMWindow* aWindow)
   , mIsWatchingFile(false)
   , mAllowedToWatchFile(false)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+  sInstanceCount++;
 }
 
 /* virtual */ JSObject*
@@ -3366,6 +3395,8 @@ nsDOMDeviceStorage::Init(nsPIDOMWindow* aWindow, const nsAString &aType,
     return NS_ERROR_NOT_AVAILABLE;
   }
   if (!mStorageName.IsEmpty()) {
+    Preferences::AddStrongObserver(this, PREF_STORAGE_WRITABLE_NAME);
+    mIsDefaultLocation = Default();
     RegisterForSDCardChanges(this);
 
 #ifdef MOZ_WIDGET_GONK
@@ -3426,6 +3457,8 @@ nsDOMDeviceStorage::Init(nsPIDOMWindow* aWindow, const nsAString &aType,
 
 nsDOMDeviceStorage::~nsDOMDeviceStorage()
 {
+  MOZ_ASSERT(NS_IsMainThread());
+  sInstanceCount--;
 }
 
 void
@@ -3439,6 +3472,7 @@ nsDOMDeviceStorage::Shutdown()
   }
 
   if (!mStorageName.IsEmpty()) {
+    Preferences::RemoveObserver(this, PREF_STORAGE_WRITABLE_NAME);
     UnregisterForSDCardChanges(this);
   }
 
@@ -3511,7 +3545,7 @@ nsDOMDeviceStorage::CreateDeviceStorageFor(nsPIDOMWindow* aWin,
     *aStore = nullptr;
     return;
   }
-  NS_ADDREF(*aStore = ds.get());
+  ds.forget(aStore);
 }
 
 // static
@@ -4330,6 +4364,34 @@ nsDOMDeviceStorage::EnumerateInternal(const nsAString& aPath,
   return cursor.forget();
 }
 
+void
+nsDOMDeviceStorage::DispatchDefaultChangeEvent()
+{
+  nsAdoptingString DefaultLocation;
+  GetDefaultStorageName(mStorageType, DefaultLocation);
+
+  DeviceStorageChangeEventInit init;
+  init.mBubbles = true;
+  init.mCancelable = false;
+  init.mPath = DefaultLocation;
+
+  if (mIsDefaultLocation) {
+    init.mReason.AssignLiteral("default-location-changed");
+  } else {
+    init.mReason.AssignLiteral("became-default-location");
+  }
+
+  nsRefPtr<DeviceStorageChangeEvent> event =
+    DeviceStorageChangeEvent::Constructor(this,
+                                          NS_LITERAL_STRING(STORAGE_CHANGE_EVENT),
+                                          init);
+  event->SetTrusted(true);
+
+  bool ignore;
+  DispatchEvent(event, &ignore);
+  mIsDefaultLocation = Default();
+}
+
 #ifdef MOZ_WIDGET_GONK
 void
 nsDOMDeviceStorage::DispatchStatusChangeEvent(nsAString& aStatus)
@@ -4347,7 +4409,8 @@ nsDOMDeviceStorage::DispatchStatusChangeEvent(nsAString& aStatus)
   init.mReason = aStatus;
 
   nsRefPtr<DeviceStorageChangeEvent> event =
-    DeviceStorageChangeEvent::Constructor(this, NS_LITERAL_STRING("change"),
+    DeviceStorageChangeEvent::Constructor(this,
+                                          NS_LITERAL_STRING(STORAGE_CHANGE_EVENT),
                                           init);
   event->SetTrusted(true);
 
@@ -4408,6 +4471,14 @@ nsDOMDeviceStorage::Observe(nsISupports *aSubject,
     return NS_OK;
   }
 
+  if (!strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID) &&
+               aData &&
+               nsDependentString(aData).Equals(NS_LITERAL_STRING(PREF_STORAGE_WRITABLE_NAME)))
+  {
+    DispatchDefaultChangeEvent();
+    return NS_OK;
+  }
+
 #ifdef MOZ_WIDGET_GONK
   else if (!strcmp(aTopic, NS_VOLUME_STATE_CHANGED)) {
     // We invalidate the used space cache for the volume that actually changed
@@ -4465,7 +4536,8 @@ nsDOMDeviceStorage::Notify(const char* aReason, DeviceStorageFile* aFile)
   init.mReason.AssignWithConversion(aReason);
 
   nsRefPtr<DeviceStorageChangeEvent> event =
-    DeviceStorageChangeEvent::Constructor(this, NS_LITERAL_STRING("change"),
+    DeviceStorageChangeEvent::Constructor(this,
+                                          NS_LITERAL_STRING(STORAGE_CHANGE_EVENT),
                                           init);
   event->SetTrusted(true);
 

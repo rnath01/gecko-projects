@@ -30,16 +30,20 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/AutoTimelineMarker.h"
 #include "mozilla/Base64.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/LoadInfo.h"
 #include "mozilla/dom/DocumentFragment.h"
+#include "mozilla/dom/DOMTypes.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLMediaElement.h"
 #include "mozilla/dom/HTMLTemplateElement.h"
 #include "mozilla/dom/HTMLContentElement.h"
 #include "mozilla/dom/HTMLShadowElement.h"
+#include "mozilla/dom/ipc/BlobChild.h"
+#include "mozilla/dom/ipc/BlobParent.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/TabParent.h"
@@ -167,6 +171,7 @@
 #include "nsReferencedElement.h"
 #include "nsSandboxFlags.h"
 #include "nsScriptSecurityManager.h"
+#include "nsStreamUtils.h"
 #include "nsSVGFeatures.h"
 #include "nsTextEditorState.h"
 #include "nsTextFragment.h"
@@ -399,7 +404,7 @@ EventListenerManagerHashClearEntry(PLDHashTable *table, PLDHashEntryHdr *entry)
 }
 
 class SameOriginCheckerImpl final : public nsIChannelEventSink,
-                                        public nsIInterfaceRequestor
+                                    public nsIInterfaceRequestor
 {
   ~SameOriginCheckerImpl() {}
 
@@ -459,7 +464,12 @@ nsContentUtils::Init()
 
   sSecurityManager->GetSystemPrincipal(&sSystemPrincipal);
   MOZ_ASSERT(sSystemPrincipal);
-  NS_ADDREF(sNullSubjectPrincipal = new nsNullPrincipal());
+
+  // We use the constructor here because we want infallible initialization; we
+  // apparently don't care whether sNullSubjectPrincipal has a sane URI or not.
+  nsRefPtr<nsNullPrincipal> nullPrincipal = new nsNullPrincipal();
+  nullPrincipal->Init();
+  nullPrincipal.forget(&sNullSubjectPrincipal);
 
   nsresult rv = CallGetService(NS_IOSERVICE_CONTRACTID, &sIOService);
   if (NS_FAILED(rv)) {
@@ -4241,6 +4251,8 @@ nsContentUtils::ParseFragmentHTML(const nsAString& aSourceBuffer,
                                   bool aQuirks,
                                   bool aPreventScriptExecution)
 {
+  AutoTimelineMarker m(aTargetNode->OwnerDoc()->GetDocShell(), "Parse HTML");
+
   if (nsContentUtils::sFragmentParsingActive) {
     NS_NOTREACHED("Re-entrant fragment parsing attempted.");
     return NS_ERROR_DOM_INVALID_STATE_ERR;
@@ -4267,6 +4279,8 @@ nsContentUtils::ParseDocumentHTML(const nsAString& aSourceBuffer,
                                   nsIDocument* aTargetDocument,
                                   bool aScriptingEnabledForNoscriptParsing)
 {
+  AutoTimelineMarker m(aTargetDocument->GetDocShell(), "Parse HTML");
+
   if (nsContentUtils::sFragmentParsingActive) {
     NS_NOTREACHED("Re-entrant fragment parsing attempted.");
     return NS_ERROR_DOM_INVALID_STATE_ERR;
@@ -4292,6 +4306,8 @@ nsContentUtils::ParseFragmentXML(const nsAString& aSourceBuffer,
                                  bool aPreventScriptExecution,
                                  nsIDOMDocumentFragment** aReturn)
 {
+  AutoTimelineMarker m(aDocument->GetDocShell(), "Parse XML");
+
   if (nsContentUtils::sFragmentParsingActive) {
     NS_NOTREACHED("Re-entrant fragment parsing attempted.");
     return NS_ERROR_DOM_INVALID_STATE_ERR;
@@ -5021,7 +5037,7 @@ static bool sRemovingScriptBlockers = false;
 void
 nsContentUtils::RemoveScriptBlocker()
 {
-  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(!sRemovingScriptBlockers);
   NS_ASSERTION(sScriptBlockerCount != 0, "Negative script blockers");
   --sScriptBlockerCount;
@@ -6052,7 +6068,7 @@ nsContentUtils::CreateBlobBuffer(JSContext* aCx,
                                  JS::MutableHandle<JS::Value> aBlob)
 {
   uint32_t blobLen = aData.Length();
-  void* blobData = moz_malloc(blobLen);
+  void* blobData = malloc(blobLen);
   nsRefPtr<File> blob;
   if (blobData) {
     memcpy(blobData, aData.BeginReading(), blobLen);
@@ -7124,22 +7140,27 @@ nsContentUtils::GetInnerWindowID(nsIRequest* aRequest)
 }
 
 void
-nsContentUtils::GetHostOrIPv6WithBrackets(nsIURI* aURI, nsAString& aHost)
+nsContentUtils::GetHostOrIPv6WithBrackets(nsIURI* aURI, nsCString& aHost)
 {
   aHost.Truncate();
-  nsAutoCString hostname;
-  nsresult rv = aURI->GetHost(hostname);
+  nsresult rv = aURI->GetHost(aHost);
   if (NS_FAILED(rv)) { // Some URIs do not have a host
     return;
   }
 
-  if (hostname.FindChar(':') != -1) { // Escape IPv6 address
-    MOZ_ASSERT(!hostname.Length() ||
-      (hostname[0] !='[' && hostname[hostname.Length() - 1] != ']'));
-    hostname.Insert('[', 0);
-    hostname.Append(']');
+  if (aHost.FindChar(':') != -1) { // Escape IPv6 address
+    MOZ_ASSERT(!aHost.Length() ||
+      (aHost[0] !='[' && aHost[aHost.Length() - 1] != ']'));
+    aHost.Insert('[', 0);
+    aHost.Append(']');
   }
+}
 
+void
+nsContentUtils::GetHostOrIPv6WithBrackets(nsIURI* aURI, nsAString& aHost)
+{
+  nsAutoCString hostname;
+  GetHostOrIPv6WithBrackets(aURI, hostname);
   CopyUTF8toUTF16(hostname, aHost);
 }
 
@@ -7192,3 +7213,181 @@ nsContentUtils::CallOnAllRemoteChildren(nsIDOMWindow* aWindow,
   }
 }
 
+void
+nsContentUtils::TransferablesToIPCTransferables(nsISupportsArray* aTransferables,
+                                                nsTArray<IPCDataTransfer>& aIPC,
+                                                mozilla::dom::nsIContentChild* aChild,
+                                                mozilla::dom::nsIContentParent* aParent)
+{
+  aIPC.Clear();
+  if (aTransferables) {
+    uint32_t transferableCount = 0;
+    aTransferables->Count(&transferableCount);
+    for (uint32_t i = 0; i < transferableCount; ++i) {
+      IPCDataTransfer* dt = aIPC.AppendElement();
+      nsCOMPtr<nsISupports> genericItem;
+      aTransferables->GetElementAt(i, getter_AddRefs(genericItem));
+      nsCOMPtr<nsITransferable> transferable(do_QueryInterface(genericItem));
+      TransferableToIPCTransferable(transferable, dt, aChild, aParent);
+    }
+  }
+}
+
+void
+nsContentUtils::TransferableToIPCTransferable(nsITransferable* aTransferable,
+                                              IPCDataTransfer* aIPCDataTransfer,
+                                              mozilla::dom::nsIContentChild* aChild,
+                                              mozilla::dom::nsIContentParent* aParent)
+{
+  MOZ_ASSERT((aChild && !aParent) || (!aChild && aParent));
+
+  if (aTransferable) {
+    nsCOMPtr<nsISupportsArray> flavorList;
+    aTransferable->FlavorsTransferableCanExport(getter_AddRefs(flavorList));
+    if (flavorList) {
+      uint32_t flavorCount = 0;
+      flavorList->Count(&flavorCount);
+      for (uint32_t j = 0; j < flavorCount; ++j) {
+        nsCOMPtr<nsISupportsCString> flavor = do_QueryElementAt(flavorList, j);
+        if (!flavor) {
+          continue;
+        }
+
+        nsAutoCString flavorStr;
+        flavor->GetData(flavorStr);
+        if (!flavorStr.Length()) {
+          continue;
+        }
+
+        nsCOMPtr<nsISupports> data;
+        uint32_t dataLen = 0;
+        aTransferable->GetTransferData(flavorStr.get(), getter_AddRefs(data), &dataLen);
+
+        nsCOMPtr<nsISupportsString> text = do_QueryInterface(data);
+        nsCOMPtr<nsISupportsCString> ctext = do_QueryInterface(data);
+        if (text) {
+          nsAutoString dataAsString;
+          text->GetData(dataAsString);
+          IPCDataTransferItem* item = aIPCDataTransfer->items().AppendElement();
+          item->flavor() = nsCString(flavorStr);
+          item->data() = nsString(dataAsString);
+        } else if (ctext) {
+          nsAutoCString dataAsString;
+          ctext->GetData(dataAsString);
+          IPCDataTransferItem* item = aIPCDataTransfer->items().AppendElement();
+          item->flavor() = nsCString(flavorStr);
+          item->data() = nsCString(dataAsString);
+        } else {
+          nsCOMPtr<nsISupportsInterfacePointer> sip =
+            do_QueryInterface(data);
+          if (sip) {
+            sip->GetData(getter_AddRefs(data));
+          }
+
+          // Images to be pasted on the clipboard are nsIInputStreams
+          nsCOMPtr<nsIInputStream> stream(do_QueryInterface(data));
+          if (stream) {
+            IPCDataTransferItem* item = aIPCDataTransfer->items().AppendElement();
+            item->flavor() = nsCString(flavorStr);
+
+            nsCString imageData;
+            NS_ConsumeStream(stream, UINT32_MAX, imageData);
+            item->data() = imageData;
+            continue;
+          }
+
+          // Images to be placed on the clipboard are imgIContainers.
+          nsCOMPtr<imgIContainer> image(do_QueryInterface(data));
+          if (image) {
+            RefPtr<mozilla::gfx::SourceSurface> surface =
+              image->GetFrame(imgIContainer::FRAME_CURRENT,
+                              imgIContainer::FLAG_SYNC_DECODE);
+
+            mozilla::RefPtr<mozilla::gfx::DataSourceSurface> dataSurface =
+              surface->GetDataSurface();
+            size_t length;
+            int32_t stride;
+            mozilla::UniquePtr<char[]> surfaceData =
+              nsContentUtils::GetSurfaceData(dataSurface, &length, &stride);
+            
+            IPCDataTransferItem* item = aIPCDataTransfer->items().AppendElement();
+            item->flavor() = nsCString(flavorStr);
+            item->data() = nsCString(surfaceData.get(), length);
+
+            IPCDataTransferImage& imageDetails = item->imageDetails();
+            mozilla::gfx::IntSize size = dataSurface->GetSize();
+            imageDetails.width() = size.width;
+            imageDetails.height() = size.height;
+            imageDetails.stride() = stride;
+            imageDetails.format() = static_cast<uint8_t>(dataSurface->GetFormat());
+
+            continue;
+          }
+
+          // Otherwise, handle this as a file.
+          nsCOMPtr<FileImpl> fileImpl;
+          nsCOMPtr<nsIFile> file = do_QueryInterface(data);
+          if (file) {
+            fileImpl = new FileImplFile(file, false);
+            ErrorResult rv;
+            fileImpl->GetSize(rv);
+            fileImpl->GetLastModified(rv);
+          } else {
+            fileImpl = do_QueryInterface(data);
+          }
+          if (fileImpl) {
+            IPCDataTransferItem* item = aIPCDataTransfer->items().AppendElement();
+            item->flavor() = nsCString(flavorStr);
+            if (aChild) {
+              item->data() =
+                mozilla::dom::BlobChild::GetOrCreate(aChild,
+                  static_cast<FileImpl*>(fileImpl.get()));
+            } else if (aParent) {
+              item->data() =
+                mozilla::dom::BlobParent::GetOrCreate(aParent,
+                  static_cast<FileImpl*>(fileImpl.get()));
+            }
+          } else {
+            // This is a hack to support kFilePromiseMime.
+            // On Windows there just needs to be an entry for it, 
+            // and for OSX we need to create
+            // nsContentAreaDragDropDataProvider as nsIFlavorDataProvider.
+            if (flavorStr.EqualsLiteral(kFilePromiseMime)) {
+              IPCDataTransferItem* item = aIPCDataTransfer->items().AppendElement();
+              item->flavor() = nsCString(flavorStr);
+              item->data() = NS_ConvertUTF8toUTF16(flavorStr);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+mozilla::UniquePtr<char[]>
+nsContentUtils::GetSurfaceData(mozilla::gfx::DataSourceSurface* aSurface,
+                               size_t* aLength, int32_t* aStride)
+{
+  mozilla::gfx::DataSourceSurface::MappedSurface map;
+  aSurface->Map(mozilla::gfx::DataSourceSurface::MapType::READ, &map);
+  mozilla::gfx::IntSize size = aSurface->GetSize();
+  mozilla::CheckedInt32 requiredBytes =
+    mozilla::CheckedInt32(map.mStride) * mozilla::CheckedInt32(size.height);
+  size_t maxBufLen = requiredBytes.isValid() ? requiredBytes.value() : 0;
+  mozilla::gfx::SurfaceFormat format = aSurface->GetFormat();
+
+  // Surface data handling is totally nuts. This is the magic one needs to
+  // know to access the data.
+  size_t bufLen = maxBufLen - map.mStride + (size.width * BytesPerPixel(format));
+
+  // nsDependentCString wants null-terminated string.
+  mozilla::UniquePtr<char[]> surfaceData(new char[maxBufLen + 1]);
+  memcpy(surfaceData.get(), reinterpret_cast<char*>(map.mData), bufLen);
+  memset(surfaceData.get() + bufLen, 0, maxBufLen - bufLen + 1);
+
+  *aLength = maxBufLen;
+  *aStride = map.mStride;
+
+  aSurface->Unmap();
+  return surfaceData;
+}

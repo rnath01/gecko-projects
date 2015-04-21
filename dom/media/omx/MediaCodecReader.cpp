@@ -500,13 +500,13 @@ MediaCodecReader::DecodeVideoFrameTask(int64_t aTimeThreshold)
 bool
 MediaCodecReader::HasAudio()
 {
-  return mInfo.mAudio.mHasAudio;
+  return mInfo.HasAudio();
 }
 
 bool
 MediaCodecReader::HasVideo()
 {
-  return mInfo.mVideo.mHasVideo;
+  return mInfo.HasVideo();
 }
 
 void
@@ -658,7 +658,7 @@ nsresult
 MediaCodecReader::ReadMetadata(MediaInfo* aInfo,
                                MetadataTags** aTags)
 {
-  MOZ_ASSERT(mDecoder->OnDecodeThread(), "Should be on decode thread.");
+  MOZ_ASSERT(OnTaskQueue());
 
   if (!ReallocateResources()) {
     return NS_ERROR_FAILURE;
@@ -1031,7 +1031,7 @@ MediaCodecReader::DecodeVideoFrameSync(int64_t aTimeThreshold)
 nsRefPtr<MediaDecoderReader::SeekPromise>
 MediaCodecReader::Seek(int64_t aTime, int64_t aEndTime)
 {
-  MOZ_ASSERT(mDecoder->OnDecodeThread(), "Should be on decode thread.");
+  MOZ_ASSERT(OnTaskQueue());
 
   mVideoTrack.mSeekTimeUs = aTime;
   mAudioTrack.mSeekTimeUs = aTime;
@@ -1322,7 +1322,7 @@ MediaCodecReader::CreateMediaCodec(sp<ALooper>& aLooper,
 
     const char* mime;
     if (sourceFormat->findCString(kKeyMIMEType, &mime)) {
-      aTrack.mCodec = MediaCodecProxy::CreateByType(aLooper, mime, false, aAsync, aListener);
+      aTrack.mCodec = MediaCodecProxy::CreateByType(aLooper, mime, false, aListener);
     }
 
     if (aTrack.mCodec == nullptr) {
@@ -1556,7 +1556,6 @@ MediaCodecReader::UpdateAudioInfo()
   }
 
   // Update AudioInfo
-  mInfo.mAudio.mHasAudio = true;
   mInfo.mAudio.mChannels = codec_channel_count;
   mInfo.mAudio.mRate = codec_sample_rate;
 
@@ -1663,7 +1662,6 @@ MediaCodecReader::UpdateVideoInfo()
   }
 
   // Update VideoInfo
-  mInfo.mVideo.mHasVideo = true;
   mVideoTrack.mPictureRect = picture_rect;
   mInfo.mVideo.mDisplay = display_size;
   mVideoTrack.mRelativePictureRect = relative_picture_rect;

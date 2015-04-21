@@ -230,16 +230,12 @@ protected:
       PROMISE_LOG("%s Then() call made from %s [Runnable=%p, Promise=%p, ThenValue=%p]",
                   resolved ? "Resolving" : "Rejecting", ThenValueBase::mCallSite,
                   runnable.get(), aPromise, this);
-      nsresult rv = mResponseTarget->Dispatch(runnable.forget());
 
-      // NB: mDisconnected is only supposed to be accessed on the dispatch
-      // thread. However, we require the consumer to have disconnected any
-      // oustanding promise requests _before_ initiating shutdown on the
-      // thread or task queue. So the only non-buggy scenario for dispatch
-      // failing involves the target thread being unable to manipulate the
-      // ThenValue (since it's been disconnected), so it's safe to read here.
-      MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv) || Consumer::mDisconnected);
-      unused << rv;
+      // Promise consumers are allowed to disconnect the Consumer object and
+      // then shut down the thread or task queue that the promise result would
+      // be dispatched on. So we unfortunately can't assert that promise
+      // dispatch succeeds. :-(
+      mResponseTarget->Dispatch(runnable.forget(), AbstractThread::DontAssertDispatchSuccess);
     }
 
 #ifdef DEBUG
@@ -306,17 +302,16 @@ protected:
   };
 public:
 
-  template<typename TargetType, typename ThisType,
-           typename ResolveMethodType, typename RejectMethodType>
-  already_AddRefed<Consumer> RefableThen(TargetType* aResponseTarget, const char* aCallSite, ThisType* aThisVal,
+  template<typename ThisType, typename ResolveMethodType, typename RejectMethodType>
+  already_AddRefed<Consumer> RefableThen(AbstractThread* aResponseThread, const char* aCallSite, ThisType* aThisVal,
                                          ResolveMethodType aResolveMethod, RejectMethodType aRejectMethod)
   {
     MutexAutoLock lock(mMutex);
+    MOZ_ASSERT(aResponseThread->IsDispatchReliable());
     MOZ_DIAGNOSTIC_ASSERT(!IsExclusive || !mHaveConsumer);
     mHaveConsumer = true;
-    nsRefPtr<AbstractThread> responseTarget = AbstractThread::Create(aResponseTarget);
     nsRefPtr<ThenValueBase> thenValue = new ThenValue<ThisType, ResolveMethodType, RejectMethodType>(
-                                              responseTarget, aThisVal, aResolveMethod, aRejectMethod, aCallSite);
+                                              aResponseThread, aThisVal, aResolveMethod, aRejectMethod, aCallSite);
     PROMISE_LOG("%s invoking Then() [this=%p, thenValue=%p, aThisVal=%p, isPending=%d]",
                 aCallSite, this, thenValue.get(), aThisVal, (int) IsPending());
     if (!IsPending()) {
@@ -328,13 +323,12 @@ public:
     return thenValue.forget();
   }
 
-  template<typename TargetType, typename ThisType,
-           typename ResolveMethodType, typename RejectMethodType>
-  void Then(TargetType* aResponseTarget, const char* aCallSite, ThisType* aThisVal,
+  template<typename ThisType, typename ResolveMethodType, typename RejectMethodType>
+  void Then(AbstractThread* aResponseThread, const char* aCallSite, ThisType* aThisVal,
             ResolveMethodType aResolveMethod, RejectMethodType aRejectMethod)
   {
     nsRefPtr<Consumer> c =
-      RefableThen(aResponseTarget, aCallSite, aThisVal, aResolveMethod, aRejectMethod);
+      RefableThen(aResponseThread, aCallSite, aThisVal, aResolveMethod, aRejectMethod);
     return;
   }
 
@@ -489,6 +483,7 @@ public:
     mPromise = nullptr;
   }
 
+
   void ResolveIfExists(typename PromiseType::ResolveValueType aResolveValue,
                        const char* aMethodName)
   {
@@ -507,6 +502,7 @@ public:
     mPromise->Reject(aRejectValue, aMethodName);
     mPromise = nullptr;
   }
+
 
   void RejectIfExists(typename PromiseType::RejectValueType aRejectValue,
                       const char* aMethodName)
@@ -646,24 +642,22 @@ private:
   nsAutoPtr<MethodCallBase<PromiseType>> mMethodCall;
 };
 
-template<typename PromiseType, typename TargetType>
+template<typename PromiseType>
 static nsRefPtr<PromiseType>
-ProxyInternal(TargetType* aTarget, MethodCallBase<PromiseType>* aMethodCall, const char* aCallerName)
+ProxyInternal(AbstractThread* aTarget, MethodCallBase<PromiseType>* aMethodCall, const char* aCallerName)
 {
-  nsRefPtr<AbstractThread> target = AbstractThread::Create(aTarget);
   nsRefPtr<typename PromiseType::Private> p = new (typename PromiseType::Private)(aCallerName);
   nsRefPtr<ProxyRunnable<PromiseType>> r = new ProxyRunnable<PromiseType>(p, aMethodCall);
-  nsresult rv = target->Dispatch(r.forget());
-  MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
-  unused << rv;
+  MOZ_ASSERT(aTarget->IsDispatchReliable());
+  aTarget->Dispatch(r.forget());
   return Move(p);
 }
 
 } // namespace detail
 
-template<typename PromiseType, typename TargetType, typename ThisType>
+template<typename PromiseType, typename ThisType>
 static nsRefPtr<PromiseType>
-ProxyMediaCall(TargetType* aTarget, ThisType* aThisVal, const char* aCallerName,
+ProxyMediaCall(AbstractThread* aTarget, ThisType* aThisVal, const char* aCallerName,
                nsRefPtr<PromiseType>(ThisType::*aMethod)())
 {
   typedef detail::MethodCallWithNoArgs<PromiseType, ThisType> MethodCallType;
@@ -671,9 +665,9 @@ ProxyMediaCall(TargetType* aTarget, ThisType* aThisVal, const char* aCallerName,
   return detail::ProxyInternal(aTarget, methodCall, aCallerName);
 }
 
-template<typename PromiseType, typename TargetType, typename ThisType, typename Arg1Type>
+template<typename PromiseType, typename ThisType, typename Arg1Type>
 static nsRefPtr<PromiseType>
-ProxyMediaCall(TargetType* aTarget, ThisType* aThisVal, const char* aCallerName,
+ProxyMediaCall(AbstractThread* aTarget, ThisType* aThisVal, const char* aCallerName,
                nsRefPtr<PromiseType>(ThisType::*aMethod)(Arg1Type), Arg1Type aArg1)
 {
   typedef detail::MethodCallWithOneArg<PromiseType, ThisType, Arg1Type> MethodCallType;
@@ -681,10 +675,9 @@ ProxyMediaCall(TargetType* aTarget, ThisType* aThisVal, const char* aCallerName,
   return detail::ProxyInternal(aTarget, methodCall, aCallerName);
 }
 
-template<typename PromiseType, typename TargetType, typename ThisType,
-         typename Arg1Type, typename Arg2Type>
+template<typename PromiseType, typename ThisType, typename Arg1Type, typename Arg2Type>
 static nsRefPtr<PromiseType>
-ProxyMediaCall(TargetType* aTarget, ThisType* aThisVal, const char* aCallerName,
+ProxyMediaCall(AbstractThread* aTarget, ThisType* aThisVal, const char* aCallerName,
                nsRefPtr<PromiseType>(ThisType::*aMethod)(Arg1Type, Arg2Type), Arg1Type aArg1, Arg2Type aArg2)
 {
   typedef detail::MethodCallWithTwoArgs<PromiseType, ThisType, Arg1Type, Arg2Type> MethodCallType;

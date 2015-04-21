@@ -156,6 +156,9 @@ user_pref("layout.css.ruby.enabled", true);
 // Enable CSS Font Loading API for testing
 user_pref("layout.css.font-loading-api.enabled", true);
 
+// Enable unicode-range for testing
+user_pref("layout.css.unicode-range.enabled", true);
+
 // Disable spammy layout warnings because they pollute test logs
 user_pref("layout.spammy_warnings.enabled", false);
 
@@ -214,6 +217,9 @@ user_pref("general.useragent.updates.enabled", false);
 
 // Disable webapp updates.  Yes, it is supposed to be an integer.
 user_pref("browser.webapps.checkForUpdates", 0);
+
+// Enable debug logging in the tcp presentation server.
+user_pref("dom.presentation.tcp_server.debug", true);
 
 // Don't connect to Yahoo! for RSS feed tests.
 // en-US only uses .types.0.uri, but set all of them just to be sure.
@@ -301,9 +307,18 @@ user_pref("media.decoder.heuristic.dormant.timeout", 0);
 user_pref("browser.displayedE10SPrompt.1", 5);
 // Don't use auto-enabled e10s
 user_pref("browser.tabs.remote.autostart.1", false);
+user_pref("browser.tabs.remote.autostart.2", false);
 // Don't forceably kill content processes after a timeout
 user_pref("dom.ipc.tabs.shutdownTimeoutSecs", 0);
+
+// Avoid performing Readinglist Intro during tests.
+user_pref("browser.readinglist.introShown", true);
 
 // Don't let PAC generator to set PAC, as mochitest framework has its own PAC
 // rules during testing.
 user_pref("network.proxy.pac_generator", false);
+
+// Make tests run consistently on DevEdition (which has a lightweight theme
+// selected by default).
+user_pref("lightweightThemes.selectedThemeID", "");
+user_pref("browser.devedition.theme.enabled", false);

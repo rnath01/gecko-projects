@@ -149,6 +149,7 @@ class RefTest(object):
             break
         dirs.add(path)
         path = os.path.split(path)[0]
+    mozinfo.find_and_update_from_json(*dirs)
 
   def getFullPath(self, path):
     "Get an absolute path relative to self.oldcwd."
@@ -205,6 +206,9 @@ class RefTest(object):
     # Ensure that telemetry is disabled, so we don't connect to the telemetry
     # server in the middle of the tests.
     prefs['toolkit.telemetry.enabled'] = False
+    # Don't send Telemetry reports to the production server. This is
+    # needed as Telemetry sends pings also if FHR upload is enabled.
+    prefs['toolkit.telemetry.server'] = 'http://%(server)s/telemetry-dummy/'
     # Likewise for safebrowsing.
     prefs['browser.safebrowsing.enabled'] = False
     prefs['browser.safebrowsing.malware.enabled'] = False
@@ -222,6 +226,7 @@ class RefTest(object):
 
     #Don't use auto-enabled e10s
     prefs['browser.tabs.remote.autostart.1'] = False
+    prefs['browser.tabs.remote.autostart.2'] = False
     if options.e10s:
       prefs['browser.tabs.remote.autostart'] = True
 
@@ -813,7 +818,10 @@ class ReftestOptions(OptionParser):
       if options.debugger is not None:
         self.error("cannot specify a debugger with parallel tests")
 
-    options.leakThresholds = {"default": options.defaultLeakThreshold}
+    options.leakThresholds = {
+        "default": options.defaultLeakThreshold,
+        "tab": 25000,  # See dependencies of bug 1051230.
+    }
 
     return options
 

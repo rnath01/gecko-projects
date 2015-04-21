@@ -25,6 +25,7 @@ const Telemetry = require("devtools/shared/telemetry");
 const {RuntimeScanners, WiFiScanner} = require("devtools/webide/runtimes");
 const {showDoorhanger} = require("devtools/shared/doorhanger");
 const ProjectList = require("devtools/webide/project-list");
+const {Simulators} = require("devtools/webide/simulators");
 
 const Strings = Services.strings.createBundle("chrome://browser/locale/devtools/webide.properties");
 
@@ -37,6 +38,7 @@ const MIN_ZOOM = 0.6;
 // Download remote resources early
 getJSON("devtools.webide.addonsURL", true);
 getJSON("devtools.webide.templatesURL", true);
+getJSON("devtools.devices.url", true);
 
 // See bug 989619
 console.log = console.log.bind(console);
@@ -117,12 +119,16 @@ let UI = {
     this.contentViewer.fullZoom = Services.prefs.getCharPref("devtools.webide.zoom");
 
     gDevToolsBrowser.isWebIDEInitialized.resolve();
+
+    this.configureSimulator = this.configureSimulator.bind(this);
+    Simulators.on("configure", this.configureSimulator);
   },
 
   destroy: function() {
     window.removeEventListener("focus", this.onfocus, true);
     AppManager.off("app-manager-update", this.appManagerUpdate);
     AppManager.destroy();
+    Simulators.off("configure", this.configureSimulator);
     projectList = null;
     window.removeEventListener("message", this.onMessage);
     this.updateConnectionTelemetry();
@@ -156,8 +162,9 @@ let UI = {
 
   appManagerUpdate: function(event, what, details) {
     // Got a message from app-manager.js
+    // See AppManager.update() for descriptions of what these events mean.
     switch (what) {
-      case "runtimelist":
+      case "runtime-list":
         this.updateRuntimeList();
         this.autoConnectRuntime();
         break;
@@ -178,21 +185,30 @@ let UI = {
           UI.updateCommands();
           UI.updateProjectButton();
           UI.openProject();
-          UI.autoStartProject();
+          yield UI.autoStartProject();
+          UI.autoOpenToolbox();
           UI.saveLastSelectedProject();
           projectList.update();
         });
         return;
-      case "project-is-not-running":
-      case "project-is-running":
-      case "list-tabs-response":
+      case "project-started":
+        this.updateCommands();
+        projectList.update();
+        UI.autoOpenToolbox();
+        break;
+      case "project-stopped":
+        UI.destroyToolbox();
+        this.updateCommands();
+        projectList.update();
+        break;
+      case "runtime-global-actors":
         this.updateCommands();
         projectList.update();
         break;
       case "runtime-details":
         this.updateRuntimeButton();
         break;
-      case "runtime-changed":
+      case "runtime":
         this.updateRuntimeButton();
         this.saveLastConnectedRuntime();
         break;
@@ -209,15 +225,19 @@ let UI = {
       case "install-progress":
         this.updateProgress(Math.round(100 * details.bytesSent / details.totalBytes));
         break;
-      case "runtime-apps-found":
+      case "runtime-targets":
         this.autoSelectProject();
-        projectList.update();
+        projectList.update(details);
         break;
       case "pre-package":
         this.prePackageLog(details);
         break;
     };
     this._updatePromise = promise.resolve();
+  },
+
+  configureSimulator: function(event, simulator) {
+    UI.selectDeckPanel("simulator");
   },
 
   openInBrowser: function(url) {
@@ -245,7 +265,8 @@ let UI = {
   hidePanels: function() {
     let panels = document.querySelectorAll("panel");
     for (let p of panels) {
-      p.hidePopup();
+      // Sometimes in tests, p.hidePopup is not defined - Bug 1151796.
+      p.hidePopup && p.hidePopup();
     }
   },
 
@@ -405,16 +426,29 @@ let UI = {
         parent.firstChild.remove();
       }
       for (let runtime of runtimeList[type]) {
-        let panelItemNode = document.createElement("toolbarbutton");
-        panelItemNode.className = "panel-item runtime-panel-item-" + type;
-        panelItemNode.setAttribute("label", runtime.name);
-        parent.appendChild(panelItemNode);
         let r = runtime;
-        panelItemNode.addEventListener("click", () => {
+        let panelItemNode = document.createElement("hbox");
+        panelItemNode.className = "panel-item-complex";
+
+        let connectButton = document.createElement("toolbarbutton");
+        connectButton.className = "panel-item runtime-panel-item-" + type;
+        connectButton.setAttribute("label", r.name);
+        connectButton.setAttribute("flex", "1");
+        connectButton.addEventListener("click", () => {
           this.hidePanels();
           this.dismissErrorNotification();
           this.connectToRuntime(r);
         }, true);
+        panelItemNode.appendChild(connectButton);
+
+        if (r.configure && UI.isRuntimeConfigurationEnabled()) {
+          let configButton = document.createElement("toolbarbutton");
+          configButton.className = "configure-button";
+          configButton.addEventListener("click", r.configure.bind(r), true);
+          panelItemNode.appendChild(configButton);
+        }
+
+        parent.appendChild(panelItemNode);
       }
     }
   },
@@ -621,6 +655,10 @@ let UI = {
     return Services.prefs.getBoolPref("devtools.webide.showProjectEditor");
   },
 
+  isRuntimeConfigurationEnabled: function() {
+    return Services.prefs.getBoolPref("devtools.webide.enableRuntimeConfiguration");
+  },
+
   openProject: function() {
     let project = AppManager.selectedProject;
 
@@ -656,7 +694,7 @@ let UI = {
     }, console.error);
   },
 
-  autoStartProject: function() {
+  autoStartProject: Task.async(function*() {
     let project = AppManager.selectedProject;
 
     if (!project) {
@@ -668,15 +706,27 @@ let UI = {
       return; // For something that is not an editable app, we're done.
     }
 
-    Task.spawn(function() {
-      // Do not force opening apps that are already running, as they may have
-      // some activity being opened and don't want to dismiss them.
-      if (project.type == "runtimeApp" && !AppManager.isProjectRunning()) {
-        yield UI.busyUntil(AppManager.launchRuntimeApp(), "running app");
-      }
-      yield UI.createToolbox();
-    });
-  },
+    // Do not force opening apps that are already running, as they may have
+    // some activity being opened and don't want to dismiss them.
+    if (project.type == "runtimeApp" && !AppManager.isProjectRunning()) {
+      yield UI.busyUntil(AppManager.launchRuntimeApp(), "running app");
+    }
+  }),
+
+  autoOpenToolbox: Task.async(function*() {
+    let project = AppManager.selectedProject;
+
+    if (!project) {
+      return;
+    }
+    if (!(project.type == "runtimeApp" ||
+          project.type == "mainProcess" ||
+          project.type == "tab")) {
+      return; // For something that is not an editable app, we're done.
+    }
+
+    yield UI.createToolbox();
+  }),
 
   importAndSelectApp: Task.async(function* (source) {
     let isPackaged = !!source.path;
@@ -1014,6 +1064,7 @@ let UI = {
     let panel = document.querySelector("#deck").selectedPanel;
     let nbox = document.querySelector("#notificationbox");
     if (panel && panel.id == "deck-panel-details" &&
+        AppManager.selectedProject &&
         AppManager.selectedProject.type != "packaged" &&
         this.toolboxIframe) {
       nbox.setAttribute("toolboxfullscreen", "true");
@@ -1076,6 +1127,18 @@ let Cmds = {
 
   showProjectPanel: function() {
     ProjectPanel.toggle(projectList.sidebarsEnabled, true);
+
+    // There are currently no available events to listen for when an unselected
+    // tab navigates.  Since we show every tab's location in the project menu,
+    // we re-list all the tabs each time the menu is displayed.
+    // TODO: An event-based solution will be needed for the sidebar UI.
+    if (!projectList.sidebarsEnabled && AppManager.connected) {
+      return AppManager.listTabs().then(() => {
+        projectList.updateTabs();
+      }).catch(console.error);
+    }
+
+    return promise.resolve();
   },
 
   showRuntimePanel: function() {

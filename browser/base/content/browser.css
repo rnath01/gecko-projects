@@ -46,6 +46,12 @@ searchbar {
   -moz-binding: url("chrome://browser/content/search/search.xml#searchbar");
 }
 
+/* Prevent shrinking the page content to 0 height and width */
+.browserStack > browser {
+  min-height: 25px;
+  min-width: 25px;
+}
+
 .browserStack > browser {
   -moz-binding: url("chrome://browser/content/tabbrowser.xml#tabbrowser-browser");
 }
@@ -879,14 +885,6 @@ html|*#gcli-output-frame,
 
 toolbarbutton[type="socialmark"] {
   -moz-binding: url("chrome://browser/content/socialmarks.xml#toolbarbutton-marks");
-}
-
-toolbarbutton.badged-button > .toolbarbutton-badge-container > .toolbarbutton-icon,
-toolbarbutton[type="socialmark"] > .toolbarbutton-icon {
-  max-width: 18px;
-}
-toolbarpaletteitem[place="palette"] > toolbarbutton.badged-button > .toolbarbutton-badge-container > .toolbarbutton-icon {
-  max-width: 32px;
 }
 
 panelview > .social-panel-frame {

@@ -14,7 +14,6 @@
 
 #ifdef JS_ION_PERF
 # include "jit/JitSpewer.h"
-# include "jit/LinearScan.h"
 # include "jit/LIR.h"
 # include "jit/MIR.h"
 # include "jit/MIRGraph.h"
@@ -50,12 +49,12 @@ static uint32_t PerfMode = 0;
 
 static bool PerfChecked = false;
 
-static FILE *PerfFilePtr = nullptr;
+static FILE* PerfFilePtr = nullptr;
 
-static PRLock *PerfMutex;
+static PRLock* PerfMutex;
 
 static bool
-openPerfMap(const char *dir)
+openPerfMap(const char* dir)
 {
     const ssize_t bufferSize = 256;
     char filenameBuffer[bufferSize];
@@ -75,7 +74,7 @@ openPerfMap(const char *dir)
 void
 js::jit::CheckPerf() {
     if (!PerfChecked) {
-        const char *env = getenv("IONPERF");
+        const char* env = getenv("IONPERF");
         if (env == nullptr) {
             PerfMode = PERF_MODE_NONE;
             fprintf(stderr, "Warning: JIT perf reporting requires IONPERF set to \"block\" or \"func\". ");
@@ -153,13 +152,13 @@ unlockPerfMap()
 uint32_t PerfSpewer::nextFunctionIndex = 0;
 
 bool
-PerfSpewer::startBasicBlock(MBasicBlock *blk,
-                            MacroAssembler &masm)
+PerfSpewer::startBasicBlock(MBasicBlock* blk,
+                            MacroAssembler& masm)
 {
     if (!PerfBlockEnabled())
         return true;
 
-    const char *filename = blk->info().script()->filename();
+    const char* filename = blk->info().script()->filename();
     unsigned lineNumber, columnNumber;
     if (blk->pc()) {
         lineNumber = PCToLineNumber(blk->info().script(),
@@ -175,7 +174,7 @@ PerfSpewer::startBasicBlock(MBasicBlock *blk,
 }
 
 bool
-PerfSpewer::endBasicBlock(MacroAssembler &masm)
+PerfSpewer::endBasicBlock(MacroAssembler& masm)
 {
     if (!PerfBlockEnabled())
         return true;
@@ -185,7 +184,7 @@ PerfSpewer::endBasicBlock(MacroAssembler &masm)
 }
 
 bool
-PerfSpewer::noteEndInlineCode(MacroAssembler &masm)
+PerfSpewer::noteEndInlineCode(MacroAssembler& masm)
 {
     if (!PerfBlockEnabled())
         return true;
@@ -195,9 +194,9 @@ PerfSpewer::noteEndInlineCode(MacroAssembler &masm)
 }
 
 void
-PerfSpewer::writeProfile(JSScript *script,
-                         JitCode *code,
-                         MacroAssembler &masm)
+PerfSpewer::writeProfile(JSScript* script,
+                         JitCode* code,
+                         MacroAssembler& masm)
 {
     if (PerfFuncEnabled()) {
         if (!lockPerfMap())
@@ -237,7 +236,7 @@ PerfSpewer::writeProfile(JSScript *script,
 
         uintptr_t cur = funcStart + prologueSize;
         for (uint32_t i = 0; i < basicBlocks_.length(); i++) {
-            Record &r = basicBlocks_[i];
+            Record& r = basicBlocks_[i];
 
             uintptr_t blockStart = funcStart + masm.actualOffset(r.start.offset());
             uintptr_t blockEnd = funcStart + masm.actualOffset(r.end.offset());
@@ -283,7 +282,7 @@ PerfSpewer::writeProfile(JSScript *script,
 }
 
 void
-js::jit::writePerfSpewerBaselineProfile(JSScript *script, JitCode *code)
+js::jit::writePerfSpewerBaselineProfile(JSScript* script, JitCode* code)
 {
     if (!PerfEnabled())
         return;
@@ -302,7 +301,7 @@ js::jit::writePerfSpewerBaselineProfile(JSScript *script, JitCode *code)
 }
 
 void
-js::jit::writePerfSpewerJitCodeProfile(JitCode *code, const char *msg)
+js::jit::writePerfSpewerJitCodeProfile(JitCode* code, const char* msg)
 {
     if (!code || !PerfEnabled())
         return;
@@ -322,8 +321,8 @@ js::jit::writePerfSpewerJitCodeProfile(JitCode *code, const char *msg)
 
 void
 js::jit::writePerfSpewerAsmJSFunctionMap(uintptr_t base, uintptr_t size,
-                                         const char *filename, unsigned lineno, unsigned colIndex,
-                                         const char *funcName)
+                                         const char* filename, unsigned lineno, unsigned colIndex,
+                                         const char* funcName)
 {
     if (!PerfFuncEnabled() || size == 0U)
         return;
@@ -338,7 +337,7 @@ js::jit::writePerfSpewerAsmJSFunctionMap(uintptr_t base, uintptr_t size,
 }
 
 bool
-AsmJSPerfSpewer::startBasicBlock(MBasicBlock *blk, MacroAssembler &masm)
+AsmJSPerfSpewer::startBasicBlock(MBasicBlock* blk, MacroAssembler& masm)
 {
     if (!PerfBlockEnabled())
         return true;
@@ -355,7 +354,7 @@ AsmJSPerfSpewer::noteBlocksOffsets()
         return;
 
     for (uint32_t i = 0; i < basicBlocks_.length(); i++) {
-        Record &r = basicBlocks_[i];
+        Record& r = basicBlocks_[i];
         r.startOffset = r.start.offset();
         r.endOffset = r.end.offset();
     }
@@ -364,8 +363,8 @@ AsmJSPerfSpewer::noteBlocksOffsets()
 void
 js::jit::writePerfSpewerAsmJSBlocksMap(uintptr_t baseAddress, size_t funcStartOffset,
                                        size_t funcEndInlineOffset, size_t funcSize,
-                                       const char *filename, const char *funcName,
-                                       const js::jit::BasicBlocksVector &basicBlocks)
+                                       const char* filename, const char* funcName,
+                                       const js::jit::BasicBlocksVector& basicBlocks)
 {
     if (!PerfBlockEnabled() || basicBlocks.empty())
         return;
@@ -385,7 +384,7 @@ js::jit::writePerfSpewerAsmJSBlocksMap(uintptr_t baseAddress, size_t funcStartOf
     }
 
     for (uint32_t i = 0; i < basicBlocks.length(); i++) {
-        const Record &r = basicBlocks[i];
+        const Record& r = basicBlocks[i];
 
         size_t blockStart = baseAddress + r.startOffset;
         size_t blockEnd = baseAddress + r.endOffset;

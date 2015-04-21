@@ -978,7 +978,7 @@ XULDocument::AttributeChanged(nsIDocument* aDocument,
                     static_cast<BroadcastListener*>(entry->mListeners[i]);
 
                 if ((bl->mAttribute == aAttribute) ||
-                    (bl->mAttribute == nsGkAtoms::_asterix)) {
+                    (bl->mAttribute == nsGkAtoms::_asterisk)) {
                     nsCOMPtr<Element> listenerEl
                         = do_QueryReferent(bl->mListener);
                     if (listenerEl) {
@@ -2041,8 +2041,7 @@ XULDocument::PrepareToLoadPrototype(nsIURI* aURI, const char* aCommand,
                                kCharsetFromDocTypeDefault);
     parser->SetContentSink(sink); // grabs a reference to the parser
 
-    *aResult = parser;
-    NS_ADDREF(*aResult);
+    parser.forget(aResult);
     return NS_OK;
 }
 
@@ -3661,7 +3660,7 @@ XULDocument::CreateOverlayElement(nsXULPrototypeElement* aPrototype,
     rv = AddForwardReference(fwdref);
     if (NS_FAILED(rv)) return rv;
 
-    NS_ADDREF(*aResult = element);
+    element.forget(aResult);
     return NS_OK;
 }
 
@@ -4169,7 +4168,7 @@ XULDocument::BroadcastAttributeChangeFromOverlay(nsIContent* aNode,
             (entry->mListeners[i]);
 
         if ((bl->mAttribute != aAttribute) &&
-            (bl->mAttribute != nsGkAtoms::_asterix))
+            (bl->mAttribute != nsGkAtoms::_asterisk))
             continue;
 
         nsCOMPtr<nsIContent> l = do_QueryReferent(bl->mListener);
@@ -4371,7 +4370,7 @@ XULDocument::InsertElement(nsINode* aParent, nsIContent* aChild,
 
             token = nsCRT::strtok(rest, ", ", &rest);
         }
-        nsMemory::Free(str);
+        free(str);
 
         if (content) {
             int32_t pos = aParent->IndexOf(content);

@@ -231,17 +231,19 @@ public:
                   bool aShrinkWrap) override;
 
   /**
-   * Invokes the WillReflow() function, positions the frame and its view (if
-   * requested), and then calls Reflow(). If the reflow succeeds and the child
-   * frame is complete, deletes any next-in-flows using DeleteNextInFlowChild()
+   * Positions aChildFrame and its view (if requested), and then calls Reflow().
+   * If the reflow status after reflowing the child is FULLY_COMPLETE then any
+   * next-in-flows are deleted using DeleteNextInFlowChild().
+   *
+   * @param aContainerWidth  width of the border-box of the containing frame
    *
    * Flags:
    * NS_FRAME_NO_MOVE_VIEW - don't position the frame's view. Set this if you
    *    don't want to automatically sync the frame and view
-   * NS_FRAME_NO_MOVE_FRAME - don't move the frame. aX and aY are ignored in this
+   * NS_FRAME_NO_MOVE_FRAME - don't move the frame. aPos is ignored in this
    *    case. Also implies NS_FRAME_NO_MOVE_VIEW
    */
-  void ReflowChild(nsIFrame*                      aKidFrame,
+  void ReflowChild(nsIFrame*                      aChildFrame,
                    nsPresContext*                 aPresContext,
                    nsHTMLReflowMetrics&           aDesiredSize,
                    const nsHTMLReflowState&       aReflowState,
@@ -262,8 +264,10 @@ public:
    * - sets the view's visibility, opacity, content transparency, and clip
    * - invoked the DidReflow() function
    *
+   * @param aContainerWidth  width of the border-box of the containing frame
+   *
    * Flags:
-   * NS_FRAME_NO_MOVE_FRAME - don't move the frame. aX and aY are ignored in this
+   * NS_FRAME_NO_MOVE_FRAME - don't move the frame. aPos is ignored in this
    *    case. Also implies NS_FRAME_NO_MOVE_VIEW
    * NS_FRAME_NO_MOVE_VIEW - don't position the frame's view. Set this if you
    *    don't want to automatically sync the frame and view

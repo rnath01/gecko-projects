@@ -23,7 +23,9 @@
 
 #include "nsAppRunner.h"
 #include "mozilla/AppData.h"
+#if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID)
 #include "nsUpdateDriver.h"
+#endif
 #include "ProfileReset.h"
 
 #ifdef MOZ_INSTRUMENT_EVENT_LOOP
@@ -55,6 +57,7 @@
 #include "nsICommandLineRunner.h"
 #include "nsIComponentManager.h"
 #include "nsIComponentRegistrar.h"
+#include "nsIConsoleService.h"
 #include "nsIContentHandler.h"
 #include "nsIDialogParamBlock.h"
 #include "nsIDOMWindow.h"
@@ -84,6 +87,8 @@
 #include "nsAppShellCID.h"
 #include "mozilla/scache/StartupCache.h"
 #include "nsIGfxInfo.h"
+
+#include "base/histogram.h"
 
 #include "mozilla/unused.h"
 
@@ -584,29 +589,6 @@ CanShowProfileManager()
 #endif
 }
 
-static bool
-KeyboardMayHaveIME()
-{
-#ifdef XP_WIN
-  // http://msdn.microsoft.com/en-us/library/windows/desktop/dd318693%28v=vs.85%29.aspx
-  HKL locales[10];
-  int result = GetKeyboardLayoutList(10, locales);
-  for (int i = 0; i < result; i++) {
-    int kb = (uintptr_t)locales[i] & 0xFFFF;
-    if (kb == 0x0411 ||  // japanese
-        kb == 0x0412 ||  // korean
-        kb == 0x0C04 ||  // HK Chinese
-        kb == 0x0804 || kb == 0x0004 || // Hans Chinese
-        kb == 0x7C04 || kb ==  0x0404)  { //Hant Chinese
-
-      return true;
-    }
-  }
-#endif
-
-  return false;
-}
-
 bool gSafeMode = false;
 
 /**
@@ -884,13 +866,6 @@ nsXULAppInfo::GetAccessibilityEnabled(bool* aResult)
 #else
   *aResult = false;
 #endif
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsXULAppInfo::GetKeyboardMayHaveIME(bool* aResult)
-{
-  *aResult = KeyboardMayHaveIME();
   return NS_OK;
 }
 
@@ -2958,9 +2933,7 @@ class XREMain
 {
 public:
   XREMain() :
-    mScopedXPCOM(nullptr)
-    , mAppData(nullptr)
-    , mStartOffline(false)
+    mStartOffline(false)
     , mShuttingDown(false)
 #ifdef MOZ_ENABLE_XREMOTE
     , mDisableRemote(false)
@@ -2971,13 +2944,9 @@ public:
   {};
 
   ~XREMain() {
-    if (mAppData) {
-      delete mAppData;
-    }
-    if (mScopedXPCOM) {
-      NS_WARNING("Scoped xpcom should have been deleted!");
-      delete mScopedXPCOM;
-    }
+    mScopedXPCOM = nullptr;
+    mStatisticsRecorder = nullptr;
+    mAppData = nullptr;
   }
 
   int XRE_main(int argc, char* argv[], const nsXREAppData* aAppData);
@@ -2994,8 +2963,10 @@ public:
   nsCOMPtr<nsIRemoteService> mRemoteService;
 #endif
 
-  ScopedXPCOMStartup* mScopedXPCOM;
-  ScopedAppData* mAppData;
+  UniquePtr<ScopedXPCOMStartup> mScopedXPCOM;
+  UniquePtr<base::StatisticsRecorder> mStatisticsRecorder;
+  nsAutoPtr<mozilla::ScopedAppData> mAppData;
+
   nsXREDirProvider mDirProvider;
   nsAutoCString mProfileName;
   nsAutoCString mDesktopStartupID;
@@ -3114,7 +3085,7 @@ XREMain::XRE_mainInit(bool* aExitFlag)
       return 1;
     }
 
-    rv = XRE_ParseAppData(overrideLF, mAppData);
+    rv = XRE_ParseAppData(overrideLF, mAppData.get());
     if (NS_FAILED(rv)) {
       Output(true, "Couldn't read override.ini");
       return 1;
@@ -3639,25 +3610,9 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
   }
 #endif /* MOZ_WIDGET_GTK */
 #ifdef MOZ_X11
-  // Init X11 in thread-safe mode. Must be called prior to the first call to XOpenDisplay 
+  // Init X11 in thread-safe mode. Must be called prior to the first call to XOpenDisplay
   // (called inside gdk_display_open). This is a requirement for off main tread compositing.
-  // This is done only on X11 platforms if the environment variable MOZ_USE_OMTC is set so 
-  // as to avoid overhead when omtc is not used. 
-  //
-  // On nightly builds, we call this by default to enable OMTC for Electrolysis testing. On
-  // aurora, beta, and release builds, there is a small tpaint regression from enabling this
-  // call, so it sits behind an environment variable.
-  //
-  // An environment variable is used instead of a pref on X11 platforms because we start having 
-  // access to prefs long after the first call to XOpenDisplay which is hard to change due to 
-  // interdependencies in the initialization.
-# ifndef NIGHTLY_BUILD
-  if (PR_GetEnv("MOZ_USE_OMTC") ||
-      PR_GetEnv("MOZ_OMTC_ENABLED"))
-# endif
-  {
-    XInitThreads();
-  }
+  XInitThreads();
 #endif
 #if defined(MOZ_WIDGET_GTK)
   {
@@ -3749,7 +3704,7 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
   }
 #endif
 
-#if defined(USE_MOZ_UPDATER)
+#if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID)
   // Check for and process any available updates
   nsCOMPtr<nsIFile> updRoot;
   bool persistent;
@@ -4230,6 +4185,10 @@ XREMain::XRE_main(int argc, char* argv[], const nsXREAppData* aAppData)
 
   NS_ENSURE_TRUE(aAppData, 2);
 
+  // A initializer to initialize histogram collection, a chromium
+  // thing used by Telemetry.
+  mStatisticsRecorder = MakeUnique<base::StatisticsRecorder>();
+
   mAppData = new ScopedAppData(aAppData);
   if (!mAppData)
     return 1;
@@ -4267,7 +4226,7 @@ XREMain::XRE_main(int argc, char* argv[], const nsXREAppData* aAppData)
   bool appInitiatedRestart = false;
 
   // Start the real application
-  mScopedXPCOM = new ScopedXPCOMStartup();
+  mScopedXPCOM = MakeUnique<ScopedXPCOMStartup>();
   if (!mScopedXPCOM)
     return 1;
 
@@ -4302,8 +4261,8 @@ XREMain::XRE_main(int argc, char* argv[], const nsXREAppData* aAppData)
 #endif /* MOZ_ENABLE_XREMOTE */
   }
 
-  delete mScopedXPCOM;
   mScopedXPCOM = nullptr;
+  mStatisticsRecorder = nullptr;
 
   // unlock the profile after ScopedXPCOMStartup object (xpcom) 
   // has gone out of scope.  see bug #386739 for more details
@@ -4381,7 +4340,7 @@ XRE_metroStartup(bool runXREMain)
     return NS_ERROR_FAILURE;
 
   // Start the real application
-  xreMainPtr->mScopedXPCOM = new ScopedXPCOMStartup();
+  xreMainPtr->mScopedXPCOM = MakeUnique<ScopedXPCOMStartup>();
   if (!xreMainPtr->mScopedXPCOM)
     return NS_ERROR_FAILURE;
 
@@ -4398,7 +4357,6 @@ XRE_metroStartup(bool runXREMain)
 void
 XRE_metroShutdown()
 {
-  delete xreMainPtr->mScopedXPCOM;
   xreMainPtr->mScopedXPCOM = nullptr;
 
 #ifdef MOZ_INSTRUMENT_EVENT_LOOP
@@ -4635,6 +4593,15 @@ LogE10sBlockedReason(const char *reason) {
 }
 #endif
 
+enum {
+  kE10sEnabledByUser = 0,
+  kE10sEnabledByDefault = 1,
+  kE10sDisabledByUser = 2,
+  kE10sDisabledInSafeMode = 3,
+  kE10sDisabledForAccessibility = 4,
+  kE10sDisabledForMacGfx = 5,
+};
+
 bool
 mozilla::BrowserTabsRemoteAutostart()
 {
@@ -4643,8 +4610,16 @@ mozilla::BrowserTabsRemoteAutostart()
   }
   gBrowserTabsRemoteAutostartInitialized = true;
   bool optInPref = Preferences::GetBool("browser.tabs.remote.autostart", false);
-  bool trialPref = Preferences::GetBool("browser.tabs.remote.autostart.1", false);
+  bool trialPref = Preferences::GetBool("browser.tabs.remote.autostart.2", false);
   bool prefEnabled = optInPref || trialPref;
+  int status;
+  if (optInPref) {
+    status = kE10sEnabledByUser;
+  } else if (trialPref) {
+    status = kE10sEnabledByDefault;
+  } else {
+    status = kE10sDisabledByUser;
+  }
 #if !defined(NIGHTLY_BUILD)
   // When running tests with 'layers.offmainthreadcomposition.testing.enabled' and
   // autostart set to true, return enabled.  These tests must be allowed to run
@@ -4657,16 +4632,18 @@ mozilla::BrowserTabsRemoteAutostart()
   // Nightly builds, update gBrowserTabsRemoteAutostart based on all the
   // e10s remote relayed prefs we watch.
   bool disabledForA11y = Preferences::GetBool("browser.tabs.remote.autostart.disabled-because-using-a11y", false);
-  // Only disable for IME for the automatic pref, not the opt-in one.
-  bool disabledForIME = trialPref && KeyboardMayHaveIME();
+  // Disable for VR
+  bool disabledForVR = Preferences::GetBool("dom.vr.enabled", false);
 
   if (prefEnabled) {
     if (gSafeMode) {
+      status = kE10sDisabledInSafeMode;
       LogE10sBlockedReason("Safe mode");
     } else if (disabledForA11y) {
+      status = kE10sDisabledForAccessibility;
       LogE10sBlockedReason("An accessibility tool is or was active. See bug 1115956.");
-    } else if (disabledForIME) {
-      LogE10sBlockedReason("The keyboard being used has activated IME");
+    } else if (disabledForVR) {
+      LogE10sBlockedReason("Experimental VR interfaces are enabled");
     } else {
       gBrowserTabsRemoteAutostart = true;
     }
@@ -4706,6 +4683,7 @@ mozilla::BrowserTabsRemoteAutostart()
     if (accelDisabled) {
       gBrowserTabsRemoteAutostart = false;
 
+      status = kE10sDisabledForMacGfx;
 #ifdef NIGHTLY_BUILD
       LogE10sBlockedReason("Hardware acceleration is disabled");
 #endif
@@ -4714,6 +4692,7 @@ mozilla::BrowserTabsRemoteAutostart()
 #endif // defined(XP_MACOSX)
 
   mozilla::Telemetry::Accumulate(mozilla::Telemetry::E10S_AUTOSTART, gBrowserTabsRemoteAutostart);
+  mozilla::Telemetry::Accumulate(mozilla::Telemetry::E10S_AUTOSTART_STATUS, status);
   if (Preferences::GetBool("browser.enabledE10SFromPrompt", false)) {
     mozilla::Telemetry::Accumulate(mozilla::Telemetry::E10S_STILL_ACCEPTED_FROM_PROMPT,
                                     gBrowserTabsRemoteAutostart);

@@ -17,6 +17,7 @@
 
 #include "gfxUtils.h"
 #include "mozilla/dom/TabChild.h"
+#include "mozilla/dom/KeyframeEffect.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/layers/PLayerTransaction.h"
 #include "nsCSSRendering.h"
@@ -28,6 +29,7 @@
 #include "nsStyleTransformMatrix.h"
 #include "gfxMatrix.h"
 #include "gfxPrefs.h"
+#include "gfxVR.h"
 #include "nsSVGIntegrationUtils.h"
 #include "nsSVGUtils.h"
 #include "nsLayoutUtils.h"
@@ -350,9 +352,9 @@ AddAnimationForProperty(nsIFrame* aFrame, const AnimationProperty& aProperty,
                         AnimationData& aData, bool aPending)
 {
   MOZ_ASSERT(aLayer->AsContainerLayer(), "Should only animate ContainerLayer");
-  MOZ_ASSERT(aPlayer->GetSource(),
+  MOZ_ASSERT(aPlayer->GetEffect(),
              "Should not be adding an animation for a player without"
-             " an animation");
+             " an effect");
   nsStyleContext* styleContext = aFrame->StyleContext();
   nsPresContext* presContext = aFrame->PresContext();
   nsRect bounds = nsDisplayTransform::GetFrameBoundsForTransform(aFrame);
@@ -362,7 +364,7 @@ AddAnimationForProperty(nsIFrame* aFrame, const AnimationProperty& aProperty,
     aLayer->AddAnimationForNextTransaction() :
     aLayer->AddAnimation();
 
-  const AnimationTiming& timing = aPlayer->GetSource()->Timing();
+  const AnimationTiming& timing = aPlayer->GetEffect()->Timing();
   Nullable<TimeDuration> startTime = aPlayer->GetCurrentOrPendingStartTime();
   animation->startTime() = startTime.IsNull()
                            ? TimeStamp()
@@ -409,32 +411,35 @@ AddAnimationsForProperty(nsIFrame* aFrame, nsCSSProperty aProperty,
                          Layer* aLayer, AnimationData& aData,
                          bool aPending)
 {
+  MOZ_ASSERT(nsCSSProps::PropHasFlags(aProperty,
+                                      CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR),
+             "inconsistent property flags");
+
+  // Add from first to last (since last overrides)
   for (size_t playerIdx = 0; playerIdx < aPlayers.Length(); playerIdx++) {
     AnimationPlayer* player = aPlayers[playerIdx];
-    if (!player->IsRunning()) {
+    if (!player->IsPlaying()) {
       continue;
     }
-    dom::Animation* anim = player->GetSource();
-    if (!anim) {
-      continue;
-    }
+    dom::KeyframeEffectReadonly* effect = player->GetEffect();
+    MOZ_ASSERT(effect, "A playing player should have an effect");
     const AnimationProperty* property =
-      anim->GetAnimationOfProperty(aProperty);
+      effect->GetAnimationOfProperty(aProperty);
     if (!property) {
       continue;
     }
 
-    if (!property->mWinsInCascade) {
-      // We have an animation or transition, but it isn't actually
-      // winning in the CSS cascade, so we don't want to send it to the
-      // compositor.
-      // I believe that anything that changes mWinsInCascade should
-      // trigger this code again, either because of a restyle that
-      // changes the properties in question, or because of the
-      // main-thread style update that results when an animation stops
-      // filling.
-      continue;
-    }
+    // Note that if mWinsInCascade on property was  false,
+    // GetAnimationOfProperty returns null instead.
+    // This is what we want, since if we have an animation or transition
+    // that isn't actually winning in the CSS cascade, we don't want to
+    // send it to the compositor.
+    // I believe that anything that changes mWinsInCascade should
+    // trigger this code again, either because of a restyle that changes
+    // the properties in question, or because of the main-thread style
+    // update that results when an animation stops being in effect.
+    MOZ_ASSERT(property->mWinsInCascade,
+               "GetAnimationOfProperty already tested mWinsInCascade");
 
     // Don't add animations that are pending when their corresponding
     // refresh driver is under test control. This is because any pending
@@ -464,6 +469,10 @@ nsDisplayListBuilder::AddAnimationsAndTransitionsToLayer(Layer* aLayer,
                                                          nsIFrame* aFrame,
                                                          nsCSSProperty aProperty)
 {
+  MOZ_ASSERT(nsCSSProps::PropHasFlags(aProperty,
+                                      CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR),
+             "inconsistent property flags");
+
   // This function can be called in two ways:  from
   // nsDisplay*::BuildLayer while constructing a layer (with all
   // pointers non-null), or from RestyleManager's handling of
@@ -554,6 +563,8 @@ nsDisplayListBuilder::AddAnimationsAndTransitionsToLayer(Layer* aLayer,
     data = null_t();
   }
 
+  // When both are running, animations override transitions.  We want
+  // to add the ones that override last.
   if (transitions) {
     AddAnimationsForProperty(aFrame, aProperty, transitions->mPlayers,
                              aLayer, data, pending);
@@ -823,8 +834,7 @@ nsDisplayScrollLayer::ComputeFrameMetrics(nsIFrame* aForFrame,
   // all the pres shells from here up to the root, as well as any css-driven
   // resolution. We don't need to compute it as it's already stored in the
   // container parameters.
-  metrics.SetCumulativeResolution(LayoutDeviceToLayerScale2D(aContainerParameters.mXScale,
-                                                             aContainerParameters.mYScale));
+  metrics.SetCumulativeResolution(aContainerParameters.Scale());
 
   LayoutDeviceToScreenScale2D resolutionToScreen(
       presShell->GetCumulativeResolution()
@@ -1226,7 +1236,7 @@ nsDisplayListBuilder::IsAnimatedGeometryRoot(nsIFrame* aFrame, nsIFrame** aParen
     return true;
   }
 
-  if (parentType == nsGkAtoms::scrollFrame) {
+  if (parentType == nsGkAtoms::scrollFrame || parentType == nsGkAtoms::listControlFrame) {
     nsIScrollableFrame* sf = do_QueryFrame(parent);
     if (sf->IsScrollingActive(this) && sf->GetScrolledFrame() == aFrame) {
       return true;
@@ -1699,7 +1709,11 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
     } else if (!gfxPrefs::LayoutUseContainersForRootFrames()) {
       // If there is no root scroll frame, and we're using containerless
       // scrolling, pick the document element instead.
+      // On Android we want the root xul document to get a null scroll id
+      // so that the root content document gets the first non-null scroll id.
+#ifndef MOZ_WIDGET_ANDROID
       content = document->GetDocumentElement();
+#endif
     }
 
     root->SetFrameMetrics(
@@ -2043,9 +2057,8 @@ static bool IsZOrderLEQ(nsDisplayItem* aItem1, nsDisplayItem* aItem2,
   return aItem1->ZIndex() <= aItem2->ZIndex();
 }
 
-void nsDisplayList::SortByZOrder(nsDisplayListBuilder* aBuilder,
-                                 nsIContent* aCommonAncestor) {
-  Sort(aBuilder, IsZOrderLEQ, aCommonAncestor);
+void nsDisplayList::SortByZOrder(nsDisplayListBuilder* aBuilder) {
+  Sort(aBuilder, IsZOrderLEQ, nullptr);
 }
 
 void nsDisplayList::SortByContentOrder(nsDisplayListBuilder* aBuilder,
@@ -2502,7 +2515,8 @@ nsDisplayBackgroundImage::TryOptimizeToImageLayer(LayerManager* aManager,
   // layer pixel boundaries. This should be OK for now.
 
   int32_t appUnitsPerDevPixel = presContext->AppUnitsPerDevPixel();
-  mDestRect = nsLayoutUtils::RectToGfxRect(state.mDestArea, appUnitsPerDevPixel);
+  mDestRect =
+    LayoutDeviceRect::FromAppUnits(state.mDestArea, appUnitsPerDevPixel);
   mImageContainer = imageContainer;
 
   // Ok, we can turn this into a layer if needed.
@@ -2558,13 +2572,11 @@ nsDisplayBackgroundImage::GetLayerState(nsDisplayListBuilder* aBuilder,
     mozilla::gfx::IntSize imageSize = mImageContainer->GetCurrentSize();
     NS_ASSERTION(imageSize.width != 0 && imageSize.height != 0, "Invalid image size!");
 
-    gfxRect destRect = mDestRect;
-
-    destRect.width *= aParameters.mXScale;
-    destRect.height *= aParameters.mYScale;
+    const LayerRect destLayerRect = mDestRect * aParameters.Scale();
 
     // Calculate the scaling factor for the frame.
-    gfxSize scale = gfxSize(destRect.width / imageSize.width, destRect.height / imageSize.height);
+    const gfxSize scale = gfxSize(destLayerRect.width / imageSize.width,
+                                  destLayerRect.height / imageSize.height);
 
     // If we are not scaling at all, no point in separating this into a layer.
     if (scale.width == 1.0f && scale.height == 1.0f) {
@@ -2572,7 +2584,7 @@ nsDisplayBackgroundImage::GetLayerState(nsDisplayListBuilder* aBuilder,
     }
 
     // If the target size is pretty small, no point in using a layer.
-    if (destRect.width * destRect.height < 64 * 64) {
+    if (destLayerRect.width * destLayerRect.height < 64 * 64) {
       return LAYER_NONE;
     }
   }
@@ -2593,12 +2605,13 @@ nsDisplayBackgroundImage::BuildLayer(nsDisplayListBuilder* aBuilder,
       return nullptr;
   }
   layer->SetContainer(mImageContainer);
-  ConfigureLayer(layer, aParameters.mOffset);
+  ConfigureLayer(layer, aParameters);
   return layer.forget();
 }
 
 void
-nsDisplayBackgroundImage::ConfigureLayer(ImageLayer* aLayer, const nsIntPoint& aOffset)
+nsDisplayBackgroundImage::ConfigureLayer(ImageLayer* aLayer,
+                                         const ContainerLayerParameters& aParameters)
 {
   aLayer->SetFilter(nsLayoutUtils::GetGraphicsFilterForFrame(mFrame));
 
@@ -2610,7 +2623,13 @@ nsDisplayBackgroundImage::ConfigureLayer(ImageLayer* aLayer, const nsIntPoint& a
     nsDisplayBackgroundGeometry::UpdateDrawResult(this, DrawResult::SUCCESS);
   }
 
-  gfxPoint p = mDestRect.TopLeft() + aOffset;
+  // XXX(seth): Right now we ignore aParameters.Scale() and
+  // aParameters.Offset(), because FrameLayerBuilder already applies
+  // aParameters.Scale() via the layer's post-transform, and
+  // aParameters.Offset() is always zero.
+  MOZ_ASSERT(aParameters.Offset() == LayerIntPoint(0,0));
+
+  const LayoutDevicePoint p = mDestRect.TopLeft();
   Matrix transform = Matrix::Translation(p.x, p.y);
   transform.PreScale(mDestRect.width / imageSize.width,
                      mDestRect.height / imageSize.height);
@@ -3020,11 +3039,6 @@ nsDisplayThemedBackground::GetBoundsInternal() {
   presContext->GetTheme()->
       GetWidgetOverflow(presContext->DeviceContext(), mFrame,
                         mFrame->StyleDisplay()->mAppearance, &r);
-#ifdef XP_MACOSX
-  // Bug 748219
-  r.Inflate(mFrame->PresContext()->AppUnitsPerDevPixel());
-#endif
-
   return r + ToReferenceFrame();
 }
 
@@ -4159,10 +4173,13 @@ bool nsDisplayBlendContainer::TryMerge(nsDisplayListBuilder* aBuilder, nsDisplay
 
 nsDisplayOwnLayer::nsDisplayOwnLayer(nsDisplayListBuilder* aBuilder,
                                      nsIFrame* aFrame, nsDisplayList* aList,
-                                     uint32_t aFlags, ViewID aScrollTarget)
+                                     uint32_t aFlags, ViewID aScrollTarget,
+                                     float aScrollbarThumbRatio)
     : nsDisplayWrapList(aBuilder, aFrame, aList)
     , mFlags(aFlags)
-    , mScrollTarget(aScrollTarget) {
+    , mScrollTarget(aScrollTarget)
+    , mScrollbarThumbRatio(aScrollbarThumbRatio)
+{
   MOZ_COUNT_CTOR(nsDisplayOwnLayer);
 }
 
@@ -4176,16 +4193,17 @@ nsDisplayOwnLayer::~nsDisplayOwnLayer() {
 already_AddRefed<Layer>
 nsDisplayOwnLayer::BuildLayer(nsDisplayListBuilder* aBuilder,
                               LayerManager* aManager,
-                              const ContainerLayerParameters& aContainerParameters) {
+                              const ContainerLayerParameters& aContainerParameters)
+{
   nsRefPtr<ContainerLayer> layer = aManager->GetLayerBuilder()->
     BuildContainerLayerFor(aBuilder, aManager, mFrame, this, &mList,
                            aContainerParameters, nullptr,
                            FrameLayerBuilder::CONTAINER_ALLOW_PULL_BACKGROUND_COLOR);
   if (mFlags & VERTICAL_SCROLLBAR) {
-    layer->SetScrollbarData(mScrollTarget, Layer::ScrollDirection::VERTICAL);
+    layer->SetScrollbarData(mScrollTarget, Layer::ScrollDirection::VERTICAL, mScrollbarThumbRatio);
   }
   if (mFlags & HORIZONTAL_SCROLLBAR) {
-    layer->SetScrollbarData(mScrollTarget, Layer::ScrollDirection::HORIZONTAL);
+    layer->SetScrollbarData(mScrollTarget, Layer::ScrollDirection::HORIZONTAL, mScrollbarThumbRatio);
   }
   if (mFlags & SCROLLBAR_CONTAINER) {
     layer->SetIsScrollbarContainer();

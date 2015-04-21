@@ -1293,7 +1293,7 @@ nsNPAPIPluginInstance::GetFormValue(nsAString& aValue)
 
   // NPPVformValue allocates with NPN_MemAlloc(), which uses
   // nsMemory.
-  nsMemory::Free(value);
+  free(value);
 
   return NS_OK;
 }
@@ -1777,4 +1777,23 @@ nsNPAPIPluginInstance::GetContentsScaleFactor()
     mOwner->GetContentsScaleFactor(&scaleFactor);
   }
   return scaleFactor;
+}
+
+nsresult
+nsNPAPIPluginInstance::GetRunID(uint32_t* aRunID)
+{
+  if (NS_WARN_IF(!aRunID)) {
+    return NS_ERROR_INVALID_POINTER;
+  }
+
+  if (NS_WARN_IF(!mPlugin)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  PluginLibrary* library = mPlugin->GetLibrary();
+  if (!library) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return library->GetRunID(aRunID);
 }
