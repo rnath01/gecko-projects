@@ -2270,6 +2270,26 @@ UpdateThreadFunc(void *param)
   QuitProgressUI();
 }
 
+#if defined(MOZ_VERIFY_MAR_SIGNATURE) && !defined(XP_WIN) && !defined(XP_MACOSX)
+#include "prprf.h"
+#define PATH_SEPARATOR ":"
+#define LD_LIBRARY_PATH_ENVVAR_NAME "LD_LIBRARY_PATH"
+static void
+AppendToLibPath(const char *appPath)
+{
+  char *s = nullptr;
+  char *pathValue = getenv(LD_LIBRARY_PATH_ENVVAR_NAME);
+  if (nullptr == pathValue || '\0' == *pathValue) {
+    s = PR_smprintf("%s=%s", LD_LIBRARY_PATH_ENVVAR_NAME, appPath);
+  } else {
+    s = PR_smprintf("%s=%s" PATH_SEPARATOR "%s",
+                    LD_LIBRARY_PATH_ENVVAR_NAME, appPath, pathValue);
+  }
+  putenv(s);
+  PR_smprintf_free(s);
+}
+#endif
+
 int NS_main(int argc, NS_tchar **argv)
 {
 #if defined(MOZ_WIDGET_GONK)
@@ -2291,6 +2311,10 @@ int NS_main(int argc, NS_tchar **argv)
 #endif
 
 #if defined(MOZ_VERIFY_MAR_SIGNATURE) && !defined(XP_WIN) && !defined(XP_MACOSX)
+  // When using NSS some NSS shared libraries must be in the path, so we add
+  // in the application directory into the path.
+  AppendToLibPath(argv[2]);
+
   // On Windows and Mac we rely on native APIs to do verifications so we don't
   // need to initialize NSS at all there.
   // Otherwise, minimize the amount of NSS we depend on by avoiding all the NSS
