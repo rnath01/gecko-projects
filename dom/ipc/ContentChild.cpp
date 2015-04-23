@@ -38,6 +38,7 @@
 #include "mozilla/dom/asmjscache/AsmJSCache.h"
 #include "mozilla/dom/asmjscache/PAsmJSCacheEntryChild.h"
 #include "mozilla/dom/nsIContentChild.h"
+#include "mozilla/psm/PSMContentListener.h"
 #include "mozilla/hal_sandbox/PHalChild.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/FileDescriptorSetChild.h"
@@ -203,6 +204,7 @@ using namespace mozilla::ipc;
 using namespace mozilla::layers;
 using namespace mozilla::net;
 using namespace mozilla::jsipc;
+using namespace mozilla::psm;
 using namespace mozilla::widget;
 #if defined(MOZ_WIDGET_GONK)
 using namespace mozilla::system;
@@ -1623,6 +1625,22 @@ ContentChild::DeallocPScreenManagerChild(PScreenManagerChild* aService)
     return true;
 }
 
+PPSMContentDownloaderChild*
+ContentChild::AllocPPSMContentDownloaderChild(const uint32_t& aCertType)
+{
+    // NB: We don't need aCertType in the child actor.
+    nsRefPtr<PSMContentDownloaderChild> child = new PSMContentDownloaderChild();
+    return child.forget().take();
+}
+
+bool
+ContentChild::DeallocPPSMContentDownloaderChild(PPSMContentDownloaderChild* aListener)
+{
+    auto* listener = static_cast<PSMContentDownloaderChild*>(aListener);
+    nsRefPtr<PSMContentDownloaderChild> child = dont_AddRef(listener);
+    return true;
+}
+
 PExternalHelperAppChild*
 ContentChild::AllocPExternalHelperAppChild(const OptionalURIParams& uri,
                                            const nsCString& aMimeContentType,
@@ -2019,7 +2037,7 @@ ContentChild::RecvAsyncMessage(const nsString& aMsg,
     if (cpm) {
         StructuredCloneData cloneData = ipc::UnpackClonedMessageDataForChild(aData);
         CrossProcessCpowHolder cpows(this, aCpows);
-        cpm->ReceiveMessage(static_cast<nsIContentFrameMessageManager*>(cpm.get()),
+        cpm->ReceiveMessage(static_cast<nsIContentFrameMessageManager*>(cpm.get()), nullptr,
                             aMsg, false, &cloneData, &cpows, aPrincipal, nullptr);
     }
     return true;

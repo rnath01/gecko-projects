@@ -48,7 +48,6 @@ class nsIPrincipal;
 class nsIURI;
 class nsNodeSupportsWeakRefTearoff;
 class nsNodeWeakReference;
-class nsXPCClassInfo;
 class nsDOMMutationObserver;
 
 namespace mozilla {
@@ -73,7 +72,6 @@ class DOMQuad;
 class DOMRectReadOnly;
 class Element;
 class EventHandlerNonNull;
-class OnErrorEventHandlerNonNull;
 template<typename T> class Optional;
 class Text;
 class TextOrElementOrDocument;
@@ -1971,7 +1969,10 @@ protected:
 
   nsRefPtr<mozilla::dom::NodeInfo> mNodeInfo;
 
-  nsINode* mParent;
+  // mParent is an owning ref most of the time, except for the case of document
+  // nodes, so it cannot be represented by nsCOMPtr, so mark is as
+  // MOZ_OWNING_REF.
+  nsINode* MOZ_OWNING_REF mParent;
 
 private:
   // Boolean flags.

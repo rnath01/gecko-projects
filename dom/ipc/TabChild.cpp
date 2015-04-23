@@ -496,7 +496,7 @@ TabChildBase::DispatchMessageManagerMessage(const nsAString& aMessageName,
     // content manipulate the frame state.
     nsRefPtr<nsFrameMessageManager> mm =
       static_cast<nsFrameMessageManager*>(mTabChildGlobal->mMessageManager.get());
-    mm->ReceiveMessage(static_cast<EventTarget*>(mTabChildGlobal),
+    mm->ReceiveMessage(static_cast<EventTarget*>(mTabChildGlobal), nullptr,
                        aMessageName, false, &cloneData, nullptr, nullptr, nullptr);
 }
 
@@ -1085,7 +1085,7 @@ TabChild::Init()
   }
   mWidget->Create(
     nullptr, 0,              // no parents
-    nsIntRect(nsIntPoint(0, 0), nsIntSize(0, 0)),
+    gfx::IntRect(gfx::IntPoint(0, 0), gfx::IntSize(0, 0)),
     nullptr                  // HandleWidgetEvent
   );
 
@@ -2018,7 +2018,7 @@ TabChild::RecvShow(const ScreenIntSize& aSize,
 
 bool
 TabChild::RecvUpdateDimensions(const nsIntRect& rect, const ScreenIntSize& size,
-                               const ScreenOrientation& orientation, const nsIntPoint& chromeDisp)
+                               const ScreenOrientation& orientation, const LayoutDeviceIntPoint& chromeDisp)
 {
     if (!mRemoteFrame) {
         return true;
@@ -2488,6 +2488,11 @@ TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& event,
   AutoCacheNativeKeyCommands autoCache(widget);
 
   if (event.message == NS_KEY_PRESS) {
+    // If content code called preventDefault() on a keydown event, then we don't
+    // want to process any following keypress events.
+    if (mIgnoreKeyPressEvent) {
+      return true;
+    }
     if (aBindings.type() == MaybeNativeKeyBinding::TNativeKeyBinding) {
       const NativeKeyBinding& bindings = aBindings;
       autoCache.Cache(bindings.singleLineCommands(),
@@ -2496,11 +2501,6 @@ TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& event,
     } else {
       autoCache.CacheNoCommands();
     }
-  }
-  // If content code called preventDefault() on a keydown event, then we don't
-  // want to process any following keypress events.
-  if (event.message == NS_KEY_PRESS && mIgnoreKeyPressEvent) {
-    return true;
   }
 
   WidgetKeyboardEvent localEvent(event);
@@ -2689,7 +2689,7 @@ TabChild::RecvAsyncMessage(const nsString& aMessage,
     nsRefPtr<nsFrameMessageManager> mm =
       static_cast<nsFrameMessageManager*>(mTabChildGlobal->mMessageManager.get());
     CrossProcessCpowHolder cpows(Manager(), aCpows);
-    mm->ReceiveMessage(static_cast<EventTarget*>(mTabChildGlobal),
+    mm->ReceiveMessage(static_cast<EventTarget*>(mTabChildGlobal), nullptr,
                        aMessage, false, &cloneData, &cpows, aPrincipal, nullptr);
   }
   return true;
@@ -3179,7 +3179,7 @@ TabChild::CreatePluginWidget(nsIWidget* aParent, nsIWidget** aOut)
   initData.mUnicode = false;
   initData.clipChildren = true;
   initData.clipSiblings = true;
-  nsresult rv = pluginWidget->Create(aParent, nullptr, nsIntRect(nsIntPoint(0, 0),
+  nsresult rv = pluginWidget->Create(aParent, nullptr, gfx::IntRect(gfx::IntPoint(0, 0),
                                      nsIntSize(0, 0)), &initData);
   if (NS_FAILED(rv)) {
     NS_WARNING("Creating native plugin widget on the chrome side failed.");

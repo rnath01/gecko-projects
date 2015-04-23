@@ -156,6 +156,7 @@
 #include "prio.h"
 #include "private/pprio.h"
 #include "ContentProcessManager.h"
+#include "mozilla/psm/PSMContentListener.h"
 
 #include "nsIBidiKeyboard.h"
 
@@ -249,6 +250,7 @@ using namespace mozilla::ipc;
 using namespace mozilla::layers;
 using namespace mozilla::net;
 using namespace mozilla::jsipc;
+using namespace mozilla::psm;
 using namespace mozilla::widget;
 
 #ifdef ENABLE_TESTS
@@ -1703,7 +1705,7 @@ ContentParent::ShutDownMessageManager()
   }
 
   mMessageManager->ReceiveMessage(
-            static_cast<nsIContentFrameMessageManager*>(mMessageManager.get()),
+            static_cast<nsIContentFrameMessageManager*>(mMessageManager.get()), nullptr,
             CHILD_PROCESS_SHUTDOWN_MESSAGE, false,
             nullptr, nullptr, nullptr, nullptr);
 
@@ -1883,11 +1885,6 @@ struct DelayedDeleteContentParentTask : public nsRunnable
 void
 ContentParent::ActorDestroy(ActorDestroyReason why)
 {
-#ifdef MOZ_CRASHREPORTER
-    CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("ChildShutdownState"),
-                                       NS_LITERAL_CSTRING("ActorDestroy"));
-#endif
-
     if (mForceKillTimer) {
         mForceKillTimer->Cancel();
         mForceKillTimer = nullptr;
@@ -2049,12 +2046,6 @@ ContentParent::NotifyTabDestroying(PBrowserParent* aTab)
     StartForceKillTimer();
 }
 
-static int32_t
-ForceKillTimeout()
-{
-    return Preferences::GetInt("dom.ipc.tabs.shutdownTimeoutSecs", 5);
-}
-
 void
 ContentParent::StartForceKillTimer()
 {
@@ -2062,7 +2053,7 @@ ContentParent::StartForceKillTimer()
         return;
     }
 
-    int32_t timeoutSecs = ForceKillTimeout();
+    int32_t timeoutSecs = Preferences::GetInt("dom.ipc.tabs.shutdownTimeoutSecs", 5);
     if (timeoutSecs > 0) {
         mForceKillTimer = do_CreateInstance("@mozilla.org/timer;1");
         MOZ_ASSERT(mForceKillTimer);
@@ -2360,6 +2351,13 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
                             bool aSetupOffMainThreadCompositing,
                             bool aSendRegisteredChrome)
 {
+    if (aSendRegisteredChrome) {
+        nsCOMPtr<nsIChromeRegistry> registrySvc = nsChromeRegistry::GetService();
+        nsChromeRegistryChrome* chromeRegistry =
+            static_cast<nsChromeRegistryChrome*>(registrySvc.get());
+        chromeRegistry->SendRegisteredChrome(this);
+    }
+
     // Initialize the message manager (and load delayed scripts) now that we
     // have established communications with the child.
     mMessageManager->InitWithCallback(this);
@@ -2400,13 +2398,6 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
         DebugOnly<bool> opened = PSharedBufferManager::Open(this);
         MOZ_ASSERT(opened);
 #endif
-    }
-
-    if (aSendRegisteredChrome) {
-        nsCOMPtr<nsIChromeRegistry> registrySvc = nsChromeRegistry::GetService();
-        nsChromeRegistryChrome* chromeRegistry =
-            static_cast<nsChromeRegistryChrome*>(registrySvc.get());
-        chromeRegistry->SendRegisteredChrome(this);
     }
 
     if (gAppData) {
@@ -2933,27 +2924,13 @@ ContentParent::Observe(nsISupports* aSubject,
 {
     if (mSubprocess && (!strcmp(aTopic, "profile-before-change") ||
                         !strcmp(aTopic, "xpcom-shutdown"))) {
-#ifdef MOZ_CRASHREPORTER
-        CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("ChildShutdownState"),
-                                           NS_LITERAL_CSTRING("Begin"));
-#endif
-
         // Okay to call ShutDownProcess multiple times.
         ShutDownProcess(SEND_SHUTDOWN_MESSAGE);
-
-        int32_t timeout = ForceKillTimeout();
-
-        // Make sure we have a KillHard timer before we start waiting.
-        MOZ_RELEASE_ASSERT(!timeout || !mIPCOpen || mCalledKillHard || mForceKillTimer);
 
         // Wait for shutdown to complete, so that we receive any shutdown
         // data (e.g. telemetry) from the child before we quit.
         // This loop terminate prematurely based on mForceKillTimer.
-        while (mIPCOpen) {
-            // If we clear the KillHard timer, it should only be because we
-            // called KillHard. In that case, ActorDestroy should happen
-            // momentarily.
-            MOZ_RELEASE_ASSERT(!timeout || mCalledKillHard || mForceKillTimer);
+        while (mIPCOpen && !mCalledKillHard) {
             NS_ProcessNextEvent(nullptr, true);
         }
         NS_ASSERTION(!mSubprocess, "Close should have nulled mSubprocess");
@@ -3400,11 +3377,6 @@ ContentParent::ForceKillTimerCallback(nsITimer* aTimer, void* aClosure)
 void
 ContentParent::KillHard(const char* aReason)
 {
-#ifdef MOZ_CRASHREPORTER
-    CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("ChildShutdownState"),
-                                       NS_LITERAL_CSTRING("KillHard"));
-#endif
-
     // On Windows, calling KillHard multiple times causes problems - the
     // process handle becomes invalid on the first call, causing a second call
     // to crash our process - more details in bug 890840.
@@ -3692,6 +3664,22 @@ bool
 ContentParent::DeallocPScreenManagerParent(PScreenManagerParent* aActor)
 {
     delete aActor;
+    return true;
+}
+
+PPSMContentDownloaderParent*
+ContentParent::AllocPPSMContentDownloaderParent(const uint32_t& aCertType)
+{
+    nsRefPtr<PSMContentDownloaderParent> downloader =
+        new PSMContentDownloaderParent(aCertType);
+    return downloader.forget().take();
+}
+
+bool
+ContentParent::DeallocPPSMContentDownloaderParent(PPSMContentDownloaderParent* aListener)
+{
+    auto* listener = static_cast<PSMContentDownloaderParent*>(aListener);
+    nsRefPtr<PSMContentDownloaderParent> downloader = dont_AddRef(listener);
     return true;
 }
 
