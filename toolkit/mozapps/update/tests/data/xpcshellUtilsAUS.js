@@ -2554,7 +2554,7 @@ function checkUpdateLogContents(aCompareLogFile, aExcludeDistributionDir) {
     updateLogContents = updateLogContents.replace(/^ensure_remove: failed to remove file: .*$/mg, "");
     updateLogContents = updateLogContents.replace(/^ensure_remove_recursive: unable to remove directory: .*$/mg, "");
     updateLogContents = updateLogContents.replace(/^Removing tmpDir failed, err: -1$/mg, "");
-    updateLogContents = updateLogContents.replace(/^move_away: file will be .*$/mg, "");
+    updateLogContents = updateLogContents.replace(/^remove_recursive_on_reboot: file will be .*$/mg, "");
   }
   updateLogContents = updateLogContents.replace(/\r/g, "");
   // Replace error codes since they are different on each platform.
