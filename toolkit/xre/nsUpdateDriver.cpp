@@ -428,6 +428,7 @@ SwitchToUpdatedApp(nsIFile *greDir, nsIFile *updateDir,
 {
   nsresult rv;
 
+#ifndef XP_WIN
   // Steps:
   //  - copy updater into updates/0/MozUpdater/bgupdate/ dir
   //  - run updater with the correct arguments
@@ -454,6 +455,7 @@ SwitchToUpdatedApp(nsIFile *greDir, nsIFile *updateDir,
     LOG(("failed copying updater\n"));
     return;
   }
+#endif
 
   // We need to use the value returned from XRE_GetBinaryPath when attempting
   // to restart the running application.
@@ -473,15 +475,28 @@ SwitchToUpdatedApp(nsIFile *greDir, nsIFile *updateDir,
 #ifdef XP_WIN
   nsAutoString appFilePathW;
   rv = appFile->GetPath(appFilePathW);
-  if (NS_FAILED(rv))
+  if (NS_FAILED(rv)) {
     return;
+  }
   NS_ConvertUTF16toUTF8 appFilePath(appFilePathW);
+
+  nsCOMPtr<nsIFile> updater;
+  rv = greDir->Clone(getter_AddRefs(updater));
+  if (NS_FAILED(rv)) {
+    return;
+  }
+
+  nsDependentCString leaf(kUpdaterBin);
+  rv = updater->AppendNative(leaf);
+  if (NS_FAILED(rv)) {
+    return;
+  }
 
   nsAutoString updaterPathW;
   rv = updater->GetPath(updaterPathW);
-  if (NS_FAILED(rv))
+  if (NS_FAILED(rv)) {
     return;
-
+  }
   NS_ConvertUTF16toUTF8 updaterPath(updaterPathW);
 #else
 
@@ -703,6 +718,7 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *statusFile,
 {
   nsresult rv;
 
+#ifndef XP_WIN
   // Steps:
   //  - mark update as 'applying'
   //  - copy updater into update dir
@@ -713,6 +729,7 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *statusFile,
     LOG(("failed copying updater\n"));
     return;
   }
+#endif
 
   // We need to use the value returned from XRE_GetBinaryPath when attempting
   // to restart the running application.
@@ -732,17 +749,29 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *statusFile,
 #ifdef XP_WIN
   nsAutoString appFilePathW;
   rv = appFile->GetPath(appFilePathW);
-  if (NS_FAILED(rv))
+  if (NS_FAILED(rv)) {
     return;
+  }
   NS_ConvertUTF16toUTF8 appFilePath(appFilePathW);
+
+  nsCOMPtr<nsIFile> updater;
+  rv = greDir->Clone(getter_AddRefs(updater));
+  if (NS_FAILED(rv)) {
+    return;
+  }
+
+  nsDependentCString leaf(kUpdaterBin);
+  rv = updater->AppendNative(leaf);
+  if (NS_FAILED(rv)) {
+    return;
+  }
 
   nsAutoString updaterPathW;
   rv = updater->GetPath(updaterPathW);
-  if (NS_FAILED(rv))
+  if (NS_FAILED(rv)) {
     return;
-
+  }
   NS_ConvertUTF16toUTF8 updaterPath(updaterPathW);
-
 #else
   nsAutoCString appFilePath;
   rv = appFile->GetNativePath(appFilePath);

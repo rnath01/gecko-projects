@@ -648,20 +648,19 @@ function getCanStageUpdates() {
     return false;
   }
 
-
-  if (AppConstants.platform == "win" && isServiceInstalled() &&
-      shouldUseService()) {
+  if (AppConstants.platform == "win" &&
+      !(isServiceInstalled() && shouldUseService())) {
     // No need to perform directory write checks, the maintenance service will
     // be able to write to all directories.
-    LOG("getCanStageUpdates - able to stage updates because we'll use the service");
-    return true;
+    LOG("getCanStageUpdates - unable to stage updates on without the service");
+    return false;
   }
 
   // For Gonk, the updater will remount the /system partition to move staged
   // files into place.
   if (AppConstants.platform == "gonk") {
     LOG("getCanStageUpdates - able to stage updates because this is gonk");
-      return true;
+    return true;
   }
 
   if (!hasUpdateMutex()) {
