@@ -224,6 +224,7 @@ const Class js::ScalarTypeDescr::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     TypeDescr::finalize,
     ScalarTypeDescr::call
@@ -321,6 +322,7 @@ const Class js::ReferenceTypeDescr::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     TypeDescr::finalize,
     ReferenceTypeDescr::call
@@ -500,6 +502,7 @@ const Class ArrayTypeDescr::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     TypeDescr::finalize,
     nullptr, /* call */
@@ -727,6 +730,7 @@ const Class StructTypeDescr::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     TypeDescr::finalize,
     nullptr, /* call */
@@ -1485,7 +1489,7 @@ OutlineTypedObject::createUnattachedWithClass(JSContext* cx,
     if (!group)
         return nullptr;
 
-    NewObjectKind newKind = (heap == gc::TenuredHeap) ? MaybeSingletonObject : GenericObject;
+    NewObjectKind newKind = (heap == gc::TenuredHeap) ? TenuredObject : GenericObject;
     OutlineTypedObject* obj = NewObjectWithGroup<OutlineTypedObject>(cx, group,
                                                                      gc::AllocKind::OBJECT0,
                                                                      newKind);
@@ -2119,7 +2123,7 @@ InlineTypedObject::create(JSContext* cx, HandleTypeDescr descr, gc::InitialHeap 
     if (!group)
         return nullptr;
 
-    NewObjectKind newKind = (heap == gc::TenuredHeap) ? MaybeSingletonObject : GenericObject;
+    NewObjectKind newKind = (heap == gc::TenuredHeap) ? TenuredObject : GenericObject;
     return NewObjectWithGroup<InlineTypedObject>(cx, group, allocKind, newKind);
 }
 
@@ -2246,6 +2250,7 @@ OutlineTransparentTypedObject::getOrCreateBuffer(JSContext* cx)
         nullptr,        /* setProperty */                \
         nullptr,        /* enumerate   */                \
         nullptr,        /* resolve     */                \
+        nullptr,        /* mayResolve  */                \
         nullptr,        /* convert     */                \
         nullptr,        /* finalize    */                \
         nullptr,        /* call        */                \

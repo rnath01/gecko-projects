@@ -15,6 +15,7 @@ if (Cu === undefined) {
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
+Cu.import("resource://gre/modules/AppConstants.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
   "resource://gre/modules/Services.jsm");
@@ -131,6 +132,9 @@ function testInit() {
     // In non-e10s, only run the ShutdownLeaksCollector in the parent process.
     Components.utils.import("chrome://mochikit/content/ShutdownLeaksCollector.jsm");
   }
+
+  let gmm = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
+  gmm.loadFrameScript("chrome://mochikit/content/tests/SimpleTest/AsyncUtilsContent.js", true);
 }
 
 function Tester(aTests, aDumper, aCallback) {
@@ -513,8 +517,7 @@ Tester.prototype = {
           .getService(Ci.nsIXULRuntime)
           .processType == Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT)
       {
-        this.MemoryStats.dump(this.dumper.structuredLogger,
-                              this.currentTestIndex,
+        this.MemoryStats.dump(this.currentTestIndex,
                               this.currentTest.path,
                               gConfig.dumpOutputDirectory,
                               gConfig.dumpAboutMemoryAfterTest,
@@ -552,20 +555,29 @@ Tester.prototype = {
         // frames and browser intentionally kept alive until shutdown to
         // eliminate false positives.
         if (gConfig.testRoot == "browser") {
-          // Replace the document currently loaded in the browser's sidebar.
-          // This will prevent false positives for tests that were the last
-          // to touch the sidebar. They will thus not be blamed for leaking
-          // a document.
-          let sidebar = document.getElementById("sidebar");
-          sidebar.setAttribute("src", "data:text/html;charset=utf-8,");
-          sidebar.docShell.createAboutBlankContentViewer(null);
-          sidebar.setAttribute("src", "about:blank");
+          //Skip if SeaMonkey
+          if (AppConstants.MOZ_APP_NAME != "seamonkey") {
+            // Replace the document currently loaded in the browser's sidebar.
+            // This will prevent false positives for tests that were the last
+            // to touch the sidebar. They will thus not be blamed for leaking
+            // a document.
+            let sidebar = document.getElementById("sidebar");
+            sidebar.setAttribute("src", "data:text/html;charset=utf-8,");
+            sidebar.docShell.createAboutBlankContentViewer(null);
+            sidebar.setAttribute("src", "about:blank");
 
-          // Do the same for the social sidebar.
-          let socialSidebar = document.getElementById("social-sidebar-browser");
-          socialSidebar.setAttribute("src", "data:text/html;charset=utf-8,");
-          socialSidebar.docShell.createAboutBlankContentViewer(null);
-          socialSidebar.setAttribute("src", "about:blank");
+            // Do the same for the social sidebar.
+            let socialSidebar = document.getElementById("social-sidebar-browser");
+            socialSidebar.setAttribute("src", "data:text/html;charset=utf-8,");
+            socialSidebar.docShell.createAboutBlankContentViewer(null);
+            socialSidebar.setAttribute("src", "about:blank");
+
+            SelfSupportBackend.uninit();
+            CustomizationTabPreloader.uninit();
+            SocialFlyout.unload();
+            SocialShare.uninit();
+            TabView.uninit();
+          }
 
           // Destroy BackgroundPageThumbs resources.
           let {BackgroundPageThumbs} =
@@ -578,12 +590,6 @@ Tester.prototype = {
             gBrowser._preloadedBrowser = null;
             gBrowser.getNotificationBox(browser).remove();
           }
-
-          SelfSupportBackend.uninit();
-          CustomizationTabPreloader.uninit();
-          SocialFlyout.unload();
-          SocialShare.uninit();
-          TabView.uninit();
         }
 
         // Schedule GC and CC runs before finishing in order to detect
@@ -906,9 +912,9 @@ function testScope(aTester, aTest, expected) {
 
   var self = this;
   this.ok = function test_ok(condition, name, diag, stack) {
-    if (this.__expected == 'fail') {
+    if (self.__expected == 'fail') {
         if (!condition) {
-          this.__num_failed++;
+          self.__num_failed++;
           condition = true;
         }
     }

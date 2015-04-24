@@ -92,16 +92,11 @@ hardware (via AudioStream).
 #include "mozilla/RollingMean.h"
 #include "MediaTimer.h"
 
-class nsITimer;
-
 namespace mozilla {
 
 class AudioSegment;
-class VideoSegment;
 class MediaTaskQueue;
-class SharedThreadPool;
 class AudioSink;
-class MediaDecoderStateMachineScheduler;
 
 // GetCurrentTime is defined in winbase.h as zero argument macro forwarding to
 // GetTickCount() and conflicts with MediaDecoderStateMachine::GetCurrentTime
@@ -718,15 +713,37 @@ protected:
   // Can only be called on the state machine thread.
   void SetPlayStartTime(const TimeStamp& aTimeStamp);
 
+private:
   // Update mAudioEndTime.
   void OnAudioEndTimeUpdate(int64_t aAudioEndTime);
+public:
+  void DispatchOnAudioEndTimeUpdate(int64_t aAudioEndTime)
+  {
+    RefPtr<nsRunnable> r =
+      NS_NewRunnableMethodWithArg<int64_t>(this, &MediaDecoderStateMachine::OnAudioEndTimeUpdate, aAudioEndTime);
+    TaskQueue()->Dispatch(r.forget());
+  }
 
+private:
   // Update mDecoder's playback offset.
   void OnPlaybackOffsetUpdate(int64_t aPlaybackOffset);
+public:
+  void DispatchOnPlaybackOffsetUpdate(int64_t aPlaybackOffset)
+  {
+    RefPtr<nsRunnable> r =
+      NS_NewRunnableMethodWithArg<int64_t>(this, &MediaDecoderStateMachine::OnPlaybackOffsetUpdate, aPlaybackOffset);
+    TaskQueue()->Dispatch(r.forget());
+  }
 
+private:
   // Called by the AudioSink to signal that all outstanding work is complete
   // and the sink is shutting down.
   void OnAudioSinkComplete();
+public:
+  void DispatchOnAudioSinkComplete()
+  {
+    TaskQueue()->Dispatch(NS_NewRunnableMethod(this, &MediaDecoderStateMachine::OnAudioSinkComplete));
+  }
 
   // Called by the AudioSink to signal errors.
   void OnAudioSinkError();
@@ -780,6 +797,7 @@ protected:
 
     void Ensure(mozilla::TimeStamp& aTarget)
     {
+      MOZ_ASSERT(mSelf->OnTaskQueue());
       if (IsScheduled() && mTarget <= aTarget) {
         return;
       }
@@ -1214,6 +1232,8 @@ protected:
   // to decode any audio/video since the MediaDecoder will trigger a seek
   // operation soon.
   bool mSentFirstFrameLoadedEvent;
+
+  bool mSentPlaybackEndedEvent;
 };
 
 } // namespace mozilla;

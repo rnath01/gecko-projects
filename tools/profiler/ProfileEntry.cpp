@@ -11,6 +11,7 @@
 
 // JS
 #include "jsapi.h"
+#include "jsfriendapi.h"
 #include "js/ProfilingFrameIterator.h"
 #include "js/TrackedOptimizationInfo.h"
 
@@ -24,9 +25,11 @@
  #define snprintf _snprintf
 #endif
 
+using mozilla::MakeUnique;
 using mozilla::Maybe;
 using mozilla::Some;
 using mozilla::Nothing;
+
 
 ////////////////////////////////////////////////////////////////////////
 // BEGIN ProfileEntry
@@ -153,7 +156,6 @@ void ProfileBuffer::deleteExpiredStoredMarkers() {
 void ProfileBuffer::reset() {
   mGeneration += 2;
   mReadPos = mWritePos = 0;
-  deleteExpiredStoredMarkers();
 }
 
 #define DYNAMIC_MAX_STRING 512
@@ -232,8 +234,8 @@ public:
     , mStartedTypeList(false)
   { }
 
-  void readType(const char *keyedBy, const char *name,
-                const char *location, unsigned lineno) override {
+  void readType(const char* keyedBy, const char* name,
+                const char* location, Maybe<unsigned> lineno) override {
     if (!mStartedTypeList) {
       mStartedTypeList = true;
       mWriter.BeginObject();
@@ -249,13 +251,13 @@ public:
       if (location) {
         mWriter.NameValue("location", location);
       }
-      if (lineno != UINT32_MAX) {
-        mWriter.NameValue("line", lineno);
+      if (lineno.isSome()) {
+        mWriter.NameValue("line", *lineno);
       }
     mWriter.EndObject();
   }
 
-  void operator()(JS::TrackedTypeSite site, const char *mirType) override {
+  void operator()(JS::TrackedTypeSite site, const char* mirType) override {
     if (mStartedTypeList) {
       mWriter.EndArray();
       mStartedTypeList = false;
@@ -370,12 +372,18 @@ void UniqueJITOptimizations::stream(JSStreamWriter& b, JSRuntime* rt)
 
     b.Name("attempts");
     b.BeginArray();
-    JSScript *script;
-    jsbytecode *pc;
+    JSScript* script;
+    jsbytecode* pc;
     StreamOptimizationAttemptsOp attemptOp(b);
     JS::ForEachTrackedOptimizationAttempt(rt, mOpts[i].mEntryAddr, mOpts[i].mIndex,
                                           attemptOp, &script, &pc);
     b.EndArray();
+
+    if (JSAtom* name = js::GetPropertyNameFromPC(script, pc)) {
+      char buf[512];
+      JS_PutEscapedFlatString(buf, mozilla::ArrayLength(buf), js::AtomToFlatString(name), 0);
+      b.NameValue("propertyName", buf);
+    }
 
     unsigned line, column;
     line = JS_PCToLineNumber(script, pc, &column);

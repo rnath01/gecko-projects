@@ -24,19 +24,23 @@ public:
                   bool aAuth,
                   bool aEncrypt);
 
-  bool ConnectSocket(const nsAString& aDeviceAddress, int aChannel);
+  bool ConnectSocket(const nsAString& aDeviceAddress,
+                     const BluetoothUuid& aServiceUuid,
+                     int aChannel);
 
-  bool ListenSocket(int aChannel);
+  bool ListenSocket(const nsAString& aServiceName,
+                    const BluetoothUuid& aServiceUuid,
+                    int aChannel);
 
-  void CloseSocket();
+  void CloseSocket() override;
 
-  bool SendSocketData(mozilla::ipc::UnixSocketRawData* aData);
+  void SendSocketData(mozilla::ipc::UnixSocketIOBuffer* aBuffer) override;
 
   virtual void OnConnectSuccess() override;
   virtual void OnConnectError() override;
   virtual void OnDisconnect() override;
   virtual void ReceiveSocketData(
-    nsAutoPtr<mozilla::ipc::UnixSocketRawData>& aMessage) override;
+    nsAutoPtr<mozilla::ipc::UnixSocketBuffer>& aBuffer) override;
 
   inline void GetAddress(nsAString& aDeviceAddress)
   {

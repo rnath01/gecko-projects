@@ -77,6 +77,8 @@ loader.lazyGetter(this, "REGEX_ALL_CSS_PROPERTIES", function () {
  */
 function OutputParser() {
   this.parsed = [];
+  this.colorSwatches = new WeakMap();
+  this._onSwatchMouseDown = this._onSwatchMouseDown.bind(this);
 }
 
 exports.OutputParser = OutputParser;
@@ -102,6 +104,8 @@ OutputParser.prototype = {
     // It avoids parsing "linear" as a timing-function in "linear-gradient(...)"
     options.expectCubicBezier = ["transition", "transition-timing-function",
       "animation", "animation-timing-function"].indexOf(name) !== -1;
+
+    options.expectFilter = name === "filter";
 
     if (this._cssPropertySupportsValue(name, value)) {
       return this._parse(value, options);
@@ -181,6 +185,11 @@ OutputParser.prototype = {
       if (i > MAX_ITERATIONS) {
         this._appendTextNode(text);
         text = "";
+        break;
+      }
+
+      if (options.expectFilter) {
+        this._appendFilter(text, options);
         break;
       }
 
@@ -389,12 +398,14 @@ OutputParser.prototype = {
           class: options.colorSwatchClass,
           style: "background-color:" + color
         });
+        this.colorSwatches.set(swatch, colorObj);
+        swatch.addEventListener("mousedown", this._onSwatchMouseDown, false);
         container.appendChild(swatch);
       }
 
       if (options.defaultColorType) {
         color = colorObj.toString();
-        container.dataset["color"] = color;
+        container.dataset.color = color;
       }
 
       let value = this._createNode("span", {
@@ -406,6 +417,41 @@ OutputParser.prototype = {
       return true;
     }
     return false;
+  },
+
+  _appendFilter: function(filters, options={}) {
+    let container = this._createNode("span", {
+      "data-filters": filters
+    });
+
+    if (options.filterSwatchClass) {
+      let swatch = this._createNode("span", {
+        class: options.filterSwatchClass
+      });
+      container.appendChild(swatch);
+    }
+
+    let value = this._createNode("span", {
+      class: options.filterClass
+    }, filters);
+
+    container.appendChild(value);
+    this.parsed.push(container);
+  },
+
+  _onSwatchMouseDown: function(event) {
+    // Prevent text selection in the case of shift-click or double-click.
+    event.preventDefault();
+
+    if (!event.shiftKey) {
+      return;
+    }
+
+    let swatch = event.target;
+    let color = this.colorSwatches.get(swatch);
+    let val = color.nextColorUnit();
+
+    swatch.nextElementSibling.textContent = val;
   },
 
    /**

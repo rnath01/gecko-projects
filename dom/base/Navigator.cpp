@@ -37,6 +37,7 @@
 #include "mozilla/dom/power/PowerManagerService.h"
 #include "mozilla/dom/CellBroadcast.h"
 #include "mozilla/dom/IccManager.h"
+#include "mozilla/dom/InputPortManager.h"
 #include "mozilla/dom/MobileMessageManager.h"
 #include "mozilla/dom/ServiceWorkerContainer.h"
 #include "mozilla/dom/Telephony.h"
@@ -117,6 +118,10 @@
 #include "mozilla/EMEUtils.h"
 #endif
 
+#ifdef MOZ_WIDGET_GONK
+#include <cutils/properties.h>
+#endif
+
 namespace mozilla {
 namespace dom {
 
@@ -183,6 +188,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTelephony)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mVoicemail)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTVManager)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mInputPortManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mConnection)
 #ifdef MOZ_B2G_RIL
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMobileConnections)
@@ -275,6 +281,10 @@ Navigator::Invalidate()
 
   if (mTVManager) {
     mTVManager = nullptr;
+  }
+
+  if (mInputPortManager) {
+    mInputPortManager = nullptr;
   }
 
   if (mConnection) {
@@ -1215,7 +1225,7 @@ Navigator::SendBeacon(const nsAString& aUrl,
                                                                principal,
                                                                true);
 
-  rv = cors->Init(channel, true);
+  rv = cors->Init(channel, DataURIHandling::Allow);
   NS_ENSURE_SUCCESS(rv, false);
 
   nsCOMPtr<nsINetworkInterceptController> interceptController = do_QueryInterface(docShell);
@@ -1447,6 +1457,17 @@ Navigator::GetFeature(const nsAString& aName, ErrorResult& aRv)
   } // hardware.memory
 #endif
 
+#ifdef MOZ_WIDGET_GONK
+  if (aName.EqualsLiteral("acl.version")) {
+    char value[PROPERTY_VALUE_MAX];
+    uint32_t len = property_get("persist.acl.version", value, nullptr);
+    if (len > 0) {
+      p->MaybeResolve(NS_ConvertUTF8toUTF16(value));
+      return p.forget();
+    }
+  }
+#endif
+
   p->MaybeResolve(JS::UndefinedHandleValue);
   return p.forget();
 }
@@ -1633,6 +1654,23 @@ Navigator::GetTv()
   }
 
   return mTVManager;
+}
+
+InputPortManager*
+Navigator::GetInputPortManager(ErrorResult& aRv)
+{
+  if (!mInputPortManager) {
+    if (!mWindow) {
+      aRv.Throw(NS_ERROR_FAILURE);
+      return nullptr;
+    }
+    mInputPortManager = InputPortManager::Create(mWindow, aRv);
+    if (NS_WARN_IF(aRv.Failed())) {
+      return nullptr;
+    }
+  }
+
+  return mInputPortManager;
 }
 
 #ifdef MOZ_B2G

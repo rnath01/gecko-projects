@@ -14,8 +14,6 @@
 #include <d3d11.h>
 #include <vector>
 
-class gfxD2DSurface;
-
 namespace mozilla {
 namespace layers {
 
@@ -33,6 +31,12 @@ public:
                      TextureFlags aFlags);
 
   virtual ~TextureClientD3D11();
+
+  void InitWith(ID3D11Texture2D* aTexture, const gfx::IntSize& aSize)
+  {
+    mTexture = aTexture;
+    mSize = aSize;
+  }
 
   // TextureClient
 

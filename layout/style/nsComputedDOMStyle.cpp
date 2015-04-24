@@ -543,7 +543,7 @@ nsComputedDOMStyle::GetPresShellForContent(nsIContent* aContent)
 // on a nsComputedDOMStyle object, but must be defined to avoid
 // compile errors.
 css::Declaration*
-nsComputedDOMStyle::GetCSSDeclaration(bool)
+nsComputedDOMStyle::GetCSSDeclaration(Operation)
 {
   NS_RUNTIMEABORT("called nsComputedDOMStyle::GetCSSDeclaration");
   return nullptr;
@@ -1427,7 +1427,7 @@ nsComputedDOMStyle::DoGetFontSizeAdjust()
 
   const nsStyleFont *font = StyleFont();
 
-  if (font->mFont.sizeAdjust) {
+  if (font->mFont.sizeAdjust >= 0.0f) {
     val->SetNumber(font->mFont.sizeAdjust);
   } else {
     val->SetIdent(eCSSKeyword_none);

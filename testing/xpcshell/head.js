@@ -501,7 +501,14 @@ function _execute_test() {
 
   try {
     do_test_pending("MAIN run_test");
-    run_test();
+    // Check if run_test() is defined. If defined, run it.
+    // Else, call run_next_test() directly to invoke tests
+    // added by add_test() and add_task().  
+    if (typeof run_test === "function") {
+      run_test();
+    } else {
+      run_next_test();
+    }
     do_test_finished("MAIN run_test");
     _do_main();
   } catch (e) {
@@ -1101,9 +1108,10 @@ function do_get_minidumpdir() {
  * Registers a directory with the profile service,
  * and return the directory as an nsILocalFile.
  *
+ * @param notifyProfileAfterChange Whether to notify for "profile-after-change".
  * @return nsILocalFile of the profile directory.
  */
-function do_get_profile() {
+function do_get_profile(notifyProfileAfterChange = false) {
   if (!runningInParent) {
     _testLogger.info("Ignoring profile creation from child process.");
     return null;
@@ -1166,6 +1174,9 @@ function do_get_profile() {
   if (!_profileInitialized) {
     obsSvc.notifyObservers(null, "profile-do-change", "xpcshell-do-get-profile");
     _profileInitialized = true;
+    if (notifyProfileAfterChange) {
+      obsSvc.notifyObservers(null, "profile-after-change", "xpcshell-do-get-profile");
+    }
   }
 
   // The methods of 'provider' will retain this scope so null out everything
@@ -1202,7 +1213,6 @@ function do_load_child_test_harness()
 
   let command =
         "const _HEAD_JS_PATH=" + uneval(_HEAD_JS_PATH) + "; "
-      + "const _HTTPD_JS_PATH=" + uneval(_HTTPD_JS_PATH) + "; "
       + "const _HEAD_FILES=" + uneval(_HEAD_FILES) + "; "
       + "const _TAIL_FILES=" + uneval(_TAIL_FILES) + "; "
       + "const _TEST_NAME=" + uneval(_TEST_NAME) + "; "
@@ -1420,6 +1430,7 @@ try {
 
     prefs.setCharPref("media.gmp-manager.url.override", "http://%(server)s/dummy-gmp-manager.xml");
     prefs.setCharPref("browser.selfsupport.url", "https://%(server)s/selfsupport-dummy/");
+    prefs.setCharPref("toolkit.telemetry.server", "https://%(server)s/telemetry-dummy");
   }
 } catch (e) { }
 

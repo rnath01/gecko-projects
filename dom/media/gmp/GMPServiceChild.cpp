@@ -148,8 +148,7 @@ class GetNodeIdDone : public GetServiceChildCallback
 {
 public:
   GetNodeIdDone(const nsAString& aOrigin, const nsAString& aTopLevelOrigin,
-                bool aInPrivateBrowsing,
-                UniquePtr<GetNodeIdCallback>&& aCallback)
+                bool aInPrivateBrowsing, UniquePtr<GetNodeIdCallback>&& aCallback)
     : mOrigin(aOrigin),
       mTopLevelOrigin(aTopLevelOrigin),
       mInPrivateBrowsing(aInPrivateBrowsing),
@@ -188,8 +187,7 @@ GeckoMediaPluginServiceChild::GetNodeId(const nsAString& aOrigin,
                                         UniquePtr<GetNodeIdCallback>&& aCallback)
 {
   UniquePtr<GetServiceChildCallback> callback(
-    new GetNodeIdDone(aOrigin, aTopLevelOrigin, aInPrivateBrowsing,
-                      Move(aCallback)));
+    new GetNodeIdDone(aOrigin, aTopLevelOrigin, aInPrivateBrowsing, Move(aCallback)));
   GetServiceChild(Move(callback));
   return NS_OK;
 }

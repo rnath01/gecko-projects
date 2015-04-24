@@ -39,7 +39,6 @@
 
 class CancelableTask;
 class MessageLoop;
-class gfxContext;
 class nsIWidget;
 
 namespace mozilla {
@@ -167,7 +166,7 @@ public:
   virtual bool RecvNotifyChildCreated(const uint64_t& child) override;
   virtual bool RecvAdoptChild(const uint64_t& child) override;
   virtual bool RecvMakeSnapshot(const SurfaceDescriptor& aInSnapshot,
-                                const nsIntRect& aRect) override;
+                                const gfx::IntRect& aRect) override;
   virtual bool RecvFlushRendering() override;
 
   virtual bool RecvGetTileSize(int32_t* aWidth, int32_t* aHeight) override;
@@ -198,6 +197,9 @@ public:
                override;
   virtual void GetAPZTestData(const LayerTransactionParent* aLayerTree,
                               APZTestData* aOutData) override;
+  virtual void SetConfirmedTargetAPZC(const LayerTransactionParent* aLayerTree,
+                                      const uint64_t& aInputBlockId,
+                                      const nsTArray<ScrollableLayerGuid>& aTargets) override;
   virtual AsyncCompositionManager* GetCompositionManager(LayerTransactionParent* aLayerTree) override { return mCompositionManager; }
 
   /**
@@ -223,6 +225,7 @@ public:
    * Returns true if a surface was obtained and the resume succeeded; false
    * otherwise.
    */
+  bool ScheduleResumeOnCompositorThread();
   bool ScheduleResumeOnCompositorThread(int width, int height);
 
   virtual void ScheduleComposition();
@@ -337,6 +340,7 @@ public:
 
   static void RequestNotifyLayerTreeReady(uint64_t aLayersId, CompositorUpdateObserver* aObserver);
   static void RequestNotifyLayerTreeCleared(uint64_t aLayersId, CompositorUpdateObserver* aObserver);
+  static void SwapLayerTreeObservers(uint64_t aLayer, uint64_t aOtherLayer);
 
   float ComputeRenderIntegrity();
 
@@ -359,8 +363,8 @@ protected:
   virtual bool DeallocPLayerTransactionParent(PLayerTransactionParent* aLayers) override;
   virtual void ScheduleTask(CancelableTask*, int);
   void CompositeCallback(TimeStamp aScheduleTime);
-  void CompositeToTarget(gfx::DrawTarget* aTarget, const nsIntRect* aRect = nullptr);
-  void ForceComposeToTarget(gfx::DrawTarget* aTarget, const nsIntRect* aRect = nullptr);
+  void CompositeToTarget(gfx::DrawTarget* aTarget, const gfx::IntRect* aRect = nullptr);
+  void ForceComposeToTarget(gfx::DrawTarget* aTarget, const gfx::IntRect* aRect = nullptr);
 
   void SetEGLSurfaceSize(int width, int height);
 

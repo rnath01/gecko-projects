@@ -411,67 +411,6 @@ class MinorCollectionTracer : public JS::CallbackTracer
 } /* namespace gc */
 } /* namespace js */
 
-static AllocKind
-GetObjectAllocKindForCopy(const Nursery& nursery, JSObject* obj)
-{
-    if (obj->is<ArrayObject>()) {
-        ArrayObject* aobj = &obj->as<ArrayObject>();
-        MOZ_ASSERT(aobj->numFixedSlots() == 0);
-
-        /* Use minimal size object if we are just going to copy the pointer. */
-        if (!nursery.isInside(aobj->getElementsHeader()))
-            return AllocKind::OBJECT0_BACKGROUND;
-
-        size_t nelements = aobj->getDenseCapacity();
-        return GetBackgroundAllocKind(GetGCArrayKind(nelements));
-    }
-
-    if (obj->is<JSFunction>())
-        return obj->as<JSFunction>().getAllocKind();
-
-    /*
-     * Typed arrays in the nursery may have a lazily allocated buffer, make
-     * sure there is room for the array's fixed data when moving the array.
-     */
-    if (obj->is<TypedArrayObject>() && !obj->as<TypedArrayObject>().buffer()) {
-        size_t nbytes = obj->as<TypedArrayObject>().byteLength();
-        return GetBackgroundAllocKind(TypedArrayObject::AllocKindForLazyBuffer(nbytes));
-    }
-
-    // Proxies have finalizers and are not nursery allocated.
-    MOZ_ASSERT(!IsProxy(obj));
-
-    // Unboxed plain objects are sized according to the data they store.
-    if (obj->is<UnboxedPlainObject>()) {
-        size_t nbytes = obj->as<UnboxedPlainObject>().layoutDontCheckGeneration().size();
-        return GetGCObjectKindForBytes(UnboxedPlainObject::offsetOfData() + nbytes);
-    }
-
-    // Inlined typed objects are followed by their data, so make sure we copy
-    // it all over to the new object.
-    if (obj->is<InlineTypedObject>()) {
-        // Figure out the size of this object, from the prototype's TypeDescr.
-        // The objects we are traversing here are all tenured, so we don't need
-        // to check forwarding pointers.
-        TypeDescr* descr = &obj->as<InlineTypedObject>().typeDescr();
-        MOZ_ASSERT(!IsInsideNursery(descr));
-        return InlineTypedObject::allocKindForTypeDescriptor(descr);
-    }
-
-    // Outline typed objects use the minimum allocation kind.
-    if (obj->is<OutlineTypedObject>())
-        return AllocKind::OBJECT0;
-
-    // All nursery allocatable non-native objects are handled above.
-    MOZ_ASSERT(obj->isNative());
-
-    AllocKind kind = GetGCObjectFixedSlotsKind(obj->as<NativeObject>().numFixedSlots());
-    MOZ_ASSERT(!IsBackgroundFinalized(kind));
-    if (!CanBeFinalizedInBackground(kind, obj->getClass()))
-        return kind;
-    return GetBackgroundAllocKind(kind);
-}
-
 MOZ_ALWAYS_INLINE TenuredCell*
 js::Nursery::allocateFromTenured(Zone* zone, AllocKind thingKind)
 {
@@ -656,7 +595,7 @@ void*
 js::Nursery::moveToTenured(MinorCollectionTracer* trc, JSObject* src)
 {
 
-    AllocKind dstKind = GetObjectAllocKindForCopy(*this, src);
+    AllocKind dstKind = src->allocKindForTenure(*this);
     Zone* zone = src->zone();
     JSObject* dst = reinterpret_cast<JSObject*>(allocateFromTenured(zone, dstKind));
     if (!dst)
@@ -700,8 +639,10 @@ js::Nursery::moveObjectToTenured(MinorCollectionTracer* trc,
 
         // The shape's list head may point into the old object. This can only
         // happen for dictionaries, which are native objects.
-        if (&nsrc->shape_ == ndst->shape_->listp)
+        if (&nsrc->shape_ == ndst->shape_->listp) {
+            MOZ_ASSERT(nsrc->shape_->inDictionary());
             ndst->shape_->listp = &ndst->shape_;
+        }
     }
 
     if (src->is<InlineTypedObject>())
@@ -853,13 +794,6 @@ js::Nursery::collect(JSRuntime* rt, JS::gcreason::Reason reason, ObjectGroupList
     sb.markGenericEntries(&trc);
     TIME_END(markGenericEntries);
 
-    TIME_START(checkHashTables);
-#ifdef JS_GC_ZEAL
-    if (rt->gcZeal() == ZealCheckHashTablesOnMinorGC)
-        CheckHashTablesAfterMovingGC(rt);
-#endif
-    TIME_END(checkHashTables);
-
     TIME_START(markRuntime);
     rt->gc.markRuntime(&trc);
     TIME_END(markRuntime);
@@ -914,6 +848,14 @@ js::Nursery::collect(JSRuntime* rt, JS::gcreason::Reason reason, ObjectGroupList
     TIME_START(clearStoreBuffer);
     rt->gc.storeBuffer.clear();
     TIME_END(clearStoreBuffer);
+
+    // Make sure hashtables have been updated after the collection.
+    TIME_START(checkHashTables);
+#ifdef JS_GC_ZEAL
+    if (rt->gcZeal() == ZealCheckHashTablesOnMinorGC)
+        CheckHashTablesAfterMovingGC(rt);
+#endif
+    TIME_END(checkHashTables);
 
     // Resize the nursery.
     TIME_START(resize);

@@ -28,8 +28,6 @@
 #include "nsTArrayForwardDeclare.h"
 #include "nsTObserverArray.h"
 
-class nsIScriptError;
-
 namespace mozilla {
 
 namespace ipc {
@@ -38,7 +36,7 @@ class BackgroundChild;
 
 namespace dom {
 
-class ServiceWorkerRegistration;
+class ServiceWorkerRegistrationListener;
 
 namespace workers {
 
@@ -215,6 +213,7 @@ class ServiceWorkerInfo final
 private:
   const ServiceWorkerRegistrationInfo* mRegistration;
   nsCString mScriptSpec;
+  nsString mCacheName;
   ServiceWorkerState mState;
   // We hold rawptrs since the ServiceWorker constructor and destructor ensure
   // addition and removal.
@@ -247,18 +246,27 @@ public:
   }
 
   explicit ServiceWorkerInfo(ServiceWorkerRegistrationInfo* aReg,
-                             const nsACString& aScriptSpec)
+                             const nsACString& aScriptSpec,
+                             const nsAString& aCacheName)
     : mRegistration(aReg)
     , mScriptSpec(aScriptSpec)
+    , mCacheName(aCacheName)
     , mState(ServiceWorkerState::EndGuard_)
   {
     MOZ_ASSERT(mRegistration);
+    MOZ_ASSERT(!aCacheName.IsEmpty());
   }
 
   ServiceWorkerState
   State() const
   {
     return mState;
+  }
+
+  const nsString&
+  CacheName() const
+  {
+    return mCacheName;
   }
 
   void
@@ -330,7 +338,7 @@ public:
   // The scope should be a fully qualified valid URL.
   nsRefPtrHashtable<nsCStringHashKey, ServiceWorkerRegistrationInfo> mServiceWorkerRegistrationInfos;
 
-  nsTObserverArray<ServiceWorkerRegistration*> mServiceWorkerRegistrations;
+  nsTObserverArray<ServiceWorkerRegistrationListener*> mServiceWorkerRegistrationListeners;
 
   nsRefPtrHashtable<nsISupportsHashKey, ServiceWorkerRegistrationInfo> mControlledDocuments;
 
@@ -388,6 +396,13 @@ public:
  void LoadRegistrations(
                  const nsTArray<ServiceWorkerRegistrationData>& aRegistrations);
 
+  NS_IMETHOD
+  AddRegistrationEventListener(const nsAString& aScope,
+                               ServiceWorkerRegistrationListener* aListener);
+
+  NS_IMETHOD
+  RemoveRegistrationEventListener(const nsAString& aScope,
+                                  ServiceWorkerRegistrationListener* aListener);
 private:
   ServiceWorkerManager();
   ~ServiceWorkerManager();
@@ -417,6 +432,9 @@ private:
                            WhichServiceWorker aWhichWorker,
                            nsISupports** aServiceWorker);
 
+  already_AddRefed<ServiceWorker>
+  CreateServiceWorkerForScope(const nsACString& aScope);
+
   void
   InvalidateServiceWorkerRegistrationWorker(ServiceWorkerRegistrationInfo* aRegistration,
                                             WhichServiceWorker aWhichOnes);
@@ -444,15 +462,7 @@ private:
                                              const nsAString& aName);
 
   void
-  FireEventOnServiceWorkerRegistrations(ServiceWorkerRegistrationInfo* aRegistration,
-                                        const nsAString& aName);
-
-  void
-  FireUpdateFound(ServiceWorkerRegistrationInfo* aRegistration)
-  {
-    FireEventOnServiceWorkerRegistrations(aRegistration,
-                                          NS_LITERAL_STRING("updatefound"));
-  }
+  FireUpdateFoundOnServiceWorkerRegistrations(ServiceWorkerRegistrationInfo* aRegistration);
 
   void
   FireControllerChange(ServiceWorkerRegistrationInfo* aRegistration);

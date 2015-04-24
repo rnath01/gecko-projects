@@ -823,9 +823,6 @@ private:
   const uint32_t mBucketCount;
 };
 
-// A initializer to initialize histogram collection
-StatisticsRecorder gStatisticsRecorder;
-
 // Hardcoded probes
 struct TelemetryHistogram {
   uint32_t min;
@@ -3585,6 +3582,14 @@ RecordShutdownEndTimeStamp() {
   PL_strfree(gRecordedShutdownTimeFileName);
   gRecordedShutdownTimeFileName = nullptr;
   gAlreadyFreedShutdownTimeFileName = true;
+
+  if (gRecordedShutdownStartTime.IsNull()) {
+    // If |CanRecordExtended()| is true before |AsyncFetchTelemetryData| is called and
+    // then disabled before shutdown, |RecordShutdownStartTimeStamp| will bail out and
+    // we will end up with a null |gRecordedShutdownStartTime| here. This can happen
+    // during tests.
+    return;
+  }
 
   nsCString tmpName = name;
   tmpName += ".tmp";

@@ -7,35 +7,38 @@
 
 #include "FrameLayerBuilder.h"
 
-#include "mozilla/gfx/Matrix.h"
-#include "nsDisplayList.h"
-#include "nsPresContext.h"
-#include "nsLayoutUtils.h"
-#include "Layers.h"
-#include "BasicLayers.h"
-#include "gfxUtils.h"
-#include "nsRenderingContext.h"
-#include "MaskLayerImageCache.h"
-#include "nsIScrollableFrame.h"
-#include "nsPrintfCString.h"
-#include "LayerTreeInvalidation.h"
-#include "nsSVGIntegrationUtils.h"
-#include "ImageContainer.h"
-#include "ActiveLayerTracker.h"
-#include "gfx2DGlue.h"
 #include "mozilla/LookAndFeel.h"
-#include "nsDocShell.h"
-#include "nsImageFrame.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/dom/ProfileTimelineMarkerBinding.h"
+#include "mozilla/gfx/Matrix.h"
+#include "ActiveLayerTracker.h"
+#include "BasicLayers.h"
+#include "ImageContainer.h"
+#include "LayerTreeInvalidation.h"
+#include "Layers.h"
+#include "MaskLayerImageCache.h"
+#include "UnitTransforms.h"
+#include "Units.h"
+#include "gfx2DGlue.h"
+#include "gfxUtils.h"
+#include "nsDisplayList.h"
+#include "nsDocShell.h"
+#include "nsIScrollableFrame.h"
+#include "nsImageFrame.h"
+#include "nsLayoutUtils.h"
+#include "nsPresContext.h"
+#include "nsPrintfCString.h"
+#include "nsRenderingContext.h"
+#include "nsSVGIntegrationUtils.h"
 
-#include "GeckoProfiler.h"
-#include "mozilla/gfx/Tools.h"
-#include "mozilla/gfx/2D.h"
-#include "gfxPrefs.h"
-#include "LayersLogging.h"
-#include "mozilla/unused.h"
-#include "mozilla/ReverseIterator.h"
 #include "mozilla/Move.h"
+#include "mozilla/ReverseIterator.h"
+#include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/Tools.h"
+#include "mozilla/unused.h"
+#include "GeckoProfiler.h"
+#include "LayersLogging.h"
+#include "gfxPrefs.h"
 
 #include <algorithm>
 
@@ -46,45 +49,41 @@ namespace mozilla {
 
 class PaintedDisplayItemLayerUserData;
 
+static nsTHashtable<nsPtrHashKey<FrameLayerBuilder::DisplayItemData>>* sAliveDisplayItemDatas;
+
 FrameLayerBuilder::DisplayItemData::DisplayItemData(LayerManagerData* aParent, uint32_t aKey,
-                                                    nsIFrame* aFrame)
+                                                    Layer* aLayer, nsIFrame* aFrame)
 
   : mParent(aParent)
-  , mLayer(nullptr)
+  , mLayer(aLayer)
   , mDisplayItemKey(aKey)
   , mItem(nullptr)
   , mUsed(true)
   , mIsInvalid(false)
 {
+  MOZ_COUNT_CTOR(FrameLayerBuilder::DisplayItemData);
+
+  if (!sAliveDisplayItemDatas) {
+    sAliveDisplayItemDatas = new nsTHashtable<nsPtrHashKey<FrameLayerBuilder::DisplayItemData>>();
+  }
+  MOZ_RELEASE_ASSERT(!sAliveDisplayItemDatas->Contains(this));
+  sAliveDisplayItemDatas->PutEntry(this);
+
+  MOZ_RELEASE_ASSERT(mLayer);
   if (aFrame) {
     AddFrame(aFrame);
   }
-}
 
-FrameLayerBuilder::DisplayItemData::DisplayItemData(DisplayItemData &toCopy)
-{
-  // This isn't actually a copy-constructor; notice that it steals toCopy's
-  // mGeometry pointer.  Be careful.
-  mParent = toCopy.mParent;
-  mLayer = toCopy.mLayer;
-  mInactiveManager = toCopy.mInactiveManager;
-  mFrameList = toCopy.mFrameList;
-  mGeometry = toCopy.mGeometry;
-  mDisplayItemKey = toCopy.mDisplayItemKey;
-  mClip = toCopy.mClip;
-  mContainerLayerGeneration = toCopy.mContainerLayerGeneration;
-  mLayerState = toCopy.mLayerState;
-  mItem = toCopy.mItem;
-  mUsed = toCopy.mUsed;
 }
 
 void
 FrameLayerBuilder::DisplayItemData::AddFrame(nsIFrame* aFrame)
 {
+  MOZ_RELEASE_ASSERT(mLayer);
   mFrameList.AppendElement(aFrame);
 
-  nsTArray<DisplayItemData*> *array =
-    reinterpret_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(FrameLayerBuilder::LayerManagerDataProperty()));
+  nsTArray<DisplayItemData*>* array =
+    static_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(FrameLayerBuilder::LayerManagerDataProperty()));
   if (!array) {
     array = new nsTArray<DisplayItemData*>();
     aFrame->Properties().Set(FrameLayerBuilder::LayerManagerDataProperty(), array);
@@ -96,12 +95,12 @@ void
 FrameLayerBuilder::DisplayItemData::RemoveFrame(nsIFrame* aFrame)
 {
   MOZ_RELEASE_ASSERT(mLayer);
-  DebugOnly<bool> result = mFrameList.RemoveElement(aFrame);
-  NS_ASSERTION(result, "Can't remove a frame that wasn't added!");
+  bool result = mFrameList.RemoveElement(aFrame);
+  MOZ_RELEASE_ASSERT(result, "Can't remove a frame that wasn't added!");
 
-  nsTArray<DisplayItemData*> *array =
-    reinterpret_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(FrameLayerBuilder::LayerManagerDataProperty()));
-  NS_ASSERTION(array, "Must be already stored on the frame!");
+  nsTArray<DisplayItemData*>* array =
+    static_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(FrameLayerBuilder::LayerManagerDataProperty()));
+  MOZ_RELEASE_ASSERT(array, "Must be already stored on the frame!");
   array->RemoveElement(this);
 }
 
@@ -133,6 +132,7 @@ FrameLayerBuilder::DisplayItemData::BeginUpdate(Layer* aLayer, LayerState aState
                                                 uint32_t aContainerLayerGeneration,
                                                 nsDisplayItem* aItem /* = nullptr */)
 {
+  MOZ_RELEASE_ASSERT(mLayer);
   MOZ_RELEASE_ASSERT(aLayer);
   mLayer = aLayer;
   mOptLayer = nullptr;
@@ -175,6 +175,8 @@ FrameLayerBuilder::DisplayItemData::BeginUpdate(Layer* aLayer, LayerState aState
 static nsIFrame* sDestroyedFrame = nullptr;
 FrameLayerBuilder::DisplayItemData::~DisplayItemData()
 {
+  MOZ_COUNT_DTOR(FrameLayerBuilder::DisplayItemData);
+  MOZ_RELEASE_ASSERT(mLayer);
   for (uint32_t i = 0; i < mFrameList.Length(); i++) {
     nsIFrame* frame = mFrameList[i];
     if (frame == sDestroyedFrame) {
@@ -183,6 +185,13 @@ FrameLayerBuilder::DisplayItemData::~DisplayItemData()
     nsTArray<DisplayItemData*> *array =
       reinterpret_cast<nsTArray<DisplayItemData*>*>(frame->Properties().Get(LayerManagerDataProperty()));
     array->RemoveElement(this);
+  }
+
+  MOZ_RELEASE_ASSERT(sAliveDisplayItemDatas && sAliveDisplayItemDatas->Contains(this));
+  sAliveDisplayItemDatas->RemoveEntry(this);
+  if (sAliveDisplayItemDatas->Count() == 0) {
+    delete sAliveDisplayItemDatas;
+    sAliveDisplayItemDatas = nullptr;
   }
 }
 
@@ -1407,16 +1416,23 @@ FrameLayerBuilder::FlashPaint(gfxContext *aContext)
   aContext->Paint();
 }
 
+static FrameLayerBuilder::DisplayItemData*
+AssertDisplayItemData(FrameLayerBuilder::DisplayItemData* aData)
+{
+  MOZ_RELEASE_ASSERT(aData);
+  MOZ_RELEASE_ASSERT(sAliveDisplayItemDatas && sAliveDisplayItemDatas->Contains(aData));
+  MOZ_RELEASE_ASSERT(aData->mLayer);
+  return aData;
+}
+
 FrameLayerBuilder::DisplayItemData*
 FrameLayerBuilder::GetDisplayItemData(nsIFrame* aFrame, uint32_t aKey)
 {
-  nsTArray<DisplayItemData*> *array =
-    reinterpret_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
+  const nsTArray<DisplayItemData*>* array =
+    static_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
   if (array) {
     for (uint32_t i = 0; i < array->Length(); i++) {
-      DisplayItemData* item = array->ElementAt(i);
-      MOZ_RELEASE_ASSERT(item);
-      MOZ_RELEASE_ASSERT(item->mLayer);
+      DisplayItemData* item = AssertDisplayItemData(array->ElementAt(i));
       if (item->mDisplayItemKey == aKey &&
           item->mLayer->Manager() == mRetainingManager) {
         return item;
@@ -1523,6 +1539,7 @@ GetTranslationForPaintedLayer(PaintedLayer* aLayer)
 FrameLayerBuilder::RemoveFrameFromLayerManager(nsIFrame* aFrame,
                                                void* aPropertyValue)
 {
+  MOZ_RELEASE_ASSERT(!sDestroyedFrame);
   sDestroyedFrame = aFrame;
   nsTArray<DisplayItemData*> *array =
     reinterpret_cast<nsTArray<DisplayItemData*>*>(aPropertyValue);
@@ -1706,11 +1723,11 @@ FrameLayerBuilder::DumpDisplayItemDataForFrame(nsRefPtrHashKey<DisplayItemData>*
 FrameLayerBuilder::GetDisplayItemDataForManager(nsDisplayItem* aItem,
                                                 LayerManager* aManager)
 {
-  nsTArray<DisplayItemData*> *array =
-    reinterpret_cast<nsTArray<DisplayItemData*>*>(aItem->Frame()->Properties().Get(LayerManagerDataProperty()));
+  const nsTArray<DisplayItemData*>* array =
+    static_cast<nsTArray<DisplayItemData*>*>(aItem->Frame()->Properties().Get(LayerManagerDataProperty()));
   if (array) {
     for (uint32_t i = 0; i < array->Length(); i++) {
-      DisplayItemData* item = array->ElementAt(i);
+      DisplayItemData* item = AssertDisplayItemData(array->ElementAt(i));
       if (item->mDisplayItemKey == aItem->GetPerFrameKey() &&
           item->mLayer->Manager() == aManager) {
         return item;
@@ -1723,11 +1740,11 @@ FrameLayerBuilder::GetDisplayItemDataForManager(nsDisplayItem* aItem,
 bool
 FrameLayerBuilder::HasRetainedDataFor(nsIFrame* aFrame, uint32_t aDisplayItemKey)
 {
-  nsTArray<DisplayItemData*> *array =
-    reinterpret_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
+  const nsTArray<DisplayItemData*>* array =
+    static_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
   if (array) {
     for (uint32_t i = 0; i < array->Length(); i++) {
-      if (array->ElementAt(i)->mDisplayItemKey == aDisplayItemKey) {
+      if (AssertDisplayItemData(array->ElementAt(i))->mDisplayItemKey == aDisplayItemKey) {
         return true;
       }
     }
@@ -1738,14 +1755,14 @@ FrameLayerBuilder::HasRetainedDataFor(nsIFrame* aFrame, uint32_t aDisplayItemKey
 void
 FrameLayerBuilder::IterateRetainedDataFor(nsIFrame* aFrame, DisplayItemDataCallback aCallback)
 {
-  nsTArray<DisplayItemData*> *array =
-    reinterpret_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
+  const nsTArray<DisplayItemData*>* array =
+    static_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
   if (!array) {
     return;
   }
 
   for (uint32_t i = 0; i < array->Length(); i++) {
-    DisplayItemData* data = array->ElementAt(i);
+    DisplayItemData* data = AssertDisplayItemData(array->ElementAt(i));
     if (data->mDisplayItemKey != nsDisplayItem::TYPE_ZERO) {
       aCallback(aFrame, data);
     }
@@ -1805,15 +1822,15 @@ FrameLayerBuilder::ClearCachedGeometry(nsDisplayItem* aItem)
 /* static */ Layer*
 FrameLayerBuilder::GetDebugOldLayerFor(nsIFrame* aFrame, uint32_t aDisplayItemKey)
 {
-  nsTArray<DisplayItemData*> *array =
-    reinterpret_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
+  const nsTArray<DisplayItemData*>* array =
+    static_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
 
   if (!array) {
     return nullptr;
   }
 
   for (uint32_t i = 0; i < array->Length(); i++) {
-    DisplayItemData *data = array->ElementAt(i);
+    DisplayItemData *data = AssertDisplayItemData(array->ElementAt(i));
 
     if (data->mDisplayItemKey == aDisplayItemKey) {
       return data->mLayer;
@@ -1825,8 +1842,8 @@ FrameLayerBuilder::GetDebugOldLayerFor(nsIFrame* aFrame, uint32_t aDisplayItemKe
 /* static */ Layer*
 FrameLayerBuilder::GetDebugSingleOldLayerForFrame(nsIFrame* aFrame)
 {
-  nsTArray<DisplayItemData*>* array =
-    reinterpret_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
+  const nsTArray<DisplayItemData*>* array =
+    static_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
 
   if (!array) {
     return nullptr;
@@ -1834,6 +1851,7 @@ FrameLayerBuilder::GetDebugSingleOldLayerForFrame(nsIFrame* aFrame)
 
   Layer* layer = nullptr;
   for (DisplayItemData* data : *array) {
+    AssertDisplayItemData(data);
     if (layer && layer != data->mLayer) {
       // More than one layer assigned, bail.
       return nullptr;
@@ -2227,7 +2245,7 @@ ContainerState::FindOpaqueBackgroundColorInLayer(const PaintedLayerData* aData,
 
   // Scan the candidate's display items.
   nsIntRect deviceRect = aRect;
-  nsRect appUnitRect = deviceRect.ToAppUnits(mAppUnitsPerDevPixel);
+  nsRect appUnitRect = ToAppUnits(deviceRect, mAppUnitsPerDevPixel);
   appUnitRect.ScaleInverseRoundOut(mParameters.mXScale, mParameters.mYScale);
 
   for (auto& assignedItem : Reversed(aData->mAssignedDisplayItems)) {
@@ -2315,6 +2333,7 @@ nscolor
 PaintedLayerDataNode::FindOpaqueBackgroundColorCoveringEverything() const
 {
   if (!mPaintedLayerDataStack.IsEmpty() ||
+      mAllDrawingAboveBackground ||
       !mVisibleAboveBackgroundRegion.IsEmpty()) {
     return NS_RGBA(0,0,0,0);
   }
@@ -2835,15 +2854,15 @@ void ContainerState::FinishPaintedLayerData(PaintedLayerData& aData, FindOpaqueB
     if (imageContainer) {
       nsRefPtr<ImageLayer> imageLayer = CreateOrRecycleImageLayer(data->mLayer);
       imageLayer->SetContainer(imageContainer);
-      data->mImage->ConfigureLayer(imageLayer, mParameters.mOffset);
+      data->mImage->ConfigureLayer(imageLayer, mParameters);
       imageLayer->SetPostScale(mParameters.mXScale,
                                mParameters.mYScale);
       if (data->mItemClip.HasClip()) {
-        nsIntRect clip = ScaleToNearestPixels(data->mItemClip.GetClipRect());
-        clip.MoveBy(mParameters.mOffset);
-        imageLayer->SetClipRect(&clip);
+        ParentLayerIntRect clip = ViewAs<ParentLayerPixel>(ScaleToNearestPixels(data->mItemClip.GetClipRect()));
+        clip.MoveBy(ViewAs<ParentLayerPixel>(mParameters.mOffset));
+        imageLayer->SetClipRect(Some(clip));
       } else {
-        imageLayer->SetClipRect(nullptr);
+        imageLayer->SetClipRect(Nothing());
       }
       layer = imageLayer;
       mLayerBuilder->StoreOptimizedLayerForFrame(data->mImage,
@@ -2860,7 +2879,7 @@ void ContainerState::FinishPaintedLayerData(PaintedLayerData& aData, FindOpaqueB
       nsIntRect visibleRect = data->mVisibleRegion.GetBounds();
       visibleRect.MoveBy(-GetTranslationForPaintedLayer(data->mLayer));
       colorLayer->SetBounds(visibleRect);
-      colorLayer->SetClipRect(nullptr);
+      colorLayer->SetClipRect(Nothing());
 
       layer = colorLayer;
       FLB_LOG_PAINTED_LAYER_DECISION(data, "  Selected color layer=%p\n", layer.get());
@@ -2879,15 +2898,15 @@ void ContainerState::FinishPaintedLayerData(PaintedLayerData& aData, FindOpaqueB
 
     // Hide the PaintedLayer. We leave it in the layer tree so that we
     // can find and recycle it later.
-    nsIntRect emptyRect;
-    data->mLayer->SetClipRect(&emptyRect);
+    ParentLayerIntRect emptyRect;
+    data->mLayer->SetClipRect(Some(emptyRect));
     data->mLayer->SetVisibleRegion(nsIntRegion());
     data->mLayer->InvalidateRegion(data->mLayer->GetValidRegion().GetBounds());
     data->mLayer->SetEventRegions(EventRegions());
   } else {
     layer = data->mLayer;
     imageContainer = nullptr;
-    layer->SetClipRect(nullptr);
+    layer->SetClipRect(Nothing());
     FLB_LOG_PAINTED_LAYER_DECISION(data, "  Selected painted layer=%p\n", layer.get());
   }
 
@@ -3042,12 +3061,9 @@ void ContainerState::FinishPaintedLayerData(PaintedLayerData& aData, FindOpaqueB
         ScaleRegionToOutsidePixels(data->mDispatchToContentHitRegion));
     regions.mHitRegion.OrWith(maybeHitRegion);
 
-    nsIntPoint translation = -GetTranslationForPaintedLayer(data->mLayer);
-    regions.mHitRegion.MoveBy(translation);
-    regions.mDispatchToContentHitRegion.MoveBy(translation);
-    regions.mNoActionRegion.MoveBy(translation);
-    regions.mHorizontalPanRegion.MoveBy(translation);
-    regions.mVerticalPanRegion.MoveBy(translation);
+    Matrix mat = layer->GetBaseTransform().As2D();
+    mat.Invert();
+    regions.ApplyTranslationAndScale(mat._31, mat._32, mat._11, mat._22);
 
     layer->SetEventRegions(regions);
   }
@@ -3340,31 +3356,6 @@ ContainerState::ChooseAnimatedGeometryRoot(const nsDisplayList& aList,
   return false;
 }
 
-/* Checks if aPotentialScrollItem is a scroll layer item and aPotentialScrollbarItem
- * is an overlay scrollbar item for the same scroll frame.
- */
-static bool
-IsScrollLayerItemAndOverlayScrollbarForScrollFrame(
-  nsDisplayItem* aPotentialScrollItem, nsDisplayItem* aPotentialScrollbarItem)
-{
-  if (aPotentialScrollItem->GetType() == nsDisplayItem::TYPE_SCROLL_LAYER &&
-      aPotentialScrollbarItem &&
-      aPotentialScrollbarItem->GetType() == nsDisplayItem::TYPE_OWN_LAYER &&
-      LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars)) {
-    nsDisplayScrollLayer* scrollItem =
-      static_cast<nsDisplayScrollLayer*>(aPotentialScrollItem);
-    nsDisplayOwnLayer* layerItem =
-      static_cast<nsDisplayOwnLayer*>(aPotentialScrollbarItem);
-    if ((layerItem->GetFlags() &
-         (nsDisplayOwnLayer::VERTICAL_SCROLLBAR |
-          nsDisplayOwnLayer::HORIZONTAL_SCROLLBAR)) &&
-        layerItem->Frame()->GetParent() == scrollItem->GetScrollFrame()) {
-      return true;
-    }
-  }
-  return false;
-}
-
 nsIntRegion
 ContainerState::ComputeOpaqueRect(nsDisplayItem* aItem,
                                   const nsIFrame* aAnimatedGeometryRoot,
@@ -3464,25 +3455,9 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
         aList->RemoveBottom();
         item->~nsDisplayItem();
         item = aboveItem;
-      } else if (IsScrollLayerItemAndOverlayScrollbarForScrollFrame(aboveItem, item)) {
-        // If an overlay scrollbar item is between a scroll layer item and the
-        // other scroll layer items that we need to merge with just move the
-        // scrollbar item up, that way it will be on top of the scrolled content
-        // and we can try to merge all the scroll layer items.
-        aList->RemoveBottom();
-        aList->AppendToBottom(item);
-        item = aboveItem;
       } else {
         break;
       }
-    }
-
-    nsDisplayList* itemSameCoordinateSystemChildren
-      = item->GetSameCoordinateSystemChildren();
-    if (item->ShouldFlattenAway(mBuilder)) {
-      aList->AppendToBottom(itemSameCoordinateSystemChildren);
-      item->~nsDisplayItem();
-      continue;
     }
 
     nsDisplayItem::Type itemType = item->GetType();
@@ -3497,6 +3472,14 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
       nsDisplayScrollInfoLayer* scrollInfoItem = static_cast<nsDisplayScrollInfoLayer*>(item);
       scrollInfoItem->MarkHoisted();
       mLayerBuilder->GetContainingContainerState()->AddHoistedItem(scrollInfoItem);
+      continue;
+    }
+
+    nsDisplayList* itemSameCoordinateSystemChildren
+      = item->GetSameCoordinateSystemChildren();
+    if (item->ShouldFlattenAway(mBuilder)) {
+      aList->AppendToBottom(itemSameCoordinateSystemChildren);
+      item->~nsDisplayItem();
       continue;
     }
 
@@ -3519,15 +3502,15 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
     nsIntRect itemDrawRect = ScaleToOutsidePixels(itemContent, snap);
     bool prerenderedTransform = itemType == nsDisplayItem::TYPE_TRANSFORM &&
         static_cast<nsDisplayTransform*>(item)->ShouldPrerender(mBuilder);
-    nsIntRect clipRect;
+    ParentLayerIntRect clipRect;
     const DisplayItemClip& itemClip = item->GetClip();
     if (itemClip.HasClip()) {
       itemContent.IntersectRect(itemContent, itemClip.GetClipRect());
-      clipRect = ScaleToNearestPixels(itemClip.GetClipRect());
+      clipRect = ViewAs<ParentLayerPixel>(ScaleToNearestPixels(itemClip.GetClipRect()));
       if (!prerenderedTransform) {
-        itemDrawRect.IntersectRect(itemDrawRect, clipRect);
+        itemDrawRect.IntersectRect(itemDrawRect, ParentLayerIntRect::ToUntyped(clipRect));
       }
-      clipRect.MoveBy(mParameters.mOffset);
+      clipRect.MoveBy(ViewAs<ParentLayerPixel>(mParameters.mOffset));
     }
 #ifdef DEBUG
     nsRect bounds = itemContent;
@@ -3625,7 +3608,11 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
       // visible rect for the two important cases.
       nscolor uniformColor = NS_RGBA(0,0,0,0);
       nscolor* uniformColorPtr = !mayDrawOutOfOrder ? &uniformColor : nullptr;
-      nsIntRect* clipPtr = itemClip.HasClip() ? &clipRect : nullptr;
+      nsIntRect clipRectUntyped;
+      nsIntRect* clipPtr = itemClip.HasClip() ? &clipRectUntyped : nullptr;
+      if (clipPtr) {
+	      clipRectUntyped = ParentLayerIntRect::ToUntyped(clipRect);
+      }
       if (animatedGeometryRoot == item->Frame() &&
           animatedGeometryRoot != mBuilder->RootReferenceFrame()) {
         // This is the case for scrollbar thumbs, for example. In that case the
@@ -3633,10 +3620,12 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
         const nsIFrame* clipAnimatedGeometryRoot =
           mPaintedLayerDataTree.GetParentAnimatedGeometryRoot(animatedGeometryRoot);
         mPaintedLayerDataTree.AddingOwnLayer(clipAnimatedGeometryRoot,
-                                             clipPtr, uniformColorPtr);
+					     clipPtr,
+					     uniformColorPtr);
       } else if (prerenderedTransform) {
         mPaintedLayerDataTree.AddingOwnLayer(animatedGeometryRoot,
-                                             clipPtr, uniformColorPtr);
+					     clipPtr,
+					     uniformColorPtr);
       } else {
         // Using itemVisibleRect here isn't perfect. itemVisibleRect can be
         // larger or smaller than the potential bounds of item's contents in
@@ -3691,9 +3680,9 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
                    "If we have rounded rects, we must have a clip rect");
       // It has its own layer. Update that layer's clip and visible rects.
       if (itemClip.HasClip()) {
-        ownLayer->SetClipRect(&clipRect);
+        ownLayer->SetClipRect(Some(clipRect));
       } else {
-        ownLayer->SetClipRect(nullptr);
+        ownLayer->SetClipRect(Nothing());
       }
 
       // rounded rectangle clipping using mask layers
@@ -3737,11 +3726,9 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
         SetOuterVisibleRegionForLayer(ownLayer, itemVisibleRect,
             layerContentsVisibleRect.width >= 0 ? &layerContentsVisibleRect : nullptr);
       }
-      if (itemType == nsDisplayItem::TYPE_SCROLL_LAYER ||
-          itemType == nsDisplayItem::TYPE_SCROLL_INFO_LAYER) {
-        nsDisplayScrollLayer* scrollItem = static_cast<nsDisplayScrollLayer*>(item);
-        newLayerEntry->mOpaqueForAnimatedGeometryRootParent =
-            scrollItem->IsDisplayPortOpaque();
+      if (itemType == nsDisplayItem::TYPE_SCROLL_INFO_LAYER) {
+        nsDisplayScrollInfoLayer* scrollItem = static_cast<nsDisplayScrollInfoLayer*>(item);
+        newLayerEntry->mOpaqueForAnimatedGeometryRootParent = false;
         newLayerEntry->mBaseFrameMetrics =
             scrollItem->ComputeFrameMetrics(ownLayer, mParameters);
       } else if ((itemType == nsDisplayItem::TYPE_SUBDOCUMENT ||
@@ -4086,7 +4073,7 @@ FrameLayerBuilder::StoreDataForFrame(nsDisplayItem* aItem, Layer* aLayer, LayerS
     (mRetainingManager->GetUserData(&gLayerManagerUserData));
 
   nsRefPtr<DisplayItemData> data =
-    new DisplayItemData(lmd, aItem->GetPerFrameKey());
+    new DisplayItemData(lmd, aItem->GetPerFrameKey(), aLayer);
 
   data->BeginUpdate(aLayer, aState, mContainerLayerGeneration, aItem);
 
@@ -4110,7 +4097,7 @@ FrameLayerBuilder::StoreDataForFrame(nsIFrame* aFrame,
     (mRetainingManager->GetUserData(&gLayerManagerUserData));
 
   nsRefPtr<DisplayItemData> data =
-    new DisplayItemData(lmd, aDisplayItemKey, aFrame);
+    new DisplayItemData(lmd, aDisplayItemKey, aLayer, aFrame);
 
   data->BeginUpdate(aLayer, aState, mContainerLayerGeneration);
 
@@ -4236,8 +4223,8 @@ ContainerState::SetupScrollingMetadata(NewLayerEntry* aEntry)
   }
   uint32_t baseLength = metricsArray.Length();
 
-  nsIntRect tmpClipRect;
-  const nsIntRect* layerClip = aEntry->mLayer->GetClipRect();
+  ParentLayerIntRect tmpClipRect;
+  const ParentLayerIntRect* layerClip = aEntry->mLayer->GetClipRect().ptrOr(nullptr);
   nsIFrame* fParent;
   for (const nsIFrame* f = aEntry->mAnimatedGeometryRoot;
        f != mContainerAnimatedGeometryRoot;
@@ -4266,7 +4253,7 @@ ContainerState::SetupScrollingMetadata(NewLayerEntry* aEntry)
     scrollFrame->ComputeFrameMetrics(aEntry->mLayer, mContainerReferenceFrame,
                                      mParameters, &clipRect, &metricsArray);
     if (clipRect.width >= 0) {
-      nsIntRect pixClip = ScaleToNearestPixels(clipRect);
+      ParentLayerIntRect pixClip = ViewAs<ParentLayerPixel>(ScaleToNearestPixels(clipRect));
       if (layerClip) {
         tmpClipRect.IntersectRect(pixClip, *layerClip);
       } else {
@@ -4278,7 +4265,7 @@ ContainerState::SetupScrollingMetadata(NewLayerEntry* aEntry)
       // both CSS and scroll clipping.
     }
   }
-  aEntry->mLayer->SetClipRect(layerClip);
+  aEntry->mLayer->SetClipRect(ToMaybe(layerClip));
   // Watch out for FrameMetrics copies in profiles
   aEntry->mLayer->SetFrameMetrics(metricsArray);
 }
@@ -4309,9 +4296,9 @@ ContainerState::PostprocessRetainedLayers(nsIntRegion* aOpaqueRegionForContainer
     if (hideAll) {
       e->mVisibleRegion.SetEmpty();
     } else if (!e->mLayer->IsScrollbarContainer()) {
-      const nsIntRect* clipRect = e->mLayer->GetClipRect();
+      const Maybe<ParentLayerIntRect>& clipRect = e->mLayer->GetClipRect();
       if (clipRect && opaqueRegionForContainer >= 0 &&
-          opaqueRegions[opaqueRegionForContainer].mOpaqueRegion.Contains(*clipRect)) {
+          opaqueRegions[opaqueRegionForContainer].mOpaqueRegion.Contains(ParentLayerIntRect::ToUntyped(*clipRect))) {
         e->mVisibleRegion.SetEmpty();
       } else if (data) {
         e->mVisibleRegion.Sub(e->mVisibleRegion, data->mOpaqueRegion);
@@ -4344,9 +4331,9 @@ ContainerState::PostprocessRetainedLayers(nsIntRegion* aOpaqueRegionForContainer
       }
 
       nsIntRegion clippedOpaque = e->mOpaqueRegion;
-      const nsIntRect* clipRect = e->mLayer->GetClipRect();
+      const Maybe<ParentLayerIntRect>& clipRect = e->mLayer->GetClipRect();
       if (clipRect) {
-        clippedOpaque.AndWith(*clipRect);
+        clippedOpaque.AndWith(ParentLayerIntRect::ToUntyped(*clipRect));
       }
       data->mOpaqueRegion.Or(data->mOpaqueRegion, clippedOpaque);
       if (e->mHideAllLayersBelow) {
@@ -4455,8 +4442,7 @@ ContainerState::Finish(uint32_t* aTextContentFlags, LayerManagerData* aData,
         scrollInfoLayerEntry.mLayer = scrollInfoLayer;
         scrollInfoLayerEntry.mAnimatedGeometryRoot = animatedGeometryRoot;
         scrollInfoLayerEntry.mFixedPosFrameForLayerData = fixedPosFrame;
-        scrollInfoLayerEntry.mOpaqueForAnimatedGeometryRootParent =
-            item->IsDisplayPortOpaque();
+        scrollInfoLayerEntry.mOpaqueForAnimatedGeometryRootParent = false;
         scrollInfoLayerEntry.mBaseFrameMetrics =
             item->ComputeFrameMetrics(scrollInfoLayer, mParameters);
         SetupScrollingMetadata(&scrollInfoLayerEntry);
@@ -4859,7 +4845,7 @@ FrameLayerBuilder::BuildContainerLayerFor(nsDisplayListBuilder* aBuilder,
   // we won't paint
   if (aChildren->IsOpaque() && !aChildren->NeedsTransparentSurface()) {
     bounds.ScaleRoundIn(scaleParameters.mXScale, scaleParameters.mYScale);
-    if (bounds.Contains(pixBounds.ToAppUnits(appUnitsPerDevPixel))) {
+    if (bounds.Contains(ToAppUnits(pixBounds, appUnitsPerDevPixel))) {
       // Clear CONTENT_COMPONENT_ALPHA and add CONTENT_OPAQUE instead.
       flags &= ~Layer::CONTENT_COMPONENT_ALPHA;
       flags |= Layer::CONTENT_OPAQUE;
@@ -4911,11 +4897,11 @@ FrameLayerBuilder::InvalidateAllLayers(LayerManager* aManager)
 /* static */ void
 FrameLayerBuilder::InvalidateAllLayersForFrame(nsIFrame *aFrame)
 {
-  nsTArray<DisplayItemData*> *array =
-    reinterpret_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
+  const nsTArray<DisplayItemData*>* array =
+    static_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
   if (array) {
     for (uint32_t i = 0; i < array->Length(); i++) {
-      array->ElementAt(i)->mParent->mInvalidateAllLayers = true;
+      AssertDisplayItemData(array->ElementAt(i))->mParent->mInvalidateAllLayers = true;
     }
   }
 }
@@ -4928,11 +4914,11 @@ FrameLayerBuilder::GetDedicatedLayer(nsIFrame* aFrame, uint32_t aDisplayItemKey)
   // in the normal widget manager, and as a different layer (or no layer)
   // in the secondary manager
 
-  nsTArray<DisplayItemData*> *array =
-    reinterpret_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
+  const nsTArray<DisplayItemData*>* array =
+    static_cast<nsTArray<DisplayItemData*>*>(aFrame->Properties().Get(LayerManagerDataProperty()));
   if (array) {
     for (uint32_t i = 0; i < array->Length(); i++) {
-      DisplayItemData *element = array->ElementAt(i);
+      DisplayItemData *element = AssertDisplayItemData(array->ElementAt(i));
       if (!element->mParent->mLayerManager->IsWidgetLayerManager()) {
         continue;
       }
@@ -4984,14 +4970,14 @@ FrameLayerBuilder::GetPaintedLayerScaleForFrame(nsIFrame* aFrame)
       break;
     }
 
-    nsTArray<DisplayItemData*> *array =
-      reinterpret_cast<nsTArray<DisplayItemData*>*>(f->Properties().Get(LayerManagerDataProperty()));
+    const nsTArray<DisplayItemData*>* array =
+      static_cast<nsTArray<DisplayItemData*>*>(f->Properties().Get(LayerManagerDataProperty()));
     if (!array) {
       continue;
     }
 
     for (uint32_t i = 0; i < array->Length(); i++) {
-      Layer* layer = array->ElementAt(i)->mLayer;
+      Layer* layer = AssertDisplayItemData(array->ElementAt(i))->mLayer;
       ContainerLayer* container = layer->AsContainerLayer();
       if (!container ||
           !layer->Manager()->IsWidgetLayerManager()) {
@@ -5107,7 +5093,7 @@ FrameLayerBuilder::PaintItems(nsTArray<ClippedDisplayItem>& aItems,
   DrawTarget& aDrawTarget = *aRC->GetDrawTarget();
 
   int32_t appUnitsPerDevPixel = aPresContext->AppUnitsPerDevPixel();
-  nsRect boundRect = aRect.ToAppUnits(appUnitsPerDevPixel);
+  nsRect boundRect = ToAppUnits(aRect, appUnitsPerDevPixel);
   boundRect.MoveBy(NSIntPixelsToAppUnits(aOffset.x, appUnitsPerDevPixel),
                  NSIntPixelsToAppUnits(aOffset.y, appUnitsPerDevPixel));
   boundRect.ScaleInverseRoundOut(aXScale, aYScale);
@@ -5434,7 +5420,7 @@ FrameLayerBuilder::GetMostRecentGeometry(nsDisplayItem* aItem)
 
   // Retrieve the array of DisplayItemData associated with our frame.
   FrameProperties properties = aItem->Frame()->Properties();
-  auto dataArray =
+  const DataArray* dataArray =
     static_cast<DataArray*>(properties.Get(LayerManagerDataProperty()));
   if (!dataArray) {
     return nullptr;
@@ -5443,7 +5429,7 @@ FrameLayerBuilder::GetMostRecentGeometry(nsDisplayItem* aItem)
   // Find our display item data, if it exists, and return its geometry.
   uint32_t itemPerFrameKey = aItem->GetPerFrameKey();
   for (uint32_t i = 0; i < dataArray->Length(); i++) {
-    DisplayItemData* data = dataArray->ElementAt(i);
+    DisplayItemData* data = AssertDisplayItemData(dataArray->ElementAt(i));
     if (data->GetDisplayItemKey() == itemPerFrameKey) {
       return data->GetGeometry();
     }

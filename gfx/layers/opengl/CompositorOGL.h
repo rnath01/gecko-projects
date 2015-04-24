@@ -40,7 +40,6 @@
 class nsIWidget;
 
 namespace mozilla {
-class TimeStamp;
 
 namespace gfx {
 class Matrix4x4;
@@ -237,7 +236,7 @@ public:
                         const gfx::Matrix4x4 &aTransform) override;
 
   virtual void EndFrame() override;
-  virtual void SetFBAcquireFence(Layer* aLayer) override;
+  virtual void SetDispAcquireFence(Layer* aLayer) override;
   virtual FenceHandle GetReleaseFence() override;
   virtual void EndFrameForExternalComposition(const gfx::Matrix& aTransform) override;
 
@@ -304,10 +303,23 @@ public:
   const gfx::Matrix4x4& GetProjMatrix() const {
     return mProjMatrix;
   }
+
+  void SetProjMatrix(const gfx::Matrix4x4& aProjMatrix) {
+    mProjMatrix = aProjMatrix;
+  }
+
+  const gfx::IntSize GetDestinationSurfaceSize() const {
+    return gfx::IntSize (mSurfaceSize.width, mSurfaceSize.height);
+  }
+
+  const ScreenPoint& GetScreenRenderOffset() const {
+    return mRenderOffset;
+  }
+
 private:
   virtual gfx::IntSize GetWidgetSize() const override
   {
-    return gfx::ToIntSize(mWidgetSize);
+    return mWidgetSize;
   }
 
   bool InitializeVR();
@@ -321,7 +333,7 @@ private:
 
   /** Widget associated with this compositor */
   nsIWidget *mWidget;
-  nsIntSize mWidgetSize;
+  gfx::IntSize mWidgetSize;
   nsRefPtr<GLContext> mGLContext;
   UniquePtr<GLBlitTextureImageHelper> mBlitTextureImageHelper;
   gfx::Matrix4x4 mProjMatrix;

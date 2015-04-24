@@ -1017,6 +1017,11 @@ MSimdBinaryComp::printOpcode(FILE* fp) const
 {
     PrintOpcodeOperation(this, fp);
 }
+void
+MSimdShift::printOpcode(FILE* fp) const
+{
+    PrintOpcodeOperation(this, fp);
+}
 
 void
 MSimdInsertElement::printOpcode(FILE* fp) const
@@ -1280,13 +1285,19 @@ MCallDOMNative::getAliasSet() const
         // getArg(0) is "this", so skip it
         MDefinition* arg = getArg(argIndex+1);
         MIRType actualType = arg->type();
-        // The only way to reliably avoid side-effects given the informtion we
+        // The only way to reliably avoid side-effects given the information we
         // have here is if we're passing in a known primitive value to an
-        // argument that expects a primitive value.  XXXbz maybe we need to
-        // communicate better information.  For example, a sequence argument
-        // will sort of unavoidably have side effects, while a typed array
-        // argument won't have any, but both are claimed to be
-        // JSJitInfo::Object.
+        // argument that expects a primitive value.
+        //
+        // XXXbz maybe we need to communicate better information.  For example,
+        // a sequence argument will sort of unavoidably have side effects, while
+        // a typed array argument won't have any, but both are claimed to be
+        // JSJitInfo::Object.  But if we do that, we need to watch out for our
+        // movability/DCE-ability bits: if we have an arg type that can reliably
+        // throw an exception on conversion, that might not affect our alias set
+        // per se, but it should prevent us being moved or DCE-ed, unless we
+        // know the incoming things match that arg type and won't throw.
+        //
         if ((actualType == MIRType_Value || actualType == MIRType_Object) ||
             (*argType & JSJitInfo::Object))
          {
@@ -4342,17 +4353,10 @@ MGuardReceiverPolymorphic::congruentTo(const MDefinition* ins) const
 
     const MGuardReceiverPolymorphic* other = ins->toGuardReceiverPolymorphic();
 
-    if (numShapes() != other->numShapes())
+    if (numReceivers() != other->numReceivers())
         return false;
-    for (size_t i = 0; i < numShapes(); i++) {
-        if (getShape(i) != other->getShape(i))
-            return false;
-    }
-
-    if (numUnboxedGroups() != other->numUnboxedGroups())
-        return false;
-    for (size_t i = 0; i < numUnboxedGroups(); i++) {
-        if (getUnboxedGroup(i) != other->getUnboxedGroup(i))
+    for (size_t i = 0; i < numReceivers(); i++) {
+        if (receiver(i) != other->receiver(i))
             return false;
     }
 
@@ -4498,8 +4502,10 @@ MGetPropertyPolymorphic::mightAlias(const MDefinition* store) const
     if (!store->isStoreFixedSlot() && !store->isStoreSlot())
         return true;
 
-    for (size_t i = 0; i < numShapes(); i++) {
+    for (size_t i = 0; i < numReceivers(); i++) {
         const Shape* shape = this->shape(i);
+        if (!shape)
+            continue;
         if (shape->slot() < shape->numFixedSlots()) {
             // Fixed slot.
             uint32_t slot = shape->slot();
@@ -5119,8 +5125,7 @@ AddGroupGuard(TempAllocator& alloc, MBasicBlock* current, MDefinition* obj,
 
     if (key->isGroup()) {
         guard = MGuardObjectGroup::New(alloc, obj, key->group(), bailOnEquality,
-                                       Bailout_ObjectIdentityOrTypeGuard,
-                                       /* checkUnboxedExpando = */ false);
+                                       Bailout_ObjectIdentityOrTypeGuard);
     } else {
         MConstant* singletonConst = MConstant::NewConstraintlessObject(alloc, key->singleton());
         current->add(singletonConst);

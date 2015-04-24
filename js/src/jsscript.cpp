@@ -1361,6 +1361,7 @@ const Class ScriptSourceObject::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     finalize,
     nullptr, /* call */
@@ -2625,6 +2626,7 @@ JSScript::fullyInitFromEmitter(ExclusiveContext* cx, HandleScript script, Byteco
     script->bindingsAccessedDynamically_ = bce->sc->bindingsAccessedDynamically();
     script->funHasExtensibleScope_ = funbox ? funbox->hasExtensibleScope() : false;
     script->funNeedsDeclEnvObject_ = funbox ? funbox->needsDeclEnvObject() : false;
+    script->needsHomeObject_       = funbox ? funbox->needsHomeObject() : false;
     script->hasSingletons_ = bce->hasSingletons;
 
     if (funbox) {
@@ -2923,12 +2925,13 @@ js::DescribeScriptedCallerForCompilation(JSContext* cx, MutableHandleScript mayb
                     "next op after a direct eval must be at consistent offset");
         MOZ_ASSERT(JSOp(*pc) == JSOP_EVAL || JSOp(*pc) == JSOP_STRICTEVAL ||
                    JSOp(*pc) == JSOP_SPREADEVAL || JSOp(*pc) == JSOP_STRICTSPREADEVAL);
-        mozilla::DebugOnly<bool> isSpread = JSOp(*pc) == JSOP_SPREADEVAL ||
-                                            JSOp(*pc) == JSOP_STRICTSPREADEVAL;
-        MOZ_ASSERT(*(pc + (isSpread ? JSOP_SPREADEVAL_LENGTH : JSOP_EVAL_LENGTH)) == JSOP_LINENO);
+
+        bool isSpread = JSOp(*pc) == JSOP_SPREADEVAL || JSOp(*pc) == JSOP_STRICTSPREADEVAL;
+        jsbytecode* nextpc = pc + (isSpread ? JSOP_SPREADEVAL_LENGTH : JSOP_EVAL_LENGTH);
+        MOZ_ASSERT(*nextpc == JSOP_LINENO);
+
         *file = maybeScript->filename();
-        *linenop = GET_UINT16(pc + (JSOp(*pc) == JSOP_EVAL ? JSOP_EVAL_LENGTH
-                                                           : JSOP_SPREADEVAL_LENGTH));
+        *linenop = GET_UINT32(nextpc);
         *pcOffset = pc - maybeScript->code();
         *mutedErrors = maybeScript->mutedErrors();
         return;
@@ -3421,7 +3424,7 @@ JSScript::hasBreakpointsAt(jsbytecode* pc)
 }
 
 void
-JSScript::markChildren(JSTracer* trc)
+JSScript::traceChildren(JSTracer* trc)
 {
     // NOTE: this JSScript may be partially initialized at this point.  E.g. we
     // may have created it and partially initialized it with
@@ -3479,7 +3482,7 @@ JSScript::markChildren(JSTracer* trc)
 }
 
 void
-LazyScript::markChildren(JSTracer* trc)
+LazyScript::traceChildren(JSTracer* trc)
 {
     if (function_)
         TraceEdge(trc, &function_, "function");

@@ -18,6 +18,12 @@ XPCOMUtils.defineLazyModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm
 XPCOMUtils.defineLazyModuleGetter(this, "ReaderWorker", "resource://gre/modules/reader/ReaderWorker.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Task", "resource://gre/modules/Task.jsm");
 
+XPCOMUtils.defineLazyGetter(this, "Readability", function() {
+  let scope = {};
+  Services.scriptloader.loadSubScript("resource://gre/modules/reader/Readability.js", scope);
+  return scope["Readability"];
+});
+
 this.ReaderMode = {
   // Version of the cache schema.
   CACHE_VERSION: 1,
@@ -26,7 +32,12 @@ this.ReaderMode = {
 
   // Don't try to parse the page if it has too many elements (for memory and
   // performance reasons)
-  MAX_ELEMS_TO_PARSE: 3000,
+  get maxElemsToParse() {
+    delete this.parseNodeLimit;
+
+    Services.prefs.addObserver("reader.parse-node-limit", this, false);
+    return this.parseNodeLimit = Services.prefs.getIntPref("reader.parse-node-limit");
+  },
 
   get isEnabledForParseOnLoad() {
     delete this.isEnabledForParseOnLoad;
@@ -56,8 +67,35 @@ this.ReaderMode = {
       case "nsPref:changed":
         if (aData.startsWith("reader.parse-on-load.")) {
           this.isEnabledForParseOnLoad = this._getStateForParseOnLoad();
+        } else if (aData === "reader.parse-node-limit") {
+          this.parseNodeLimit = Services.prefs.getIntPref(aData);
         }
         break;
+    }
+  },
+
+  /**
+   * Returns original URL from an about:reader URL.
+   *
+   * @param url An about:reader URL.
+   * @return The original URL for the article, or null if we did not find
+   *         a properly formatted about:reader URL.
+   */
+  getOriginalUrl: function(url) {
+    if (!url.startsWith("about:reader?")) {
+      return null;
+    }
+
+    let searchParams = new URLSearchParams(url.substring("about:reader?".length));
+    if (!searchParams.has("url")) {
+      return null;
+    }
+    let encodedURL = searchParams.get("url");
+    try {
+      return decodeURIComponent(encodedURL);
+    } catch (e) {
+      Cu.reportError("Error decoding original URL: " + e);
+      return encodedURL;
     }
   },
 
@@ -78,36 +116,7 @@ this.ReaderMode = {
       return false;
     }
 
-    let REGEXPS = {
-      unlikelyCandidates: /combx|comment|community|disqus|extra|foot|header|menu|remark|rss|shoutbox|sidebar|sponsor|ad-break|agegate|pagination|pager|popup|tweet|twitter/i,
-      okMaybeItsACandidate: /and|article|body|column|main|shadow/i,
-    };
-
-    let nodes = doc.getElementsByTagName("p");
-    if (nodes.length < 5) {
-      return false;
-    }
-
-    let possibleParagraphs = 0;
-    for (let i = 0; i < nodes.length; i++) {
-      let node = nodes[i];
-      let matchString = node.className + " " + node.id;
-
-      if (REGEXPS.unlikelyCandidates.test(matchString) &&
-          !REGEXPS.okMaybeItsACandidate.test(matchString)) {
-        continue;
-      }
-
-      if (node.textContent.trim().length < 100) {
-        continue;
-      }
-
-      possibleParagraphs++;
-      if (possibleParagraphs >= 5) {
-        return true;
-      }
-    }
-    return false;
+    return new Readability(uri, doc).isProbablyReaderable();
   },
 
   /**
@@ -154,6 +163,10 @@ this.ReaderMode = {
         }
 
         let doc = xhr.responseXML;
+        if (!doc) {
+          reject("Reader mode XHR didn't return a document");
+          return;
+        }
 
         // Manually follow a meta refresh tag if one exists.
         let meta = doc.querySelector("meta[http-equiv=refresh]");
@@ -250,10 +263,12 @@ this.ReaderMode = {
    * @resolves JS object representing the article, or null if no article is found.
    */
   _readerParse: Task.async(function* (uri, doc) {
-    let numTags = doc.getElementsByTagName("*").length;
-    if (numTags > this.MAX_ELEMS_TO_PARSE) {
-      this.log("Aborting parse for " + uri.spec + "; " + numTags + " elements found");
-      return null;
+    if (this.parseNodeLimit) {
+      let numTags = doc.getElementsByTagName("*").length;
+      if (numTags > this.parseNodeLimit) {
+        this.log("Aborting parse for " + uri.spec + "; " + numTags + " elements found");
+        return null;
+      }
     }
 
     let uriParam = {

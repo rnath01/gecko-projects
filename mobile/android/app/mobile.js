@@ -862,3 +862,11 @@ pref("reader.toolbar.vertical", false);
 
 // Whether or not to display buttons related to reading list in reader view.
 pref("browser.readinglist.enabled", true);
+
+// Selection carets never fall-back to internal LongTap detector.
+pref("selectioncaret.detects.longtap", false);
+
+// Enable Service workers for Android on non-release builds
+#ifdef NIGHTLY_BUILD
+pref("dom.serviceWorkers.enabled", true);
+#endif

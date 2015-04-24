@@ -11,6 +11,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 let promise = require("resource://gre/modules/Promise.jsm").Promise;
 let EventEmitter = require("devtools/toolkit/event-emitter");
 let clipboard = require("sdk/clipboard");
+let {HostType} = require("devtools/framework/toolbox").Toolbox;
 
 loader.lazyGetter(this, "MarkupView", () => require("devtools/markupview/markup-view").MarkupView);
 loader.lazyGetter(this, "HTMLBreadcrumbs", () => require("devtools/inspector/breadcrumbs").HTMLBreadcrumbs);
@@ -144,6 +145,9 @@ InspectorPanel.prototype = {
 
     this.breadcrumbs = new HTMLBreadcrumbs(this);
 
+    this.onToolboxHostChanged = this.onToolboxHostChanged.bind(this);
+    this._toolbox.on("host-changed", this.onToolboxHostChanged);
+
     if (this.target.isLocalTab) {
       this.browser = this.target.tab.linkedBrowser;
       this.scheduleLayoutChange = this.scheduleLayoutChange.bind(this);
@@ -255,10 +259,10 @@ InspectorPanel.prototype = {
       if (front) {
         return front;
       }
-      return this.walker.documentElement(this.walker.rootNode);
+      return this.walker.documentElement();
     }).then(node => {
-      if (walker !== this.walker) {
-        promise.reject(null);
+      if (hasNavigated()) {
+        return promise.reject("navigated; resolution of _defaultNode aborted");
       }
       this._defaultNode = node;
       return node;
@@ -350,6 +354,19 @@ InspectorPanel.prototype = {
     }
 
     this.sidebar.show();
+
+    this.setupSidebarToggle();
+  },
+
+  /**
+   * Add the expand/collapse behavior for the sidebar panel.
+   */
+  setupSidebarToggle: function() {
+    this._paneToggleButton = this.panelDoc.getElementById("inspector-pane-toggle");
+    this.onPaneToggleButtonClicked = this.onPaneToggleButtonClicked.bind(this);
+    this._paneToggleButton.addEventListener("mousedown",
+      this.onPaneToggleButtonClicked);
+    this.updatePaneToggleButton();
   },
 
   /**
@@ -392,6 +409,10 @@ InspectorPanel.prototype = {
    * reload
    */
   set selectionCssSelector(cssSelector = null) {
+    if (this._panelDestroyer) {
+      return;
+    }
+
     this._selectionCssSelector = {
       selector: cssSelector,
       url: this._target.url
@@ -553,6 +574,7 @@ InspectorPanel.prototype = {
     this.target.off("thread-paused", this.updateDebuggerPausedWarning);
     this.target.off("thread-resumed", this.updateDebuggerPausedWarning);
     this._toolbox.off("select", this.updateDebuggerPausedWarning);
+    this._toolbox.off("host-changed", this.onToolboxHostChanged);
 
     this.sidebar.off("select", this._setDefaultSidebar);
     let sidebarDestroyer = this.sidebar.destroy();
@@ -561,6 +583,9 @@ InspectorPanel.prototype = {
     this.nodemenu.removeEventListener("popupshowing", this._setupNodeMenu, true);
     this.nodemenu.removeEventListener("popuphiding", this._resetNodeMenu, true);
     this.breadcrumbs.destroy();
+    this._paneToggleButton.removeEventListener("mousedown",
+      this.onPaneToggleButtonClicked);
+    this._paneToggleButton = null;
     this.searchSuggestions.destroy();
     this.searchBox = null;
     this.selection.off("new-node-front", this.onNewSelection);
@@ -648,19 +673,27 @@ InspectorPanel.prototype = {
       deleteNode.setAttribute("disabled", "true");
     }
 
-    // Disable / enable "Copy Unique Selector", "Copy inner HTML" &
-    // "Copy outer HTML" as appropriate
+    // Disable / enable "Copy Unique Selector", "Copy inner HTML",
+    // "Copy outer HTML" & "Scroll Into View" as appropriate
     let unique = this.panelDoc.getElementById("node-menu-copyuniqueselector");
     let copyInnerHTML = this.panelDoc.getElementById("node-menu-copyinner");
     let copyOuterHTML = this.panelDoc.getElementById("node-menu-copyouter");
+    let scrollIntoView = this.panelDoc.getElementById("node-menu-scrollnodeintoview");
+
+    this._target.actorHasMethod("domnode", "scrollIntoView").then(value => {
+      scrollIntoView.hidden = !value;
+    });
+
     if (isSelectionElement) {
       unique.removeAttribute("disabled");
       copyInnerHTML.removeAttribute("disabled");
       copyOuterHTML.removeAttribute("disabled");
+      scrollIntoView.removeAttribute("disabled");
     } else {
       unique.setAttribute("disabled", "true");
       copyInnerHTML.setAttribute("disabled", "true");
       copyOuterHTML.setAttribute("disabled", "true");
+      scrollIntoView.setAttribute("disabled", "true");
     }
     if (!this.canGetUniqueSelector) {
       unique.hidden = true;
@@ -782,6 +815,53 @@ InspectorPanel.prototype = {
     this._markupBox = null;
 
     return destroyPromise;
+  },
+
+  /**
+   * When the type of toolbox host changes.
+   */
+  onToolboxHostChanged: function() {
+    this.updatePaneToggleButton();
+  },
+
+  /**
+   * When the pane toggle button is clicked, toggle the pane, change the button
+   * state and tooltip.
+   */
+  onPaneToggleButtonClicked: function(e) {
+    let sidePane = this.panelDoc.querySelector("#inspector-sidebar");
+    let button = this._paneToggleButton;
+    let isVisible = !button.hasAttribute("pane-collapsed");
+
+    // Make sure the sidebar has a width attribute before collapsing because
+    // ViewHelpers needs it.
+    if (isVisible && !sidePane.hasAttribute("width")) {
+      sidePane.setAttribute("width", sidePane.getBoundingClientRect().width);
+    }
+
+    ViewHelpers.togglePane({
+      visible: !isVisible,
+      animated: true,
+      delayed: true
+    }, sidePane);
+
+    if (isVisible) {
+      button.setAttribute("pane-collapsed", "");
+      button.setAttribute("tooltiptext",
+        this.strings.GetStringFromName("inspector.expandPane"));
+    } else {
+      button.removeAttribute("pane-collapsed");
+      button.setAttribute("tooltiptext",
+        this.strings.GetStringFromName("inspector.collapsePane"));
+    }
+  },
+
+  /**
+   * Update the pane toggle button visibility depending on the toolbox host type.
+   */
+  updatePaneToggleButton: function() {
+    this._paneToggleButton.setAttribute("hidden",
+      this._toolbox.hostType === HostType.SIDE);
   },
 
   /**
@@ -931,6 +1011,18 @@ InspectorPanel.prototype = {
     this.selection.nodeFront.getUniqueSelector().then((selector) => {
       clipboardHelper.copyString(selector);
     }).then(null, console.error);
+  },
+
+  /**
+   * Scroll the node into view.
+   */
+  scrollNodeIntoView: function InspectorPanel_scrollNodeIntoView()
+  {
+    if (!this.selection.isNode()) {
+      return;
+    }
+
+    this.selection.nodeFront.scrollIntoView();
   },
 
   /**

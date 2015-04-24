@@ -90,6 +90,11 @@
         </menupopup>
       </menu>
       <menuseparator/>
+      <menuitem id="node-menu-scrollnodeintoview"
+        label="&inspectorScrollNodeIntoView.label;"
+        accesskey="&inspectorScrollNodeIntoView.accesskey;"
+        oncommand="inspector.scrollNodeIntoView()"/>
+      <menuseparator/>
       <menuitem id="node-menu-delete"
         label="&inspectorHTMLDelete.label;"
         accesskey="&inspectorHTMLDelete.accesskey;"
@@ -121,6 +126,9 @@
           timeout="50"
           class="devtools-searchinput"
           placeholder="&inspectorSearchHTML.label2;"/>
+        <toolbarbutton id="inspector-pane-toggle"
+          class="devtools-toolbarbutton"
+          tabindex="0" />
       </toolbar>
       <vbox flex="1" id="markup-box">
       </vbox>

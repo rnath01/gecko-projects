@@ -96,8 +96,13 @@ bool
 mozilla::plugins::SetupBridge(uint32_t aPluginId,
                               dom::ContentParent* aContentParent,
                               bool aForceBridgeNow,
-                              nsresult* rv)
+                              nsresult* rv,
+                              uint32_t* runID)
 {
+    if (NS_WARN_IF(!rv) || NS_WARN_IF(!runID)) {
+        return false;
+    }
+
     PluginModuleChromeParent::ClearInstantiationFlag();
     nsRefPtr<nsPluginHost> host = nsPluginHost::GetInst();
     nsRefPtr<nsNPAPIPlugin> plugin;
@@ -106,6 +111,10 @@ mozilla::plugins::SetupBridge(uint32_t aPluginId,
         return true;
     }
     PluginModuleChromeParent* chromeParent = static_cast<PluginModuleChromeParent*>(plugin->GetLibrary());
+    *rv = chromeParent->GetRunID(runID);
+    if (NS_FAILED(*rv)) {
+        return true;
+    }
     chromeParent->SetContentParent(aContentParent);
     if (!aForceBridgeNow && chromeParent->IsStartingAsync() &&
         PluginModuleChromeParent::DidInstantiate()) {
@@ -365,7 +374,8 @@ PluginModuleContentParent::LoadModule(uint32_t aPluginId)
      */
     dom::ContentChild* cp = dom::ContentChild::GetSingleton();
     nsresult rv;
-    if (!cp->SendLoadPlugin(aPluginId, &rv) ||
+    uint32_t runID;
+    if (!cp->SendLoadPlugin(aPluginId, &rv, &runID) ||
         NS_FAILED(rv)) {
         return nullptr;
     }
@@ -381,6 +391,7 @@ PluginModuleContentParent::LoadModule(uint32_t aPluginId)
     }
 
     parent->mPluginId = aPluginId;
+    parent->mRunID = runID;
 
     return parent;
 }
@@ -607,6 +618,7 @@ PluginModuleParent::PluginModuleParent(bool aIsChrome)
     , mIsFlashPlugin(false)
     , mIsStartingAsync(false)
     , mNPInitialized(false)
+    , mIsNPShutdownPending(false)
     , mAsyncNewRv(NS_ERROR_NOT_INITIALIZED)
 {
 #if defined(XP_WIN) || defined(XP_MACOSX) || defined(MOZ_WIDGET_GTK)
@@ -644,6 +656,10 @@ PluginModuleContentParent::~PluginModuleContentParent()
     Preferences::UnregisterCallback(TimeoutChanged, kContentTimeoutPref, this);
 }
 
+// We start the Run IDs at 1 so that we can use 0 as a way of detecting
+// errors in retrieving the run ID.
+uint32_t PluginModuleChromeParent::sNextRunID = 1;
+
 bool PluginModuleChromeParent::sInstantiated = false;
 
 PluginModuleChromeParent::PluginModuleChromeParent(const char* aFilePath, uint32_t aPluginId)
@@ -675,6 +691,7 @@ PluginModuleChromeParent::PluginModuleChromeParent(const char* aFilePath, uint32
 {
     NS_ASSERTION(mSubprocess, "Out of memory!");
     sInstantiated = true;
+    mRunID = sNextRunID++;
 
     RegisterSettingsCallbacks();
 
@@ -1095,24 +1112,17 @@ PluginModuleChromeParent::AnnotateHang(mozilla::HangMonitor::HangAnnotations& aA
     }
 }
 
-#ifdef MOZ_CRASHREPORTER_INJECTOR
+#ifdef MOZ_CRASHREPORTER
 static bool
-CreateFlashMinidump(DWORD processId, ThreadId childThread,
-                    nsIFile* parentMinidump, const nsACString& name)
+CreatePluginMinidump(base::ProcessId processId, ThreadId childThread,
+                     nsIFile* parentMinidump, const nsACString& name)
 {
-  if (processId == 0) {
+  mozilla::ipc::ScopedProcessHandle handle;
+  if (processId == 0 ||
+      !base::OpenPrivilegedProcessHandle(processId, &handle.rwget())) {
     return false;
   }
-
-  base::ProcessHandle handle;
-  if (!base::OpenPrivilegedProcessHandle(processId, &handle)) {
-    return false;
-  }
-
-  bool res = CreateAdditionalChildMinidump(handle, 0, parentMinidump, name);
-  base::CloseProcessHandle(handle);
-
-  return res;
+  return CreateAdditionalChildMinidump(handle, 0, parentMinidump, name);
 }
 #endif
 
@@ -1184,32 +1194,37 @@ PluginModuleChromeParent::TerminateChildProcess(MessageLoop* aMsgLoop)
         }
     }
 #endif // XP_WIN
+    // Generate base report, includes plugin and browser process minidumps.
     if (crashReporter->GeneratePairedMinidump(this)) {
         mPluginDumpID = crashReporter->ChildDumpID();
         PLUGIN_LOG_DEBUG(
                 ("generated paired browser/plugin minidumps: %s)",
                  NS_ConvertUTF16toUTF8(mPluginDumpID).get()));
-
         nsAutoCString additionalDumps("browser");
-
-#ifdef MOZ_CRASHREPORTER_INJECTOR
         nsCOMPtr<nsIFile> pluginDumpFile;
-
         if (GetMinidumpForID(mPluginDumpID, getter_AddRefs(pluginDumpFile)) &&
             pluginDumpFile) {
-          nsCOMPtr<nsIFile> childDumpFile;
-
-          if (CreateFlashMinidump(mFlashProcess1, 0, pluginDumpFile,
-                                  NS_LITERAL_CSTRING("flash1"))) {
-            additionalDumps.AppendLiteral(",flash1");
-          }
-          if (CreateFlashMinidump(mFlashProcess2, 0, pluginDumpFile,
-                                  NS_LITERAL_CSTRING("flash2"))) {
-            additionalDumps.AppendLiteral(",flash2");
-          }
-        }
+#ifdef MOZ_CRASHREPORTER_INJECTOR
+            // If we have handles to the flash sandbox processes on Windows,
+            // include those minidumps as well.
+            if (CreatePluginMinidump(mFlashProcess1, 0, pluginDumpFile,
+                                     NS_LITERAL_CSTRING("flash1"))) {
+                additionalDumps.AppendLiteral(",flash1");
+            }
+            if (CreatePluginMinidump(mFlashProcess2, 0, pluginDumpFile,
+                                     NS_LITERAL_CSTRING("flash2"))) {
+                additionalDumps.AppendLiteral(",flash2");
+            }
 #endif
-
+            if (mContentParent) {
+                // Include the content process minidump
+                if (CreatePluginMinidump(mContentParent->OtherPid(), 0,
+                                         pluginDumpFile,
+                                         NS_LITERAL_CSTRING("content"))) {
+                    additionalDumps.AppendLiteral(",content");
+                }
+            }
+        }
         crashReporter->AnnotateCrashReport(
             NS_LITERAL_CSTRING("additional_minidumps"),
             additionalDumps);
@@ -1497,6 +1512,16 @@ PluginModuleParent::ActorDestroy(ActorDestroyReason why)
     default:
         NS_RUNTIMEABORT("Unexpected shutdown reason for toplevel actor.");
     }
+}
+
+nsresult
+PluginModuleParent::GetRunID(uint32_t* aRunID)
+{
+    if (NS_WARN_IF(!aRunID)) {
+      return NS_ERROR_INVALID_POINTER;
+    }
+    *aRunID = mRunID;
+    return NS_OK;
 }
 
 void
@@ -2249,6 +2274,13 @@ PluginModuleChromeParent::RecvNP_InitializeResult(const NPError& aError)
 void
 PluginModuleParent::InitAsyncSurrogates()
 {
+    if (MaybeRunDeferredShutdown()) {
+        // We've shut down, so the surrogates are no longer valid. Clear
+        // mSurrogateInstances to ensure that these aren't used.
+        mSurrogateInstances.Clear();
+        return;
+    }
+
     uint32_t len = mSurrogateInstances.Length();
     for (uint32_t i = 0; i < len; ++i) {
         NPError err;
@@ -2268,6 +2300,21 @@ PluginModuleParent::RemovePendingSurrogate(
     return mSurrogateInstances.RemoveElement(aSurrogate);
 }
 
+bool
+PluginModuleParent::MaybeRunDeferredShutdown()
+{
+    if (!mIsStartingAsync || !mIsNPShutdownPending) {
+        return false;
+    }
+    MOZ_ASSERT(!mShutdown);
+    NPError error;
+    if (!DoShutdown(&error)) {
+        return false;
+    }
+    mIsNPShutdownPending = false;
+    return true;
+}
+
 nsresult
 PluginModuleParent::NP_Shutdown(NPError* error)
 {
@@ -2278,6 +2325,24 @@ PluginModuleParent::NP_Shutdown(NPError* error)
         return NS_ERROR_FAILURE;
     }
 
+    /* If we're still running an async NP_Initialize then we need to defer
+       shutdown until we've received the result of the NP_Initialize call. */
+    if (mIsStartingAsync && !mNPInitialized) {
+        mIsNPShutdownPending = true;
+        *error = NPERR_NO_ERROR;
+        return NS_OK;
+    }
+
+    if (!DoShutdown(error)) {
+        return NS_ERROR_FAILURE;
+    }
+
+    return NS_OK;
+}
+
+bool
+PluginModuleParent::DoShutdown(NPError* error)
+{
     bool ok = true;
     if (IsChrome()) {
         ok = CallNP_Shutdown(error);
@@ -2289,7 +2354,11 @@ PluginModuleParent::NP_Shutdown(NPError* error)
     // CallNP_Shutdown() message
     Close();
 
-    return ok ? NS_OK : NS_ERROR_FAILURE;
+    mShutdown = ok;
+    if (!ok) {
+        *error = NPERR_GENERIC_ERROR;
+    }
+    return ok;
 }
 
 nsresult

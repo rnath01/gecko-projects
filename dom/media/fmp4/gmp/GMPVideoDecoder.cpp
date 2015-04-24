@@ -8,6 +8,7 @@
 #include "GMPVideoHost.h"
 #include "mozilla/Endian.h"
 #include "prsystem.h"
+#include "MediaData.h"
 
 namespace mozilla {
 
@@ -18,7 +19,7 @@ extern bool IsOnGMPThread();
 void
 VideoCallbackAdapter::Decoded(GMPVideoi420Frame* aDecodedFrame)
 {
-  GMPUnique<GMPVideoi420Frame>::Ptr decodedFrame(aDecodedFrame);
+  GMPUniquePtr<GMPVideoi420Frame> decodedFrame(aDecodedFrame);
 
   MOZ_ASSERT(IsOnGMPThread());
 
@@ -114,8 +115,8 @@ GMPVideoDecoder::GetNodeId()
   return NS_LITERAL_CSTRING("");
 }
 
-GMPUnique<GMPVideoEncodedFrame>::Ptr
-GMPVideoDecoder::CreateFrame(mp4_demuxer::MP4Sample* aSample)
+GMPUniquePtr<GMPVideoEncodedFrame>
+GMPVideoDecoder::CreateFrame(MediaRawData* aSample)
 {
   GMPVideoFrame* ftmp = nullptr;
   GMPErr err = mHost->CreateFrame(kGMPEncodedVideoFrame, &ftmp);
@@ -124,14 +125,14 @@ GMPVideoDecoder::CreateFrame(mp4_demuxer::MP4Sample* aSample)
     return nullptr;
   }
 
-  GMPUnique<GMPVideoEncodedFrame>::Ptr frame(static_cast<GMPVideoEncodedFrame*>(ftmp));
-  err = frame->CreateEmptyFrame(aSample->size);
+  GMPUniquePtr<GMPVideoEncodedFrame> frame(static_cast<GMPVideoEncodedFrame*>(ftmp));
+  err = frame->CreateEmptyFrame(aSample->mSize);
   if (GMP_FAILED(err)) {
     mCallback->Error();
     return nullptr;
   }
 
-  memcpy(frame->Buffer(), aSample->data, frame->Size());
+  memcpy(frame->Buffer(), aSample->mData, frame->Size());
 
   // Convert 4-byte NAL unit lengths to host-endian 4-byte buffer lengths to
   // suit the GMP API.
@@ -147,12 +148,12 @@ GMPVideoDecoder::CreateFrame(mp4_demuxer::MP4Sample* aSample)
 
   frame->SetBufferType(GMP_BufferLength32);
 
-  frame->SetEncodedWidth(mConfig.display_width);
-  frame->SetEncodedHeight(mConfig.display_height);
-  frame->SetTimeStamp(aSample->composition_timestamp);
+  frame->SetEncodedWidth(mConfig.mDisplay.width);
+  frame->SetEncodedHeight(mConfig.mDisplay.height);
+  frame->SetTimeStamp(aSample->mTime);
   frame->SetCompleteFrame(true);
-  frame->SetDuration(aSample->duration);
-  frame->SetFrameType(aSample->is_sync_point ? kGMPKeyFrame : kGMPDeltaFrame);
+  frame->SetDuration(aSample->mDuration);
+  frame->SetFrameType(aSample->mKeyframe ? kGMPKeyFrame : kGMPDeltaFrame);
 
   return frame;
 }
@@ -182,13 +183,13 @@ GMPVideoDecoder::GMPInitDone(GMPVideoDecoderProxy* aGMP, GMPVideoHost* aHost)
   codec.mGMPApiVersion = kGMPVersion33;
 
   codec.mCodecType = kGMPVideoCodecH264;
-  codec.mWidth = mConfig.display_width;
-  codec.mHeight = mConfig.display_height;
+  codec.mWidth = mConfig.mDisplay.width;
+  codec.mHeight = mConfig.mDisplay.height;
 
   nsTArray<uint8_t> codecSpecific;
   codecSpecific.AppendElement(0); // mPacketizationMode.
-  codecSpecific.AppendElements(mConfig.extra_data->Elements(),
-                               mConfig.extra_data->Length());
+  codecSpecific.AppendElements(mConfig.mExtraData->Elements(),
+                               mConfig.mExtraData->Length());
 
   nsresult rv = aGMP->InitDecode(codec,
                                  codecSpecific,
@@ -235,19 +236,19 @@ GMPVideoDecoder::Init()
 }
 
 nsresult
-GMPVideoDecoder::Input(mp4_demuxer::MP4Sample* aSample)
+GMPVideoDecoder::Input(MediaRawData* aSample)
 {
   MOZ_ASSERT(IsOnGMPThread());
 
-  nsAutoPtr<mp4_demuxer::MP4Sample> sample(aSample);
+  nsRefPtr<MediaRawData> sample(aSample);
   if (!mGMP) {
     mCallback->Error();
     return NS_ERROR_FAILURE;
   }
 
-  mAdapter->SetLastStreamOffset(sample->byte_offset);
+  mAdapter->SetLastStreamOffset(sample->mOffset);
 
-  GMPUnique<GMPVideoEncodedFrame>::Ptr frame = CreateFrame(sample);
+  GMPUniquePtr<GMPVideoEncodedFrame> frame = CreateFrame(sample);
   nsTArray<uint8_t> info; // No codec specific per-frame info to pass.
   nsresult rv = mGMP->Decode(Move(frame), false, info, 0);
   if (NS_FAILED(rv)) {

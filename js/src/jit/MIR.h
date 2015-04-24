@@ -17,6 +17,7 @@
 
 #include "builtin/SIMD.h"
 #include "jit/AtomicOp.h"
+#include "jit/BaselineIC.h"
 #include "jit/FixedList.h"
 #include "jit/InlineList.h"
 #include "jit/JitAllocPolicy.h"
@@ -868,7 +869,7 @@ class MUseDefIterator
         current_(search(def->usesBegin()))
     { }
 
-    operator bool() const {
+    explicit operator bool() const {
         return current_ != def_->usesEnd();
     }
     MUseDefIterator operator ++() {
@@ -1530,9 +1531,14 @@ class MSimdConvert
       : MUnaryInstruction(obj)
     {
         MOZ_ASSERT(IsSimdType(toType));
-        setMovable();
         setResultType(toType);
         specialization_ = fromType; // expects fromType as input
+
+        setMovable();
+        if (IsFloatingPointSimdType(fromType) && IsIntegerSimdType(toType)) {
+            // Does the extra range check => do not remove
+            setGuard();
+        }
     }
 
   public:
@@ -2270,7 +2276,7 @@ class MSimdBinaryBitwise
 
 class MSimdShift
   : public MBinaryInstruction,
-    public NoTypePolicy::Data
+    public MixPolicy<SimdSameAsReturnedTypePolicy<0>, SimdScalarPolicy<1> >::Data
 {
   public:
     enum Operation {
@@ -2285,7 +2291,6 @@ class MSimdShift
     MSimdShift(MDefinition* left, MDefinition* right, Operation op)
       : MBinaryInstruction(left, right), operation_(op)
     {
-        MOZ_ASSERT(left->type() == MIRType_Int32x4 && right->type() == MIRType_Int32);
         setResultType(MIRType_Int32x4);
         setMovable();
     }
@@ -2295,6 +2300,14 @@ class MSimdShift
     static MSimdShift* NewAsmJS(TempAllocator& alloc, MDefinition* left,
                                 MDefinition* right, Operation op)
     {
+        MOZ_ASSERT(left->type() == MIRType_Int32x4 && right->type() == MIRType_Int32);
+        return new(alloc) MSimdShift(left, right, op);
+    }
+
+    static MSimdShift* New(TempAllocator& alloc, MDefinition* left, MDefinition* right,
+                           Operation op, MIRType type)
+    {
+        MOZ_ASSERT(type == MIRType_Int32x4);
         return new(alloc) MSimdShift(left, right, op);
     }
 
@@ -2303,6 +2316,17 @@ class MSimdShift
     }
 
     Operation operation() const { return operation_; }
+
+    static const char* OperationName(Operation op) {
+        switch (op) {
+          case lsh:  return "lsh";
+          case rsh:  return "rsh-arithmetic";
+          case ursh: return "rhs-logical";
+        }
+        MOZ_CRASH("unexpected operation");
+    }
+
+    void printOpcode(FILE* fp) const override;
 
     bool congruentTo(const MDefinition* ins) const override {
         if (!binaryCongruentTo(ins))
@@ -3240,6 +3264,7 @@ class MSimdUnbox
       : MUnaryInstruction(op)
     {
         MOZ_ASSERT(IsSimdType(type));
+        setGuard();
         setMovable();
         setResultType(type);
     }
@@ -3739,13 +3764,13 @@ class MCallDOMNative : public MCall
     MCallDOMNative(JSFunction* target, uint32_t numActualArgs)
         : MCall(target, numActualArgs, false)
     {
-        // If our jitinfo is not marked movable, that means that our C++
+        // If our jitinfo is not marked eliminatable, that means that our C++
         // implementation is fallible or that it never wants to be eliminated or
-        // coalesced or that we have no hope of ever doing the sort of argument
-        // analysis that would allow us to detemine that we're side-effect-free.
-        // In the latter case we wouldn't get DCEd no matter what, but for the
-        // former two cases we have to explicitly say that we can't be DCEd.
-        if (!getJitInfo()->isMovable)
+        // that we have no hope of ever doing the sort of argument analysis that
+        // would allow us to detemine that we're side-effect-free.  In the
+        // latter case we wouldn't get DCEd no matter what, but for the former
+        // two cases we have to explicitly say that we can't be DCEd.
+        if (!getJitInfo()->isEliminatable)
             setGuard();
     }
 
@@ -7942,6 +7967,49 @@ class MTypedArrayElements
     ALLOW_CLONE(MTypedArrayElements)
 };
 
+class MSetDisjointTypedElements
+  : public MTernaryInstruction,
+    public NoTypePolicy::Data
+{
+    explicit MSetDisjointTypedElements(MDefinition* target, MDefinition* targetOffset,
+                                       MDefinition* source)
+      : MTernaryInstruction(target, targetOffset, source)
+    {
+        MOZ_ASSERT(target->type() == MIRType_Object);
+        MOZ_ASSERT(targetOffset->type() == MIRType_Int32);
+        MOZ_ASSERT(source->type() == MIRType_Object);
+        setResultType(MIRType_None);
+    }
+
+  public:
+    INSTRUCTION_HEADER(SetDisjointTypedElements)
+
+    static MSetDisjointTypedElements*
+    New(TempAllocator& alloc, MDefinition* target, MDefinition* targetOffset,
+        MDefinition* source)
+    {
+        return new(alloc) MSetDisjointTypedElements(target, targetOffset, source);
+    }
+
+    MDefinition* target() const {
+        return getOperand(0);
+    }
+
+    MDefinition* targetOffset() const {
+        return getOperand(1);
+    }
+
+    MDefinition* source() const {
+        return getOperand(2);
+    }
+
+    AliasSet getAliasSet() const override {
+        return AliasSet::Store(AliasSet::UnboxedElement);
+    }
+
+    ALLOW_CLONE(MSetDisjointTypedElements)
+};
+
 // Load a binary data object's "elements", which is just its opaque
 // binary data space. Eventually this should probably be
 // unified with `MTypedArrayElements`.
@@ -8034,18 +8102,24 @@ class MNot
     bool operandMightEmulateUndefined_;
     bool operandIsNeverNaN_;
 
-    explicit MNot(MDefinition* input)
+    explicit MNot(MDefinition* input, CompilerConstraintList* constraints = nullptr)
       : MUnaryInstruction(input),
         operandMightEmulateUndefined_(true),
         operandIsNeverNaN_(false)
     {
         setResultType(MIRType_Boolean);
         setMovable();
+        if (constraints)
+            cacheOperandMightEmulateUndefined(constraints);
     }
 
+    void cacheOperandMightEmulateUndefined(CompilerConstraintList* constraints);
+
   public:
-    static MNot* New(TempAllocator& alloc, MDefinition* elements) {
-        return new(alloc) MNot(elements);
+    static MNot* New(TempAllocator& alloc, MDefinition* elements,
+                     CompilerConstraintList* constraints = nullptr)
+    {
+        return new(alloc) MNot(elements, constraints);
     }
     static MNot* NewAsmJS(TempAllocator& alloc, MDefinition* elements) {
         MNot* ins = new(alloc) MNot(elements);
@@ -8055,7 +8129,6 @@ class MNot
 
     INSTRUCTION_HEADER(Not)
 
-    void cacheOperandMightEmulateUndefined(CompilerConstraintList* constraints);
     MDefinition* foldsTo(TempAllocator& alloc) override;
 
     void markOperandCantEmulateUndefined() {
@@ -9755,28 +9828,26 @@ class MGetPropertyCache
     bool updateForReplacement(MDefinition* ins) override;
 };
 
-// Emit code to load a value from an object if its shape/group matches one of
-// the shapes/groups observed by the baseline IC, else bails out.
+// Emit code to load a value from an object if it matches one of the receivers
+// observed by the baseline IC, else bails out.
 class MGetPropertyPolymorphic
   : public MUnaryInstruction,
     public SingleObjectPolicy::Data
 {
     struct Entry {
-        // The shape to guard against.
-        Shape* objShape;
+        // The group and/or shape to guard against.
+        ReceiverGuard::StackGuard receiver;
 
-        // The property to laod.
+        // The property to load, null for loads from unboxed properties.
         Shape* shape;
     };
 
-    Vector<Entry, 4, JitAllocPolicy> nativeShapes_;
-    Vector<ObjectGroup*, 4, JitAllocPolicy> unboxedGroups_;
+    Vector<Entry, 4, JitAllocPolicy> receivers_;
     AlwaysTenuredPropertyName name_;
 
     MGetPropertyPolymorphic(TempAllocator& alloc, MDefinition* obj, PropertyName* name)
       : MUnaryInstruction(obj),
-        nativeShapes_(alloc),
-        unboxedGroups_(alloc),
+        receivers_(alloc),
         name_(name)
     {
         setGuard();
@@ -9799,29 +9870,20 @@ class MGetPropertyPolymorphic
         return congruentIfOperandsEqual(ins);
     }
 
-    bool addShape(Shape* objShape, Shape* shape) {
+    bool addReceiver(const ReceiverGuard::StackGuard receiver, Shape* shape) {
         Entry entry;
-        entry.objShape = objShape;
+        entry.receiver = receiver;
         entry.shape = shape;
-        return nativeShapes_.append(entry);
+        return receivers_.append(entry);
     }
-    bool addUnboxedGroup(ObjectGroup* group) {
-        return unboxedGroups_.append(group);
+    size_t numReceivers() const {
+        return receivers_.length();
     }
-    size_t numShapes() const {
-        return nativeShapes_.length();
-    }
-    Shape* objShape(size_t i) const {
-        return nativeShapes_[i].objShape;
+    const ReceiverGuard::StackGuard receiver(size_t i) const {
+        return receivers_[i].receiver;
     }
     Shape* shape(size_t i) const {
-        return nativeShapes_[i].shape;
-    }
-    size_t numUnboxedGroups() const {
-        return unboxedGroups_.length();
-    }
-    ObjectGroup* unboxedGroup(size_t i) const {
-        return unboxedGroups_[i];
+        return receivers_[i].shape;
     }
     PropertyName* name() const {
         return name_;
@@ -9830,10 +9892,17 @@ class MGetPropertyPolymorphic
         return getOperand(0);
     }
     AliasSet getAliasSet() const override {
+        bool hasUnboxedLoad = false;
+        for (size_t i = 0; i < numReceivers(); i++) {
+            if (!shape(i)) {
+                hasUnboxedLoad = true;
+                break;
+            }
+        }
         return AliasSet::Load(AliasSet::ObjectFields |
                               AliasSet::FixedSlot |
                               AliasSet::DynamicSlot |
-                              (!unboxedGroups_.empty() ? AliasSet::UnboxedElement : 0));
+                              (hasUnboxedLoad ? AliasSet::UnboxedElement : 0));
     }
 
     bool mightAlias(const MDefinition* store) const override;
@@ -9846,23 +9915,21 @@ class MSetPropertyPolymorphic
     public MixPolicy<SingleObjectPolicy, NoFloatPolicy<1> >::Data
 {
     struct Entry {
-        // The shape to guard against.
-        Shape* objShape;
+        // The group and/or shape to guard against.
+        ReceiverGuard::StackGuard receiver;
 
-        // The property to load.
+        // The property to store, null for stores to unboxed properties.
         Shape* shape;
     };
 
-    Vector<Entry, 4, JitAllocPolicy> nativeShapes_;
-    Vector<ObjectGroup*, 4, JitAllocPolicy> unboxedGroups_;
+    Vector<Entry, 4, JitAllocPolicy> receivers_;
     AlwaysTenuredPropertyName name_;
     bool needsBarrier_;
 
     MSetPropertyPolymorphic(TempAllocator& alloc, MDefinition* obj, MDefinition* value,
                             PropertyName* name)
       : MBinaryInstruction(obj, value),
-        nativeShapes_(alloc),
-        unboxedGroups_(alloc),
+        receivers_(alloc),
         name_(name),
         needsBarrier_(false)
     {
@@ -9876,29 +9943,20 @@ class MSetPropertyPolymorphic
         return new(alloc) MSetPropertyPolymorphic(alloc, obj, value, name);
     }
 
-    bool addShape(Shape* objShape, Shape* shape) {
+    bool addReceiver(const ReceiverGuard::StackGuard& receiver, Shape* shape) {
         Entry entry;
-        entry.objShape = objShape;
+        entry.receiver = receiver;
         entry.shape = shape;
-        return nativeShapes_.append(entry);
+        return receivers_.append(entry);
     }
-    bool addUnboxedGroup(ObjectGroup* group) {
-        return unboxedGroups_.append(group);
+    size_t numReceivers() const {
+        return receivers_.length();
     }
-    size_t numShapes() const {
-        return nativeShapes_.length();
-    }
-    Shape* objShape(size_t i) const {
-        return nativeShapes_[i].objShape;
+    const ReceiverGuard::StackGuard& receiver(size_t i) const {
+        return receivers_[i].receiver;
     }
     Shape* shape(size_t i) const {
-        return nativeShapes_[i].shape;
-    }
-    size_t numUnboxedGroups() const {
-        return unboxedGroups_.length();
-    }
-    ObjectGroup* unboxedGroup(size_t i) const {
-        return unboxedGroups_[i];
+        return receivers_[i].shape;
     }
     PropertyName* name() const {
         return name_;
@@ -9916,10 +9974,17 @@ class MSetPropertyPolymorphic
         needsBarrier_ = true;
     }
     AliasSet getAliasSet() const override {
+        bool hasUnboxedStore = false;
+        for (size_t i = 0; i < numReceivers(); i++) {
+            if (!shape(i)) {
+                hasUnboxedStore = true;
+                break;
+            }
+        }
         return AliasSet::Store(AliasSet::ObjectFields |
                                AliasSet::FixedSlot |
                                AliasSet::DynamicSlot |
-                               (!unboxedGroups_.empty() ? AliasSet::UnboxedElement : 0));
+                               (hasUnboxedStore ? AliasSet::UnboxedElement : 0));
     }
 };
 
@@ -10214,13 +10279,11 @@ class MGuardReceiverPolymorphic
   : public MUnaryInstruction,
     public SingleObjectPolicy::Data
 {
-    Vector<Shape*, 4, JitAllocPolicy> shapes_;
-    Vector<ObjectGroup*, 4, JitAllocPolicy> unboxedGroups_;
+    Vector<ReceiverGuard::StackGuard, 4, JitAllocPolicy> receivers_;
 
     MGuardReceiverPolymorphic(TempAllocator& alloc, MDefinition* obj)
       : MUnaryInstruction(obj),
-        shapes_(alloc),
-        unboxedGroups_(alloc)
+        receivers_(alloc)
     {
         setGuard();
         setMovable();
@@ -10238,24 +10301,14 @@ class MGuardReceiverPolymorphic
         return getOperand(0);
     }
 
-    bool addShape(Shape* shape) {
-        return shapes_.append(shape);
+    bool addReceiver(const ReceiverGuard::StackGuard& receiver) {
+        return receivers_.append(receiver);
     }
-    size_t numShapes() const {
-        return shapes_.length();
+    size_t numReceivers() const {
+        return receivers_.length();
     }
-    Shape* getShape(size_t i) const {
-        return shapes_[i];
-    }
-
-    bool addUnboxedGroup(ObjectGroup* group) {
-        return unboxedGroups_.append(group);
-    }
-    size_t numUnboxedGroups() const {
-        return unboxedGroups_.length();
-    }
-    ObjectGroup* getUnboxedGroup(size_t i) const {
-        return unboxedGroups_[i];
+    const ReceiverGuard::StackGuard& receiver(size_t i) const {
+        return receivers_[i];
     }
 
     bool congruentTo(const MDefinition* ins) const override;
@@ -10273,15 +10326,13 @@ class MGuardObjectGroup
     AlwaysTenured<ObjectGroup*> group_;
     bool bailOnEquality_;
     BailoutKind bailoutKind_;
-    bool checkUnboxedExpando_;
 
     MGuardObjectGroup(MDefinition* obj, ObjectGroup* group, bool bailOnEquality,
-                      BailoutKind bailoutKind, bool checkUnboxedExpando)
+                      BailoutKind bailoutKind)
       : MUnaryInstruction(obj),
         group_(group),
         bailOnEquality_(bailOnEquality),
-        bailoutKind_(bailoutKind),
-        checkUnboxedExpando_(checkUnboxedExpando)
+        bailoutKind_(bailoutKind)
     {
         setGuard();
         setMovable();
@@ -10296,10 +10347,8 @@ class MGuardObjectGroup
     INSTRUCTION_HEADER(GuardObjectGroup)
 
     static MGuardObjectGroup* New(TempAllocator& alloc, MDefinition* obj, ObjectGroup* group,
-                                  bool bailOnEquality, BailoutKind bailoutKind,
-                                  bool checkUnboxedExpando) {
-        return new(alloc) MGuardObjectGroup(obj, group, bailOnEquality, bailoutKind,
-                                            checkUnboxedExpando);
+                                  bool bailOnEquality, BailoutKind bailoutKind) {
+        return new(alloc) MGuardObjectGroup(obj, group, bailOnEquality, bailoutKind);
     }
 
     MDefinition* obj() const {
@@ -10313,9 +10362,6 @@ class MGuardObjectGroup
     }
     BailoutKind bailoutKind() const {
         return bailoutKind_;
-    }
-    bool checkUnboxedExpando() const {
-        return checkUnboxedExpando_;
     }
     bool congruentTo(const MDefinition* ins) const override {
         if (!ins->isGuardObjectGroup())
@@ -10418,6 +10464,84 @@ class MGuardClass
     }
 
     ALLOW_CLONE(MGuardClass)
+};
+
+// Guard on the presence or absence of an unboxed object's expando.
+class MGuardUnboxedExpando
+  : public MUnaryInstruction,
+    public SingleObjectPolicy::Data
+{
+    bool requireExpando_;
+    BailoutKind bailoutKind_;
+
+    MGuardUnboxedExpando(MDefinition* obj, bool requireExpando, BailoutKind bailoutKind)
+      : MUnaryInstruction(obj),
+        requireExpando_(requireExpando),
+        bailoutKind_(bailoutKind)
+    {
+        setGuard();
+        setMovable();
+        setResultType(MIRType_Object);
+    }
+
+  public:
+    INSTRUCTION_HEADER(GuardUnboxedExpando)
+
+    static MGuardUnboxedExpando* New(TempAllocator& alloc, MDefinition* obj,
+                                     bool requireExpando, BailoutKind bailoutKind) {
+        return new(alloc) MGuardUnboxedExpando(obj, requireExpando, bailoutKind);
+    }
+
+    MDefinition* obj() const {
+        return getOperand(0);
+    }
+    bool requireExpando() const {
+        return requireExpando_;
+    }
+    BailoutKind bailoutKind() const {
+        return bailoutKind_;
+    }
+    bool congruentTo(const MDefinition* ins) const override {
+        if (!congruentIfOperandsEqual(ins))
+            return false;
+        if (requireExpando() != ins->toGuardUnboxedExpando()->requireExpando())
+            return false;
+        return true;
+    }
+    AliasSet getAliasSet() const override {
+        return AliasSet::Load(AliasSet::ObjectFields);
+    }
+};
+
+// Load an unboxed plain object's expando.
+class MLoadUnboxedExpando
+  : public MUnaryInstruction,
+    public SingleObjectPolicy::Data
+{
+  private:
+    explicit MLoadUnboxedExpando(MDefinition* object)
+      : MUnaryInstruction(object)
+    {
+        setResultType(MIRType_Object);
+        setMovable();
+    }
+
+  public:
+    INSTRUCTION_HEADER(LoadUnboxedExpando)
+
+    static MLoadUnboxedExpando* New(TempAllocator& alloc, MDefinition* object) {
+        return new(alloc) MLoadUnboxedExpando(object);
+    }
+
+    MDefinition* object() const {
+        return getOperand(0);
+    }
+    bool congruentTo(const MDefinition* ins) const override {
+        return congruentIfOperandsEqual(ins);
+    }
+    AliasSet getAliasSet() const override {
+        return AliasSet::Load(AliasSet::ObjectFields);
+    }
 };
 
 // Load from vp[slot] (slots that are not inline in an object).
@@ -12553,32 +12677,9 @@ class MAsmJSHeapAccess
     bool needsBoundsCheck() const { return needsBoundsCheck_; }
     void removeBoundsCheck() { needsBoundsCheck_ = false; }
     unsigned numSimdElems() const { MOZ_ASSERT(Scalar::isSimdType(accessType_)); return numSimdElems_; }
-
-    bool tryAddDisplacement(int32_t o) {
-        // Compute the new offset. Check for overflow and negative. In theory it
-        // ought to be possible to support negative offsets, but it'd require
-        // more elaborate bounds checking mechanisms than we currently have.
-        MOZ_ASSERT(offset_ >= 0);
-        int32_t newOffset = uint32_t(offset_) + o;
-        if (newOffset < 0)
-            return false;
-
-        // Compute the new offset to the end of the access. Check for overflow
-        // and negative here also.
-        int32_t newEnd = uint32_t(newOffset) + byteSize();
-        if (newEnd < 0)
-            return false;
-        MOZ_ASSERT(uint32_t(newEnd) >= uint32_t(newOffset));
-
-        // If we need bounds checking, keep it within the more restrictive
-        // AsmJSCheckedImmediateRange. Otherwise, just keep it within what
-        // the instruction set can support.
-        size_t range = needsBoundsCheck() ? AsmJSCheckedImmediateRange : AsmJSImmediateRange;
-        if (size_t(newEnd) > range)
-            return false;
-
-        offset_ = newOffset;
-        return true;
+    void setOffset(int32_t o) {
+        MOZ_ASSERT(o >= 0);
+        offset_ = o;
     }
 };
 

@@ -125,13 +125,10 @@ typedef HashMap<CrossCompartmentKey, ReadBarrieredValue,
 
 } /* namespace js */
 
-namespace JS {
-struct TypeInferenceSizes;
-}
-
 namespace js {
 class DebugScopes;
 class ObjectWeakMap;
+class WatchpointMap;
 class WeakMapBase;
 }
 
@@ -591,6 +588,7 @@ struct JSCompartment
         DeprecatedLetExpression = 5,        // Added in JS 1.7
         DeprecatedNoSuchMethod = 6,         // JS 1.7+
         DeprecatedFlagsArgument = 7,        // JS 1.3 or older
+        RegExpSourceProperty = 8,           // ES5
         DeprecatedLanguageExtensionCount
     };
 
@@ -611,6 +609,15 @@ JSRuntime::isAtomsZone(JS::Zone* zone)
 }
 
 namespace js {
+
+// We only set the maybeAlive flag for objects and scripts. It's assumed that,
+// if a compartment is alive, then it will have at least some live object or
+// script it in. Even if we get this wrong, the worst that will happen is that
+// scheduledForDestruction will be set on the compartment, which will cause
+// some extra GC activity to try to free the compartment.
+template<typename T> inline void SetMaybeAliveFlag(T* thing) {}
+template<> inline void SetMaybeAliveFlag(JSObject* thing) {thing->compartment()->maybeAlive = true;}
+template<> inline void SetMaybeAliveFlag(JSScript* thing) {thing->compartment()->maybeAlive = true;}
 
 inline js::Handle<js::GlobalObject*>
 ExclusiveContext::global() const

@@ -28,6 +28,13 @@
     "extended_statistics_ok": true,
     "description": "time spent updating accessibility (ms)"
   },
+  "ADDON_SHIM_USAGE": {
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": 15,
+    "keyed": "true",
+    "description": "Reasons why add-on shims were used, keyed by add-on ID."
+  },
   "APPLICATION_REPUTATION_SHOULD_BLOCK": {
     "expires_in_version": "never",
     "kind": "boolean",
@@ -3439,50 +3446,59 @@
     "description": "PLACES: Days from last maintenance"
   },
   "UPDATE_CHECK_NO_UPDATE_EXTERNAL" : {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of no updates were found for a background update check (externally initiated)"
   },
   "UPDATE_CHECK_NO_UPDATE_NOTIFY" : {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of no updates were found for a background update check (timer initiated)"
   },
   "UPDATE_CHECK_CODE_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 50,
     "description": "Update: background update check result code except for no updates found (externally initiated)"
   },
   "UPDATE_CHECK_CODE_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 50,
     "description": "Update: background update check result code except for no updates found (timer initiated)"
   },
   "UPDATE_CHECK_EXTENDED_ERROR_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "keyed": true,
     "description": "Update: keyed count (key names are prefixed with AUS_CHECK_EX_ERR_) of background update check extended error code (externally initiated)"
   },
   "UPDATE_CHECK_EXTENDED_ERROR_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "keyed": true,
     "description": "Update: keyed count (key names are prefixed with AUS_CHECK_EX_ERR_) of background update check extended error code (timer initiated)"
   },
   "UPDATE_INVALID_LASTUPDATETIME_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of systems that have a last update time greater than the current time (externally initiated)"
   },
   "UPDATE_INVALID_LASTUPDATETIME_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of systems that have a last update time greater than the current time (timer initiated)"
   },
   "UPDATE_LAST_NOTIFY_INTERVAL_DAYS_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "exponential",
     "n_buckets": 60,
@@ -3490,211 +3506,261 @@
     "description": "Update: interval in days since the last background update check (externally initiated)"
   },
   "UPDATE_LAST_NOTIFY_INTERVAL_DAYS_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "exponential",
     "n_buckets": 30,
     "high": "180",
     "description": "Update: interval in days since the last background update check (timer initiated)"
   },
+  "UPDATE_PING_COUNT_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "description": "Update: count of systems for this ping for comparison with other pings (externally initiated)"
+  },
+  "UPDATE_PING_COUNT_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "count",
+    "description": "Update: count of systems for this ping for comparison with other pings (timer initiated)"
+  },
   "UPDATE_SERVICE_INSTALLED_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "boolean",
     "description": "Update: whether the service is installed (externally initiated)"
   },
   "UPDATE_SERVICE_INSTALLED_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "boolean",
     "description": "Update: whether the service is installed (timer initiated)"
   },
   "UPDATE_SERVICE_MANUALLY_UNINSTALLED_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of systems that manually uninstalled the service (externally initiated)"
   },
   "UPDATE_SERVICE_MANUALLY_UNINSTALLED_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of systems that manually uninstalled the service (timer initiated)"
   },
-  "UPDATE_CANNOT_APPLY_EXTERNAL": {
+  "UPDATE_UNABLE_TO_APPLY_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
-    "kind": "boolean",
-    "description": "Update: systems that cannot apply updates (externally initiated)"
+    "kind": "count",
+    "description": "Update: count of systems that cannot apply updates (externally initiated)"
   },
-  "UPDATE_CANNOT_APPLY_NOTIFY": {
+  "UPDATE_UNABLE_TO_APPLY_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
-    "kind": "boolean",
-    "description": "Update: systems that cannot apply updates (timer initiated)"
+    "kind": "count",
+    "description": "Update: count of systems that cannot apply updates (timer initiated)"
   },
   "UPDATE_CANNOT_STAGE_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of systems that cannot stage updates (externally initiated)"
   },
   "UPDATE_CANNOT_STAGE_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of systems that cannot stage updates (timer initiated)"
   },
   "UPDATE_HAS_PREF_URL_OVERRIDE_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of systems that have an app.update.url.override preference (externally initiated)"
   },
   "UPDATE_HAS_PREF_URL_OVERRIDE_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of systems that have an app.update.url.override preference (timer initiated)"
   },
   "UPDATE_PREF_UPDATE_CANCELATIONS_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 100,
     "description": "Update: number of sequential update elevation request cancelations greater than 0 (externally initiated)"
   },
   "UPDATE_PREF_UPDATE_CANCELATIONS_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 100,
     "description": "Update: number of sequential update elevation request cancelations greater than 0 (timer initiated)"
   },
   "UPDATE_PREF_SERVICE_ERRORS_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 30,
     "description": "Update: number of sequential update service errors greater than 0 (externally initiated)"
   },
   "UPDATE_PREF_SERVICE_ERRORS_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 30,
     "description": "Update: number of sequential update service errors greater than 0 (timer initiated)"
   },
   "UPDATE_NOT_PREF_UPDATE_AUTO_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of when the app.update.auto boolean preference is not the default value of true (true values are not submitted)"
   },
   "UPDATE_NOT_PREF_UPDATE_AUTO_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of when the app.update.auto boolean preference is not the default value of true (true values are not submitted)"
   },
   "UPDATE_NOT_PREF_UPDATE_ENABLED_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of when the app.update.enabled boolean preference is not the default value of true (true values are not submitted)"
   },
   "UPDATE_NOT_PREF_UPDATE_ENABLED_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of when the app.update.enabled boolean preference is not the default value of true (true values are not submitted)"
   },
   "UPDATE_NOT_PREF_UPDATE_STAGING_ENABLED_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of when the app.update.staging.enabled boolean preference is not the default value of true (true values are not submitted)"
   },
   "UPDATE_NOT_PREF_UPDATE_STAGING_ENABLED_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of when the app.update.staging.enabled boolean preference is not the default value of true (true values are not submitted)"
   },
   "UPDATE_NOT_PREF_UPDATE_SERVICE_ENABLED_EXTERNAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of when the app.update.service.enabled boolean preference is not the default value of true (true values are not submitted)"
   },
   "UPDATE_NOT_PREF_UPDATE_SERVICE_ENABLED_NOTIFY": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
     "description": "Update: count of when the app.update.service.enabled boolean preference is not the default value of true (true values are not submitted)"
   },
   "UPDATE_DOWNLOAD_CODE_COMPLETE": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 50,
     "description": "Update: complete patch download result code"
   },
   "UPDATE_DOWNLOAD_CODE_PARTIAL": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 50,
     "description": "Update: complete patch download result code"
   },
   "UPDATE_STATE_CODE_COMPLETE_STARTUP": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 20,
     "description": "Update: the state of a complete update from update.status on startup"
   },
   "UPDATE_STATE_CODE_PARTIAL_STARTUP": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 20,
     "description": "Update: the state of a partial patch update from update.status on startup"
   },
   "UPDATE_STATE_CODE_UNKNOWN_STARTUP": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 20,
     "description": "Update: the state of an unknown patch update from update.status on startup"
   },
   "UPDATE_STATE_CODE_COMPLETE_STAGE": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 20,
     "description": "Update: the state of a complete patch update from update.status after staging"
   },
   "UPDATE_STATE_CODE_PARTIAL_STAGE": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 20,
     "description": "Update: the state of a partial patch update from update.status after staging"
   },
   "UPDATE_STATE_CODE_UNKNOWN_STAGE": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 20,
     "description": "Update: the state of an unknown patch update from update.status after staging"
   },
   "UPDATE_STATUS_ERROR_CODE_COMPLETE_STARTUP": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 100,
     "description": "Update: the status error code for a failed complete patch update from update.status on startup"
   },
   "UPDATE_STATUS_ERROR_CODE_PARTIAL_STARTUP": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 100,
     "description": "Update: the status error code for a failed partial patch update from update.status on startup"
   },
   "UPDATE_STATUS_ERROR_CODE_UNKNOWN_STARTUP": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 100,
     "description": "Update: the status error code for a failed unknown patch update from update.status on startup"
   },
   "UPDATE_STATUS_ERROR_CODE_COMPLETE_STAGE": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 100,
     "description": "Update: the status error code for a failed complete patch update from update.status after staging"
   },
   "UPDATE_STATUS_ERROR_CODE_PARTIAL_STAGE": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 100,
     "description": "Update: the status error code for a failed partial patch update from update.status after staging"
   },
   "UPDATE_STATUS_ERROR_CODE_UNKNOWN_STAGE": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 100,
     "description": "Update: the status error code for a failed unknown patch update from update.status after staging"
   },
   "UPDATE_WIZ_LAST_PAGE_CODE": {
+    "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "n_values": 30,
@@ -3961,14 +4027,6 @@
     "extended_statistics_ok": true,
     "description": "Session restore: Time to JSON serialize session data (ms)"
   },
-  "FX_SESSION_RESTORE_SERIALIZE_DATA_LONGEST_OP_MS": {
-    "expires_in_version": "40",
-    "kind": "exponential",
-    "high": "30000",
-    "n_buckets": 10,
-    "extended_statistics_ok": true,
-    "description": "Session restore: Duration of the longest uninterruptible operation while serializing session data (ms)"
-  },
   "FX_SESSION_RESTORE_READ_FILE_MS": {
     "expires_in_version": "default",
     "kind": "exponential",
@@ -3976,14 +4034,6 @@
     "n_buckets": 10,
     "extended_statistics_ok": true,
     "description": "Session restore: Time to read the session data from the file on disk (ms)"
-  },
-  "FX_SESSION_RESTORE_SEND_SERIALIZED_STATE_LONGEST_OP_MS": {
-    "expires_in_version": "40",
-    "kind": "exponential",
-    "high": "3000",
-    "n_buckets": 10,
-    "extended_statistics_ok": true,
-    "description": "Session restore: Time spent on the main thread sending the session data off the main thread for writing (ms)"
   },
   "FX_SESSION_RESTORE_WRITE_STATE_LONGEST_OP_MS": {
     "expires_in_version": "40",
@@ -7475,24 +7525,31 @@
     "description": "Stores 1 every time the URL is copied or shared."
   },
   "LOOP_TWO_WAY_MEDIA_CONN_LENGTH": {
+    "alert_emails": ["firefox-dev@mozilla.org", "dmose@mozilla.com"],
     "expires_in_version": "43",
-    "kind": "count",
-    "keyed": true,
+    "kind": "enumerated",
+    "n_values": 8,
     "releaseChannelCollection": "opt-out",
-    "description": "Connection length for bi-directionally connected media"
+    "description": "Connection length for bi-directionally connected media (0=SHORTER_THAN_10S, 1=BETWEEN_10S_AND_30S, 2=BETWEEN_30S_AND_5M, 3=MORE_THAN_5M)"
   },
   "LOOP_SHARING_STATE_CHANGE": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
     "expires_in_version": "43",
-    "kind": "count",
-    "keyed": true,
-    "releaseChannelCollection": "opt-in",
-    "description": "Number of times the sharing feature has been enabled and disabled"
+    "kind": "enumerated",
+    "n_values": 8,
+    "releaseChannelCollection": "opt-out",
+    "description": "Number of times the sharing feature has been enabled and disabled (0=WINDOW_ENABLED, 1=WINDOW_DISABLED, 2=BROWSER_ENABLED, 3=BROWSER_DISABLED)"
   },
   "E10S_AUTOSTART": {
     "expires_in_version": "never",
     "kind": "boolean",
     "description": "Whether a session is set to autostart e10s windows"
+  },
+  "E10S_AUTOSTART_STATUS": {
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": 6,
+    "description": "Why e10s is enabled or disabled (0=ENABLED_BY_USER, 1=ENABLED_BY_DEFAULT, 2=DISABLED_BY_USER, 3=DISABLED_IN_SAFE_MODE, 4=DISABLED_FOR_ACCESSIBILITY, 5=DISABLED_FOR_MAC_GFX)"
   },
   "E10S_WINDOW": {
     "expires_in_version": "never",
@@ -7500,12 +7557,12 @@
     "description": "Whether a browser window is set as an e10s window"
   },
   "E10S_STILL_ACCEPTED_FROM_PROMPT": {
-    "expires_in_version": "40",
+    "expires_in_version": "never",
     "kind": "boolean",
     "description": "Whether a user who accepted e10s from the prompt is still using e10s"
   },
   "E10S_BLOCKED_FROM_RUNNING": {
-    "expires_in_version": "40",
+    "expires_in_version": "never",
     "kind": "boolean",
     "description": "Whether the e10s pref was set but it was blocked from running due to blacklisted conditions"
   },

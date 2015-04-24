@@ -23,6 +23,13 @@ loop.store.ActiveRoomStore = (function() {
 
   var ROOM_INFO_FAILURES = loop.shared.utils.ROOM_INFO_FAILURES;
 
+  var OPTIONAL_ROOMINFO_FIELDS = {
+    urls: "roomContextUrls",
+    description: "roomDescription",
+    roomInfoFailure: "roomInfoFailure",
+    roomName: "roomName"
+  };
+
   /**
    * Active room store.
    *
@@ -80,10 +87,19 @@ loop.store.ActiveRoomStore = (function() {
         remoteVideoDimensions: {},
         screenSharingState: SCREEN_SHARE_STATES.INACTIVE,
         receivingScreenShare: false,
+        // Any urls (aka context) associated with the room.
+        roomContextUrls: null,
         // The roomCryptoKey to decode the context data if necessary.
         roomCryptoKey: null,
+        // The description for a room as stored in the context data.
+        roomDescription: null,
         // Room information failed to be obtained for a reason. See ROOM_INFO_FAILURES.
-        roomInfoFailure: null
+        roomInfoFailure: null,
+        // The name of the room.
+        roomName: null,
+        // Social API state.
+        socialShareButtonAvailable: false,
+        socialShareProviders: null
       };
     },
 
@@ -139,7 +155,8 @@ loop.store.ActiveRoomStore = (function() {
         "feedbackComplete",
         "videoDimensionsChanged",
         "startScreenShare",
-        "endScreenShare"
+        "endScreenShare",
+        "updateSocialShareInfo"
       ]);
     },
 
@@ -177,9 +194,13 @@ loop.store.ActiveRoomStore = (function() {
 
           this.dispatchAction(new sharedActions.SetupRoomInfo({
             roomToken: actionData.roomToken,
-            roomName: roomData.roomName,
+            roomContextUrls: roomData.decryptedContext.urls,
+            roomDescription: roomData.decryptedContext.description,
+            roomName: roomData.decryptedContext.roomName,
             roomOwner: roomData.roomOwner,
-            roomUrl: roomData.roomUrl
+            roomUrl: roomData.roomUrl,
+            socialShareButtonAvailable: this._mozLoop.isSocialShareButtonAvailable(),
+            socialShareProviders: this._mozLoop.getSocialShareProviders()
           }));
 
           // For the conversation window, we need to automatically
@@ -265,6 +286,8 @@ loop.store.ActiveRoomStore = (function() {
               .then(function(decryptedResult) {
           var realResult = JSON.parse(decryptedResult);
 
+          roomInfoData.description = realResult.description;
+          roomInfoData.urls = realResult.urls;
           roomInfoData.roomName = realResult.roomName;
 
           dispatcher.dispatch(roomInfoData);
@@ -288,18 +311,25 @@ loop.store.ActiveRoomStore = (function() {
       }
 
       this.setStoreState({
+        roomContextUrls: actionData.roomContextUrls,
+        roomDescription: actionData.roomDescription,
         roomName: actionData.roomName,
         roomOwner: actionData.roomOwner,
         roomState: ROOM_STATES.READY,
         roomToken: actionData.roomToken,
-        roomUrl: actionData.roomUrl
+        roomUrl: actionData.roomUrl,
+        socialShareButtonAvailable: actionData.socialShareButtonAvailable,
+        socialShareProviders: actionData.socialShareProviders
       });
 
       this._onUpdateListener = this._handleRoomUpdate.bind(this);
       this._onDeleteListener = this._handleRoomDelete.bind(this);
+      this._onSocialShareUpdate = this._handleSocialShareUpdate.bind(this);
 
       this._mozLoop.rooms.on("update:" + actionData.roomToken, this._onUpdateListener);
       this._mozLoop.rooms.on("delete:" + actionData.roomToken, this._onDeleteListener);
+      window.addEventListener("LoopShareWidgetChanged", this._onSocialShareUpdate);
+      window.addEventListener("LoopSocialProvidersChanged", this._onSocialShareUpdate);
     },
 
     /**
@@ -308,11 +338,30 @@ loop.store.ActiveRoomStore = (function() {
      * @param {sharedActions.UpdateRoomInfo} actionData
      */
     updateRoomInfo: function(actionData) {
-      this.setStoreState({
-        roomInfoFailure: actionData.roomInfoFailure,
-        roomName: actionData.roomName,
+      var newState = {
         roomOwner: actionData.roomOwner,
         roomUrl: actionData.roomUrl
+      };
+      // Iterate over the optional fields that _may_ be present on the actionData
+      // object.
+      Object.keys(OPTIONAL_ROOMINFO_FIELDS).forEach(function(field) {
+        if (actionData[field]) {
+          newState[OPTIONAL_ROOMINFO_FIELDS[field]] = actionData[field];
+        }
+      });
+      this.setStoreState(newState);
+    },
+
+    /**
+     * Handles the updateSocialShareInfo action. Updates the room data with new
+     * Social API info.
+     *
+     * @param  {sharedActions.UpdateSocialShareInfo} actionData
+     */
+    updateSocialShareInfo: function(actionData) {
+      this.setStoreState({
+        socialShareButtonAvailable: actionData.socialShareButtonAvailable,
+        socialShareProviders: actionData.socialShareProviders
       });
     },
 
@@ -324,7 +373,7 @@ loop.store.ActiveRoomStore = (function() {
      */
     _handleRoomUpdate: function(eventName, roomData) {
       this.dispatchAction(new sharedActions.UpdateRoomInfo({
-        roomName: roomData.roomName,
+        roomName: roomData.decryptedContext.roomName,
         roomOwner: roomData.roomOwner,
         roomUrl: roomData.roomUrl
       }));
@@ -340,6 +389,17 @@ loop.store.ActiveRoomStore = (function() {
       this._sdkDriver.forceDisconnectAll(function() {
         window.close();
       });
+    },
+
+    /**
+     * Handles an update of the position of the Share widget and changes to list
+     * of Social API providers, notified by the mozLoop API.
+     */
+    _handleSocialShareUpdate: function() {
+      this.dispatchAction(new sharedActions.UpdateSocialShareInfo({
+        socialShareButtonAvailable: this._mozLoop.isSocialShareButtonAvailable(),
+        socialShareProviders: this._mozLoop.getSocialShareProviders()
+      }));
     },
 
     /**
@@ -593,8 +653,12 @@ loop.store.ActiveRoomStore = (function() {
       var roomToken = this.getStoreState().roomToken;
       this._mozLoop.rooms.off("update:" + roomToken, this._onUpdateListener);
       this._mozLoop.rooms.off("delete:" + roomToken, this._onDeleteListener);
+      window.removeEventListener("LoopShareWidgetChanged", this._onShareWidgetUpdate);
+      window.removeEventListener("LoopSocialProvidersChanged", this._onSocialProvidersUpdate);
       delete this._onUpdateListener;
       delete this._onDeleteListener;
+      delete this._onShareWidgetUpdate;
+      delete this._onSocialProvidersUpdate;
     },
 
     /**

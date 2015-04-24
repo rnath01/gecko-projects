@@ -5,7 +5,7 @@
 
 #include "GMPDecryptorParent.h"
 #include "GMPContentParent.h"
-#include "mp4_demuxer/DecoderData.h"
+#include "MediaData.h"
 #include "mozilla/unused.h"
 
 namespace mozilla {
@@ -14,6 +14,7 @@ namespace gmp {
 GMPDecryptorParent::GMPDecryptorParent(GMPContentParent* aPlugin)
   : mIsOpen(false)
   , mShuttingDown(false)
+  , mActorDestroyed(false)
   , mPlugin(aPlugin)
   , mCallback(nullptr)
 #ifdef DEBUG
@@ -133,7 +134,7 @@ GMPDecryptorParent::SetServerCertificate(uint32_t aPromiseId,
 
 void
 GMPDecryptorParent::Decrypt(uint32_t aId,
-                            const mp4_demuxer::CryptoSample& aCrypto,
+                            const CryptoSample& aCrypto,
                             const nsTArray<uint8_t>& aBuffer)
 {
   if (!mIsOpen) {
@@ -142,13 +143,13 @@ GMPDecryptorParent::Decrypt(uint32_t aId,
   }
 
   // Caller should ensure parameters passed in are valid.
-  MOZ_ASSERT(!aBuffer.IsEmpty() && aCrypto.valid);
+  MOZ_ASSERT(!aBuffer.IsEmpty() && aCrypto.mValid);
 
-  GMPDecryptionData data(aCrypto.key,
-                         aCrypto.iv,
-                         aCrypto.plain_sizes,
-                         aCrypto.encrypted_sizes,
-                         aCrypto.session_ids);
+  GMPDecryptionData data(aCrypto.mKeyId,
+                         aCrypto.mIV,
+                         aCrypto.mPlainSizes,
+                         aCrypto.mEncryptedSizes,
+                         aCrypto.mSessionIds);
 
   unused << SendDecrypt(aId, aBuffer, data);
 }
@@ -347,7 +348,9 @@ GMPDecryptorParent::Shutdown()
   }
 
   mIsOpen = false;
-  unused << SendDecryptingComplete();
+  if (!mActorDestroyed) {
+    unused << SendDecryptingComplete();
+  }
 }
 
 // Note: Keep this sync'd up with Shutdown
@@ -355,6 +358,7 @@ void
 GMPDecryptorParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   mIsOpen = false;
+  mActorDestroyed = true;
   if (mCallback) {
     // May call Close() (and Shutdown()) immediately or with a delay
     mCallback->Terminated();

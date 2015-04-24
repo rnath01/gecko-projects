@@ -19,7 +19,6 @@
 #include "nsTHashtable.h"
 
 class nsIDocument;
-class nsIWeakReference;
 class nsPIDOMWindow;
 
 namespace mozilla {
@@ -199,6 +198,12 @@ public:
 
   void
   NoteFinishedMutableFile(IDBMutableFile* aMutableFile);
+
+  void
+  OnNewFileHandle();
+
+  void
+  OnFileHandleFinished();
 
   nsPIDOMWindow*
   GetParentObject() const;

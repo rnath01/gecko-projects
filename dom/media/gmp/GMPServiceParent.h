@@ -80,7 +80,8 @@ private:
 
   void AddOnGMPThread(const nsAString& aDirectory);
   void RemoveOnGMPThread(const nsAString& aDirectory,
-                         const bool aDeleteFromDisk);
+                         const bool aDeleteFromDisk,
+                         const bool aCanDefer);
 
   nsresult SetAsyncShutdownTimeout();
 
@@ -95,7 +96,8 @@ private:
 
 protected:
   friend class GMPParent;
-  void ReAddOnGMPThread(nsRefPtr<GMPParent>& aOld);
+  void ReAddOnGMPThread(const nsRefPtr<GMPParent>& aOld);
+  void PluginTerminated(const nsRefPtr<GMPParent>& aOld);
   virtual void InitializePlugins() override;
   virtual bool GetContentParentFrom(const nsACString& aNodeId,
                                     const nsCString& aAPI,
@@ -117,10 +119,11 @@ private:
     };
 
     PathRunnable(GeckoMediaPluginServiceParent* aService, const nsAString& aPath,
-                 EOperation aOperation)
+                 EOperation aOperation, bool aDefer = false)
       : mService(aService)
       , mPath(aPath)
       , mOperation(aOperation)
+      , mDefer(aDefer)
     { }
 
     NS_DECL_NSIRUNNABLE
@@ -129,6 +132,7 @@ private:
     nsRefPtr<GeckoMediaPluginServiceParent> mService;
     nsString mPath;
     EOperation mOperation;
+    bool mDefer;
   };
 
   // Protected by mMutex from the base class.
@@ -158,6 +162,8 @@ private:
 
   nsTArray<nsRefPtr<GMPParent>> mAsyncShutdownPlugins; // GMP Thread only.
 
+  nsTArray<nsString> mPluginsWaitingForDeletion;
+
   nsCOMPtr<nsIFile> mStorageBaseDir;
 
   // Hashes of (origin,topLevelOrigin) to the node id for
@@ -170,7 +176,7 @@ private:
 };
 
 nsresult ReadSalt(nsIFile* aPath, nsACString& aOutData);
-bool MatchOrigin(nsIFile* aPath, const nsACString& aOrigin);
+bool MatchOrigin(nsIFile* aPath, const nsACString& aSite);
 
 class GMPServiceParent final : public PGMPServiceParent
 {

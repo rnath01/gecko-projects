@@ -52,7 +52,7 @@ native GetGMPVideoDecoderCallback(mozilla::UniquePtr<GetGMPVideoDecoderCallback>
 native GetGMPVideoEncoderCallback(mozilla::UniquePtr<GetGMPVideoEncoderCallback>&&);
 native GetNodeIdCallback(mozilla::UniquePtr<GetNodeIdCallback>&&);
 
-[scriptable, uuid(2b0c90e1-df89-4583-a123-8bdb2f5f7e39)]
+[scriptable, uuid(787cf744-eea8-48c8-b692-376e0485ef97)]
 interface mozIGeckoMediaPluginService : nsISupports
 {
 

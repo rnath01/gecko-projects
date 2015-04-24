@@ -6,6 +6,7 @@ let Cc = Components.classes;
 let Ci = Components.interfaces;
 let Cu = Components.utils;
 
+Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 Cu.import("resource://gre/modules/RemoteAddonsChild.jsm");
@@ -14,11 +15,11 @@ Cu.import("resource://gre/modules/Timer.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PageThumbUtils",
   "resource://gre/modules/PageThumbUtils.jsm");
 
-#ifdef MOZ_CRASHREPORTER
-XPCOMUtils.defineLazyServiceGetter(this, "CrashReporter",
-                                   "@mozilla.org/xre/app-info;1",
-                                   "nsICrashReporter");
-#endif
+if (AppConstants.MOZ_CRASHREPORTER) {
+  XPCOMUtils.defineLazyServiceGetter(this, "CrashReporter",
+                                     "@mozilla.org/xre/app-info;1",
+                                     "nsICrashReporter");
+}
 
 let FocusSyncHandler = {
   init: function() {
@@ -64,11 +65,20 @@ let WebProgressListener = {
 
   _setupJSON: function setupJSON(aWebProgress, aRequest) {
     if (aWebProgress) {
+      let domWindowID;
+      try {
+        domWindowID = aWebProgress && aWebProgress.DOMWindowID;
+      } catch (e) {
+        // If nsDocShell::Destroy has already been called, then we'll
+        // get NS_NOINTERFACE when trying to get the DOM window ID.
+        domWindowID = null;
+      }
+
       aWebProgress = {
         isTopLevel: aWebProgress.isTopLevel,
         isLoadingDocument: aWebProgress.isLoadingDocument,
         loadType: aWebProgress.loadType,
-        DOMWindowID: aWebProgress.DOMWindowID,
+        DOMWindowID: domWindowID
       };
     }
 
@@ -138,6 +148,7 @@ let WebProgressListener = {
 
     if (aWebProgress && aWebProgress.isTopLevel) {
       json.documentURI = content.document.documentURIObject.spec;
+      json.title = content.document.title;
       json.charset = content.document.characterSet;
       json.mayEnableCharacterEncodingMenu = docShell.mayEnableCharacterEncodingMenu;
       json.principal = content.document.nodePrincipal;
@@ -256,10 +267,8 @@ let WebNavigation =  {
   },
 
   loadURI: function(uri, flags, referrer, referrerPolicy, baseURI) {
-#ifdef MOZ_CRASHREPORTER
-    if (CrashReporter.enabled)
+    if (AppConstants.MOZ_CRASHREPORTER && CrashReporter.enabled)
       CrashReporter.annotateCrashReport("URL", uri);
-#endif
     if (referrer)
       referrer = Services.io.newURI(referrer, null, null);
     if (baseURI)

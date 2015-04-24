@@ -21,9 +21,8 @@
 #include "ClearKeyDecryptionManager.h"
 #include "ClearKeyUtils.h"
 #include "gmp-task-utils.h"
-#include "mozilla/Endian.h"
+#include "Endian.h"
 #include "VideoDecoder.h"
-#include "mozilla/Move.h"
 
 using namespace wmf;
 
@@ -40,7 +39,9 @@ VideoDecoder::VideoDecoder(GMPVideoHost *aHostAPI)
 
 VideoDecoder::~VideoDecoder()
 {
-  mMutex->Destroy();
+  if (mMutex) {
+    mMutex->Destroy();
+  }
 }
 
 void
@@ -55,12 +56,14 @@ VideoDecoder::InitDecode(const GMPVideoCodec& aCodecSettings,
   mDecoder = new WMFH264Decoder();
   HRESULT hr = mDecoder->Init();
   if (FAILED(hr)) {
+    CK_LOGD("VideoDecoder::InitDecode failed to init WMFH264Decoder");
     mCallback->Error(GMPGenericErr);
     return;
   }
 
   auto err = GetPlatform()->createmutex(&mMutex);
   if (GMP_FAILED(err)) {
+    CK_LOGD("VideoDecoder::InitDecode failed to create GMPMutex");
     mCallback->Error(GMPGenericErr);
     return;
   }
@@ -196,11 +199,10 @@ VideoDecoder::DecodeTask(GMPVideoEncodedFrame* aInput)
       MaybeRunOnMainThread(
         WrapTask(this,
                  &VideoDecoder::ReturnOutput,
-                 CComPtr<IMFSample>(mozilla::Move(output)),
+                 CComPtr<IMFSample>(output),
                  mDecoder->GetFrameWidth(),
                  mDecoder->GetFrameHeight(),
                  mDecoder->GetStride()));
-      assert(!output.Get());
     }
     if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
       AutoLock lock(mMutex);
@@ -332,8 +334,12 @@ VideoDecoder::SampleToVideoFrame(IMFSample* aSample,
 void
 VideoDecoder::Reset()
 {
-  mDecoder->Reset();
-  mCallback->ResetComplete();
+  if (mDecoder) {
+    mDecoder->Reset();
+  }
+  if (mCallback) {
+    mCallback->ResetComplete();
+  }
 }
 
 void
@@ -351,11 +357,10 @@ VideoDecoder::DrainTask()
       MaybeRunOnMainThread(
         WrapTask(this,
                  &VideoDecoder::ReturnOutput,
-                 CComPtr<IMFSample>(mozilla::Move(output)),
+                 CComPtr<IMFSample>(output),
                  mDecoder->GetFrameWidth(),
                  mDecoder->GetFrameHeight(),
                  mDecoder->GetStride()));
-      assert(!output.Get());
     }
   }
   MaybeRunOnMainThread(WrapTask(mCallback, &GMPVideoDecoderCallback::DrainComplete));
@@ -364,6 +369,12 @@ VideoDecoder::DrainTask()
 void
 VideoDecoder::Drain()
 {
+  if (!mDecoder) {
+    if (mCallback) {
+      mCallback->DrainComplete();
+    }
+    return;
+  }
   EnsureWorker();
   mWorkerThread->Post(WrapTask(this,
                                &VideoDecoder::DrainTask));

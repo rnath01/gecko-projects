@@ -186,6 +186,9 @@ AddRawValueRoot(JSContext* cx, JS::Value* vp, const char* name);
 JS_FRIEND_API(void)
 RemoveRawValueRoot(JSContext* cx, JS::Value* vp);
 
+JS_FRIEND_API(JSAtom*)
+GetPropertyNameFromPC(JSScript* script, jsbytecode* pc);
+
 #ifdef JS_DEBUG
 
 /*
@@ -316,6 +319,7 @@ namespace js {
         nullptr,                 /* setProperty */                                      \
         nullptr,                 /* enumerate */                                        \
         nullptr,                 /* resolve */                                          \
+        nullptr,                 /* mayResolve */                                       \
         js::proxy_Convert,                                                              \
         js::proxy_Finalize,      /* finalize    */                                      \
         nullptr,                 /* call        */                                      \
@@ -618,7 +622,7 @@ struct String
 extern JS_FRIEND_DATA(const js::Class* const) ObjectClassPtr;
 
 inline const js::Class*
-GetObjectClass(JSObject* obj)
+GetObjectClass(const JSObject* obj)
 {
     return reinterpret_cast<const shadow::Object*>(obj)->group->clasp;
 }
@@ -869,6 +873,12 @@ MOZ_ALWAYS_INLINE JSLinearString*
 AtomToLinearString(JSAtom* atom)
 {
     return reinterpret_cast<JSLinearString*>(atom);
+}
+
+MOZ_ALWAYS_INLINE JSFlatString*
+AtomToFlatString(JSAtom* atom)
+{
+    return reinterpret_cast<JSFlatString*>(atom);
 }
 
 MOZ_ALWAYS_INLINE JSLinearString*
@@ -1421,8 +1431,9 @@ GetSCOffset(JSStructuredCloneWriter* writer);
 
 namespace Scalar {
 
-/* Scalar types which can appear in typed arrays and typed objects.  The enum
- * values need to be kept in sync with the JS_SCALARTYPEREPR_ constants, as
+/*
+ * Scalar types that can appear in typed arrays and typed objects.  The enum
+ * values must to be kept in sync with the JS_SCALARTYPEREPR_ constants, as
  * well as the TypedArrayObject::classes and TypedArrayObject::protoClasses
  * definitions.
  */
@@ -1471,6 +1482,27 @@ byteSize(Type atype)
       case Int32x4:
       case Float32x4:
         return 16;
+      default:
+        MOZ_CRASH("invalid scalar type");
+    }
+}
+
+static inline bool
+isSignedIntType(Type atype) {
+    switch (atype) {
+      case Int8:
+      case Int16:
+      case Int32:
+      case Int32x4:
+        return true;
+      case Uint8:
+      case Uint8Clamped:
+      case Uint16:
+      case Uint32:
+      case Float32:
+      case Float64:
+      case Float32x4:
+        return false;
       default:
         MOZ_CRASH("invalid scalar type");
     }
@@ -2316,6 +2348,7 @@ struct JSJitInfo {
 #define JITINFO_OP_TYPE_BITS 4
 #define JITINFO_ALIAS_SET_BITS 4
 #define JITINFO_RETURN_TYPE_BITS 8
+#define JITINFO_SLOT_INDEX_BITS 10
 
     // The OpType that says what sort of function we are.
     uint32_t type_ : JITINFO_OP_TYPE_BITS;
@@ -2344,7 +2377,10 @@ struct JSJitInfo {
     uint32_t isMovable : 1;    /* Is op movable?  To be movable the op must
                                   not AliasEverything, but even that might
                                   not be enough (e.g. in cases when it can
-                                  throw). */
+                                  throw or is explicitly not movable). */
+    uint32_t isEliminatable : 1; /* Can op be dead-code eliminated? Again, this
+                                    depends on whether the op can throw, in
+                                    addition to the alias set. */
     // XXXbz should we have a JSValueType for the type of the member?
     uint32_t isAlwaysInSlot : 1; /* True if this is a getter that can always
                                     get the value from a slot of the "this"
@@ -2355,9 +2391,15 @@ struct JSJitInfo {
                                           slot of the "this" object. */
     uint32_t isTypedMethod : 1; /* True if this is an instance of
                                    JSTypedMethodJitInfo. */
-    uint32_t slotIndex : 11;   /* If isAlwaysInSlot or isSometimesInSlot is
-                                  true, the index of the slot to get the value
-                                  from.  Otherwise 0. */
+    uint32_t slotIndex : JITINFO_SLOT_INDEX_BITS; /* If isAlwaysInSlot or
+                                                     isSometimesInSlot is true,
+                                                     the index of the slot to
+                                                     get the value from.
+                                                     Otherwise 0. */
+
+    static const size_t maxSlotIndex = (1 << JITINFO_SLOT_INDEX_BITS) - 1;
+
+#undef JITINFO_SLOT_INDEX_BITS
 };
 
 static_assert(sizeof(JSJitInfo) == (sizeof(void*) + 2 * sizeof(uint32_t)),
@@ -2582,7 +2624,7 @@ class JS_FRIEND_API(AutoCTypesActivityCallback) {
 };
 
 typedef JSObject*
-(* ObjectMetadataCallback)(JSContext* cx);
+(* ObjectMetadataCallback)(JSContext* cx, JSObject* obj);
 
 /*
  * Specify a callback to invoke when creating each JS object in the current

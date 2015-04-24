@@ -191,6 +191,7 @@ EXPORTS.mozilla.dom += [
     'PerformanceResourceTiming.h',
     'ProcessGlobal.h',
     'ResponsiveImageSelector.h',
+    'SameProcessMessageQueue.h',
     'ScreenOrientation.h',
     'ScriptSettings.h',
     'ShadowRoot.h',
@@ -328,6 +329,7 @@ UNIFIED_SOURCES += [
     'PerformanceResourceTiming.cpp',
     'ProcessGlobal.cpp',
     'ResponsiveImageSelector.cpp',
+    'SameProcessMessageQueue.cpp',
     'ScriptSettings.cpp',
     'ShadowRoot.cpp',
     'StyleSheetList.cpp',
@@ -386,6 +388,13 @@ EXTRA_COMPONENTS += [
     'SlowScriptDebug.manifest',
 ]
 
+# Firefox for Android provides an alternate version of this component
+if CONFIG['MOZ_BUILD_APP'] != 'mobile/android':
+    EXTRA_COMPONENTS += [
+        'SiteSpecificUserAgent.js',
+        'SiteSpecificUserAgent.manifest',
+    ]
+
 EXTRA_JS_MODULES += [
     'DOMRequestHelper.jsm',
     'IndexedDBHelper.jsm',
@@ -415,6 +424,7 @@ LOCAL_INCLUDES += [
     '/dom/xml',
     '/dom/xslt/xpath',
     '/dom/xul',
+    '/gfx/2d',
     '/image/src',
     '/js/xpconnect/src',
     '/js/xpconnect/wrappers',
@@ -427,6 +437,15 @@ LOCAL_INCLUDES += [
     '/widget',
     '/xpcom/ds',
 ]
+
+if CONFIG['MOZ_B2G_BT_API_V2']:
+    LOCAL_INCLUDES += [
+        '../bluetooth/bluetooth2',
+    ]
+else:
+    LOCAL_INCLUDES += [
+        '../bluetooth/bluetooth1',
+    ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
     LOCAL_INCLUDES += [

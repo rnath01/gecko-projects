@@ -35,6 +35,7 @@
 #include "nsDocShell.h"
 #include "nsIDocShellTreeItem.h"
 #include "nsCOMArray.h"
+#include "nsQueryObject.h"
 #include "nsDOMClassInfo.h"
 #include "mozilla/Services.h"
 
@@ -186,9 +187,9 @@
 #include "nsSandboxFlags.h"
 #include "nsIAppsService.h"
 #include "mozilla/dom/AnonymousContent.h"
-#include "mozilla/dom/AnimationTimeline.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/DocumentFragment.h"
+#include "mozilla/dom/DocumentTimeline.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/HTMLBodyElement.h"
 #include "mozilla/dom/HTMLInputElement.h"
@@ -226,6 +227,7 @@
 #include "nsLocation.h"
 #include "mozilla/dom/FontFaceSet.h"
 #include "mozilla/dom/BoxObject.h"
+#include "gfxVR.h"
 
 #ifdef MOZ_MEDIA_NAVIGATOR
 #include "mozilla/MediaManager.h"
@@ -2016,8 +2018,8 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsDocument)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCachedEncoder)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mStateObjectCached)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mUndoManager)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAnimationTimeline)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPendingPlayerTracker)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocumentTimeline)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPendingAnimationTracker)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTemplateContentsOwner)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mChildrenCollection)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRegistry)
@@ -2100,8 +2102,8 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mOriginalDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCachedEncoder)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mUndoManager)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mAnimationTimeline)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mPendingPlayerTracker)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocumentTimeline)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mPendingAnimationTracker)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mTemplateContentsOwner)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mChildrenCollection)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mRegistry)
@@ -2302,7 +2304,7 @@ nsDocument::Reset(nsIChannel* aChannel, nsILoadGroup* aLoadGroup)
   // Note that, since mTiming does not change during a reset, the
   // navigationStart time remains unchanged and therefore any future new
   // timeline will have the same global clock time as the old one.
-  mAnimationTimeline = nullptr;
+  mDocumentTimeline = nullptr;
 
   nsCOMPtr<nsIPropertyBag2> bag = do_QueryInterface(aChannel);
   if (bag) {
@@ -3321,14 +3323,14 @@ nsDocument::IsWebAnimationsEnabled(JSContext* /*unused*/, JSObject* /*unused*/)
          Preferences::GetBool("dom.animations-api.core.enabled");
 }
 
-AnimationTimeline*
+DocumentTimeline*
 nsDocument::Timeline()
 {
-  if (!mAnimationTimeline) {
-    mAnimationTimeline = new AnimationTimeline(this);
+  if (!mDocumentTimeline) {
+    mDocumentTimeline = new DocumentTimeline(this);
   }
 
-  return mAnimationTimeline;
+  return mDocumentTimeline;
 }
 
 /* Return true if the document is in the focused top-level window, and is an
@@ -3918,6 +3920,42 @@ nsIDocument::TakeFrameRequestCallbacks(FrameRequestCallbackList& aCallbacks)
 {
   aCallbacks.AppendElements(mFrameRequestCallbacks);
   mFrameRequestCallbacks.Clear();
+}
+
+bool
+nsIDocument::ShouldThrottleFrameRequests()
+{
+  if (!mIsShowing) {
+    // We're not showing (probably in a background tab or the bf cache).
+    return true;
+  }
+
+  if (!mPresShell) {
+    return false;  // Can't do anything smarter.
+  }
+
+  nsIFrame* frame = mPresShell->GetRootFrame();
+  if (!frame) {
+    return false;  // Can't do anything smarter.
+  }
+
+  nsIFrame* displayRootFrame = nsLayoutUtils::GetDisplayRootFrame(frame);
+  if (!displayRootFrame) {
+    return false;  // Can't do anything smarter.
+  }
+
+  if (!displayRootFrame->DidPaintPresShell(mPresShell)) {
+    // We didn't get painted during the last paint, so we're not visible.
+    // Throttle. Note that because we have to paint this document at least
+    // once to unthrottle it, we will drop one requestAnimationFrame frame
+    // when a document that previously wasn't visible scrolls into view. This
+    // is acceptable since it would happen outside the viewport on APZ
+    // platforms and is unlikely to be human-perceivable on non-APZ platforms.
+    return true;
+  }
+
+  // We got painted during the last paint, so run at full speed.
+  return false;
 }
 
 PLDHashOperator RequestDiscardEnumerator(imgIRequest* aKey,
@@ -7490,14 +7528,14 @@ nsDocument::GetAnimationController()
   return mAnimationController;
 }
 
-PendingPlayerTracker*
-nsDocument::GetOrCreatePendingPlayerTracker()
+PendingAnimationTracker*
+nsDocument::GetOrCreatePendingAnimationTracker()
 {
-  if (!mPendingPlayerTracker) {
-    mPendingPlayerTracker = new PendingPlayerTracker(this);
+  if (!mPendingAnimationTracker) {
+    mPendingAnimationTracker = new PendingAnimationTracker(this);
   }
 
-  return mPendingPlayerTracker;
+  return mPendingAnimationTracker;
 }
 
 /**
@@ -10830,8 +10868,8 @@ nsIDocument::Children()
 {
   if (!mChildrenCollection) {
     mChildrenCollection = new nsContentList(this, kNameSpaceID_Wildcard,
-                                            nsGkAtoms::_asterix,
-                                            nsGkAtoms::_asterix,
+                                            nsGkAtoms::_asterisk,
+                                            nsGkAtoms::_asterisk,
                                             false);
   }
 
@@ -11373,6 +11411,10 @@ bool
 nsDocument::IsFullScreenDoc()
 {
   return GetFullScreenElement() != nullptr;
+}
+
+FullScreenOptions::FullScreenOptions()
+{
 }
 
 class nsCallRequestFullScreen : public nsRunnable
@@ -12004,7 +12046,13 @@ public:
   nsPointerLockPermissionRequest(Element* aElement, bool aUserInputOrChromeCaller)
   : mElement(do_GetWeakReference(aElement)),
     mDocument(do_GetWeakReference(aElement->OwnerDoc())),
-    mUserInputOrChromeCaller(aUserInputOrChromeCaller) {}
+    mUserInputOrChromeCaller(aUserInputOrChromeCaller)
+  {
+    nsCOMPtr<nsIDocument> doc = do_QueryReferent(mDocument);
+    if (doc) {
+      mRequester = new nsContentPermissionRequester(doc->GetInnerWindow());
+    }
+  }
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSICONTENTPERMISSIONREQUEST
@@ -12064,6 +12112,7 @@ public:
 
 protected:
   virtual ~nsPointerLockPermissionRequest() {}
+  nsCOMPtr<nsIContentPermissionRequester> mRequester;
 };
 
 NS_IMPL_ISUPPORTS_INHERITED(nsPointerLockPermissionRequest,
@@ -12166,6 +12215,16 @@ nsPointerLockPermissionRequest::Allow(JS::HandleValue aChoices)
                "aElement and this should support weak references!");
 
   DispatchPointerLockChange(d);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsPointerLockPermissionRequest::GetRequester(nsIContentPermissionRequester** aRequester)
+{
+  NS_ENSURE_ARG_POINTER(aRequester);
+
+  nsCOMPtr<nsIContentPermissionRequester> requester = mRequester;
+  requester.forget(aRequester);
   return NS_OK;
 }
 

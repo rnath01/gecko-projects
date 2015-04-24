@@ -60,6 +60,7 @@ const GENERIC_VARIABLES_VIEW_SETTINGS = {
   eval: () => {}
 };
 const NETWORK_ANALYSIS_PIE_CHART_DIAMETER = 200; // px
+const FREETEXT_FILTER_SEARCH_DELAY = 200; // ms
 
 /**
  * Object defining the network monitor view components.
@@ -350,6 +351,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     this._splitter = $("#network-inspector-view-splitter");
     this._summary = $("#requests-menu-network-summary-label");
     this._summary.setAttribute("value", L10N.getStr("networkMenu.empty"));
+    this.userInputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
 
     Prefs.filters.forEach(type => this.filterOn(type));
     this.sortContents(this._byTiming);
@@ -370,6 +372,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     this._onContextNewTabCommand = this.openRequestInTab.bind(this);
     this._onContextCopyUrlCommand = this.copyUrl.bind(this);
     this._onContextCopyImageAsDataUriCommand = this.copyImageAsDataUri.bind(this);
+    this._onContextCopyResponseCommand = this.copyResponse.bind(this);
     this._onContextResendCommand = this.cloneSelectedRequest.bind(this);
     this._onContextToggleRawHeadersCommand = this.toggleRawHeaders.bind(this);
     this._onContextPerfCommand = () => NetMonitorView.toggleFrontendMode();
@@ -380,12 +383,20 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     this.cloneSelectedRequestEvent = this.cloneSelectedRequest.bind(this);
     this.toggleRawHeadersEvent = this.toggleRawHeaders.bind(this);
 
+    this.requestsFreetextFilterEvent = this.requestsFreetextFilterEvent.bind(this);
+    this.reFilterRequests = this.reFilterRequests.bind(this);
+
+    this.freetextFilterBox = $("#requests-menu-filter-freetext-text");
+    this.freetextFilterBox.addEventListener("input", this.requestsFreetextFilterEvent, false);
+    this.freetextFilterBox.addEventListener("command", this.requestsFreetextFilterEvent, false);
+
     $("#toolbar-labels").addEventListener("click", this.requestsMenuSortEvent, false);
     $("#requests-menu-footer").addEventListener("click", this.requestsMenuFilterEvent, false);
     $("#requests-menu-clear-button").addEventListener("click", this.reqeustsMenuClearEvent, false);
     $("#network-request-popup").addEventListener("popupshowing", this._onContextShowing, false);
     $("#request-menu-context-newtab").addEventListener("command", this._onContextNewTabCommand, false);
     $("#request-menu-context-copy-url").addEventListener("command", this._onContextCopyUrlCommand, false);
+    $("#request-menu-context-copy-response").addEventListener("command", this._onContextCopyResponseCommand, false);
     $("#request-menu-context-copy-image-as-data-uri").addEventListener("command", this._onContextCopyImageAsDataUriCommand, false);
     $("#toggle-raw-headers").addEventListener("click", this.toggleRawHeadersEvent, false);
 
@@ -440,9 +451,13 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     $("#toolbar-labels").removeEventListener("click", this.requestsMenuSortEvent, false);
     $("#requests-menu-footer").removeEventListener("click", this.requestsMenuFilterEvent, false);
     $("#requests-menu-clear-button").removeEventListener("click", this.reqeustsMenuClearEvent, false);
+    this.freetextFilterBox.removeEventListener("input", this.requestsFreetextFilterEvent, false);
+    this.freetextFilterBox.removeEventListener("command", this.requestsFreetextFilterEvent, false);
+    this.userInputTimer.cancel();
     $("#network-request-popup").removeEventListener("popupshowing", this._onContextShowing, false);
     $("#request-menu-context-newtab").removeEventListener("command", this._onContextNewTabCommand, false);
     $("#request-menu-context-copy-url").removeEventListener("command", this._onContextCopyUrlCommand, false);
+    $("#request-menu-context-copy-response").removeEventListener("command", this._onContextCopyResponseCommand, false);
     $("#request-menu-context-copy-image-as-data-uri").removeEventListener("command", this._onContextCopyImageAsDataUriCommand, false);
     $("#request-menu-context-resend").removeEventListener("command", this._onContextResendCommand, false);
     $("#request-menu-context-perf").removeEventListener("command", this._onContextPerfCommand, false);
@@ -594,6 +609,18 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
   },
 
   /**
+   * Copy response data as a string.
+   */
+  copyResponse: function() {
+    let selected = this.selectedItem.attachment;
+    let text = selected.responseContent.content.text;
+
+    gNetwork.getString(text).then(aString => {
+      clipboardHelper.copyString(aString, document);
+    });
+  },
+
+  /**
    * Create a new custom request form populated with the data from
    * the currently selected request.
    */
@@ -671,6 +698,31 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
   },
 
   /**
+   * Handles the timeout on the freetext filter textbox
+   */
+  requestsFreetextFilterEvent: function() {
+    this.userInputTimer.cancel();
+    this._currentFreetextFilter = this.freetextFilterBox.value || "";
+
+    if (this._currentFreetextFilter.length === 0) {
+      this.freetextFilterBox.removeAttribute("filled");
+    } else {
+      this.freetextFilterBox.setAttribute("filled", true);
+    }
+
+    this.userInputTimer.initWithCallback(this.reFilterRequests, FREETEXT_FILTER_SEARCH_DELAY, Ci.nsITimer.TYPE_ONE_SHOT);
+  },
+
+  /**
+   * Refreshes the view contents with the newly selected filters
+   */
+  reFilterRequests: function() {
+    this.filterContents(this._filterPredicate);
+    this.refreshSummary();
+    this.refreshZebra();
+  },
+
+  /**
    * Filters all network requests in this container by a specified type.
    *
    * @param string aType
@@ -700,9 +752,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
       this._disableFilter(aType);
     }
 
-    this.filterContents(this._filterPredicate);
-    this.refreshSummary();
-    this.refreshZebra();
+    this.reFilterRequests();
   },
 
   /**
@@ -771,18 +821,14 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
    */
   get _filterPredicate() {
     let filterPredicates = this._allFilterPredicates;
+    let currentFreetextFilter = this._currentFreetextFilter;
 
-     if (this._activeFilters.length === 1) {
-       // The simplest case: only one filter active.
-       return filterPredicates[this._activeFilters[0]].bind(this);
-     } else {
-       // Multiple filters active.
-       return requestItem => {
-         return this._activeFilters.some(filterName => {
-           return filterPredicates[filterName].call(this, requestItem);
-         });
-       };
-     }
+    return requestItem => {
+      return this._activeFilters.some(filterName => {
+        return filterPredicates[filterName].call(this, requestItem) &&
+                filterPredicates["freetext"].call(this, requestItem, currentFreetextFilter);
+      });
+    };
   },
 
   /**
@@ -798,7 +844,8 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     images: this.isImage,
     media: this.isMedia,
     flash: this.isFlash,
-    other: this.isOther
+    other: this.isOther,
+    freetext: this.isFreetextMatch
   }),
 
   /**
@@ -956,6 +1003,9 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
   isOther: function(e)
     !this.isHtml(e) && !this.isCss(e) && !this.isJs(e) && !this.isXHR(e) &&
     !this.isFont(e) && !this.isImage(e) && !this.isMedia(e) && !this.isFlash(e),
+
+  isFreetextMatch: function({ attachment: { url } }, text) //no text is a positive match
+    !text || url.contains(text),
 
   /**
    * Predicates used when sorting items.
@@ -1180,6 +1230,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
             break;
           case "remoteAddress":
             requestItem.attachment.remoteAddress = value;
+            this.updateMenuView(requestItem, key, value);
             break;
           case "remotePort":
             requestItem.attachment.remotePort = value;
@@ -1332,6 +1383,11 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
         domain.setAttribute("tooltiptext", hostPort);
         break;
       }
+      case "remoteAddress":
+        let domain = $(".requests-menu-domain", target);
+        let tooltip = domain.getAttribute("value") + " (" + aValue + ")";
+        domain.setAttribute("tooltiptext", tooltip);
+        break;
       case "securityState": {
         let tooltip = L10N.getStr("netmonitor.security.state." + aValue);
         let icon = $(".requests-security-state-icon", target);
@@ -1720,6 +1776,12 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     let copyAsCurlElement = $("#request-menu-context-copy-as-curl");
     copyAsCurlElement.hidden = !selectedItem || !selectedItem.attachment.responseContent;
 
+    let copyResponse = $("#request-menu-context-copy-response");
+    copyResponse.hidden = !selectedItem ||
+      !selectedItem.attachment.responseContent ||
+      !selectedItem.attachment.responseContent.content.text ||
+      selectedItem.attachment.responseContent.content.text.length === 0;
+
     let copyImageAsDataUriElement = $("#request-menu-context-copy-image-as-data-uri");
     copyImageAsDataUriElement.hidden = !selectedItem ||
       !selectedItem.attachment.responseContent ||
@@ -1865,7 +1927,8 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
   _updateQueue: [],
   _updateTimeout: null,
   _resizeTimeout: null,
-  _activeFilters: ["all"]
+  _activeFilters: ["all"],
+  _currentFreetextFilter: ""
 });
 
 /**

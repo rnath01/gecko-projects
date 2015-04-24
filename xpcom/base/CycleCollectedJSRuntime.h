@@ -194,6 +194,8 @@ private:
   static void TraceBlackJS(JSTracer* aTracer, void* aData);
   static void TraceGrayJS(JSTracer* aTracer, void* aData);
   static void GCCallback(JSRuntime* aRuntime, JSGCStatus aStatus, void* aData);
+  static void GCSliceCallback(JSRuntime* aRuntime, JS::GCProgress aProgress,
+                              const JS::GCDescription& aDesc);
   static void OutOfMemoryCallback(JSContext* aContext, void* aData);
   static void LargeAllocationFailureCallback(void* aData);
   static bool ContextCallback(JSContext* aCx, unsigned aOperation,
@@ -292,12 +294,23 @@ public:
   // isn't one.
   static CycleCollectedJSRuntime* Get();
 
+  // Storage for watching rejected promises waiting for some client to
+  // consume their rejection.
+  // We store values as `nsISupports` to avoid adding compile-time dependencies
+  // from xpcom to dom/promise, but they can really only have a single concrete
+  // type.
+  nsTArray<nsCOMPtr<nsISupports /* Promise */>> mUncaughtRejections;
+  nsTArray<nsCOMPtr<nsISupports /* Promise */ >> mConsumedRejections;
+  nsTArray<nsCOMPtr<nsISupports /* UncaughtRejectionObserver */ >> mUncaughtRejectionObservers;
+
 private:
   JSGCThingParticipant mGCThingCycleCollectorGlobal;
 
   JSZoneParticipant mJSZoneCycleCollectorGlobal;
 
   JSRuntime* mJSRuntime;
+
+  JS::GCSliceCallback mPrevGCSliceCallback;
 
   nsDataHashtable<nsPtrHashKey<void>, nsScriptObjectTracer*> mJSHolders;
 

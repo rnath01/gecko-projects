@@ -18,7 +18,6 @@
 #include "mozilla/layers/LayersMessages.h"
 #include "mozilla/mozalloc.h"           // for operator delete, etc
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
-#include "nsRect.h"                     // for nsIntRect
 #include "LayersLogging.h"
 
 namespace mozilla {
@@ -258,17 +257,15 @@ ClientTiledPaintedLayer::UseProgressiveDraw() {
     return false;
   }
 
-  // XXX We probably want to disable progressive drawing for non active APZ layers in the future
-  //     but we should wait for a proper test case before making this change.
-#if 0 //!defined(MOZ_WIDGET_ANDROID) || defined(MOZ_ANDROID_APZ)
-  LayerMetricsWrapper scrollAncestor;
-  GetAncestorLayers(&scrollAncestor, nullptr, nullptr);
-  MOZ_ASSERT(scrollAncestor); // because mPaintData.mCriticalDisplayPort is non-empty
-  const FrameMetrics& parentMetrics = scrollAncestor.Metrics();
-  if (!IsScrollingOnCompositor(parentMetrics)) {
-    return false;
+  if (gfxPrefs::AsyncPanZoomEnabled()) {
+    LayerMetricsWrapper scrollAncestor;
+    GetAncestorLayers(&scrollAncestor, nullptr, nullptr);
+    MOZ_ASSERT(scrollAncestor); // because mPaintData.mCriticalDisplayPort is non-empty
+    const FrameMetrics& parentMetrics = scrollAncestor.Metrics();
+    if (!IsScrollingOnCompositor(parentMetrics)) {
+      return false;
+    }
   }
-#endif
 
   return true;
 }
@@ -426,12 +423,12 @@ ClientTiledPaintedLayer::RenderLayer()
     // outside of our texture coords. Make the visible region a single rect,
     // and pad it out by 1 pixel (restricted to tile boundaries) so that
     // we always have valid content or transparent pixels to sample from.
-    nsIntRect bounds = neededRegion.GetBounds();
-    nsIntRect wholeTiles = bounds;
-    wholeTiles.Inflate(nsIntSize(
+    IntRect bounds = neededRegion.GetBounds();
+    IntRect wholeTiles = bounds;
+    wholeTiles.InflateToMultiple(IntSize(
       gfxPlatform::GetPlatform()->GetTileWidth(),
       gfxPlatform::GetPlatform()->GetTileHeight()));
-    nsIntRect padded = bounds;
+    IntRect padded = bounds;
     padded.Inflate(1);
     padded.IntersectRect(padded, wholeTiles);
     neededRegion = padded;

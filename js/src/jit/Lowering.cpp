@@ -1766,19 +1766,7 @@ LIRGenerator::visitToDouble(MToDouble* convert)
 
       case MIRType_Float32:
       {
-        LFloat32ToDouble* lir;
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
-        // Bug 1039993: this used to be useRegisterAtStart, and theoretically, it
-        // should still be, however, there is a bug in LSRA's implementation of
-        // *AtStart, which is quite fundamental. This should be reverted when that
-        // is fixed, or lsra is deprecated.
-        if (gen->optimizationInfo().registerAllocator() == RegisterAllocator_LSRA)
-            lir = new (alloc()) LFloat32ToDouble(useRegister(opd));
-        else
-            lir = new (alloc()) LFloat32ToDouble(useRegisterAtStart(opd));
-#else
-        lir = new (alloc()) LFloat32ToDouble(useRegisterAtStart(opd));
-#endif
+        LFloat32ToDouble* lir = new (alloc()) LFloat32ToDouble(useRegisterAtStart(opd));
         define(lir, convert);
         break;
       }
@@ -1834,16 +1822,7 @@ LIRGenerator::visitToFloat32(MToFloat32* convert)
 
       case MIRType_Double:
       {
-        LDoubleToFloat32* lir;
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
-        // Bug 1039993: workaround LSRA issues.
-        if (gen->optimizationInfo().registerAllocator() == RegisterAllocator_LSRA)
-            lir = new(alloc()) LDoubleToFloat32(useRegister(opd));
-        else
-            lir = new(alloc()) LDoubleToFloat32(useRegisterAtStart(opd));
-#else
-        lir = new(alloc()) LDoubleToFloat32(useRegisterAtStart(opd));
-#endif
+        LDoubleToFloat32* lir = new(alloc()) LDoubleToFloat32(useRegisterAtStart(opd));
         define(lir, convert);
         break;
       }
@@ -2452,6 +2431,27 @@ LIRGenerator::visitTypedArrayElements(MTypedArrayElements* ins)
 {
     MOZ_ASSERT(ins->type() == MIRType_Elements);
     define(new(alloc()) LTypedArrayElements(useRegisterAtStart(ins->object())), ins);
+}
+
+void
+LIRGenerator::visitSetDisjointTypedElements(MSetDisjointTypedElements* ins)
+{
+    MOZ_ASSERT(ins->type() == MIRType_None);
+
+    MDefinition* target = ins->target();
+    MOZ_ASSERT(target->type() == MIRType_Object);
+
+    MDefinition* targetOffset = ins->targetOffset();
+    MOZ_ASSERT(targetOffset->type() == MIRType_Int32);
+
+    MDefinition* source = ins->source();
+    MOZ_ASSERT(source->type() == MIRType_Object);
+
+    auto lir = new(alloc()) LSetDisjointTypedElements(useRegister(target),
+                                                      useRegister(targetOffset),
+                                                      useRegister(source),
+                                                      temp());
+    add(lir, ins);
 }
 
 void
@@ -3270,6 +3270,24 @@ LIRGenerator::visitGuardReceiverPolymorphic(MGuardReceiverPolymorphic* ins)
 }
 
 void
+LIRGenerator::visitGuardUnboxedExpando(MGuardUnboxedExpando* ins)
+{
+    LGuardUnboxedExpando* guard =
+        new(alloc()) LGuardUnboxedExpando(useRegister(ins->obj()));
+    assignSnapshot(guard, ins->bailoutKind());
+    add(guard, ins);
+    redefine(ins, ins->obj());
+}
+
+void
+LIRGenerator::visitLoadUnboxedExpando(MLoadUnboxedExpando* ins)
+{
+    LLoadUnboxedExpando* lir =
+        new(alloc()) LLoadUnboxedExpando(useRegisterAtStart(ins->object()));
+    define(lir, ins);
+}
+
+void
 LIRGenerator::visitAssertRange(MAssertRange* ins)
 {
     MDefinition* input = ins->input();
@@ -3872,11 +3890,13 @@ LIRGenerator::visitSimdConvert(MSimdConvert* ins)
 {
     MOZ_ASSERT(IsSimdType(ins->type()));
     MDefinition* input = ins->input();
-    LUse use = useRegisterAtStart(input);
-
+    LUse use = useRegister(input);
     if (ins->type() == MIRType_Int32x4) {
         MOZ_ASSERT(input->type() == MIRType_Float32x4);
-        define(new(alloc()) LFloat32x4ToInt32x4(use), ins);
+        LFloat32x4ToInt32x4* lir = new(alloc()) LFloat32x4ToInt32x4(use, temp());
+        if (!gen->conversionErrorLabel())
+            assignSnapshot(lir, Bailout_BoundsCheck);
+        define(lir, ins);
     } else if (ins->type() == MIRType_Float32x4) {
         MOZ_ASSERT(input->type() == MIRType_Int32x4);
         define(new(alloc()) LInt32x4ToFloat32x4(use), ins);
@@ -4083,6 +4103,8 @@ void
 LIRGenerator::visitSimdShift(MSimdShift* ins)
 {
     MOZ_ASSERT(ins->type() == MIRType_Int32x4);
+    MOZ_ASSERT(ins->lhs()->type() == MIRType_Int32x4);
+    MOZ_ASSERT(ins->rhs()->type() == MIRType_Int32);
 
     LUse vector = useRegisterAtStart(ins->lhs());
     LAllocation value = useRegisterOrConstant(ins->rhs());
@@ -4171,19 +4193,9 @@ LIRGenerator::visitInstruction(MInstruction* ins)
     ins->setInWorklistUnchecked();
 #endif
 
-    // If we added a Nop for this instruction, we'll also add a Mop, so that
-    // that live-ranges for fixed register defs, which with LSRA extend through
-    // the Nop so that they can extend through the OsiPoint don't, with their
-    // one-extra extension, extend into a position where they use the input
-    // move group for the following instruction.
-    bool needsMop = !current->instructions().empty() && current->rbegin()->isNop();
-
     // If no safepoint was created, there's no need for an OSI point.
     if (LOsiPoint* osiPoint = popOsiPoint())
         add(osiPoint);
-
-    if (needsMop)
-        add(new(alloc()) LMop);
 
     return !gen->errored();
 }
@@ -4227,9 +4239,6 @@ LIRGenerator::visitBlock(MBasicBlock* block)
     updateResumeState(block);
 
     definePhis();
-
-    if (gen->optimizationInfo().registerAllocator() == RegisterAllocator_LSRA)
-        add(new(alloc()) LLabel());
 
     for (MInstructionIterator iter = block->begin(); *iter != block->lastIns(); iter++) {
         if (!visitInstruction(*iter))

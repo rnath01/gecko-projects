@@ -812,6 +812,27 @@ cleanup:
 }
 
 NS_EXPORT void JNICALL
+Java_org_mozilla_gecko_GeckoAppShell_addPresentationSurface(JNIEnv* jenv, jclass, jobject surface)
+{
+    if (surface != NULL) {
+        void* window = AndroidBridge::Bridge()->AcquireNativeWindow(jenv, surface);
+        if (window) {
+            AndroidBridge::Bridge()->SetPresentationWindow(window);
+        }
+    }
+}
+
+NS_EXPORT void JNICALL
+Java_org_mozilla_gecko_GeckoAppShell_removePresentationSurface(JNIEnv* jenv, jclass, jobject surface)
+{
+    void* window = AndroidBridge::Bridge()->GetPresentationWindow();
+    if (window) {
+        AndroidBridge::Bridge()->SetPresentationWindow(nullptr);
+        AndroidBridge::Bridge()->ReleaseNativeWindow(window);
+    }
+}
+
+NS_EXPORT void JNICALL
 Java_org_mozilla_gecko_GeckoAppShell_onFullScreenPluginHidden(JNIEnv* jenv, jclass, jobject view)
 {
   class ExitFullScreenRunnable : public nsRunnable {
@@ -928,7 +949,7 @@ Java_org_mozilla_gecko_gfx_NativePanZoomController_handleTouchEvent(JNIEnv* env,
     uint64_t blockId;
     nsEventStatus status = controller->ReceiveInputEvent(input, &guid, &blockId);
     if (status != nsEventStatus_eConsumeNoDefault) {
-        nsAppShell::gAppShell->PostEvent(AndroidGeckoEvent::MakeApzInputEvent(input, guid, blockId));
+        nsAppShell::gAppShell->PostEvent(AndroidGeckoEvent::MakeApzInputEvent(input, guid, blockId, status));
     }
     return true;
 }

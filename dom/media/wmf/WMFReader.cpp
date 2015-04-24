@@ -53,12 +53,12 @@ WMFReader::WMFReader(AbstractMediaDecoder* aDecoder)
     mVideoWidth(0),
     mVideoHeight(0),
     mVideoStride(0),
-    mAudioFrameSum(0),
     mAudioFrameOffset(0),
+    mAudioFrameSum(0),
+    mMustRecaptureAudioPosition(true),
     mHasAudio(false),
     mHasVideo(false),
     mUseHwAccel(false),
-    mMustRecaptureAudioPosition(true),
     mIsMP3Enabled(WMFDecoder::IsMP3Supported()),
     mCOMInitialized(false)
 {
@@ -113,7 +113,7 @@ WMFReader::InitializeDXVA()
     return false;
   }
 
-  mDXVA2Manager = DXVA2Manager::Create();
+  mDXVA2Manager = DXVA2Manager::CreateD3D9DXVA();
 
   return mDXVA2Manager != nullptr;
 }
@@ -366,7 +366,7 @@ WMFReader::ConfigureVideoDecoder()
 
   DECODER_LOG("Successfully configured video stream");
 
-  mHasVideo = mInfo.mVideo.mHasVideo = true;
+  mHasVideo = true;
 
   return S_OK;
 }
@@ -435,7 +435,7 @@ WMFReader::ConfigureAudioDecoder()
 
   mInfo.mAudio.mChannels = mAudioChannels;
   mInfo.mAudio.mRate = mAudioRate;
-  mHasAudio = mInfo.mAudio.mHasAudio = true;
+  mHasAudio = true;
 
   DECODER_LOG("Successfully configured audio stream. rate=%u channels=%u bitsPerSample=%u",
               mAudioRate, mAudioChannels, mAudioBytesPerSample);
@@ -473,7 +473,7 @@ WMFReader::CreateSourceReader()
   hr = ConfigureAudioDecoder();
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
-  if (mUseHwAccel && mInfo.mVideo.mHasVideo) {
+  if (mUseHwAccel && mInfo.HasVideo()) {
     RefPtr<IMFTransform> videoDecoder;
     hr = mSourceReader->GetServiceForStream(MF_SOURCE_READER_FIRST_VIDEO_STREAM,
                                             GUID_NULL,
@@ -747,7 +747,7 @@ WMFReader::CreateBasicVideoFrame(IMFSample* aSample,
                                             b,
                                             false,
                                             -1,
-                                            ToIntRect(mPictureRegion));
+                                            mPictureRegion);
   if (twoDBuffer) {
     twoDBuffer->Unlock2D();
   } else {
@@ -789,7 +789,7 @@ WMFReader::CreateD3DVideoFrame(IMFSample* aSample,
                                                      image.forget(),
                                                      false,
                                                      -1,
-                                                     ToIntRect(mPictureRegion));
+                                                     mPictureRegion);
 
   NS_ENSURE_TRUE(v, E_FAIL);
   v.forget(aOutVideoData);

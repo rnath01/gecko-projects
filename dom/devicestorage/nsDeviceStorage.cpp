@@ -2176,6 +2176,7 @@ nsDOMDeviceStorageCursor::nsDOMDeviceStorageCursor(nsPIDOMWindow* aWindow,
   , mSince(aSince)
   , mFile(aFile)
   , mPrincipal(aPrincipal)
+  , mRequester(new nsContentPermissionRequester(GetOwner()))
 {
 }
 
@@ -2262,6 +2263,16 @@ nsDOMDeviceStorageCursor::Allow(JS::HandleValue aChoices)
 
   nsCOMPtr<nsIRunnable> event = new InitCursorEvent(this, mFile);
   target->Dispatch(event, NS_DISPATCH_NORMAL);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMDeviceStorageCursor::GetRequester(nsIContentPermissionRequester** aRequester)
+{
+  NS_ENSURE_ARG_POINTER(aRequester);
+
+  nsCOMPtr<nsIContentPermissionRequester> requester = mRequester;
+  requester.forget(aRequester);
   return NS_OK;
 }
 
@@ -2851,6 +2862,7 @@ public:
     , mFile(aFile)
     , mRequest(aRequest)
     , mDeviceStorage(aDeviceStorage)
+    , mRequester(new nsContentPermissionRequester(mWindow))
   {
     MOZ_ASSERT(mWindow);
     MOZ_ASSERT(mPrincipal);
@@ -2871,6 +2883,7 @@ public:
     , mFile(aFile)
     , mRequest(aRequest)
     , mBlob(aBlob)
+    , mRequester(new nsContentPermissionRequester(mWindow))
   {
     MOZ_ASSERT(mWindow);
     MOZ_ASSERT(mPrincipal);
@@ -2890,6 +2903,7 @@ public:
     , mFile(aFile)
     , mRequest(aRequest)
     , mDSFileDescriptor(aDSFileDescriptor)
+    , mRequester(new nsContentPermissionRequester(mWindow))
   {
     MOZ_ASSERT(mRequestType == DEVICE_STORAGE_REQUEST_CREATEFD);
     MOZ_ASSERT(mWindow);
@@ -3299,6 +3313,15 @@ public:
     return NS_OK;
   }
 
+  NS_IMETHOD GetRequester(nsIContentPermissionRequester** aRequester) override
+  {
+    NS_ENSURE_ARG_POINTER(aRequester);
+
+    nsCOMPtr<nsIContentPermissionRequester> requester = mRequester;
+    requester.forget(aRequester);
+    return NS_OK;
+  }
+
 private:
   ~DeviceStorageRequest() {}
 
@@ -3311,6 +3334,7 @@ private:
   nsCOMPtr<nsIDOMBlob> mBlob;
   nsRefPtr<nsDOMDeviceStorage> mDeviceStorage;
   nsRefPtr<DeviceStorageFileDescriptor> mDSFileDescriptor;
+  nsCOMPtr<nsIContentPermissionRequester> mRequester;
 };
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(DeviceStorageRequest)
@@ -3337,6 +3361,8 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 NS_IMPL_ADDREF_INHERITED(nsDOMDeviceStorage, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(nsDOMDeviceStorage, DOMEventTargetHelper)
 
+int nsDOMDeviceStorage::sInstanceCount = 0;
+
 nsDOMDeviceStorage::nsDOMDeviceStorage(nsPIDOMWindow* aWindow)
   : DOMEventTargetHelper(aWindow)
   , mIsShareable(false)
@@ -3344,6 +3370,8 @@ nsDOMDeviceStorage::nsDOMDeviceStorage(nsPIDOMWindow* aWindow)
   , mIsWatchingFile(false)
   , mAllowedToWatchFile(false)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+  sInstanceCount++;
 }
 
 /* virtual */ JSObject*
@@ -3429,6 +3457,8 @@ nsDOMDeviceStorage::Init(nsPIDOMWindow* aWindow, const nsAString &aType,
 
 nsDOMDeviceStorage::~nsDOMDeviceStorage()
 {
+  MOZ_ASSERT(NS_IsMainThread());
+  sInstanceCount--;
 }
 
 void
@@ -3515,7 +3545,7 @@ nsDOMDeviceStorage::CreateDeviceStorageFor(nsPIDOMWindow* aWin,
     *aStore = nullptr;
     return;
   }
-  NS_ADDREF(*aStore = ds.get());
+  ds.forget(aStore);
 }
 
 // static

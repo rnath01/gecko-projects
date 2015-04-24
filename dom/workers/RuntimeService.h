@@ -16,7 +16,6 @@
 #include "nsHashKeys.h"
 #include "nsTArray.h"
 
-class nsIRunnable;
 class nsITimer;
 class nsPIDOMWindow;
 
@@ -142,16 +141,6 @@ public:
   {
     return CreateSharedWorkerInternal(aGlobal, aScriptURL, aName,
                                       WorkerTypeShared, aSharedWorker);
-  }
-
-  nsresult
-  CreateSharedWorkerForServiceWorker(const GlobalObject& aGlobal,
-                                     const nsAString& aScriptURL,
-                                     const nsACString& aScope,
-                                     SharedWorker** aSharedWorker)
-  {
-    return CreateSharedWorkerInternal(aGlobal, aScriptURL, aScope,
-                                      WorkerTypeService, aSharedWorker);
   }
 
   nsresult

@@ -94,6 +94,10 @@ bool            gDisableNativeTheme               = false;
 #define TOUCH_INJECT_LONG_TAP_DEFAULT_MSEC 1500
 int32_t nsIWidget::sPointerIdCounter = 0;
 
+// Some statics from nsIWidget.h
+/*static*/ uint64_t AutoObserverNotifier::sObserverId = 0;
+/*static*/ nsDataHashtable<nsUint64HashKey, nsCOMPtr<nsIObserver>> AutoObserverNotifier::sSavedObservers;
+
 nsAutoRollup::nsAutoRollup()
 {
   // remember if mLastRollup was null, and only clear it upon destruction
@@ -126,7 +130,6 @@ nsBaseWidget::nsBaseWidget()
 , mBorderStyle(eBorderStyle_none)
 , mUseLayersAcceleration(false)
 , mForceLayersAcceleration(false)
-, mTemporarilyUseBasicLayerManager(false)
 , mUseAttachedEvents(false)
 , mBounds(0,0,0,0)
 , mOriginalBounds(nullptr)
@@ -150,35 +153,66 @@ nsBaseWidget::nsBaseWidget()
   }
 #endif
   mShutdownObserver = new WidgetShutdownObserver(this);
-  nsContentUtils::RegisterShutdownObserver(mShutdownObserver);
 }
 
 NS_IMPL_ISUPPORTS(WidgetShutdownObserver, nsIObserver)
+
+WidgetShutdownObserver::WidgetShutdownObserver(nsBaseWidget* aWidget) :
+  mWidget(aWidget),
+  mRegistered(false)
+{
+  Register();
+}
+
+WidgetShutdownObserver::~WidgetShutdownObserver()
+{
+  // No need to call Unregister(), we can't be destroyed until nsBaseWidget
+  // gets torn down. The observer service and nsBaseWidget have a ref on us
+  // so nsBaseWidget has to call Unregister and then clear its ref.
+}
 
 NS_IMETHODIMP
 WidgetShutdownObserver::Observe(nsISupports *aSubject,
                                 const char *aTopic,
                                 const char16_t *aData)
 {
-  if (strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID) == 0 &&
-      mWidget) {
-#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
-    if (sPluginWidgetList) {
-      delete sPluginWidgetList;
-      sPluginWidgetList = nullptr;
-    }
-#endif
+  if (mWidget && !strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID)) {
+    nsCOMPtr<nsIWidget> kungFuDeathGrip(mWidget);
     mWidget->Shutdown();
-    nsContentUtils::UnregisterShutdownObserver(this);
   }
- return NS_OK;
+  return NS_OK;
+}
+
+void
+WidgetShutdownObserver::Register()
+{
+  if (!mRegistered) {
+    mRegistered = true;
+    nsContentUtils::RegisterShutdownObserver(this);
+  }
+}
+
+void
+WidgetShutdownObserver::Unregister()
+{
+  if (mRegistered) {
+    mWidget = nullptr;
+    nsContentUtils::UnregisterShutdownObserver(this);
+    mRegistered = false;
+  }
 }
 
 void
 nsBaseWidget::Shutdown()
 {
   DestroyCompositor();
-  mShutdownObserver = nullptr;
+  FreeShutdownObserver();
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
+  if (sPluginWidgetList) {
+    delete sPluginWidgetList;
+    sPluginWidgetList = nullptr;
+  }
+#endif
 }
 
 void nsBaseWidget::DestroyCompositor()
@@ -201,6 +235,15 @@ void nsBaseWidget::DestroyLayerManager()
   DestroyCompositor();
 }
 
+void
+nsBaseWidget::FreeShutdownObserver()
+{
+  if (mShutdownObserver) {
+    mShutdownObserver->Unregister();
+  }
+  mShutdownObserver = nullptr;
+}
+
 //-------------------------------------------------------------------------
 //
 // nsBaseWidget destructor
@@ -213,15 +256,7 @@ nsBaseWidget::~nsBaseWidget()
     static_cast<BasicLayerManager*>(mLayerManager.get())->ClearRetainerWidget();
   }
 
-  if (mShutdownObserver) {
-    // If the shutdown observer is currently processing observers,
-    // then UnregisterShutdownObserver won't stop our Observer
-    // function from being called. Make sure we don't try
-    // to reference the dead widget.
-    mShutdownObserver->mWidget = nullptr;
-    nsContentUtils::UnregisterShutdownObserver(mShutdownObserver);
-  }
-
+  FreeShutdownObserver();
   DestroyLayerManager();
 
 #ifdef NOISY_WIDGET_LEAKS
@@ -788,20 +823,6 @@ nsBaseWidget::AutoLayerManagerSetup::~AutoLayerManagerSetup()
   }
 }
 
-nsBaseWidget::AutoUseBasicLayerManager::AutoUseBasicLayerManager(nsBaseWidget* aWidget)
-  : mWidget(aWidget)
-{
-  mPreviousTemporarilyUseBasicLayerManager =
-    mWidget->mTemporarilyUseBasicLayerManager;
-  mWidget->mTemporarilyUseBasicLayerManager = true;
-}
-
-nsBaseWidget::AutoUseBasicLayerManager::~AutoUseBasicLayerManager()
-{
-  mWidget->mTemporarilyUseBasicLayerManager =
-    mPreviousTemporarilyUseBasicLayerManager;
-}
-
 bool
 nsBaseWidget::ComputeShouldAccelerate(bool aDefault)
 {
@@ -898,25 +919,6 @@ nsBaseWidget::CreateRootContentController()
   return controller.forget();
 }
 
-class ChromeProcessSetTargetAPZCCallback : public SetTargetAPZCCallback {
-public:
-  explicit ChromeProcessSetTargetAPZCCallback(APZCTreeManager* aTreeManager)
-    : mTreeManager(aTreeManager)
-  {}
-
-  void Run(uint64_t aInputBlockId, const nsTArray<ScrollableLayerGuid>& aTargets) const override {
-    MOZ_ASSERT(NS_IsMainThread());
-    // need a local var to disambiguate between the SetTargetAPZC overloads.
-    void (APZCTreeManager::*setTargetApzcFunc)(uint64_t, const nsTArray<ScrollableLayerGuid>&)
-        = &APZCTreeManager::SetTargetAPZC;
-    APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
-        mTreeManager.get(), setTargetApzcFunc, aInputBlockId, aTargets));
-  }
-
-private:
-  nsRefPtr<APZCTreeManager> mTreeManager;
-};
-
 class ChromeProcessSetAllowedTouchBehaviorCallback : public SetAllowedTouchBehaviorCallback {
 public:
   explicit ChromeProcessSetAllowedTouchBehaviorCallback(APZCTreeManager* aTreeManager)
@@ -963,7 +965,6 @@ void nsBaseWidget::ConfigureAPZCTreeManager()
   mAPZC->SetDPI(GetDPI());
   mAPZEventState = new APZEventState(this,
       new ChromeProcessContentReceivedInputBlockCallback(mAPZC));
-  mSetTargetAPZCCallback = new ChromeProcessSetTargetAPZCCallback(mAPZC);
   mSetAllowedTouchBehaviorCallback = new ChromeProcessSetAllowedTouchBehaviorCallback(mAPZC);
 
   nsRefPtr<GeckoContentController> controller = CreateRootContentController();
@@ -976,6 +977,17 @@ void nsBaseWidget::ConfigureAPZControllerThread()
 {
   // By default the controller thread is the main thread.
   APZThreadUtils::SetControllerThread(MessageLoop::current());
+}
+
+void
+nsBaseWidget::SetConfirmedTargetAPZC(uint64_t aInputBlockId,
+                                     const nsTArray<ScrollableLayerGuid>& aTargets) const
+{
+  // Need to specifically bind this since it's overloaded.
+  void (APZCTreeManager::*setTargetApzcFunc)(uint64_t, const nsTArray<ScrollableLayerGuid>&)
+          = &APZCTreeManager::SetTargetAPZC;
+  APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
+    mAPZC.get(), setTargetApzcFunc, aInputBlockId, mozilla::Move(aTargets)));
 }
 
 nsEventStatus
@@ -1013,12 +1025,12 @@ nsBaseWidget::ProcessUntransformedAPZEvent(WidgetInputEvent* aEvent,
               aInputBlockId, mSetAllowedTouchBehaviorCallback);
         }
         APZCCallbackHelper::SendSetTargetAPZCNotification(this, GetDocument(), *aEvent,
-            aGuid, aInputBlockId, mSetTargetAPZCCallback);
+            aGuid, aInputBlockId);
       }
       mAPZEventState->ProcessTouchEvent(*touchEvent, aGuid, aInputBlockId, aApzResponse);
     } else if (WidgetWheelEvent* wheelEvent = aEvent->AsWheelEvent()) {
       APZCCallbackHelper::SendSetTargetAPZCNotification(this, GetDocument(), *aEvent,
-                aGuid, aInputBlockId, mSetTargetAPZCCallback);
+                aGuid, aInputBlockId);
       mAPZEventState->ProcessWheelEvent(*wheelEvent, aGuid, aInputBlockId);
     }
   }
@@ -1142,17 +1154,6 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
   nsTArray<LayersBackend> backendHints;
   GetPreferredCompositorBackends(backendHints);
 
-#if !defined(MOZ_X11) && !defined(XP_WIN)
-  if (!mRequireOffMainThreadCompositing &&
-      !Preferences::GetBool("layers.offmainthreadcomposition.force-basic", false)) {
-    for (size_t i = 0; i < backendHints.Length(); ++i) {
-      if (backendHints[i] == LayersBackend::LAYERS_BASIC) {
-        backendHints[i] = LayersBackend::LAYERS_NONE;
-      }
-    }
-  }
-#endif
-
   bool success = false;
   if (!backendHints.IsEmpty()) {
     shadowManager = mCompositorChild->SendPLayerTransactionConstructor(
@@ -1201,15 +1202,10 @@ LayerManager* nsBaseWidget::GetLayerManager(PLayerTransactionChild* aShadowManag
       mLayerManager = CreateBasicLayerManager();
     }
   }
-  if (mTemporarilyUseBasicLayerManager && !mBasicLayerManager) {
-    mBasicLayerManager = CreateBasicLayerManager();
-  }
-  LayerManager* usedLayerManager = mTemporarilyUseBasicLayerManager ?
-                                     mBasicLayerManager : mLayerManager;
   if (aAllowRetaining) {
-    *aAllowRetaining = (usedLayerManager == mLayerManager);
+    *aAllowRetaining = true;
   }
-  return usedLayerManager;
+  return mLayerManager;
 }
 
 LayerManager* nsBaseWidget::CreateBasicLayerManager()
@@ -1706,22 +1702,25 @@ nsBaseWidget::GetRootAccessible()
 #endif // ACCESSIBILITY
 
 nsresult
-nsIWidget::SynthesizeNativeTouchTap(nsIntPoint aPointerScreenPoint, bool aLongTap)
+nsIWidget::SynthesizeNativeTouchTap(nsIntPoint aPointerScreenPoint, bool aLongTap,
+                                    nsIObserver* aObserver)
 {
+  AutoObserverNotifier notifier(aObserver, "touchtap");
+
   if (sPointerIdCounter > TOUCH_INJECT_MAX_POINTS) {
     sPointerIdCounter = 0;
   }
   int pointerId = sPointerIdCounter;
   sPointerIdCounter++;
   nsresult rv = SynthesizeNativeTouchPoint(pointerId, TOUCH_CONTACT,
-                                           aPointerScreenPoint, 1.0, 90);
+                                           aPointerScreenPoint, 1.0, 90, nullptr);
   if (NS_FAILED(rv)) {
     return rv;
   }
 
   if (!aLongTap) {
     nsresult rv = SynthesizeNativeTouchPoint(pointerId, TOUCH_REMOVE,
-                                             aPointerScreenPoint, 0, 0);
+                                             aPointerScreenPoint, 0, 0, nullptr);
     return rv;
   }
 
@@ -1732,7 +1731,7 @@ nsIWidget::SynthesizeNativeTouchTap(nsIntPoint aPointerScreenPoint, bool aLongTa
     mLongTapTimer = do_CreateInstance(NS_TIMER_CONTRACTID, &rv);
     if (NS_FAILED(rv)) {
       SynthesizeNativeTouchPoint(pointerId, TOUCH_CANCEL,
-                                 aPointerScreenPoint, 0, 0);
+                                 aPointerScreenPoint, 0, 0, nullptr);
       return NS_ERROR_UNEXPECTED;
     }
     // Windows requires recuring events, so we set this to a smaller window
@@ -1750,11 +1749,13 @@ nsIWidget::SynthesizeNativeTouchTap(nsIntPoint aPointerScreenPoint, bool aLongTa
   // tap to be active at a time.
   if (mLongTapTouchPoint) {
     SynthesizeNativeTouchPoint(mLongTapTouchPoint->mPointerId, TOUCH_CANCEL,
-                               mLongTapTouchPoint->mPosition, 0, 0);
+                               mLongTapTouchPoint->mPosition, 0, 0, nullptr);
   }
 
   mLongTapTouchPoint = new LongTapInfo(pointerId, aPointerScreenPoint,
-                                       TimeDuration::FromMilliseconds(elapse));
+                                       TimeDuration::FromMilliseconds(elapse),
+                                       aObserver);
+  notifier.SkipNotification();  // we'll do it in the long-tap callback
   return NS_OK;
 }
 
@@ -1772,10 +1773,12 @@ nsIWidget::OnLongTapTimerCallback(nsITimer* aTimer, void* aClosure)
     self->SynthesizeNativeTouchPoint(self->mLongTapTouchPoint->mPointerId,
                                      TOUCH_CONTACT,
                                      self->mLongTapTouchPoint->mPosition,
-                                     1.0, 90);
+                                     1.0, 90, nullptr);
 #endif
     return;
   }
+
+  AutoObserverNotifier notiifer(self->mLongTapTouchPoint->mObserver, "touchtap");
 
   // finished, remove the touch point
   self->mLongTapTimer->Cancel();
@@ -1783,20 +1786,22 @@ nsIWidget::OnLongTapTimerCallback(nsITimer* aTimer, void* aClosure)
   self->SynthesizeNativeTouchPoint(self->mLongTapTouchPoint->mPointerId,
                                    TOUCH_REMOVE,
                                    self->mLongTapTouchPoint->mPosition,
-                                   0, 0);
+                                   0, 0, nullptr);
   self->mLongTapTouchPoint = nullptr;
 }
 
 nsresult
-nsIWidget::ClearNativeTouchSequence()
+nsIWidget::ClearNativeTouchSequence(nsIObserver* aObserver)
 {
+  AutoObserverNotifier notifier(aObserver, "cleartouch");
+
   if (!mLongTapTimer) {
     return NS_OK;
   }
   mLongTapTimer->Cancel();
   mLongTapTimer = nullptr;
   SynthesizeNativeTouchPoint(mLongTapTouchPoint->mPointerId, TOUCH_CANCEL,
-                             mLongTapTouchPoint->mPosition, 0, 0);
+                             mLongTapTouchPoint->mPosition, 0, 0, nullptr);
   mLongTapTouchPoint = nullptr;
   return NS_OK;
 }

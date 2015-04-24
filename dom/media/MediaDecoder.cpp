@@ -117,6 +117,12 @@ public:
 
 StaticRefPtr<MediaMemoryTracker> MediaMemoryTracker::sUniqueInstance;
 
+void
+MediaDecoder::InitStatics()
+{
+  AbstractThread::InitStatics();
+}
+
 NS_IMPL_ISUPPORTS(MediaMemoryTracker, nsIMemoryReporter)
 
 NS_IMPL_ISUPPORTS(MediaDecoder, nsIObserver)
@@ -307,7 +313,8 @@ MediaDecoder::DecodedStreamData::DecodedStreamData(MediaDecoder* aDecoder,
     mHaveSentFinishVideo(false),
     mStream(aStream),
     mHaveBlockedForPlayState(false),
-    mHaveBlockedForStateMachineNotPlaying(false)
+    mHaveBlockedForStateMachineNotPlaying(false),
+    mEOSVideoCompensation(false)
 {
   mListener = new DecodedStreamGraphListener(mStream, this);
   mStream->AddListener(mListener);
@@ -579,6 +586,7 @@ bool MediaDecoder::IsInfinite()
 }
 
 MediaDecoder::MediaDecoder() :
+  mReadyStateWatchTarget("MediaDecoder::mReadyStateWatchTarget"),
   mDecoderPosition(0),
   mPlaybackPosition(0),
   mCurrentTime(0.0),
@@ -589,7 +597,7 @@ MediaDecoder::MediaDecoder() :
   mMediaSeekable(true),
   mSameOriginMedia(false),
   mReentrantMonitor("media.decoder"),
-  mPlayState(PLAY_STATE_LOADING),
+  mPlayState(PLAY_STATE_LOADING, "MediaDecoder::mPlayState"),
   mNextState(PLAY_STATE_PAUSED),
   mIgnoreProgressData(false),
   mInfiniteStream(false),
@@ -616,8 +624,11 @@ MediaDecoder::MediaDecoder() :
   if (!gMediaDecoderLog) {
     gMediaDecoderLog = PR_NewLogModule("MediaDecoder");
   }
+  EnsureStateWatchingLog();
 #endif
   mAudioChannel = AudioChannelService::GetDefaultAudioChannel();
+
+  mReadyStateWatchTarget->Watch(mPlayState);
 }
 
 bool MediaDecoder::Init(MediaDecoderOwner* aOwner)
@@ -1134,7 +1145,6 @@ void MediaDecoder::NotifySuspendedStatusChanged()
   if (mResource && mOwner) {
     bool suspended = mResource->IsSuspendedByCache();
     mOwner->NotifySuspendedByCache(suspended);
-    UpdateReadyStateForData();
   }
 }
 
@@ -1215,9 +1225,10 @@ void MediaDecoder::UpdateReadyStateForData()
   mOwner->UpdateReadyStateForData(frameStatus);
 }
 
-void MediaDecoder::OnSeekResolvedInternal(bool aAtEnd, MediaDecoderEventVisibility aEventVisibility)
+void MediaDecoder::OnSeekResolved(SeekResolveValue aVal)
 {
   MOZ_ASSERT(NS_IsMainThread());
+  mSeekRequest.Complete();
 
   if (mShuttingDown)
     return;
@@ -1234,20 +1245,20 @@ void MediaDecoder::OnSeekResolvedInternal(bool aAtEnd, MediaDecoderEventVisibili
       seekWasAborted = true;
     } else {
       UnpinForSeek();
-      fireEnded = aAtEnd;
-      if (aAtEnd) {
+      fireEnded = aVal.mAtEnd;
+      if (aVal.mAtEnd) {
         ChangeState(PLAY_STATE_ENDED);
-      } else if (aEventVisibility != MediaDecoderEventVisibility::Suppressed) {
-        ChangeState(aAtEnd ? PLAY_STATE_ENDED : mNextState);
+      } else if (aVal.mEventVisibility != MediaDecoderEventVisibility::Suppressed) {
+        ChangeState(aVal.mAtEnd ? PLAY_STATE_ENDED : mNextState);
       }
     }
   }
 
-  PlaybackPositionChanged(aEventVisibility);
+  PlaybackPositionChanged(aVal.mEventVisibility);
 
   if (mOwner) {
     UpdateReadyStateForData();
-    if (!seekWasAborted && (aEventVisibility != MediaDecoderEventVisibility::Suppressed)) {
+    if (!seekWasAborted && (aVal.mEventVisibility != MediaDecoderEventVisibility::Suppressed)) {
       mOwner->SeekCompleted();
       if (fireEnded) {
         mOwner->PlaybackEnded();
@@ -1325,7 +1336,7 @@ void MediaDecoder::ApplyStateToStateMachine(PlayState aState)
         mSeekRequest.Begin(ProxyMediaCall(mDecoderStateMachine->TaskQueue(),
                                           mDecoderStateMachine.get(), __func__,
                                           &MediaDecoderStateMachine::Seek, mRequestedSeekTarget)
-          ->RefableThen(NS_GetCurrentThread(), __func__, this,
+          ->RefableThen(AbstractThread::MainThread(), __func__, this,
                         &MediaDecoder::OnSeekResolved, &MediaDecoder::OnSeekRejected));
         mRequestedSeekTarget.Reset();
         break;
@@ -1538,7 +1549,7 @@ void MediaDecoder::SetLoadInBackground(bool aLoadInBackground)
 
 void MediaDecoder::UpdatePlaybackOffset(int64_t aOffset)
 {
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
+  GetReentrantMonitor().AssertCurrentThreadIn();
   mPlaybackPosition = aOffset;
 }
 
@@ -1697,8 +1708,8 @@ void MediaDecoder::UnpinForSeek()
 bool MediaDecoder::CanPlayThrough()
 {
   Statistics stats = GetStatistics();
+  NS_ENSURE_TRUE(mDecoderStateMachine, false);
 
-  NS_ASSERTION(mDecoderStateMachine, "CanPlayThrough should have state machine!");
   if (mDecoderStateMachine->IsRealTime() ||
       (stats.mTotalBytes < 0 && stats.mDownloadRateReliable) ||
       (stats.mTotalBytes >= 0 && stats.mTotalBytes == stats.mDownloadPosition)) {
@@ -1915,7 +1926,7 @@ MediaDecoder::ConstructMediaTracks()
 
   AudioTrackList* audioList = element->AudioTracks();
   if (audioList && mInfo->HasAudio()) {
-    TrackInfo info = mInfo->mAudio.mTrackInfo;
+    const TrackInfo& info = mInfo->mAudio;
     nsRefPtr<AudioTrack> track = MediaTrackList::CreateAudioTrack(
     info.mId, info.mKind, info.mLabel, info.mLanguage, info.mEnabled);
 
@@ -1924,7 +1935,7 @@ MediaDecoder::ConstructMediaTracks()
 
   VideoTrackList* videoList = element->VideoTracks();
   if (videoList && mInfo->HasVideo()) {
-    TrackInfo info = mInfo->mVideo.mTrackInfo;
+    const TrackInfo& info = mInfo->mVideo;
     nsRefPtr<VideoTrack> track = MediaTrackList::CreateVideoTrack(
     info.mId, info.mKind, info.mLabel, info.mLanguage);
 

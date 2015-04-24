@@ -113,6 +113,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "Notifications",
 XPCOMUtils.defineLazyModuleGetter(this, "GMPInstallManager",
                                   "resource://gre/modules/GMPInstallManager.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode", "resource://gre/modules/ReaderMode.jsm");
+
 let lazilyLoadedBrowserScripts = [
   ["SelectHelper", "chrome://browser/content/SelectHelper.js"],
   ["InputWidgetHelper", "chrome://browser/content/InputWidgetHelper.js"],
@@ -1413,7 +1415,7 @@ var BrowserApp = {
     });
   },
 
-  setPreferences: function setPreferences(aPref) {
+  setPreferences: function (aPref) {
     let json = JSON.parse(aPref);
 
     switch (json.name) {
@@ -1469,6 +1471,13 @@ var BrowserApp = {
         Services.prefs.setComplexValue(json.name, Ci.nsISupportsString, pref);
         break;
       }
+    }
+
+    // Finally, if we were asked to flush, flush prefs to disk right now.
+    // This allows us to be confident that prefs set in Settings are persisted,
+    // even if we crash very soon after.
+    if (json.flush) {
+      Services.prefs.savePrefFile(null);
     }
   },
 
@@ -2225,7 +2234,11 @@ var NativeWindow = {
    *                     { text: <title>,
    *                       resource: <resource_url> }
    *
-   *        subtext:     A string to appear below the doorhanger message.
+   *        actionText:  An object that specifies a clickable string, a type of action,
+   *                     and a bundle blob for the consumer to create a click action.
+   *                     { text: <text>,
+   *                       type: <type>,
+   *                       bundle: <blob-object> }
    *
    * @param aCategory
    *        Doorhanger type to display (e.g., LOGIN)
@@ -4551,16 +4564,7 @@ Tab.prototype = {
   },
 
   _stripAboutReaderURL: function (url) {
-    if (!url.startsWith("about:reader")) {
-      return url;
-    }
-
-    // From ReaderParent._getOriginalUrl (browser/modules/ReaderParent.jsm).
-    let searchParams = new URLSearchParams(url.substring("about:reader?".length));
-    if (!searchParams.has("url")) {
-        return url;
-    }
-    return decodeURIComponent(searchParams.get("url"));
+    return ReaderMode.getOriginalUrl(url) || url;
   },
 
   // Properties used to cache security state used to update the UI
@@ -5543,10 +5547,14 @@ var ErrorPageEventHandler = {
           }
         } else if (errorDoc.documentURI.startsWith("about:blocked")) {
           // The event came from a button on a malware/phishing block page
-          // First check whether it's malware or phishing, so that we can
-          // use the right strings/links
-          let isMalware = errorDoc.documentURI.contains("e=malwareBlocked");
-          let bucketName = isMalware ? "WARNING_MALWARE_PAGE_" : "WARNING_PHISHING_PAGE_";
+          // First check whether it's malware, phishing or unwanted, so that we
+          // can use the right strings/links
+          let bucketName = "WARNING_PHISHING_PAGE_";
+          if (errorDoc.documentURI.contains("e=malwareBlocked")) {
+            bucketName = "WARNING_MALWARE_PAGE_";
+          } else if (errorDoc.documentURI.contains("e=unwantedBlocked")) {
+            bucketName = "WARNING_UNWANTED_PAGE_";
+          }
           let nsISecTel = Ci.nsISecurityUITelemetry;
           let isIframe = (errorDoc.defaultView.parent === errorDoc.defaultView);
           bucketName += isIframe ? "TOP_" : "FRAME_";
@@ -5561,23 +5569,10 @@ var ErrorPageEventHandler = {
             // the measurement is for how many users clicked the WHY BLOCKED button
             Telemetry.addData("SECURITY_UI", nsISecTel[bucketName + "WHY_BLOCKED"]);
 
-            // This is the "Why is this site blocked" button.  For malware,
-            // we can fetch a site-specific report, for phishing, we redirect
-            // to the generic page describing phishing protection.
-            if (isMalware) {
-              // Get the stop badware "why is this blocked" report url, append the current url, and go there.
-              try {
-                let reportURL = formatter.formatURLPref("browser.safebrowsing.malware.reportURL");
-                reportURL += errorDoc.location.href;
-                BrowserApp.selectedBrowser.loadURI(reportURL);
-              } catch (e) {
-                Cu.reportError("Couldn't get malware report URL: " + e);
-              }
-            } else {
-              // It's a phishing site, just link to the generic information page
-              let url = Services.urlFormatter.formatURLPref("app.support.baseURL");
-              BrowserApp.selectedBrowser.loadURI(url + "phishing-malware");
-            }
+            // This is the "Why is this site blocked" button. We redirect
+            // to the generic page describing phishing/malware protection.
+            let url = Services.urlFormatter.formatURLPref("app.support.baseURL");
+            BrowserApp.selectedBrowser.loadURI(url + "phishing-malware");
           } else if (target == errorDoc.getElementById("ignoreWarningButton")) {
             Telemetry.addData("SECURITY_UI", nsISecTel[bucketName + "IGNORE_WARNING"]);
 
@@ -6368,7 +6363,12 @@ var ViewportHandler = {
    */
   getViewportMetadata: function getViewportMetadata(aWindow) {
     let tab = BrowserApp.getTabForWindow(aWindow);
-    if (tab.desktopMode) {
+    let readerMode = false;
+    try {
+      readerMode = tab.browser.contentDocument.documentURI.startsWith("about:reader");
+    } catch (e) {
+    }
+    if (tab.desktopMode && !readerMode) {
       return new ViewportMetadata({
         minZoom: kViewportMinScale,
         maxZoom: kViewportMaxScale,
@@ -6659,13 +6659,12 @@ var IndexedDB = {
 
     let requestor = subject.QueryInterface(Ci.nsIInterfaceRequestor);
 
-    let contentWindow = requestor.getInterface(Ci.nsIDOMWindow);
-    let contentDocument = contentWindow.document;
-    let tab = BrowserApp.getTabForWindow(contentWindow);
+    let browser = requestor.getInterface(Ci.nsIDOMNode);
+    let tab = BrowserApp.getTabForBrowser(browser);
     if (!tab)
       return;
 
-    let host = contentDocument.documentURIObject.asciiHost;
+    let host = browser.currentURI.asciiHost;
 
     let strings = Strings.browser;
 

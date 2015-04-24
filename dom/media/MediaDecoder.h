@@ -196,6 +196,7 @@ destroying the MediaDecoder object.
 #include "mozilla/ReentrantMonitor.h"
 #include "MediaStreamGraph.h"
 #include "AbstractMediaDecoder.h"
+#include "StateWatching.h"
 #include "necko-config.h"
 #ifdef MOZ_EME
 #include "mozilla/CDMProxy.h"
@@ -297,6 +298,9 @@ public:
     PLAY_STATE_ENDED,
     PLAY_STATE_SHUTDOWN
   };
+
+  // Must be called exactly once, on the main thread, during startup.
+  static void InitStatics();
 
   MediaDecoder();
 
@@ -451,6 +455,9 @@ public:
     // We also have an explicit blocker on the stream when
     // mDecoderStateMachine is non-null and MediaDecoderStateMachine is false.
     bool mHaveBlockedForStateMachineNotPlaying;
+    // True if we need to send a compensation video frame to ensure the
+    // StreamTime going forward.
+    bool mEOSVideoCompensation;
   };
 
   class DecodedStreamGraphListener : public MediaStreamListener {
@@ -806,21 +813,7 @@ public:
   void PlaybackEnded();
 
   void OnSeekRejected() { mSeekRequest.Complete(); }
-  void OnSeekResolvedInternal(bool aAtEnd, MediaDecoderEventVisibility aEventVisibility);
-
-  void OnSeekResolved(SeekResolveValue aVal)
-  {
-    mSeekRequest.Complete();
-    OnSeekResolvedInternal(aVal.mAtEnd, aVal.mEventVisibility);
-  }
-
-#ifdef MOZ_AUDIO_OFFLOAD
-  // Temporary hack - see bug 1139206.
-  void SimulateSeekResolvedForAudioOffload(MediaDecoderEventVisibility aEventVisibility)
-  {
-    OnSeekResolvedInternal(false, aEventVisibility);
-  }
-#endif
+  void OnSeekResolved(SeekResolveValue aVal);
 
   // Seeking has started. Inform the element on the main
   // thread.
@@ -1051,6 +1044,8 @@ public:
     GetFrameStatistics().NotifyDecodedFrames(aParsed, aDecoded, aDropped);
   }
 
+  WatchTarget& ReadyStateWatchTarget() { return *mReadyStateWatchTarget; }
+
 protected:
   virtual ~MediaDecoder();
   void SetStateMachineParameters();
@@ -1065,6 +1060,8 @@ protected:
 
   // Return true if the decoder has reached the end of playback
   bool IsEnded() const;
+
+  WatcherHolder mReadyStateWatchTarget;
 
   /******
    * The following members should be accessed with the decoder lock held.
@@ -1148,7 +1145,7 @@ protected:
   // OR on the main thread.
   // Any change to the state on the main thread must call NotifyAll on the
   // monitor so the decode thread can wake up.
-  PlayState mPlayState;
+  Watchable<PlayState> mPlayState;
 
   // The state to change to after a seek or load operation.
   // This can only be changed on the main thread while holding the decoder

@@ -176,6 +176,7 @@
 #include "nsIFrameInlines.h"
 #include "mozilla/gfx/2D.h"
 #include "nsSubDocumentFrame.h"
+#include "nsQueryObject.h"
 
 #ifdef ANDROID
 #include "nsIDocShellTreeOwner.h"
@@ -199,7 +200,7 @@ using namespace mozilla::layout;
 
 CapturingContentInfo nsIPresShell::gCaptureInfo =
   { false /* mAllowed */, false /* mPointerLock */, false /* mRetargetToElement */,
-    false /* mPreventDrag */, nullptr /* mContent */ };
+    false /* mPreventDrag */ };
 nsIContent* nsIPresShell::gKeyDownTarget;
 nsClassHashtable<nsUint32HashKey, nsIPresShell::PointerCaptureInfo>* nsIPresShell::gPointerCaptureList;
 nsClassHashtable<nsUint32HashKey, nsIPresShell::PointerInfo>* nsIPresShell::gActivePointersIds;
@@ -746,7 +747,6 @@ PresShell::BeforeAfterKeyboardEventEnabled()
 PresShell::PresShell()
   : mMouseLocation(NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE)
 {
-  mSelection = nullptr;
 #ifdef MOZ_REFLOW_PERF
   mReflowCountMgr = new ReflowCountMgr();
   mReflowCountMgr->SetPresContext(mPresContext);
@@ -835,10 +835,6 @@ PresShell::~PresShell()
   delete mFrameConstructor;
 
   mCurrentEventContent = nullptr;
-
-  NS_IF_RELEASE(mPresContext);
-  NS_IF_RELEASE(mDocument);
-  NS_IF_RELEASE(mSelection);
 }
 
 /**
@@ -864,7 +860,6 @@ PresShell::Init(nsIDocument* aDocument,
   }
 
   mDocument = aDocument;
-  NS_ADDREF(mDocument);
   mViewManager = aViewManager;
 
   // Create our frame constructor.
@@ -877,7 +872,6 @@ PresShell::Init(nsIDocument* aDocument,
 
   // Bind the context to the presentation shell.
   mPresContext = aPresContext;
-  NS_ADDREF(mPresContext);
   aPresContext->SetShell(this);
 
   // Now we can initialize the style set.
@@ -905,7 +899,7 @@ PresShell::Init(nsIDocument* aDocument,
   }
 
 
-  NS_ADDREF(mSelection = new nsFrameSelection());
+  mSelection = new nsFrameSelection();
 
   mSelection->Init(this, nullptr);
 
@@ -1204,7 +1198,7 @@ PresShell::Destroy()
     mViewManager = nullptr;
   }
 
-  mStyleSet->BeginShutdown(mPresContext);
+  mStyleSet->BeginShutdown();
   nsRefreshDriver* rd = GetPresContext()->RefreshDriver();
 
   // This shell must be removed from the document before the frame
@@ -1262,7 +1256,7 @@ PresShell::Destroy()
   }
 
   // Let the style set do its cleanup.
-  mStyleSet->Shutdown(mPresContext);
+  mStyleSet->Shutdown();
 
   if (mPresContext) {
     // We hold a reference to the pres context, and it holds a weak link back
@@ -3882,7 +3876,7 @@ PresShell::ClearMouseCaptureOnView(nsView* aView)
         if (view) {
           do {
             if (view == aView) {
-              NS_RELEASE(gCaptureInfo.mContent);
+              gCaptureInfo.mContent = nullptr;
               // the view containing the captured content likely disappeared so
               // disable capture for now.
               gCaptureInfo.mAllowed = false;
@@ -3897,7 +3891,7 @@ PresShell::ClearMouseCaptureOnView(nsView* aView)
       }
     }
 
-    NS_RELEASE(gCaptureInfo.mContent);
+    gCaptureInfo.mContent = nullptr;
   }
 
   // disable mouse capture until the next mousedown as a dialog has opened
@@ -3916,20 +3910,20 @@ nsIPresShell::ClearMouseCapture(nsIFrame* aFrame)
 
   // null frame argument means clear the capture
   if (!aFrame) {
-    NS_RELEASE(gCaptureInfo.mContent);
+    gCaptureInfo.mContent = nullptr;
     gCaptureInfo.mAllowed = false;
     return;
   }
 
   nsIFrame* capturingFrame = gCaptureInfo.mContent->GetPrimaryFrame();
   if (!capturingFrame) {
-    NS_RELEASE(gCaptureInfo.mContent);
+    gCaptureInfo.mContent = nullptr;
     gCaptureInfo.mAllowed = false;
     return;
   }
 
   if (nsLayoutUtils::IsAncestorFrameCrossDoc(aFrame, capturingFrame)) {
-    NS_RELEASE(gCaptureInfo.mContent);
+    gCaptureInfo.mContent = nullptr;
     gCaptureInfo.mAllowed = false;
   }
 }
@@ -4399,8 +4393,7 @@ PresShell::DocumentStatesChanged(nsIDocument* aDocument,
   NS_PRECONDITION(aDocument == mDocument, "Unexpected aDocument");
 
   if (mDidInitialize &&
-      mStyleSet->HasDocumentStateDependentStyle(mPresContext,
-                                                mDocument->GetRootElement(),
+      mStyleSet->HasDocumentStateDependentStyle(mDocument->GetRootElement(),
                                                 aStateMask)) {
     mPresContext->RestyleManager()->PostRestyleEvent(mDocument->GetRootElement(),
                                                      eRestyle_Subtree,
@@ -4582,6 +4575,13 @@ PresShell::ContentRemoved(nsIDocument *aDocument,
   if (aContainer && aContainer->IsElement()) {
     mPresContext->RestyleManager()->
       RestyleForRemove(aContainer->AsElement(), aChild, oldNextSibling);
+  }
+
+  // After removing aChild from tree we should save information about live ancestor
+  if (mPointerEventTarget) {
+    if (nsContentUtils::ContentIsDescendantOf(mPointerEventTarget, aChild)) {
+      mPointerEventTarget = aContainer;
+    }
   }
 
   // We should check that aChild does not contain pointer capturing elements.
@@ -4986,14 +4986,21 @@ PresShell::ClipListToRange(nsDisplayListBuilder *aBuilder,
           frame->GetPointFromOffset(hilightStart, &startPoint);
           frame->GetPointFromOffset(hilightEnd, &endPoint);
 
-          // the clip rectangle is determined by taking the the start and
+          // The clip rectangle is determined by taking the the start and
           // end points of the range, offset from the reference frame.
-          // Because of rtl, the end point may be to the left of the
-          // start point, so x is set to the lowest value
+          // Because of rtl, the end point may be to the left of (or above,
+          // in vertical mode) the start point, so x (or y) is set to the
+          // lower of the values.
           nsRect textRect(aBuilder->ToReferenceFrame(frame), frame->GetSize());
-          nscoord x = std::min(startPoint.x, endPoint.x);
-          textRect.x += x;
-          textRect.width = std::max(startPoint.x, endPoint.x) - x;
+          if (frame->GetWritingMode().IsVertical()) {
+            nscoord y = std::min(startPoint.y, endPoint.y);
+            textRect.y += y;
+            textRect.height = std::max(startPoint.y, endPoint.y) - y;
+          } else {
+            nscoord x = std::min(startPoint.x, endPoint.x);
+            textRect.x += x;
+            textRect.width = std::max(startPoint.x, endPoint.x) - x;
+          }
           surfaceRect.UnionRect(surfaceRect, textRect);
 
           DisplayItemClip newClip;
@@ -5285,7 +5292,7 @@ PresShell::RenderNode(nsIDOMNode* aNode,
     // combine the area with the supplied region
     nsIntRect rrectPixels = aRegion->GetBounds();
 
-    nsRect rrect = rrectPixels.ToAppUnits(nsPresContext::AppUnitsPerCSSPixel());
+    nsRect rrect = ToAppUnits(rrectPixels, nsPresContext::AppUnitsPerCSSPixel());
     area.IntersectRect(area, rrect);
 
     nsPresContext* pc = GetPresContext();
@@ -6351,14 +6358,14 @@ nsIPresShell::SetCapturingContent(nsIContent* aContent, uint8_t aFlags)
     return;
   }
 
-  NS_IF_RELEASE(gCaptureInfo.mContent);
+  gCaptureInfo.mContent = nullptr;
 
   // only set capturing content if allowed or the CAPTURE_IGNOREALLOWED or
   // CAPTURE_POINTERLOCK flags are used.
   if ((aFlags & CAPTURE_IGNOREALLOWED) || gCaptureInfo.mAllowed ||
       (aFlags & CAPTURE_POINTERLOCK)) {
     if (aContent) {
-      NS_ADDREF(gCaptureInfo.mContent = aContent);
+      gCaptureInfo.mContent = aContent;
     }
     // CAPTURE_POINTERLOCK is the same as CAPTURE_RETARGETTOELEMENT & CAPTURE_IGNOREALLOWED
     gCaptureInfo.mRetargetToElement = ((aFlags & CAPTURE_RETARGETTOELEMENT) != 0) ||
@@ -6819,7 +6826,8 @@ DispatchPointerFromMouseOrTouch(PresShell* aShell,
                                 nsIFrame* aFrame,
                                 WidgetGUIEvent* aEvent,
                                 bool aDontRetargetEvents,
-                                nsEventStatus* aStatus)
+                                nsEventStatus* aStatus,
+                                nsIContent** aTargetContent)
 {
   uint32_t pointerMessage = 0;
   if (aEvent->mClass == eMouseEventClass) {
@@ -6853,7 +6861,7 @@ DispatchPointerFromMouseOrTouch(PresShell* aShell,
                      mouseEvent->pressure ? mouseEvent->pressure : 0.5f :
                      0.0f;
     event.convertToPointer = mouseEvent->convertToPointer = false;
-    aShell->HandleEvent(aFrame, &event, aDontRetargetEvents, aStatus);
+    aShell->HandleEvent(aFrame, &event, aDontRetargetEvents, aStatus, aTargetContent);
   } else if (aEvent->mClass == eTouchEventClass) {
     WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent();
     // loop over all touches and dispatch pointer events on each touch
@@ -6898,7 +6906,7 @@ DispatchPointerFromMouseOrTouch(PresShell* aShell,
       event.buttons = WidgetMouseEvent::eLeftButtonFlag;
       event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
       event.convertToPointer = touch->convertToPointer = false;
-      aShell->HandleEvent(aFrame, &event, aDontRetargetEvents, aStatus);
+      aShell->HandleEvent(aFrame, &event, aDontRetargetEvents, aStatus, aTargetContent);
     }
   }
   return NS_OK;
@@ -7165,7 +7173,8 @@ nsresult
 PresShell::HandleEvent(nsIFrame* aFrame,
                        WidgetGUIEvent* aEvent,
                        bool aDontRetargetEvents,
-                       nsEventStatus* aEventStatus)
+                       nsEventStatus* aEventStatus,
+                       nsIContent** aTargetContent)
 {
 #ifdef MOZ_TASK_TRACER
   // Make touch events, mouse events and hardware key events to be the source
@@ -7181,11 +7190,27 @@ PresShell::HandleEvent(nsIFrame* aFrame,
   AutoSourceEvent taskTracerEvent(type);
 #endif
 
-  if (sPointerEventEnabled) {
-    DispatchPointerFromMouseOrTouch(this, aFrame, aEvent, aDontRetargetEvents, aEventStatus);
-  }
+  NS_ASSERTION(aFrame, "aFrame should be not null");
 
-  NS_ASSERTION(aFrame, "null frame");
+  if (sPointerEventEnabled) {
+    nsWeakFrame weakFrame(aFrame);
+    nsCOMPtr<nsIContent> targetContent;
+    DispatchPointerFromMouseOrTouch(this, aFrame, aEvent, aDontRetargetEvents,
+                                    aEventStatus, getter_AddRefs(targetContent));
+    if (!weakFrame.IsAlive()) {
+      if (targetContent) {
+        aFrame = targetContent->GetPrimaryFrame();
+        if (!aFrame) {
+          PushCurrentEventInfo(aFrame, targetContent);
+          nsresult rv = HandleEventInternal(aEvent, aEventStatus);
+          PopCurrentEventInfo();
+          return rv;
+        }
+      } else {
+        return NS_OK;
+      }
+    }
+  }
 
   if (mIsDestroying ||
       (sDisableNonTestMouseEvents && !aEvent->mFlags.mIsSynthesizedForTests &&
@@ -7352,9 +7377,10 @@ PresShell::HandleEvent(nsIFrame* aFrame,
       }
     }
 
-    NS_WARN_IF_FALSE(frame, "Nothing to handle this event!");
-    if (!frame)
+    if (!frame) {
+      NS_WARNING("Nothing to handle this event!");
       return NS_OK;
+    }
 
     nsPresContext* framePresContext = frame->PresContext();
     nsPresContext* rootPresContext = framePresContext->GetRootPresContext();
@@ -7555,11 +7581,18 @@ PresShell::HandleEvent(nsIFrame* aFrame,
 
     if (aEvent->mClass == ePointerEventClass) {
       if (WidgetPointerEvent* pointerEvent = aEvent->AsPointerEvent()) {
+        // Try to keep frame for following check, because
+        // frame can be damaged during CheckPointerCaptureState.
+        nsWeakFrame frameKeeper(frame);
         // Before any pointer events, we should check state of pointer capture,
         // Thus got/lostpointercapture events emulate asynchronous behavior.
         // Handlers of got/lostpointercapture events can change capturing state,
         // That's why we should re-check pointer capture state until stable state.
         while(CheckPointerCaptureState(pointerEvent->pointerId));
+        // Prevent application crashes, in case damaged frame.
+        if (!frameKeeper.IsAlive()) {
+          frame = nullptr;
+        }
       }
     }
 
@@ -7601,7 +7634,11 @@ PresShell::HandleEvent(nsIFrame* aFrame,
           delete event;
         }
       }
+      return NS_OK;
+    }
 
+    if (!frame) {
+      NS_WARNING("Nothing to handle this event!");
       return NS_OK;
     }
 
@@ -7672,6 +7709,15 @@ PresShell::HandleEvent(nsIFrame* aFrame,
       }
     }
 
+    // Before HandlePositionedEvent we should save mPointerEventTarget in some cases
+    nsWeakFrame weakFrame;
+    if (sPointerEventEnabled && aTargetContent && ePointerEventClass == aEvent->mClass) {
+      weakFrame = frame;
+      shell->mPointerEventTarget = frame->GetContent();
+      MOZ_ASSERT(!frame->GetContent() || shell->GetDocument() == frame->GetContent()->OwnerDoc());
+    }
+
+    nsresult rv;
     if (shell != this) {
       // Handle the event in the correct shell.
       // Prevent deletion until we're done with event handling (bug 336582).
@@ -7680,10 +7726,20 @@ PresShell::HandleEvent(nsIFrame* aFrame,
       // the only correct alternative; if the event was captured then it
       // must have been captured by us or some ancestor shell and we
       // now ask the subshell to dispatch it normally.
-      return shell->HandlePositionedEvent(frame, aEvent, aEventStatus);
+      rv = shell->HandlePositionedEvent(frame, aEvent, aEventStatus);
+    } else {
+      rv = HandlePositionedEvent(frame, aEvent, aEventStatus);
     }
 
-    return HandlePositionedEvent(frame, aEvent, aEventStatus);
+    // After HandlePositionedEvent we should reestablish
+    // content (which still live in tree) in some cases
+    if (sPointerEventEnabled && aTargetContent && ePointerEventClass == aEvent->mClass) {
+      if (!weakFrame.IsAlive()) {
+        shell->mPointerEventTarget.swap(*aTargetContent);
+      }
+    }
+
+    return rv;
   }
 
   nsresult rv = NS_OK;
@@ -7920,7 +7976,7 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent, nsEventStatus* aStatus)
   nsRefPtr<EventStateManager> manager = mPresContext->EventStateManager();
   nsresult rv = NS_OK;
 
-  if (!NS_EVENT_NEEDS_FRAME(aEvent) || GetCurrentEventFrame()) {
+  if (!NS_EVENT_NEEDS_FRAME(aEvent) || GetCurrentEventFrame() || GetCurrentEventContent()) {
     bool touchIsNew = false;
     bool isHandlingUserInput = false;
 
@@ -8033,7 +8089,8 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent, nsEventStatus* aStatus)
 
     // 1. Give event to event manager for pre event state changes and
     //    generation of synthetic events.
-    rv = manager->PreHandleEvent(mPresContext, aEvent, mCurrentEventFrame, aStatus);
+    rv = manager->PreHandleEvent(mPresContext, aEvent, mCurrentEventFrame,
+                                 mCurrentEventContent, aStatus);
 
     // 2. Give event to the DOM for third party and JS use.
     if (NS_SUCCEEDED(rv)) {
@@ -8147,9 +8204,9 @@ PresShell::DispatchEventToDOM(WidgetEvent* aEvent,
   }
   if (eventTarget) {
     if (aEvent->mClass == eCompositionEventClass) {
-      IMEStateManager::DispatchCompositionEvent(eventTarget,
-        mPresContext, aEvent->AsCompositionEvent(), aStatus,
-        eventCBPtr);
+      IMEStateManager::DispatchCompositionEvent(eventTarget, mPresContext,
+                                                aEvent->AsCompositionEvent(),
+                                                aStatus, eventCBPtr);
     } else if (aEvent->mClass == eKeyboardEventClass) {
       HandleKeyboardEvent(eventTarget, *(aEvent->AsKeyboardEvent()),
                           false, aStatus, eventCBPtr);

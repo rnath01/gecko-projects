@@ -54,6 +54,7 @@
 #include "mozilla/dom/MessageEventBinding.h"
 #include "mozilla/dom/MessagePortList.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/dom/PromiseDebugging.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/StructuredClone.h"
 #include "mozilla/dom/WebCryptoCommon.h"
@@ -80,6 +81,7 @@
 #include "nsNetUtil.h"
 #include "nsPrintfCString.h"
 #include "nsProxyRelease.h"
+#include "nsQueryObject.h"
 #include "nsSandboxFlags.h"
 #include "prthread.h"
 #include "xpcpublic.h"
@@ -1396,7 +1398,7 @@ private:
   {
     // This busy count will be matched by the CloseEventRunnable.
     return aWorkerPrivate->ModifyBusyCount(aCx, true) &&
-           aWorkerPrivate->Close(aCx);
+           aWorkerPrivate->Close();
   }
 };
 
@@ -2294,6 +2296,7 @@ WorkerLoadInfo::StealFrom(WorkerLoadInfo& aOther)
   mPrincipalInfo = aOther.mPrincipalInfo.forget();
 
   mDomain = aOther.mDomain;
+  mServiceWorkerCacheName = aOther.mServiceWorkerCacheName;
   mWindowID = aOther.mWindowID;
   mFromWindow = aOther.mFromWindow;
   mEvalAllowed = aOther.mEvalAllowed;
@@ -2661,6 +2664,28 @@ struct WorkerPrivate::PreemptingRunnableInfo final
   }
 };
 
+template <class Derived>
+nsIDocument*
+WorkerPrivateParent<Derived>::GetDocument() const
+{
+  AssertIsOnMainThread();
+  if (mLoadInfo.mWindow) {
+    return mLoadInfo.mWindow->GetExtantDoc();
+  }
+  // if we don't have a document, we should query the document
+  // from the parent in case of a nested worker
+  WorkerPrivate* parent = mParent;
+  while (parent) {
+    if (parent->mLoadInfo.mWindow) {
+      return parent->mLoadInfo.mWindow->GetExtantDoc();
+    }
+    parent = parent->GetParent();
+  }
+  // couldn't query a document, give up and return nullptr
+  return nullptr;
+}
+
+
 // Can't use NS_IMPL_CYCLE_COLLECTION_CLASS(WorkerPrivateParent) because of the
 // templates.
 template <class Derived>
@@ -2681,7 +2706,8 @@ WorkerPrivateParent<Derived>::WorkerPrivateParent(
   mCondVar(mMutex, "WorkerPrivateParent CondVar"),
   mMemoryReportCondVar(mMutex, "WorkerPrivateParent Memory Report CondVar"),
   mParent(aParent), mScriptURL(aScriptURL),
-  mSharedWorkerName(aSharedWorkerName), mBusyCount(0), mMessagePortSerial(0),
+  mSharedWorkerName(aSharedWorkerName), mLoadingWorkerScript(false),
+  mBusyCount(0), mMessagePortSerial(0),
   mParentStatus(Pending), mParentFrozen(false),
   mIsChromeWorker(aIsChromeWorker), mMainThreadObjectsForgotten(false),
   mWorkerType(aWorkerType),
@@ -3221,7 +3247,7 @@ WorkerPrivateParent<Derived>::Thaw(JSContext* aCx, nsPIDOMWindow* aWindow)
 
 template <class Derived>
 bool
-WorkerPrivateParent<Derived>::Close(JSContext* aCx)
+WorkerPrivateParent<Derived>::Close()
 {
   AssertIsOnParentThread();
 
@@ -3971,17 +3997,16 @@ WorkerPrivateParent<Derived>::SetBaseURI(nsIURI* aBaseURI)
     mLocationInfo.mHref.Truncate();
   }
 
-  if (NS_FAILED(aBaseURI->GetHost(mLocationInfo.mHostname))) {
-    mLocationInfo.mHostname.Truncate();
-  }
+  mLocationInfo.mHostname.Truncate();
+  nsContentUtils::GetHostOrIPv6WithBrackets(aBaseURI, mLocationInfo.mHostname);
 
-  if (NS_FAILED(aBaseURI->GetPath(mLocationInfo.mPathname))) {
+  nsCOMPtr<nsIURL> url(do_QueryInterface(aBaseURI));
+  if (!url || NS_FAILED(url->GetFilePath(mLocationInfo.mPathname))) {
     mLocationInfo.mPathname.Truncate();
   }
 
   nsCString temp;
 
-  nsCOMPtr<nsIURL> url(do_QueryInterface(aBaseURI));
   if (url && NS_SUCCEEDED(url->GetQuery(temp)) && !temp.IsEmpty()) {
     mLocationInfo.mSearch.Assign('?');
     mLocationInfo.mSearch.Append(temp);
@@ -5135,6 +5160,10 @@ WorkerPrivate::DoRunLoop(JSContext* aCx)
 
       // If we're supposed to die then we should exit the loop.
       if (currentStatus == Killing) {
+        // Flush uncaught rejections immediately, without
+        // waiting for a next tick.
+        PromiseDebugging::FlushUncaughtRejections();
+
         ShutdownGCTimers();
 
         DisableMemoryReporter();
@@ -5896,11 +5925,10 @@ WorkerPrivate::NotifyFeatures(JSContext* aCx, Status aStatus)
     CancelAllTimeouts(aCx);
   }
 
-  nsAutoTArray<WorkerFeature*, 30> features;
-  features.AppendElements(mFeatures);
-
-  for (uint32_t index = 0; index < features.Length(); index++) {
-    if (!features[index]->Notify(aCx, aStatus)) {
+  nsTObserverArray<WorkerFeature*>::ForwardIterator iter(mFeatures);
+  while (iter.HasMore()) {
+    WorkerFeature* feature = iter.GetNext();
+    if (!feature->Notify(aCx, aStatus)) {
       NS_WARNING("Failed to notify feature!");
     }
   }

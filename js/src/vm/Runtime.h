@@ -31,6 +31,7 @@
 #include "gc/GCRuntime.h"
 #include "gc/Tracer.h"
 #include "irregexp/RegExpStack.h"
+#include "js/Debug.h"
 #include "js/HashTable.h"
 #ifdef DEBUG
 # include "js/Proxy.h" // For AutoEnterPolicy
@@ -520,6 +521,9 @@ class PerThreadData : public PerThreadDataFriendFields
 #ifdef DEBUG
     // Whether this thread is actively Ion compiling.
     bool ionCompiling;
+
+    // Whether this thread is currently sweeping GC things.
+    bool gcSweeping;
 #endif
 
     // Number of active bytecode compilation on this thread.
@@ -566,8 +570,6 @@ class PerThreadData : public PerThreadDataFriendFields
 };
 
 class AutoLockForExclusiveAccess;
-
-struct AutoStopwatch;
 } // namespace js
 
 struct JSRuntime : public JS::shadow::Runtime,
@@ -1356,18 +1358,18 @@ struct JSRuntime : public JS::shadow::Runtime,
     JS_FRIEND_API(void) onTooMuchMalloc();
 
     /*
-     * This should be called after system malloc/realloc returns nullptr to try
-     * to recove some memory or to report an error. Failures in malloc and
-     * calloc are signaled by p == null and p == reinterpret_cast<void*>(1).
-     * Other values of p mean a realloc failure.
+     * This should be called after system malloc/calloc/realloc returns nullptr
+     * to try to recove some memory or to report an error.  For realloc, the
+     * original pointer must be passed as reallocPtr.
      *
      * The function must be called outside the GC lock.
      */
-    JS_FRIEND_API(void*) onOutOfMemory(void* p, size_t nbytes);
-    JS_FRIEND_API(void*) onOutOfMemory(void* p, size_t nbytes, JSContext* cx);
+    JS_FRIEND_API(void*) onOutOfMemory(js::AllocFunction allocator, size_t nbytes,
+                                       void* reallocPtr = nullptr, JSContext* maybecx = nullptr);
 
     /*  onOutOfMemory but can call the largeAllocationFailureCallback. */
-    JS_FRIEND_API(void*) onOutOfMemoryCanGC(void* p, size_t bytes);
+    JS_FRIEND_API(void*) onOutOfMemoryCanGC(js::AllocFunction allocator, size_t nbytes,
+                                            void* reallocPtr = nullptr);
 
     void addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::RuntimeSizes* runtime);
 
@@ -1431,7 +1433,7 @@ struct JSRuntime : public JS::shadow::Runtime,
             reportAllocationOverflow();
             return nullptr;
         }
-        return (T*)onOutOfMemoryCanGC(reinterpret_cast<void*>(1), numElems * sizeof(T));
+        return (T*)onOutOfMemoryCanGC(js::AllocFunction::Calloc, numElems * sizeof(T));
     }
 
     template <typename T>
@@ -1443,7 +1445,7 @@ struct JSRuntime : public JS::shadow::Runtime,
             reportAllocationOverflow();
             return nullptr;
         }
-        return (T*)onOutOfMemoryCanGC(p, newSize * sizeof(T));
+        return (T*)onOutOfMemoryCanGC(js::AllocFunction::Realloc, newSize * sizeof(T), p);
     }
 
     /*

@@ -55,9 +55,6 @@ MOZ_PAY=1
 # Enable UI for healthreporter
 MOZ_SERVICES_HEALTHREPORT=1
 
-# Enable reading list service integration.
-MOZ_ANDROID_READING_LIST_SERVICE=1
-
 # Enable runtime locale switching.
 MOZ_LOCALE_SWITCHER=1
 
@@ -84,6 +81,9 @@ MOZ_ANDROID_MLS_STUMBLER=1
 
 # Enable adding to the system downloads list in pre-release builds.
 MOZ_ANDROID_DOWNLOADS_INTEGRATION=1
+
+# Enable Tab Queue
+MOZ_ANDROID_TAB_QUEUE=1
 
 # Use the low-memory GC tuning.
 export JS_GC_SMALL_CHUNK_SIZE=1

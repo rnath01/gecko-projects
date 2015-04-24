@@ -2488,7 +2488,6 @@ public:
     }
 
     void TraceJS(JSTracer* trc);
-    static void GetTraceName(JSTracer* trc, char* buf, size_t bufsize);
 
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 
@@ -2527,7 +2526,6 @@ public:
 
 public:
     void TraceJS(JSTracer* trc);
-    static void GetTraceName(JSTracer* trc, char* buf, size_t bufsize);
 
     explicit XPCJSObjectHolder(JSObject* obj);
 
@@ -3335,7 +3333,6 @@ public:
     virtual ~XPCTraceableVariant();
 
     void TraceJS(JSTracer* trc);
-    static void GetTraceName(JSTracer* trc, char* buf, size_t bufsize);
 };
 
 /***************************************************************************/
@@ -3441,6 +3438,7 @@ public:
         , addonId(cx)
         , writeToGlobalPrototype(false)
         , sameZoneAs(cx)
+        , freshZone(false)
         , invisibleToDebugger(false)
         , discardSource(false)
         , metadata(cx)
@@ -3456,6 +3454,7 @@ public:
     JS::RootedString addonId;
     bool writeToGlobalPrototype;
     JS::RootedObject sameZoneAs;
+    bool freshZone;
     bool invisibleToDebugger;
     bool discardSource;
     GlobalProperties globalProperties;

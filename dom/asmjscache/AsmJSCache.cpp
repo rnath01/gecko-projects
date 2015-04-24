@@ -759,7 +759,10 @@ MainProcessRunnable::ReadMetadata()
   nsresult rv =
     qm->EnsureOriginIsInitialized(mPersistence, mGroup, mOrigin, mIsApp,
                                   getter_AddRefs(mDirectory));
-  NS_ENSURE_SUCCESS(rv, rv);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    mResult = JS::AsmJSCache_StorageInitFailure;
+    return rv;
+  }
 
   rv = mDirectory->Append(NS_LITERAL_STRING(ASMJSCACHE_DIRECTORY_NAME));
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1001,7 +1004,12 @@ MainProcessRunnable::Run()
     case eFailedToReadMetadata: {
       MOZ_ASSERT(NS_IsMainThread());
 
-      CacheMiss();
+      if (mOpenMode == eOpenForRead) {
+        CacheMiss();
+        return NS_OK;
+      }
+
+      Fail();
       return NS_OK;
     }
 
@@ -1835,18 +1843,6 @@ public:
   ReleaseIOThreadObjects() override
   { }
 
-  virtual bool
-  IsFileServiceUtilized() override
-  {
-    return false;
-  }
-
-  virtual bool
-  IsTransactionServiceActivated() override
-  {
-    return false;
-  }
-
   virtual void
   WaitForStoragesToComplete(nsTArray<nsIOfflineStorage*>& aStorages,
                             nsIRunnable* aCallback) override
@@ -1855,7 +1851,7 @@ public:
   }
 
   virtual void
-  ShutdownTransactionService() override
+  ShutdownWorkThreads() override
   { }
 
 private:

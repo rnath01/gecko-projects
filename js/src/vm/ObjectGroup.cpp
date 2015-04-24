@@ -416,7 +416,7 @@ class ObjectGroupCompartment::NewTableRef : public gc::BufferableRef
 
     void mark(JSTracer* trc) {
         JSObject* prior = proto;
-        trc->setTracingLocation(&*prior);
+        JS::AutoOriginalTraceLocation reloc(trc, &proto);
         TraceManuallyBarrieredEdge(trc, &proto, "newObjectGroups set prototype");
         if (prior == proto)
             return;
@@ -1553,7 +1553,7 @@ ObjectGroupCompartment::checkNewTableAfterMovingGC(NewTable* table)
 
         NewEntry::Lookup lookup(clasp, proto, entry.associated);
         NewTable::Ptr ptr = table->lookup(lookup);
-        MOZ_ASSERT(ptr.found() && &*ptr == &e.front());
+        MOZ_RELEASE_ASSERT(ptr.found() && &*ptr == &e.front());
     }
 }
 

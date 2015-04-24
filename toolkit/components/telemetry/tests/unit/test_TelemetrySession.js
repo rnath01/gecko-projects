@@ -8,11 +8,6 @@
  * checked in the second request.
  */
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-const Cr = Components.results;
-
 Cu.import("resource://testing-common/httpd.js", this);
 Cu.import("resource://services-common/utils.js");
 Cu.import("resource://gre/modules/ClientID.jsm");
@@ -71,9 +66,6 @@ const PREF_SERVER = PREF_BRANCH + "server";
 const PREF_FHR_UPLOAD_ENABLED = "datareporting.healthreport.uploadEnabled";
 const PREF_FHR_SERVICE_ENABLED = "datareporting.healthreport.service.enabled";
 
-const SESSION_RECORDER_EXPECTED = HAS_DATAREPORTINGSERVICE &&
-                                  Preferences.get(PREF_FHR_SERVICE_ENABLED, true);
-
 const DATAREPORTING_DIR = "datareporting";
 const ABORTED_PING_FILE_NAME = "aborted-session-ping";
 const ABORTED_SESSION_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
@@ -88,11 +80,6 @@ let gHttpServer = new HttpServer();
 let gServerStarted = false;
 let gRequestIterator = null;
 let gClientID = null;
-
-XPCOMUtils.defineLazyGetter(this, "gDatareportingService",
-  () => Cc["@mozilla.org/datareporting/service;1"]
-          .getService(Ci.nsISupports)
-          .wrappedJSObject);
 
 function generateUUID() {
   let str = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator).generateUUID().toString();
@@ -181,42 +168,6 @@ function getSavedPingFile(basename) {
   return pingFile;
 }
 
-function decodeRequestPayload(request) {
-  let s = request.bodyInputStream;
-  let payload = null;
-  let decoder = Cc["@mozilla.org/dom/json;1"].createInstance(Ci.nsIJSON)
-
-  if (request.getHeader("content-encoding") == "gzip") {
-    let observer = {
-      buffer: "",
-      onStreamComplete: function(loader, context, status, length, result) {
-        this.buffer = String.fromCharCode.apply(this, result);
-      }
-    };
-
-    let scs = Cc["@mozilla.org/streamConverters;1"]
-              .getService(Ci.nsIStreamConverterService);
-    let listener = Cc["@mozilla.org/network/stream-loader;1"]
-                  .createInstance(Ci.nsIStreamLoader);
-    listener.init(observer);
-    let converter = scs.asyncConvertData("gzip", "uncompressed",
-                                         listener, null);
-    converter.onStartRequest(null, null);
-    converter.onDataAvailable(null, null, s, 0, s.available());
-    converter.onStopRequest(null, null, null);
-    let unicodeConverter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
-                    .createInstance(Ci.nsIScriptableUnicodeConverter);
-    unicodeConverter.charset = "UTF-8";
-    let utf8string = unicodeConverter.ConvertToUnicode(observer.buffer);
-    utf8string += unicodeConverter.Finish();
-    payload = decoder.decode(utf8string);
-  } else {
-    payload = decoder.decodeFromStream(s, s.available());
-  }
-
-  return payload;
-}
-
 function checkPingFormat(aPing, aType, aHasClientId, aHasEnvironment) {
   const MANDATORY_PING_FIELDS = [
     "type", "id", "creationDate", "version", "application", "payload"
@@ -261,15 +212,23 @@ function checkPayloadInfo(data) {
   const ALLOWED_REASONS = [
     "environment-change", "shutdown", "daily", "saved-session", "test-ping"
   ];
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   let numberCheck = arg => { return (typeof arg == "number"); };
   let positiveNumberCheck = arg => { return numberCheck(arg) && (arg >= 0); };
   let stringCheck = arg => { return (typeof arg == "string") && (arg != ""); };
-  let isoDateCheck = arg => { return stringCheck(arg) && !Number.isNaN(Date.parse(arg)); }
   let revisionCheck = arg => {
     return (Services.appinfo.isOfficial) ? stringCheck(arg) : (typeof arg == "string");
   };
-  let uuidCheck = arg => uuidRegex.test(arg);
+  let uuidCheck = arg => {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(arg);
+  };
+  let isoDateCheck = arg => {
+    // We expect use of this version of the ISO format:
+    // 2015-04-12T18:51:19.1+00:00
+    const isoDateRegEx = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+[+-]\d{2}:\d{2}$/;
+    return stringCheck(arg) && !Number.isNaN(Date.parse(arg)) &&
+           isoDateRegEx.test(arg);
+  };
 
   const EXPECTED_INFO_FIELDS_TYPES = {
     reason: stringCheck,
@@ -321,7 +280,7 @@ function checkPayload(payload, reason, successfulPings) {
   Assert.ok(payload.simpleMeasurements.maximalNumberOfConcurrentThreads >= gNumberOfThreadsLaunched);
 
   let activeTicks = payload.simpleMeasurements.activeTicks;
-  Assert.ok(SESSION_RECORDER_EXPECTED ? activeTicks >= 0 : activeTicks == -1);
+  Assert.ok(activeTicks >= 0);
 
   Assert.equal(payload.simpleMeasurements.failedProfileLockCount,
               FAILED_PROFILE_LOCK_ATTEMPTS);
@@ -491,13 +450,6 @@ function run_test() {
   Services.prefs.setBoolPref(PREF_ENABLED, true);
   Services.prefs.setBoolPref(PREF_FHR_UPLOAD_ENABLED, true);
 
-  // Send the needed startup notifications to the datareporting service
-  // to ensure that it has been initialized.
-  if (HAS_DATAREPORTINGSERVICE) {
-    gDatareportingService.observe(null, "app-startup", null);
-    gDatareportingService.observe(null, "profile-after-change", null);
-  }
-
   // Make it look like we've previously failed to lock a profile a couple times.
   write_fake_failedprofilelocks_file();
 
@@ -532,20 +484,6 @@ function run_test() {
 add_task(function* asyncSetup() {
   yield TelemetrySession.setup();
   yield TelemetryPing.setup();
-
-  if (HAS_DATAREPORTINGSERVICE) {
-    // force getSessionRecorder()==undefined to check the payload's activeTicks
-    gDatareportingService.simulateNoSessionRecorder();
-  }
-
-  // When no DRS or no DRS.getSessionRecorder(), activeTicks should be -1.
-  do_check_eq(TelemetrySession.getPayload().simpleMeasurements.activeTicks, -1);
-
-  if (HAS_DATAREPORTINGSERVICE) {
-    // Restore normal behavior for getSessionRecorder()
-    gDatareportingService.simulateRestoreSessionRecorder();
-  }
-
   // Load the client ID from the client ID provider to check for pings sanity.
   gClientID = yield ClientID.getClientID();
 });
@@ -851,14 +789,13 @@ add_task(function* test_checkSubsessionHistograms() {
 });
 
 add_task(function* test_checkSubsessionData() {
-  if (gIsAndroid || !SESSION_RECORDER_EXPECTED) {
-    // We don't support subsessions yet on Android. Also bail out if we
-    // can't use the session recorder.
+  if (gIsAndroid) {
+    // We don't support subsessions yet on Android.
     return;
   }
 
   // Keep track of the active ticks count if the session recorder is available.
-  let sessionRecorder = gDatareportingService.getSessionRecorder();
+  let sessionRecorder = TelemetryPing.getSessionRecorder();
   let activeTicksAtSubsessionStart = sessionRecorder.activeTicks;
   let expectedActiveTicks = activeTicksAtSubsessionStart;
 
@@ -1653,6 +1590,7 @@ add_task(function* test_schedulerUserIdle() {
   // We should not miss midnight when going to idle.
   now.setHours(23);
   now.setMinutes(50);
+  fakeNow(now);
   fakeIdleNotification("idle");
   Assert.equal(schedulerTimeout, 10 * 60 * 1000);
 

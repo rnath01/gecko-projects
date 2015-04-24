@@ -20,7 +20,6 @@
 
 
 struct ChromePackage;
-class nsIDOMBlob;
 class nsIObserver;
 struct ResourceMapping;
 struct OverrideMapping;
@@ -35,10 +34,6 @@ class PFileDescriptorSetChild;
 class URIParams;
 }// namespace ipc
 
-namespace jsipc {
-class JavaScriptShared;
-}
-
 namespace layers {
 class PCompositorChild;
 } // namespace layers
@@ -46,7 +41,6 @@ class PCompositorChild;
 namespace dom {
 
 class AlertObserver;
-class PrefObserver;
 class ConsoleListener;
 class PStorageChild;
 class ClonedMessageData;
@@ -134,11 +128,6 @@ public:
     PProcessHangMonitorChild*
     AllocPProcessHangMonitorChild(Transport* aTransport,
                                   ProcessId aOtherProcess) override;
-
-#if defined(XP_WIN) && defined(MOZ_CONTENT_SANDBOX)
-    // Cleans up any resources used by the process when sandboxed.
-    void CleanUpSandboxEnvironment();
-#endif
 
     virtual bool RecvSetProcessSandbox() override;
 
@@ -243,6 +232,10 @@ public:
                              bool* aSuccess) override;
     virtual bool DeallocPScreenManagerChild(PScreenManagerChild*) override;
 
+    virtual PPSMContentDownloaderChild* AllocPPSMContentDownloaderChild(
+            const uint32_t& aCertType) override;
+    virtual bool DeallocPPSMContentDownloaderChild(PPSMContentDownloaderChild* aDownloader) override;
+
     virtual PExternalHelperAppChild *AllocPExternalHelperAppChild(
             const OptionalURIParams& uri,
             const nsCString& aMimeContentType,
@@ -303,6 +296,10 @@ public:
     virtual bool RecvSetOffline(const bool& offline) override;
 
     virtual bool RecvSpeakerManagerNotify() override;
+
+    virtual bool RecvBidiKeyboardNotify(const bool& isLangRTL) override;
+
+    virtual bool RecvUpdateServiceWorkerRegistrations() override;
 
     virtual bool RecvNotifyVisited(const URIParams& aURI) override;
     // auto remove when alertfinished is received.
@@ -389,6 +386,7 @@ public:
                                        const base::ProcessId& aProcessId) override;
     virtual bool RecvLoadPluginResult(const uint32_t& aPluginId,
                                       const bool& aResult) override;
+    virtual bool RecvUpdateWindow(const uintptr_t& aChildId) override;
 
     virtual bool RecvStartProfiler(const uint32_t& aEntries,
                                    const double& aInterval,
@@ -400,6 +398,11 @@ public:
                                       const OptionalURIParams& aDomain) override;
     virtual bool RecvShutdown() override;
 
+    virtual bool
+    RecvInvokeDragSession(nsTArray<IPCDataTransfer>&& aTransfers,
+                          const uint32_t& aAction) override;
+    virtual bool RecvEndDragSession(const bool& aDoneDrag,
+                                    const bool& aUserCancelled) override;
 #ifdef ANDROID
     gfxIntSize GetScreenSize() { return mScreenSize; }
 #endif
@@ -453,6 +456,13 @@ public:
             const TabId& aTabId) override;
     virtual bool
     DeallocPOfflineCacheUpdateChild(POfflineCacheUpdateChild* offlineCacheUpdate) override;
+
+    virtual PContentPermissionRequestChild*
+    AllocPContentPermissionRequestChild(const InfallibleTArray<PermissionRequest>& aRequests,
+                                        const IPC::Principal& aPrincipal,
+                                        const TabId& aTabId) override;
+    virtual bool
+    DeallocPContentPermissionRequestChild(PContentPermissionRequestChild* actor) override;
 
 private:
     virtual void ActorDestroy(ActorDestroyReason why) override;

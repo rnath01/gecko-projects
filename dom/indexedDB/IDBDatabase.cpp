@@ -50,6 +50,7 @@
 #include "nsThreadUtils.h"
 #include "ProfilerHelpers.h"
 #include "ReportInternalError.h"
+#include "nsQueryObject.h"
 
 // Include this last to avoid path problems on Windows.
 #include "ActorsChild.h"
@@ -1281,6 +1282,26 @@ IDBDatabase::NoteFinishedMutableFile(IDBMutableFile* aMutableFile)
   // is in the list already.
 
   mLiveMutableFiles.RemoveElement(aMutableFile);
+}
+
+void
+IDBDatabase::OnNewFileHandle()
+{
+  MOZ_ASSERT(IndexedDatabaseManager::IsMainProcess());
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(mBackgroundActor);
+
+  mBackgroundActor->SendNewFileHandle();
+}
+
+void
+IDBDatabase::OnFileHandleFinished()
+{
+  MOZ_ASSERT(IndexedDatabaseManager::IsMainProcess());
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(mBackgroundActor);
+
+  mBackgroundActor->SendFileHandleFinished();
 }
 
 void

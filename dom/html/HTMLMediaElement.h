@@ -23,6 +23,7 @@
 #ifdef MOZ_EME
 #include "mozilla/dom/MediaKeys.h"
 #endif
+#include "StateWatching.h"
 #include "nsGkAtoms.h"
 
 // X.h on Linux #defines CurrentTime as 0L, so we have to #undef it here.
@@ -260,7 +261,10 @@ public:
 
   // Update the visual size of the media. Called from the decoder on the
   // main thread when/if the size changes.
-  void UpdateMediaSize(nsIntSize size);
+  void UpdateMediaSize(const nsIntSize& aSize);
+  // Like UpdateMediaSize, but only updates the size if no size has yet
+  // been set.
+  void UpdateInitialMediaSize(const nsIntSize& aSize);
 
   // Returns the CanPlayStatus indicating if we can handle the
   // full MIME type including the optional codecs parameter.
@@ -642,6 +646,18 @@ protected:
   class MediaLoadListener;
   class MediaStreamTracksAvailableCallback;
   class StreamListener;
+  class StreamSizeListener;
+
+  void SetDecoder(MediaDecoder* aDecoder)
+  {
+    if (mDecoder) {
+      mReadyStateUpdater->Unwatch(mDecoder->ReadyStateWatchTarget());
+    }
+    mDecoder = aDecoder;
+    if (mDecoder) {
+      mReadyStateUpdater->Watch(mDecoder->ReadyStateWatchTarget());
+    }
+  }
 
   virtual void GetItemValueText(DOMString& text) override;
   virtual void SetItemValueText(const nsAString& text) override;
@@ -656,7 +672,7 @@ protected:
     void SetOuter(HTMLMediaElement* outer) { mOuter = outer; }
     void SetCanPlay(bool aCanPlay);
 
-    operator bool() const { return mValue; }
+    MOZ_IMPLICIT operator bool() const { return mValue; }
 
     WakeLockBoolWrapper& operator=(bool val);
 
@@ -1009,6 +1025,9 @@ protected:
   // MediaElement doesn't yet have one then it will create it.
   TextTrackManager* GetOrCreateTextTrackManager();
 
+  // Recomputes ready state and fires events as necessary based on current state.
+  void UpdateReadyStateInternal();
+
   class nsAsyncEventRunner;
   using nsGenericHTMLElement::DispatchEvent;
   // For nsAsyncEventRunner.
@@ -1047,8 +1066,12 @@ protected:
   };
   nsTArray<OutputMediaStream> mOutputStreams;
 
-  // Holds a reference to the MediaStreamListener attached to mSrcStream.
-  nsRefPtr<StreamListener> mSrcStreamListener;
+  // Holds a reference to the MediaStreamListener attached to mPlaybackStream
+  // (or mSrcStream if mPlaybackStream is null).
+  nsRefPtr<StreamListener> mMediaStreamListener;
+  // Holds a reference to the size-getting MediaStreamListener attached to
+  // mSrcStream.
+  nsRefPtr<StreamSizeListener> mMediaStreamSizeListener;
 
   // Holds a reference to the MediaSource supplying data for playback.
   nsRefPtr<MediaSource> mMediaSource;
@@ -1082,10 +1105,12 @@ protected:
   // Media loading flags. See:
   //   http://www.whatwg.org/specs/web-apps/current-work/#video)
   nsMediaNetworkState mNetworkState;
-  nsMediaReadyState mReadyState;
+  Watchable<nsMediaReadyState> mReadyState;
+
+  WatcherHolder mReadyStateUpdater;
 
   // Last value passed from codec or stream source to UpdateReadyStateForData.
-  NextFrameStatus mLastNextFrameStatus;
+  Watchable<NextFrameStatus> mNextFrameStatus;
 
   enum LoadAlgorithmState {
     // No load algorithm instance is waiting for a source to be added to the
@@ -1124,13 +1149,6 @@ protected:
   // PRELOAD_UNDEFINED, its value is changed by calling
   // UpdatePreloadAction().
   PreloadAction mPreloadAction;
-
-  // Size of the media. Updated by the decoder on the main thread if
-  // it changes. Defaults to a width and height of -1 if not set.
-  // We keep this separate from the intrinsic size stored in the
-  // VideoFrameContainer so that it doesn't change unexpectedly under us
-  // due to decoder activity.
-  nsIntSize mMediaSize;
 
   // Time that the last timeupdate event was fired. Read/Write from the
   // main thread only.
@@ -1327,7 +1345,7 @@ protected:
 #endif // MOZ_EME
 
   // True if the media's channel's download has been suspended.
-  bool mDownloadSuspendedByCache;
+  Watchable<bool> mDownloadSuspendedByCache;
 
   // Audio Channel.
   AudioChannel mAudioChannel;

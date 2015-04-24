@@ -45,8 +45,6 @@ extern mozilla::TimeStamp sLastTracerEvent;
 extern int sFrameNumber;
 extern int sLastFrameNumber;
 
-class BreakpadSampler;
-
 class TableTicker: public Sampler {
  public:
   TableTicker(double aInterval, int aEntrySize,
@@ -56,7 +54,6 @@ class TableTicker: public Sampler {
     , mPrimaryThreadProfile(nullptr)
     , mBuffer(new ProfileBuffer(aEntrySize))
     , mSaveRequested(false)
-    , mUnwinderThread(false)
 #if defined(XP_WIN)
     , mIntelPowerGadget(nullptr)
 #endif
@@ -70,7 +67,6 @@ class TableTicker: public Sampler {
     // Users sometimes ask to filter by a list of threads but forget to request
     // profiling non main threads. Let's make it implificit if we have a filter
     mProfileThreads = hasFeature(aFeatures, aFeatureCount, "threads") || aFilterCount > 0;
-    mUnwinderThread = hasFeature(aFeatures, aFeatureCount, "unwinder") || sps_version2();
     mAddLeafAddresses = hasFeature(aFeatures, aFeatureCount, "leaf");
     mPrivacyMode = hasFeature(aFeatures, aFeatureCount, "privacy");
     mAddMainThreadIO = hasFeature(aFeatures, aFeatureCount, "mainthreadio");
@@ -201,7 +197,6 @@ class TableTicker: public Sampler {
   void StreamMetaJSCustomObject(JSStreamWriter& b);
   void StreamTaskTracer(JSStreamWriter& b);
   void FlushOnJSShutdown(JSRuntime* aRuntime);
-  bool HasUnwinderThread() const { return mUnwinderThread; }
   bool ProfileJS() const { return mProfileJS; }
   bool ProfileJava() const { return mProfileJava; }
   bool ProfileGPU() const { return mProfileGPU; }
@@ -215,10 +210,9 @@ class TableTicker: public Sampler {
   bool DisplayListDump() const { return mDisplayListDump; }
   bool ProfileRestyle() const { return mProfileRestyle; }
 
-protected:
-  // Called within a signal. This function must be reentrant
-  virtual void UnwinderTick(TickSample* sample);
+  void GetBufferInfo(uint32_t *aCurrentPosition, uint32_t *aTotalSize, uint32_t *aGeneration);
 
+protected:
   // Called within a signal. This function must be reentrant
   virtual void InplaceTick(TickSample* sample);
 
@@ -236,7 +230,6 @@ protected:
   bool mProfileJS;
   bool mProfileGPU;
   bool mProfileThreads;
-  bool mUnwinderThread;
   bool mProfileJava;
   bool mProfilePower;
   bool mLayersDump;

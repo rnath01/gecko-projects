@@ -86,7 +86,7 @@ js::TraceCycleDetectionSet(JSTracer* trc, js::ObjectSet& set)
 {
     for (js::ObjectSet::Enum e(set); !e.empty(); e.popFront()) {
         JSObject* key = e.front();
-        trc->setTracingLocation((void*)&e.front());
+        JS::AutoOriginalTraceLocation reloc(trc, &e.front());
         TraceRoot(trc, &key, "cycle detector table entry");
         if (key != e.front())
             e.rekeyFront(key);
@@ -764,9 +764,9 @@ js::ReportErrorNumberVA(JSContext* cx, unsigned flags, JSErrorCallback callback,
 }
 
 static bool
-ExpandErrorArguments(ExclusiveContext *cx, JSErrorCallback callback,
-                     void *userRef, const unsigned errorNumber,
-                     char **messagep, JSErrorReport *reportp,
+ExpandErrorArguments(ExclusiveContext* cx, JSErrorCallback callback,
+                     void* userRef, const unsigned errorNumber,
+                     char** messagep, JSErrorReport* reportp,
                      ErrorArgumentsType argumentsType, ...)
 {
     va_list ap;

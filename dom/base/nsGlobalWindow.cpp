@@ -120,6 +120,7 @@
 #include "nsIControllerContext.h"
 #include "nsGlobalWindowCommands.h"
 #include "nsAutoPtr.h"
+#include "nsQueryObject.h"
 #include "nsContentUtils.h"
 #include "nsCSSProps.h"
 #include "nsIDOMFileList.h"
@@ -215,6 +216,7 @@
 #include "mozilla/dom/MozSelfSupportBinding.h"
 #include "mozilla/dom/PopStateEvent.h"
 #include "mozilla/dom/PopupBlockedEvent.h"
+#include "mozilla/dom/PrimitiveConversions.h"
 #include "mozilla/dom/WindowBinding.h"
 #include "nsITabChild.h"
 #include "mozilla/dom/MediaQueryList.h"
@@ -500,7 +502,9 @@ public:
 private:
   ~nsGlobalWindowObserver() {}
 
-  nsGlobalWindow* mWindow;
+  // This reference is non-owning and safe because it's cleared by
+  // nsGlobalWindow::CleanUp().
+  nsGlobalWindow* MOZ_NON_OWNING_REF mWindow;
 };
 
 NS_IMPL_ISUPPORTS(nsGlobalWindowObserver, nsIObserver, nsIInterfaceRequestor)
@@ -1142,7 +1146,6 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
 
     mObserver = new nsGlobalWindowObserver(this);
     if (mObserver) {
-      NS_ADDREF(mObserver);
       nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
       if (os) {
         // Watch for online/offline status changes so we can fire events. Use
@@ -1162,8 +1165,6 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
     // remain frozen until they get an inner window, so freeze this
     // outer window here.
     Freeze();
-
-    mObserver = nullptr;
   }
 
   // We could have failed the first time through trying
@@ -1461,7 +1462,6 @@ nsGlobalWindow::CleanUp()
     // Drop its reference to this dying window, in case for some bogus reason
     // the object stays around.
     mObserver->Forget();
-    NS_RELEASE(mObserver);
   }
 
   if (mNavigator) {
@@ -2702,7 +2702,7 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
   if (createdInnerWindow) {
     // AutoEntryScript required to invoke debugger hook, which is a
     // Gecko-specific concept at present.
-    AutoEntryScript aes(newInnerWindow);
+    AutoEntryScript aes(newInnerWindow, "nsGlobalWindow report new global");
     JS::Rooted<JSObject*> global(aes.cx(), newInnerWindow->GetWrapper());
     JS_FireOnNewGlobalObject(aes.cx(), global);
   }
@@ -4047,7 +4047,7 @@ nsGlobalWindow::GetPrompter(nsIPrompt** aPrompt)
   nsCOMPtr<nsIPrompt> prompter(do_GetInterface(mDocShell));
   NS_ENSURE_TRUE(prompter, NS_ERROR_NO_INTERFACE);
 
-  NS_ADDREF(*aPrompt = prompter);
+  prompter.forget(aPrompt);
   return NS_OK;
 }
 
@@ -4541,18 +4541,7 @@ nsGlobalWindow::SetOpener(JSContext* aCx, JS::Handle<JS::Value> aOpener,
   // get reset on navigation.  This is just like replaceable properties, but
   // we're not quite readonly.
   if (!aOpener.isNull() && !nsContentUtils::IsCallerChrome()) {
-    JS::Rooted<JSObject*> thisObj(aCx, GetWrapperPreserveColor());
-    if (!thisObj) {
-      aError.Throw(NS_ERROR_UNEXPECTED);
-      return;
-    }
-
-    if (!JS_WrapObject(aCx, &thisObj) ||
-        !JS_DefineProperty(aCx, thisObj, "opener", aOpener, JSPROP_ENUMERATE,
-                           JS_STUBGETTER, JS_STUBSETTER)) {
-      aError.Throw(NS_ERROR_FAILURE);
-    }
-
+    RedefineProperty(aCx, "opener", aOpener, aError);
     return;
   }
 
@@ -4804,6 +4793,15 @@ nsGlobalWindow::GetInnerWidth(ErrorResult& aError)
   return size.width;
 }
 
+void
+nsGlobalWindow::GetInnerWidth(JSContext* aCx,
+                              JS::MutableHandle<JS::Value> aValue,
+                              ErrorResult& aError)
+{
+  GetReplaceableWindowCoord(aCx, &nsGlobalWindow::GetInnerWidth, aValue,
+                            aError);
+}
+
 NS_IMETHODIMP
 nsGlobalWindow::GetInnerWidth(int32_t* aInnerWidth)
 {
@@ -4820,14 +4818,6 @@ nsGlobalWindow::SetInnerWidth(int32_t aInnerWidth, ErrorResult& aError)
 
   if (!mDocShell) {
     aError.Throw(NS_ERROR_UNEXPECTED);
-    return;
-  }
-
-  /*
-   * If caller is not chrome and the user has not explicitly exempted the site,
-   * prevent setting window.innerWidth by exiting early
-   */
-  if (!CanMoveResizeWindows() || IsFrame()) {
     return;
   }
 
@@ -4857,9 +4847,21 @@ nsGlobalWindow::SetInnerWidth(int32_t aInnerWidth, ErrorResult& aError)
   aError = SetDocShellWidthAndHeight(CSSToDevIntPixels(aInnerWidth), height);
 }
 
+void
+nsGlobalWindow::SetInnerWidth(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                              ErrorResult& aError)
+{
+  SetReplaceableWindowCoord(aCx, &nsGlobalWindow::SetInnerWidth,
+                            aValue, "innerWidth", aError);
+}
+
 NS_IMETHODIMP
 nsGlobalWindow::SetInnerWidth(int32_t aInnerWidth)
 {
+  if (IsFrame()) {
+    return NS_OK;
+  }
+
   ErrorResult rv;
   SetInnerWidth(aInnerWidth, rv);
 
@@ -4874,6 +4876,15 @@ nsGlobalWindow::GetInnerHeight(ErrorResult& aError)
   CSSIntSize size;
   aError = GetInnerSize(size);
   return size.height;
+}
+
+void
+nsGlobalWindow::GetInnerHeight(JSContext* aCx,
+                              JS::MutableHandle<JS::Value> aValue,
+                              ErrorResult& aError)
+{
+  GetReplaceableWindowCoord(aCx, &nsGlobalWindow::GetInnerHeight, aValue,
+                            aError);
 }
 
 NS_IMETHODIMP
@@ -4892,14 +4903,6 @@ nsGlobalWindow::SetInnerHeight(int32_t aInnerHeight, ErrorResult& aError)
 
   if (!mDocShell) {
     aError.Throw(NS_ERROR_UNEXPECTED);
-    return;
-  }
-
-  /*
-   * If caller is not chrome and the user has not explicitly exempted the site,
-   * prevent setting window.innerHeight by exiting early
-   */
-  if (!CanMoveResizeWindows() || IsFrame()) {
     return;
   }
 
@@ -4928,9 +4931,21 @@ nsGlobalWindow::SetInnerHeight(int32_t aInnerHeight, ErrorResult& aError)
   aError = SetDocShellWidthAndHeight(width, CSSToDevIntPixels(aInnerHeight));
 }
 
+void
+nsGlobalWindow::SetInnerHeight(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                               ErrorResult& aError)
+{
+  SetReplaceableWindowCoord(aCx, &nsGlobalWindow::SetInnerHeight,
+                            aValue, "innerHeight", aError);
+}
+
 NS_IMETHODIMP
 nsGlobalWindow::SetInnerHeight(int32_t aInnerHeight)
 {
+  if (IsFrame()) {
+    return NS_OK;
+  }
+
   ErrorResult rv;
   SetInnerHeight(aInnerHeight, rv);
 
@@ -4970,6 +4985,15 @@ nsGlobalWindow::GetOuterWidth(ErrorResult& aError)
   return GetOuterSize(aError).width;
 }
 
+void
+nsGlobalWindow::GetOuterWidth(JSContext* aCx,
+                              JS::MutableHandle<JS::Value> aValue,
+                              ErrorResult& aError)
+{
+  GetReplaceableWindowCoord(aCx, &nsGlobalWindow::GetOuterWidth, aValue,
+                            aError);
+}
+
 NS_IMETHODIMP
 nsGlobalWindow::GetOuterWidth(int32_t* aOuterWidth)
 {
@@ -4986,6 +5010,15 @@ nsGlobalWindow::GetOuterHeight(ErrorResult& aError)
   return GetOuterSize(aError).height;
 }
 
+void
+nsGlobalWindow::GetOuterHeight(JSContext* aCx,
+                               JS::MutableHandle<JS::Value> aValue,
+                               ErrorResult& aError)
+{
+  GetReplaceableWindowCoord(aCx, &nsGlobalWindow::GetOuterHeight, aValue,
+                            aError);
+}
+
 NS_IMETHODIMP
 nsGlobalWindow::GetOuterHeight(int32_t* aOuterHeight)
 {
@@ -5000,15 +5033,6 @@ nsGlobalWindow::SetOuterSize(int32_t aLengthCSSPixels, bool aIsWidth,
                              ErrorResult& aError)
 {
   MOZ_ASSERT(IsOuterWindow());
-
-  /*
-   * If caller is not chrome and the user has not explicitly exempted the site,
-   * prevent setting window.outerWidth by exiting early
-   */
-
-  if (!CanMoveResizeWindows() || IsFrame()) {
-    return;
-  }
 
   nsCOMPtr<nsIBaseWindow> treeOwnerAsWin = GetTreeOwnerWindow();
   if (!treeOwnerAsWin) {
@@ -5042,9 +5066,21 @@ nsGlobalWindow::SetOuterWidth(int32_t aOuterWidth, ErrorResult& aError)
   SetOuterSize(aOuterWidth, true, aError);
 }
 
+void
+nsGlobalWindow::SetOuterWidth(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                              ErrorResult& aError)
+{
+  SetReplaceableWindowCoord(aCx, &nsGlobalWindow::SetOuterWidth,
+                            aValue, "outerWidth", aError);
+}
+
 NS_IMETHODIMP
 nsGlobalWindow::SetOuterWidth(int32_t aOuterWidth)
 {
+  if (IsFrame()) {
+    return NS_OK;
+  }
+
   ErrorResult rv;
   SetOuterWidth(aOuterWidth, rv);
 
@@ -5059,9 +5095,21 @@ nsGlobalWindow::SetOuterHeight(int32_t aOuterHeight, ErrorResult& aError)
   SetOuterSize(aOuterHeight, false, aError);
 }
 
+void
+nsGlobalWindow::SetOuterHeight(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                               ErrorResult& aError)
+{
+  SetReplaceableWindowCoord(aCx, &nsGlobalWindow::SetOuterHeight,
+                            aValue, "outerHeight", aError);
+}
+
 NS_IMETHODIMP
 nsGlobalWindow::SetOuterHeight(int32_t aOuterHeight)
 {
+  if (IsFrame()) {
+    return NS_OK;
+  }
+
   ErrorResult rv;
   SetOuterHeight(aOuterHeight, rv);
 
@@ -5090,6 +5138,15 @@ nsGlobalWindow::GetScreenX(ErrorResult& aError)
   FORWARD_TO_OUTER_OR_THROW(GetScreenX, (aError), aError, 0);
 
   return DevToCSSIntPixels(GetScreenXY(aError).x);
+}
+
+void
+nsGlobalWindow::GetScreenX(JSContext* aCx,
+                           JS::MutableHandle<JS::Value> aValue,
+                           ErrorResult& aError)
+{
+  GetReplaceableWindowCoord(aCx, &nsGlobalWindow::GetScreenX, aValue,
+                            aError);
 }
 
 NS_IMETHODIMP
@@ -5384,15 +5441,6 @@ nsGlobalWindow::SetScreenX(int32_t aScreenX, ErrorResult& aError)
 {
   FORWARD_TO_OUTER_OR_THROW(SetScreenX, (aScreenX, aError), aError, );
 
-  /*
-   * If caller is not chrome and the user has not explicitly exempted the site,
-   * prevent setting window.screenX by exiting early
-   */
-
-  if (!CanMoveResizeWindows() || IsFrame()) {
-    return;
-  }
-
   nsCOMPtr<nsIBaseWindow> treeOwnerAsWin = GetTreeOwnerWindow();
   if (!treeOwnerAsWin) {
     aError.Throw(NS_ERROR_FAILURE);
@@ -5411,9 +5459,21 @@ nsGlobalWindow::SetScreenX(int32_t aScreenX, ErrorResult& aError)
   aError = treeOwnerAsWin->SetPosition(x, y);
 }
 
+void
+nsGlobalWindow::SetScreenX(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                           ErrorResult& aError)
+{
+  SetReplaceableWindowCoord(aCx, &nsGlobalWindow::SetScreenX,
+                            aValue, "screenX", aError);
+}
+
 NS_IMETHODIMP
 nsGlobalWindow::SetScreenX(int32_t aScreenX)
 {
+  if (IsFrame()) {
+    return NS_OK;
+  }
+
   ErrorResult rv;
   SetScreenX(aScreenX, rv);
 
@@ -5438,18 +5498,18 @@ nsGlobalWindow::GetScreenY(int32_t* aScreenY)
 }
 
 void
+nsGlobalWindow::GetScreenY(JSContext* aCx,
+                           JS::MutableHandle<JS::Value> aValue,
+                           ErrorResult& aError)
+{
+  GetReplaceableWindowCoord(aCx, &nsGlobalWindow::GetScreenY, aValue,
+                            aError);
+}
+
+void
 nsGlobalWindow::SetScreenY(int32_t aScreenY, ErrorResult& aError)
 {
   FORWARD_TO_OUTER_OR_THROW(SetScreenY, (aScreenY, aError), aError, );
-
-  /*
-   * If caller is not chrome and the user has not explicitly exempted the site,
-   * prevent setting window.screenY by exiting early
-   */
-
-  if (!CanMoveResizeWindows() || IsFrame()) {
-    return;
-  }
 
   nsCOMPtr<nsIBaseWindow> treeOwnerAsWin = GetTreeOwnerWindow();
   if (!treeOwnerAsWin) {
@@ -5469,9 +5529,21 @@ nsGlobalWindow::SetScreenY(int32_t aScreenY, ErrorResult& aError)
   aError = treeOwnerAsWin->SetPosition(x, y);
 }
 
+void
+nsGlobalWindow::SetScreenY(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                           ErrorResult& aError)
+{
+  SetReplaceableWindowCoord(aCx, &nsGlobalWindow::SetScreenY,
+                            aValue, "screenY", aError);
+}
+
 NS_IMETHODIMP
 nsGlobalWindow::SetScreenY(int32_t aScreenY)
 {
+  if (IsFrame()) {
+    return NS_OK;
+  }
+
   ErrorResult rv;
   SetScreenY(aScreenY, rv);
 
@@ -8812,8 +8884,8 @@ nsGlobalWindow::IsInModalState()
   nsGlobalWindow *topWin = GetScriptableTop();
 
   if (!topWin) {
-    NS_ERROR("Uh, IsInModalState() called w/o a reachable top window?");
-
+    // IsInModalState() getting called w/o a reachable top window is a bit
+    // iffy, but valid enough not to make noise about it.  See bug 404828
     return false;
   }
 
@@ -12250,6 +12322,13 @@ nsGlobalWindow::RunTimeoutHandler(nsTimeout* aTimeout,
     sNestingLevel = timeout->mNestingLevel;
   }
 
+  const char *reason;
+  if (timeout->mIsInterval) {
+    reason = "setInterval handler";
+  } else {
+    reason = "setTimeout handler";
+  }
+
   nsCOMPtr<nsIScriptTimeoutHandler> handler(timeout->mScriptHandler);
   nsRefPtr<Function> callback = handler->GetCallback();
   if (!callback) {
@@ -12262,8 +12341,8 @@ nsGlobalWindow::RunTimeoutHandler(nsTimeout* aTimeout,
     handler->GetLocation(&filename, &lineNo);
 
     // New script entry point required, due to the "Create a script" sub-step of
-    // http://www.whatwg.org/specs/web-apps/current-work/#timer-initialization-steps
-    AutoEntryScript entryScript(this, true, aScx->GetNativeContext());
+    // http://www.whatwg.org/specs/web-apps/current-work/#timer-initialisation-steps
+    AutoEntryScript entryScript(this, reason, true, aScx->GetNativeContext());
     JS::CompileOptions options(entryScript.cx());
     options.setFileAndLine(filename, lineNo)
            .setVersion(JSVERSION_DEFAULT);
@@ -12275,7 +12354,7 @@ nsGlobalWindow::RunTimeoutHandler(nsTimeout* aTimeout,
     nsCOMPtr<nsISupports> me(static_cast<nsIDOMWindow *>(this));
     ErrorResult ignored;
     JS::Rooted<JS::Value> ignoredVal(CycleCollectedJSRuntime::Get()->Runtime());
-    callback->Call(me, handler->GetArgs(), &ignoredVal, ignored);
+    callback->Call(me, handler->GetArgs(), &ignoredVal, ignored, reason);
   }
 
   // We ignore any failures from calling EvaluateString() on the context or
@@ -12984,7 +13063,8 @@ nsGlobalWindow::SuspendTimeouts(uint32_t aIncrease,
 
     // Suspend all of the AudioContexts for this window
     for (uint32_t i = 0; i < mAudioContexts.Length(); ++i) {
-      mAudioContexts[i]->Suspend();
+      ErrorResult dummy;
+      nsRefPtr<Promise> d = mAudioContexts[i]->Suspend(dummy);
     }
   }
 
@@ -13044,7 +13124,8 @@ nsGlobalWindow::ResumeTimeouts(bool aThawChildren)
 
     // Resume all of the AudioContexts for this window
     for (uint32_t i = 0; i < mAudioContexts.Length(); ++i) {
-      mAudioContexts[i]->Resume();
+      ErrorResult dummy;
+      nsRefPtr<Promise> d = mAudioContexts[i]->Resume(dummy);
     }
 
     // Thaw all of the workers for this window.
@@ -13594,6 +13675,14 @@ nsGlobalWindow::BeginWindowMove(Event& aMouseDownEvent, Element* aPanel,
   aError = widget->BeginMoveDrag(mouseEvent);
 }
 
+already_AddRefed<nsWindowRoot>
+nsGlobalWindow::GetWindowRoot(mozilla::ErrorResult& aError)
+{
+  FORWARD_TO_OUTER_OR_THROW(GetWindowRoot, (aError), aError, nullptr);
+  nsCOMPtr<nsPIWindowRoot> root = GetTopWindowRoot();
+  return root.forget().downcast<nsWindowRoot>();
+}
+
 //Note: This call will lock the cursor, it will not change as it moves.
 //To unlock, the cursor must be set back to CURSOR_AUTO.
 NS_IMETHODIMP
@@ -13974,18 +14063,9 @@ nsGlobalWindow::GetConsole(JSContext* aCx,
 NS_IMETHODIMP
 nsGlobalWindow::SetConsole(JSContext* aCx, JS::Handle<JS::Value> aValue)
 {
-  JS::Rooted<JSObject*> thisObj(aCx, GetWrapper());
-  if (!thisObj) {
-    return NS_ERROR_UNEXPECTED;
-  }
-
-  if (!JS_WrapObject(aCx, &thisObj) ||
-      !JS_DefineProperty(aCx, thisObj, "console", aValue, JSPROP_ENUMERATE,
-                         JS_STUBGETTER, JS_STUBSETTER)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  return NS_OK;
+  ErrorResult rv;
+  RedefineProperty(aCx, "console", aValue, rv);
+  return rv.ErrorCode();
 }
 
 Console*
@@ -14144,6 +14224,63 @@ nsGlobalWindow::DisableNetworkEvent(uint32_t aType)
   }
 }
 #endif // MOZ_B2G
+
+void
+nsGlobalWindow::RedefineProperty(JSContext* aCx, const char* aPropName,
+                                 JS::Handle<JS::Value> aValue,
+                                 ErrorResult& aError)
+{
+  JS::Rooted<JSObject*> thisObj(aCx, GetWrapperPreserveColor());
+  if (!thisObj) {
+    aError.Throw(NS_ERROR_UNEXPECTED);
+    return;
+  }
+
+  if (!JS_WrapObject(aCx, &thisObj) ||
+      !JS_DefineProperty(aCx, thisObj, aPropName, aValue, JSPROP_ENUMERATE,
+                         JS_STUBGETTER, JS_STUBSETTER)) {
+    aError.Throw(NS_ERROR_FAILURE);
+  }
+}
+
+void
+nsGlobalWindow::GetReplaceableWindowCoord(JSContext* aCx,
+                                          nsGlobalWindow::WindowCoordGetter aGetter,
+                                          JS::MutableHandle<JS::Value> aRetval,
+                                          ErrorResult& aError)
+{
+  int32_t coord = (this->*aGetter)(aError);
+  if (!aError.Failed() &&
+      !ToJSValue(aCx, coord, aRetval)) {
+    aError.Throw(NS_ERROR_FAILURE);
+  }
+}
+
+void
+nsGlobalWindow::SetReplaceableWindowCoord(JSContext* aCx,
+                                          nsGlobalWindow::WindowCoordSetter aSetter,
+                                          JS::Handle<JS::Value> aValue,
+                                          const char* aPropName,
+                                          ErrorResult& aError)
+{
+  /*
+   * If caller is not chrome and the user has not explicitly exempted the site,
+   * just treat this the way we would an IDL replaceable property.
+   */
+  nsGlobalWindow* outer = GetOuterWindowInternal();
+  if (!outer || !outer->CanMoveResizeWindows() || outer->IsFrame()) {
+    RedefineProperty(aCx, aPropName, aValue, aError);
+    return;
+  }
+
+  int32_t value;
+  if (!ValueToPrimitive<int32_t, eDefault>(aCx, aValue, &value)) {
+    aError.Throw(NS_ERROR_UNEXPECTED);
+    return;
+  }
+
+  (this->*aSetter)(value, aError);
+}
 
 #ifdef _WINDOWS_
 #error "Never include windows.h in this file!"

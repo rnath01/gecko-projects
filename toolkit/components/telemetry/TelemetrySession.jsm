@@ -39,7 +39,6 @@ const RETENTION_DAYS = 14;
 const REASON_ABORTED_SESSION = "aborted-session";
 const REASON_DAILY = "daily";
 const REASON_SAVED_SESSION = "saved-session";
-const REASON_IDLE_DAILY = "idle-daily";
 const REASON_GATHER_PAYLOAD = "gather-payload";
 const REASON_TEST_PING = "test-ping";
 const REASON_ENVIRONMENT_CHANGE = "environment-change";
@@ -58,10 +57,7 @@ const LOGGER_NAME = "Toolkit.Telemetry";
 const LOGGER_PREFIX = "TelemetrySession::";
 
 const PREF_BRANCH = "toolkit.telemetry.";
-const PREF_SERVER = PREF_BRANCH + "server";
-const PREF_ENABLED = PREF_BRANCH + "enabled";
 const PREF_PREVIOUS_BUILDID = PREF_BRANCH + "previousBuildID";
-const PREF_CACHED_CLIENTID = PREF_BRANCH + "cachedClientID"
 const PREF_FHR_UPLOAD_ENABLED = "datareporting.healthreport.uploadEnabled";
 const PREF_ASYNC_PLUGIN_INIT = "dom.ipc.plugins.asyncInit";
 
@@ -98,7 +94,7 @@ const SCHEDULER_COALESCE_THRESHOLD_MS = 2 * 60 * 1000;
 
 // Seconds of idle time before pinging.
 // On idle-daily a gather-telemetry notification is fired, during it probes can
-// start asynchronous tasks to gather data.  On the next idle the data is sent.
+// start asynchronous tasks to gather data.
 const IDLE_TIMEOUT_SECONDS = 5 * 60;
 
 // The frequency at which we persist session data to the disk to prevent data loss
@@ -253,7 +249,8 @@ function toLocalTimeISOString(date) {
   }
 
   let sign = (n) => n >= 0 ? "+" : "-";
-  let tzOffset = date.getTimezoneOffset();
+  // getTimezoneOffset counter-intuitively returns -60 for UTC+1.
+  let tzOffset = - date.getTimezoneOffset();
 
   // YYYY-MM-DDThh:mm:ss.sTZD (eg 1997-07-16T19:20:30.45+01:00)
   return    padNumber(date.getFullYear(), 4)
@@ -261,10 +258,10 @@ function toLocalTimeISOString(date) {
     + "-" + padNumber(date.getDate(), 2)
     + "T" + padNumber(date.getHours(), 2)
     + ":" + padNumber(date.getMinutes(), 2)
-    + ":" + padNumber(date.getSeconds(), 2);
+    + ":" + padNumber(date.getSeconds(), 2)
     + "." + date.getMilliseconds()
-    + sign(tzOffset) + Math.abs(Math.floor(tzOffset / 60))
-    + ":" + Math.abs(tzOffset % 60);
+    + sign(tzOffset) + padNumber(Math.floor(Math.abs(tzOffset / 60)), 2)
+    + ":" + padNumber(Math.abs(tzOffset % 60), 2);
 }
 
 /**
@@ -723,8 +720,6 @@ this.EXPORTED_SYMBOLS = ["TelemetrySession"];
 
 this.TelemetrySession = Object.freeze({
   Constants: Object.freeze({
-    PREF_ENABLED: PREF_ENABLED,
-    PREF_SERVER: PREF_SERVER,
     PREF_PREVIOUS_BUILDID: PREF_PREVIOUS_BUILDID,
   }),
   /**
@@ -972,24 +967,18 @@ let Impl = {
     }
 
     ret.activeTicks = -1;
-    if ("@mozilla.org/datareporting/service;1" in Cc) {
-      let drs = Cc["@mozilla.org/datareporting/service;1"]
-                  .getService(Ci.nsISupports)
-                  .wrappedJSObject;
-
-      let sr = drs.getSessionRecorder();
-      if (sr) {
-        let activeTicks = sr.activeTicks;
-        if (isSubsession) {
-          activeTicks = sr.activeTicks - this._subsessionStartActiveTicks;
-        }
-
-        if (clearSubsession) {
-          this._subsessionStartActiveTicks = activeTicks;
-        }
-
-        ret.activeTicks = activeTicks;
+    let sr = TelemetryPing.getSessionRecorder();
+    if (sr) {
+      let activeTicks = sr.activeTicks;
+      if (isSubsession) {
+        activeTicks = sr.activeTicks - this._subsessionStartActiveTicks;
       }
+
+      if (clearSubsession) {
+        this._subsessionStartActiveTicks = activeTicks;
+      }
+
+      ret.activeTicks = activeTicks;
     }
 
     ret.pingsOverdue = TelemetryFile.pingsOverdue;
@@ -1469,35 +1458,10 @@ let Impl = {
       return;
     Services.obs.removeObserver(this, "idle-daily");
     Services.obs.removeObserver(this, "cycle-collector-begin");
-    if (this._isIdleObserver) {
-      idleService.removeIdleObserver(this, IDLE_TIMEOUT_SECONDS);
-      this._isIdleObserver = false;
-    }
   },
 
   /**
-   * Perform telemetry initialization for either chrome or content process.
-   */
-  enableTelemetryRecording: function enableTelemetryRecording(testing) {
-
-#ifdef MOZILLA_OFFICIAL
-    if (!Telemetry.isOfficialTelemetry && !testing) {
-      this._log.config("enableTelemetryRecording - Can't send data, disabling Telemetry recording.");
-      return false;
-    }
-#endif
-
-    let enabled = Preferences.get(PREF_ENABLED, false);
-    if (!enabled) {
-      this._log.config("enableTelemetryRecording - Telemetry is disabled, turning off Telemetry recording.");
-      return false;
-    }
-
-    return true;
-  },
-
-  /**
-   * Initializes telemetry within a timer. If there is no PREF_SERVER set, don't turn on telemetry.
+   * Initializes telemetry within a timer.
    */
   setupChromeProcess: function setupChromeProcess(testing) {
     this._initStarted = true;
@@ -1539,7 +1503,7 @@ let Impl = {
       Preferences.set(PREF_PREVIOUS_BUILDID, thisBuildID);
     }
 
-    if (!this.enableTelemetryRecording(testing)) {
+    if (!Telemetry.canRecordBase && !testing) {
       this._log.config("setupChromeProcess - Telemetry recording is disabled, skipping Chrome process setup.");
       return Promise.resolve();
     }
@@ -1613,7 +1577,7 @@ let Impl = {
   setupContentProcess: function setupContentProcess() {
     this._log.trace("setupContentProcess");
 
-    if (!this.enableTelemetryRecording()) {
+    if (!Telemetry.canRecordBase) {
       return;
     }
 
@@ -1710,7 +1674,7 @@ let Impl = {
     let shutdownPayload = this.getSessionPayload(REASON_SHUTDOWN, false);
     // Make sure we try to save the pending pings, even though we failed saving the shutdown
     // ping.
-    return TelemetryPing.savePing(getPingType(shutdownPayload), shutdownPayload, options)
+    return TelemetryPing.addPendingPing(getPingType(shutdownPayload), shutdownPayload, options)
                         .then(() => this.savePendingPingsClassic(),
                               () => this.savePendingPingsClassic());
 #else
@@ -1740,9 +1704,8 @@ let Impl = {
       addClientId: true,
       addEnvironment: true,
       overwrite: true,
-      filePath: file.path,
     };
-    return TelemetryPing.savePing(getPingType(payload), payload, options);
+    return TelemetryPing.savePing(getPingType(payload), payload, file.path, options);
   },
 
   /**
@@ -1796,21 +1759,8 @@ let Impl = {
     this._addons = aAddOns;
   },
 
-  sendIdlePing: function sendIdlePing(aTest) {
-    this._log.trace("sendIdlePing");
-    if (this._isIdleObserver) {
-      idleService.removeIdleObserver(this, IDLE_TIMEOUT_SECONDS);
-      this._isIdleObserver = false;
-    }
-    if (aTest) {
-      return this.send(REASON_TEST_PING);
-    } else if (Telemetry.isOfficialTelemetry) {
-      return this.send(REASON_IDLE_DAILY);
-    }
-  },
-
   testPing: function testPing() {
-    return this.sendIdlePing(true);
+    return this.send(REASON_TEST_PING);
   },
 
   /**
@@ -1864,19 +1814,18 @@ let Impl = {
       gWasDebuggerAttached = debugService.isDebuggerAttached;
       this.gatherStartup();
       break;
-    case REASON_IDLE_DAILY:
+    case "idle-daily":
       // Enqueue to main-thread, otherwise components may be inited by the
       // idle-daily category and miss the gather-telemetry notification.
       Services.tm.mainThread.dispatch((function() {
-        // Notify that data should be gathered now, since ping will happen soon.
+        // Notify that data should be gathered now.
+        // TODO: We are keeping this behaviour for now but it will be removed as soon as
+        // bug 1127907 lands.
         Services.obs.notifyObservers(null, "gather-telemetry", null);
-        // The ping happens at the first idle of length IDLE_TIMEOUT_SECONDS.
-        idleService.addIdleObserver(this, IDLE_TIMEOUT_SECONDS);
-        this._isIdleObserver = true;
       }).bind(this), Ci.nsIThread.DISPATCH_NORMAL);
-      break;
-    case "idle":
-      this.sendIdlePing(false, this._server);
+      // TODO: This is just a fallback for now. Remove this when we have ping send
+      // scheduling properly factored out and driven independently of this module.
+      TelemetryPing.sendPersistedPings();
       break;
 
 #ifdef MOZ_WIDGET_ANDROID
@@ -1904,7 +1853,7 @@ let Impl = {
           addEnvironment: true,
           overwrite: true,
         };
-        TelemetryPing.savePing(getPingType(payload), payload, options);
+        TelemetryPing.addPendingPing(getPingType(payload), payload, options);
       }
       break;
 #endif
@@ -2068,7 +2017,6 @@ let Impl = {
   _isClassicReason: function(reason) {
     const classicReasons = [
       REASON_SAVED_SESSION,
-      REASON_IDLE_DAILY,
       REASON_GATHER_PAYLOAD,
       REASON_TEST_PING,
     ];
@@ -2123,7 +2071,7 @@ let Impl = {
     if (abortedExists) {
       this._log.trace("_checkAbortedSessionPing - aborted session found: " + FILE_PATH);
       yield this._abortedSessionSerializer.enqueueTask(
-        () => TelemetryPing.addPendingPing(FILE_PATH, true));
+        () => TelemetryPing.addPendingPingFromFile(FILE_PATH, true));
     }
   }),
 
@@ -2152,9 +2100,8 @@ let Impl = {
       addClientId: true,
       addEnvironment: true,
       overwrite: true,
-      filePath: FILE_PATH,
     };
     return this._abortedSessionSerializer.enqueueTask(() =>
-      TelemetryPing.savePing(getPingType(payload), payload, options));
+      TelemetryPing.savePing(getPingType(payload), payload, FILE_PATH, options));
   },
 };

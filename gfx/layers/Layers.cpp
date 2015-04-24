@@ -14,13 +14,14 @@
 #include "LayerSorter.h"                // for SortLayersBy3DZOrder
 #include "LayersLogging.h"              // for AppendToString
 #include "ReadbackLayer.h"              // for ReadbackLayer
+#include "UnitTransforms.h"             // for ViewAs
 #include "gfxPlatform.h"                // for gfxPlatform
 #include "gfxPrefs.h"
 #include "gfxUtils.h"                   // for gfxUtils, etc
 #include "gfx2DGlue.h"
 #include "mozilla/DebugOnly.h"          // for DebugOnly
 #include "mozilla/Telemetry.h"          // for Accumulate
-#include "mozilla/dom/AnimationPlayer.h" // for ComputedTimingFunction
+#include "mozilla/dom/Animation.h"      // for ComputedTimingFunction
 #include "mozilla/gfx/2D.h"             // for DrawTarget
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
 #include "mozilla/gfx/Matrix.h"         // for Matrix4x4
@@ -201,13 +202,13 @@ Layer::Layer(LayerManager* aManager, void* aImplData) :
   mMixBlendMode(CompositionOp::OP_OVER),
   mForceIsolatedGroup(false),
   mContentFlags(0),
-  mUseClipRect(false),
   mUseTileSourceRect(false),
   mIsFixedPosition(false),
   mMargins(0, 0, 0, 0),
   mStickyPositionData(nullptr),
   mScrollbarTargetId(FrameMetrics::NULL_SCROLL_ID),
   mScrollbarDirection(ScrollDirection::NONE),
+  mScrollbarThumbRatio(0.0f),
   mIsScrollbarContainer(false),
   mDebugColorIndex(0),
   mAnimationGeneration(0)
@@ -266,6 +267,12 @@ Layer::ClearAnimationsForNextTransaction()
   mPendingAnimations->Clear();
 }
 
+static inline void
+SetCSSAngle(const CSSAngle& aAngle, nsCSSValue& aValue)
+{
+  aValue.SetFloatValue(aAngle.value(), nsCSSUnit(aAngle.unit()));
+}
+
 static nsCSSValueSharedList*
 CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
 {
@@ -276,34 +283,34 @@ CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
     switch (aFunctions[i].type()) {
       case TransformFunction::TRotationX:
       {
-        float theta = aFunctions[i].get_RotationX().radians();
+        const CSSAngle& angle = aFunctions[i].get_RotationX().angle();
         arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotatex,
                                                            resultTail);
-        arr->Item(1).SetFloatValue(theta, eCSSUnit_Radian);
+        SetCSSAngle(angle, arr->Item(1));
         break;
       }
       case TransformFunction::TRotationY:
       {
-        float theta = aFunctions[i].get_RotationY().radians();
+        const CSSAngle& angle = aFunctions[i].get_RotationY().angle();
         arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotatey,
                                                            resultTail);
-        arr->Item(1).SetFloatValue(theta, eCSSUnit_Radian);
+        SetCSSAngle(angle, arr->Item(1));
         break;
       }
       case TransformFunction::TRotationZ:
       {
-        float theta = aFunctions[i].get_RotationZ().radians();
+        const CSSAngle& angle = aFunctions[i].get_RotationZ().angle();
         arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotatez,
                                                            resultTail);
-        arr->Item(1).SetFloatValue(theta, eCSSUnit_Radian);
+        SetCSSAngle(angle, arr->Item(1));
         break;
       }
       case TransformFunction::TRotation:
       {
-        float theta = aFunctions[i].get_Rotation().radians();
+        const CSSAngle& angle = aFunctions[i].get_Rotation().angle();
         arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotate,
                                                            resultTail);
-        arr->Item(1).SetFloatValue(theta, eCSSUnit_Radian);
+        SetCSSAngle(angle, arr->Item(1));
         break;
       }
       case TransformFunction::TRotation3D:
@@ -311,14 +318,14 @@ CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
         float x = aFunctions[i].get_Rotation3D().x();
         float y = aFunctions[i].get_Rotation3D().y();
         float z = aFunctions[i].get_Rotation3D().z();
-        float theta = aFunctions[i].get_Rotation3D().radians();
+        const CSSAngle& angle = aFunctions[i].get_Rotation3D().angle();
         arr =
           StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotate3d,
                                                        resultTail);
         arr->Item(1).SetFloatValue(x, eCSSUnit_Number);
         arr->Item(2).SetFloatValue(y, eCSSUnit_Number);
         arr->Item(3).SetFloatValue(z, eCSSUnit_Number);
-        arr->Item(4).SetFloatValue(theta, eCSSUnit_Radian);
+        SetCSSAngle(angle, arr->Item(4));
         break;
       }
       case TransformFunction::TScale:
@@ -343,26 +350,28 @@ CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
       }
       case TransformFunction::TSkewX:
       {
-        float x = aFunctions[i].get_SkewX().x();
+        const CSSAngle& x = aFunctions[i].get_SkewX().x();
         arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_skewx,
                                                            resultTail);
-        arr->Item(1).SetFloatValue(x, eCSSUnit_Radian);
+        SetCSSAngle(x, arr->Item(1));
         break;
       }
       case TransformFunction::TSkewY:
       {
-        float y = aFunctions[i].get_SkewY().y();
+        const CSSAngle& y = aFunctions[i].get_SkewY().y();
         arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_skewy,
                                                            resultTail);
-        arr->Item(1).SetFloatValue(y, eCSSUnit_Radian);
+        SetCSSAngle(y, arr->Item(1));
         break;
       }
       case TransformFunction::TSkew:
       {
+        const CSSAngle& x = aFunctions[i].get_Skew().x();
+        const CSSAngle& y = aFunctions[i].get_Skew().y();
         arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_skew,
                                                            resultTail);
-        arr->Item(1).SetFloatValue(aFunctions[i].get_Skew().x(), eCSSUnit_Radian);
-        arr->Item(2).SetFloatValue(aFunctions[i].get_Skew().y(), eCSSUnit_Radian);
+        SetCSSAngle(x, arr->Item(1));
+        SetCSSAngle(y, arr->Item(2));
         break;
       }
       case TransformFunction::TTransformMatrix:
@@ -546,7 +555,7 @@ Layer::CanUseOpaqueSurface()
 
 // NB: eventually these methods will be defined unconditionally, and
 // can be moved into Layers.h
-const nsIntRect*
+const Maybe<ParentLayerIntRect>&
 Layer::GetEffectiveClipRect()
 {
   if (LayerComposite* shadow = AsLayerComposite()) {
@@ -672,7 +681,9 @@ Layer::CalculateScissorRect(const RenderTargetIntRect& aCurrentScissorRect)
     return currentClip;
   }
 
-  const RenderTargetIntRect clipRect = RenderTargetPixel::FromUntyped(*GetEffectiveClipRect());
+  const RenderTargetIntRect clipRect =
+    ViewAs<RenderTargetPixel>(*GetEffectiveClipRect(),
+                              PixelCastJustification::RenderTargetIsParentLayerForRoot);
   if (clipRect.IsEmpty()) {
     // We might have a non-translation transform in the container so we can't
     // use the code path below.
@@ -693,7 +704,7 @@ Layer::CalculateScissorRect(const RenderTargetIntRect& aCurrentScissorRect)
     if (!gfxUtils::GfxRectToIntRect(trScissor, &tmp)) {
       return RenderTargetIntRect(currentClip.TopLeft(), RenderTargetIntSize(0, 0));
     }
-    scissor = RenderTargetPixel::FromUntyped(tmp);
+    scissor = ViewAs<RenderTargetPixel>(tmp);
 
     // Find the nearest ancestor with an intermediate surface
     do {
@@ -840,14 +851,10 @@ Layer::ComputeEffectiveTransformForMaskLayer(const Matrix4x4& aTransformToSurfac
     bool maskIs2D = mMaskLayer->GetTransform().CanDraw2D();
     NS_ASSERTION(maskIs2D, "How did we end up with a 3D transform here?!");
 #endif
-    // Use our shadow transform and base transform to compute a delta for the
-    // mask layer's effective transform, as though it was also transformed by
-    // the APZ.
-    //
-    // Note: This will fail if the base transform is degenerate. Currently, this
-    //       is not expected for OMTA transformed layers.
-    mMaskLayer->mEffectiveTransform = mMaskLayer->GetTransform() *
-      GetTransform().Inverse() * GetLocalTransform() *
+    // The mask layer can have an async transform applied to it in some
+    // situations, so be sure to use its GetLocalTransform() rather than
+    // its GetTransform().
+    mMaskLayer->mEffectiveTransform = mMaskLayer->GetLocalTransform() *
       mMaskLayer->mEffectiveTransform;
   }
 }
@@ -887,7 +894,7 @@ Layer::GetVisibleRegionRelativeToRootLayer(nsIntRegion& aResult,
     // If the parent layer clips its lower layers, clip the visible region
     // we're accumulating.
     if (layer->GetEffectiveClipRect()) {
-      aResult.AndWith(*layer->GetEffectiveClipRect());
+      aResult.AndWith(ParentLayerIntRect::ToUntyped(*layer->GetEffectiveClipRect()));
     }
 
     // Now we need to walk across the list of siblings for this parent layer,
@@ -1102,7 +1109,7 @@ ContainerLayer::HasMultipleChildren()
 {
   uint32_t count = 0;
   for (Layer* child = GetFirstChild(); child; child = child->GetNextSibling()) {
-    const nsIntRect *clipRect = child->GetEffectiveClipRect();
+    const Maybe<ParentLayerIntRect>& clipRect = child->GetEffectiveClipRect();
     if (clipRect && clipRect->IsEmpty())
       continue;
     if (child->GetVisibleRegion().IsEmpty())
@@ -1169,7 +1176,7 @@ ContainerLayer::DefaultComputeEffectiveTransforms(const Matrix4x4& aTransformToS
         gfx::ThebesMatrix(contTransform).HasNonIntegerTranslation()) {
 #endif
         for (Layer* child = GetFirstChild(); child; child = child->GetNextSibling()) {
-          const nsIntRect *clipRect = child->GetEffectiveClipRect();
+          const Maybe<ParentLayerIntRect>& clipRect = child->GetEffectiveClipRect();
           /* We can't (easily) forward our transform to children with a non-empty clip
            * rect since it would need to be adjusted for the transform. See
            * the calculations performed by CalculateScissorRect above.
@@ -1568,8 +1575,8 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
 
   layers::PrintInfo(aStream, AsLayerComposite());
 
-  if (mUseClipRect) {
-    AppendToString(aStream, mClipRect, " [clip=", "]");
+  if (mClipRect) {
+    AppendToString(aStream, *mClipRect, " [clip=", "]");
   }
   if (1.0 != mPostXScale || 1.0 != mPostYScale) {
     aStream << nsPrintfCString(" [postScale=%g, %g]", mPostXScale, mPostYScale).get();
@@ -1653,8 +1660,10 @@ DumpTransform(layerscope::LayersPacket::Layer::Matrix* aLayerMatrix, const Matri
 }
 
 // The static helper function sets the nsIntRect into the packet
+template <typename T, typename Sub, typename Point, typename SizeT, typename MarginT>
 static void
-DumpRect(layerscope::LayersPacket::Layer::Rect* aLayerRect, const nsIntRect& aRect)
+DumpRect(layerscope::LayersPacket::Layer::Rect* aLayerRect,
+         const BaseRect<T, Sub, Point, SizeT, MarginT>& aRect)
 {
   aLayerRect->set_x(aRect.x);
   aLayerRect->set_y(aRect.y);
@@ -1685,7 +1694,7 @@ Layer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
   // Shadow
   if (LayerComposite* lc = AsLayerComposite()) {
     LayersPacket::Layer::Shadow* s = layer->mutable_shadow();
-    if (const nsIntRect* clipRect = lc->GetShadowClipRect()) {
+    if (const Maybe<ParentLayerIntRect>& clipRect = lc->GetShadowClipRect()) {
       DumpRect(s->mutable_clip(), *clipRect);
     }
     if (!lc->GetShadowTransform().IsIdentity()) {
@@ -1696,8 +1705,8 @@ Layer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
     }
   }
   // Clip
-  if (mUseClipRect) {
-    DumpRect(layer->mutable_clip(), mClipRect);
+  if (mClipRect) {
+    DumpRect(layer->mutable_clip(), *mClipRect);
   }
   // Transform
   if (!mTransform.IsIdentity()) {
@@ -2050,7 +2059,7 @@ PrintInfo(std::stringstream& aStream, LayerComposite* aLayerComposite)
   if (!aLayerComposite) {
     return;
   }
-  if (const nsIntRect* clipRect = aLayerComposite->GetShadowClipRect()) {
+  if (const Maybe<ParentLayerIntRect>& clipRect = aLayerComposite->GetShadowClipRect()) {
     AppendToString(aStream, *clipRect, " [shadow-clip=", "]");
   }
   if (!aLayerComposite->GetShadowTransform().IsIdentity()) {

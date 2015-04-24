@@ -23,7 +23,6 @@
 #include "nsIFile.h"
 #include "ThreadSafeRefcountingWithMainThreadDestruction.h"
 
-class nsILineInputStream;
 class nsIThread;
 
 #ifdef MOZ_CRASHREPORTER
@@ -91,6 +90,10 @@ public:
   // normal shutdown or unexpected shutdown/crash.
   void CloseActive(bool aDieWhenUnloaded);
 
+  // Tell the plugin to die after shutdown.
+  void MarkForDeletion();
+  bool IsMarkedForDeletion();
+
   // Called by the GMPService to forcibly close active de/encoders at shutdown
   void Shutdown();
 
@@ -135,6 +138,9 @@ public:
   }
 
   void AbortAsyncShutdown();
+
+  // Called when the child process has died.
+  void ChildTerminated();
 
   bool GetGMPContentParent(UniquePtr<GetGMPContentParentCallback>&& aCallback);
   already_AddRefed<GMPContentParent> ForgetGMPContentParent();
@@ -191,6 +197,7 @@ private:
   GMPProcessParent* mProcess;
   bool mDeleteProcessOnlyOnUnload;
   bool mAbnormalShutdownInProgress;
+  bool mIsBlockingDeletion;
 
   nsTArray<nsRefPtr<GMPTimerParent>> mTimers;
   nsTArray<nsRefPtr<GMPStorageParent>> mStorage;

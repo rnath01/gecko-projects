@@ -468,7 +468,9 @@ static const js::Class SandboxClass = {
     "Sandbox",
     XPCONNECT_GLOBAL_FLAGS_WITH_EXTRA_SLOTS(1),
     nullptr, nullptr, nullptr, nullptr,
-    sandbox_enumerate, sandbox_resolve, sandbox_convert,  sandbox_finalize,
+    sandbox_enumerate, sandbox_resolve,
+    nullptr,        /* mayResolve */
+    sandbox_convert,  sandbox_finalize,
     nullptr, nullptr, nullptr, JS_GlobalObjectTraceHook,
     JS_NULL_CLASS_SPEC,
     {
@@ -487,7 +489,9 @@ static const js::Class SandboxWriteToProtoClass = {
     "Sandbox",
     XPCONNECT_GLOBAL_FLAGS_WITH_EXTRA_SLOTS(1),
     sandbox_addProperty, nullptr, nullptr, nullptr,
-    sandbox_enumerate, sandbox_resolve, sandbox_convert,  sandbox_finalize,
+    sandbox_enumerate, sandbox_resolve,
+    nullptr,        /* mayResolve */
+    sandbox_convert,  sandbox_finalize,
     nullptr, nullptr, nullptr, JS_GlobalObjectTraceHook,
     JS_NULL_CLASS_SPEC,
     {
@@ -885,6 +889,8 @@ xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp, nsISupports* prin
     JS::CompartmentOptions compartmentOptions;
     if (options.sameZoneAs)
         compartmentOptions.setSameZoneAs(js::UncheckedUnwrap(options.sameZoneAs));
+    else if (options.freshZone)
+        compartmentOptions.setZone(JS::FreshZone);
     else
         compartmentOptions.setZone(JS::SystemZone);
 
@@ -1360,18 +1366,28 @@ SandboxOptions::ParseGlobalProperties()
 bool
 SandboxOptions::Parse()
 {
-    return ParseObject("sandboxPrototype", &proto) &&
-           ParseBoolean("wantXrays", &wantXrays) &&
-           ParseBoolean("wantComponents", &wantComponents) &&
-           ParseBoolean("wantExportHelpers", &wantExportHelpers) &&
-           ParseString("sandboxName", sandboxName) &&
-           ParseObject("sameZoneAs", &sameZoneAs) &&
-           ParseBoolean("invisibleToDebugger", &invisibleToDebugger) &&
-           ParseBoolean("discardSource", &discardSource) &&
-           ParseJSString("addonId", &addonId) &&
-           ParseBoolean("writeToGlobalPrototype", &writeToGlobalPrototype) &&
-           ParseGlobalProperties() &&
-           ParseValue("metadata", &metadata);
+    bool ok = ParseObject("sandboxPrototype", &proto) &&
+              ParseBoolean("wantXrays", &wantXrays) &&
+              ParseBoolean("wantComponents", &wantComponents) &&
+              ParseBoolean("wantExportHelpers", &wantExportHelpers) &&
+              ParseString("sandboxName", sandboxName) &&
+              ParseObject("sameZoneAs", &sameZoneAs) &&
+              ParseBoolean("freshZone", &freshZone) &&
+              ParseBoolean("invisibleToDebugger", &invisibleToDebugger) &&
+              ParseBoolean("discardSource", &discardSource) &&
+              ParseJSString("addonId", &addonId) &&
+              ParseBoolean("writeToGlobalPrototype", &writeToGlobalPrototype) &&
+              ParseGlobalProperties() &&
+              ParseValue("metadata", &metadata);
+    if (!ok)
+        return false;
+
+    if (freshZone && sameZoneAs) {
+        JS_ReportError(mCx, "Cannot use both sameZoneAs and freshZone");
+        return false;
+    }
+
+    return true;
 }
 
 static nsresult
@@ -1507,7 +1523,7 @@ xpc::EvalInSandbox(JSContext* cx, HandleObject sandboxArg, const nsAString& sour
     NS_ENSURE_TRUE(prin, NS_ERROR_FAILURE);
 
     nsAutoCString filenameBuf;
-    if (!filename.IsVoid()) {
+    if (!filename.IsVoid() && filename.Length() != 0) {
         filenameBuf.Assign(filename);
     } else {
         // Default to the spec of the principal.
@@ -1522,7 +1538,7 @@ xpc::EvalInSandbox(JSContext* cx, HandleObject sandboxArg, const nsAString& sour
     {
         // We're about to evaluate script, so make an AutoEntryScript.
         // This is clearly Gecko-specific and not in any spec.
-        mozilla::dom::AutoEntryScript aes(priv);
+        mozilla::dom::AutoEntryScript aes(priv, "XPConnect sandbox evaluation");
         JSContext* sandcx = aes.cx();
         AutoSaveContextOptions savedOptions(sandcx);
         JS::ContextOptionsRef(sandcx).setDontReportUncaught(true);

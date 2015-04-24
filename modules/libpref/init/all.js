@@ -166,15 +166,12 @@ pref("dom.keyboardevent.code.enabled", true);
 // even if this is true).
 pref("dom.keyboardevent.dispatch_during_composition", false);
 
-// Whether the WebCrypto API is enabled
-pref("dom.webcrypto.enabled", true);
-
 // Whether the UndoManager API is enabled
 pref("dom.undo_manager.enabled", false);
 
 // Whether URL,nsLocation,Link::GetHash should be percent encoded
 // in setter and percent decoded in getter (old behaviour = true)
-pref("dom.url.encode_decode_hash", false);
+pref("dom.url.encode_decode_hash", true);
 
 // Whether to run add-on code in different compartments from browser code. This
 // causes a separate compartment for each (addon, global) combination, which may
@@ -273,10 +270,8 @@ pref("media.play-stand-alone", true);
 
 pref("media.hardware-video-decoding.enabled", true);
 
-#if defined(XP_WIN)
 pref("media.decoder.heuristic.dormant.enabled", true);
 pref("media.decoder.heuristic.dormant.timeout", 60000);
-#endif
 
 #ifdef MOZ_WMF
 pref("media.windows-media-foundation.enabled", true);
@@ -378,11 +373,7 @@ pref("media.navigator.permission.disabled", false);
 pref("media.peerconnection.default_iceservers", "[{\"urls\": [\"stun:stun.services.mozilla.com\"]}]");
 pref("media.peerconnection.ice.loopback", false); // Set only for testing in offline environments.
 pref("media.peerconnection.use_document_iceservers", true);
-// Do not enable identity before ensuring that the UX cannot be spoofed
-// see Bug 884573 for details
-// Do not enable identity before fixing domain comparison: see Bug 958741
-// Do not enable identity before fixing origin spoofing: see Bug 968335
-pref("media.peerconnection.identity.enabled", false);
+pref("media.peerconnection.identity.enabled", true);
 pref("media.peerconnection.identity.timeout", 10000);
 pref("media.peerconnection.ice.loopback", false); // Set only for testing in offline environments.
 // These values (aec, agc, and noice) are from media/webrtc/trunk/webrtc/common_types.h
@@ -547,13 +538,15 @@ pref("apz.x_stationary_size_multiplier", "3.0");
 pref("apz.y_stationary_size_multiplier", "3.5");
 pref("apz.zoom_animation_duration_ms", 250);
 
-#ifdef XP_MACOSX
+#if !defined(MOZ_WIDGET_GONK) && !defined(MOZ_WIDGET_ANDROID)
+// Desktop prefs
 pref("apz.fling_repaint_interval", 16);
 pref("apz.smooth_scroll_repaint_interval", 16);
 pref("apz.pan_repaint_interval", 16);
 pref("apz.x_skate_size_multiplier", "2.5");
 pref("apz.y_skate_size_multiplier", "3.5");
 #else
+// Mobile prefs
 pref("apz.fling_repaint_interval", 75);
 pref("apz.smooth_scroll_repaint_interval", 75);
 pref("apz.pan_repaint_interval", 250);
@@ -649,7 +642,7 @@ pref("gfx.content.azure.backends", "direct2d1.1,direct2d,cairo");
 #else
 #ifdef XP_MACOSX
 pref("gfx.content.azure.backends", "cg");
-pref("gfx.canvas.azure.backends", "cg");
+pref("gfx.canvas.azure.backends", "skia");
 // Accelerated cg canvas where available (10.7+)
 pref("gfx.canvas.azure.accelerated", false);
 #else
@@ -780,6 +773,8 @@ pref("toolkit.telemetry.infoURL", "https://www.mozilla.org/legal/privacy/firefox
 // Determines whether full SQL strings are returned when they might contain sensitive info
 // i.e. dynamically constructed SQL strings or SQL executed by addons against addon DBs
 pref("toolkit.telemetry.debugSlowSql", false);
+// Determines if Telemetry pings can be archived locally.
+pref("toolkit.telemetry.archive.enabled", true);
 
 // Identity module
 pref("toolkit.identity.enabled", false);
@@ -1332,8 +1327,6 @@ pref("network.http.spdy.default-concurrent", 100);
 
 // alt-svc allows separation of transport routing from
 // the origin host without using a proxy.
-pref("network.http.atsvc.enabled", false);
-pref("network.http.atsvc.oe", false);
 pref("network.http.altsvc.enabled", false);
 pref("network.http.altsvc.oe", false);
 
@@ -1847,7 +1840,7 @@ pref("security.csp.debug", false);
 pref("security.csp.experimentalEnabled", false);
 
 // Default Content Security Policy to apply to privileged apps.
-pref("security.apps.privileged.CSP.default", "default-src *; script-src 'self'; object-src 'none'; style-src 'self' 'unsafe-inline'");
+pref("security.apps.privileged.CSP.default", "default-src * data: blob:; script-src 'self'; object-src 'none'; style-src 'self' 'unsafe-inline'");
 
 // Mixed content blocking
 pref("security.mixed_content.block_active_content", false);
@@ -3020,11 +3013,8 @@ pref("intl.keyboard.per_window_layout", false);
 
 #ifdef NS_ENABLE_TSF
 // Enable/Disable TSF support on Vista or later.
-#ifndef RELEASE_BUILD
 pref("intl.tsf.enable", true);
-#else
-pref("intl.tsf.enable", false);
-#endif
+
 // Force enable TSF even on WinXP or WinServer 2003.
 // Be aware, TSF framework on prior to Vista is not enough stable.
 pref("intl.tsf.force_enable", false);
@@ -3844,6 +3834,10 @@ pref("image.cache.timeweight", 500);
 // them to be decoded on demand when they are drawn.
 pref("image.decode-only-on-draw.enabled", true);
 
+// Decode all images automatically on load, ignoring our normal heuristics.
+// Overrides image.decode-only-on-draw.enabled.
+pref("image.decode-immediately.enabled", false);
+
 // Whether we attempt to downscale images during decoding.
 pref("image.downscale-during-decode.enabled", false);
 
@@ -3933,6 +3927,8 @@ pref("webgl.enable-draft-extensions", false);
 pref("webgl.enable-privileged-extensions", false);
 pref("webgl.bypass-shader-validation", false);
 pref("webgl.enable-prototype-webgl2", false);
+pref("gl.require-hardware", false);
+
 #ifdef XP_WIN
 pref("webgl.angle.try-d3d11", true);
 pref("webgl.angle.force-d3d11", false);
@@ -3977,6 +3973,9 @@ pref("layers.bench.enabled", false);
 #ifdef ANDROID
 // bug 838603 -- on Android, accidentally blacklisting OpenGL layers
 // means a startup crash for everyone.
+// Temporarily force-enable GL compositing.  This is default-disabled
+// deep within the bowels of the widgetry system.  Remove me when GL
+// compositing isn't default disabled in widget/android.
 pref("layers.acceleration.force-enabled", true);
 #else
 pref("layers.acceleration.force-enabled", false);
@@ -4012,7 +4011,7 @@ pref("layers.max-active", -1);
 pref("layers.tiles.adjust", true);
 
 // Set the default values, and then override per-platform as needed
-pref("layers.offmainthreadcomposition.enabled", false);
+pref("layers.offmainthreadcomposition.enabled", true);
 // Compositor target frame rate. NOTE: If vsync is enabled the compositor
 // frame rate will still be capped.
 // -1 -> default (match layout.frame_rate or 60 FPS)
@@ -4024,23 +4023,9 @@ pref("layers.offmainthreadcomposition.frame-rate", -1);
 pref("layers.async-video.enabled", true);
 pref("layers.async-video-oop.enabled",true);
 
-#ifdef XP_WIN
-pref("layers.offmainthreadcomposition.enabled", true);
-#endif
-
-#ifdef MOZ_WIDGET_QT
-pref("layers.offmainthreadcomposition.enabled", true);
-#endif
-
 #ifdef XP_MACOSX
-pref("layers.offmainthreadcomposition.enabled", true);
 pref("layers.enable-tiles", true);
 pref("layers.tiled-drawtarget.enabled", true);
-#endif
-
-// ANDROID covers android and b2g
-#ifdef ANDROID
-pref("layers.offmainthreadcomposition.enabled", true);
 #endif
 
 // same effect as layers.offmainthreadcomposition.enabled, but specifically for
@@ -4051,7 +4036,11 @@ pref("layers.offmainthreadcomposition.testing.enabled", false);
 pref("layers.offmainthreadcomposition.force-basic", false);
 
 // Whether to animate simple opacity and transforms on the compositor
+#ifdef RELEASE_BUILD
 pref("layers.offmainthreadcomposition.async-animations", false);
+#else
+pref("layers.offmainthreadcomposition.async-animations", true);
+#endif
 
 // Whether to log information about off main thread animations to stderr
 pref("layers.offmainthreadcomposition.log-animations", false);
@@ -4185,8 +4174,44 @@ pref("dom.mozContacts.enabled", false);
 // WebAlarms
 pref("dom.mozAlarms.enabled", false);
 
-// SimplePush
-pref("services.push.enabled", false);
+// Push
+pref("dom.push.enabled", false);
+
+pref("dom.push.debug", false);
+pref("dom.push.serverURL", "wss://push.services.mozilla.com/");
+pref("dom.push.userAgentID", "");
+
+// Is the network connection allowed to be up?
+// This preference should be used in UX to enable/disable push.
+pref("dom.push.connection.enabled", true);
+
+// Exponential back-off start is 5 seconds like in HTTP/1.1.
+// Maximum back-off is pingInterval.
+pref("dom.push.retryBaseInterval", 5000);
+
+// Interval at which to ping PushServer to check connection status. In
+// milliseconds. If no reply is received within requestTimeout, the connection
+// is considered closed.
+pref("dom.push.pingInterval", 1800000); // 30 minutes
+
+// How long before we timeout
+pref("dom.push.requestTimeout", 10000);
+pref("dom.push.pingInterval.default", 180000);// 3 min
+pref("dom.push.pingInterval.mobile", 180000); // 3 min
+pref("dom.push.pingInterval.wifi", 180000);  // 3 min
+
+// Adaptive ping
+pref("dom.push.adaptive.enabled", false);
+pref("dom.push.adaptive.lastGoodPingInterval", 180000);// 3 min
+pref("dom.push.adaptive.lastGoodPingInterval.mobile", 180000);// 3 min
+pref("dom.push.adaptive.lastGoodPingInterval.wifi", 180000);// 3 min
+// Valid gap between the biggest good ping and the bad ping
+pref("dom.push.adaptive.gap", 60000); // 1 minute
+// We limit the ping to this maximum value
+pref("dom.push.adaptive.upperLimit", 1740000); // 29 min
+
+// enable udp wakeup support
+pref("dom.push.udp.wakeupEnabled", false);
 
 // WebNetworkStats
 pref("dom.mozNetworkStats.enabled", false);
@@ -4281,6 +4306,9 @@ pref("dom.idle-observers-api.fuzz_time.disabled", true);
 
 // Lowest localId for apps.
 pref("dom.mozApps.maxLocalId", 1000);
+
+// Reset apps permissions
+pref("dom.apps.reset-permissions", false);
 
 // XXX Security: You CANNOT safely add a new app store for
 // installing privileged apps just by modifying this pref and
@@ -4442,11 +4470,11 @@ pref("dom.inter-app-communication-api.enabled", false);
 pref("dom.mapped_arraybuffer.enabled", false);
 
 // The tables used for Safebrowsing phishing and malware checks.
-pref("urlclassifier.malwareTable", "goog-malware-shavar,test-malware-simple");
+pref("urlclassifier.malwareTable", "goog-malware-shavar,goog-unwanted-shavar,test-malware-simple,test-unwanted-simple");
 pref("urlclassifier.phishTable", "goog-phish-shavar,test-phish-simple");
 pref("urlclassifier.downloadBlockTable", "");
 pref("urlclassifier.downloadAllowTable", "");
-pref("urlclassifier.disallow_completions", "test-malware-simple,test-phish-simple,goog-downloadwhite-digest256,mozpub-track-digest256");
+pref("urlclassifier.disallow_completions", "test-malware-simple,test-phish-simple,test-unwanted-simple,goog-downloadwhite-digest256,mozpub-track-digest256");
 
 // The table and update/gethash URLs for Safebrowsing phishing and malware
 // checks.
@@ -4475,6 +4503,9 @@ pref("selectioncaret.enabled", false);
 // This will inflate size of selection caret frame when we checking if
 // user click on selection caret or not. In app units.
 pref("selectioncaret.inflatesize.threshold", 40);
+
+// Selection carets will fall-back to internal LongTap detector.
+pref("selectioncaret.detects.longtap", true);
 
 // Wakelock is disabled by default.
 pref("dom.wakelock.enabled", false);
@@ -4519,6 +4550,7 @@ pref("dom.beforeAfterKeyboardEvent.enabled", false);
 
 // Presentation API
 pref("dom.presentation.enabled", false);
+pref("dom.presentation.tcp_server.debug", false);
 
 // Use raw ICU instead of CoreServices API in Unicode collation
 #ifdef XP_MACOSX
@@ -4617,6 +4649,10 @@ pref("media.gmp-manager.certs.2.commonName", "aus4.mozilla.org");
 // If this pref is disabled, we will never show a reader mode icon in the toolbar.
 pref("reader.parse-on-load.enabled", true);
 
+// After what size document we don't bother running Readability on it
+// because it'd slow things down too much
+pref("reader.parse-node-limit", 3000);
+
 // Force-enables reader mode parsing, even on low-memory platforms, where it
 // is disabled by default.
 pref("reader.parse-on-load.force-enabled", false);
@@ -4649,18 +4685,12 @@ pref("reader.toolbar.vertical", true);
 pref("media.gmp.insecure.allow", false);
 #endif
 
-// Use vsync aligned rendering. b2g prefs are in b2g.js
-// Only supported on windows, os x, and b2g
-#if defined(XP_MACOSX) || defined(XP_WIN)
+// Use vsync aligned rendering. b2g prefs are in b2g.js.
+// Hardware vsync supported on windows, os x, and b2g.
+// Linux and fennec will use software vsync.
 pref("gfx.vsync.hw-vsync.enabled", true);
 pref("gfx.vsync.compositor", true);
 pref("gfx.vsync.refreshdriver", true);
-#endif
-
-#if defined(XP_LINUX)
-pref("gfx.vsync.hw-vsync.enabled", true);
-pref("gfx.vsync.compositor", true);
-#endif
 
 // Secure Element API
 #ifdef MOZ_SECUREELEMENT

@@ -185,6 +185,7 @@ SavedFrame::finishSavedFrameInit(JSContext* cx, HandleObject ctor, HandleObject 
     nullptr,                    // setProperty
     nullptr,                    // enumerate
     nullptr,                    // resolve
+    nullptr,                    // mayResolve
     nullptr,                    // convert
     SavedFrame::finalize,       // finalize
     nullptr,                    // call
@@ -251,14 +252,14 @@ uint32_t
 SavedFrame::getLine()
 {
     const Value& v = getReservedSlot(JSSLOT_LINE);
-    return v.toInt32();
+    return v.toPrivateUint32();
 }
 
 uint32_t
 SavedFrame::getColumn()
 {
     const Value& v = getReservedSlot(JSSLOT_COLUMN);
-    return v.toInt32();
+    return v.toPrivateUint32();
 }
 
 JSAtom*
@@ -304,8 +305,8 @@ SavedFrame::initFromLookup(SavedFrame::HandleLookup lookup)
     MOZ_ASSERT(getReservedSlot(JSSLOT_SOURCE).isUndefined());
     setReservedSlot(JSSLOT_SOURCE, StringValue(lookup->source));
 
-    setReservedSlot(JSSLOT_LINE, NumberValue(lookup->line));
-    setReservedSlot(JSSLOT_COLUMN, NumberValue(lookup->column));
+    setReservedSlot(JSSLOT_LINE, PrivateUint32Value(lookup->line));
+    setReservedSlot(JSSLOT_COLUMN, PrivateUint32Value(lookup->column));
     setReservedSlot(JSSLOT_FUNCTIONDISPLAYNAME,
                     lookup->functionDisplayName
                         ? StringValue(lookup->functionDisplayName)
@@ -1180,8 +1181,10 @@ SavedStacks::chooseSamplingProbability(JSContext* cx)
 }
 
 JSObject*
-SavedStacksMetadataCallback(JSContext* cx)
+SavedStacksMetadataCallback(JSContext* cx, JSObject* target)
 {
+    RootedObject obj(cx, target);
+
     SavedStacks& stacks = cx->compartment()->savedStacks();
     if (stacks.allocationSkipCount > 0) {
         stacks.allocationSkipCount--;
@@ -1221,7 +1224,7 @@ SavedStacksMetadataCallback(JSContext* cx)
     if (!stacks.saveCurrentStack(cx, &frame))
         CrashAtUnhandlableOOM("SavedStacksMetadataCallback");
 
-    if (!Debugger::onLogAllocationSite(cx, frame, PRMJ_Now()))
+    if (!Debugger::onLogAllocationSite(cx, obj, frame, PRMJ_Now()))
         CrashAtUnhandlableOOM("SavedStacksMetadataCallback");
 
     return frame;

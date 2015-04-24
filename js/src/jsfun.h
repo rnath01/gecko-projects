@@ -53,8 +53,8 @@ class JSFunction : public js::NativeObject
                                        must be constructible but not decompilable. */
         HAS_REST         = 0x0200,  /* function has a rest (...) parameter */
         INTERPRETED_LAZY = 0x0400,  /* function is interpreted but doesn't have a script yet */
-        RESOLVED_LENGTH  = 0x0800,  /* f.length has been resolved (see js::fun_resolve). */
-        RESOLVED_NAME    = 0x1000,  /* f.name has been resolved (see js::fun_resolve). */
+        RESOLVED_LENGTH  = 0x0800,  /* f.length has been resolved (see fun_resolve). */
+        RESOLVED_NAME    = 0x1000,  /* f.name has been resolved (see fun_resolve). */
 
         FUNCTION_KIND_SHIFT = 13,
         FUNCTION_KIND_MASK  = 0x3 << FUNCTION_KIND_SHIFT,
@@ -115,6 +115,7 @@ class JSFunction : public js::NativeObject
         return nonLazyScript()->hasAnyAliasedBindings() ||
                nonLazyScript()->funHasExtensibleScope() ||
                nonLazyScript()->funNeedsDeclEnvObject() ||
+               nonLazyScript()->needsHomeObject()       ||
                isGenerator();
     }
 
@@ -568,9 +569,6 @@ bool
 FunctionHasResolveHook(const JSAtomState& atomState, jsid id);
 
 extern bool
-fun_resolve(JSContext* cx, HandleObject obj, HandleId id, bool* resolvedp);
-
-extern bool
 fun_toString(JSContext* cx, unsigned argc, Value* vp);
 
 extern bool
@@ -588,6 +586,8 @@ class FunctionExtended : public JSFunction
 
     /* Arrow functions store their lexical |this| in the first extended slot. */
     static const unsigned ARROW_THIS_SLOT = 0;
+
+    static const unsigned METHOD_HOMEOBJECT_SLOT = 0;
 
     static inline size_t offsetOfExtendedSlot(unsigned which) {
         MOZ_ASSERT(which < NUM_EXTENDED_SLOTS);

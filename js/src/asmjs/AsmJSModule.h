@@ -251,6 +251,7 @@ class AsmJSModule
         friend class AsmJSModule;
 
         Global(Which which, PropertyName* name) {
+            mozilla::PodZero(&pod);  // zero padding for Valgrind
             pod.which_ = which;
             name_ = name;
             MOZ_ASSERT_IF(name_, name_->isTenured());
@@ -580,6 +581,9 @@ class AsmJSModule
         uint32_t begin() const {
             return begin_;
         }
+        uint32_t profilingEntry() const {
+            return begin();
+        }
         uint32_t entry() const {
             MOZ_ASSERT(isFunction());
             return begin_ + u.func.beginToEntry_;
@@ -847,7 +851,7 @@ class AsmJSModule
     uint8_t *                             interruptExit_;
     uint8_t *                             outOfBoundsExit_;
     StaticLinkData                        staticLinkData_;
-    HeapPtrArrayBufferObjectMaybeShared   maybeHeap_;
+    RelocatablePtrArrayBufferObjectMaybeShared maybeHeap_;
     AsmJSModule **                        prevLinked_;
     AsmJSModule *                         nextLinked_;
     bool                                  dynamicallyLinked_;

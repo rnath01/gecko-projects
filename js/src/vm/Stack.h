@@ -28,7 +28,6 @@ class AsmJSModule;
 class InterpreterRegs;
 class CallObject;
 class ScopeObject;
-class ClonedBlockObject;
 class ScriptFrameIter;
 class SPSProfiler;
 class InterpreterFrame;
@@ -176,7 +175,7 @@ class AbstractFramePtr
     bool operator ==(const AbstractFramePtr& other) const { return ptr_ == other.ptr_; }
     bool operator !=(const AbstractFramePtr& other) const { return ptr_ != other.ptr_; }
 
-    operator bool() const { return !!ptr_; }
+    explicit operator bool() const { return !!ptr_; }
 
     inline JSObject* scopeChain() const;
     inline CallObject& callObj() const;
@@ -1523,7 +1522,6 @@ class AsmJSActivation : public Activation
     AsmJSActivation* prevAsmJS_;
     AsmJSActivation* prevAsmJSForModule_;
     void* entrySP_;
-    SPSProfiler* profiler_;
     void* resumePC_;
     uint8_t* fp_;
     AsmJSExit::Reason exitReason_;

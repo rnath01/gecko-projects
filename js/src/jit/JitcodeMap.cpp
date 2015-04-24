@@ -794,7 +794,7 @@ JitcodeGlobalTable::sweep(JSRuntime* rt)
         if (entry->baseEntry().isJitcodeAboutToBeFinalized())
             e.removeFront();
         else
-            entry->sweep();
+            entry->sweep(rt);
     }
 }
 
@@ -928,6 +928,22 @@ JitcodeGlobalEntry::IonEntry::isMarkedFromAnyThread()
     }
 
     return true;
+}
+
+bool
+JitcodeGlobalEntry::IonCacheEntry::markIfUnmarked(JSTracer* trc)
+{
+    JitcodeGlobalEntry entry;
+    RejoinEntry(trc->runtime(), *this, nativeStartAddr(), &entry);
+    return entry.markIfUnmarked(trc);
+}
+
+void
+JitcodeGlobalEntry::IonCacheEntry::sweep(JSRuntime* rt)
+{
+    JitcodeGlobalEntry entry;
+    RejoinEntry(rt, *this, nativeStartAddr(), &entry);
+    entry.sweep(rt);
 }
 
 bool
@@ -1516,8 +1532,8 @@ JitcodeIonTable::WriteIonTable(CompactBufferWriter& writer,
 JS_PUBLIC_API(JS::ProfilingFrameIterator::FrameKind)
 JS::GetProfilingFrameKindFromNativeAddr(JSRuntime* rt, void* addr)
 {
-    JitcodeGlobalTable* table = rt->jitRuntime()->getJitcodeGlobalTable();
-    JitcodeGlobalEntry entry;
+    js::jit::JitcodeGlobalTable* table = rt->jitRuntime()->getJitcodeGlobalTable();
+    js::jit::JitcodeGlobalEntry entry;
     table->lookupInfallible(addr, &entry, rt);
     MOZ_ASSERT(entry.isIon() || entry.isIonCache() || entry.isBaseline());
 

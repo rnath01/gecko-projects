@@ -2582,7 +2582,7 @@ date_format(JSContext* cx, double date, formatspec format, MutableHandleValue rv
                     char16_t c = tzbuf[i];
                     if (c > 127 ||
                         !(isalpha(c) || isdigit(c) ||
-                          c == ' ' || c == '(' || c == ')')) {
+                          c == ' ' || c == '(' || c == ')' || c == '.')) {
                         usetz = false;
                     }
                 }
@@ -3044,6 +3044,7 @@ const Class DateObject::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     date_convert,
     nullptr, /* finalize */
     nullptr, /* call */

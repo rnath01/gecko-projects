@@ -33,7 +33,6 @@
 #import <Cocoa/Cocoa.h>
 #import <AppKit/NSOpenGL.h>
 
-class gfxASurface;
 class nsChildView;
 class nsCocoaWindow;
 
@@ -456,14 +455,17 @@ public:
                                             int32_t aNativeKeyCode,
                                             uint32_t aModifierFlags,
                                             const nsAString& aCharacters,
-                                            const nsAString& aUnmodifiedCharacters) override;
+                                            const nsAString& aUnmodifiedCharacters,
+                                            nsIObserver* aObserver) override;
 
   virtual nsresult SynthesizeNativeMouseEvent(mozilla::LayoutDeviceIntPoint aPoint,
                                               uint32_t aNativeMessage,
-                                              uint32_t aModifierFlags) override;
+                                              uint32_t aModifierFlags,
+                                              nsIObserver* aObserver) override;
 
-  virtual nsresult SynthesizeNativeMouseMove(mozilla::LayoutDeviceIntPoint aPoint) override
-  { return SynthesizeNativeMouseEvent(aPoint, NSMouseMoved, 0); }
+  virtual nsresult SynthesizeNativeMouseMove(mozilla::LayoutDeviceIntPoint aPoint,
+                                             nsIObserver* aObserver) override
+  { return SynthesizeNativeMouseEvent(aPoint, NSMouseMoved, 0, aObserver); }
 
   // Mac specific methods
   
@@ -536,7 +538,7 @@ public:
                             int32_t aPanelX, int32_t aPanelY,
                             nsString& aCommitted) override;
 
-  NS_IMETHOD SetPluginFocused(bool& aFocused);
+  NS_IMETHOD SetPluginFocused(bool& aFocused) override;
 
   bool IsPluginFocused() { return mPluginFocused; }
 
@@ -560,6 +562,7 @@ protected:
   }
 
   void ConfigureAPZCTreeManager() override;
+  void ConfigureAPZControllerThread() override;
 
   void DoRemoteComposition(const nsIntRect& aRenderRect);
 

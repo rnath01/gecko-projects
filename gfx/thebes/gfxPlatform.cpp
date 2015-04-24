@@ -141,6 +141,8 @@ static void ShutdownCMS();
 #include "mozilla/gfx/SourceSurfaceCairo.h"
 using namespace mozilla::gfx;
 
+void InitLayersAccelerationPrefs();
+
 /* Class to listen for pref changes so that chrome code can dynamically
    force sRGB as an output profile. See Bug #452125. */
 class SRGBOverrideObserver final : public nsIObserver,
@@ -496,6 +498,7 @@ gfxPlatform::Init()
     mozilla::gl::GLContext::StaticInit();
 #endif
 
+    InitLayersAccelerationPrefs();
     InitLayersIPC();
 
     nsresult rv;
@@ -837,7 +840,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     surf.mFormat = format;
     surf.mType = NativeSurfaceType::CAIRO_SURFACE;
     surf.mSurface = aSurface->CairoSurface();
-    surf.mSize = ToIntSize(aSurface->GetSize());
+    surf.mSize = aSurface->GetSize();
     // We return here regardless of whether CreateSourceSurfaceFromNativeSurface
     // succeeds or not since we don't expect to be able to do any better below
     // if it fails.
@@ -862,7 +865,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     surf.mFormat = format;
     surf.mType = NativeSurfaceType::D3D10_TEXTURE;
     surf.mSurface = static_cast<gfxD2DSurface*>(aSurface)->GetTexture();
-    surf.mSize = ToIntSize(aSurface->GetSize());
+    surf.mSize = aSurface->GetSize();
     mozilla::gfx::DrawTarget *dt = static_cast<mozilla::gfx::DrawTarget*>(aSurface->GetData(&kDrawTarget));
     if (dt) {
       dt->Flush();
@@ -910,7 +913,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     surf.mFormat = format;
     surf.mType = NativeSurfaceType::CAIRO_SURFACE;
     surf.mSurface = aSurface->CairoSurface();
-    surf.mSize = ToIntSize(aSurface->GetSize());
+    surf.mSize = aSurface->GetSize();
     RefPtr<DrawTarget> drawTarget =
       Factory::CreateDrawTarget(BackendType::CAIRO, IntSize(1, 1), format);
     if (!drawTarget) {
@@ -956,7 +959,7 @@ gfxPlatform::GetWrappedDataSourceSurface(gfxASurface* aSurface)
   RefPtr<DataSourceSurface> result =
     Factory::CreateWrappingDataSourceSurface(image->Data(),
                                              image->Stride(),
-                                             ToIntSize(image->GetSize()),
+                                             image->GetSize(),
                                              ImageFormatToSurfaceFormat(image->Format()));
 
   if (!result) {
@@ -2169,6 +2172,7 @@ gfxPlatform::OptimalFormatForContent(gfxContentType aContent)
  */
 static bool sLayersSupportsD3D9 = false;
 static bool sLayersSupportsD3D11 = false;
+static bool sANGLESupportsD3D11 = false;
 static bool sLayersSupportsHardwareVideoDecoding = false;
 static bool sBufferRotationCheckPref = true;
 static bool sPrefBrowserTabsRemoteAutostart = false;
@@ -2209,6 +2213,11 @@ InitLayersAccelerationPrefs()
       if (!gfxPrefs::LayersD3D11DisableWARP()) {
         // Always support D3D11 when WARP is allowed.
         sLayersSupportsD3D11 = true;
+      }
+      if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_11_ANGLE, &status))) {
+        if (status == nsIGfxInfo::FEATURE_STATUS_OK) {
+          sANGLESupportsD3D11 = true;
+        }
       }
     }
 #endif
@@ -2256,6 +2265,14 @@ gfxPlatform::CanUseHardwareVideoDecoding()
 }
 
 bool
+gfxPlatform::CanUseDirect3D11ANGLE()
+{
+  MOZ_ASSERT(sLayersAccelerationPrefsInitialized);
+  return sANGLESupportsD3D11;
+}
+
+
+bool
 gfxPlatform::BufferRotationEnabled()
 {
   MutexAutoLock autoLock(*gGfxPlatformPrefsLock);
@@ -2301,12 +2318,6 @@ gfxPlatform::UsesOffMainThreadCompositing()
     // Linux users who chose OpenGL are being grandfathered in to OMTC
     result |= gfxPrefs::LayersAccelerationForceEnabled();
 
-#if !defined(NIGHTLY_BUILD)
-    // Yeah, these two env vars do the same thing.
-    // I'm told that one of them is enabled on some test slaves config,
-    // so be slightly careful if you think you can remove one of them.
-    result &= PR_GetEnv("MOZ_USE_OMTC") || PR_GetEnv("MOZ_OMTC_ENABLED");
-#endif
 #endif
     firstTime = false;
   }

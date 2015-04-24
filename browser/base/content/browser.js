@@ -10,7 +10,6 @@ let Cc = Components.classes;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/NotificationDB.jsm");
 Cu.import("resource:///modules/RecentWindow.jsm");
-Cu.import("resource://gre/modules/WindowsPrefSync.jsm");
 
 
 XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
@@ -25,6 +24,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
                                   "resource://gre/modules/BrowserUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
                                   "resource://gre/modules/Task.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
+                                  "resource://gre/modules/PromiseUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "CharsetMenu",
                                   "resource://gre/modules/CharsetMenu.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ShortcutUtils",
@@ -39,6 +40,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "AboutHome",
                                   "resource:///modules/AboutHome.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Log",
                                   "resource://gre/modules/Log.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
+                                  "resource://gre/modules/AppConstants.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "Favicons",
                                    "@mozilla.org/browser/favicon-service;1",
                                    "mozIAsyncFavicons");
@@ -47,6 +50,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "gDNSService",
                                    "nsIDNSService");
 XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
                                   "resource://gre/modules/LightweightThemeManager.jsm");
+
 
 const nsIWebNavigation = Ci.nsIWebNavigation;
 
@@ -195,7 +199,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "gWebRTCUI",
 
 #ifdef MOZ_CRASHREPORTER
 XPCOMUtils.defineLazyModuleGetter(this, "TabCrashReporter",
-  "resource:///modules/TabCrashReporter.jsm");
+  "resource:///modules/ContentCrashReporters.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PluginCrashReporter",
+  "resource:///modules/ContentCrashReporters.jsm");
 #endif
 
 XPCOMUtils.defineLazyModuleGetter(this, "FormValidationHandler",
@@ -209,6 +215,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "CastingApps",
 
 XPCOMUtils.defineLazyModuleGetter(this, "SimpleServiceDiscovery",
   "resource://gre/modules/SimpleServiceDiscovery.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode",
+  "resource://gre/modules/ReaderMode.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "ReaderParent",
   "resource:///modules/ReaderParent.jsm");
@@ -925,7 +934,7 @@ var gBrowserInit = {
   onLoad: function() {
     gBrowser.addEventListener("DOMUpdatePageReport", gPopupBlockerObserver, false);
 
-    Services.obs.addObserver(gPluginHandler.pluginCrashed, "plugin-crashed", false);
+    Services.obs.addObserver(gPluginHandler.NPAPIPluginCrashed, "plugin-crashed", false);
 
     window.addEventListener("AppCommand", HandleAppCommandEvent, true);
 
@@ -938,10 +947,13 @@ var gBrowserInit = {
     LanguageDetectionListener.init();
     BrowserOnClick.init();
     DevEdition.init();
+    AboutPrivateBrowsingListener.init();
 
     let mm = window.getGroupMessageManager("browsers");
+    mm.loadFrameScript("chrome://browser/content/tab-content.js", true);
     mm.loadFrameScript("chrome://browser/content/content.js", true);
     mm.loadFrameScript("chrome://browser/content/content-UITour.js", true);
+    mm.loadFrameScript("chrome://global/content/manifestMessages.js", true);
 
     window.messageManager.addMessageListener("Browser:LoadURI", RedirectLoad);
 
@@ -1034,7 +1046,6 @@ var gBrowserInit = {
     CombinedStopReload.init();
     gPrivateBrowsingUI.init();
     TabsInTitlebar.init();
-    ReadingListUI.init();
 
 #ifdef XP_WIN
     if (window.matchMedia("(-moz-os-version: windows-win8)").matches &&
@@ -1235,6 +1246,7 @@ var gBrowserInit = {
 #ifdef E10S_TESTING_ONLY
     gRemoteTabsUI.init();
 #endif
+    ReadingListUI.init();
 
     // Initialize the full zoom setting.
     // We do this before the session restore service gets initialized so we can
@@ -1242,11 +1254,6 @@ var gBrowserInit = {
     FullZoom.init();
     PanelUI.init();
     LightweightThemeListener.init();
-
-#ifdef MOZ_CRASHREPORTER
-    if (gMultiProcessBrowser)
-      TabCrashReporter.init();
-#endif
 
     Services.telemetry.getHistogramById("E10S_WINDOW").add(gMultiProcessBrowser);
 
@@ -1490,7 +1497,7 @@ var gBrowserInit = {
     gFxAccounts.uninit();
 #endif
 
-    Services.obs.removeObserver(gPluginHandler.pluginCrashed, "plugin-crashed");
+    Services.obs.removeObserver(gPluginHandler.NPAPIPluginCrashed, "plugin-crashed");
 
     try {
       gBrowser.removeProgressListener(window.XULBrowserWindow);
@@ -2388,6 +2395,8 @@ function URLBarSetURI(aURI) {
 
 function losslessDecodeURI(aURI) {
   var value = aURI.spec;
+  if (aURI.schemeIs("moz-action"))
+    throw new Error("losslessDecodeURI should never get a moz-action URI");
   // Try to decode as UTF-8 if there's no encoding sequence that we would break.
   if (!/%25(?:3B|2F|3F|3A|40|26|3D|2B|24|2C|23)/i.test(value))
     try {
@@ -2656,7 +2665,7 @@ let BrowserOnClick = {
                               msg.data.sslStatusAsString);
       break;
       case "Browser:SiteBlockedError":
-        this.onAboutBlocked(msg.data.elementId, msg.data.isMalware,
+        this.onAboutBlocked(msg.data.elementId, msg.data.reason,
                             msg.data.isTopFrame, msg.data.location);
       break;
       case "Browser:EnableOnlineMode":
@@ -2840,10 +2849,15 @@ let BrowserOnClick = {
     }
   },
 
-  onAboutBlocked: function (elementId, isMalware, isTopFrame, location) {
-    // Depending on what page we are displaying here (malware/phishing)
+  onAboutBlocked: function (elementId, reason, isTopFrame, location) {
+    // Depending on what page we are displaying here (malware/phishing/unwanted)
     // use the right strings and links for each.
-    let bucketName = isMalware ? "WARNING_MALWARE_PAGE_":"WARNING_PHISHING_PAGE_";
+    let bucketName = "WARNING_PHISHING_PAGE_";
+    if (reason === 'malware') {
+      bucketName = "WARNING_MALWARE_PAGE_";
+    } else if (reason === 'unwanted') {
+      bucketName = "WARNING_UNWANTED_PAGE_";
+    }
     let secHistogram = Services.telemetry.getHistogramById("SECURITY_UI");
     let nsISecTel = Ci.nsISecurityUITelemetry;
     bucketName += isTopFrame ? "TOP_" : "FRAME_";
@@ -2854,33 +2868,19 @@ let BrowserOnClick = {
         break;
 
       case "reportButton":
-        // This is the "Why is this site blocked" button.  For malware,
-        // we can fetch a site-specific report, for phishing, we redirect
-        // to the generic page describing phishing protection.
+        // This is the "Why is this site blocked" button. We redirect
+        // to the generic page describing phishing/malware protection.
 
-        // We log even if malware/phishing info URL couldn't be found:
+        // We log even if malware/phishing/unwanted info URL couldn't be found:
         // the measurement is for how many users clicked the WHY BLOCKED button
         secHistogram.add(nsISecTel[bucketName + "WHY_BLOCKED"]);
 
-        if (isMalware) {
-          // Get the stop badware "why is this blocked" report url,
-          // append the current url, and go there.
-          try {
-            let reportURL = formatURL("browser.safebrowsing.malware.reportURL", true);
-            reportURL += location;
-            gBrowser.loadURI(reportURL);
-          } catch (e) {
-            Components.utils.reportError("Couldn't get malware report URL: " + e);
-          }
-        }
-        else { // It's a phishing site, not malware
-          openHelpLink("phishing-malware", false, "current");
-        }
+        openHelpLink("phishing-malware", false, "current");
         break;
 
       case "ignoreWarningButton":
         secHistogram.add(nsISecTel[bucketName + "IGNORE_WARNING"]);
-        this.ignoreWarningButton(isMalware);
+        this.ignoreWarningButton(reason);
         break;
     }
   },
@@ -2907,7 +2907,7 @@ let BrowserOnClick = {
     }
   },
 
-  ignoreWarningButton: function (isMalware) {
+  ignoreWarningButton: function (reason) {
     // Allow users to override and continue through to the site,
     // but add a notify bar as a reminder, so that they don't lose
     // track after, e.g., tab switching.
@@ -2926,7 +2926,7 @@ let BrowserOnClick = {
     }];
 
     let title;
-    if (isMalware) {
+    if (reason === 'malware') {
       title = gNavigatorBundle.getString("safebrowsing.reportedAttackSite");
       buttons[1] = {
         label: gNavigatorBundle.getString("safebrowsing.notAnAttackButton.label"),
@@ -2935,7 +2935,7 @@ let BrowserOnClick = {
           openUILinkIn(gSafeBrowsing.getReportURL('MalwareError'), 'tab');
         }
       };
-    } else {
+    } else if (reason === 'phishing') {
       title = gNavigatorBundle.getString("safebrowsing.reportedWebForgery");
       buttons[1] = {
         label: gNavigatorBundle.getString("safebrowsing.notAForgeryButton.label"),
@@ -2944,6 +2944,10 @@ let BrowserOnClick = {
           openUILinkIn(gSafeBrowsing.getReportURL('Error'), 'tab');
         }
       };
+    } else if (reason === 'unwanted') {
+      title = gNavigatorBundle.getString("safebrowsing.reportedUnwantedSite");
+      // There is no button for reporting errors since Google doesn't currently
+      // provide a URL endpoint for these reports.
     }
 
     let notificationBox = gBrowser.getNotificationBox();
@@ -3918,26 +3922,6 @@ function updateCharacterEncodingMenuState()
   }
 }
 
-/**
- * Returns true if |aMimeType| is text-based, false otherwise.
- *
- * @param aMimeType
- *        The MIME type to check.
- *
- * If adding types to this function, please also check the similar
- * function in findbar.xml
- */
-function mimeTypeIsTextBased(aMimeType)
-{
-  return aMimeType.startsWith("text/") ||
-         aMimeType.endsWith("+xml") ||
-         aMimeType == "application/x-javascript" ||
-         aMimeType == "application/javascript" ||
-         aMimeType == "application/json" ||
-         aMimeType == "application/xml" ||
-         aMimeType == "mozilla.application/cached-xul";
-}
-
 var XULBrowserWindow = {
   // Stored Status, Link and Loading values
   status: "",
@@ -4011,6 +3995,11 @@ var XULBrowserWindow = {
   },
 
   showTooltip: function (x, y, tooltip) {
+    if (Cc["@mozilla.org/widget/dragservice;1"].getService(Ci.nsIDragService).
+        getCurrentSession()) {
+      return;
+    }
+
     // The x,y coordinates are relative to the <browser> element using
     // the chrome zoom level.
     let elt = document.getElementById("remoteBrowserTooltip");
@@ -4147,7 +4136,7 @@ var XULBrowserWindow = {
         this.setDefaultStatus(msg);
 
         // Disable menu entries for images, enable otherwise
-        if (browser.documentContentType && mimeTypeIsTextBased(browser.documentContentType))
+        if (browser.documentContentType && BrowserUtils.mimeTypeIsTextBased(browser.documentContentType))
           this.isImage.removeAttribute('disabled');
         else
           this.isImage.setAttribute('disabled', 'true');
@@ -4192,7 +4181,7 @@ var XULBrowserWindow = {
     let browser = gBrowser.selectedBrowser;
 
     // Disable menu entries for images, enable otherwise
-    if (browser.documentContentType && mimeTypeIsTextBased(browser.documentContentType))
+    if (browser.documentContentType && BrowserUtils.mimeTypeIsTextBased(browser.documentContentType))
       this.isImage.removeAttribute('disabled');
     else
       this.isImage.setAttribute('disabled', 'true');
@@ -4220,6 +4209,7 @@ var XULBrowserWindow = {
 
         BookmarkingUI.onLocationChange();
         SocialUI.updateState(location);
+        UITour.onLocationChange(location);
       }
 
       // Utility functions for disabling find
@@ -6182,20 +6172,13 @@ var IndexedDBPromptHelper = {
 
     var requestor = subject.QueryInterface(Ci.nsIInterfaceRequestor);
 
-    var contentWindow = requestor.getInterface(Ci.nsIDOMWindow);
-    var contentDocument = contentWindow.document;
-    var browserWindow =
-      OfflineApps._getBrowserWindowForContentWindow(contentWindow);
-
-    if (browserWindow != window) {
-      // Must belong to some other window.
+    var browser = requestor.getInterface(Ci.nsIDOMNode);
+    if (browser.ownerDocument.defaultView != window) {
+      // Only listen for notifications for browsers in our chrome window.
       return;
     }
 
-    var browser =
-      OfflineApps._getBrowserForContentWindow(browserWindow, contentWindow);
-
-    var host = contentDocument.documentURIObject.asciiHost;
+    var host = browser.currentURI.asciiHost;
 
     var message;
     var responseTopic;
@@ -6862,11 +6845,9 @@ var gIdentityHandler = {
     } else if (state & nsIWebProgressListener.STATE_IS_SECURE) {
       this.setMode(this.IDENTITY_MODE_DOMAIN_VERIFIED);
     } else if (state & nsIWebProgressListener.STATE_IS_BROKEN) {
-      if ((state & nsIWebProgressListener.STATE_LOADED_MIXED_ACTIVE_CONTENT) &&
-          gPrefService.getBoolPref("security.mixed_content.block_active_content")) {
+      if (state & nsIWebProgressListener.STATE_LOADED_MIXED_ACTIVE_CONTENT) {
         this.setMode(this.IDENTITY_MODE_MIXED_ACTIVE_LOADED);
-      } else if ((state & nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT) &&
-                gPrefService.getBoolPref("security.mixed_content.block_active_content")) {
+      } else if (state & nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT) {
         this.setMode(this.IDENTITY_MODE_MIXED_DISPLAY_LOADED_ACTIVE_BLOCKED);
       } else {
         this.setMode(this.IDENTITY_MODE_MIXED_DISPLAY_LOADED);
@@ -7322,6 +7303,14 @@ let gRemoteTabsUI = {
       // e10s isn't supported in safe mode, so don't show the menu items for it
       return;
     }
+
+#ifdef XP_MACOSX
+    if (Services.prefs.getBoolPref("layers.acceleration.disabled")) {
+      // On OS X, "Disable Hardware Acceleration" also disables OMTC and forces
+      // a fallback to Basic Layers. This is incompatible with e10s.
+      return;
+    }
+#endif
 
     let newRemoteWindow = document.getElementById("menu_newRemoteWindow");
     let newNonRemoteWindow = document.getElementById("menu_newNonRemoteWindow");
@@ -7802,4 +7791,14 @@ let PanicButtonNotifier = {
     let popup = document.getElementById("panic-button-success-notification");
     popup.hidePopup();
   },
+};
+
+let AboutPrivateBrowsingListener = {
+  init: function () {
+    window.messageManager.addMessageListener(
+      "AboutPrivateBrowsing:OpenPrivateWindow",
+      msg => {
+        OpenBrowserWindow({private: true});
+    });
+  }
 };

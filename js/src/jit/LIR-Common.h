@@ -31,26 +31,6 @@ class LBinaryMath : public LInstructionHelper<1, 2 + ExtraUses, Temps>
     }
 };
 
-// Simplifies register allocation since the first instruction of a block is
-// guaranteed to have no uses.
-class LLabel : public LInstructionHelper<0, 0, 0>
-{
-  public:
-    LIR_HEADER(Label)
-};
-
-class LNop : public LInstructionHelper<0, 0, 0>
-{
-  public:
-    LIR_HEADER(Nop)
-};
-
-class LMop : public LInstructionHelper<0, 0, 0>
-{
-  public:
-    LIR_HEADER(Mop)
-};
-
 // An LOsiPoint captures a snapshot after a call and ensures enough space to
 // patch in a call to the invalidation mechanism.
 //
@@ -585,6 +565,9 @@ class LSimdShift : public LInstructionHelper<1, 2, 0>
     }
     MSimdShift::Operation operation() const {
         return mir_->toSimdShift()->operation();
+    }
+    const char* extraName() const {
+        return MSimdShift::OperationName(operation());
     }
     MSimdShift* mir() const {
         return mir_->toSimdShift();
@@ -3779,12 +3762,19 @@ class LInt32x4ToFloat32x4 : public LInstructionHelper<1, 1, 0>
     }
 };
 
-class LFloat32x4ToInt32x4 : public LInstructionHelper<1, 1, 0>
+class LFloat32x4ToInt32x4 : public LInstructionHelper<1, 1, 1>
 {
   public:
     LIR_HEADER(Float32x4ToInt32x4);
-    explicit LFloat32x4ToInt32x4(const LAllocation& input) {
+    explicit LFloat32x4ToInt32x4(const LAllocation& input, const LDefinition& temp) {
         setOperand(0, input);
+        setTemp(0, temp);
+    }
+    const LDefinition* temp() {
+        return getTemp(0);
+    }
+    const MSimdConvert* mir() const {
+        return mir_->toSimdConvert();
     }
 };
 
@@ -4252,6 +4242,43 @@ class LTypedArrayElements : public LInstructionHelper<1, 1, 0>
     }
     const LAllocation* object() {
         return getOperand(0);
+    }
+};
+
+// Assign
+//
+//   target[targetOffset..targetOffset + source.length] = source[0..source.length]
+//
+// where the source element range doesn't overlap the target element range in
+// memory.
+class LSetDisjointTypedElements : public LCallInstructionHelper<0, 3, 1>
+{
+  public:
+    LIR_HEADER(SetDisjointTypedElements)
+
+    explicit LSetDisjointTypedElements(const LAllocation& target, const LAllocation& targetOffset,
+                                       const LAllocation& source, const LDefinition& temp)
+    {
+        setOperand(0, target);
+        setOperand(1, targetOffset);
+        setOperand(2, source);
+        setTemp(0, temp);
+    }
+
+    const LAllocation* target() {
+        return getOperand(0);
+    }
+
+    const LAllocation* targetOffset() {
+        return getOperand(1);
+    }
+
+    const LAllocation* source() {
+        return getOperand(2);
+    }
+
+    const LDefinition* temp() {
+        return getTemp(0);
     }
 };
 
@@ -6125,6 +6152,38 @@ class LGuardReceiverPolymorphic : public LInstructionHelper<0, 1, 1>
     }
     const MGuardReceiverPolymorphic* mir() const {
         return mir_->toGuardReceiverPolymorphic();
+    }
+};
+
+class LGuardUnboxedExpando : public LInstructionHelper<0, 1, 0>
+{
+  public:
+    LIR_HEADER(GuardUnboxedExpando)
+
+    explicit LGuardUnboxedExpando(const LAllocation& in) {
+        setOperand(0, in);
+    }
+    const LAllocation* object() {
+        return getOperand(0);
+    }
+    const MGuardUnboxedExpando* mir() const {
+        return mir_->toGuardUnboxedExpando();
+    }
+};
+
+class LLoadUnboxedExpando : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(LoadUnboxedExpando)
+
+    explicit LLoadUnboxedExpando(const LAllocation& in) {
+        setOperand(0, in);
+    }
+    const LAllocation* object() {
+        return getOperand(0);
+    }
+    const MLoadUnboxedExpando* mir() const {
+        return mir_->toLoadUnboxedExpando();
     }
 };
 

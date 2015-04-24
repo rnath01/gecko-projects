@@ -103,6 +103,10 @@ static RedirEntry kRedirMap[] = {
     "webrtc", "chrome://global/content/aboutwebrtc/aboutWebrtc.xhtml",
     nsIAboutModule::ALLOW_SCRIPT
   },
+  {
+    "serviceworkers", "chrome://global/content/aboutServiceWorkers.xhtml",
+    nsIAboutModule::ALLOW_SCRIPT
+  },
   // about:srcdoc is unresolvable by specification.  It is included here
   // because the security manager would disallow srcdoc iframes otherwise.
   {
@@ -143,7 +147,7 @@ nsAboutRedirector::NewChannel(nsIURI* aURI,
 
       tempChannel->SetOriginalURI(aURI);
 
-      NS_ADDREF(*aResult = tempChannel);
+      tempChannel.forget(aResult);
       return rv;
     }
   }
@@ -182,9 +186,6 @@ nsAboutRedirector::GetIndexedDBOriginPostfix(nsIURI* aURI, nsAString& aResult)
 nsresult
 nsAboutRedirector::Create(nsISupports* aOuter, REFNSIID aIID, void** aResult)
 {
-  nsAboutRedirector* about = new nsAboutRedirector();
-  NS_ADDREF(about);
-  nsresult rv = about->QueryInterface(aIID, aResult);
-  NS_RELEASE(about);
-  return rv;
+  nsRefPtr<nsAboutRedirector> about = new nsAboutRedirector();
+  return about->QueryInterface(aIID, aResult);
 }

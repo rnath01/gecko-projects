@@ -44,6 +44,8 @@ var ecmaGlobals =
     "Number",
     "Object",
     "Proxy",
+    "PushEvent",
+    "PushMessageData",
     "RangeError",
     "ReferenceError",
     "RegExp",
@@ -141,8 +143,6 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ImageData",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "InstallEvent",
-// IMPORTANT: Do not change this list without review from a DOM peer!
     "MessageEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MessagePort",
@@ -158,6 +158,8 @@ var interfaceNamesInGlobalScope =
     "ServiceWorker",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ServiceWorkerGlobalScope",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "ServiceWorkerRegistration",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "TextDecoder",
 // IMPORTANT: Do not change this list without review from a DOM peer!

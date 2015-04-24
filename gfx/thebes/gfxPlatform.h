@@ -38,11 +38,9 @@ class nsIURI;
 class nsIAtom;
 class nsIObserver;
 class SRGBOverrideObserver;
-struct gfxRGBA;
 
 namespace mozilla {
 namespace gl {
-class GLContext;
 class SkiaGLGlue;
 }
 namespace gfx {
@@ -498,6 +496,7 @@ public:
     static bool CanUseDirect3D9();
     static bool CanUseDirect3D11();
     static bool CanUseHardwareVideoDecoding();
+    static bool CanUseDirect3D11ANGLE();
 
     /**
      * Is it possible to use buffer rotation.  Note that these
@@ -621,10 +620,10 @@ public:
     /**
      * Used to test which input types are handled via APZ.
      */
-    virtual bool SupportsApzWheelInput() {
+    virtual bool SupportsApzWheelInput() const {
       return false;
     }
-    virtual bool SupportsApzTouchInput() {
+    virtual bool SupportsApzTouchInput() const {
       return false;
     }
 

@@ -213,6 +213,7 @@ const static js::Class sNPObjectJSWrapperClass =
     NPObjWrapper_SetProperty,
     nullptr,
     NPObjWrapper_Resolve,
+    nullptr,                                                /* mayResolve */
     NPObjWrapper_Convert,
     NPObjWrapper_Finalize,
     NPObjWrapper_Call,
@@ -265,7 +266,7 @@ static const JSClass sNPObjectMemberClass =
   {
     "NPObject Ambiguous Member class", JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS,
     nullptr, nullptr, nullptr, nullptr,
-    nullptr, nullptr, NPObjectMember_Convert,
+    nullptr, nullptr, nullptr, NPObjectMember_Convert,
     NPObjectMember_Finalize, NPObjectMember_Call,
     nullptr, nullptr, NPObjectMember_Trace
   };
@@ -664,7 +665,7 @@ ReportExceptionIfPending(JSContext *cx)
 }
 
 nsJSObjWrapper::nsJSObjWrapper(NPP npp)
-  : mJSObj(nullptr), mNpp(npp)
+  : mJSObj(nullptr), mNpp(npp), mDestroyPending(false)
 {
   MOZ_COUNT_CTOR(nsJSObjWrapper);
   OnWrapperCreated();
@@ -773,7 +774,7 @@ doInvoke(NPObject *npobj, NPIdentifier method, const NPVariant *args,
 
   // We're about to run script via JS_CallFunctionValue, so we need an
   // AutoEntryScript. NPAPI plugins are Gecko-specific and not in any spec.
-  dom::AutoEntryScript aes(globalObject);
+  dom::AutoEntryScript aes(globalObject, "NPAPI doInvoke");
   JSContext *cx = aes.cx();
 
   if (!npobj || !result) {
@@ -901,7 +902,7 @@ nsJSObjWrapper::NP_GetProperty(NPObject *npobj, NPIdentifier id,
 
   // We're about to run script via JS_CallFunctionValue, so we need an
   // AutoEntryScript. NPAPI plugins are Gecko-specific and not in any spec.
-  dom::AutoEntryScript aes(globalObject);
+  dom::AutoEntryScript aes(globalObject, "NPAPI get");
   JSContext *cx = aes.cx();
 
   if (!npobj) {
@@ -935,7 +936,7 @@ nsJSObjWrapper::NP_SetProperty(NPObject *npobj, NPIdentifier npid,
 
   // We're about to run script via JS_CallFunctionValue, so we need an
   // AutoEntryScript. NPAPI plugins are Gecko-specific and not in any spec.
-  dom::AutoEntryScript aes(globalObject);
+  dom::AutoEntryScript aes(globalObject, "NPAPI set");
   JSContext *cx = aes.cx();
 
   if (!npobj) {

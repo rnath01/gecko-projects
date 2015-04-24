@@ -701,6 +701,8 @@ nsObjectLoadingContent::UnbindFromTree(bool aDeep, bool aNullParent)
 nsObjectLoadingContent::nsObjectLoadingContent()
   : mType(eType_Loading)
   , mFallbackType(eFallbackAlternate)
+  , mRunID(0)
+  , mHasRunID(false)
   , mChannelLoaded(false)
   , mInstantiating(false)
   , mNetworkCreated(true)
@@ -814,6 +816,17 @@ nsObjectLoadingContent::InstantiatePluginInstance(bool aIsLoading)
   }
 
   mInstanceOwner = newOwner;
+
+  if (mInstanceOwner) {
+    nsRefPtr<nsNPAPIPluginInstance> inst;
+    rv = mInstanceOwner->GetInstance(getter_AddRefs(inst));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+
+    rv = inst->GetRunID(&mRunID);
+    mHasRunID = NS_SUCCEEDED(rv);
+  }
 
   // Ensure the frame did not change during instantiation re-entry (common).
   // HasNewFrame would not have mInstanceOwner yet, so the new frame would be
@@ -2720,8 +2733,10 @@ nsObjectLoadingContent::PluginDestroyed()
   // plugins in plugin host. Invalidate instance owner / prototype but otherwise
   // don't take any action.
   TeardownProtoChain();
-  mInstanceOwner->Destroy();
-  mInstanceOwner = nullptr;
+  if (mInstanceOwner) {
+    mInstanceOwner->Destroy();
+    mInstanceOwner = nullptr;
+  }
   return NS_OK;
 }
 
@@ -3145,6 +3160,24 @@ nsObjectLoadingContent::CancelPlayPreview()
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsObjectLoadingContent::GetRunID(uint32_t* aRunID)
+{
+  if (NS_WARN_IF(!nsContentUtils::IsCallerChrome())) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+  if (NS_WARN_IF(!aRunID)) {
+    return NS_ERROR_INVALID_POINTER;
+  }
+  if (!mHasRunID) {
+    // The plugin instance must not have a run ID, so we must
+    // be running the plugin in-process.
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+  *aRunID = mRunID;
+  return NS_OK;
+}
+
 static bool sPrefsInitialized;
 static uint32_t sSessionTimeoutMinutes;
 static uint32_t sPersistentTimeoutDays;
@@ -3160,6 +3193,16 @@ nsObjectLoadingContent::ShouldPlay(FallbackType &aReason, bool aIgnoreCurrentTyp
     Preferences::AddUintVarCache(&sPersistentTimeoutDays,
                                  "plugin.persistentPermissionAlways.intervalInDays", 90);
     sPrefsInitialized = true;
+  }
+
+  if (XRE_GetProcessType() == GeckoProcessType_Default &&
+      (Preferences::GetBool("browser.tabs.remote.autostart", false) ||
+       Preferences::GetBool("browser.tabs.remote.autostart.1", false) ||
+       Preferences::GetBool("browser.tabs.remote.autostart.2", false))) {
+    // Plugins running OOP from the chrome process along with plugins running
+    // OOP from the content process will hang. Let's prevent that situation.
+    aReason = eFallbackDisabled;
+    return false;
   }
 
   nsRefPtr<nsPluginHost> pluginHost = nsPluginHost::GetInst();

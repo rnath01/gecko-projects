@@ -43,11 +43,11 @@ namespace jit {
 
 class BreakpointSite;
 class BindingIter;
+class Debugger;
 class LazyScript;
 class RegExpObject;
 struct SourceCompressionTask;
 class Shape;
-class WatchpointMap;
 class NestedScopeObject;
 
 namespace frontend {
@@ -201,7 +201,7 @@ class Bindings
     friend class BindingIter;
     friend class AliasedFormalIter;
 
-    HeapPtrShape callObjShape_;
+    RelocatablePtrShape callObjShape_;
     uintptr_t bindingArrayAndFlag_;
     uint16_t numArgs_;
     uint16_t numBlockScoped_;
@@ -1020,6 +1020,8 @@ class JSScript : public js::gc::TenuredCell
     // keep it from relazifying.
     bool doNotRelazify_:1;
 
+    bool needsHomeObject_:1;
+
     // Add padding so JSScript is gc::Cell aligned. Make padding protected
     // instead of private to suppress -Wunused-private-field compiler warnings.
   protected:
@@ -1283,6 +1285,14 @@ class JSScript : public js::gc::TenuredCell
         MOZ_ASSERT(!isGenerator());
         generatorKindBits_ = GeneratorKindAsBits(kind);
     }
+
+    void setNeedsHomeObject() {
+        needsHomeObject_ = true;
+    }
+    bool needsHomeObject() const {
+        return needsHomeObject_;
+    }
+
 
     /*
      * As an optimization, even when argsHasLocalBinding, the function prologue
@@ -1624,6 +1634,9 @@ class JSScript : public js::gc::TenuredCell
         return arr->vector[index];
     }
 
+    // The following 3 functions find the static scope just before the
+    // execution of the instruction pointed to by pc.
+
     js::NestedScopeObject* getStaticBlockScope(jsbytecode* pc);
 
     // Returns the innermost static scope at pc if it falls within the extent
@@ -1704,7 +1717,7 @@ class JSScript : public js::gc::TenuredCell
 
     static inline js::ThingRootKind rootKind() { return js::THING_ROOT_SCRIPT; }
 
-    void markChildren(JSTracer* trc);
+    void traceChildren(JSTracer* trc);
 
     // A helper class to prevent relazification of the given function's script
     // while it's holding on to it.  This class automatically roots the script.
@@ -1779,7 +1792,7 @@ class BindingIter
       : bindings_(script, &script->bindings), i_(0), unaliasedLocal_(0) {}
 
     bool done() const { return i_ == bindings_->count(); }
-    operator bool() const { return !done(); }
+    explicit operator bool() const { return !done(); }
     BindingIter& operator++() { (*this)++; return *this; }
 
     void operator++(int) {
@@ -1850,7 +1863,7 @@ class AliasedFormalIter
     explicit inline AliasedFormalIter(JSScript* script);
 
     bool done() const { return p_ == end_; }
-    operator bool() const { return !done(); }
+    explicit operator bool() const { return !done(); }
     void operator++(int) { MOZ_ASSERT(!done()); p_++; slot_++; settle(); }
 
     const Binding& operator*() const { MOZ_ASSERT(!done()); return *p_; }
@@ -2120,7 +2133,7 @@ class LazyScript : public gc::TenuredCell
     bool hasUncompiledEnclosingScript() const;
     uint32_t staticLevel(JSContext* cx) const;
 
-    void markChildren(JSTracer* trc);
+    void traceChildren(JSTracer* trc);
     void finalize(js::FreeOp* fop);
     void fixupAfterMovingGC() {}
 

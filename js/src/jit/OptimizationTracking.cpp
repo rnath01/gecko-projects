@@ -1145,17 +1145,19 @@ JS::ForEachTrackedOptimizationAttempt(JSRuntime* rt, void* addr, uint8_t index,
 }
 
 static void
-InterpretedFunctionFilenameAndLineNumber(JSFunction* fun, const char** filename, unsigned* lineno)
+InterpretedFunctionFilenameAndLineNumber(JSFunction* fun, const char** filename,
+                                         Maybe<unsigned>* lineno)
 {
-    ScriptSource* source;
     if (fun->hasScript()) {
-        source = fun->nonLazyScript()->maybeForwardedScriptSource();
-        *lineno = fun->nonLazyScript()->lineno();
+        *filename = fun->nonLazyScript()->maybeForwardedScriptSource()->filename();
+        *lineno = Some((unsigned) fun->nonLazyScript()->lineno());
+    } else if (fun->lazyScriptOrNull()) {
+        *filename = fun->lazyScript()->maybeForwardedScriptSource()->filename();
+        *lineno = Some((unsigned) fun->lazyScript()->lineno());
     } else {
-        source = fun->lazyScript()->maybeForwardedScriptSource();
-        *lineno = fun->lazyScript()->lineno();
+        *filename = "(self-hosted builtin)";
+        *lineno = Nothing();
     }
-    *filename = source->filename();
 }
 
 static JSFunction*
@@ -1180,7 +1182,7 @@ IonTrackedOptimizationsTypeInfo::ForEachOpAdapter::readType(const IonTrackedType
     TypeSet::Type ty = tracked.type;
 
     if (ty.isPrimitive() || ty.isUnknown() || ty.isAnyObject()) {
-        op_.readType("primitive", TypeSet::NonObjectTypeString(ty), nullptr, 0);
+        op_.readType("primitive", TypeSet::NonObjectTypeString(ty), nullptr, Nothing());
         return;
     }
 
@@ -1188,9 +1190,18 @@ IonTrackedOptimizationsTypeInfo::ForEachOpAdapter::readType(const IonTrackedType
     const uint32_t bufsize = mozilla::ArrayLength(buf);
 
     if (JSFunction* fun = FunctionFromTrackedType(tracked)) {
+        // The displayAtom is useful for identifying both native and
+        // interpreted functions.
+        char* name = nullptr;
+        if (fun->displayAtom()) {
+            PutEscapedString(buf, bufsize, fun->displayAtom(), 0);
+            name = buf;
+        }
+
         if (fun->isNative()) {
             //
-            // Print out the absolute address of the function pointer.
+            // Try printing out the displayAtom of the native function and the
+            // absolute address of the native function pointer.
             //
             // Note that this address is not usable without knowing the
             // starting address at which our shared library is loaded. Shared
@@ -1207,17 +1218,20 @@ IonTrackedOptimizationsTypeInfo::ForEachOpAdapter::readType(const IonTrackedType
             //   if (dladdr(addr, &info) != 0)
             //       offset = uintptr_t(addr) - uintptr_t(info.dli_fbase);
             //
-            uintptr_t addr = JS_FUNC_TO_DATA_PTR(uintptr_t, fun->native());
-            JS_snprintf(buf, bufsize, "%llx", addr);
-            op_.readType("native", nullptr, buf, UINT32_MAX);
+            char locationBuf[20];
+            if (!name) {
+                uintptr_t addr = JS_FUNC_TO_DATA_PTR(uintptr_t, fun->native());
+                JS_snprintf(locationBuf, mozilla::ArrayLength(locationBuf), "%llx", addr);
+            }
+            op_.readType("native", name, name ? nullptr : locationBuf, Nothing());
             return;
         }
 
-        PutEscapedString(buf, bufsize, fun->displayAtom(), 0);
         const char* filename;
-        unsigned lineno;
+        Maybe<unsigned> lineno;
         InterpretedFunctionFilenameAndLineNumber(fun, &filename, &lineno);
-        op_.readType(tracked.constructor ? "constructor" : "function", buf, filename, lineno);
+        op_.readType(tracked.constructor ? "constructor" : "function",
+                     name, filename, lineno);
         return;
     }
 
@@ -1228,16 +1242,16 @@ IonTrackedOptimizationsTypeInfo::ForEachOpAdapter::readType(const IonTrackedType
         JSScript* script = tracked.script;
         op_.readType("alloc site", buf,
                      script->maybeForwardedScriptSource()->filename(),
-                     PCToLineNumber(script, script->offsetToPC(tracked.offset)));
+                     Some(PCToLineNumber(script, script->offsetToPC(tracked.offset))));
         return;
     }
 
     if (ty.isGroup()) {
-        op_.readType("prototype", buf, nullptr, UINT32_MAX);
+        op_.readType("prototype", buf, nullptr, Nothing());
         return;
     }
 
-    op_.readType("singleton", buf, nullptr, UINT32_MAX);
+    op_.readType("singleton", buf, nullptr, Nothing());
 }
 
 void

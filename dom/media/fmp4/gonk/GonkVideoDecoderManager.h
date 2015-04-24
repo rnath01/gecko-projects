@@ -40,7 +40,7 @@ typedef mozilla::layers::TextureClient TextureClient;
 public:
   GonkVideoDecoderManager(MediaTaskQueue* aTaskQueue,
                           mozilla::layers::ImageContainer* aImageContainer,
-		                      const mp4_demuxer::VideoDecoderConfig& aConfig);
+                          const VideoInfo& aConfig);
 
   ~GonkVideoDecoderManager();
 
@@ -51,16 +51,12 @@ public:
 
   virtual nsresult Flush() override;
 
-  virtual void AllocateMediaResources();
-
   virtual void ReleaseMediaResources();
 
   static void RecycleCallback(TextureClient* aClient, void* aClosure);
 
 protected:
-  virtual bool PerformFormatSpecificProcess(mp4_demuxer::MP4Sample* aSample) override;
-
-  virtual android::status_t SendSampleToOMX(mp4_demuxer::MP4Sample* aSample) override;
+  virtual android::status_t SendSampleToOMX(MediaRawData* aSample) override;
 
 private:
   struct FrameInfo
@@ -148,10 +144,10 @@ private:
 
   android::sp<MediaCodecProxy> mDecoder;
   nsRefPtr<layers::ImageContainer> mImageContainer;
-  MediaDataDecoderCallback* mCallback;
 
   android::MediaBuffer* mVideoBuffer;
 
+  nsRefPtr<MediaByteBuffer>  mCodecSpecificData;
   MediaDataDecoderCallback*  mReaderCallback;
   MediaInfo mInfo;
   android::sp<VideoResourceListener> mVideoListener;
@@ -182,6 +178,7 @@ private:
   // The lock protects mPendingVideoBuffers.
   Mutex mPendingVideoBuffersLock;
 
+  nsAutoCString mMimeType;
 };
 
 } // namespace mozilla

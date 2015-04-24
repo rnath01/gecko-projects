@@ -12,12 +12,11 @@
 #include "BluetoothHfpManagerBase.h"
 #include "BluetoothRilListener.h"
 #include "BluetoothSocketObserver.h"
-#include "mozilla/ipc/UnixSocket.h"
+#include "mozilla/ipc/SocketBase.h"
 #include "mozilla/Hal.h"
 
 BEGIN_BLUETOOTH_NAMESPACE
 
-class BluetoothReplyRunnable;
 class BluetoothSocket;
 class Call;
 
@@ -172,7 +171,12 @@ private:
 
   BluetoothHfpManager();
   bool Init();
+
+#ifdef MOZ_B2G_BT_API_V2
+  // Removed in bluetooth2
+#else
   void Cleanup();
+#endif
 
   void HandleShutdown();
   void HandleVolumeChanged(nsISupports* aSubject);

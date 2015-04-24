@@ -41,6 +41,7 @@ namespace js {
 struct MatchPair;
 class MatchPairs;
 class RegExpShared;
+class RegExpStatics;
 
 namespace frontend { class TokenStream; }
 
@@ -119,7 +120,7 @@ class RegExpShared
 
     struct RegExpCompilation
     {
-        HeapPtrJitCode jitCode;
+        RelocatablePtrJitCode jitCode;
         uint8_t* byteCode;
 
         RegExpCompilation() : byteCode(nullptr) {}
@@ -131,7 +132,7 @@ class RegExpShared
     };
 
     /* Source to the RegExp, for lazy compilation. */
-    HeapPtrAtom        source;
+    RelocatablePtrAtom source;
 
     RegExpFlag         flags;
     size_t             parenCount;

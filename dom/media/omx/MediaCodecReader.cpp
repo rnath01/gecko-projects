@@ -426,8 +426,11 @@ MediaCodecReader::DecodeAudioDataSync()
     }
   }
 
-  if (bufferInfo.mBuffer != nullptr && bufferInfo.mSize > 0 &&
-      bufferInfo.mBuffer->data() != nullptr) {
+  if ((bufferInfo.mFlags & MediaCodec::BUFFER_FLAG_EOS) ||
+      (status == ERROR_END_OF_STREAM)) {
+    AudioQueue().Finish();
+  } else if (bufferInfo.mBuffer != nullptr && bufferInfo.mSize > 0 &&
+             bufferInfo.mBuffer->data() != nullptr) {
     // This is the approximate byte position in the stream.
     int64_t pos = mDecoder->GetResource()->Tell();
 
@@ -445,13 +448,7 @@ MediaCodecReader::DecodeAudioDataSync()
         bufferInfo.mSize,
         mInfo.mAudio.mChannels));
   }
-
-  if ((bufferInfo.mFlags & MediaCodec::BUFFER_FLAG_EOS) ||
-      (status == ERROR_END_OF_STREAM)) {
-    AudioQueue().Finish();
-  }
   mAudioTrack.mCodec->releaseOutputBuffer(bufferInfo.mIndex);
-
 }
 
 void
@@ -500,13 +497,13 @@ MediaCodecReader::DecodeVideoFrameTask(int64_t aTimeThreshold)
 bool
 MediaCodecReader::HasAudio()
 {
-  return mInfo.mAudio.mHasAudio;
+  return mInfo.HasAudio();
 }
 
 bool
 MediaCodecReader::HasVideo()
 {
-  return mInfo.mVideo.mHasVideo;
+  return mInfo.HasVideo();
 }
 
 void
@@ -918,6 +915,13 @@ MediaCodecReader::DecodeVideoFrameSync(int64_t aTimeThreshold)
     }
   }
 
+  if ((bufferInfo.mFlags & MediaCodec::BUFFER_FLAG_EOS) ||
+      (status == ERROR_END_OF_STREAM)) {
+    VideoQueue().Finish();
+    mVideoTrack.mCodec->releaseOutputBuffer(bufferInfo.mIndex);
+    return;
+  }
+
   nsRefPtr<VideoData> v;
   RefPtr<TextureClient> textureClient;
   sp<GraphicBuffer> graphicBuffer;
@@ -1012,11 +1016,6 @@ MediaCodecReader::DecodeVideoFrameSync(int64_t aTimeThreshold)
     } else {
       NS_WARNING("Unable to create VideoData");
     }
-  }
-
-  if ((bufferInfo.mFlags & MediaCodec::BUFFER_FLAG_EOS) ||
-      (status == ERROR_END_OF_STREAM)) {
-    VideoQueue().Finish();
   }
 
   if (v != nullptr && textureClient != nullptr && graphicBuffer != nullptr) {
@@ -1322,7 +1321,7 @@ MediaCodecReader::CreateMediaCodec(sp<ALooper>& aLooper,
 
     const char* mime;
     if (sourceFormat->findCString(kKeyMIMEType, &mime)) {
-      aTrack.mCodec = MediaCodecProxy::CreateByType(aLooper, mime, false, aAsync, aListener);
+      aTrack.mCodec = MediaCodecProxy::CreateByType(aLooper, mime, false, aListener);
     }
 
     if (aTrack.mCodec == nullptr) {
@@ -1556,7 +1555,6 @@ MediaCodecReader::UpdateAudioInfo()
   }
 
   // Update AudioInfo
-  mInfo.mAudio.mHasAudio = true;
   mInfo.mAudio.mChannels = codec_channel_count;
   mInfo.mAudio.mRate = codec_sample_rate;
 
@@ -1646,7 +1644,7 @@ MediaCodecReader::UpdateVideoInfo()
   }
 
   // Relative picture size
-  gfx::IntRect relative_picture_rect = gfx::ToIntRect(picture_rect);
+  gfx::IntRect relative_picture_rect = picture_rect;
   if (mVideoTrack.mWidth != mVideoTrack.mFrameSize.width ||
       mVideoTrack.mHeight != mVideoTrack.mFrameSize.height) {
     // Frame size is different from what the container reports. This is legal,
@@ -1663,7 +1661,6 @@ MediaCodecReader::UpdateVideoInfo()
   }
 
   // Update VideoInfo
-  mInfo.mVideo.mHasVideo = true;
   mVideoTrack.mPictureRect = picture_rect;
   mInfo.mVideo.mDisplay = display_size;
   mVideoTrack.mRelativePictureRect = relative_picture_rect;

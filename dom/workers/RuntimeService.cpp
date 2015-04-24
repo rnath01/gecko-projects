@@ -160,6 +160,7 @@ static_assert(MAX_WORKERS_PER_DOMAIN >= 1,
 #define PREF_DOM_CACHES_ENABLED        "dom.caches.enabled"
 #define PREF_WORKERS_LATEST_JS_VERSION "dom.workers.latestJSVersion"
 #define PREF_INTL_ACCEPT_LANGUAGES     "intl.accept_languages"
+#define PREF_SERVICEWORKERS_ENABLED    "dom.serviceWorkers.enabled"
 
 namespace {
 
@@ -269,11 +270,12 @@ GetWorkerPref(const nsACString& aPref,
 }
 
 // This function creates a key for a SharedWorker composed by "shared|name|scriptSpec"
-// and a key for a ServiceWorker composed by "service|scope|scriptSpec".
+// and a key for a ServiceWorker composed by "service|scope|cache|scriptSpec".
 // If the name contains a '|', this will be replaced by '||'.
 void
 GenerateSharedWorkerKey(const nsACString& aScriptSpec, const nsACString& aName,
-                        WorkerType aWorkerType, nsCString& aKey)
+                        const nsACString& aCacheName, WorkerType aWorkerType,
+                        nsCString& aKey)
 {
   aKey.Truncate();
   NS_NAMED_LITERAL_CSTRING(sharedPrefix, "shared|");
@@ -281,8 +283,10 @@ GenerateSharedWorkerKey(const nsACString& aScriptSpec, const nsACString& aName,
   MOZ_ASSERT(servicePrefix.Length() > sharedPrefix.Length());
   MOZ_ASSERT(aWorkerType == WorkerTypeShared ||
              aWorkerType == WorkerTypeService);
+  MOZ_ASSERT_IF(aWorkerType == WorkerTypeShared, aCacheName.IsEmpty());
+  MOZ_ASSERT_IF(aWorkerType == WorkerTypeService, !aCacheName.IsEmpty());
   aKey.SetCapacity(servicePrefix.Length() + aScriptSpec.Length() +
-                   aName.Length() + 1);
+                   aName.Length() + aCacheName.Length() + 1);
 
   aKey.Append(aWorkerType == WorkerTypeService ? servicePrefix : sharedPrefix);
 
@@ -295,6 +299,11 @@ GenerateSharedWorkerKey(const nsACString& aScriptSpec, const nsACString& aName,
     } else {
       aKey.Append(*start);
     }
+  }
+
+  if (aWorkerType == WorkerTypeService) {
+    aKey.Append('|');
+    aKey.Append(aCacheName);
   }
 
   aKey.Append('|');
@@ -769,9 +778,48 @@ AsmJSCacheOpenEntryForWrite(JS::Handle<JSObject*> aGlobal,
                                        aSize, aMemory, aHandle);
 }
 
-struct WorkerThreadRuntimePrivate : public PerThreadAtomCache
+class WorkerJSRuntime;
+
+class WorkerThreadRuntimePrivate : private PerThreadAtomCache
 {
+  friend class WorkerJSRuntime;
+
   WorkerPrivate* mWorkerPrivate;
+
+public:
+  // This can't return null, but we can't lose the "Get" prefix in the name or
+  // it will be ambiguous with the WorkerPrivate class name.
+  WorkerPrivate*
+  GetWorkerPrivate() const
+  {
+    MOZ_ASSERT(!NS_IsMainThread());
+    MOZ_ASSERT(mWorkerPrivate);
+
+    return mWorkerPrivate;
+  }
+
+private:
+  explicit
+  WorkerThreadRuntimePrivate(WorkerPrivate* aWorkerPrivate)
+    : mWorkerPrivate(aWorkerPrivate)
+  {
+    MOZ_ASSERT(!NS_IsMainThread());
+
+    // Zero out the base class members.
+    memset(this, 0, sizeof(PerThreadAtomCache));
+
+    MOZ_ASSERT(mWorkerPrivate);
+  }
+
+  ~WorkerThreadRuntimePrivate()
+  {
+    MOZ_ASSERT(!NS_IsMainThread());
+  }
+
+  WorkerThreadRuntimePrivate(const WorkerThreadRuntimePrivate&) = delete;
+
+  WorkerThreadRuntimePrivate&
+  operator=(const WorkerThreadRuntimePrivate&) = delete;
 };
 
 JSContext*
@@ -819,11 +867,6 @@ CreateJSContextForWorker(WorkerPrivate* aWorkerPrivate, JSRuntime* aRuntime)
     NS_WARNING("Could not create new context!");
     return nullptr;
   }
-
-  auto rtPrivate = new WorkerThreadRuntimePrivate();
-  memset(rtPrivate, 0, sizeof(WorkerThreadRuntimePrivate));
-  rtPrivate->mWorkerPrivate = aWorkerPrivate;
-  JS_SetRuntimePrivate(aRuntime, rtPrivate);
 
   JS_SetErrorReporter(aRuntime, ErrorReporter);
 
@@ -912,16 +955,23 @@ public:
                               WORKER_DEFAULT_NURSERY_SIZE),
     mWorkerPrivate(aWorkerPrivate)
   {
-    js::SetPreserveWrapperCallback(Runtime(), PreserveWrapper);
-    JS_InitDestroyPrincipalsCallback(Runtime(), DestroyWorkerPrincipals);
-    JS_SetWrapObjectCallbacks(Runtime(), &WrapObjectCallbacks);
+    JSRuntime* rt = Runtime();
+    MOZ_ASSERT(rt);
+
+    JS_SetRuntimePrivate(rt, new WorkerThreadRuntimePrivate(aWorkerPrivate));
+
+    js::SetPreserveWrapperCallback(rt, PreserveWrapper);
+    JS_InitDestroyPrincipalsCallback(rt, DestroyWorkerPrincipals);
+    JS_SetWrapObjectCallbacks(rt, &WrapObjectCallbacks);
   }
 
   ~WorkerJSRuntime()
   {
-    auto rtPrivate = static_cast<WorkerThreadRuntimePrivate*>(JS_GetRuntimePrivate(Runtime()));
-    delete rtPrivate;
-    JS_SetRuntimePrivate(Runtime(), nullptr);
+    JSRuntime* rt = Runtime();
+    MOZ_ASSERT(rt);
+
+    delete static_cast<WorkerThreadRuntimePrivate*>(JS_GetRuntimePrivate(rt));
+    JS_SetRuntimePrivate(rt, nullptr);
 
     // The worker global should be unrooted and the shutdown cycle collection
     // should break all remaining cycles. The superclass destructor will run
@@ -1303,7 +1353,8 @@ GetWorkerPrivateFromContext(JSContext* aCx)
   void* rtPrivate = JS_GetRuntimePrivate(rt);
   MOZ_ASSERT(rtPrivate);
 
-  return static_cast<WorkerThreadRuntimePrivate*>(rtPrivate)->mWorkerPrivate;
+  return
+    static_cast<WorkerThreadRuntimePrivate*>(rtPrivate)->GetWorkerPrivate();
 }
 
 WorkerPrivate*
@@ -1322,7 +1373,8 @@ GetCurrentThreadWorkerPrivate()
   void* rtPrivate = JS_GetRuntimePrivate(rt);
   MOZ_ASSERT(rtPrivate);
 
-  return static_cast<WorkerThreadRuntimePrivate*>(rtPrivate)->mWorkerPrivate;
+  return
+    static_cast<WorkerThreadRuntimePrivate*>(rtPrivate)->GetWorkerPrivate();
 }
 
 bool
@@ -1492,10 +1544,14 @@ RuntimeService::RegisterWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
 
     if (isSharedOrServiceWorker) {
       const nsCString& sharedWorkerName = aWorkerPrivate->SharedWorkerName();
+      const nsCString& cacheName =
+        aWorkerPrivate->IsServiceWorker() ?
+          NS_ConvertUTF16toUTF8(aWorkerPrivate->ServiceWorkerCacheName()) :
+          EmptyCString();
 
       nsAutoCString key;
       GenerateSharedWorkerKey(sharedWorkerScriptSpec, sharedWorkerName,
-                              aWorkerPrivate->Type(), key);
+                              cacheName, aWorkerPrivate->Type(), key);
       MOZ_ASSERT(!domainInfo->mSharedWorkerInfos.Get(key));
 
       SharedWorkerInfo* sharedWorkerInfo =
@@ -1603,9 +1659,13 @@ RuntimeService::UnregisterWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
 
       if (match.mSharedWorkerInfo) {
         nsAutoCString key;
+        const nsCString& cacheName =
+          aWorkerPrivate->IsServiceWorker() ?
+            NS_ConvertUTF16toUTF8(aWorkerPrivate->ServiceWorkerCacheName()) :
+            EmptyCString();
         GenerateSharedWorkerKey(match.mSharedWorkerInfo->mScriptSpec,
                                 match.mSharedWorkerInfo->mName,
-                                aWorkerPrivate->Type(), key);
+                                cacheName, aWorkerPrivate->Type(), key);
         domainInfo->mSharedWorkerInfos.Remove(key);
       }
     }
@@ -1874,6 +1934,10 @@ RuntimeService::Init()
                                   WorkerPrefChanged,
                                   PREF_DOM_CACHES_ENABLED,
                                   reinterpret_cast<void *>(WORKERPREF_DOM_CACHES))) ||
+      NS_FAILED(Preferences::RegisterCallbackAndCall(
+                                  WorkerPrefChanged,
+                                  PREF_SERVICEWORKERS_ENABLED,
+                                  reinterpret_cast<void *>(WORKERPREF_SERVICEWORKERS))) ||
       NS_FAILED(Preferences::RegisterCallback(LoadRuntimeOptions,
                                               PREF_JS_OPTIONS_PREFIX,
                                               nullptr)) ||
@@ -2069,6 +2133,10 @@ RuntimeService::Cleanup()
         NS_FAILED(Preferences::UnregisterCallback(LoadRuntimeOptions,
                                                   PREF_WORKERS_OPTIONS_PREFIX,
                                                   nullptr)) ||
+        NS_FAILED(Preferences::UnregisterCallback(
+                                  WorkerPrefChanged,
+                                  PREF_SERVICEWORKERS_ENABLED,
+                                  reinterpret_cast<void *>(WORKERPREF_SERVICEWORKERS))) ||
         NS_FAILED(Preferences::UnregisterCallback(
                                   WorkerPrefChanged,
                                   PREF_DOM_CACHES_ENABLED,
@@ -2340,7 +2408,9 @@ RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsAutoCString key;
-    GenerateSharedWorkerKey(scriptSpec, aName, aType, key);
+    GenerateSharedWorkerKey(scriptSpec, aName,
+                            NS_ConvertUTF16toUTF8(aLoadInfo->mServiceWorkerCacheName),
+                            aType, key);
 
     if (mDomainMap.Get(aLoadInfo->mDomain, &domainInfo) &&
         domainInfo->mSharedWorkerInfos.Get(key, &sharedWorkerInfo)) {
@@ -2414,9 +2484,13 @@ RuntimeService::ForgetSharedWorker(WorkerPrivate* aWorkerPrivate)
 
     if (match.mSharedWorkerInfo) {
       nsAutoCString key;
+      const nsCString& cacheName =
+        aWorkerPrivate->IsServiceWorker() ?
+          NS_ConvertUTF16toUTF8(aWorkerPrivate->ServiceWorkerCacheName()) :
+          EmptyCString();
       GenerateSharedWorkerKey(match.mSharedWorkerInfo->mScriptSpec,
                               match.mSharedWorkerInfo->mName,
-                              aWorkerPrivate->Type(), key);
+                              cacheName, aWorkerPrivate->Type(), key);
       domainInfo->mSharedWorkerInfos.Remove(key);
     }
   }
@@ -2607,6 +2681,10 @@ RuntimeService::WorkerPrefChanged(const char* aPrefName, void* aClosure)
     key = WORKERPREF_DOM_CACHES;
     sDefaultPreferences[WORKERPREF_DOM_CACHES] =
       Preferences::GetBool(PREF_DOM_CACHES_ENABLED, false);
+  } else if (key == WORKERPREF_SERVICEWORKERS) {
+    key = WORKERPREF_SERVICEWORKERS;
+    sDefaultPreferences[WORKERPREF_SERVICEWORKERS] =
+      Preferences::GetBool(PREF_SERVICEWORKERS_ENABLED, false);
   }
   // This function should never be registered as a callback for a preference it
   // does not handle.
@@ -2740,15 +2818,18 @@ WorkerThreadPrimaryRunnable::Run()
 #endif
     }
 
-    // Destroy the main context.  This will unroot the main worker global and
-    // GC.  This is not the last JSContext (WorkerJSRuntime maintains an
-    // internal JSContext).
+    // Destroy the main context. This will unroot the main worker global and GC,
+    // which should break all cycles that touch JS.
     JS_DestroyContext(cx);
 
+    // Before shutting down the cycle collector we need to do one more pass
+    // through the event loop to clean up any C++ objects that need deferred
+    // cleanup.
+    mWorkerPrivate->ClearMainEventQueue(WorkerPrivate::WorkerRan);
+
     // Now WorkerJSRuntime goes out of scope and its destructor will shut
-    // down the cycle collector and destroy the final JSContext.  This
-    // breaks any remaining cycles and collects the C++ and JS objects
-    // participating.
+    // down the cycle collector. This breaks any remaining cycles and collects
+    // any remaining C++ objects.
   }
 
   mWorkerPrivate->SetThread(nullptr);

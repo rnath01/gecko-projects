@@ -119,6 +119,14 @@ GetBuildConfiguration(JSContext* cx, unsigned argc, jsval* vp)
     if (!JS_SetProperty(cx, info, "asan", value))
         return false;
 
+#ifdef MOZ_TSAN
+    value = BooleanValue(true);
+#else
+    value = BooleanValue(false);
+#endif
+    if (!JS_SetProperty(cx, info, "tsan", value))
+        return false;
+
 #ifdef JS_GC_ZEAL
     value = BooleanValue(true);
 #else
@@ -201,6 +209,10 @@ GetBuildConfiguration(JSContext* cx, unsigned argc, jsval* vp)
     value = BooleanValue(false);
 #endif
     if (!JS_SetProperty(cx, info, "moz-memory", value))
+        return false;
+
+    value.setInt32(sizeof(void*));
+    if (!JS_SetProperty(cx, info, "pointer-byte-size", value))
         return false;
 
     args.rval().setObject(*info);
@@ -713,6 +725,22 @@ GCSlice(JSContext* cx, unsigned argc, Value* vp)
 }
 
 static bool
+AbortGC(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (args.length() != 0) {
+        RootedObject callee(cx, &args.callee());
+        ReportUsageError(cx, callee, "Wrong number of arguments");
+        return false;
+    }
+
+    cx->runtime()->gc.abortGC();
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
 ValidateGC(JSContext* cx, unsigned argc, jsval* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -1126,6 +1154,7 @@ static const JSClass FinalizeCounterClass = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     finalize_counter_finalize
 };
@@ -1395,7 +1424,7 @@ DisplayName(JSContext* cx, unsigned argc, jsval* vp)
 }
 
 static JSObject*
-ShellObjectMetadataCallback(JSContext* cx)
+ShellObjectMetadataCallback(JSContext* cx, JSObject*)
 {
     RootedObject obj(cx, NewBuiltinClassInstance<PlainObject>(cx));
     if (!obj)
@@ -1479,7 +1508,7 @@ js::testingFunc_inJit(JSContext* cx, unsigned argc, jsval* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    if (!IsBaselineEnabled(cx)) {
+    if (!jit::IsBaselineEnabled(cx)) {
         JSString* error = JS_NewStringCopyZ(cx, "Baseline is disabled.");
         if(!error)
             return false;
@@ -1507,7 +1536,7 @@ js::testingFunc_inIon(JSContext* cx, unsigned argc, jsval* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    if (!IsIonEnabled(cx)) {
+    if (!jit::IsIonEnabled(cx)) {
         JSString* error = JS_NewStringCopyZ(cx, "Ion is disabled.");
         if (!error)
             return false;
@@ -1807,6 +1836,7 @@ const Class CloneBufferObject::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     Finalize
 };
@@ -2082,7 +2112,7 @@ static bool
 ReportLargeAllocationFailure(JSContext* cx, unsigned argc, jsval* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    void* buf = cx->runtime()->onOutOfMemoryCanGC(NULL, JSRuntime::LARGE_ALLOCATION);
+    void* buf = cx->runtime()->onOutOfMemoryCanGC(AllocFunction::Malloc, JSRuntime::LARGE_ALLOCATION);
     js_free(buf);
     args.rval().setUndefined();
     return true;
@@ -2449,11 +2479,18 @@ ByteSize(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     mozilla::MallocSizeOf mallocSizeOf = cx->runtime()->debuggerMallocSizeOf;
-    JS::ubi::Node node = args.get(0);
-    if (node)
-        args.rval().set(NumberValue(node.size(mallocSizeOf)));
-    else
-        args.rval().setUndefined();
+
+    {
+        // We can't tolerate the GC moving things around while we're using a
+        // ubi::Node. Check that nothing we do causes a GC.
+        JS::AutoCheckCannotGC autoCannotGC;
+
+        JS::ubi::Node node = args.get(0);
+        if (node)
+            args.rval().setNumber(uint32_t(node.size(mallocSizeOf)));
+        else
+            args.rval().setUndefined();
+    }
     return true;
 }
 
@@ -2494,17 +2531,24 @@ DumpStringRepresentation(JSContext* cx, unsigned argc, Value* vp)
 #endif
 
 static bool
-SetLazyParsingEnabled(JSContext* cx, unsigned argc, Value* vp)
+SetLazyParsingDisabled(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    if (argc < 1) {
-        JS_ReportError(cx, "setLazyParsingEnabled: need an argument");
-        return false;
-    }
+    bool disable = !args.hasDefined(0) || ToBoolean(args[0]);
+    JS::CompartmentOptionsRef(cx->compartment()).setDisableLazyParsing(disable);
 
-    bool arg = ToBoolean(args.get(0));
-    JS::CompartmentOptionsRef(cx->compartment()).setDiscardSource(!arg);
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+SetDiscardSource(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    bool discard = !args.hasDefined(0) || ToBoolean(args[0]);
+    JS::CompartmentOptionsRef(cx->compartment()).setDiscardSource(discard);
 
     args.rval().setUndefined();
     return true;
@@ -2654,6 +2698,10 @@ gc::ZealModeHelpText),
     JS_FN_HELP("gcslice", GCSlice, 1, 0,
 "gcslice([n])",
 "  Start or continue an an incremental GC, running a slice that processes about n objects."),
+
+    JS_FN_HELP("abortgc", AbortGC, 1, 0,
+"abortgc()",
+"  Abort the current incremental GC."),
 
     JS_FN_HELP("validategc", ValidateGC, 1, 0,
 "validategc(true|false)",
@@ -2902,9 +2950,15 @@ gc::ZealModeHelpText),
 "  Print a human-readable description of how the string |str| is represented.\n"),
 #endif
 
-    JS_FN_HELP("setLazyParsingEnabled", SetLazyParsingEnabled, 1, 0,
-"setLazyParsingEnabled(bool)",
-"  Enable or disable lazy parsing in the current compartment.  The default is enabled."),
+    JS_FN_HELP("setLazyParsingDisabled", SetLazyParsingDisabled, 1, 0,
+"setLazyParsingDisabled(bool)",
+"  Explicitly disable lazy parsing in the current compartment.  The default is that lazy "
+"  parsing is not explicitly disabled."),
+
+    JS_FN_HELP("setDiscardSource", SetDiscardSource, 1, 0,
+"setDiscardSource(bool)",
+"  Explicitly enable source discarding in the current compartment.  The default is that "
+"  source discarding is not explicitly enabled."),
 
     JS_FS_HELP_END
 };

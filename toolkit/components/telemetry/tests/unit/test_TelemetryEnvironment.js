@@ -1,8 +1,6 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
-
 Cu.import("resource://gre/modules/AddonManager.jsm");
 Cu.import("resource://gre/modules/TelemetryEnvironment.jsm", this);
 Cu.import("resource://gre/modules/Preferences.jsm", this);
@@ -394,11 +392,14 @@ function checkSystemSection(data) {
   let gfxData = data.system.gfx;
   Assert.ok("D2DEnabled" in gfxData);
   Assert.ok("DWriteEnabled" in gfxData);
-  Assert.ok("DWriteVersion" in gfxData);
+  // DWriteVersion is disabled due to main thread jank and will be enabled
+  // again as part of bug 1154500.
+  //Assert.ok("DWriteVersion" in gfxData);
   if (gIsWindows) {
     Assert.equal(typeof gfxData.D2DEnabled, "boolean");
     Assert.equal(typeof gfxData.DWriteEnabled, "boolean");
-    Assert.ok(checkString(gfxData.DWriteVersion));
+    // As above, will be enabled again as part of bug 1154500.
+    //Assert.ok(checkString(gfxData.DWriteVersion));
   }
 
   Assert.ok("adapters" in gfxData);

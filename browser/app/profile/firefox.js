@@ -102,10 +102,10 @@ pref("app.update.log", false);
 pref("app.update.backgroundMaxErrors", 10);
 
 // The aus update xml certificate checks for application update are disabled on
-// Windows since the mar signature check which is currently only implemented on
-// Windows is sufficient for preventing us from applying a mar that is not
+// Windows and Mac OS X since the mar signature check are implemented on these
+// platforms and is sufficient to prevent us from applying a mar that is not
 // valid.
-#ifdef XP_WIN
+#if defined(XP_WIN) || defined(XP_MACOSX)
 pref("app.update.cert.requireBuiltIn", false);
 pref("app.update.cert.checkAttributes", false);
 #else
@@ -251,6 +251,8 @@ pref("browser.uitour.loglevel", "Error");
 pref("browser.uitour.requireSecure", true);
 pref("browser.uitour.themeOrigin", "https://addons.mozilla.org/%LOCALE%/firefox/themes/");
 pref("browser.uitour.url", "https://www.mozilla.org/%LOCALE%/firefox/%VERSION%/tour/");
+// This is used as a regexp match against the page's URL.
+pref("browser.uitour.readerViewTrigger", "^https:\\/\\/www\\.mozilla\\.org\\/[^\\/]+\\/firefox\\/reading\\/start");
 
 pref("browser.customizemode.tip0.shown", false);
 pref("browser.customizemode.tip0.learnMoreUrl", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/customize");
@@ -658,6 +660,7 @@ pref("plugins.update.url", "https://www.mozilla.org/%LOCALE%/plugincheck/?utm_so
 pref("plugins.update.notifyUser", false);
 
 pref("plugins.click_to_play", true);
+pref("plugins.testmode", false);
 
 pref("plugin.default.state", 1);
 
@@ -1016,6 +1019,7 @@ pref("urlclassifier.downloadAllowTable", "goog-downloadwhite-digest256");
 #endif
 
 pref("browser.geolocation.warning.infoURL", "https://www.mozilla.org/%LOCALE%/firefox/geolocation/");
+pref("browser.push.warning.infoURL", "https://www.mozilla.org/%LOCALE%/firefox/push/");
 
 pref("browser.EULA.version", 3);
 pref("browser.rights.version", 3);
@@ -1155,13 +1159,6 @@ pref("browser.privatebrowsing.autostart", false);
 // Don't try to alter this pref, it'll be reset the next time you use the
 // bookmarking dialog
 pref("browser.bookmarks.editDialog.firstEditField", "namePicker");
-
-// Whether to use a panel that looks like an OS X sheet for customization
-#ifdef XP_MACOSX
-pref("toolbar.customization.usesheet", true);
-#else
-pref("toolbar.customization.usesheet", false);
-#endif
 
 pref("dom.ipc.plugins.flash.disable-protected-mode", false);
 
@@ -1611,6 +1608,11 @@ pref("devtools.fontinspector.enabled", true);
 // version for each user.
 pref("devtools.telemetry.tools.opened.version", "{}");
 
+// Set imgur upload client ID
+pref("devtools.gcli.imgurClientID", '0df414e888d7240');
+// Imgur's upload URL
+pref("devtools.gcli.imgurUploadURL", "https://api.imgur.com/3/image");
+
 // Whether the character encoding menu is under the main Firefox button. This
 // preference is a string so that localizers can alter it.
 pref("browser.menu.showCharacterEncoding", "chrome://browser/locale/browser.properties");
@@ -1708,9 +1710,9 @@ pref("loop.debug.websocket", false);
 pref("loop.debug.sdk", false);
 pref("loop.debug.twoWayMediaTelemetry", false);
 #ifdef DEBUG
-pref("loop.CSP", "default-src 'self' about: file: chrome: http://localhost:*; img-src *; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net http://localhost:* ws://localhost:*; media-src blob:");
+pref("loop.CSP", "default-src 'self' about: file: chrome: http://localhost:*; img-src * data:; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net http://localhost:* ws://localhost:*; media-src blob:");
 #else
-pref("loop.CSP", "default-src 'self' about: file: chrome:; img-src *; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net; media-src blob:");
+pref("loop.CSP", "default-src 'self' about: file: chrome:; img-src * data:; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net; media-src blob:");
 #endif
 pref("loop.oauth.google.redirect_uri", "urn:ietf:wg:oauth:2.0:oob:auto");
 pref("loop.oauth.google.scope", "https://www.google.com/m8/feeds");
@@ -1721,9 +1723,6 @@ pref("loop.contacts.gravatars.show", false);
 pref("loop.contacts.gravatars.promo", true);
 pref("loop.browserSharing.showInfoBar", true);
 pref("loop.contextInConverations.enabled", false);
-
-// serverURL to be assigned by services team
-pref("services.push.serverURL", "wss://push.services.mozilla.com/");
 
 pref("social.sidebar.unload_timeout_ms", 10000);
 
@@ -1855,7 +1854,11 @@ pref("privacy.trackingprotection.ui.enabled", false);
 #endif
 
 #ifdef NIGHTLY_BUILD
-pref("browser.tabs.remote.autostart.1", true);
+// At the moment, autostart.2 is used, while autostart.1 is unused.
+// We leave it here set to false to reset users' defaults and allow
+// us to change everybody to true in the future, when desired.
+pref("browser.tabs.remote.autostart.1", false);
+pref("browser.tabs.remote.autostart.2", true);
 #endif
 
 #ifdef NIGHTLY_BUILD
@@ -1882,9 +1885,15 @@ pref("dom.ipc.reportProcessHangs", false);
 pref("dom.ipc.reportProcessHangs", true);
 #endif
 
-// Enable ReadingList browser UI by default.
-pref("browser.readinglist.enabled", true);
+pref("browser.readinglist.enabled", false);
 pref("browser.readinglist.sidebarEverOpened", false);
-// Enable the readinglist engine by default.
-pref("readinglist.scheduler.enabled", true);
+pref("readinglist.scheduler.enabled", false);
 pref("readinglist.server", "https://readinglist.services.mozilla.com/v1");
+
+// Don't limit how many nodes we care about on desktop:
+pref("reader.parse-node-limit", 0);
+
+// Enable Service workers for desktop on non-release builds
+#ifdef NIGHTLY_BUILD
+pref("dom.serviceWorkers.enabled", true);
+#endif

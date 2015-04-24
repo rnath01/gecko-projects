@@ -10,6 +10,7 @@
 #include "mozilla/Atomics.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/GuardObjects.h"
+#include "mozilla/mozalloc.h"
 #include "mozilla/PodOperations.h"
 
 #ifdef XP_WIN
@@ -586,7 +587,6 @@ Process(JSContext* cx, const char* filename, bool forceTTY)
         if (!file) {
             JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr,
                                  JSSMSG_CANT_OPEN, filename, strerror(errno));
-            gExitCode = EXITCODE_FILE_NOT_FOUND;
             return;
         }
     }
@@ -1398,7 +1398,6 @@ FileAsString(JSContext* cx, const char* pathname)
                         JS::UTF8CharsToNewTwoByteCharsZ(cx, JS::UTF8Chars(buf, len), &len).get();
                     if (!ucbuf) {
                         JS_ReportError(cx, "Invalid UTF-8 in file '%s'", pathname);
-                        gExitCode = EXITCODE_RUNTIME_ERROR;
                         return nullptr;
                     }
                     str = JS_NewUCStringCopyN(cx, ucbuf, len);
@@ -2205,6 +2204,30 @@ TryNotes(JSContext* cx, HandleScript script, Sprinter* sp)
 }
 
 static bool
+BlockNotes(JSContext* cx, HandleScript script, Sprinter* sp)
+{
+    if (!script->hasBlockScopes())
+        return true;
+
+    Sprint(sp, "\nBlock table:\n   index   parent    start      end\n");
+
+    BlockScopeArray* scopes = script->blockScopes();
+    for (uint32_t i = 0; i < scopes->length; i++) {
+        const BlockScopeNote* note = &scopes->vector[i];
+        if (note->index == BlockScopeNote::NoBlockScopeIndex)
+            Sprint(sp, "%8s ", "(none)");
+        else
+            Sprint(sp, "%8u ", note->index);
+        if (note->parent == BlockScopeNote::NoBlockScopeIndex)
+            Sprint(sp, "%8s ", "(none)");
+        else
+            Sprint(sp, "%8u ", note->parent);
+        Sprint(sp, "%8u %8u\n", note->start, note->start + note->length);
+    }
+    return true;
+}
+
+static bool
 DisassembleScript(JSContext* cx, HandleScript script, HandleFunction fun, bool lines,
                   bool recursive, Sprinter* sp)
 {
@@ -2231,6 +2254,7 @@ DisassembleScript(JSContext* cx, HandleScript script, HandleFunction fun, bool l
         return false;
     SrcNotes(cx, script, sp);
     TryNotes(cx, script, sp);
+    BlockNotes(cx, script, sp);
 
     if (recursive && script->hasObjects()) {
         ObjectArray* objects = script->objects();
@@ -2301,6 +2325,7 @@ DisassembleToSprinter(JSContext* cx, unsigned argc, jsval* vp, Sprinter* sprinte
                 return false;
             SrcNotes(cx, script, sprinter);
             TryNotes(cx, script, sprinter);
+            BlockNotes(cx, script, sprinter);
         }
     } else {
         for (unsigned i = 0; i < p.argc; i++) {
@@ -2635,7 +2660,7 @@ static const JSClass sandbox_class = {
     JSCLASS_GLOBAL_FLAGS,
     nullptr, nullptr, nullptr, nullptr,
     sandbox_enumerate, sandbox_resolve,
-    nullptr, nullptr,
+    nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr,
     JS_GlobalObjectTraceHook
 };
@@ -4316,7 +4341,7 @@ SetSharedArrayBuffer(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
-class SprintOptimizationTypeInfoOp : public ForEachTrackedOptimizationTypeInfoOp
+class SprintOptimizationTypeInfoOp : public JS::ForEachTrackedOptimizationTypeInfoOp
 {
     Sprinter* sp;
     bool startedTypes_;
@@ -4328,7 +4353,7 @@ class SprintOptimizationTypeInfoOp : public ForEachTrackedOptimizationTypeInfoOp
     { }
 
     void readType(const char* keyedBy, const char* name,
-                  const char* location, unsigned lineno) override
+                  const char* location, Maybe<unsigned> lineno) override
     {
         if (!startedTypes_) {
             startedTypes_ = true;
@@ -4342,12 +4367,12 @@ class SprintOptimizationTypeInfoOp : public ForEachTrackedOptimizationTypeInfoOp
             PutEscapedString(buf, mozilla::ArrayLength(buf), location, strlen(location), '"');
             Sprint(sp, ",\"location\":%s", buf);
         }
-        if (lineno != UINT32_MAX)
-            Sprint(sp, ",\"line\":%u", lineno);
+        if (lineno.isSome())
+            Sprint(sp, ",\"line\":%u", *lineno);
         Sprint(sp, "},");
     }
 
-    void operator()(TrackedTypeSite site, const char* mirType) override {
+    void operator()(JS::TrackedTypeSite site, const char* mirType) override {
         if (startedTypes_) {
             // Clear trailing ,
             if ((*sp)[sp->getOffset() - 1] == ',')
@@ -4363,7 +4388,7 @@ class SprintOptimizationTypeInfoOp : public ForEachTrackedOptimizationTypeInfoOp
     }
 };
 
-class SprintOptimizationAttemptsOp : public ForEachTrackedOptimizationAttemptOp
+class SprintOptimizationAttemptsOp : public JS::ForEachTrackedOptimizationAttemptOp
 {
     Sprinter* sp;
 
@@ -4372,7 +4397,7 @@ class SprintOptimizationAttemptsOp : public ForEachTrackedOptimizationAttemptOp
       : sp(sp)
     { }
 
-    void operator()(TrackedStrategy strategy, TrackedOutcome outcome) override {
+    void operator()(JS::TrackedStrategy strategy, JS::TrackedOutcome outcome) override {
         Sprint(sp, "{\"strategy\":\"%s\",\"outcome\":\"%s\"},",
                TrackedStrategyString(strategy), TrackedOutcomeString(outcome));
     }
@@ -5094,10 +5119,16 @@ global_resolve(JSContext* cx, HandleObject obj, HandleId id, bool* resolvedp)
     return true;
 }
 
+static bool
+global_mayResolve(const JSAtomState& names, jsid id, JSObject* maybeObj)
+{
+    return JS_MayResolveStandardClass(names, id, maybeObj);
+}
+
 static const JSClass global_class = {
     "global", JSCLASS_GLOBAL_FLAGS,
     nullptr, nullptr, nullptr, nullptr,
-    global_enumerate, global_resolve,
+    global_enumerate, global_resolve, global_mayResolve,
     nullptr, nullptr,
     nullptr, nullptr, nullptr,
     JS_GlobalObjectTraceHook
@@ -5160,6 +5191,7 @@ static const JSJitInfo dom_x_getterinfo = {
     JSVAL_TYPE_UNKNOWN, /* returnType */
     true,     /* isInfallible. False in setters. */
     true,     /* isMovable */
+    true,     /* isEliminatable */
     false,    /* isAlwaysInSlot */
     false,    /* isLazilyCachedInSlot */
     false,    /* isTypedMethod */
@@ -5175,6 +5207,7 @@ static const JSJitInfo dom_x_setterinfo = {
     JSVAL_TYPE_UNKNOWN, /* returnType */
     false,    /* isInfallible. False in setters. */
     false,    /* isMovable. */
+    false,    /* isEliminatable. */
     false,    /* isAlwaysInSlot */
     false,    /* isLazilyCachedInSlot */
     false,    /* isTypedMethod */
@@ -5190,6 +5223,7 @@ static const JSJitInfo doFoo_methodinfo = {
     JSVAL_TYPE_UNKNOWN, /* returnType */
     false,    /* isInfallible. False in setters. */
     false,    /* isMovable */
+    false,    /* isEliminatable */
     false,    /* isAlwaysInSlot */
     false,    /* isLazilyCachedInSlot */
     false,    /* isTypedMethod */
@@ -6064,26 +6098,6 @@ DummyPreserveWrapperCallback(JSContext* cx, JSObject* obj)
     return true;
 }
 
-size_t
-ShellMallocSizeOf(const void* constPtr)
-{
-    // Match the type that all the library functions we might use here expect.
-    void* ptr = (void*) constPtr;
-
-    if (!ptr)
-        return 0;
-
-#if defined(HAVE_MALLOC_USABLE_SIZE)
-    return malloc_usable_size(ptr);
-#elif defined(HAVE_MALLOC_SIZE)
-    return malloc_size(ptr);
-#elif HAVE__MSIZE
-    return _msize(ptr);
-#else
-    return 0;
-#endif
-}
-
 int
 main(int argc, char** argv, char** envp)
 {
@@ -6184,8 +6198,7 @@ main(int argc, char** argv, char** envp)
                             "(default: 1000)", -1)
         || !op.addStringOption('\0', "ion-regalloc", "[mode]",
                                "Specify Ion register allocation:\n"
-                               "  lsra: Linear Scan register allocation (default)\n"
-                               "  backtracking: Priority based backtracking register allocation\n"
+                               "  backtracking: Priority based backtracking register allocation (default)\n"
                                "  stupid: Simple block local register allocation")
         || !op.addBoolOption('\0', "ion-eager", "Always ion-compile methods (implies --baseline-eager)")
         || !op.addStringOption('\0', "ion-offthread-compile", "on/off",
@@ -6339,7 +6352,7 @@ main(int argc, char** argv, char** envp)
 
     JS_SetNativeStackQuota(rt, gMaxStackSize);
 
-    JS::dbg::SetDebuggerMallocSizeOf(rt, ShellMallocSizeOf);
+    JS::dbg::SetDebuggerMallocSizeOf(rt, moz_malloc_size_of);
 
     if (!offThreadState.init())
         return 1;
