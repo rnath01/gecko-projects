@@ -648,12 +648,12 @@ function getCanStageUpdates() {
     return false;
   }
 
-  if (AppConstants.platform == "win" &&
-      !(isServiceInstalled() && shouldUseService())) {
+  if (AppConstants.platform == "win" && isServiceInstalled() &&
+      shouldUseService()) {
     // No need to perform directory write checks, the maintenance service will
     // be able to write to all directories.
-    LOG("getCanStageUpdates - unable to stage updates on without the service");
-    return false;
+    LOG("getCanStageUpdates - able to stage updates using the service");
+    return true;
   }
 
   // For Gonk, the updater will remount the /system partition to move staged
