@@ -418,8 +418,12 @@ AppendToLibPath(const char *newPathToCheck)
     s = PR_smprintf("%s=%s" PATH_SEPARATOR "%s",
                     LD_LIBRARY_PATH_ENVVAR_NAME, newPathToCheck, pathValue);
   }
-  putenv(s);
-  PR_smprintf_free(s);
+  //putenv(s);
+
+  // We intentionally leak the value that is passed into PR_SetEnv() because
+  // the environment will hold a pointer to it.
+  PR_SetEnv(s);
+  //PR_smprintf_free(s);
 }
 #endif
 
