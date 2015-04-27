@@ -402,6 +402,8 @@ CopyUpdaterIntoUpdateDir(nsIFile *greDir, nsIFile *appDir, nsIFile *updateDir,
 /**
  * Appends the specified path to the library path.
  * This is used so that updater can find libmozsqlite3.so and other shared libs.
+ *
+ * @param newPathToCheck A new library path to prepend to LD_LIBRARY_PATH
  */
 #if defined(MOZ_VERIFY_MAR_SIGNATURE) && !defined(XP_WIN) && !defined(XP_MACOSX)
 #include "prprf.h"
@@ -418,12 +420,12 @@ AppendToLibPath(const char *newPathToCheck)
     s = PR_smprintf("%s=%s" PATH_SEPARATOR "%s",
                     LD_LIBRARY_PATH_ENVVAR_NAME, newPathToCheck, pathValue);
   }
-  //putenv(s);
 
-  // We intentionally leak the value that is passed into PR_SetEnv() because
-  // the environment will hold a pointer to it.
+  // The memory used by PR_SetEnv is not copied to the environment on all
+  // platform, it can be used by reference directly. So we purposely do not
+  // call PR_smprintf_free on s.  Subsequent calls to PR_SetEnv will free
+  // the old memory first.
   PR_SetEnv(s);
-  //PR_smprintf_free(s);
 }
 #endif
 
