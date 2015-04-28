@@ -412,7 +412,6 @@ CopyUpdaterIntoUpdateDir(nsIFile *greDir, nsIFile *appDir, nsIFile *updateDir,
 static void
 AppendToLibPath(const char *pathToAppend)
 {
-  char *s = nullptr;
   char *pathValue = getenv(LD_LIBRARY_PATH_ENVVAR_NAME);
   if (nullptr == pathValue || '\0' == *pathValue) {
     char *s = PR_smprintf("%s=%s", LD_LIBRARY_PATH_ENVVAR_NAME, pathToAppend);
