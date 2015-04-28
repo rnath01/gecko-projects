@@ -416,7 +416,7 @@ AppendToLibPath(const char *pathToAppend)
   char *pathValue = getenv(LD_LIBRARY_PATH_ENVVAR_NAME);
   if (nullptr == pathValue || '\0' == *pathValue) {
     s = PR_smprintf("%s=%s", LD_LIBRARY_PATH_ENVVAR_NAME, pathToAppend);
-  } else {
+  } else if (!strstr(pathValue, pathToAppend)) {
     s = PR_smprintf("%s=%s" PATH_SEPARATOR "%s",
                     LD_LIBRARY_PATH_ENVVAR_NAME, pathToAppend, pathValue);
   }
