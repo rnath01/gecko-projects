@@ -10,7 +10,6 @@
 #include "nsCOMPtr.h"
 #include "nsID.h"
 
-class nsIDOMBlob;
 class nsIEventTarget;
 class nsIRemoteBlob;
 class nsString;
@@ -113,7 +112,7 @@ public:
   SetMysteryBlobInfo(const nsString& aName,
                      const nsString& aContentType,
                      uint64_t aLength,
-                     uint64_t aLastModifiedDate);
+                     int64_t aLastModifiedDate);
 
   // Use this for non-file blobs.
   bool

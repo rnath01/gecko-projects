@@ -88,7 +88,6 @@ class nsIURIFixup;
 class nsIURILoader;
 class nsIWebBrowserFind;
 class nsIWidget;
-class ProfilerMarkerTracing;
 
 /* load commands were moved to nsIDocShell.h */
 /* load types were moved to nsDocShellLoadTypes.h */
@@ -159,7 +158,7 @@ class nsDocShell final
   friend class nsDSURIContentListener;
 
 public:
-  MOZ_DECLARE_REFCOUNTED_TYPENAME(nsDocShell)
+  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(nsDocShell)
   // Object Management
   nsDocShell();
 

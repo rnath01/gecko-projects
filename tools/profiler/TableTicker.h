@@ -45,8 +45,6 @@ extern mozilla::TimeStamp sLastTracerEvent;
 extern int sFrameNumber;
 extern int sLastFrameNumber;
 
-class BreakpadSampler;
-
 class TableTicker: public Sampler {
  public:
   TableTicker(double aInterval, int aEntrySize,
@@ -194,8 +192,8 @@ class TableTicker: public Sampler {
     return mPrimaryThreadProfile;
   }
 
-  void ToStreamAsJSON(std::ostream& stream);
-  virtual JSObject *ToJSObject(JSContext *aCx);
+  void ToStreamAsJSON(std::ostream& stream, float aSinceTime = 0);
+  virtual JSObject *ToJSObject(JSContext *aCx, float aSinceTime = 0);
   void StreamMetaJSCustomObject(JSStreamWriter& b);
   void StreamTaskTracer(JSStreamWriter& b);
   void FlushOnJSShutdown(JSRuntime* aRuntime);
@@ -212,6 +210,8 @@ class TableTicker: public Sampler {
   bool DisplayListDump() const { return mDisplayListDump; }
   bool ProfileRestyle() const { return mProfileRestyle; }
 
+  void GetBufferInfo(uint32_t *aCurrentPosition, uint32_t *aTotalSize, uint32_t *aGeneration);
+
 protected:
   // Called within a signal. This function must be reentrant
   virtual void InplaceTick(TickSample* sample);
@@ -219,7 +219,7 @@ protected:
   // Not implemented on platforms which do not support backtracing
   void doNativeBacktrace(ThreadProfile &aProfile, TickSample* aSample);
 
-  void StreamJSObject(JSStreamWriter& b);
+  void StreamJSObject(JSStreamWriter& b, float aSinceTime);
 
   // This represent the application's main thread (SAMPLER_INIT)
   ThreadProfile* mPrimaryThreadProfile;

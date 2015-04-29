@@ -17,6 +17,7 @@
 #include "nsAttrValueInlines.h"
 #include "nsCOMPtr.h"
 #include "nsIAtom.h"
+#include "nsQueryObject.h"
 #include "nsIContentInlines.h"
 #include "nsIContentViewer.h"
 #include "mozilla/css/StyleRule.h"
@@ -152,7 +153,7 @@ public:
         fm->GetFocusedContent()->OwnerDoc() != document) {
       mozilla::ErrorResult rv;
       mElement->Focus(rv);
-      return rv.ErrorCode();
+      return rv.StealNSResult();
     }
 
     return NS_OK;
@@ -430,7 +431,7 @@ nsGenericHTMLElement::InsertAdjacentHTML(const nsAString& aPosition,
 {
   ErrorResult rv;
   Element::InsertAdjacentHTML(aPosition, aText, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 bool
@@ -1858,12 +1859,12 @@ nsGenericHTMLElement::SetUndoScopeInternal(bool aUndoScope)
       ErrorResult rv;
       slots->mUndoManager->ClearRedo(rv);
       if (rv.Failed()) {
-        return rv.ErrorCode();
+        return rv.StealNSResult();
       }
 
       slots->mUndoManager->ClearUndo(rv);
       if (rv.Failed()) {
-        return rv.ErrorCode();
+        return rv.StealNSResult();
       }
 
       slots->mUndoManager->Disconnect();

@@ -15,7 +15,6 @@
 #include "nsRect.h"
 #include "IProgressObserver.h"
 
-class imgIContainer;
 class nsIRunnable;
 
 namespace mozilla {
@@ -73,7 +72,7 @@ class ProgressTracker : public mozilla::SupportsWeakPtr<ProgressTracker>
   virtual ~ProgressTracker() { }
 
 public:
-  MOZ_DECLARE_REFCOUNTED_TYPENAME(ProgressTracker)
+  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(ProgressTracker)
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(ProgressTracker)
 
   ProgressTracker()

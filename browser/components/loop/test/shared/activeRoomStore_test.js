@@ -32,7 +32,8 @@ describe("loop.store.ActiveRoomStore", function () {
         refreshMembership: sinon.stub(),
         leave: sinon.stub(),
         on: sinon.stub(),
-        off: sinon.stub()
+        off: sinon.stub(),
+        sendConnectionStatus: sinon.stub()
       },
       setScreenShareState: sinon.stub(),
       getActiveTabWindowId: sandbox.stub().callsArgWith(0, null, 42),
@@ -282,6 +283,8 @@ describe("loop.store.ActiveRoomStore", function () {
         sinon.assert.calledTwice(dispatcher.dispatch);
         sinon.assert.calledWithExactly(dispatcher.dispatch,
           new sharedActions.SetupRoomInfo({
+            roomContextUrls: undefined,
+            roomDescription: undefined,
             roomToken: fakeToken,
             roomName: fakeRoomData.decryptedContext.roomName,
             roomOwner: fakeRoomData.roomOwner,
@@ -461,6 +464,7 @@ describe("loop.store.ActiveRoomStore", function () {
         fetchServerAction.cryptoKey = "fakeKey";
 
         var roomContext = {
+          description: "Never gonna let you down. Never gonna give you up...",
           roomName: "The wonderful Loopy room",
           urls: [{
             description: "An invalid page",
@@ -1115,6 +1119,29 @@ describe("loop.store.ActiveRoomStore", function () {
       store.remotePeerDisconnected();
 
       expect(store.getStoreState().roomState).eql(ROOM_STATES.SESSION_CONNECTED);
+    });
+  });
+
+  describe("#connectionStatus", function() {
+    it("should call rooms.sendConnectionStatus on mozLoop", function() {
+      store.setStoreState({
+        roomToken: "fakeToken",
+        sessionToken: "9876543210"
+      });
+
+      var data = new sharedActions.ConnectionStatus({
+        event: "Publisher.streamCreated",
+        state: "sendrecv",
+        connections: 2,
+        recvStreams: 1,
+        sendStreams: 2
+      });
+
+      store.connectionStatus(data);
+
+      sinon.assert.calledOnce(fakeMozLoop.rooms.sendConnectionStatus);
+      sinon.assert.calledWith(fakeMozLoop.rooms.sendConnectionStatus,
+        "fakeToken", "9876543210", data);
     });
   });
 

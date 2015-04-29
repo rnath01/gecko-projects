@@ -150,7 +150,7 @@ jfieldID AndroidBridge::GetStaticFieldID(JNIEnv* env, jclass jClass,
 }
 
 void
-AndroidBridge::ConstructBridge(JNIEnv *jEnv, Object::Param clsLoader)
+AndroidBridge::ConstructBridge(JNIEnv *jEnv, Object::Param clsLoader, Object::Param msgQueue)
 {
     /* NSS hack -- bionic doesn't handle recursive unloads correctly,
      * because library finalizer functions are called with the dynamic
@@ -165,6 +165,16 @@ AndroidBridge::ConstructBridge(JNIEnv *jEnv, Object::Param clsLoader)
     MOZ_ASSERT(!sBridge);
     sBridge = new AndroidBridge;
     sBridge->Init(jEnv, clsLoader); // Success or crash
+
+    auto msgQueueClass = ClassObject::LocalRef::Adopt(
+            jEnv, jEnv->GetObjectClass(msgQueue.Get()));
+    sBridge->mMessageQueue = msgQueue;
+    // mMessageQueueNext must not be null
+    sBridge->mMessageQueueNext = GetMethodID(
+            jEnv, msgQueueClass.Get(), "next", "()Landroid/os/Message;");
+    // mMessageQueueMessages may be null (e.g. due to proguard optimization)
+    sBridge->mMessageQueueMessages = jEnv->GetFieldID(
+            msgQueueClass.Get(), "mMessages", "Landroid/os/Message;");
 }
 
 void
@@ -184,7 +194,7 @@ AndroidBridge::Init(JNIEnv *jEnv, Object::Param clsLoader)
             "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
 
     mJNIEnv = nullptr;
-    mThread = -1;
+    mThread = pthread_t();
     mGLControllerObj = nullptr;
     mOpenedGraphicsLibraries = false;
     mHasNativeBitmapAccess = false;
@@ -256,7 +266,16 @@ AndroidBridge::SetMainThread(pthread_t thr)
     }
 
     mJNIEnv = nullptr;
-    mThread = -1;
+    mThread = pthread_t();
+
+    // SetMainThread(0) is called on Gecko shutdown,
+    // so we should clean up the bridge here.
+    if (sBridge) {
+        delete sBridge;
+        // AndroidBridge destruction requires sBridge to still be valid,
+        // so we set sBridge to nullptr after deleting it.
+        sBridge = nullptr;
+    }
     return true;
 }
 
@@ -1657,6 +1676,32 @@ AndroidBridge::GetProxyForURI(const nsACString & aSpec,
     return NS_OK;
 }
 
+bool
+AndroidBridge::PumpMessageLoop()
+{
+    JNIEnv* const env = GetJNIEnv();
+
+    if (mMessageQueueMessages) {
+        auto msg = Object::LocalRef::Adopt(env,
+                env->GetObjectField(mMessageQueue.Get(),
+                                    mMessageQueueMessages));
+        // if queue.mMessages is null, queue.next() will block, which we don't
+        // want. It turns out to be an order of magnitude more performant to do
+        // this extra check here and block less vs. one fewer checks here and
+        // more blocking.
+        if (!msg) {
+            return false;
+        }
+    }
+
+    auto msg = Object::LocalRef::Adopt(
+            env, env->CallObjectMethod(mMessageQueue.Get(), mMessageQueueNext));
+    if (!msg) {
+        return false;
+    }
+
+    return GeckoAppShell::PumpMessageLoop(msg);
+}
 
 /* attribute nsIAndroidBrowserApp browserApp; */
 NS_IMETHODIMP nsAndroidBridge::GetBrowserApp(nsIAndroidBrowserApp * *aBrowserApp)

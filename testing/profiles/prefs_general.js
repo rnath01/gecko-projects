@@ -76,6 +76,8 @@ user_pref("extensions.getAddons.cache.enabled", false);
 user_pref("extensions.installDistroAddons", false);
 // XPI extensions are required for test harnesses to load
 user_pref("extensions.defaultProviders.enabled", true);
+// Disable signature requirements where possible
+user_pref("xpinstall.signatures.required", false);
 
 user_pref("geo.wifi.uri", "http://%(server)s/tests/dom/tests/mochitest/geolocation/network_geolocation.sjs");
 user_pref("geo.wifi.timeToWaitBeforeSending", 2000);
@@ -196,10 +198,6 @@ user_pref("browser.download.panel.shown", true);
 // Assume the about:newtab page's intro panels have been shown to not depend on
 // which test runs first and happens to open about:newtab
 user_pref("browser.newtabpage.introShown", true);
-
-// prefs for firefox metro.
-// Disable first-tun tab
-user_pref("browser.firstrun.count", 0);
 
 // Tell the PBackground infrastructure to run a test at startup.
 user_pref("pbackground.testing", true);
@@ -322,3 +320,6 @@ user_pref("network.proxy.pac_generator", false);
 // selected by default).
 user_pref("lightweightThemes.selectedThemeID", "");
 user_pref("browser.devedition.theme.enabled", false);
+
+// Disable periodic updates of service workers.
+user_pref("dom.serviceWorkers.periodic-updates.enabled", false);

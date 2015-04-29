@@ -284,13 +284,6 @@ InspectorPanel.prototype = {
   },
 
   /**
-   * Expose gViewSourceUtils so that other tools can make use of them.
-   */
-  get viewSourceUtils() {
-    return this.panelWin.gViewSourceUtils;
-  },
-
-  /**
    * Indicate that a tool has modified the state of the page.  Used to
    * decide whether to show the "are you sure you want to navigate"
    * notification.
@@ -673,19 +666,27 @@ InspectorPanel.prototype = {
       deleteNode.setAttribute("disabled", "true");
     }
 
-    // Disable / enable "Copy Unique Selector", "Copy inner HTML" &
-    // "Copy outer HTML" as appropriate
+    // Disable / enable "Copy Unique Selector", "Copy inner HTML",
+    // "Copy outer HTML" & "Scroll Into View" as appropriate
     let unique = this.panelDoc.getElementById("node-menu-copyuniqueselector");
     let copyInnerHTML = this.panelDoc.getElementById("node-menu-copyinner");
     let copyOuterHTML = this.panelDoc.getElementById("node-menu-copyouter");
+    let scrollIntoView = this.panelDoc.getElementById("node-menu-scrollnodeintoview");
+
+    this._target.actorHasMethod("domnode", "scrollIntoView").then(value => {
+      scrollIntoView.hidden = !value;
+    });
+
     if (isSelectionElement) {
       unique.removeAttribute("disabled");
       copyInnerHTML.removeAttribute("disabled");
       copyOuterHTML.removeAttribute("disabled");
+      scrollIntoView.removeAttribute("disabled");
     } else {
       unique.setAttribute("disabled", "true");
       copyInnerHTML.setAttribute("disabled", "true");
       copyOuterHTML.setAttribute("disabled", "true");
+      scrollIntoView.setAttribute("disabled", "true");
     }
     if (!this.canGetUniqueSelector) {
       unique.hidden = true;
@@ -824,6 +825,12 @@ InspectorPanel.prototype = {
     let sidePane = this.panelDoc.querySelector("#inspector-sidebar");
     let button = this._paneToggleButton;
     let isVisible = !button.hasAttribute("pane-collapsed");
+
+    // Make sure the sidebar has a width attribute before collapsing because
+    // ViewHelpers needs it.
+    if (isVisible && !sidePane.hasAttribute("width")) {
+      sidePane.setAttribute("width", sidePane.getBoundingClientRect().width);
+    }
 
     ViewHelpers.togglePane({
       visible: !isVisible,
@@ -997,6 +1004,18 @@ InspectorPanel.prototype = {
     this.selection.nodeFront.getUniqueSelector().then((selector) => {
       clipboardHelper.copyString(selector);
     }).then(null, console.error);
+  },
+
+  /**
+   * Scroll the node into view.
+   */
+  scrollNodeIntoView: function InspectorPanel_scrollNodeIntoView()
+  {
+    if (!this.selection.isNode()) {
+      return;
+    }
+
+    this.selection.nodeFront.scrollIntoView();
   },
 
   /**

@@ -21,6 +21,7 @@
 #include "nsIDocument.h"
 #include "nsPresContext.h"
 #include "nsGkAtoms.h"
+#include "nsQueryObject.h"
 #include "nsString.h"
 #include "nsTArray.h"
 #include "nsIDOMCSSStyleSheet.h"
@@ -1769,7 +1770,7 @@ CSSStyleSheet::GetCssRules(nsIDOMCSSRuleList** aCssRules)
   ErrorResult rv;
   nsCOMPtr<nsIDOMCSSRuleList> rules = GetCssRules(rv);
   rules.forget(aCssRules);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 CSSRuleList*

@@ -652,16 +652,18 @@ function EnvironmentCache() {
 
   this._updateSettings();
 
-#ifndef MOZ_WIDGET_ANDROID
-  this._currentEnvironment.profile = {};
-#endif
-
   // Build the remaining asynchronous parts of the environment. Don't register change listeners
   // until the initial environment has been built.
 
   this._addonBuilder = new EnvironmentAddonBuilder(this);
 
-  this._initTask = Promise.all([this._addonBuilder.init(), this._updateProfile()])
+  let p = [ this._addonBuilder.init() ];
+#ifndef MOZ_WIDGET_ANDROID
+  this._currentEnvironment.profile = {};
+  p.push(this._updateProfile());
+#endif
+
+  this._initTask = Promise.all(p)
     .then(
       () => {
         this._initTask = null;
@@ -671,7 +673,7 @@ function EnvironmentCache() {
       },
       (err) => {
         // log errors but eat them for consumers
-        this._log.error("error while initializing", err);
+        this._log.error("EnvironmentCache - error while initializing", err);
         this._initTask = null;
         this._startWatchingPrefs();
         this._addonBuilder.watchForChanges();
@@ -748,17 +750,17 @@ EnvironmentCache.prototype = {
    */
   _getPrefData: function () {
     let prefData = {};
-    for (let pref in this._watchedPrefs) {
+    for (let [pref, policy] of this._watchedPrefs.entries()) {
       // Only record preferences if they are non-default and policy allows recording.
       if (!Preferences.isSet(pref) ||
-          this._watchedPrefs[pref] == TelemetryEnvironment.RECORD_PREF_NOTIFY_ONLY) {
+          policy == TelemetryEnvironment.RECORD_PREF_NOTIFY_ONLY) {
         continue;
       }
 
       // Check the policy for the preference and decide if we need to store its value
       // or whether it changed from the default value.
       let prefValue = undefined;
-      if (this._watchedPrefs[pref] == TelemetryEnvironment.RECORD_PREF_STATE) {
+      if (policy == TelemetryEnvironment.RECORD_PREF_STATE) {
         prefValue = "<user-set>";
       } else {
         prefValue = Preferences.get(pref, null);
@@ -774,7 +776,7 @@ EnvironmentCache.prototype = {
   _startWatchingPrefs: function () {
     this._log.trace("_startWatchingPrefs - " + this._watchedPrefs);
 
-    for (let pref in this._watchedPrefs) {
+    for (let pref of this._watchedPrefs.keys()) {
       Preferences.observe(pref, this._onPrefChanged, this);
     }
   },
@@ -792,7 +794,7 @@ EnvironmentCache.prototype = {
   _stopWatchingPrefs: function () {
     this._log.trace("_stopWatchingPrefs");
 
-    for (let pref in this._watchedPrefs) {
+    for (let pref of this._watchedPrefs.keys()) {
       Preferences.ignore(pref, this._onPrefChanged, this);
     }
   },
@@ -1019,7 +1021,9 @@ EnvironmentCache.prototype = {
     let gfxData = {
       D2DEnabled: getGfxField("D2DEnabled", null),
       DWriteEnabled: getGfxField("DWriteEnabled", null),
-      DWriteVersion: getGfxField("DWriteVersion", null),
+      // The following line is disabled due to main thread jank and will be enabled
+      // again as part of bug 1154500.
+      //DWriteVersion: getGfxField("DWriteVersion", null),
       adapters: [],
     };
 

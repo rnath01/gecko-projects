@@ -21,12 +21,6 @@ function debug(s) {
   dump("-@- MmsService: " + s + "\n");
 };
 
-// Read debug setting from pref.
-try {
-  let debugPref = Services.prefs.getBoolPref("mms.debugging.enabled");
-  DEBUG = DEBUG || debugPref;
-} catch (e) {}
-
 const kSmsSendingObserverTopic           = "sms-sending";
 const kSmsSentObserverTopic              = "sms-sent";
 const kSmsFailedObserverTopic            = "sms-failed";
@@ -42,6 +36,7 @@ const NS_XPCOM_SHUTDOWN_OBSERVER_ID      = "xpcom-shutdown";
 const kNetworkConnStateChangedTopic      = "network-connection-state-changed";
 
 const kPrefRilRadioDisabled              = "ril.radio.disabled";
+const kPrefMmsDebuggingEnabled           = "mms.debugging.enabled";
 
 // HTTP status codes:
 // @see http://tools.ietf.org/html/rfc2616#page-39
@@ -139,6 +134,10 @@ XPCOMUtils.defineLazyServiceGetter(this, "gpps",
                                    "@mozilla.org/network/protocol-proxy-service;1",
                                    "nsIProtocolProxyService");
 
+XPCOMUtils.defineLazyServiceGetter(this, "gIccService",
+                                   "@mozilla.org/icc/iccservice;1",
+                                   "nsIIccService");
+
 XPCOMUtils.defineLazyServiceGetter(this, "gUUIDGenerator",
                                    "@mozilla.org/uuid-generator;1",
                                    "nsIUUIDGenerator");
@@ -166,6 +165,10 @@ XPCOMUtils.defineLazyServiceGetter(this, "gNetworkManager",
 XPCOMUtils.defineLazyServiceGetter(this, "gMobileConnectionService",
                                    "@mozilla.org/mobileconnection/mobileconnectionservice;1",
                                    "nsIMobileConnectionService");
+
+XPCOMUtils.defineLazyServiceGetter(this, "gNetworkService",
+                                   "@mozilla.org/network/service;1",
+                                   "nsINetworkService");
 
 XPCOMUtils.defineLazyGetter(this, "MMS", function() {
   let MMS = {};
@@ -348,7 +351,7 @@ MmsConnection.prototype = {
     // Get the proper IccInfo based on the current card type.
     try {
       let iccInfo = null;
-      let baseIccInfo = this.radioInterface.rilContext.iccInfo;
+      let baseIccInfo = this.getIccInfo();
       if (baseIccInfo.iccType === 'ruim' || baseIccInfo.iccType === 'csim') {
         iccInfo = baseIccInfo.QueryInterface(Ci.nsICdmaIccInfo);
         number = iccInfo.mdn;
@@ -367,10 +370,26 @@ MmsConnection.prototype = {
   },
 
   /**
+   * A utility function to get IccInfo of the SIM card (if installed).
+   */
+  getIccInfo: function() {
+    let icc = gIccService.getIccByServiceId(this.serviceId);
+    return icc ? icc.iccInfo : null;
+  },
+
+  /**
+   * A utility function to get CardState of the SIM card (if installed).
+   */
+  getCardState: function() {
+    let icc = gIccService.getIccByServiceId(this.serviceId);
+    return icc ? icc.cardState : Ci.nsIIcc.CARD_STATE_UNKNOWN;
+  },
+
+  /**
   * A utility function to get the ICC ID of the SIM card (if installed).
   */
   getIccId: function() {
-    let iccInfo = this.radioInterface.rilContext.iccInfo;
+    let iccInfo = this.getIccInfo();
 
     if (!iccInfo) {
       return null;
@@ -405,8 +424,7 @@ MmsConnection.prototype = {
       if (getRadioDisabledState()) {
         if (DEBUG) debug("Error! Radio is disabled when sending MMS.");
         errorStatus = _HTTP_STATUS_RADIO_DISABLED;
-      } else if (this.radioInterface.rilContext.cardState !=
-                 Ci.nsIIcc.CARD_STATE_READY) {
+      } else if (this.getCardState() != Ci.nsIIcc.CARD_STATE_READY) {
         if (DEBUG) debug("Error! SIM card is not ready when sending MMS.");
         errorStatus = _HTTP_STATUS_NO_SIM_CARD;
       }
@@ -706,33 +724,38 @@ XPCOMUtils.defineLazyGetter(this, "gMmsTransactionHelper", function() {
           url = mmsConnection.mmsc;
         }
 
-        let startTransaction = () => {
+        let startTransaction = netId => {
           if (DEBUG) debug("sendRequest: register proxy filter to " + url);
           let proxyFilter = new MmsProxyFilter(mmsConnection, url);
           gpps.registerFilter(proxyFilter, 0);
 
           cancellable.xhr =
             this.sendHttpRequest(mmsConnection, method,
-                                 url, istream, proxyFilter,
+                                 url, istream, proxyFilter, netId,
                                  (aHttpStatus, aData) =>
                                    cancellable.done(aHttpStatus, aData));
         };
 
-        mmsConnection.ensureRouting(url)
-          .then(() => startTransaction(),
-                (aError) => {
-                  debug("Failed to ensureRouting: " + aError);
+        let onRejected = aReason => {
+          debug(aReason);
+          mmsConnection.release();
+          cancellable.done(_HTTP_STATUS_FAILED_TO_ROUTE, null);
+        };
 
-                  mmsConnection.release();
-                  cancellable.done(_HTTP_STATUS_FAILED_TO_ROUTE, null);
-                });
+        // TODO: |getNetId| will be implemented as a sync call in nsINetworkManager
+        //       once Bug 1141903 is landed.
+        mmsConnection.ensureRouting(url)
+          .then(() => gNetworkService.getNetId(mmsConnection.networkInterface.name),
+                (aReason) => onRejected('Failed to ensureRouting: ' + aReason))
+          .then((netId) => startTransaction(netId),
+                (aReason) => onRejected('Failed to getNetId: ' + aReason));
       });
 
       return cancellable;
     },
 
     sendHttpRequest: function(mmsConnection, method, url, istream, proxyFilter,
-                              callback) {
+                              netId, callback) {
       let releaseMmsConnectionAndCallback = (httpStatus, data) => {
         gpps.unregisterFilter(proxyFilter);
         // Always release the MMS network connection before callback.
@@ -745,6 +768,7 @@ XPCOMUtils.defineLazyGetter(this, "gMmsTransactionHelper", function() {
                   .createInstance(Ci.nsIXMLHttpRequest);
 
         // Basic setups
+        xhr.networkInterfaceId = netId;
         xhr.open(method, url, true);
         xhr.responseType = "arraybuffer";
         if (istream) {
@@ -1508,6 +1532,7 @@ ReadRecTransaction.prototype = {
  * MmsService
  */
 function MmsService() {
+  this._updateDebugFlag();
   if (DEBUG) {
     let macro = (MMS.MMS_VERSION >> 4) & 0x0f;
     let minor = MMS.MMS_VERSION & 0x0f;
@@ -1515,6 +1540,7 @@ function MmsService() {
   }
 
   Services.prefs.addObserver(kPrefDefaultServiceId, this, false);
+  Services.prefs.addObserver(kPrefMmsDebuggingEnabled, this, false);
   this.mmsDefaultServiceId = getDefaultServiceId();
 
   // TODO: bug 810084 - support application identifier
@@ -1530,6 +1556,12 @@ MmsService.prototype = {
    * and M-Acknowledge.ind PDU.
    */
   confSendDeliveryReport: CONFIG_SEND_REPORT_DEFAULT_YES,
+
+  _updateDebugFlag: function() {
+    try {
+      DEBUG = Services.prefs.getBoolPref(kPrefMmsDebuggingEnabled);
+    } catch (e) {}
+  },
 
   /**
    * Calculate Whether or not should we enable X-Mms-Report-Allowed.
@@ -2627,6 +2659,8 @@ MmsService.prototype = {
       case NS_PREFBRANCH_PREFCHANGE_TOPIC_ID:
         if (aData === kPrefDefaultServiceId) {
           this.mmsDefaultServiceId = getDefaultServiceId();
+        } else if (aData === kPrefMmsDebuggingEnabled) {
+          this._updateDebugFlag();
         }
         break;
     }

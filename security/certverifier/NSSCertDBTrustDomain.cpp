@@ -11,6 +11,7 @@
 #include "ExtendedValidation.h"
 #include "OCSPRequestor.h"
 #include "certdb.h"
+#include "cert.h"
 #include "mozilla/UniquePtr.h"
 #include "nsNSSCertificate.h"
 #include "nss.h"
@@ -24,6 +25,8 @@
 #include "prprf.h"
 #include "ScopedNSSTypes.h"
 #include "secerr.h"
+
+#include "CNNICHashWhitelist.inc"
 
 using namespace mozilla;
 using namespace mozilla::pkix;
@@ -61,39 +64,6 @@ NSSCertDBTrustDomain::NSSCertDBTrustDomain(SECTrustType certDBTrustType,
 {
 }
 
-// E=igca@sgdn.pm.gouv.fr,CN=IGC/A,OU=DCSSI,O=PM/SGDN,L=Paris,ST=France,C=FR
-static const uint8_t ANSSI_SUBJECT_DATA[] =
-                       "\x30\x81\x85\x31\x0B\x30\x09\x06\x03\x55\x04"
-                       "\x06\x13\x02\x46\x52\x31\x0F\x30\x0D\x06\x03"
-                       "\x55\x04\x08\x13\x06\x46\x72\x61\x6E\x63\x65"
-                       "\x31\x0E\x30\x0C\x06\x03\x55\x04\x07\x13\x05"
-                       "\x50\x61\x72\x69\x73\x31\x10\x30\x0E\x06\x03"
-                       "\x55\x04\x0A\x13\x07\x50\x4D\x2F\x53\x47\x44"
-                       "\x4E\x31\x0E\x30\x0C\x06\x03\x55\x04\x0B\x13"
-                       "\x05\x44\x43\x53\x53\x49\x31\x0E\x30\x0C\x06"
-                       "\x03\x55\x04\x03\x13\x05\x49\x47\x43\x2F\x41"
-                       "\x31\x23\x30\x21\x06\x09\x2A\x86\x48\x86\xF7"
-                       "\x0D\x01\x09\x01\x16\x14\x69\x67\x63\x61\x40"
-                       "\x73\x67\x64\x6E\x2E\x70\x6D\x2E\x67\x6F\x75"
-                       "\x76\x2E\x66\x72";
-
-static const uint8_t PERMIT_FRANCE_GOV_NAME_CONSTRAINTS_DATA[] =
-                       "\x30\x5D" // SEQUENCE (length=93)
-                       "\xA0\x5B" // permittedSubtrees (length=91)
-                       "\x30\x05\x82\x03" ".fr"
-                       "\x30\x05\x82\x03" ".gp"
-                       "\x30\x05\x82\x03" ".gf"
-                       "\x30\x05\x82\x03" ".mq"
-                       "\x30\x05\x82\x03" ".re"
-                       "\x30\x05\x82\x03" ".yt"
-                       "\x30\x05\x82\x03" ".pm"
-                       "\x30\x05\x82\x03" ".bl"
-                       "\x30\x05\x82\x03" ".mf"
-                       "\x30\x05\x82\x03" ".wf"
-                       "\x30\x05\x82\x03" ".pf"
-                       "\x30\x05\x82\x03" ".nc"
-                       "\x30\x05\x82\x03" ".tf";
-
 // If useRoots is true, we only use root certificates in the candidate list.
 // If useRoots is false, we only use non-root certificates in the list.
 static Result
@@ -114,23 +84,30 @@ FindIssuerInner(ScopedCERTCertList& candidates, bool useRoots,
       continue; // probably too big
     }
 
-    Input anssiSubject;
-    rv = anssiSubject.Init(ANSSI_SUBJECT_DATA, sizeof(ANSSI_SUBJECT_DATA) - 1);
-    if (rv != Success) {
-      return Result::FATAL_ERROR_LIBRARY_FAILURE;
-    }
-    // TODO: Use CERT_CompareName or equivalent
-    if (InputsAreEqual(encodedIssuerName, anssiSubject)) {
-      Input anssiNameConstraints;
-      if (anssiNameConstraints.Init(
-              PERMIT_FRANCE_GOV_NAME_CONSTRAINTS_DATA,
-              sizeof(PERMIT_FRANCE_GOV_NAME_CONSTRAINTS_DATA) - 1)
-            != Success) {
+    const SECItem encodedIssuerNameItem = {
+      siBuffer,
+      const_cast<unsigned char*>(encodedIssuerName.UnsafeGetData()),
+      encodedIssuerName.GetLength()
+    };
+    ScopedSECItem nameConstraints(::SECITEM_AllocItem(nullptr, nullptr, 0));
+    SECStatus srv = CERT_GetImposedNameConstraints(&encodedIssuerNameItem,
+                                                   nameConstraints.get());
+    if (srv != SECSuccess) {
+      if (PR_GetError() != SEC_ERROR_EXTENSION_NOT_FOUND) {
         return Result::FATAL_ERROR_LIBRARY_FAILURE;
       }
-      rv = checker.Check(certDER, &anssiNameConstraints, keepGoing);
-    } else {
+
+      // If no imposed name constraints were found, continue without them
       rv = checker.Check(certDER, nullptr, keepGoing);
+    } else {
+      // Otherwise apply the constraints
+      Input nameConstraintsInput;
+      if (nameConstraintsInput.Init(
+              nameConstraints->data,
+              nameConstraints->len) != Success) {
+        return Result::FATAL_ERROR_LIBRARY_FAILURE;
+      }
+      rv = checker.Check(certDER, &nameConstraintsInput, keepGoing);
     }
     if (rv != Success) {
       return rv;
@@ -149,10 +126,10 @@ NSSCertDBTrustDomain::FindIssuer(Input encodedIssuerName,
 {
   // TODO: NSS seems to be ambiguous between "no potential issuers found" and
   // "there was an error trying to retrieve the potential issuers."
-  SECItem encodedIssuerNameSECItem = UnsafeMapInputToSECItem(encodedIssuerName);
+  SECItem encodedIssuerNameItem = UnsafeMapInputToSECItem(encodedIssuerName);
   ScopedCERTCertList
     candidates(CERT_CreateSubjectCertList(nullptr, CERT_GetDefaultCertDB(),
-                                          &encodedIssuerNameSECItem, 0,
+                                          &encodedIssuerNameItem, 0,
                                           false));
   if (candidates) {
     // First, try all the root certs; then try all the non-root certs.
@@ -679,6 +656,40 @@ NSSCertDBTrustDomain::VerifyAndMaybeCacheEncodedOCSPResponse(
   return rv;
 }
 
+static const uint8_t CNNIC_ROOT_CA_SUBJECT_DATA[] =
+  "\x30\x32\x31\x0B\x30\x09\x06\x03\x55\x04\x06\x13\x02\x43\x4E\x31\x0E\x30"
+  "\x0C\x06\x03\x55\x04\x0A\x13\x05\x43\x4E\x4E\x49\x43\x31\x13\x30\x11\x06"
+  "\x03\x55\x04\x03\x13\x0A\x43\x4E\x4E\x49\x43\x20\x52\x4F\x4F\x54";
+
+static const uint8_t CNNIC_EV_ROOT_CA_SUBJECT_DATA[] =
+  "\x30\x81\x8A\x31\x0B\x30\x09\x06\x03\x55\x04\x06\x13\x02\x43\x4E\x31\x32"
+  "\x30\x30\x06\x03\x55\x04\x0A\x0C\x29\x43\x68\x69\x6E\x61\x20\x49\x6E\x74"
+  "\x65\x72\x6E\x65\x74\x20\x4E\x65\x74\x77\x6F\x72\x6B\x20\x49\x6E\x66\x6F"
+  "\x72\x6D\x61\x74\x69\x6F\x6E\x20\x43\x65\x6E\x74\x65\x72\x31\x47\x30\x45"
+  "\x06\x03\x55\x04\x03\x0C\x3E\x43\x68\x69\x6E\x61\x20\x49\x6E\x74\x65\x72"
+  "\x6E\x65\x74\x20\x4E\x65\x74\x77\x6F\x72\x6B\x20\x49\x6E\x66\x6F\x72\x6D"
+  "\x61\x74\x69\x6F\x6E\x20\x43\x65\x6E\x74\x65\x72\x20\x45\x56\x20\x43\x65"
+  "\x72\x74\x69\x66\x69\x63\x61\x74\x65\x73\x20\x52\x6F\x6F\x74";
+
+class WhitelistedCNNICHashBinarySearchComparator
+{
+public:
+  explicit WhitelistedCNNICHashBinarySearchComparator(const uint8_t* aTarget,
+                                                      size_t aTargetLength)
+    : mTarget(aTarget)
+  {
+    MOZ_ASSERT(aTargetLength == CNNIC_WHITELIST_HASH_LEN,
+               "Hashes should be of the same length.");
+  }
+
+  int operator()(const WhitelistedCNNICHash val) const {
+    return memcmp(mTarget, val.hash, CNNIC_WHITELIST_HASH_LEN);
+  }
+
+private:
+  const uint8_t* mTarget;
+};
+
 Result
 NSSCertDBTrustDomain::IsChainValid(const DERArray& certArray, Time time)
 {
@@ -690,6 +701,49 @@ NSSCertDBTrustDomain::IsChainValid(const DERArray& certArray, Time time)
                                                             certList);
   if (srv != SECSuccess) {
     return MapPRErrorCodeToResult(PR_GetError());
+  }
+
+  // If the certificate appears to have been issued by a CNNIC root, only allow
+  // it if it is on the whitelist.
+  CERTCertListNode* rootNode = CERT_LIST_TAIL(certList);
+  if (!rootNode) {
+    return Result::FATAL_ERROR_LIBRARY_FAILURE;
+  }
+  CERTCertificate* root = rootNode->cert;
+  if (!root) {
+    return Result::FATAL_ERROR_LIBRARY_FAILURE;
+  }
+  if ((root->derSubject.len == sizeof(CNNIC_ROOT_CA_SUBJECT_DATA) - 1 &&
+       memcmp(root->derSubject.data, CNNIC_ROOT_CA_SUBJECT_DATA,
+              root->derSubject.len) == 0) ||
+      (root->derSubject.len == sizeof(CNNIC_EV_ROOT_CA_SUBJECT_DATA) - 1 &&
+       memcmp(root->derSubject.data, CNNIC_EV_ROOT_CA_SUBJECT_DATA,
+              root->derSubject.len) == 0)) {
+    CERTCertListNode* certNode = CERT_LIST_HEAD(certList);
+    if (!certNode) {
+      return Result::FATAL_ERROR_LIBRARY_FAILURE;
+    }
+    CERTCertificate* cert = certNode->cert;
+    if (!cert) {
+      return Result::FATAL_ERROR_LIBRARY_FAILURE;
+    }
+    Digest digest;
+    nsresult nsrv = digest.DigestBuf(SEC_OID_SHA256, cert->derCert.data,
+                                     cert->derCert.len);
+    if (NS_FAILED(nsrv)) {
+      return Result::FATAL_ERROR_LIBRARY_FAILURE;
+    }
+    const uint8_t* certHash(
+      reinterpret_cast<const uint8_t*>(digest.get().data));
+    size_t certHashLen = digest.get().len;
+    size_t unused;
+    if (!mozilla::BinarySearchIf(WhitelistedCNNICHashes, 0,
+                                 ArrayLength(WhitelistedCNNICHashes),
+                                 WhitelistedCNNICHashBinarySearchComparator(
+                                   certHash, certHashLen),
+                                 &unused)) {
+      return Result::ERROR_REVOKED_CERTIFICATE;
+    }
   }
 
   Result result = CertListContainsExpectedKeys(certList, mHostname, time,

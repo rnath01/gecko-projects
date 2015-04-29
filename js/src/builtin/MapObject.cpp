@@ -839,7 +839,7 @@ HashableValue
 HashableValue::mark(JSTracer* trc) const
 {
     HashableValue hv(*this);
-    trc->setTracingLocation((void*)this);
+    JS::AutoOriginalTraceLocation reloc(trc, (void**)this);
     TraceEdge(trc, &hv.value, "key");
     return hv;
 }
@@ -880,6 +880,7 @@ const Class MapIteratorObject::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     MapIteratorObject::finalize
 };
@@ -1024,6 +1025,7 @@ const Class MapObject::class_ = {
     nullptr, // setProperty
     nullptr, // enumerate
     nullptr, // resolve
+    nullptr, // mayResolve
     nullptr, // convert
     finalize,
     nullptr, // call
@@ -1616,6 +1618,7 @@ const Class SetIteratorObject::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     SetIteratorObject::finalize
 };
@@ -1756,6 +1759,7 @@ const Class SetObject::class_ = {
     nullptr, // setProperty
     nullptr, // enumerate
     nullptr, // resolve
+    nullptr, // mayResolve
     nullptr, // convert
     finalize,
     nullptr, // call

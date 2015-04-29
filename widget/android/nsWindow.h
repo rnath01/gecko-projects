@@ -47,8 +47,6 @@ public:
     static gfxIntSize GetAndroidScreenBounds();
     static nsWindow* TopWindow();
 
-    nsWindow* FindWindowForPoint(const nsIntPoint& pt);
-
     bool OnContextmenuEvent(mozilla::AndroidGeckoEvent *ae);
     void OnLongTapEvent(mozilla::AndroidGeckoEvent *ae);
     bool OnMultitouchEvent(mozilla::AndroidGeckoEvent *ae);
@@ -169,6 +167,8 @@ public:
 
     virtual bool WidgetPaintsBackground();
 
+    virtual uint32_t GetMaxTouchPoints() const override;
+
 protected:
     void BringToFront();
     nsWindow *FindTopLevel();
@@ -205,6 +205,8 @@ protected:
     void FlushIMEChanges();
 
     void ConfigureAPZCTreeManager() override;
+    void ConfigureAPZControllerThread() override;
+
     already_AddRefed<GeckoContentController> CreateRootContentController() override;
 
     // Call this function when the users activity is the direct cause of an
@@ -214,7 +216,6 @@ protected:
     bool mIsVisible;
     nsTArray<nsWindow*> mChildren;
     nsWindow* mParent;
-    nsWindow* mFocus;
 
     double mStartDist;
     double mLastDist;
@@ -242,8 +243,6 @@ private:
     void InitKeyEvent(mozilla::WidgetKeyboardEvent& event,
                       mozilla::AndroidGeckoEvent& key,
                       ANPEvent* pluginEvent);
-    void DispatchGestureEvent(uint32_t msg, uint32_t direction, double delta,
-                              const mozilla::LayoutDeviceIntPoint &refPoint, uint64_t time);
     void HandleSpecialKey(mozilla::AndroidGeckoEvent *ae);
     void CreateLayerManager(int aCompositorWidth, int aCompositorHeight);
     void RedrawAll();

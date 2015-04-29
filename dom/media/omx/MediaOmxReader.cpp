@@ -403,7 +403,7 @@ bool MediaOmxReader::DecodeVideoFrame(bool &aKeyframeSkip,
 
     aKeyframeSkip = false;
 
-    IntRect picture = ToIntRect(mPicture);
+    IntRect picture = mPicture;
     if (frame.Y.mWidth != mInitialFrame.width ||
         frame.Y.mHeight != mInitialFrame.height) {
 
@@ -491,15 +491,18 @@ void MediaOmxReader::NotifyDataArrived(const char* aBuffer, uint32_t aLength, in
   if (HasVideo()) {
     return;
   }
-
   if (!mMP3FrameParser.NeedsData()) {
     return;
   }
 
   mMP3FrameParser.Parse(aBuffer, aLength, aOffset);
+  if (!mMP3FrameParser.IsMP3()) {
+    return;
+  }
+
   int64_t duration = mMP3FrameParser.GetDuration();
-  ReentrantMonitorAutoEnter mon(decoder->GetReentrantMonitor());
   if (duration != mLastParserDuration && mUseParserDuration) {
+    ReentrantMonitorAutoEnter mon(decoder->GetReentrantMonitor());
     mLastParserDuration = duration;
     decoder->UpdateEstimatedMediaDuration(mLastParserDuration);
   }

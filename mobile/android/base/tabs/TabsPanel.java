@@ -102,10 +102,6 @@ public class TabsPanel extends LinearLayout
         mActivity = (GeckoApp) context;
         mTheme = ((GeckoApplication) context.getApplicationContext()).getLightweightTheme();
 
-        setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
-                                                      LinearLayout.LayoutParams.MATCH_PARENT));
-        setOrientation(LinearLayout.VERTICAL);
-
         mCurrentPanel = Panel.NORMAL_TABS;
 
         mPopupMenu = new GeckoPopupMenu(context);
@@ -278,7 +274,7 @@ public class TabsPanel extends LinearLayout
     @Override
     @SuppressWarnings("deprecation") // setBackgroundDrawable deprecated by API level 16
     public void onLightweightThemeChanged() {
-        final int background = getResources().getColor(R.color.background_tabs);
+        final int background = getResources().getColor(R.color.text_and_tabs_tray_grey);
         final LightweightThemeDrawable drawable = mTheme.getColorDrawable(this, background, true);
         if (drawable == null)
             return;
@@ -289,7 +285,7 @@ public class TabsPanel extends LinearLayout
 
     @Override
     public void onLightweightThemeReset() {
-        setBackgroundColor(getContext().getResources().getColor(R.color.background_tabs));
+        setBackgroundColor(getContext().getResources().getColor(R.color.text_and_tabs_tray_grey));
     }
 
     @Override
@@ -332,11 +328,6 @@ public class TabsPanel extends LinearLayout
         public TabsPanelToolbar(Context context, AttributeSet attrs) {
             super(context, attrs);
             mTheme = ((GeckoApplication) context.getApplicationContext()).getLightweightTheme();
-
-            setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
-                                                          (int) context.getResources().getDimension(R.dimen.browser_toolbar_height)));
-
-            setOrientation(LinearLayout.HORIZONTAL);
         }
 
         @Override
@@ -354,7 +345,7 @@ public class TabsPanel extends LinearLayout
         @Override
         @SuppressWarnings("deprecation") // setBackgroundDrawable deprecated by API level 16
         public void onLightweightThemeChanged() {
-            final int background = getResources().getColor(R.color.background_tabs);
+            final int background = getResources().getColor(R.color.text_and_tabs_tray_grey);
             final LightweightThemeDrawable drawable = mTheme.getColorDrawable(this, background);
             if (drawable == null)
                 return;
@@ -365,7 +356,7 @@ public class TabsPanel extends LinearLayout
 
         @Override
         public void onLightweightThemeReset() {
-            setBackgroundColor(getContext().getResources().getColor(R.color.background_tabs));
+            setBackgroundColor(getContext().getResources().getColor(R.color.text_and_tabs_tray_grey));
         }
 
         @Override

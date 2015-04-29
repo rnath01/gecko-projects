@@ -12,6 +12,7 @@
 #include "mozilla/dom/HTMLLabelElementBinding.h"
 #include "nsFocusManager.h"
 #include "nsIDOMMouseEvent.h"
+#include "nsQueryObject.h"
 
 // construction, destruction
 
@@ -58,7 +59,7 @@ HTMLLabelElement::SetHtmlFor(const nsAString& aHtmlFor)
 {
   ErrorResult rv;
   SetHtmlFor(aHtmlFor, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 NS_IMETHODIMP

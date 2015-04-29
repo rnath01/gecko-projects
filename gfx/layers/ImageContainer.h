@@ -95,7 +95,6 @@ typedef void* HANDLE;
 
 namespace mozilla {
 
-class CrossProcessMutex;
 
 namespace layers {
 
@@ -103,8 +102,6 @@ class ImageClient;
 class SharedPlanarYCbCrImage;
 class TextureClient;
 class CompositableClient;
-class CompositableForwarder;
-class SurfaceDescriptor;
 class GrallocImage;
 
 struct ImageBackendData
@@ -293,7 +290,7 @@ protected:
 class ImageContainer final : public SupportsWeakPtr<ImageContainer> {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(ImageContainer)
 public:
-  MOZ_DECLARE_REFCOUNTED_TYPENAME(ImageContainer)
+  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(ImageContainer)
 
   enum { DISABLE_ASYNC = 0x0, ENABLE_ASYNC = 0x01 };
 

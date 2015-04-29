@@ -130,6 +130,24 @@ namespace mozilla {
 namespace dom {
 namespace cache {
 
+namespace {
+
+bool IsHeadRequest(CacheRequest aRequest, CacheQueryParams aParams)
+{
+  return !aParams.ignoreMethod() && aRequest.method().LowerCaseEqualsLiteral("head");
+}
+
+bool IsHeadRequest(CacheRequestOrVoid aRequest, CacheQueryParams aParams)
+{
+  if (aRequest.type() == CacheRequestOrVoid::TCacheRequest) {
+    return !aParams.ignoreMethod() &&
+           aRequest.get_CacheRequest().method().LowerCaseEqualsLiteral("head");
+  }
+  return false;
+}
+
+} // anonymous namespace
+
 // ----------------------------------------------------------------------------
 
 // Singleton class to track Manager instances and ensure there is only
@@ -157,7 +175,12 @@ public:
       if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
       ref = new Manager(aManagerId, ioThread);
-      ref->Init();
+
+      // There may be an old manager for this origin in the process of
+      // cleaning up.  We need to tell the new manager about this so
+      // that it won't actually start until the old manager is done.
+      nsRefPtr<Manager> oldManager = Get(aManagerId, Closing);
+      ref->Init(oldManager);
 
       MOZ_ASSERT(!sFactory->mManagerList.Contains(ref));
       sFactory->mManagerList.AppendElement(ref);
@@ -169,20 +192,20 @@ public:
   }
 
   static already_AddRefed<Manager>
-  Get(ManagerId* aManagerId)
+  Get(ManagerId* aManagerId, State aState = Open)
   {
     mozilla::ipc::AssertIsOnBackgroundThread();
 
     nsresult rv = MaybeCreateInstance();
     if (NS_WARN_IF(NS_FAILED(rv))) { return nullptr; }
 
-    ManagerList::ForwardIterator iter(sFactory->mManagerList);
+    // Iterate in reverse to find the most recent, matching Manager.  This
+    // is important when looking for a Closing Manager.  If a new Manager
+    // chains to an old Manager we want it to be the most recent one.
+    ManagerList::BackwardIterator iter(sFactory->mManagerList);
     while (iter.HasMore()) {
       nsRefPtr<Manager> manager = iter.GetNext();
-      // If there is an invalid Manager finishing up and a new Manager
-      // is created for the same origin, then the new Manager will
-      // be blocked until QuotaManager finishes clearing the origin.
-      if (!manager->IsClosing() && *manager->mManagerId == *aManagerId) {
+      if (aState == manager->GetState() && *manager->mManagerId == *aManagerId) {
         return manager.forget();
       }
     }
@@ -505,7 +528,9 @@ public:
                                  mArgs.params(), &mFoundResponse, &mResponse);
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    if (!mFoundResponse || !mResponse.mHasBodyId) {
+    if (!mFoundResponse || !mResponse.mHasBodyId
+                        || IsHeadRequest(mArgs.request(), mArgs.params())) {
+      mResponse.mHasBodyId = false;
       return rv;
     }
 
@@ -568,7 +593,9 @@ public:
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
     for (uint32_t i = 0; i < mSavedResponses.Length(); ++i) {
-      if (!mSavedResponses[i].mHasBodyId) {
+      if (!mSavedResponses[i].mHasBodyId
+          || IsHeadRequest(mArgs.requestOrVoid(), mArgs.params())) {
+        mSavedResponses[i].mHasBodyId = false;
         continue;
       }
 
@@ -1057,7 +1084,9 @@ public:
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
     for (uint32_t i = 0; i < mSavedRequests.Length(); ++i) {
-      if (!mSavedRequests[i].mHasBodyId) {
+      if (!mSavedRequests[i].mHasBodyId
+          || IsHeadRequest(mArgs.requestOrVoid(), mArgs.params())) {
+        mSavedRequests[i].mHasBodyId = false;
         continue;
       }
 
@@ -1119,7 +1148,9 @@ public:
                                    &mSavedResponse);
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    if (!mFoundResponse || !mSavedResponse.mHasBodyId) {
+    if (!mFoundResponse || !mSavedResponse.mHasBodyId
+                        || IsHeadRequest(mArgs.request(), mArgs.params())) {
+      mSavedResponse.mHasBodyId = false;
       return rv;
     }
 
@@ -1450,7 +1481,7 @@ Manager::RemoveContext(Context* aContext)
   // Whether the Context destruction was triggered from the Manager going
   // idle or the underlying storage being invalidated, we should know we
   // are closing before the Conext is destroyed.
-  MOZ_ASSERT(mClosing);
+  MOZ_ASSERT(mState == Closing);
 
   mContext = nullptr;
 
@@ -1465,14 +1496,14 @@ Manager::NoteClosing()
 {
   NS_ASSERT_OWNINGTHREAD(Manager);
   // This can be called more than once legitimately through different paths.
-  mClosing = true;
+  mState = Closing;
 }
 
-bool
-Manager::IsClosing() const
+Manager::State
+Manager::GetState() const
 {
   NS_ASSERT_OWNINGTHREAD(Manager);
-  return mClosing;
+  return mState;
 }
 
 void
@@ -1593,7 +1624,7 @@ Manager::ExecuteCacheOp(Listener* aListener, CacheId aCacheId,
   MOZ_ASSERT(aOpArgs.type() != CacheOpArgs::TCacheAddAllArgs);
   MOZ_ASSERT(aOpArgs.type() != CacheOpArgs::TCachePutAllArgs);
 
-  if (mClosing) {
+  if (mState == Closing) {
     aListener->OnOpComplete(ErrorResult(NS_ERROR_FAILURE), void_t());
     return;
   }
@@ -1637,7 +1668,7 @@ Manager::ExecuteStorageOp(Listener* aListener, Namespace aNamespace,
   NS_ASSERT_OWNINGTHREAD(Manager);
   MOZ_ASSERT(aListener);
 
-  if (mClosing) {
+  if (mState == Closing) {
     aListener->OnOpComplete(ErrorResult(NS_ERROR_FAILURE), void_t());
     return;
   }
@@ -1686,7 +1717,7 @@ Manager::ExecutePutAll(Listener* aListener, CacheId aCacheId,
   NS_ASSERT_OWNINGTHREAD(Manager);
   MOZ_ASSERT(aListener);
 
-  if (mClosing) {
+  if (mState == Closing) {
     aListener->OnOpComplete(ErrorResult(NS_ERROR_FAILURE), CachePutAllResult());
     return;
   }
@@ -1708,7 +1739,7 @@ Manager::Manager(ManagerId* aManagerId, nsIThread* aIOThread)
   , mIOThread(aIOThread)
   , mContext(nullptr)
   , mShuttingDown(false)
-  , mClosing(false)
+  , mState(Open)
 {
   MOZ_ASSERT(mManagerId);
   MOZ_ASSERT(mIOThread);
@@ -1717,7 +1748,7 @@ Manager::Manager(ManagerId* aManagerId, nsIThread* aIOThread)
 Manager::~Manager()
 {
   NS_ASSERT_OWNINGTHREAD(Manager);
-  MOZ_ASSERT(mClosing);
+  MOZ_ASSERT(mState == Closing);
   MOZ_ASSERT(!mContext);
 
   nsCOMPtr<nsIThread> ioThread;
@@ -1731,15 +1762,20 @@ Manager::~Manager()
 }
 
 void
-Manager::Init()
+Manager::Init(Manager* aOldManager)
 {
   NS_ASSERT_OWNINGTHREAD(Manager);
+
+  nsRefPtr<Context> oldContext;
+  if (aOldManager) {
+    oldContext = aOldManager->mContext;
+  }
 
   // Create the context immediately.  Since there can at most be one Context
   // per Manager now, this lets us cleanly call Factory::Remove() once the
   // Context goes away.
   nsRefPtr<Action> setupAction = new SetupAction();
-  nsRefPtr<Context> ref = Context::Create(this, setupAction);
+  nsRefPtr<Context> ref = Context::Create(this, setupAction, oldContext);
   mContext = ref;
 }
 

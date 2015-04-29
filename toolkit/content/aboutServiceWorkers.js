@@ -9,8 +9,18 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 
+XPCOMUtils.defineLazyServiceGetter(
+  this,
+  "PushNotificationService",
+  "@mozilla.org/push/NotificationService;1",
+  "nsIPushNotificationService"
+);
+
 const bundle = Services.strings.createBundle(
   "chrome://global/locale/aboutServiceWorkers.properties");
+
+const brandBundle = Services.strings.createBundle(
+  "chrome://branding/locale/brand.properties");
 
 let gSWM;
 let gSWCount = 0;
@@ -68,7 +78,11 @@ function display(info) {
   if (info.principal.appId) {
     let b2gtitle = document.createElement('h3');
     let trueFalse = bundle.GetStringFromName(info.principal.isInBrowserElement ? 'true' : 'false');
-    let b2gtitleStr = bundle.formatStringFromName('b2gtitle', [info.principal.appId, trueFalse], 2);
+
+    let b2gtitleStr =
+      bundle.formatStringFromName('b2gtitle', [ brandBundle.getString("brandShortName"),
+                                                info.principal.appId,
+                                                trueFalse], 2);
     b2gtitle.appendChild(document.createTextNode(b2gtitleStr));
     div.appendChild(b2gtitle);
   }
@@ -84,15 +98,19 @@ function display(info) {
     bold.appendChild(document.createTextNode(title + " "));
     item.appendChild(bold);
 
+    let textNode = document.createTextNode(value);
+
     if (makeLink) {
       let link = document.createElement("a");
       link.href = value;
       link.target = "_blank";
-      link.appendChild(document.createTextNode(value));
+      link.appendChild(textNode);
       item.appendChild(link);
     } else {
-      item.appendChild(document.createTextNode(value));
+      item.appendChild(textNode);
     }
+
+    return textNode;
   }
 
   createItem(bundle.GetStringFromName('scope'), info.scope);
@@ -100,6 +118,16 @@ function display(info) {
   createItem(bundle.GetStringFromName('currentWorkerURL'), info.currentWorkerURL, true);
   createItem(bundle.GetStringFromName('activeCacheName'), info.activeCacheName);
   createItem(bundle.GetStringFromName('waitingCacheName'), info.waitingCacheName);
+
+  let pushItem = createItem(bundle.GetStringFromName('pushEndpoint'), bundle.GetStringFromName('waiting'));
+  PushNotificationService.registration(info.scope).then(
+    pushRecord => {
+      pushItem.data = JSON.stringify(pushRecord);
+    },
+    error => {
+      dump("about:serviceworkers - push registration failed\n");
+    }
+  );
 
   let updateButton = document.createElement("button");
   updateButton.appendChild(document.createTextNode(bundle.GetStringFromName('update')));

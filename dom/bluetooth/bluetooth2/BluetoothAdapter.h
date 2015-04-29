@@ -184,7 +184,7 @@ private:
   ~BluetoothAdapter();
 
   /**
-   * Set adapter properties according to properties array
+   * Set adapter properties according to properties array.
    *
    * @param aValue [in] Properties array to set with
    */
@@ -253,7 +253,7 @@ private:
   /**
    * Fire BluetoothAttributeEvent to trigger onattributechanged event handler.
    */
-  void DispatchAttributeEvent(const nsTArray<nsString>& aTypes);
+  void DispatchAttributeEvent(const Sequence<nsString>& aTypes);
 
   /**
    * Fire BluetoothDeviceEvent to trigger

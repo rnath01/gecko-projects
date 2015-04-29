@@ -39,7 +39,6 @@
 #endif
 
 class nsIInputStream;
-class nsIThreadPool;
 class nsIRequest;
 
 #define NS_RASTERIMAGE_CID \
@@ -123,7 +122,6 @@ class nsIRequest;
 namespace mozilla {
 
 namespace layers {
-class LayerManager;
 class ImageContainer;
 class Image;
 }
@@ -156,7 +154,7 @@ class RasterImage final : public ImageResource
   virtual ~RasterImage();
 
 public:
-  MOZ_DECLARE_REFCOUNTED_TYPENAME(RasterImage)
+  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(RasterImage)
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIPROPERTIES
   NS_DECL_IMGICONTAINER

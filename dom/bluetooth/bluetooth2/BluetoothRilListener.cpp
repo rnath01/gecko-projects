@@ -13,6 +13,7 @@
 #include "nsITelephonyService.h"
 #include "nsServiceManagerUtils.h"
 #include "nsString.h"
+#include "nsQueryObject.h"
 
 USING_BLUETOOTH_NAMESPACE
 
@@ -216,9 +217,13 @@ TelephonyListener::HandleCallInfo(nsITelephonyCallInfo* aInfo, bool aSend)
 }
 
 NS_IMETHODIMP
-TelephonyListener::CallStateChanged(nsITelephonyCallInfo* aInfo)
+TelephonyListener::CallStateChanged(uint32_t aLength,
+                                    nsITelephonyCallInfo** aAllInfo)
 {
-  return HandleCallInfo(aInfo, true);
+  for (uint32_t i = 0; i < aLength; ++i) {
+    HandleCallInfo(aAllInfo[i], true);
+  }
+  return NS_OK;
 }
 
 NS_IMETHODIMP

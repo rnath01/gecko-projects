@@ -8,6 +8,7 @@
 
 let { Ci, Cu } = require("chrome");
 let Services = require("Services");
+let promise = require("promise");
 let { ActorPool, createExtraActors, appendExtraActors } = require("devtools/server/actors/common");
 let { DebuggerServer } = require("devtools/server/main");
 let DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
@@ -15,7 +16,6 @@ let { dbg_assert } = DevToolsUtils;
 let { TabSources, isHiddenSource } = require("./utils/TabSources");
 let makeDebugger = require("./utils/make-debugger");
 
-let {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 loader.lazyRequireGetter(this, "RootActor", "devtools/server/actors/root", true);
@@ -860,13 +860,18 @@ TabActor.prototype = {
       response.outerWindowID = windowUtils.outerWindowID;
     }
 
-    // Walk over tab actors added by extensions and add them to a new ActorPool.
-    let actorPool = new ActorPool(this.conn);
-    this._createExtraActors(DebuggerServer.tabActorFactories, actorPool);
-    if (!actorPool.isEmpty()) {
-      this._tabActorPool = actorPool;
+    // Always use the same ActorPool, so existing actor instances
+    // (created in createExtraActors) are not lost.
+    if (!this._tabActorPool) {
+      this._tabActorPool = new ActorPool(this.conn);
       this.conn.addActorPool(this._tabActorPool);
     }
+
+    // Walk over tab actor factories and make sure they are all
+    // instantiated and added into the ActorPool. Note that some
+    // factories can be added dynamically by extensions.
+    this._createExtraActors(DebuggerServer.tabActorFactories,
+      this._tabActorPool);
 
     this._appendExtraActors(response);
     return response;
@@ -876,10 +881,7 @@ TabActor.prototype = {
    * Called when the actor is removed from the connection.
    */
   disconnect: function BTA_disconnect() {
-    this._detach();
-    this._extraActors = null;
-    this._styleSheetActors.clear();
-    this._exited = true;
+    this.exit();
   },
 
   /**
@@ -900,6 +902,14 @@ TabActor.prototype = {
       this.conn.send({ from: this.actorID,
                        type: "tabDetached" });
     }
+
+    Object.defineProperty(this, "docShell", {
+      value: null,
+      configurable: true
+    });
+
+    this._extraActors = null;
+    this._styleSheetActors.clear();
 
     this._exited = true;
   },
@@ -1220,11 +1230,6 @@ TabActor.prototype = {
       this.conn.removeActorPool(this._tabActorPool);
       this._tabActorPool = null;
     }
-
-    Object.defineProperty(this, "docShell", {
-      value: null,
-      configurable: true
-    });
 
     this._attached = false;
     return true;
@@ -1822,7 +1827,10 @@ function RemoteBrowserTabActor(aConnection, aBrowser)
 
 RemoteBrowserTabActor.prototype = {
   connect: function() {
-    let connect = DebuggerServer.connectToChild(this._conn, this._browser);
+    let onDestroy = () => {
+      this._form = null;
+    };
+    let connect = DebuggerServer.connectToChild(this._conn, this._browser, onDestroy);
     return connect.then(form => {
       this._form = form;
       return this;
@@ -1835,15 +1843,21 @@ RemoteBrowserTabActor.prototype = {
   },
 
   update: function() {
-    let deferred = promise.defer();
-    let onFormUpdate = msg => {
-      this._mm.removeMessageListener("debug:form", onFormUpdate);
-      this._form = msg.json;
-      deferred.resolve(this);
-    };
-    this._mm.addMessageListener("debug:form", onFormUpdate);
-    this._mm.sendAsyncMessage("debug:form");
-    return deferred.promise;
+    // If the child happens to be crashed/close/detach, it won't have _form set,
+    // so only request form update if some code is still listening on the other side.
+    if (this._form) {
+      let deferred = promise.defer();
+      let onFormUpdate = msg => {
+        this._mm.removeMessageListener("debug:form", onFormUpdate);
+        this._form = msg.json;
+        deferred.resolve(this);
+      };
+      this._mm.addMessageListener("debug:form", onFormUpdate);
+      this._mm.sendAsyncMessage("debug:form");
+      return deferred.promise;
+    } else {
+      return this.connect();
+    }
   },
 
   form: function() {

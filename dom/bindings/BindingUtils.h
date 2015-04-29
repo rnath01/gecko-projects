@@ -127,7 +127,8 @@ ThrowMethodFailedWithDetails(JSContext* cx, ErrorResult& rv,
     rv.ReportNotEnoughArgsError(cx, ifaceName, memberName);
     return false;
   }
-  return Throw(cx, rv.ErrorCode());
+  rv.ReportGenericError(cx);
+  return false;
 }
 
 // Returns true if the JSClass is used for DOM objects.
@@ -3191,7 +3192,7 @@ WrappedJSToDictionary(nsISupports* aObject, T& aDictionary)
 
   // we need this AutoEntryScript here because the spec requires us to execute
   // getters when parsing a dictionary
-  AutoEntryScript aes(global);
+  AutoEntryScript aes(global, "WebIDL dictionary creation");
   aes.TakeOwnershipOfErrorReporting();
 
   JS::Rooted<JS::Value> v(aes.cx(), JS::ObjectValue(*obj));

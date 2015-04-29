@@ -522,7 +522,7 @@ MessageChannel::Echo(Message* aMsg)
     MonitorAutoLock lock(*mMonitor);
 
     if (!Connected()) {
-        ReportConnectionError("MessageChannel");
+        ReportConnectionError("MessageChannel", msg);
         return false;
     }
 
@@ -545,7 +545,7 @@ MessageChannel::Send(Message* aMsg)
 
     MonitorAutoLock lock(*mMonitor);
     if (!Connected()) {
-        ReportConnectionError("MessageChannel");
+        ReportConnectionError("MessageChannel", msg);
         return false;
     }
     mLink->SendMessage(msg.forget());
@@ -778,7 +778,7 @@ MessageChannel::Send(Message* aMsg, Message* aReply)
     nsAutoPtr<Message> msg(aMsg);
 
     if (!Connected()) {
-        ReportConnectionError("MessageChannel::SendAndWait");
+        ReportConnectionError("MessageChannel::SendAndWait", msg);
         return false;
     }
 
@@ -871,7 +871,7 @@ MessageChannel::Call(Message* aMsg, Message* aReply)
 
     MonitorAutoLock lock(*mMonitor);
     if (!Connected()) {
-        ReportConnectionError("MessageChannel::Call");
+        ReportConnectionError("MessageChannel::Call", aMsg);
         return false;
     }
 
@@ -1266,8 +1266,9 @@ MessageChannel::DispatchInterruptMessage(const Message& aMsg, size_t stackDepth)
         // processing of the other side's in-call.
         bool defer;
         const char* winner;
-        switch (mListener->MediateInterruptRace((mSide == ChildSide) ? aMsg : mInterruptStack.top(),
-                                          (mSide != ChildSide) ? mInterruptStack.top() : aMsg))
+        const Message& parentMsg = (mSide == ChildSide) ? aMsg : mInterruptStack.top();
+        const Message& childMsg = (mSide == ChildSide) ? mInterruptStack.top() : aMsg;
+        switch (mListener->MediateInterruptRace(parentMsg, childMsg))
         {
           case RIPChildWins:
             winner = "child";
@@ -1527,7 +1528,7 @@ MessageChannel::ReportMessageRouteError(const char* channelName) const
 }
 
 void
-MessageChannel::ReportConnectionError(const char* aChannelName) const
+MessageChannel::ReportConnectionError(const char* aChannelName, Message* aMsg) const
 {
     AssertWorkerThread();
     mMonitor->AssertCurrentThreadOwns();
@@ -1554,7 +1555,16 @@ MessageChannel::ReportConnectionError(const char* aChannelName) const
         NS_RUNTIMEABORT("unreached");
     }
 
-    PrintErrorMessage(mSide, aChannelName, errorMsg);
+    if (aMsg) {
+        char reason[512];
+        PR_snprintf(reason, sizeof(reason),
+                    "(msgtype=0x%lX,name=%s) %s",
+                    aMsg->type(), aMsg->name(), errorMsg);
+
+        PrintErrorMessage(mSide, aChannelName, reason);
+    } else {
+        PrintErrorMessage(mSide, aChannelName, errorMsg);
+    }
 
     MonitorAutoUnlock unlock(*mMonitor);
     mListener->OnProcessingError(MsgDropped, errorMsg);

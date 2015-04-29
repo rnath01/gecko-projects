@@ -326,7 +326,7 @@ DataTransfer::GetFiles(nsIDOMFileList** aFileList)
 {
   ErrorResult rv;
   NS_IF_ADDREF(*aFileList = GetFiles(rv));
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 already_AddRefed<DOMStringList>
@@ -419,7 +419,7 @@ DataTransfer::GetData(const nsAString& aFormat, nsAString& aData)
 {
   ErrorResult rv;
   GetData(aFormat, aData, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -442,7 +442,7 @@ DataTransfer::SetData(const nsAString& aFormat, const nsAString& aData)
 {
   ErrorResult rv;
   SetData(aFormat, aData, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -471,7 +471,7 @@ DataTransfer::ClearData(const nsAString& aFormat)
   format = &aFormat;
   ErrorResult rv;
   ClearData(format, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 NS_IMETHODIMP
@@ -556,7 +556,7 @@ DataTransfer::MozTypesAt(uint32_t aIndex, nsISupports** aTypes)
   ErrorResult rv;
   nsRefPtr<DOMStringList> types = MozTypesAt(aIndex, rv);
   types.forget(aTypes);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 NS_IMETHODIMP
@@ -654,6 +654,7 @@ DataTransfer::MozGetDataAt(JSContext* aCx, const nsAString& aFormat,
   }
 
   if (!data) {
+    aRetval.setNull();
     return;
   }
 
@@ -788,7 +789,7 @@ DataTransfer::MozClearDataAt(const nsAString& aFormat, uint32_t aIndex)
 {
   ErrorResult rv;
   MozClearDataAt(aFormat, aIndex, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -813,7 +814,7 @@ DataTransfer::SetDragImage(nsIDOMElement* aImage, int32_t aX, int32_t aY)
   if (image) {
     SetDragImage(*image, aX, aY, rv);
   }
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -837,7 +838,7 @@ DataTransfer::AddElement(nsIDOMElement* aElement)
 
   ErrorResult rv;
   AddElement(*element, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 nsresult

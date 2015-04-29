@@ -29,6 +29,50 @@ using namespace js;
 using namespace js::gc;
 using mozilla::DebugOnly;
 
+namespace js {
+template<typename T>
+void
+CheckTracedThing(JSTracer* trc, T thing);
+} // namespace js
+
+template <typename T>
+T
+DoCallback(JS::CallbackTracer* trc, T* thingp, const char* name)
+{
+    CheckTracedThing(trc, *thingp);
+    JSGCTraceKind kind = MapTypeToTraceKind<typename mozilla::RemovePointer<T>::Type>::kind;
+    JS::AutoTracingName ctx(trc, name);
+    trc->invoke((void**)thingp, kind);
+    return *thingp;
+}
+#define INSTANTIATE_ALL_VALID_TRACE_FUNCTIONS(name, type, _) \
+    template type* DoCallback<type*>(JS::CallbackTracer*, type**, const char*);
+FOR_EACH_GC_LAYOUT(INSTANTIATE_ALL_VALID_TRACE_FUNCTIONS);
+#undef INSTANTIATE_ALL_VALID_TRACE_FUNCTIONS
+
+template <typename S>
+struct DoCallbackFunctor : public IdentityDefaultAdaptor<S> {
+    template <typename T> S operator()(T* t, JS::CallbackTracer* trc, const char* name) {
+        return js::gc::RewrapValueOrId<S, T*>::wrap(DoCallback(trc, &t, name));
+    }
+};
+
+template <>
+Value
+DoCallback<Value>(JS::CallbackTracer* trc, Value* vp, const char* name)
+{
+    *vp = DispatchValueTyped(DoCallbackFunctor<Value>(), *vp, trc, name);
+    return *vp;
+}
+
+template <>
+jsid
+DoCallback<jsid>(JS::CallbackTracer* trc, jsid* idp, const char* name)
+{
+    *idp = DispatchIdTyped(DoCallbackFunctor<jsid>(), *idp, trc, name);
+    return *idp;
+}
+
 JS_PUBLIC_API(void)
 JS_CallUnbarrieredValueTracer(JSTracer* trc, Value* valuep, const char* name)
 {
@@ -102,7 +146,7 @@ JS_CallTenuredObjectTracer(JSTracer* trc, JS::TenuredHeap<JSObject*>* objp, cons
     if (!obj)
         return;
 
-    trc->setTracingLocation((void*)objp);
+    JS::AutoOriginalTraceLocation reloc(trc, (void**)objp);
     TraceManuallyBarrieredEdge(trc, &obj, name);
 
     objp->setPtr(obj);
@@ -329,61 +373,22 @@ JSTracer::JSTracer(JSRuntime* rt, TracerKindTag kindTag,
                    WeakMapTraceKind weakTraceKind /* = TraceWeakMapValues */)
   : runtime_(rt)
   , tag(kindTag)
-  , debugPrinter_(nullptr)
-  , debugPrintArg_(nullptr)
-  , debugPrintIndex_(size_t(-1))
   , eagerlyTraceWeakMaps_(weakTraceKind)
-#ifdef JS_GC_ZEAL
-  , realLocation_(nullptr)
-#endif
 {
-}
-
-bool
-JSTracer::hasTracingDetails() const
-{
-    return debugPrinter_ || debugPrintArg_;
 }
 
 const char*
-JSTracer::tracingName(const char* fallback) const
+JS::CallbackTracer::getTracingEdgeName(char* buffer, size_t bufferSize)
 {
-    MOZ_ASSERT(hasTracingDetails());
-    return debugPrinter_ ? fallback : (const char*)debugPrintArg_;
-}
-
-const char*
-JSTracer::getTracingEdgeName(char* buffer, size_t bufferSize)
-{
-    if (debugPrinter_) {
-        debugPrinter_(this, buffer, bufferSize);
+    if (contextFunctor_) {
+        (*contextFunctor_)(this, buffer, bufferSize);
         return buffer;
     }
-    if (debugPrintIndex_ != size_t(-1)) {
-        JS_snprintf(buffer, bufferSize, "%s[%lu]",
-                    (const char*)debugPrintArg_,
-                    debugPrintIndex_);
+    if (contextIndex_ != InvalidIndex) {
+        JS_snprintf(buffer, bufferSize, "%s[%lu]", contextName_, contextIndex_);
         return buffer;
     }
-    return (const char*)debugPrintArg_;
-}
-
-JSTraceNamePrinter
-JSTracer::debugPrinter() const
-{
-    return debugPrinter_;
-}
-
-const void*
-JSTracer::debugPrintArg() const
-{
-    return debugPrintArg_;
-}
-
-size_t
-JSTracer::debugPrintIndex() const
-{
-    return debugPrintIndex_;
+    return contextName_;
 }
 
 void
@@ -391,27 +396,6 @@ JS::CallbackTracer::setTraceCallback(JSTraceCallback traceCallback)
 {
     callback = traceCallback;
 }
-
-#ifdef JS_GC_ZEAL
-void
-JSTracer::setTracingLocation(void* location)
-{
-    if (!realLocation_ || !location)
-        realLocation_ = location;
-}
-
-void
-JSTracer::unsetTracingLocation()
-{
-    realLocation_ = nullptr;
-}
-
-void**
-JSTracer::tracingLocation(void** thingp)
-{
-    return realLocation_ ? (void**)realLocation_ : thingp;
-}
-#endif
 
 bool
 MarkStack::init(JSGCMode gcMode)

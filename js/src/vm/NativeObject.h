@@ -282,11 +282,9 @@ extern HeapSlot* const emptyObjectElements;
 
 struct Class;
 class GCMarker;
-struct ObjectOps;
 class Shape;
 
 class NewObjectCache;
-class TaggedProto;
 
 #ifdef DEBUG
 static inline bool
@@ -1360,7 +1358,7 @@ NativeLookupOwnProperty(ExclusiveContext* cx,
  */
 extern bool
 NativeGetExistingProperty(JSContext* cx, HandleObject receiver, HandleNativeObject obj,
-                          HandleShape shape, MutableHandle<Value> vp);
+                          HandleShape shape, MutableHandleValue vp);
 
 /* * */
 

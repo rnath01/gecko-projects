@@ -45,7 +45,10 @@ describe("loop.standaloneRoomViews", function() {
     });
 
     function mountTestComponent(extraProps) {
-      var props = _.extend({ receivingScreenShare: false }, extraProps);
+      var props = _.extend({
+        dispatcher: dispatcher,
+        receivingScreenShare: false
+      }, extraProps);
       return TestUtils.renderIntoDocument(
         React.createElement(
           loop.standaloneRoomViews.StandaloneRoomContextView, props));
@@ -60,13 +63,14 @@ describe("loop.standaloneRoomViews", function() {
       expect(view.getDOMNode().textContent).eql("Mike's room");
     });
 
-    it("should display an unsupported browser message if crypto is unsupported", function() {
+    it("should log an unsupported browser message if crypto is unsupported", function() {
       var view = mountTestComponent({
         roomName: "Mark's room",
         roomInfoFailure: ROOM_INFO_FAILURES.WEB_CRYPTO_UNSUPPORTED
       });
 
-      expect(view.getDOMNode().textContent).match(/unsupported/);
+      sinon.assert.called(console.error);
+      sinon.assert.calledWithMatch(console.error, sinon.match("unsupported"));
     });
 
     it("should display a general error message for any other failure", function() {
@@ -75,7 +79,8 @@ describe("loop.standaloneRoomViews", function() {
         roomInfoFailure: ROOM_INFO_FAILURES.NO_DATA
       });
 
-      expect(view.getDOMNode().textContent).match(/not_available/);
+      sinon.assert.called(console.error);
+      sinon.assert.calledWithMatch(console.error, sinon.match("not_available"));
     });
 
     it("should display context information if a url is supplied", function() {
@@ -97,6 +102,48 @@ describe("loop.standaloneRoomViews", function() {
       });
 
       expect(view.getDOMNode().querySelector(".standalone-context-url")).eql(null);
+    });
+
+    it("should dispatch a RecordClick action when the link is clicked", function() {
+      var view = mountTestComponent({
+        roomName: "Mark's room",
+        roomContextUrls: [{
+          description: "Mark's super page",
+          location: "http://invalid.com",
+          thumbnail: "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+        }]
+      });
+
+      TestUtils.Simulate.click(view.getDOMNode()
+        .querySelector(".standalone-context-url-description-wrapper > a"));
+
+      sinon.assert.calledOnce(dispatcher.dispatch);
+      sinon.assert.calledWithExactly(dispatcher.dispatch,
+        new sharedActions.RecordClick({
+          linkInfo: "Shared URL"
+        }));
+    });
+  });
+
+  describe("StandaloneRoomHeader", function() {
+    function mountTestComponent() {
+      return TestUtils.renderIntoDocument(
+        React.createElement(
+          loop.standaloneRoomViews.StandaloneRoomHeader, {
+            dispatcher: dispatcher
+          }));
+    }
+
+    it("should dispatch a RecordClick action when the support link is clicked", function() {
+      var view = mountTestComponent();
+
+      TestUtils.Simulate.click(view.getDOMNode().querySelector("a"));
+
+      sinon.assert.calledOnce(dispatcher.dispatch);
+      sinon.assert.calledWithExactly(dispatcher.dispatch,
+        new sharedActions.RecordClick({
+          linkInfo: "Support link click"
+        }));
     });
   });
 
@@ -169,6 +216,19 @@ describe("loop.standaloneRoomViews", function() {
 
           sinon.assert.calledOnce(view.updateVideoContainer);
       });
+
+      it("should reset the video dimensions cache when the gather state is entered", function() {
+        activeRoomStore.setStoreState({roomState: ROOM_STATES.SESSION_CONNECTED});
+
+        var view = mountTestComponent();
+
+        activeRoomStore.setStoreState({roomState: ROOM_STATES.GATHER});
+
+        expect(view._videoDimensionsCache).eql({
+          local: {},
+          remote: {}
+        });
+      })
     });
 
     describe("#publishStream", function() {

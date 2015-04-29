@@ -53,6 +53,8 @@ abstract class BrowserToolbarTabletBase extends BrowserToolbar {
         focusOrder.addAll(Arrays.asList(tabsButton, (View) backButton, (View) forwardButton, this));
         focusOrder.addAll(urlDisplayLayout.getFocusOrder());
         focusOrder.addAll(Arrays.asList(actionItemBar, menuButton));
+
+        urlDisplayLayout.updateSiteIdentityAnchor(backButton);
     }
 
     private void initButtonListeners() {
@@ -125,6 +127,11 @@ abstract class BrowserToolbarTabletBase extends BrowserToolbar {
             final MenuItemActionBar child = (MenuItemActionBar) actionItemBar.getChildAt(i);
             child.setPrivateMode(isPrivate);
         }
+    }
+
+    @Override
+    public View getDoorHangerAnchor() {
+        return backButton;
     }
 
     protected boolean canDoBack(final Tab tab) {

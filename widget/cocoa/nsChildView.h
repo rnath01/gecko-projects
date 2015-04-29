@@ -33,7 +33,6 @@
 #import <Cocoa/Cocoa.h>
 #import <AppKit/NSOpenGL.h>
 
-class gfxASurface;
 class nsChildView;
 class nsCocoaWindow;
 
@@ -480,6 +479,7 @@ public:
 #endif
 
   virtual void CreateCompositor() override;
+  virtual bool IsMultiProcessWindow() override;
   virtual void PrepareWindowEffects() override;
   virtual void CleanupWindowEffects() override;
   virtual bool PreRender(LayerManagerComposite* aManager) override;
