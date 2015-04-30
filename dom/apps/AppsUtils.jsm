@@ -117,6 +117,7 @@ function _setAppProperties(aObj, aApp) {
   aObj.kind = aApp.kind;
   aObj.enabled = aApp.enabled !== undefined ? aApp.enabled : true;
   aObj.sideloaded = aApp.sideloaded;
+  aObj.installMetaData = aApp.installMetaData;
 }
 
 this.AppsUtils = {

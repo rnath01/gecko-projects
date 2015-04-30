@@ -227,7 +227,7 @@ function removeServerTemporaryFile(client, fileActor) {
  *  * bytesSent:  The number of bytes sent so far
  *  * totalBytes: The total number of bytes to send
  */
-function installPackaged(client, webappsActor, packagePath, appId, progressCallback) {
+function installPackaged(client, webappsActor, packagePath, appId, receipts, installMetaData, progressCallback) {
   let deferred = promise.defer();
   let file = FileUtils.File(packagePath);
   let packagePromise;
@@ -246,7 +246,9 @@ function installPackaged(client, webappsActor, packagePath, appId, progressCallb
             to: webappsActor,
             type: "install",
             appId: appId,
-            upload: fileActor
+            upload: fileActor,
+            receipts: receipts,
+            installMetaData: installMetaData
           };
           client.request(request, (res) => {
             // If the install method immediatly fails,
@@ -275,14 +277,16 @@ function installPackaged(client, webappsActor, packagePath, appId, progressCallb
 }
 exports.installPackaged = installPackaged;
 
-function installHosted(client, webappsActor, appId, metadata, manifest) {
+function installHosted(client, webappsActor, appId, metadata, manifest, receipts, installMetaData) {
   let deferred = promise.defer();
   let request = {
     to: webappsActor,
     type: "install",
     appId: appId,
     metadata: metadata,
-    manifest: manifest
+    manifest: manifest,
+    receipts: receipts,
+    installMetaData: installMetada
   };
   client.request(request, (res) => {
     if (res.error) {
@@ -478,6 +482,28 @@ App.prototype = {
       }
     });
 
+    return deferred.promise;
+  },
+
+  fetch: function () {
+    let deferred = promise.defer();
+    let request = this.client.request({
+      to: this.webappsActor,
+      type: "fetch",
+      manifestURL: this.manifest.manifestURL
+    });
+    request.on("bulk-reply", ({length, copyTo}) => {
+      let outputFile = FileUtils.getDir("TmpD", [], true);
+      outputFile.append("application.zip");
+      outputFile.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, parseInt("666", 8));
+
+      let output = FileUtils.openSafeFileOutputStream(outputFile);
+
+      copyTo(output).then(() => {
+        FileUtils.closeSafeFileOutputStream(output);
+        deferred.resolve(outputFile.path);
+      });
+    });
     return deferred.promise;
   }
 };
@@ -747,9 +773,10 @@ AppActorFront.prototype = {
    *  * bytesSent:  The number of bytes sent so far
    *  * totalBytes: The total number of bytes to send
    */
-  installPackaged: function (packagePath, appId) {
+  installPackaged: function (packagePath, appId, receipts, installMetaData) {
     let request = () => {
       return installPackaged(this.client, this.actor, packagePath, appId,
+                             receipts, installMetaData,
                              this._onInstallProgress)
       .then(response => ({
         appId: response.appId,
@@ -817,7 +844,7 @@ AppActorFront.prototype = {
    *  * bytesSent:  The number of bytes sent so far
    *  * totalBytes: The total number of bytes to send
    */
-  installHosted: function (appId, metadata, manifest) {
+  installHosted: function (appId, metadata, manifest, receipts, installMetaData) {
     let manifestURL = metadata.manifestURL ||
                       metadata.origin + "/manifest.webapp";
     let request = () => {

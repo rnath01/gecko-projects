@@ -3925,7 +3925,7 @@ this.DOMApplicationRegistry = {
     } catch(e) {};
 
     let allowUnsignedLangpack = false;
-    try  {
+    try {
       allowUnsignedLangpack =
         Services.prefs.getBoolPref("dom.apps.allow_unsigned_langpacks") ||
         Services.prefs.getBoolPref("dom.apps.developer_mode");

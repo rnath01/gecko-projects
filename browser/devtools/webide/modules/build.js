@@ -10,6 +10,26 @@ const { TextDecoder, OS }  = Cu.import("resource://gre/modules/osfile.jsm", {});
 const Subprocess = require("sdk/system/child_process/subprocess");
 
 const ProjectBuilding = exports.ProjectBuilding = {
+  fetchInstallMetadata: Task.async(function * (project) {
+    let path = OS.Path.join(project.location, "install-metadata.json");
+    let exists = yield OS.File.exists(path);
+    if (!exists) {
+      return;
+    }
+
+    let Decoder = new TextDecoder();
+    let data = yield OS.File.read(path);
+    data = new TextDecoder().decode(data);
+    let manifest;
+    try {
+      manifest = JSON.parse(data);
+    } catch(e) {
+      throw new Error("Error while reading install-metadata manifest at: '" + path +
+                      "', invalid JSON: " + e.message);
+    }
+    return manifest;
+  }),
+
   fetchPackageManifest: Task.async(function * (project) {
     let manifestPath = OS.Path.join(project.location, "package.json");
     let exists = yield OS.File.exists(manifestPath);

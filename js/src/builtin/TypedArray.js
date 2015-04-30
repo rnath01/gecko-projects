@@ -887,7 +887,7 @@ function TypedArraySome(callbackfn, thisArg = undefined) {
     return false;
 }
 
-// ES6 draft 20150304 %TypedArray%.prototype.subarray
+// ES6 draft 20150220 %TypedArray%.prototype.subarray
 function TypedArraySubarray(begin, end) {
     // Step 1.
     var obj = this;
@@ -903,33 +903,43 @@ function TypedArraySubarray(begin, end) {
     var buffer = TypedArrayBuffer(obj);
     var srcLength = TypedArrayLength(obj);
 
-    // Steps 7-9.
-    var relativeBegin = ToInteger(begin);
-    var beginIndex = relativeBegin < 0 ? std_Math_max(srcLength + relativeBegin, 0)
-                                       : std_Math_min(relativeBegin, srcLength);
+    // Steps 7-10.
+    var beginInt = ToInteger(begin);
+    if (beginInt < 0)
+        beginInt = srcLength + beginInt;
+    var beginIndex = std_Math_min(srcLength, std_Math_max(0, beginInt));
 
-    // Steps 10-12.
-    var relativeEnd = end === undefined ? srcLength : ToInteger(end);
-    var endIndex = relativeEnd < 0 ? std_Math_max(srcLength + relativeEnd, 0)
-                                   : std_Math_min(relativeEnd, srcLength);
+    // Step 11.
+    if (end === undefined)
+        end = srcLength;
 
-    // Step 13.
-    var newLength = std_Math_max(endIndex - beginIndex, 0);
+    // Steps 12-14.
+    var endInt = ToInteger(end);
+    if (endInt < 0)
+        endInt = srcLength + endInt;
 
-    // Steps 14-15, altered to use a shift instead of a size for performance.
-    var elementShift = TypedArrayElementShift(obj);
-
-    // Step 16.
-    var srcByteOffset = TypedArrayByteOffset(obj);
+    // Steps 15-16.
+    var endIndex = std_Math_max(0, std_Math_min(srcLength, endInt));
+    if (endIndex < beginIndex)
+        endIndex = beginIndex;
 
     // Step 17.
+    var newLength = endIndex - beginIndex;
+
+    // Steps 18-19, altered to use a shift instead of a size for performance.
+    var elementShift = TypedArrayElementShift(obj);
+
+    // Step 20.
+    var srcByteOffset = TypedArrayByteOffset(obj);
+
+    // Step 21.
     var beginByteOffset = srcByteOffset + (beginIndex << elementShift);
 
-    // Steps 18-20.
+    // Steps 22-24.
     var defaultConstructor = _ConstructorForTypedArray(obj);
     var constructor = SpeciesConstructor(obj, defaultConstructor);
 
-    // Steps 21-22.
+    // Steps 25-26.
     return new constructor(buffer, beginByteOffset, newLength);
 }
 
