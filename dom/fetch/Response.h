@@ -12,13 +12,13 @@
 #include "mozilla/dom/Fetch.h"
 #include "mozilla/dom/ResponseBinding.h"
 
+#include "InternalHeaders.h"
 #include "InternalResponse.h"
 
 namespace mozilla {
 namespace dom {
 
 class Headers;
-class InternalHeaders;
 
 class Response final : public nsISupports
                      , public FetchBody<Response>
@@ -75,6 +75,12 @@ public:
   GetInternalHeaders() const
   {
     return mInternalResponse->Headers();
+  }
+
+  const nsCString&
+  GetSecurityInfo() const
+  {
+    return mInternalResponse->GetSecurityInfo();
   }
 
   Headers* Headers_();

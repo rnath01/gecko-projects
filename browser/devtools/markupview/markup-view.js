@@ -2264,6 +2264,7 @@ function TextEditor(aContainer, aNode, aTemplate) {
     stopOnReturn: true,
     trigger: "dblclick",
     multiline: true,
+    trimOutput: false,
     done: (aVal, aCommit) => {
       if (!aCommit) {
         return;
@@ -2492,8 +2493,8 @@ ElementEditor.prototype = {
     // name="v"a"l"u"e" when editing -> name='v"a"l"u"e"'
     // name="v'a"l'u"e" when editing -> name="v'a&quot;l'u&quot;e"
     let editValueDisplayed = aAttr.value || "";
-    let hasDoubleQuote = editValueDisplayed.contains('"');
-    let hasSingleQuote = editValueDisplayed.contains("'");
+    let hasDoubleQuote = editValueDisplayed.includes('"');
+    let hasSingleQuote = editValueDisplayed.includes("'");
     let initial = aAttr.name + '="' + editValueDisplayed + '"';
 
     // Can't just wrap value with ' since the value contains both " and '.
